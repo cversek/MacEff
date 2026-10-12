@@ -121,14 +121,23 @@ class _Client:
                 p.wait()
 
 
-def _core(home, client, marker):
+def _core(home, client, marker, path=None):
+    """A core whose session unit declares a PATH holding a stub ``claude``, as an installed
+    daemon must: its own PATH is the service manager's (#636 review)."""
     import os
     import pwd
     from macf.pd.core import Core
     from macf.pd.interface import Declaration, Unit
+    if path is None:
+        bindir = home.parent / "bin"
+        bindir.mkdir(exist_ok=True)
+        stub = bindir / "claude"
+        stub.write_text("#!/bin/sh\nexit 0\n")
+        stub.chmod(0o755)
+        path = str(bindir)
     me = pwd.getpwuid(os.getuid()).pw_name
     unit = Unit(name="session", kind="session", command=["/usr/bin/touch", str(marker)], account=me,
-                restart="always", liveness_interval_s=60, memory_limit_mb=64)
+                restart="always", liveness_interval_s=60, memory_limit_mb=64, environment={"PATH": path})
     return Core(Declaration(version=1, agent="Tester@abc123", units=[unit]), "Tester@abc123",
                 placeholders={"agent_home": str(home)}, hosted=client.hosted, client=client,
                 backoff_base_s=0.01, backoff_cap_s=0.05)
@@ -163,7 +172,7 @@ def test_adopts_harness_supervisor(tmp_path):
         assert core.state("session") == "running" and not marker.exists()
         core.stop("session", _policy(), "test stop")
         assert _settle(core, lambda: core.state("session") == "stopped")
-        assert client.calls[-1][:2] == ["claude", "stop"]
+        assert client.calls[-1][:2] == [str(tmp_path / "bin" / "claude"), "stop"]   # found on the declared PATH
     finally:
         client.close()
 
@@ -353,5 +362,27 @@ def test_a_stop_during_the_respawn_wait_holds(tmp_path):
         assert _settle(core, lambda: core.state("session") == "stopped" and not workers()
                        and core._units["session"].awaiting_respawn is None)
         assert not marker.exists()
+    finally:
+        client.close()
+
+
+def test_a_client_not_on_the_declared_path_is_named_and_nothing_is_touched(tmp_path):
+    """Under a service manager's PATH the client may not be found. That is not a refused
+    stop: the unit fails with the binary and the PATH named, and the hosted session is left
+    alone, neither signalled nor doubled (#636 review)."""
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    client = _Client(home)
+    try:
+        hosted = client.host("3d52b89a-bbbb")
+        core = _core(home, client, marker, path=str(empty))
+        core.boot()
+        assert core.state("session") == "failed"
+        assert client.calls == [] and hosted.poll() is None and not marker.exists()
+        from macf.agent_events_log import read_events
+        reason = next(e["data"]["reason"] for e in read_events(reverse=True) if e["event"] == "pd_unit_state")
+        assert "claude is not on the session unit's declared PATH" in reason and str(empty) in reason
     finally:
         client.close()

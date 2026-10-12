@@ -263,6 +263,7 @@ class _Runner:
     client_session: Optional[str] = None  # session id, when the client's own daemon hosts this session (R66)
     awaiting_respawn: Optional[float] = None  # monotonic deadline for a respawned worker to be listed
     client_escalated: bool = False      # a stop the client accepted outlived its grace, so signals followed
+    client_binary: Optional[str] = None  # the claude found on the session unit's declared PATH
 
 
 class _LivenessTail:
@@ -737,7 +738,9 @@ class Core:
             return False
         respawned = False
         if r.client_session:
-            out = self._client(client_command("start", r.client_session))
+            if not self._find_client(r):
+                return True
+            out = self._client(client_command("start", r.client_session, claude=r.client_binary))
             if out.returncode != 0:
                 print(f"⚠️ MACF: pd: the client could not respawn session {r.client_session[:8]} "
                       f"({(out.stderr or out.stdout or '').strip()[:200]}); deciding again", file=sys.stderr)
@@ -772,6 +775,8 @@ class Core:
             return True
         if decision.action != ADOPT:
             return False
+        if not self._find_client(r):
+            return True       # a hosted session exists: starting the unit's own would double it
         start = proc_start(decision.pid)
         if not start:
             return False   # the worker ended between the readout and now: start the unit as usual
@@ -848,7 +853,7 @@ class Core:
         r.stopping = reason
         if r.client_session:
             from macf.utils.client_daemon import client_command
-            out = self._client(client_command("stop", r.client_session))
+            out = self._client(client_command("stop", r.client_session, claude=r.client_binary or "claude"))
             if out.returncode == 0:
                 r.client_escalated = False
                 r.kill_at = self._clock() + r.spec.stop_grace_s   # escalates if the worker outlives it
@@ -857,6 +862,30 @@ class Core:
                   f"({(out.stderr or out.stdout or '').strip()[:200]}); signalling it", file=sys.stderr)
         self._kill(r, signal.SIGTERM)
         r.kill_at = self._clock() + r.spec.stop_grace_s
+
+    def _find_client(self, r: _Runner) -> bool:
+        """Find ``claude`` on the session unit's own declared PATH, the environment the
+        session runs in (MIS-0002-R12), else the daemon's. An installed daemon gets its
+        service manager's PATH, launchd's /usr/bin:/bin:/usr/sbin:/sbin on macOS, where the
+        client is rarely found. A client that cannot be found is not a client that refused:
+        the unit is recorded failed with the binary and the PATH searched, nothing is
+        signalled, and the hosted session is left alone."""
+        import shutil
+        try:
+            declared = render(r.spec.environment["PATH"], self._placeholders) if "PATH" in r.spec.environment else None
+        except KeyError:
+            declared = None
+        path = declared or os.environ.get("PATH", os.defpath)
+        found = shutil.which("claude", path=path)
+        if found:
+            r.client_binary = found
+            return True
+        r.want_up = False
+        r.proc, r.pid, r.proc_start = None, None, None
+        where = "the session unit's declared PATH" if declared else "the daemon's PATH"
+        self._transition(r, "failed", f"not adopted: claude is not on {where} ({path}); declare a PATH "
+                                      f"that holds it in the session unit's environment")
+        return False
 
     def _await_respawn(self, r: _Runner, now: float) -> None:
         """Adopt the respawned worker once the client lists it; past the deadline, decide afresh."""
