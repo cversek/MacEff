@@ -87,6 +87,7 @@ Gmail, event-log rotation, and commit-message guards. Sprints now survive compac
 
 ### Changed
 
+- **Reasoning a horizon asks a fifth question: how early may this duty interrupt?** (roles policy §4.2, #389 B1): a duty's horizon also decides when it starts to block a stop in AUTO_MODE (§9.2), and the first four questions all push it longer. The section now names both consumers and asks for `--why` to say which won.
 - **A channel counts as the operator only by a name the agent declares** (`utils/input_origin.py`, `mode_system`, MIS-0002-R107): both producers of the operator's activity check a channel's exact name against the declaration's `operator_channels`, and the MacEff channel never counts. An agent that hasn't declared the list counts every other channel, as before, and declaring it, even empty, ends that.
 - **An MIS is required only for a new policy or a major architectural change** (MIS-0003, `mis` policy §1.2): MIS-0001 also required one for any change to what an agent may do, counting every MUST added to policy text, so a small rule in an existing policy needed the whole process. The operator raised the bar on 2026-10-04. A rule added to an existing policy now ships with its capability in one reviewed pull request, and any author may still write an MIS for any change. MIS-0003 updates MIS-0001's R01 by the amendment path MIS-0001 defines, the first use of it; MIS-0001 records the change in its revision history
 

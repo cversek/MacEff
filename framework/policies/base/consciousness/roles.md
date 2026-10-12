@@ -270,12 +270,15 @@ A **horizon** is the lead time before `due` at which a duty becomes DUE_SOON -- 
 
 ### 4.2 Reasoning a horizon
 
-Reason from the duty's nature, not from a default. Four questions:
+Reason from the duty's nature, not from a default. Five questions:
 
 1. **Preparation effort.** How long does the implementing work take when nothing goes wrong? The horizon is at least that.
 2. **Dependencies.** Does the work wait on another duty, a person, a delivery? Add their latency.
 3. **Cadence period.** For a recurring duty, the horizon must be shorter than the period, or every occurrence is DUE_SOON from the moment the last one closes.
 4. **Operator availability.** If the operator must review before the due date, the horizon includes the review's turnaround.
+5. **The gate.** The horizon also decides when the duty starts to demand a service. Once it enters DUE_SOON in the focused role, a stop in AUTO_MODE is blocked until the duty is serviced (9.2). One note clears it until the next tier, so the cost is small, but it is real. How early should this duty be able to interrupt the agent's other work?
+
+**The horizon has two consumers, and they pull in opposite directions.** The approach ramp wants it long enough that the work starts in time, which is what the first four questions ask. The Stop gate makes it the point where the duty starts interrupting, which argues for no longer than the work needs. When the two disagree, say which won in `--why`.
 
 **Worked examples**:
 
