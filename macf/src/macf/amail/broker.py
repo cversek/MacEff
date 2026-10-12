@@ -55,7 +55,7 @@ from dataclasses import dataclass, field
 
 from macf.agent_events_log import append_event
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .audit import AuditLog
 from .contacts import ContactBook, ContactListError
@@ -2415,6 +2415,10 @@ class _Server(socketserver.ThreadingUnixStreamServer):
     # with an explained one. Linux absorbs such bursts anyway; macOS refuses at
     # the backlog (ECONNREFUSED), so it has to be sized to the metering cap.
     request_queue_size = MAX_CONCURRENT_CONNECTIONS
+    # Called once per pass of the accept loop, idle or not (serve_forever passes at least
+    # every half second). The daemon entry point sets it to its liveness heartbeat's tick,
+    # so liveness stops when this loop stops (MIS-0002-R14).
+    on_pass: Optional[Callable[[], None]] = None
 
     def __init__(self, *args, **kwargs):
         self._meter_lock = threading.Lock()
@@ -2422,6 +2426,17 @@ class _Server(socketserver.ThreadingUnixStreamServer):
         self._per_uid: Dict[int, int] = {}
         self._overload_audited: Dict[Optional[int], float] = {}
         super().__init__(*args, **kwargs)
+
+    def service_actions(self) -> None:
+        super().service_actions()
+        if self.on_pass is not None:
+            self.on_pass()
+
+    def in_flight(self) -> int:
+        """Connections being handled now. A handler that hangs runs in its own thread and
+        doesn't stop the accept loop, so it shows here, bounded by the metering cap."""
+        with self._meter_lock:
+            return len(self._inflight)
 
     def _acquire(self, request: Any, uid: Optional[int]) -> bool:
         with self._meter_lock:

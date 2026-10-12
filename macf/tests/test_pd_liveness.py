@@ -29,21 +29,67 @@ def test_an_event_names_this_process_by_pid_and_start_time():
     assert live.proc_start and live.proc_start != "unknown"
 
 
+def _ticking(hb, period=0.01):
+    """A work loop that ticks *hb* every *period* until the returned event is set."""
+    import threading
+    halt = threading.Event()
+
+    def loop():
+        while not halt.wait(period):
+            hb.tick()
+    threading.Thread(target=loop, daemon=True).start()
+    return halt
+
+
 def test_the_heartbeat_reports_at_once_and_then_at_its_interval():
     events, append = recorder()
     hb = lv.Heartbeat("Resident@1a2b3c", "u", 0.05, append=append).start()
+    halt = _ticking(hb)
     time.sleep(0.18)
     hb.stop()
+    halt.set()
     n = len(events)
     assert n >= 3, f"{n} events in 0.18 s at a 0.05 s interval"
     time.sleep(0.12)
     assert len(events) <= n + 1, "the heartbeat kept writing after stop"
 
 
+def test_a_loop_that_stops_passing_stops_the_events_within_one_interval(capsys):
+    """The beat means the work is running: a wedged loop must go quiet, so its daemon sees
+    the unit overdue, even though the heartbeat's own thread is still alive."""
+    events, append = recorder()
+    hb = lv.Heartbeat("Resident@1a2b3c", "u", 0.05, append=append).start()
+    halt = _ticking(hb)
+    time.sleep(0.15)
+    assert events, "a ticking loop wrote nothing"
+    halt.set()                      # the loop wedges; the heartbeat thread runs on
+    time.sleep(0.06)                # at most one beat already due may still land
+    n = len(events)
+    time.sleep(0.25)
+    try:
+        assert len(events) == n, f"{len(events) - n} beats from a loop that stopped passing"
+        assert "has not passed" in capsys.readouterr().err
+    finally:
+        hb.stop()
+
+
+def test_nothing_is_written_before_the_loop_first_passes():
+    events, append = recorder()
+    hb = lv.Heartbeat("Resident@1a2b3c", "u", 0.05, append=append).start()
+    time.sleep(0.12)
+    assert events == []
+    hb.tick()
+    time.sleep(0.03)
+    hb.stop()
+    assert len(events) == 1, "the first tick should beat at once"
+
+
 def test_in_flight_is_reported_when_the_unit_gives_it():
     events, append = recorder()
-    lv.Heartbeat("C@1a2b3c", "u", 10.0, in_flight=lambda: 3, append=append).start()
+    hb = lv.Heartbeat("C@1a2b3c", "u", 10.0, in_flight=lambda: 3, append=append).start()
+    hb.tick()
     time.sleep(0.05)
+    hb.stop()
     assert events[0][1]["in_flight"] == 3
 
 
@@ -58,6 +104,7 @@ def test_a_unit_named_with_its_interval_starts_a_heartbeat_with_the_home_card(tm
     try:
         assert hb is not None and hb.unit == "amail-broker" and hb.interval_s == 30.0
         assert hb.card.startswith("Resident@")
+        hb.tick()
         time.sleep(0.05)
         assert events and events[0][1]["agent"] == hb.card
     finally:
@@ -114,3 +161,27 @@ def test_pd_alive_with_a_malformed_setting_fails(monkeypatch, tmp_path):
     rc, events = _alive(monkeypatch, {"MACF_PD_UNIT": "mail-clock", "MACF_PD_LIVENESS_S": "often",
                                       "MACEFF_AGENT_HOME_DIR": str(_home(tmp_path))})
     assert (rc, events) == (1, [])
+
+
+# --- the mail broker ticks from its accept loop -------------------------------------------------
+
+def test_the_broker_server_calls_its_pass_hook_while_idle(tmp_path):
+    """socketserver passes service_actions on every turn of the accept loop, idle or not, so
+    the broker's heartbeat ticks while the loop runs and stops when it stops."""
+    import threading
+    from macf.amail.broker import _Handler, _Server
+    server = _Server(str(tmp_path / "s.sock"), _Handler)
+    passes = []
+    server.on_pass = lambda: passes.append(1)
+    t = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
+    t.start()
+    try:
+        time.sleep(0.2)
+        assert len(passes) >= 3, f"{len(passes)} passes in 0.2 s at a 0.02 s poll"
+        assert server.in_flight() == 0
+    finally:
+        server.shutdown()
+        server.server_close()
+    n = len(passes)
+    time.sleep(0.1)
+    assert len(passes) == n, "the hook ran after the loop stopped"

@@ -97,9 +97,12 @@ def main() -> int:
         print(f"refusing to start: {e}", file=sys.stderr)
         return 1
 
-    # Run as a primal daemon's unit, the broker reports its own liveness (MIS-0002-R14);
-    # started any other way, the environment names no unit and nothing is written.
-    heartbeat_from_env()
+    # Run as a primal daemon's unit, the broker reports its own liveness (MIS-0002-R14),
+    # one beat per interval in which its accept loop passed; started any other way, the
+    # environment names no unit and nothing is written.
+    heartbeat = heartbeat_from_env(in_flight=server.in_flight)
+    if heartbeat is not None:
+        server.on_pass = heartbeat.tick
 
     launched_by = os.environ.get("AMAIL_BROKER_LAUNCHED_BY", "")
     print(f"amail broker (unprivileged, uid {os.geteuid()}"

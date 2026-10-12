@@ -44,8 +44,15 @@ def emit(card: str, unit: str, interval_s: float, in_flight: Optional[int] = Non
 
 
 class Heartbeat:
-    """Emits liveness every *interval_s* from a daemon thread until ``stop``. The first event
-    goes out at once, so the unit reads alive as soon as its loop has started."""
+    """Emits liveness for a work loop that calls ``tick`` once per pass, until ``stop``.
+
+    A beat follows a pass, not the clock: each interval it writes only when the loop has
+    ticked since the last beat, so a loop that wedges stops the events and the daemon
+    sees the unit go overdue (MIS-0002-R14, R18). A thread on its own timer would keep
+    writing while the loop it speaks for is stuck. The first beat goes out on the first
+    tick, so the unit reads alive as soon as its loop has passed once. A loop that can
+    block for longer than its interval, on a quiet socket say, needs a timeout so that it
+    passes at least once per interval: that is the unit's contract with its daemon."""
 
     def __init__(self, card: str, unit: str, interval_s: float,
                  in_flight: Optional[Callable[[], Optional[int]]] = None,
@@ -54,17 +61,34 @@ class Heartbeat:
         self._in_flight = in_flight or (lambda: None)
         self._append = append
         self._stop = threading.Event()
+        self._ticked = threading.Event()
         self._thread = threading.Thread(target=self._run, name=f"pd-liveness-{unit}", daemon=True)
 
     def start(self) -> "Heartbeat":
         self._thread.start()
         return self
 
+    def tick(self) -> None:
+        """The work loop has passed once. Cheap enough to call on every pass."""
+        self._ticked.set()
+
     def stop(self) -> None:
         self._stop.set()
+        self._ticked.set()
 
     def _run(self) -> None:
+        stalled = False
         while True:
+            if not self._ticked.wait(self.interval_s):
+                if not stalled:
+                    print(f"⚠️ MACF: pd: {self.unit}'s loop has not passed in {self.interval_s:g} s, "
+                          f"so no liveness is written until it does", file=sys.stderr)
+                    stalled = True
+                continue
+            if self._stop.is_set():
+                return
+            self._ticked.clear()
+            stalled = False
             if not emit(self.card, self.unit, self.interval_s, self._in_flight(), self._append):
                 print(f"⚠️ MACF: pd: liveness for {self.unit} was not recorded (the unit will read "
                       f"overdue if this persists)", file=sys.stderr)
@@ -75,7 +99,9 @@ class Heartbeat:
 def heartbeat_from_env(in_flight: Optional[Callable[[], Optional[int]]] = None,
                        environ=os.environ,
                        append: Optional[Callable[[str, dict], bool]] = None) -> Optional[Heartbeat]:
-    """Start a heartbeat when this process runs as a declared unit, else return None.
+    """Start a heartbeat when this process runs as a declared unit, else return None. The
+    caller's work loop calls ``tick`` on the result once per pass; nothing is written until
+    it does.
 
     Runs as a unit when the environment names the unit, its interval and the agent home.
     A partial or malformed setting is reported on stderr and no heartbeat starts: liveness
