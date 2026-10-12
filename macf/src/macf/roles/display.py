@@ -236,7 +236,7 @@ _PUT_DOWN_BY = re.compile(r"engaged (D\w+(?:, D\w+)*) instead")
 #: Updates that record something about a waiting duty without taking it up again. A
 #: note saying why it waits is what the policy asks for (9.4), so it must not end the
 #: line; engage, done and defer do.
-_WHILE_WAITING = frozenset({"note", "occurrence", "link", "unlink", "edit"})
+_WHILE_WAITING = frozenset({"note", "occurrence", "link", "unlink", "edit", "correction"})
 
 
 def return_point(pairs: Sequence[Tuple[Role, Sequence[Duty]]]) -> Optional[Tuple[Duty, float, str]]:
