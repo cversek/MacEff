@@ -121,9 +121,16 @@ def event_occurrence(duty: Duty, at: datetime, role_expires: Optional[date] = No
     floor = _declared_at(duty)
     limit = cad.until or role_expires
     closed = False
-    for ev in read_events(reverse=True, only=[cad.event, "duty_added", "duty_serviced"]):
+    for ev in read_events(reverse=True, only=[cad.event, "duty_added", "duty_serviced",
+                                              "duty_occurrence_carried"]):
         kind, data = ev.get("event"), ev.get("data") or {}
         when = datetime.fromtimestamp(float(ev.get("timestamp") or 0))
+        if kind == "duty_occurrence_carried":
+            # Re-recorded by the cycle carry (cycle_carry.OCCURRENCE_EVENT): the occurrence is
+            # the event's own time, so its grace keeps running from it.
+            if data.get("duty_id") != duty.id or when > at:
+                continue
+            return datetime.fromtimestamp(float(data.get("occurred_at") or 0)), closed
         if when > at:
             continue
         if kind == "duty_added":

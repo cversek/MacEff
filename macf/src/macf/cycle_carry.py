@@ -43,7 +43,7 @@ CARRY_KEY_FIELD = "mode"
 #: boundary unless carried, exactly like a mode. The play-time timer is read the
 #: same way and goes with them. The focused role is read on every tool call, so it
 #: is read cycle-scoped too, and carried (#460).
-CARRY_FAMILIES = ("mode", "scope", "timer", "focus")
+CARRY_FAMILIES = ("mode", "scope", "timer", "focus", "occurrences")
 
 #: Written after every carry, whether or not anything was carried. It is what
 #: bounds the next boundary's walk: a cycle holding a COMPLETE marker (every
@@ -57,6 +57,47 @@ TIMER_EVENT_TYPES = frozenset({"scope_timer_set", "scope_timer_cleared", "scope_
 #: carry does not import the roles package.
 FOCUS_EVENT = "role_focus_change"
 
+#: An ``on:<event>`` duty's occurrence still open at the boundary, re-recorded on the near
+#: side with the time its event happened (``roles.priority.event_occurrence`` reads it).
+#: Its own event rather than the trigger again, so no other reader of the trigger is told
+#: it happened twice.
+OCCURRENCE_EVENT = "duty_occurrence_carried"
+
+
+def _event_duties() -> List[Tuple[str, str]]:
+    """(duty id, trigger event) for every open duty with an ``on:<event>`` cadence. The
+    store builds its models, which is fine once per compaction; an unreadable store
+    carries no occurrence and says why."""
+    try:
+        from .roles.cadence import is_event_cadence, parse_cadence
+        from .roles.store import RoleStore
+        return [(d.id, parse_cadence(d.cadence).event) for d, _ in RoleStore().all_duties()
+                if d.state not in ("done", "deferred") and is_event_cadence(d.cadence)]
+    except Exception as e:  # noqa: BLE001 - GUARD: the roles store must not break the carry
+        print(f"⚠️ MACF: carry: event duties unreadable, no occurrence carried: {e}", file=sys.stderr)
+        return []
+
+
+def _open_occurrences(window: List[dict], duties: List[Tuple[str, str]]) -> List[dict]:
+    """Each event duty's occurrence left open at the boundary: its latest trigger, or
+    carried occurrence, after its declaration and not followed by a done_on service.
+    Read in the log's own order, as ``event_occurrence`` reads it."""
+    out = []
+    for duty_id, trigger in duties:
+        occ = None
+        for event in window:
+            kind, data = event.get("event"), event.get("data") or {}
+            if kind == trigger:
+                occ = event.get("timestamp")
+            elif kind == OCCURRENCE_EVENT and data.get("duty_id") == duty_id:
+                occ = data.get("occurred_at")
+            elif data.get("duty_id") == duty_id and (kind == "duty_added"
+                                                    or (kind == "duty_serviced" and data.get("done_on"))):
+                occ = None
+        if occ is not None:
+            out.append({"duty_id": duty_id, "event": trigger, "occurred_at": occ})
+    return out
+
 
 def _is_complete_marker(event: dict) -> bool:
     if event.get("event") != CARRY_MARKER_EVENT:
@@ -66,7 +107,7 @@ def _is_complete_marker(event: dict) -> bool:
     return set(CARRY_FAMILIES) <= families and data.get("complete") is True
 
 
-def _read_window() -> Tuple[List[dict], bool]:
+def _read_window(extra: frozenset = frozenset()) -> Tuple[List[dict], bool]:
     """Relevant events since the last complete carry, oldest first.
 
     Walks back from the boundary just written. The walk stops at the first
@@ -81,7 +122,8 @@ def _read_window() -> Tuple[List[dict], bool]:
     reached the start of history without finding a complete marker.
     """
     from .task.scope import SCOPE_EVENT_TYPES
-    relevant = CARRIED_EVENT_TYPES | SCOPE_EVENT_TYPES | TIMER_EVENT_TYPES | {FOCUS_EVENT}
+    relevant = (CARRIED_EVENT_TYPES | SCOPE_EVENT_TYPES | TIMER_EVENT_TYPES | {FOCUS_EVENT}
+                | {OCCURRENCE_EVENT, "duty_added", "duty_serviced"} | extra)
 
     collected: List[dict] = []
     boundaries_seen = 0
@@ -188,7 +230,8 @@ def carry_state_forward(current_cycle: Optional[int] = None) -> List[str]:
 
     from .task.scope import SCOPE_EVENT_TYPES, replay_scope_events
 
-    window, bootstrapped = _read_window()
+    event_duties = _event_duties()
+    window, bootstrapped = _read_window(frozenset(t for _, t in event_duties))
     carried: List[str] = []
     failed: List[str] = []
 
@@ -245,6 +288,13 @@ def carry_state_forward(current_cycle: Optional[int] = None) -> List[str]:
         data["origin_cycle"] = _origin_cycle(focus, data, current_cycle)
         data.update(provenance)
         (carried if append_event(FOCUS_EVENT, data) else failed).append("focus")
+
+    # Open on:<event> occurrences, so an obligation the event opened is still owed after
+    # the agent compacts, its grace still running from the real event (#632).
+    occurrences = _open_occurrences(window, event_duties)
+    if occurrences:
+        ok = all([append_event(OCCURRENCE_EVENT, dict(o, **provenance)) for o in occurrences])
+        (carried if ok else failed).append("occurrences")
 
     marker = {
         "cycle": current_cycle,

@@ -114,3 +114,48 @@ def test_the_calendar_shows_an_occurrence_when_its_event_happened(store, role):
     mine = [e for e in evs if e.duty is not None and e.duty.id == d.id]
     assert len(mine) == 1 and mine[0].when.date() == today and not mine[0].done
     assert "⏰ on host_rebuild" in cal.agenda(evs, today - timedelta(days=1), today + timedelta(days=1))
+
+
+def _compact():
+    """A compaction, with the carry the SessionStart hook runs after it."""
+    from macf.cycle_carry import carry_state_forward
+    _event(CYCLE_BOUNDARY_EVENT)
+    return carry_state_forward(current_cycle=2)
+
+
+def test_an_open_occurrence_survives_a_compaction_with_its_time(store, role):
+    """An obligation like 'after a host reboot, re-check X' most needs to outlive the
+    moment the agent forgets (#632 review)."""
+    r, folder = role
+    d, _ = store.add_duty(r, folder, "check the volumes", cadence="on:host_rebuild")
+    _event("host_rebuild")
+    before = _place(d)
+    assert "occurrences" in _compact()
+    after = _place(store.find_duty(d.id)[0])
+    assert after.tier == DUE_SOON and after.occurrence == before.occurrence
+
+
+def test_the_grace_runs_from_the_real_event_across_a_compaction(store, role):
+    r, folder = role
+    d, _ = store.add_duty(r, folder, "check the volumes", cadence="on:host_rebuild",
+                          horizon="1h", why="before the next job")
+    _event("host_rebuild")
+    _compact()
+    assert _place(store.find_duty(d.id)[0], datetime.now() + timedelta(hours=2)).tier == OVERDUE
+
+
+def test_a_closed_occurrence_is_not_carried(store, role):
+    r, folder = role
+    d, path = store.add_duty(r, folder, "check the volumes", cadence="on:host_rebuild")
+    _event("host_rebuild")
+    store.note_duty(d, path.parent, "checked", done_on=date.today())
+    assert "occurrences" not in _compact()
+    assert _place(store.find_duty(d.id)[0]).tier == NORMAL
+
+
+def test_edit_can_make_a_duty_event_triggered_without_a_horizon(store, role):
+    """add and edit both go through the model, so they read the cadence the same way."""
+    r, folder = role
+    d, path = store.add_duty(r, folder, "check the volumes")
+    d = store.edit_duty(d, path.parent, {"cadence": "on:host_rebuild"}, why="it recurs on rebuilds")
+    assert d.cadence == "on:host_rebuild" and d.horizon is None
