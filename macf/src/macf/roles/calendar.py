@@ -11,9 +11,9 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from .cadence import parse_cadence
+from .cadence import is_event_cadence, parse_cadence
 from .models import Duty, Role
-from .priority import approach_mark, end_of_day, now, occurrences
+from .priority import approach_mark, end_of_day, event_occurrence, now, occurrences
 
 DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
@@ -73,7 +73,13 @@ def events(pairs: Sequence[Tuple[Role, List[Duty]]], start: date, end: date,
                 continue
             if d.due is not None and start <= d.due.date() <= end:
                 out.append(Event(d.due, "due", role, d, done=d.state == "done"))
-            if d.cadence:
+            if d.cadence and is_event_cadence(d.cadence):
+                # No future date exists for an event; a recorded occurrence shows
+                # when the event happened, open until a done_on note closes it.
+                occ, closed = event_occurrence(d, at, role.expires)
+                if occ is not None and start <= occ.date() <= end:
+                    out.append(Event(occ, "occurrence", role, d, done=closed))
+            elif d.cadence:
                 cad = parse_cadence(d.cadence)
                 done = set(d.done_on_dates())
                 for occ in occurrences(d, start, end, role.expires):
@@ -94,7 +100,12 @@ def _event_line(e: Event, at: datetime) -> str:
         h, m = divmod(e.duration_minutes, 60)
         when += f" +{h}h" if not m else f" +{h}h{m:02d}"
     status = "✔ " if e.done else ("✗ " if e.missed else "")
-    mark = "" if (e.done or e.missed) else approach_mark(e.when, e.duty.horizon_minutes() if e.duty else None, at)
+    if e.done or e.missed:
+        mark = ""
+    elif e.duty is not None and is_event_cadence(e.duty.cadence):
+        mark = "⏰ on " + parse_cadence(e.duty.cadence).event
+    else:
+        mark = approach_mark(e.when, e.duty.horizon_minutes() if e.duty else None, at)
     tag = {"review": " · review", "expires": " · tenure ends"}.get(e.kind, "")
     return f"{when:<20} {e.role.icon} {status}{e.title}{tag}" + (f"  {mark}" if mark else "")
 

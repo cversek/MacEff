@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "description": "MacEff Core Policy System with CEP Navigation - Full Policy Index",
   "last_updated": "2026-08-05",
-  "base_path": "/opt/maceff/policies",
+  "base_path": "/opt/maceff/framework/policies",
   "consciousness_patterns": {
     "description": "CEPs help agents recognize when they need specific knowledge",
     "host_tier": [

@@ -3,8 +3,9 @@
 ``role focus <id>`` and ``role unfocus`` append ``role_focus_change`` events;
 the current focus is the most recent one, found by reverse scan (derive, do
 not store -- the same rule work mode follows). Focus is lifetime state: it
-survives compaction, so the scan reads the whole log and exits on the first
-match, costing 'events since focus last changed'.
+survives compaction because the cycle carry re-asserts it at each boundary, so
+the scan reads one cycle (#460). A carried focus event is a continuation, not
+an act: its time is the original's, and it never acknowledges a duty.
 """
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -13,11 +14,39 @@ from ..agent_events_log import append_event, read_events
 EVENT = "role_focus_change"
 
 
+#: The carry's marker (``macf.cycle_carry.CARRY_MARKER_EVENT``), and the family name
+#: it lists when it carried the focus.
+CARRY_MARKER = "state_carried"
+CARRY_FAMILY = "focus"
+
+
+def _since(ev: Dict[str, Any]) -> float:
+    data = ev.get("data") or {}
+    return float(data.get("carried_from_timestamp") or ev.get("timestamp") or 0.0)
+
+
 def current_focus_event() -> Tuple[Optional[str], float]:
-    """(focused role's id or None, epoch of the focus change that set it)."""
-    for ev in read_events(reverse=True, scope="all"):   # lifetime state: see module docstring
+    """(focused role's id or None, epoch of the focus change that set it).
+
+    Cycle-scoped. A miss is authoritative only when this cycle's carry lists focus
+    and completed; a cycle opened before the carry knew about focus falls back
+    to the whole log, once, the way the carry itself bootstraps."""
+    carried_here = False
+    for ev in read_events(reverse=True):
+        kind = ev.get("event")
+        if kind == EVENT:
+            return ev.get("data", {}).get("role_id") or None, _since(ev)
+        data = ev.get("data") or {}
+        # Only a complete carry makes a miss authoritative: when an append failed the
+        # marker still lists every family, and reading that as 'unfocused' would quietly
+        # stop the focus gate for the whole cycle.
+        if kind == CARRY_MARKER and CARRY_FAMILY in (data.get("families") or ()) and data.get("complete") is True:
+            carried_here = True
+    if carried_here:
+        return None, 0.0
+    for ev in read_events(reverse=True, scope="all"):   # before the carry knew focus
         if ev.get("event") == EVENT:
-            return ev.get("data", {}).get("role_id") or None, float(ev.get("timestamp") or 0.0)
+            return ev.get("data", {}).get("role_id") or None, _since(ev)
     return None, 0.0
 
 
@@ -31,7 +60,8 @@ def last_focus_event_for(role_id: str, after_epoch: float, scope: str = "cycle")
     for ev in read_events(reverse=True, scope=scope):
         if ev.get("timestamp", 0) < after_epoch:
             return False
-        if ev.get("event") == EVENT and ev.get("data", {}).get("role_id") == role_id:
+        data = ev.get("data", {})
+        if ev.get("event") == EVENT and data.get("role_id") == role_id and not data.get("carried"):
             return True
     return False
 

@@ -517,6 +517,22 @@ def test_presence_on_call_line():
     assert presence.call_line(presence.from_events(log, daemon_alive=True)) == "onlookers: SecondOnlooker@cd34ef"
 
 
+def test_surfaces_start_from_the_newest_daemon():
+    """A surface state a previous daemon recorded says nothing about the operator now: the
+    fold starts at the newest pd_daemon_start, so a restarted daemon reports only what it saw."""
+    from macf.pd.interface import EVENT_DAEMON_START
+    term = presence.Surface("terminal", keyboard=True, viewer_seen=True)
+    log = [{"event": EVENT_DAEMON_START, "data": {}}, presence.surface_event(term)]
+    assert presence.fold_surfaces(log) == {"terminal": presence.ATTACHED}
+    log.append({"event": EVENT_DAEMON_START, "data": {}})
+    assert presence.fold_surfaces(log) == {}
+    assert presence.call_line(presence.from_events(log, daemon_alive=True)) == ""
+    log.append(presence.surface_event(presence.Surface("remote-control", keyboard=True,
+                                                       detects_viewer=False, viewer_seen=True)))
+    assert presence.fold_surfaces(log) == {"remote-control": presence.ENABLED}
+    assert presence.DAEMON_START == EVENT_DAEMON_START
+
+
 def test_undetectable_viewer_said():
     """R98: a keyboard surface that cannot see its viewer says enabled, never attached."""
     rc = presence.Surface("remote-control", keyboard=True, detects_viewer=False, viewer_seen=True)

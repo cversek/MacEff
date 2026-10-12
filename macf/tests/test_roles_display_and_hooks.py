@@ -287,6 +287,45 @@ def test_nag_fires_on_the_schedule_and_stops_after_refocus(store, lab):
     assert rh.conscientiousness_nag(store, NOW) == ""
 
 
+def test_hook_nag_reads_through_a_cache_that_a_store_write_and_the_clock_expire(store, lab, monkeypatch, tmp_path):
+    """#460: the hook's call (no arguments) says what the explicit call says, and reuses the
+    due-now list until the store changes or the TTL passes. Focus and counts stay live."""
+    role, folder = lab
+    store.add_duty(role, folder, "board plan", due=SOON3, horizon="3d", why="w")
+    _tool_calls(4)
+    hooked = rh.conscientiousness_nag()
+    assert hooked and hooked == rh.conscientiousness_nag(store, NOW)
+    from macf.utils.paths import find_agent_home
+    cached = rh._nag_cache_path(rh.roles_dir())
+    assert cached.exists() and cached.parent == find_agent_home() / ".maceff" / "cache"
+    built = []
+    real = rh._due_now
+    monkeypatch.setattr(rh, "_due_now", lambda st, at: built.append(1) or real(st, at))
+    _tool_calls(4)
+    assert "board plan" in rh.conscientiousness_nag() and built == []      # a hit builds nothing
+    time.sleep(0.01)
+    store.add_duty(role, folder, "late", due=LATE, horizon="1d", why="w")
+    _tool_calls(8)
+    assert "late" in rh.conscientiousness_nag() and built == [1]          # a write rebuilds
+    monkeypatch.setattr(rh, "NAG_CACHE_TTL_S", 0)
+    rh.conscientiousness_nag()
+    assert built == [1, 1]                                                 # so does the clock
+    monkeypatch.setattr(rh, "NAG_CACHE_TTL_S", 60)
+    set_focus(role.id, None)
+    _tool_calls(8)
+    assert rh.conscientiousness_nag() == ""                                # focus is read live
+
+
+def test_hook_path_does_not_build_the_roles_models(tmp_path):
+    """#460: importing what PreToolUse imports, and a cache hit, load no pydantic model module."""
+    import subprocess
+    import sys as _sys
+    code = ("import sys, macf.roles.hooks, macf.roles.focus, macf.roles.priority; "
+            "print('macf.roles.models' in sys.modules)")
+    out = subprocess.run([_sys.executable, "-c", code], capture_output=True, text=True)
+    assert out.stdout.strip() == "False", out.stderr
+
+
 def test_nag_overdue_every_base_with_tone_ramp(store, lab):
     role, folder = lab
     store.add_duty(role, folder, "late", due=LATE, horizon="1d", why="w")
@@ -587,3 +626,25 @@ def test_lines_carry_their_codes_before_the_marker(store, lab):
     lines = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)
     assert lines[1].startswith(f"◼ R{role.id} 🎓 Lab Course Assistant")
     assert lines[2].startswith(f"    ◻ D{d.id} 📌 board plan")
+
+
+def test_stanza_names_the_duty_an_engage_put_down(store, lab):
+    """#389 B2: engaging a duty puts the one attention was on back to pending. The stanza
+    names it as the place to return to, until it is engaged again or closed."""
+    role, folder = lab
+    (folder / "charter.md").write_text("# x\n## Boundaries\nMay draft. Must not contact anyone.\n")
+    a, apath = store.add_duty(role, folder, "grade the reports")
+    b, bpath = store.add_duty(role, folder, "answer the TA mail")
+    store.engage(a, apath.parent)
+    assert not any("return to" in l for l in disp.stanza(store, "focused", role.id, at=NOW, ansi=False))
+    store.engage(b, bpath.parent)                      # the interrupt
+    tail = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)[-1]
+    assert "return to" in tail and f"D{a.id}" in tail and "grade the reports" in tail and f"D{b.id}" in tail
+    a = store.find_duty(a.id)[0]
+    store.note_duty(a, apath.parent, "waits for the TA reply")   # recording why it waits keeps the line
+    tail = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)[-1]
+    assert "return to" in tail and f"D{a.id}" in tail
+    a = store.find_duty(a.id)[0]
+    store.engage(a, apath.parent)                      # returned: the line goes
+    assert not any(f"D{a.id} grade" in l and "return to" in l
+                   for l in disp.stanza(store, "focused", role.id, at=NOW, ansi=False))

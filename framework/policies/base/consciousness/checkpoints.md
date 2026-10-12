@@ -643,7 +643,7 @@ Approach:
 1. Personal Policies (~/agent/policies/personal/) - HIGHEST
 2. Project Policies (/shared_workspace/.maceff/policies/)
 3. Framework Policies (/opt/maceff/framework/policies/current/)
-4. Core Policies (/opt/maceff/framework/policies/base/) - LOWEST
+4. Core Policies (/opt/maceff/framework/policies/sets/base/) - LOWEST
 
 **Why This Matters**:
 - Agents' earned wisdom overrides all other policies

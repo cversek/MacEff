@@ -7,13 +7,16 @@ files, never from the environment (MIS-0002-R02 (pd_MUST-NOT_take_identity_from_
 
 The control socket is a Unix socket only (MIS-0002-R80 (pd_MUST-NOT_listen_on_network)).
 It serves one request per connection, one JSON object per line each way, and only to
-the daemon's own user, which the kernel reports. The record beside it is written after
+the daemon's own user, which the kernel reports. A request line has one deadline to arrive
+whole, and a request that fails inside the daemon costs that request alone, so no client
+can hold or end the loop that supervises the units. The record beside it is written after
 the socket is bound, so a client that finds a record finds a daemon it can reach.
 """
 import os
 import selectors
 import socket
 import sys
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -46,7 +49,8 @@ SOCKET_ASKERS = ("operator", "wind_down")
 #: How often the core makes its pass when nothing else wakes the loop.
 TICK_S = 0.25
 
-#: How long a connected client has to send its request line.
+#: How long a connected client has to send its whole request line, and the daemon to send
+#: its reply.
 REQUEST_TIMEOUT_S = 2.0
 
 #: The longest request line read; anything longer is refused, not buffered.
@@ -214,11 +218,21 @@ class Daemon:
         with conn:
             conn.setblocking(True)
             conn.settimeout(REQUEST_TIMEOUT_S)
-            response = self._handle(conn)
+            try:
+                response = self._handle(conn)
+            except Exception as e:  # noqa: BLE001 - GUARD, not handler: one request must not end the daemon
+                # Deliberately broad, as the core's pass is: a request that fails inside the
+                # daemon costs that request, and is announced and answered, never absorbed. A
+                # failure of the listener itself still ends the daemon, so its outer tier binds a
+                # fresh one.
+                print(f"⚠️ MACF: pd: a control request failed (the daemon goes on): {e!r}",
+                      file=sys.stderr)
+                response = Response(ok=False, error=f"the request failed inside the daemon: {e}")
             if not response.ok:
                 # Every refusal, now and later, names the policy that explains it.
                 response = response.model_copy(
                     update={"error": f"{response.error}\n{POLICY_POINTER}"})
+            conn.settimeout(REQUEST_TIMEOUT_S)   # reading the line spent the first one
             try:
                 conn.sendall(response.model_dump_json(exclude_none=True).encode() + b"\n")
             except OSError as e:
@@ -267,11 +281,23 @@ class Daemon:
     @staticmethod
     def _read_line(conn: socket.socket) -> Optional[str]:
         """The first line the client sent, or None when it sent no complete line.
-        A timeout or a broken connection raises, so the reply can say which."""
+
+        The whole line has one deadline, so a client that sends a byte at a time cannot hold
+        the loop for longer than a client that sends nothing. A spent deadline or a broken
+        connection raises, so the reply can say which."""
+        deadline = time.monotonic() + REQUEST_TIMEOUT_S
+        late = f"no complete request line within {REQUEST_TIMEOUT_S:g} s"
         chunks: List[bytes] = []
         size = 0
         while size <= MAX_REQUEST_BYTES:
-            chunk = conn.recv(4096)
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise TimeoutError(late)
+            conn.settimeout(left)
+            try:
+                chunk = conn.recv(4096)
+            except TimeoutError as e:   # socket.timeout is TimeoutError from Python 3.10
+                raise TimeoutError(late) from e
             if not chunk:
                 break
             chunks.append(chunk)
