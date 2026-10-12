@@ -97,6 +97,26 @@ def test_a_reasonless_correction_is_recorded_but_does_not_service(store, lab):
     assert d.updates[-1].kind == "edit" and rh._serviced_since(d, entered)
 
 
+def test_an_edit_cannot_make_a_dependency_cycle(store, lab):
+    """Two duties waiting on each other would both sit BLOCKED, out of view (#634 review)."""
+    role, folder = lab
+    alpha, apath = store.add_duty(role, folder, "alpha")
+    beta, _ = store.add_duty(role, folder, "beta", depends_on=[alpha.id])
+    gamma, _ = store.add_duty(role, folder, "gamma", depends_on=[beta.id])
+    for target in (beta.id, gamma.id):
+        with pytest.raises(RoleError, match="cycle"):
+            store.edit_duty(alpha, apath.parent, {"depends_on": [target]}, why="probe")
+    assert store.find_duty(alpha.id)[0].depends_on == []                  # nothing written
+
+
+def test_depends_on_takes_a_title_prefix_as_add_does(store, lab):
+    role, folder = lab
+    alpha, _ = store.add_duty(role, folder, "alpha task")
+    beta, bpath = store.add_duty(role, folder, "beta task")
+    beta = store.edit_duty(beta, bpath.parent, {"depends_on": ["alpha"]}, why="alpha first")
+    assert beta.depends_on == [alpha.id]
+
+
 def test_the_store_refuses_a_state_change(store, lab):
     """'Never its state' holds in the store, not only in the CLI (#634 review)."""
     role, folder = lab

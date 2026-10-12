@@ -337,6 +337,11 @@ class RoleStore:
         """Change a declared duty on the record. Never its state: engage, done, defer
         and reactivate do that. A reasoned edit is a service (roles policy 3.2)."""
         self._allowed(changes, self.DUTY_EDIT_FIELDS, "engage, done, defer and reactivate")
+        if "depends_on" in changes:
+            # Read a duty the way add does: by id or title prefix, stored as its id.
+            changes = dict(changes, depends_on=[self.find_duty(d.strip())[0].id
+                                                for d in changes["depends_on"] or [] if d.strip()])
+            self._refuse_cycle(duty, changes["depends_on"])
         moved = self._changes(duty, changes)
         if not moved:
             raise RoleError(f"nothing to change on duty {duty.id}: every value given is already its value")
@@ -347,9 +352,6 @@ class RoleStore:
         if timed and not why.strip():
             raise RoleError(f"changing {', '.join(timed)} needs --why: a horizon or date is reasoned "
                             "when it changes, as when it is declared (roles policy: reasoning a horizon)")
-        if "depends_on" in changes:
-            for dep in changes["depends_on"] or []:
-                self.find_duty(dep)
         data = dump(duty)
         for k, _, v in moved:
             data[k] = v
@@ -359,6 +361,23 @@ class RoleStore:
         append_event("duty_edited", {"duty_id": edited.id, "role_id": edited.role_id,
                                      "fields": [k for k, _, _ in moved]})
         return edited
+
+    def _refuse_cycle(self, duty: Duty, depends_on: List[str]) -> None:
+        """Refuse a dependency that leads back to the duty. Add cannot make one, since a new
+        duty has no dependents; an edit can, and both duties would then sit BLOCKED with no
+        blocker ranking above them, out of view (roles policy: tiers)."""
+        graph = {d.id: list(d.depends_on) for d, _ in self.all_duties()}
+        graph[duty.id] = list(depends_on)
+        seen, stack = set(), [(dep, [duty.id, dep]) for dep in depends_on]
+        while stack:
+            node, path = stack.pop()
+            if node == duty.id:
+                raise RoleError("that dependency makes a cycle: " + " -> ".join(path)
+                                + "; each duty would wait on the other and neither would rank")
+            if node in seen:
+                continue
+            seen.add(node)
+            stack.extend((nxt, path + [nxt]) for nxt in graph.get(node, []))
 
     def edit_role(self, role: Role, folder: Path, changes: Dict[str, Any], why: str = "") -> Role:
         """Change a role on the record. Never its state: pause, resume, expire and
