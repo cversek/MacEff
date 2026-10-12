@@ -468,6 +468,8 @@ The daemon listens on Unix sockets only, never on a network port [MIS-0002-R80 (
 
 **The runtime directory must be private.** The daemon creates it with mode 0700, and refuses to start when an existing one belongs to another user or is open to group or others. Under `/tmp`, another local user could have made the directory first, and every socket in it would then be theirs to replace.
 
+**A long-running daemon keeps its record from being swept.** On macOS, without `XDG_RUNTIME_DIR`, the runtime directory is under `/tmp`, and the system's `tmp_cleaner` deletes a regular file there once it has gone three days unread, unwritten and unchanged. The sockets are not regular files and their directory is never empty, so only the record is at risk, and `pd status` believes the daemon only through it. The daemon refreshes the record's times every hour, and writes it again if a cleaner has already taken it.
+
 ### 12.3 Who may connect, and what that proves
 
 The control socket accepts a connection only from the daemon's own user, as the kernel reports it for the connection. **That is all the check proves.** On a login that several agents share, or an agent and its operator, the kernel can't tell them apart. So a request names its asker, and the daemon records that claim beside the user, pid and start time it observed [MIS-0002-R52 (control_act_MUST_name_who_asked)]. The claim is an attribution, not an authentication, until each agent runs under its own account, and nothing over the socket gives a claimed operator more than any caller of the same login.

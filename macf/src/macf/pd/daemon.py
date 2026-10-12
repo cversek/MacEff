@@ -49,6 +49,12 @@ SOCKET_ASKERS = ("operator", "wind_down")
 #: How often the core makes its pass when nothing else wakes the loop.
 TICK_S = 0.25
 
+#: How often a running daemon refreshes its record. Without XDG_RUNTIME_DIR the record
+#: lives in /tmp, and macOS's tmp_cleaner deletes a regular file there once it has gone
+#: three days unread, unwritten and unchanged; the sockets and their directory are never
+#: taken. An hour keeps the record far inside that window at no measurable cost.
+RECORD_REFRESH_S = 3600.0
+
 #: How long a connected client has to send its whole request line, and the daemon to send
 #: its reply.
 REQUEST_TIMEOUT_S = 2.0
@@ -76,7 +82,10 @@ def card_for_home(agent_home: Path) -> str:
 class Daemon:
     """One agent's primal daemon: ``start``, then ``serve`` until ``stop``."""
 
-    def __init__(self, agent_home: Path, *, base: Optional[Path] = None, **core_options):
+    def __init__(self, agent_home: Path, *, base: Optional[Path] = None,
+                 record_refresh_s: float = RECORD_REFRESH_S, **core_options):
+        self._record_refresh_s = record_refresh_s
+        self._record_kept = time.monotonic()
         self.home = Path(agent_home)
         self.card = card_for_home(self.home)
         self.base = Path(base) if base else runtime_dir()
@@ -128,6 +137,7 @@ class Daemon:
                     else:
                         os.read(self._wake_r, 512)
                 self.core.tick()
+                self._keep_record()
         finally:
             sel.close()
             if self._stop_units:
@@ -175,6 +185,23 @@ class Daemon:
             return False
         finally:
             probe.close()
+
+    def _keep_record(self) -> None:
+        """Touch the record now and then, so a temp-directory cleaner never takes it for
+        abandoned; write it again if one already has. It is this daemon's own record, and
+        ``pd status`` believes the daemon only through it."""
+        now = time.monotonic()
+        if now - self._record_kept < self._record_refresh_s:
+            return
+        self._record_kept = now
+        try:
+            os.utime(self.record_path)
+        except FileNotFoundError:
+            print(f"⚠️ MACF: pd: the record at {self.record_path} was removed while the daemon ran; "
+                  "writing it again", file=sys.stderr)
+            self._record = self._write_record()
+        except OSError as e:
+            print(f"⚠️ MACF: pd: could not refresh the record at {self.record_path}: {e}", file=sys.stderr)
 
     def _write_record(self) -> DaemonRecord:
         record = DaemonRecord(pid=os.getpid(), proc_start=proc_start(os.getpid()) or "unknown")
