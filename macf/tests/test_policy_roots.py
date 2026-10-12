@@ -140,3 +140,59 @@ def test_the_cli_reads_and_lists_an_extra_root(roots, monkeypatch, tmp_path):
     read = run("policy", "read", "agentcad:agentcad-usage")
     assert read.returncode == 0, read.stderr
     assert "agentcad usage" in read.stdout
+
+
+# --- who can write a root (#592 review): a root's policies become the agent's instructions ----
+
+def test_a_root_writable_by_every_account_is_refused_by_name(roots, monkeypatch, capsys):
+    a = roots.a
+    a.chmod(0o777)
+    _set(monkeypatch, f"agentcad={a}")
+    assert mf.extra_policy_roots() == []
+    assert mf.find_policy_file("agentcad-usage") is None
+    err = capsys.readouterr().err
+    assert "policy root 'agentcad' skipped" in err and "writable by every account" in err
+
+
+def test_a_policy_file_writable_by_others_refuses_its_root(roots, monkeypatch, capsys):
+    a = roots.a
+    (a / "cad" / "agentcad-export.md").chmod(0o666)
+    _set(monkeypatch, f"agentcad={a}")
+    assert mf.extra_policy_roots() == []
+    assert "agentcad-export.md is writable by every account" in capsys.readouterr().err
+
+
+def test_group_write_counts_only_when_the_group_has_someone_else(roots, monkeypatch, capsys):
+    """A user-private group's write bit grants nobody else anything; a shared group's does."""
+    a = roots.a
+    a.chmod(0o775)
+    _set(monkeypatch, f"agentcad={a}")
+    monkeypatch.setattr(mf, "_private_group", lambda gid, uid: True)
+    assert [r.name for r in mf.extra_policy_roots()] == ["agentcad"]
+    mf._reported.clear()
+    monkeypatch.setattr(mf, "_private_group", lambda gid, uid: False)
+    assert mf.extra_policy_roots() == []
+    assert "which has other members" in capsys.readouterr().err
+
+
+def test_a_sticky_directory_above_the_root_is_allowed(roots, monkeypatch, tmp_path):
+    """/tmp is writable by everyone but sticky: no one else can rename or replace the root."""
+    a = roots.a
+    sticky = a.parent
+    sticky.chmod(0o1777)
+    _set(monkeypatch, f"agentcad={a}")
+    try:
+        assert [r.name for r in mf.extra_policy_roots()] == ["agentcad"]
+    finally:
+        sticky.chmod(0o755)
+
+
+def test_a_non_sticky_directory_above_the_root_writable_by_all_is_refused(roots, monkeypatch, capsys):
+    a = roots.a
+    a.parent.chmod(0o777)
+    _set(monkeypatch, f"agentcad={a}")
+    try:
+        assert mf.extra_policy_roots() == []
+        assert f"{a.parent} is writable by every account" in capsys.readouterr().err
+    finally:
+        a.parent.chmod(0o755)

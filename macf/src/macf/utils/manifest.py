@@ -40,6 +40,58 @@ def _report_once(message: str) -> None:
         print(f"⚠️ MACF: {message}", file=sys.stderr)
 
 
+def _private_group(gid: int, uid: int) -> bool:
+    """Whether a group holds no account but ``uid``: a user-private group, whose write bit
+    grants nobody else anything."""
+    import grp
+    import pwd
+    try:
+        me = pwd.getpwuid(uid).pw_name
+        members = set(grp.getgrgid(gid).gr_mem)
+    except KeyError:
+        return False
+    if members - {me}:
+        return False
+    return all(p.pw_gid != gid or p.pw_uid == uid for p in pwd.getpwall())
+
+
+def _writable_by_others(root: Path) -> str:
+    """Why someone other than this user could change what a root's policies say, or "" if
+    no one can (#592 review). Checked: the root, every directory and .md file under it, and
+    every directory above it. Each must be owned by this user or root, and not writable by
+    others or by a group with anyone else in it. A directory above the root may be writable
+    by others if it is sticky (/tmp): there no one else can rename or replace the root."""
+    import stat
+    uid = os.getuid()
+
+    def why(p: Path, ancestor: bool) -> str:
+        try:
+            st = p.stat()
+        except OSError as e:
+            return f"{p} cannot be checked ({e})"
+        if st.st_uid not in (uid, 0):
+            return f"{p} is owned by uid {st.st_uid}, not this user"
+        if ancestor and st.st_mode & stat.S_ISVTX:
+            return ""
+        if st.st_mode & stat.S_IWOTH:
+            return f"{p} is writable by every account"
+        if st.st_mode & stat.S_IWGRP and not _private_group(st.st_gid, uid):
+            return f"{p} is writable by group {st.st_gid}, which has other members"
+        return ""
+
+    root = root.resolve()
+    for p in [root, *root.rglob("*")]:
+        if p.is_dir() or p.suffix == ".md":
+            reason = why(p, ancestor=False)
+            if reason:
+                return reason
+    for p in root.parents:
+        reason = why(p, ancestor=True)
+        if reason:
+            return reason
+    return ""
+
+
 def extra_policy_roots(environ=None) -> List[PolicyRoot]:
     """The roots ``MACEFF_POLICY_ROOTS`` names, in order. An entry is ``path`` (named by its
     directory) or ``name=path``. A missing or unreadable root, a bad name and a repeated name
@@ -66,6 +118,12 @@ def extra_policy_roots(environ=None) -> List[PolicyRoot]:
             continue
         if not os.access(path, os.R_OK | os.X_OK):
             _report_once(f"policy root {name!r} skipped: {path} is not readable by this user ({POLICY_ROOTS_ENV})")
+            continue
+        unsafe = _writable_by_others(path)
+        if unsafe:
+            _report_once(f"policy root {name!r} skipped: {unsafe}. A policy read from a root becomes the "
+                         f"agent's instructions, so only this user (or root) may be able to write it "
+                         f"({POLICY_ROOTS_ENV}; policy_awareness 4.4)")
             continue
         roots.append(PolicyRoot(name, path))
     return roots
