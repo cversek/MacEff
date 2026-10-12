@@ -28,15 +28,19 @@ def _since(ev: Dict[str, Any]) -> float:
 def current_focus_event() -> Tuple[Optional[str], float]:
     """(focused role's id or None, epoch of the focus change that set it).
 
-    Cycle-scoped. A miss is authoritative only when this cycle's carry says it
-    carried the focus; a cycle opened before the carry knew about focus falls back
+    Cycle-scoped. A miss is authoritative only when this cycle's carry lists focus
+    and completed; a cycle opened before the carry knew about focus falls back
     to the whole log, once, the way the carry itself bootstraps."""
     carried_here = False
     for ev in read_events(reverse=True):
         kind = ev.get("event")
         if kind == EVENT:
             return ev.get("data", {}).get("role_id") or None, _since(ev)
-        if kind == CARRY_MARKER and CARRY_FAMILY in ((ev.get("data") or {}).get("families") or ()):
+        data = ev.get("data") or {}
+        # Only a complete carry makes a miss authoritative: when an append failed the
+        # marker still lists every family, and reading that as 'unfocused' would quietly
+        # stop the focus gate for the whole cycle.
+        if kind == CARRY_MARKER and CARRY_FAMILY in (data.get("families") or ()) and data.get("complete") is True:
             carried_here = True
     if carried_here:
         return None, 0.0

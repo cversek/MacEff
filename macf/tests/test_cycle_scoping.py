@@ -426,6 +426,18 @@ class TestFocusCarry:
 
         assert current_focus() == "r1"
 
+    def test_a_failed_carry_does_not_read_as_unfocused(self, isolated_events_log):
+        """A marker from a carry whose append failed still lists every family. Read as
+        authoritative it would say 'unfocused' all cycle and silence the focus gate."""
+        from macf.roles.focus import current_focus
+        _write(isolated_events_log, [
+            _ev("role_focus_change", 100, role_id="r1", previous=None),
+            _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+            _marker(201, 2, complete=False),
+        ])
+
+        assert current_focus() == "r1"
+
     def test_a_carried_focus_is_not_an_acknowledgement(self, isolated_events_log):
         """A duty entered DUE_SOON at 150, after the focus but before the boundary. The
         carried focus lands after 150; counting it would silence the nag on a duty
