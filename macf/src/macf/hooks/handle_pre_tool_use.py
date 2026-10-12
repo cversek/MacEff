@@ -505,7 +505,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             seen = segment(find_agent_home())
             if seen:
                 message_parts.append(f"👁️ {seen}")
-        except (OSError, ValueError, ImportError) as e:
+        except (OSError, ValueError, ImportError, KeyError, TypeError, AttributeError) as e:
             print(f"⚠️ MACF: presence skipped: {e}", file=sys.stderr)
 
         # Format message (compact single line)

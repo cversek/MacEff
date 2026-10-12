@@ -125,3 +125,20 @@ def test_the_carry_names_the_observe_events_it_folds():
     load; a renamed event would otherwise stop crossing without a word."""
     from macf.cycle_carry import OBSERVE_EVENTS
     assert OBSERVE_EVENTS == {EVENT_INVITE, EVENT_PAUSE, EVENT_RESUME, EVENT_END, EVENT_SURFACE, DAEMON_START}
+
+
+def test_a_malformed_invitation_costs_only_itself(isolated_events_log, capsys):
+    """A row that won't parse is skipped, with a line saying so, and the good invitation
+    beside it still folds and still carries; the carry still writes its marker."""
+    _write(isolated_events_log, [
+        _ev(EVENT_INVITE, 99, onlooker=OTHER),
+        {"timestamp": 99.5, "event": EVENT_INVITE, "breadcrumb": "", "data": None},
+        {"timestamp": 99.7, "event": EVENT_INVITE, "breadcrumb": "", "data": ["not", "a", "dict"]},
+        _invite(100),
+        _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+    ])
+
+    assert "observation" in carry_state_forward(current_cycle=2)
+    assert set(fold(_this_cycle())) == {WATCHER}
+    assert any(e["event"] == "state_carried" for e in _this_cycle())
+    assert "skipped" in capsys.readouterr().err

@@ -81,7 +81,10 @@ def _open_observations(window: List[dict], now: float) -> List[dict]:
     from .observe.acts import EVENT_END, EVENT_INVITE, EVENT_PAUSE, EVENT_RESUME, fold, lapsed
     acts: Dict[str, List[dict]] = {}
     for event in window:
-        kind, who = event.get("event"), (event.get("data") or {}).get("onlooker")
+        data = event.get("data") or {}
+        if not isinstance(data, dict):
+            continue  # malformed; ``fold`` below says so for the rows it is given
+        kind, who = event.get("event"), data.get("onlooker")
         if kind == EVENT_INVITE:
             acts[who] = [event]
         elif kind in (EVENT_PAUSE, EVENT_RESUME) and who in acts:

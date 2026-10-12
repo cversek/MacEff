@@ -73,3 +73,11 @@ def test_alive_means_the_record_names_this_very_process(tmp_path):
     assert not presence.daemon_alive(card, base=tmp_path)
     record_path(card, tmp_path).write_text("not json")
     assert not presence.daemon_alive(card, base=tmp_path)
+
+
+def test_a_malformed_row_does_not_cost_the_line(tmp_path, monkeypatch, isolated_events_log):
+    append_event(EVENT_INVITE, {"onlooker": "Broken@0b0b0b"})
+    _invite()
+    with patch.object(presence, "daemon_alive", return_value=True):
+        out = _line(_home(tmp_path, declared=True), monkeypatch)
+    assert "PreToolUse hook error" not in out and f"onlookers: {WATCHER}" in out

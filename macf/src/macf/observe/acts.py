@@ -23,6 +23,7 @@ import hashlib
 import hmac
 import re
 import secrets
+import sys
 from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, Iterable, Optional
 
@@ -80,10 +81,27 @@ def _check_card(card: str, what: str) -> None:
 
 
 def fold(events: Iterable[dict]) -> Dict[str, Observation]:
-    """The observations a log describes, by onlooker card. Events for others are ignored."""
+    """The observations a log describes, by onlooker card. Events for others are ignored.
+
+    A row that won't parse costs only itself: it is skipped, with a line on stderr naming
+    it, and the rows around it still fold. The per-call line and the compaction carry read
+    this fold, so one bad row must not take either of them down.
+    """
     state: Dict[str, Observation] = {}
     for ev in events:
-        kind, data = ev.get("event"), ev.get("data") or {}
+        try:
+            _fold_one(state, ev)
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
+            when = ev.get("timestamp") if isinstance(ev, dict) else None
+            print(f"⚠️ MACF: observe: skipped a malformed {ev.get('event') if isinstance(ev, dict) else 'row'} "
+                  f"at {when}: {e!r}", file=sys.stderr)
+    return state
+
+
+def _fold_one(state: Dict[str, Observation], ev: dict) -> None:
+    """Apply one observation act to ``state``; raises on a row that won't parse."""
+    kind, data = ev.get("event"), ev.get("data") or {}
+    if kind in (EVENT_INVITE, EVENT_PAUSE, EVENT_RESUME, EVENT_END):
         who = data.get("onlooker")
         if kind == EVENT_INVITE:
             state[who] = Observation(onlooker=who, status=ACTIVE, stream_from=int(data["stream_from"]),
@@ -100,7 +118,6 @@ def fold(events: Iterable[dict]) -> Dict[str, Observation]:
                                      pauses=o.pauses[:-1] + ((began, int(data["at"])),))
             elif kind == EVENT_END:
                 state[who] = replace(o, status=ENDED, ended_by=data.get("ended_by"), history=o.history + (kind,))
-    return state
 
 
 def invite(observed: str, onlooker: str, stream_from: int, state: Dict[str, Observation], *,
