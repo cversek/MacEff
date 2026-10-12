@@ -147,6 +147,7 @@ class TestTheBrokerEnforcesIt:
             agent_homes={"alpha": tmp_path / "alpha", "peer": peer_home},
             rate_limiter=RateLimiter(tmp_path / "rl",
                                      {"alpha": RateLimit(2, 3600)}))
+        (tmp_path / "handoff" / "peer").mkdir(mode=0o2770, parents=True)   # provisioned (§2.3)
         return {"broker": Broker(cfg), "cfg": cfg,
                 "msg": lambda: Message(sender="alpha@agents.test",
                                        to=["peer@agents.test"],
