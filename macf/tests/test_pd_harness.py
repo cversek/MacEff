@@ -266,3 +266,71 @@ def test_attach_is_not_a_daemon_act():
     """Attaching needs a terminal; the operator's command runs it, the daemon never does."""
     with pytest.raises(ValueError):
         client_command("attach", "aaaaaaaa-1")
+
+
+class _LazyStopClient(_Client):
+    """Answers a stop with 0 and leaves the worker running."""
+
+    def __call__(self, argv):
+        import subprocess
+        if argv[1] == "stop":
+            self.calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        return super().__call__(argv)
+
+
+class _SlowRespawnClient(_Client):
+    """Accepts a respawn at once, but its worker is listed only one readout later."""
+
+    def __init__(self, home):
+        super().__init__(home)
+        self.pending = None
+
+    def __call__(self, argv):
+        if argv[1] == "respawn":
+            import subprocess
+            self.calls.append(argv)
+            self.pending = next(s for s in self.sessions if s.startswith(argv[2]))
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        return super().__call__(argv)
+
+    def hosted(self):
+        listed = super().hosted()
+        if self.pending:
+            self.host(self.pending)   # listed from the next readout on
+            self.pending = None
+        return listed
+
+
+def test_a_stop_the_client_accepts_but_ignores_still_stops(tmp_path):
+    """R48: an outside stop succeeds; a client that acknowledges and does nothing cannot hold it."""
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    client = _LazyStopClient(home)
+    try:
+        hosted = client.host("3d52b89a-bbbb")
+        core = _core(home, client, marker)
+        core._units["session"].spec = core._units["session"].spec.model_copy(update={"stop_grace_s": 0.2})
+        core.boot()
+        core.stop("session", _policy(), "test stop")
+        # The worker's parent reaps it, as the client's daemon reaps its own workers; until
+        # then a signalled child is a zombie the probe still sees.
+        assert _settle(core, lambda: hosted.poll() is not None and core.state("session") == "stopped")
+    finally:
+        client.close()
+
+
+def test_a_respawned_worker_listed_late_is_waited_for_not_doubled(tmp_path):
+    """A respawn the client accepted is waited for; the unit's own command never runs beside it."""
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    client = _SlowRespawnClient(home)
+    try:
+        hosted = client.host("3d52b89a-bbbb")
+        core = _core(home, client, marker)
+        core.boot()
+        core.restart("session", _policy(), "test restart")
+        assert _settle(core, lambda: core.state("session") == "running" and core.pid("session") not in (None, hosted.pid))
+        assert not marker.exists()
+    finally:
+        client.close()
