@@ -86,6 +86,28 @@ def test_nothing_to_change_and_an_unknown_duty_are_refused(store, lab):
     assert _run(["role", "duty", "edit", d.id]) == 1                 # no field named
 
 
+def test_a_reasonless_correction_is_recorded_but_does_not_service(store, lab):
+    """A typo fix must not be the cheapest way past the focus gate (#634 review)."""
+    d, path = _dated(store, lab)
+    entered = datetime.now().replace(microsecond=0)
+    d = store.edit_duty(d, path.parent, {"title": "grade the reports"})
+    assert d.updates[-1].kind == "correction" and "title board plan -> grade the reports" in d.updates[-1].description
+    assert not rh._serviced_since(d, entered)
+    d = store.edit_duty(d, path.parent, {"body": "group B too"}, why="the TA asked for both groups")
+    assert d.updates[-1].kind == "edit" and rh._serviced_since(d, entered)
+
+
+def test_the_store_refuses_a_state_change(store, lab):
+    """'Never its state' holds in the store, not only in the CLI (#634 review)."""
+    role, folder = lab
+    d, path = _dated(store, lab)
+    with pytest.raises(RoleError, match="cannot change state"):
+        store.edit_duty(d, path.parent, {"state": "deferred"}, why="w")
+    assert store.find_duty(d.id)[0].state == "pending"
+    with pytest.raises(RoleError, match="cannot change state"):
+        store.edit_role(role, folder, {"state": "retired"}, why="w")
+
+
 def test_an_edit_is_a_service_and_takes_the_pointer(store, lab):
     role, folder = lab
     a, apath = _dated(store, lab, "board plan")
@@ -93,7 +115,7 @@ def test_an_edit_is_a_service_and_takes_the_pointer(store, lab):
     store.add_duty(role, folder, "welcome post")
     time.sleep(1.1)
     entered = datetime.now()
-    a = store.edit_duty(a, apath.parent, {"body": "both sections"})
+    a = store.edit_duty(a, apath.parent, {"body": "both sections"}, why="the TA asked for both")
     assert rh._serviced_since(a, entered.replace(microsecond=0))
     duties = [d for d, _ in store.duties(folder)]
     assert role_pointer(duties)[0] == a.id

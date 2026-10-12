@@ -297,6 +297,23 @@ class RoleStore:
     #: satisfied or set aside as it stood, and rewriting it would rewrite history.
     DUTY_TIME_FIELDS = ("due", "horizon", "cadence")
     ROLE_TIME_FIELDS = ("expires", "review_by", "review_horizon")
+    #: What an edit may change. State is never one: the state verbs carry their own
+    #: transition check, reason and event, and an edit would bypass all three.
+    DUTY_EDIT_FIELDS = ("title", "body", "importance", "due", "horizon", "cadence", "depends_on")
+    ROLE_EDIT_FIELDS = ("title", "icon", "expires", "review_by", "review_horizon", "resources")
+
+    @staticmethod
+    def _allowed(changes: Dict[str, Any], allowed: Tuple[str, ...], verbs: str) -> None:
+        bad = sorted(k for k in changes if k not in allowed)
+        if bad:
+            raise RoleError(f"an edit cannot change {', '.join(bad)}; it changes {', '.join(allowed)} "
+                            f"({verbs} change state)")
+
+    @staticmethod
+    def _edit_kind(why: str) -> str:
+        """A reasoned edit is a service; a correction with no reason is recorded but is
+        not, so fixing a typo cannot clear the focus gate (roles policy 3.2, 9.2)."""
+        return "edit" if why.strip() else "correction"
 
     @staticmethod
     def _changes(record: Any, changes: Dict[str, Any]) -> List[Tuple[str, Any, Any]]:
@@ -318,7 +335,8 @@ class RoleStore:
 
     def edit_duty(self, duty: Duty, folder: Path, changes: Dict[str, Any], why: str = "") -> Duty:
         """Change a declared duty on the record. Never its state: engage, done, defer
-        and reactivate do that. An edit is a service (roles policy 3.2)."""
+        and reactivate do that. A reasoned edit is a service (roles policy 3.2)."""
+        self._allowed(changes, self.DUTY_EDIT_FIELDS, "engage, done, defer and reactivate")
         moved = self._changes(duty, changes)
         if not moved:
             raise RoleError(f"nothing to change on duty {duty.id}: every value given is already its value")
@@ -336,7 +354,7 @@ class RoleStore:
         for k, _, v in moved:
             data[k] = v
         edited = Duty.model_validate(data)        # the declaration's rules, applied to the result
-        edited.updates.append(_update(self._edit_text(moved, why), kind="edit"))
+        edited.updates.append(_update(self._edit_text(moved, why), kind=self._edit_kind(why)))
         self.save_duty(edited, folder)
         append_event("duty_edited", {"duty_id": edited.id, "role_id": edited.role_id,
                                      "fields": [k for k, _, _ in moved]})
@@ -345,6 +363,7 @@ class RoleStore:
     def edit_role(self, role: Role, folder: Path, changes: Dict[str, Any], why: str = "") -> Role:
         """Change a role on the record. Never its state: pause, resume, expire and
         retire do that."""
+        self._allowed(changes, self.ROLE_EDIT_FIELDS, "pause, resume, expire and retire")
         moved = self._changes(role, changes)
         if not moved:
             raise RoleError(f"nothing to change on role {role.id}: every value given is already its value")
@@ -355,7 +374,7 @@ class RoleStore:
         for k, _, v in moved:
             data[k] = v
         edited = Role.model_validate(data)
-        edited.updates.append(_update(self._edit_text(moved, why), kind="edit"))
+        edited.updates.append(_update(self._edit_text(moved, why), kind=self._edit_kind(why)))
         self.save_role(edited, folder)
         append_event("role_edited", {"role_id": edited.id, "fields": [k for k, _, _ in moved]})
         return edited
