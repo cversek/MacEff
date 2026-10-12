@@ -207,6 +207,45 @@ def _describe_exit(code: int) -> str:
     return f"exited {code}"
 
 
+def group_members(pgid: int) -> List[tuple]:
+    """The live members of process group ``pgid``, as (pid, start time), zombies left out.
+
+    A unit leads its own group, so once its leader is reaped these are the processes it
+    started that outlived it. Read from /proc on Linux and from ``ps`` on macOS, where
+    there is no /proc; a member that ends while it is read is left out.
+    """
+    pids: List[int] = []
+    proc = Path("/proc")
+    if proc.is_dir():
+        for entry in proc.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                stat = (entry / "stat").read_text()
+            except OSError:
+                continue  # ended while the table was read
+            fields = stat[stat.rfind(")") + 2:].split()
+            if len(fields) > 2 and fields[0] != "Z" and fields[2] == str(pgid):
+                pids.append(int(entry.name))
+    else:
+        try:
+            out = subprocess.run(["ps", "-A", "-o", "pid=,pgid=,stat="], capture_output=True,
+                                 text=True, timeout=10, env={**os.environ, "LC_ALL": "C"})
+        except (OSError, subprocess.TimeoutExpired) as e:
+            print(f"⚠️ MACF: pd: cannot list process group {pgid}: {e}", file=sys.stderr)
+            return []
+        for line in out.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 3 and parts[1] == str(pgid) and not parts[2].startswith("Z"):
+                pids.append(int(parts[0]))
+    members = []
+    for pid in pids:
+        start = proc_start(pid)
+        if start:
+            members.append((pid, start))
+    return members
+
+
 class _Adopted:
     """A unit the previous daemon started that outlived it, in the place of a ``Popen``.
 
@@ -264,6 +303,8 @@ class _Runner:
     awaiting_respawn: Optional[float] = None  # monotonic deadline for a respawned worker to be listed
     client_escalated: bool = False      # a stop the client accepted outlived its grace, so signals followed
     client_binary: Optional[str] = None  # the claude found on the session unit's declared PATH
+    remnant: Optional[tuple] = None     # (pgid, [(pid, start)], kill_at, killed_at): members left after a stop reaped the leader
+    start_after_remnant: bool = False   # a start waits for the remnant to end
 
 
 class _LivenessTail:
@@ -544,7 +585,7 @@ class Core:
                 self._signal_stop(r, reason)
                 grace = max(grace, r.spec.stop_grace_s)
         deadline = time.monotonic() + grace
-        while any(r.proc is not None for r in self._units.values()):
+        while any(r.proc is not None or r.remnant is not None for r in self._units.values()):
             if time.monotonic() >= deadline:
                 for r in self._units.values():
                     if r.proc is not None:
@@ -557,6 +598,17 @@ class Core:
                             print(f"⚠️ MACF: pd: {r.spec.name} (pid {r.pid}) has not ended "
                                   f"{KILL_WAIT_S:g} s after SIGKILL; leaving it", file=sys.stderr)
                             r.proc = None
+                    if r.remnant is not None:
+                        # The daemon is going: what is left of a stopped unit is killed now,
+                        # if a recorded member still pins its group, and not waited on again.
+                        pgid, members = r.remnant[0], r.remnant[1]
+                        if any(self._probe(pid, start) for pid, start in members):
+                            try:
+                                os.killpg(pgid, signal.SIGKILL)
+                            except (ProcessLookupError, PermissionError) as e:
+                                print(f"⚠️ MACF: pd: cannot signal what is left of {r.spec.name} "
+                                      f"(group {pgid}): {e}", file=sys.stderr)
+                        r.remnant = None
             self.tick()
             time.sleep(0.02)
 
@@ -577,6 +629,10 @@ class Core:
                       f"(continuing with the others): {e}", file=sys.stderr)
 
     def _tick_unit(self, r: _Runner, now: float) -> None:
+        if r.remnant is not None:
+            self._tick_remnant(r, now)
+            if r.remnant is not None:
+                return
         if r.proc is None and r.awaiting_respawn is not None:
             self._await_respawn(r, now)
             return
@@ -681,6 +737,13 @@ class Core:
     def _on_exit(self, r: _Runner, code: int, now: float) -> None:
         why = _describe_exit(code)
         stopping = r.stopping
+        if stopping is not None and r.kill_at is not None and r.pid is not None:
+            # A stop this core sent reaped the leader before its deadline. A member of the
+            # unit's group that ignored SIGTERM is still the unit's, and the stop must reach it
+            # (persistent_layer 10.2): keep the deadline for the group, not just the leader.
+            members = group_members(r.pid)
+            if members:
+                r.remnant = (r.pid, members, r.kill_at, None)
         # An asked restart is half done when the old incarnation exits, whether this
         # core stopped it or it exited while the restart waited on its work in flight.
         asked_restart = r.then_start or r.drain is not None
@@ -798,7 +861,12 @@ class Core:
         (MIS-0002-R13 (pd_MUST_render_env_at_start)). The placeholders a declaration may
         use, the agent home, the card and the runtime directory, are filled in here from
         the daemon's own values, because the same agent's home differs between a host and a
-        container. The session unit asks Claude Code's own daemon first (``_from_client``)."""
+        container. While the previous incarnation's group still has members, the start
+        waits for them, so two copies never run side by side. The session unit asks Claude
+        Code's own daemon first (``_from_client``)."""
+        if r.remnant is not None:
+            r.start_after_remnant = True
+            return
         if self._from_client(r):
             return
         try:
@@ -829,6 +897,39 @@ class Core:
         r.started_at = self._clock()
         r.alive_at, r.alive_interval_s, r.in_flight = None, None, None
         self._transition(r, "starting", f"started as pid {proc.pid}")
+
+    def _tick_remnant(self, r: _Runner, now: float) -> None:
+        """Members of a stopped unit's group that outlived its leader. A member still the
+        process recorded, by pid and start time, keeps the group's id from being reused, so
+        at the stop's deadline a SIGKILL to the group reaches only the unit's processes. If no
+        recorded member is left, the pids may be others' now and nothing is signalled."""
+        pgid, members, kill_at, killed_at = r.remnant
+        live = [(pid, start) for pid, start in members if self._probe(pid, start)]
+        if not live:
+            self._end_remnant(r)
+            return
+        if killed_at is None and now >= kill_at:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass  # emptied between the probe and the signal
+            except PermissionError as e:
+                print(f"⚠️ MACF: pd: cannot signal what is left of {r.spec.name} (group {pgid}): {e}",
+                      file=sys.stderr)
+            r.remnant = (pgid, live, kill_at, now)
+        elif killed_at is not None and now - killed_at >= KILL_WAIT_S:
+            print(f"⚠️ MACF: pd: {len(live)} process(es) of {r.spec.name}'s group {pgid} have not ended "
+                  f"{KILL_WAIT_S:g} s after SIGKILL; leaving them", file=sys.stderr)
+            self._end_remnant(r)
+        else:
+            r.remnant = (pgid, live, kill_at, killed_at)
+
+    def _end_remnant(self, r: _Runner) -> None:
+        r.remnant = None
+        if r.start_after_remnant:
+            r.start_after_remnant = False
+            if r.want_up and r.proc is None:
+                self._spawn(r)
 
     def _begin_restart(self, r: _Runner, reason: str) -> None:
         r.then_start = True

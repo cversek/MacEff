@@ -50,6 +50,17 @@ if spec.get("crash_once") and not os.path.exists(spec["crash_once"]):
 if spec.get("ignore_term"):
     import signal
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
+if spec.get("child_ignores_term"):
+    # A child in the unit's process group that outlives SIGTERM, as a worker a unit
+    # forked can; it writes its own pid once its handler is set.
+    import subprocess
+    subprocess.Popen([sys.executable, "-c",
+                      "import os, signal, sys, time\n"
+                      "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                      "tmp = sys.argv[1] + '.tmp'\n"
+                      "open(tmp, 'w').write(str(os.getpid()))\n"
+                      "os.replace(tmp, sys.argv[1])\n"
+                      "time.sleep(300)\n", spec["child_ignores_term"]])
 log, me = os.environ["MACF_EVENTS_LOG_PATH"], os.getpid()
 start, began = proc_start(me), time.monotonic()
 if spec.get("dump"):
@@ -1173,3 +1184,54 @@ def test_a_stop_never_signals_a_process_that_took_an_adopted_units_pid(make_core
     finally:
         stranger.kill()
         stranger.wait()
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _child_pid(path):
+    assert wait_for(path.exists, timeout=5.0), "the unit's child never wrote its pid"
+    return int(path.read_text())
+
+
+def test_a_stop_reaches_the_units_whole_group(tmp_path, script, make_core):
+    """A stop reaches every process the unit started (persistent_layer 10.2): a child in
+    the unit's group that ignores SIGTERM outlives its leader's exit, and is killed at the
+    stop's deadline rather than left running."""
+    marker = tmp_path / "child.pid"
+    core = make_core([make_unit("worker", script, {"child_ignores_term": str(marker)}, stop_grace_s=0.5)])
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    child = _child_pid(marker)
+    core.stop("worker", OPERATOR, "test stop", peer=PEER)
+    assert drive(core, lambda: core.state("worker") == "stopped" and not _alive(child), timeout=5.0), \
+        f"state {core.state('worker')}, child {child} alive {_alive(child)}"
+
+
+def test_a_restart_waits_for_the_old_group(tmp_path, script, make_core):
+    """A restart starts the new incarnation only once the old one's group is gone, so two
+    copies never run side by side, as systemd waits for a unit's cgroup to empty."""
+    marker = tmp_path / "child.pid"
+    core = make_core([make_unit("worker", script, {"child_ignores_term": str(marker)}, stop_grace_s=0.5)])
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    first, child = core.pid("worker"), _child_pid(marker)
+    marker.unlink()
+    core.restart("worker", OPERATOR, "test restart", peer=PEER)
+    seen_alive_with_new = []
+
+    def new_incarnation():
+        pid = core.pid("worker")
+        if pid not in (None, first) and _alive(child):
+            seen_alive_with_new.append(pid)
+        return pid not in (None, first) and core.state("worker") == "running"
+    assert drive(core, new_incarnation, timeout=8.0)
+    assert not seen_alive_with_new, "the new incarnation started while the old group's child still ran"
+    assert not _alive(child)
