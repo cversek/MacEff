@@ -76,6 +76,9 @@ def deploy(tmp_path):
         verdict_authority=AUTHORITY,
     )
     cfg.spool_dir.mkdir()
+    # Provisioned, as a deployment does (amail.md §2.3): this broker is bound to no
+    # agent's uid, so it may not create the box itself.
+    (cfg.handoff_dir / AGENT).mkdir(mode=0o2770, parents=True)
     return cfg
 
 
@@ -107,6 +110,21 @@ def test_authorized_mail_is_handed_off_byte_exact(deploy):
     assert handed[0].read_bytes() == raw
     # Spool consumed only after the handoff completed.
     assert not eml.exists() and not sidecar.exists()
+
+
+def test_an_unprovisioned_box_is_quarantined_with_the_reason_not_created(deploy):
+    """amail.md §2.3: this broker is bound to no agent's uid, so a box it made would
+    not be the recipient's. The message is held with the reason, and no box appears."""
+    box = deploy.handoff_dir / AGENT
+    box.rmdir()
+    eml, sidecar = spool(deploy, make_raw())
+    result = inbound.process_entry(deploy, eml, sidecar)
+
+    assert result["disposition"] == QUARANTINED
+    assert "never provisioned" in result["reason"] and f"'{AGENT}'" in result["reason"]
+    assert not box.exists()
+    held = list(deploy.quarantine_dir.glob("*.reason"))
+    assert len(held) == 1 and "never provisioned" in held[0].read_text()
 
 
 def test_ingest_executes_the_custody_transfer(deploy):
@@ -528,6 +546,8 @@ def two_agents(tmp_path):
         inbound_handoff=tmp_path / "handoff",
         inbound_quarantine=tmp_path / "quarantine",
         agent_uids={_os.getuid(): "alpha"})
+    for agent in homes:                       # provisioned, as a deployment does (§2.3)
+        (tmp_path / "handoff" / agent).mkdir(mode=0o2770, parents=True)
     return {"cfg": cfg, "broker": Broker(cfg), "homes": homes,
             "contacts": contacts, "tmp": tmp_path}
 
@@ -1246,6 +1266,8 @@ def test_the_real_send_path_keeps_a_copy_and_records_a_fate(tmp_path, monkeypatc
                                  contacts_path=contacts,
                                  inbound_handoff=tmp_path / "handoff",
                                  agent_homes={"alpha": home, "peer": peer_home}))
+    for agent in ("alpha", "peer"):           # provisioned, as a deployment does (§2.3)
+        (tmp_path / "handoff" / agent).mkdir(mode=0o2770, parents=True)
 
     monkeypatch.setattr(cli, "_amail_config", lambda: {
         "agent": "alpha", "domain": "agents.test", "home": str(home),

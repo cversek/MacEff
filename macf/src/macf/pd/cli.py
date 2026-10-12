@@ -58,6 +58,7 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         return 0
     if report.source == "none":
         print(f"{card}: {report.why}")
+        _say_tray(report)
         return 0
     print(f"{card}: from the {report.source} ({report.why})")
     for unit in report.units:
@@ -70,7 +71,15 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         if "liveness" in unit:
             line += f"; liveness {unit['liveness']}: {unit['detail']}"
         print(line)
+    _say_tray(report)
     return 0
+
+
+def _say_tray(report) -> None:
+    # Whether this host can show the tray, and why not (MIS-0002-R73
+    # (readout_MUST_say_tray_unavailable)). A report built without it says nothing.
+    if report.tray:
+        print(report.tray)
 
 
 def _this_agent():
@@ -131,5 +140,25 @@ def cmd_pd_uninstall(args: argparse.Namespace) -> int:
     except (DeclarationRefused, LookupError, OSError, RuntimeError) as e:
         print(f"maceff_pd: uninstall stopped: {e}\n{POLICY_POINTER}", file=sys.stderr)
         return 1
-    print(f"{card}: uninstalled; the service manager says: {tier.status(card)}")
+    # The service manager can return before the service is gone (launchctl bootout does),
+    # so the line waits briefly for it rather than reporting a state that's already ending.
+    deadline = time.monotonic() + UNINSTALL_WAIT_S
+    said = tier.status(card)
+    while not _gone(said) and time.monotonic() < deadline:
+        time.sleep(0.2)
+        said = tier.status(card)
+    if _gone(said):
+        print(f"{card}: uninstalled; the service manager no longer has it")
+    else:
+        print(f"{card}: uninstalled, but after {UNINSTALL_WAIT_S:g} s the service manager still says: {said}")
     return 0
+
+
+#: How long uninstall waits for the service manager to let the daemon's service go.
+UNINSTALL_WAIT_S = 5.0
+
+
+def _gone(said: str) -> bool:
+    """Whether a status line says the service is no longer loaded: launchd's "not loaded",
+    or systemd's LoadState=not-found."""
+    return said.startswith("not loaded") or "LoadState=not-found" in said

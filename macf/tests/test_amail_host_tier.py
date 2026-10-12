@@ -148,6 +148,7 @@ def test_on_an_unshared_uid_a_disagreeing_claim_is_still_refused(tmp_path, sock_
     cfg = BrokerConfig(domain=DOMAIN, agent_homes=homes, contacts_path=contacts, audit_path=tmp_path / "a.jsonl",
                        socket_path=sock_dir / "c.sock", credentials_path=cred, inbound_handoff=tmp_path / "handoff",
                        inbound_quarantine=tmp_path / "q", agent_uids={os.getuid(): "alpha"})
+    (tmp_path / "handoff" / "beta").mkdir(mode=0o2770, parents=True)   # beta's own uid is not ours (§2.3)
     srv = serve(Broker(cfg)); time.sleep(0.15)
     try:
         r = submit("beta", Message(sender=f"beta@{DOMAIN}", to=[f"alpha@{DOMAIN}"], subject="s", body="b"), cfg.socket_path)

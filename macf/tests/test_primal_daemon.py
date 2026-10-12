@@ -473,6 +473,20 @@ def test_survivor_adopted_not_started_twice(make_core, script):
     assert drive(second, lambda: second.state("worker") == "running")
 
 
+def test_an_adopted_unit_reads_since_its_own_start(make_core, script):
+    """An adopted unit's "since" is when its process began, not the adoption, so a daemon's
+    restart doesn't make its units read as just restarted."""
+    began = time.time()
+    survivor = _survivor(make_core, script)
+    time.sleep(1.5)
+    second = make_core([survivor.unit])
+    adopted_at = time.time()
+    second.boot()
+    since = {s.unit: s.since for s in second.statuses()}["worker"]
+    # proc_start has one-second resolution on macOS.
+    assert began - 1.0 <= since <= adopted_at - 0.5
+
+
 def test_a_reused_pid_is_not_adopted(make_core, script):
     """A recorded pid whose start time no longer matches is another process now. The unit is
     started fresh and that process is left alone."""
@@ -896,6 +910,57 @@ def test_control_refuses_what_it_cannot_do(tmp_path, script, base, run_daemon):
     assert unit_state(daemon, "worker") == "running"
 
 
+def test_a_request_line_has_one_deadline(tmp_path, script, base, run_daemon, monkeypatch):
+    """A client that sends its request a byte at a time is cut off when the line's deadline
+    passes, not when it stops sending, so it cannot hold the loop that supervises the units."""
+    monkeypatch.setattr(daemon_module, "REQUEST_TIMEOUT_S", 0.5)
+    daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+    stop = threading.Event()
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+        conn.connect(str(daemon.control_path))
+
+        def dribble():   # a byte every 0.1 s, each well inside the deadline of the one before
+            while not stop.is_set():
+                try:
+                    conn.sendall(b" ")
+                except (BrokenPipeError, ConnectionResetError):
+                    stop.set()   # the daemon has answered and closed its end
+                    continue
+                time.sleep(0.1)
+
+        sender = threading.Thread(target=dribble, daemon=True)
+        began = time.monotonic()
+        sender.start()
+        try:
+            conn.settimeout(5)
+            reply = conn.recv(4096)
+            elapsed = time.monotonic() - began
+        finally:
+            stop.set()
+            sender.join(timeout=2)
+    assert b"no complete request line" in reply and elapsed < 2.0
+    assert wait_for(lambda: unit_state(daemon, "worker") in ("starting", "running"))
+
+
+def test_a_request_that_fails_inside_the_daemon_costs_only_itself(tmp_path, script, base, run_daemon,
+                                                                   monkeypatch):
+    """A request whose handling raises is answered with the failure, and the daemon goes on
+    serving: one bad request must not end the daemon and leave its units unsupervised."""
+    daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+    real, calls = daemon.core.statuses, []
+
+    def fails_once():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("a fault inside the daemon")
+        return real()
+
+    monkeypatch.setattr(daemon.core, "statuses", fails_once)
+    reply = ask(daemon, {"op": "status"})
+    assert reply["ok"] is False and "a fault inside the daemon" in reply["error"]
+    assert wait_for(lambda: unit_state(daemon, "worker") in ("starting", "running"))
+
+
 def test_runtime_dir_must_be_private(tmp_path, script, base):
     """A runtime directory that group or others can open is refused before anything binds."""
     base.chmod(0o755)
@@ -1073,3 +1138,17 @@ def test_no_own_compaction(make_core, script):
     assert drive(core, lambda: core.pid("worker") not in (None, first, second))
     acts = [d.get("act") for d in events("pd_control", "worker")]
     assert acts and "compact" not in acts
+
+
+def test_the_record_outlives_a_temp_cleaner(tmp_path, script, base, run_daemon):
+    """Without XDG_RUNTIME_DIR the record lives in /tmp, where macOS's tmp_cleaner deletes a
+    regular file untouched for three days. A running daemon refreshes its record, and writes
+    it again if a cleaner already took it, so pd status keeps believing it."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    daemon = run_daemon(home, base, record_refresh_s=0.1)
+    old = time.time() - 4 * 86400
+    os.utime(daemon.record_path, (old, old))
+    assert wait_for(lambda: daemon.record_path.stat().st_mtime > old + 86400)
+    daemon.record_path.unlink()
+    assert wait_for(daemon.record_path.exists)
+    assert json.loads(daemon.record_path.read_text())["pid"] == os.getpid()

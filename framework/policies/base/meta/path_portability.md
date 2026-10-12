@@ -98,7 +98,7 @@ FRAMEWORK_ROOT = Path('/opt/maceff/framework')
 
 **Container Path Examples**:
 ```
-/opt/maceff/framework/policies/base/meta/policy_writing.md
+/opt/maceff/framework/policies/sets/base/meta/policy_writing.md
 /opt/maceff/framework/subagents/DevOpsEng.md
 /opt/maceff/framework/templates/PA_PREAMBLE.md
 ```

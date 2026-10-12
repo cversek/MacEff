@@ -42,7 +42,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Any, Dict, Iterator, List, Optional, Tuple
 
-from .broker import BrokerConfig
+from .broker import BrokerConfig, unprovisioned_box
 from .contacts import ContactBook, ContactListError
 from . import alerting
 from .audit import AuditLog
@@ -550,7 +550,14 @@ def process_entry(cfg: InboundConfig, eml: Path, sidecar: Path) -> Dict[str, Any
         return terminal(QUARANTINED, reason, recipient_agent)
 
     box = cfg.handoff_dir / recipient_agent
-    box.mkdir(mode=0o2770, parents=True, exist_ok=True)
+    if not box.is_dir():
+        # amail.md §2.3: a box this broker cannot make readable to its agent is held
+        # with the reason, not created and reported delivered.
+        if not cfg.broker_config.may_create_pickup_box(recipient_agent):
+            reason = unprovisioned_box(recipient_agent, box)
+            _quarantine(cfg, eml, sidecar, reason)
+            return terminal(QUARANTINED, reason, recipient_agent)
+        box.mkdir(mode=0o2770, parents=True, exist_ok=True)
     sidecar_out = dict(meta)
     sidecar_out["authorization"] = {"outcome": outcome, "reason": reason}
     base = box / eml.stem
