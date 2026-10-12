@@ -493,7 +493,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R88 | decidable | macf/tests/test_pd_observe.py::test_lease_ends_invitation | passing |
 | R89 | decidable | macf/tests/test_pd_observe.py::test_lease_end_same_event | passing |
 | R90 | decidable | macf/tests/test_pd_observe.py::test_observation_events | passing |
-| R91 | decidable | macf/tests/test_pd_observe.py::test_presence_on_call_line | passing |
+| R91 | decidable | macf/tests/test_pd_observe.py::test_presence_on_call_line | planned |
 | R92 | decidable | macf/tests/test_pd_observe.py::test_pause_resume | passing |
 | R93 | decidable | macf/tests/test_pd_observe.py::test_pause_shown | passing |
 | R94 | decidable | macf/tests/test_pd_observe.py::test_onlooker_by_card | passing |
