@@ -76,22 +76,22 @@ This saves massive time even in single-use scenarios.
 **Find what you need quickly**:
 ```bash
 # Task involves delegation decision?
-grep -r "delegate" /opt/maceff/policies/manifest.json
+grep -r "delegate" /opt/maceff/framework/policies/manifest.json
 
 # Testing task?
-grep -r "test" /opt/maceff/policies/manifest.json
+grep -r "test" /opt/maceff/framework/policies/manifest.json
 
 # Git operations?
-grep -r "git" /opt/maceff/policies/manifest.json
+grep -r "git" /opt/maceff/framework/policies/manifest.json
 
 # Quick topic reference
-cat /opt/maceff/policies/manifest.json | jq '.discovery_index'
+cat /opt/maceff/framework/policies/manifest.json | jq '.discovery_index'
 ```
 
 ## Container Environment
 
 **Paths Available to You**:
-- Core Policies: `/opt/maceff/policies/` (framework foundation)
+- Core Policies: `/opt/maceff/framework/policies/` (framework foundation)
 - Shared Workspace: `/shared_workspace/` (where work happens)
 - Project Policies: `/shared_workspace/{project}/.maceff/policies/` (project-specific)
 
@@ -174,7 +174,7 @@ For structure, format, and content guidance, follow the reflection policy patter
 
 When you receive a delegation:
 - [ ] Read the delegation prompt COMPLETELY
-- [ ] Check `/opt/maceff/policies/manifest.json` for task-relevant policies
+- [ ] Check `/opt/maceff/framework/policies/manifest.json` for task-relevant policies
 - [ ] Read relevant policies to `=== CEP_NAV_BOUNDARY ===`
 - [ ] Identify your granted authorities and boundaries
 - [ ] Execute task with provided context

@@ -248,7 +248,7 @@ The lifecycle runs on the same generic state machine the task system uses; the t
 
 ### 3.2 Duty states
 
-`pending` (declared, not yet worked) → `active` (engaged, so attention is on it, or active because it has a tracked task; only an engaged duty carries the stanza's pointer and is disengaged when attention moves to another) → `done` (evidence recorded) or `deferred` (set aside with a reason, kept for the record). A deferred duty may be reactivated. **`role duty engage` is the duty's `task start`**: it makes the duty active, records an engage update with its breadcrumb (a service, so the stanza pointer and the gate's bound both move), focuses the duty's role if another or none was focused, may attach the implementing tasks in the same step, and shows the formatted view of each duty it engaged followed by the role's charter. **Engagement is exclusive by default**: engaging a duty disengages every other active duty in the store (`active` → `pending` with a `disengage` update), because attention moved. A disengagement is not a service and not a touch -- putting a duty down does nothing for it, so neither the gate's bound nor the pointer moves to it. **A deliberate parallel engagement is one command with several ids** (`role duty engage A B`), all in one role; the set is engaged together and everything outside it is disengaged. Parallel engagement is the rarer case and the stanza says so (§7.2). A cadence duty is never `done` as a whole; its occurrences are, via `done_on` notes (§6.2).
+`pending` (declared, not yet worked) → `active` (engaged, so attention is on it, or active because it has a tracked task; only an engaged duty carries the stanza's pointer and is disengaged when attention moves to another) → `done` (evidence recorded) or `deferred` (set aside with a reason, kept for the record). A deferred duty may be reactivated. **`role duty engage` is the duty's `task start`**: it makes the duty active, records an engage update with its breadcrumb (a service, so the stanza pointer and the gate's bound both move), focuses the duty's role if another or none was focused, may attach the implementing tasks in the same step, and shows the formatted view of each duty it engaged followed by the role's charter. **Engagement is exclusive by default**: engaging a duty disengages every other active duty in the store (`active` → `pending` with a `disengage` update), because attention moved. A disengagement is not a service and not a touch -- putting a duty down does nothing for it, so neither the gate's bound nor the pointer moves to it. **The duty put down is not lost:** an exclusive engage is how an interrupt arrives, and duties never enter the work stack (§1.4), so the stanza ends with a `↩ return to` line naming the duty an engage most recently put down and what displaced it. The line goes when that duty is engaged again, closed, or deferred; a note, link or edit while it waits leaves the line in place. It is derived from the duties' own updates, and nothing is stored for it. **A reasoned edit is a service**: `role duty edit` changes the declaration on the record (title, body, importance, due, horizon, cadence, dependencies) and writes an `edit` update carrying each old and new value, the reason and the breadcrumb, which moves the pointer and the gate's bound like any touch. An edit with no `--why`, which only a title, body, importance or dependency change may be, is recorded as a `correction`: kept and shown, but not a service, so fixing a typo is never the way past the gate. It never changes state, which is what engage, done, defer and reactivate are for, and a done or deferred duty refuses time edits: its declaration was satisfied or set aside as it stood. `role edit` does the same for a role, and never touches its state. **A deliberate parallel engagement is one command with several ids** (`role duty engage A B`), all in one role; the set is engaged together and everything outside it is disengaged. Parallel engagement is the rarer case and the stanza says so (§7.2). A cadence duty is never `done` as a whole; its occurrences are, via `done_on` notes (§6.2).
 
 ### 3.3 `done` requires evidence
 
@@ -270,12 +270,15 @@ A **horizon** is the lead time before `due` at which a duty becomes DUE_SOON -- 
 
 ### 4.2 Reasoning a horizon
 
-Reason from the duty's nature, not from a default. Four questions:
+Reason from the duty's nature, not from a default. Five questions:
 
 1. **Preparation effort.** How long does the implementing work take when nothing goes wrong? The horizon is at least that.
 2. **Dependencies.** Does the work wait on another duty, a person, a delivery? Add their latency.
 3. **Cadence period.** For a recurring duty, the horizon must be shorter than the period, or every occurrence is DUE_SOON from the moment the last one closes.
 4. **Operator availability.** If the operator must review before the due date, the horizon includes the review's turnaround.
+5. **The gate.** The horizon also decides when the duty starts to demand a service. Once it enters DUE_SOON in the focused role, a stop in AUTO_MODE is blocked until the duty is serviced (9.2). One note clears it until the next tier, so the cost is small, but it is real. How early should this duty be able to interrupt the agent's other work?
+
+**The horizon has two consumers, and they pull in opposite directions.** The approach ramp wants it long enough that the work starts in time, which is what the first four questions ask. The Stop gate makes it the point where the duty starts interrupting, which argues for no longer than the work needs. When the two disagree, say which won in `--why`.
 
 **Worked examples**:
 
@@ -285,6 +288,8 @@ Reason from the duty's nature, not from a default. Four questions:
 
 The policy gives the questions and the examples. It never gives a number.
 
+**A change is reasoned like a declaration.** Moving a due date, a horizon or a cadence with `role duty edit` needs `--why`, stored as the edit update's text, and the edit refuses to leave a dated or recurring duty without a horizon, as `duty add` does. A role's expiry, review date and review horizon follow the same rule under `role edit`. The record of why a date moved is the record of the reasoning, and editing the JSON by hand leaves neither.
+
 ### 4.3 Cadence grammar
 
 ```
@@ -292,11 +297,22 @@ daily
 weekly:<day>[,<day>...]          weekly:tue     weekly:tue,thu
 monthly:<day-of-month>           monthly:15
 [at HH:MM] [dur <N>h|<N>m] [until YYYY-MM-DD]
+on:<event> [until YYYY-MM-DD]    on:compaction_detected
 ```
 
 `until` defaults to the role's `expires`; a cadence on a role with no `expires` and no `until` runs while the role is active. Day names are three-letter English; times are the agent's local timezone.
 
 **Example**: `weekly:tue at 11:45 dur 6h until 2026-12-15` -- every Tuesday, a six-hour block, through the end of the term.
+
+**Event cadences.** Many standing obligations recur on a state change, not on the calendar: before a rebuild, after a host reboot, after a compaction. `on:<event>` names an event in the agent's own events log, and each recording of it is an occurrence. Without this an event-triggered duty could only be declared untimed, indistinguishable in the record from a one-shot, with its recurrence kept in prose where neither the tiers nor the calendar can see it.
+
+- **The occurrence** is the most recent recording of the event after the duty was declared. It enters DUE_SOON the moment it is recorded, and a `done_on` note recorded after it closes it. Any other note is a service, not completion.
+- **The horizon is optional, and means grace.** There is no date to lead, so the questions in 4.2 that presuppose one don't apply. A horizon, if given, is how long after the event the duty may wait before it is OVERDUE. Without one it stays DUE_SOON until closed. The Stop gate still applies (9.2): an occurrence demands a service from the moment its event is recorded.
+- **It is read from the current cycle, and carried across a compaction.** Like every events-log query it reads one cycle, so the cycle carry re-records an occurrence still open at the boundary (`duty_occurrence_carried`) with the time its event happened. An obligation an event opened is still owed after the agent compacts, and its grace still runs from the real event. A closed occurrence is not carried.
+- **The nag sees a new occurrence within a minute, not at once.** It reuses its due-now list for up to 60 seconds unless the roles store changes (9.1), and a trigger event is not a store write.
+- **The calendar** shows a recorded occurrence at the time its event happened, and invents no future date. `at` and `dur` set a time of day, which an event has none of, so they are refused. Only `until` applies.
+
+**Example**: `on:compaction_detected` -- after every compaction, re-read the charter and the Boundaries.
 
 ### 4.4 Cadence and horizon
 
@@ -381,7 +397,7 @@ A **service** is any touch of a task or a duty that writes a breadcrumbed update
 
 ### 7.3 Focus is a layer, not a mode
 
-Focus is **event-sourced**: `role focus <id>` and `role unfocus` emit `role_focus_change` events to the agent events log, and the current focus is derived by reverse scan, exactly as work mode is derived (`mode_system.md`, derive-do-not-store). No sidecar file holds it.
+Focus is **event-sourced**: `role focus <id>` and `role unfocus` emit `role_focus_change` events to the agent events log, and the current focus is derived by reverse scan, exactly as work mode is derived (`mode_system.md`, derive-do-not-store). No sidecar file holds it. The scan reads the current cycle only, because the cycle carry re-asserts the focused role at each boundary, as it does a mode. A carried focus is a continuation, not an act: it keeps the original focus time, and it never counts as acknowledging a duty (9.1).
 
 At most **one role is focused at a time**. Focusing a second role replaces the first; the event records both.
 
@@ -445,7 +461,7 @@ The only display preference is `roles.tree_display` in `.maceff/config.json`, on
 
 ## 9 Focus as Prioritized Auto-Scoping
 
-Focus turns a role's duty list into a scope the hooks act on, in the way a sprint's scoped task set is a scope the Stop hook acts on. Two behaviours, both derived from the events log and the duty records; no sidecar state, per the nag properties in `mode_system.md`: computed from observed state, naming the remedy, cleared by the action.
+Focus turns a role's duty list into a scope the hooks act on, in the way a sprint's scoped task set is a scope the Stop hook acts on. Two behaviours, both derived from the events log and the duty records; no sidecar state (the nag's read cache, 9.1, holds no fact of its own), per the nag properties in `mode_system.md`: computed from observed state, naming the remedy, cleared by the action.
 
 ### 9.1 Unfocused roles: the Conscientiousness nag
 
@@ -457,6 +473,8 @@ When a duty of an **unfocused** role enters DUE_SOON or OVERDUE, PreToolUse inje
 ```
 
 **Tier entry is deterministic** from the duty's own facts: DUE_SOON at `due - horizon`, OVERDUE at `due`. **Acknowledgement** is a `role_focus_change` to that role after the entry time. **Tool calls since entry** are the `tool_call_started` events after it. The nag therefore fires on a count of observed tool calls, never on a timer, and stops the moment the role is focused.
+
+**A read cache, not state.** Ranking every unfocused role's duties means building the role and duty models, which costs more than the rest of the hook, so PreToolUse reuses the list of due-now duties from a file in the agent's own home (`.maceff/cache/`), never a shared temporary directory, because the nag prints what the file holds into the agent's context. It is rebuilt whenever the roles store changes and at least once a minute. Nothing reads it as a fact: it is derived from the records, any copy may be deleted, and an unreadable one only costs the rebuild. Focus and the tool-call counts are never cached, so acknowledgement still stops the nag on the next call. What a minute of reuse can delay is noticing a tier entry that no write announced, and since the count runs from the entry time itself, not from when it was noticed, the schedule is unchanged.
 
 **Schedule**, in units of the touch-discipline base `B` (the existing constant the touch nag uses; see `MACF_TOUCH_NAG_BASE`): for DUE_SOON, at `B`, then `2B`, `4B`, ... (doubling); for OVERDUE, at every multiple of `B`, with the tone ramp 🌱 → 🌿 → 🌳 the touch nag already uses. A new tier entry (DUE_SOON → OVERDUE) re-arms the schedule. Unfocusing a role after acknowledgement does not re-arm it for the same entry; only a new entry does.
 
@@ -535,7 +553,7 @@ Definitions of class and provenance live in `scholarship.md` and are cited here,
 
 **Roles.** The unit of a node is **`charter.md`**, not the folder; the charter is the part written for a reader. Class: **conceptual authority** -- a charter is a standing statement about one agent's position that outlives the cycle in which it was written, and a reader a year later can still learn from it what the agent stood for and where its boundaries were. It is not a temporal record, because the appointment's *facts* (dates, state) live in `data.json` and change without the charter being wrong. Provenance: **lived** by default; a charter carried in from a predecessor lineage carries the inherited banner. A charter links the concepts the role is *about* and the spokes it depends on; it must not link every duty (the duty graph does that) and must not link the task numbers implementing its duties.
 
-**Duties.** The unit of a node is the **duty record**, as an idea record is, and `wiki_links` is a field so participation is unavoidable. Class: **conceptual authority with the same qualification ideas carry** -- a duty asserts what must be true, prospectively; read it with its `state`. Provenance: lived. Edges: the parent role, `evidence` (to the implementing CA or completed task), `tracks` (to open tasks), and `wiki_links`. This is how a done duty's evidence edge reaches the roadmap, experiment or report that fulfilled it, and how "what does this agent stand for" reaches "what did it actually do".
+**Duties.** The unit of a node is the **duty record**, as an idea record is, and `wiki_links` is a field so participation is unavoidable. Class: **conceptual authority with the same qualification ideas carry** -- a duty asserts what must be true, prospectively; read it with its `state`. Provenance: lived. Edges: the parent role, `evidence` (to the implementing CA or completed task), `tracks` (to open tasks), and `wiki_links`. This is how a done duty's evidence edge reaches the roadmap, experiment or report that fulfilled it, and how "what does this agent stand for" reaches "what did it actually do". **A duty's links name its domain, not a hub.** A concept that most duties could claim, such as collaboration, adds no discrimination, and a duty carrying one beside a narrow concept bridges every member of the hub into a query for the narrow one. Measured on one deployment (#389): duties left the median one-hop reach unchanged, while the two concepts whose duty also linked a hub concept carried by 22 of 53 duties grew by 17 and 20 points. Link the two to five concepts the obligation is about, as a checkpoint links the domains it worked on.
 
 There is no registry of participating types (`scholarship.md`); the graph builder walks `agent/public/roles/` like any other artifact directory and applies these definitions.
 
@@ -544,8 +562,8 @@ There is no registry of participating types (`scholarship.md`); the graph builde
 ## 12 CLI Surface
 
 ```
-macf_tools role create|list|show|note|pause|resume|expire|retire|review|focus|unfocus|calendar
-macf_tools role duty add|show|engage|note|done|defer|link|unlink|why   # engage takes one id (exclusive) or several (parallel)
+macf_tools role create|edit|list|show|note|pause|resume|expire|retire|review|focus|unfocus|calendar
+macf_tools role duty add|edit|show|engage|note|done|defer|link|unlink|why   # engage takes one id (exclusive) or several (parallel)
 macf_tools task roles [--all]
 macf_tools task tree --roles none|collapsed|focused|all
 ```

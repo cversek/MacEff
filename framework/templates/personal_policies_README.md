@@ -32,7 +32,7 @@ Project Policies (/shared_workspace/.maceff/policies/)
     ↓ overrides
 Framework Policies (/opt/maceff/framework/policies/current/)
     ↓ overrides
-Core Policies (/opt/maceff/framework/policies/base/)  ← LOWEST
+Core Policies (/opt/maceff/framework/policies/sets/base/)  ← LOWEST
 ```
 
 ## How CEP Uses This Directory

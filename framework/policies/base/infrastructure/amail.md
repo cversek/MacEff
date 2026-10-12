@@ -328,10 +328,21 @@ resulting property is worth more than the convenience it costs:
 
 - **Pickup boxes are provisioned, not auto-created.** An unprivileged broker cannot
   place a box in the recipient's group, so a box it creates on demand is unreadable
-  by the very agent it belongs to. This failure is **silent at the sender** —
-  submission reports success and the message sits in the box — so provisioning is a
-  deployment responsibility and an aged-entry alarm is the backstop that surfaces a
-  box nobody is draining.
+  by the very agent it belongs to. Left alone, that failure is **silent at the
+  sender**: submission reports success and the message sits in the box. So
+  provisioning is a deployment responsibility, and the broker refuses rather than
+  create such a box. Mail to an agent whose box is missing is **refused** on local
+  delivery and **quarantined** on internet inbound, with a reason naming the agent
+  and the box, and the next delivery after provisioning is placed. The one exception
+  is a box the broker can make for its own uid: when the broker runs as a uid its
+  authentication table binds to the recipient, alone or as one of the agents sharing
+  that uid, the box it creates is the recipient's own, and it creates it. The test is
+  that table, not the declared tier, because a host broker left at the default tier
+  still shares its agents' uid. A container provisions every box at start
+  (`provision_pickup_boxes`). An agent added later, or a host agent the table does
+  not bind to the broker's uid, needs its box made with its own group before mail
+  can reach it. The aged-entry alarm remains the backstop for a box nobody is
+  draining.
 - **Ingest is a filesystem act and MUST NOT require the broker.** A permanent record
   that needs a running service to receive it is not permanent. Custody transfer, and
   any verification performed during it, use only what the recipient can read locally.
