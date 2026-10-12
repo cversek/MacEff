@@ -248,7 +248,7 @@ The lifecycle runs on the same generic state machine the task system uses; the t
 
 ### 3.2 Duty states
 
-`pending` (declared, not yet worked) → `active` (engaged, so attention is on it, or active because it has a tracked task; only an engaged duty carries the stanza's pointer and is disengaged when attention moves to another) → `done` (evidence recorded) or `deferred` (set aside with a reason, kept for the record). A deferred duty may be reactivated. **`role duty engage` is the duty's `task start`**: it makes the duty active, records an engage update with its breadcrumb (a service, so the stanza pointer and the gate's bound both move), focuses the duty's role if another or none was focused, may attach the implementing tasks in the same step, and shows the formatted view of each duty it engaged followed by the role's charter. **Engagement is exclusive by default**: engaging a duty disengages every other active duty in the store (`active` → `pending` with a `disengage` update), because attention moved. A disengagement is not a service and not a touch -- putting a duty down does nothing for it, so neither the gate's bound nor the pointer moves to it. **A deliberate parallel engagement is one command with several ids** (`role duty engage A B`), all in one role; the set is engaged together and everything outside it is disengaged. Parallel engagement is the rarer case and the stanza says so (§7.2). A cadence duty is never `done` as a whole; its occurrences are, via `done_on` notes (§6.2).
+`pending` (declared, not yet worked) → `active` (engaged, so attention is on it, or active because it has a tracked task; only an engaged duty carries the stanza's pointer and is disengaged when attention moves to another) → `done` (evidence recorded) or `deferred` (set aside with a reason, kept for the record). A deferred duty may be reactivated. **`role duty engage` is the duty's `task start`**: it makes the duty active, records an engage update with its breadcrumb (a service, so the stanza pointer and the gate's bound both move), focuses the duty's role if another or none was focused, may attach the implementing tasks in the same step, and shows the formatted view of each duty it engaged followed by the role's charter. **Engagement is exclusive by default**: engaging a duty disengages every other active duty in the store (`active` → `pending` with a `disengage` update), because attention moved. A disengagement is not a service and not a touch -- putting a duty down does nothing for it, so neither the gate's bound nor the pointer moves to it. **The duty put down is not lost:** an exclusive engage is how an interrupt arrives, and duties never enter the work stack (§1.4), so the stanza ends with a `↩ return to` line naming the duty an engage most recently put down and what displaced it. The line goes when that duty is engaged again, closed, or deferred; a note, link or edit while it waits leaves the line in place. It is derived from the duties' own updates, and nothing is stored for it. **A reasoned edit is a service**: `role duty edit` changes the declaration on the record (title, body, importance, due, horizon, cadence, dependencies) and writes an `edit` update carrying each old and new value, the reason and the breadcrumb, which moves the pointer and the gate's bound like any touch. An edit with no `--why`, which only a title, body, importance or dependency change may be, is recorded as a `correction`: kept and shown, but not a service, so fixing a typo is never the way past the gate. It never changes state, which is what engage, done, defer and reactivate are for, and a done or deferred duty refuses time edits: its declaration was satisfied or set aside as it stood. `role edit` does the same for a role, and never touches its state. **A deliberate parallel engagement is one command with several ids** (`role duty engage A B`), all in one role; the set is engaged together and everything outside it is disengaged. Parallel engagement is the rarer case and the stanza says so (§7.2). A cadence duty is never `done` as a whole; its occurrences are, via `done_on` notes (§6.2).
 
 ### 3.3 `done` requires evidence
 
@@ -288,6 +288,8 @@ Reason from the duty's nature, not from a default. Five questions:
 
 The policy gives the questions and the examples. It never gives a number.
 
+**A change is reasoned like a declaration.** Moving a due date, a horizon or a cadence with `role duty edit` needs `--why`, stored as the edit update's text, and the edit refuses to leave a dated or recurring duty without a horizon, as `duty add` does. A role's expiry, review date and review horizon follow the same rule under `role edit`. The record of why a date moved is the record of the reasoning, and editing the JSON by hand leaves neither.
+
 ### 4.3 Cadence grammar
 
 ```
@@ -295,11 +297,22 @@ daily
 weekly:<day>[,<day>...]          weekly:tue     weekly:tue,thu
 monthly:<day-of-month>           monthly:15
 [at HH:MM] [dur <N>h|<N>m] [until YYYY-MM-DD]
+on:<event> [until YYYY-MM-DD]    on:compaction_detected
 ```
 
 `until` defaults to the role's `expires`; a cadence on a role with no `expires` and no `until` runs while the role is active. Day names are three-letter English; times are the agent's local timezone.
 
 **Example**: `weekly:tue at 11:45 dur 6h until 2026-12-15` -- every Tuesday, a six-hour block, through the end of the term.
+
+**Event cadences.** Many standing obligations recur on a state change, not on the calendar: before a rebuild, after a host reboot, after a compaction. `on:<event>` names an event in the agent's own events log, and each recording of it is an occurrence. Without this an event-triggered duty could only be declared untimed, indistinguishable in the record from a one-shot, with its recurrence kept in prose where neither the tiers nor the calendar can see it.
+
+- **The occurrence** is the most recent recording of the event after the duty was declared. It enters DUE_SOON the moment it is recorded, and a `done_on` note recorded after it closes it. Any other note is a service, not completion.
+- **The horizon is optional, and means grace.** There is no date to lead, so the questions in 4.2 that presuppose one don't apply. A horizon, if given, is how long after the event the duty may wait before it is OVERDUE. Without one it stays DUE_SOON until closed. The Stop gate still applies (9.2): an occurrence demands a service from the moment its event is recorded.
+- **It is read from the current cycle, and carried across a compaction.** Like every events-log query it reads one cycle, so the cycle carry re-records an occurrence still open at the boundary (`duty_occurrence_carried`) with the time its event happened. An obligation an event opened is still owed after the agent compacts, and its grace still runs from the real event. A closed occurrence is not carried.
+- **The nag sees a new occurrence within a minute, not at once.** It reuses its due-now list for up to 60 seconds unless the roles store changes (9.1), and a trigger event is not a store write.
+- **The calendar** shows a recorded occurrence at the time its event happened, and invents no future date. `at` and `dur` set a time of day, which an event has none of, so they are refused. Only `until` applies.
+
+**Example**: `on:compaction_detected` -- after every compaction, re-read the charter and the Boundaries.
 
 ### 4.4 Cadence and horizon
 
@@ -384,7 +397,7 @@ A **service** is any touch of a task or a duty that writes a breadcrumbed update
 
 ### 7.3 Focus is a layer, not a mode
 
-Focus is **event-sourced**: `role focus <id>` and `role unfocus` emit `role_focus_change` events to the agent events log, and the current focus is derived by reverse scan, exactly as work mode is derived (`mode_system.md`, derive-do-not-store). No sidecar file holds it.
+Focus is **event-sourced**: `role focus <id>` and `role unfocus` emit `role_focus_change` events to the agent events log, and the current focus is derived by reverse scan, exactly as work mode is derived (`mode_system.md`, derive-do-not-store). No sidecar file holds it. The scan reads the current cycle only, because the cycle carry re-asserts the focused role at each boundary, as it does a mode. A carried focus is a continuation, not an act: it keeps the original focus time, and it never counts as acknowledging a duty (9.1).
 
 At most **one role is focused at a time**. Focusing a second role replaces the first; the event records both.
 
@@ -549,8 +562,8 @@ There is no registry of participating types (`scholarship.md`); the graph builde
 ## 12 CLI Surface
 
 ```
-macf_tools role create|list|show|note|pause|resume|expire|retire|review|focus|unfocus|calendar
-macf_tools role duty add|show|engage|note|done|defer|link|unlink|why   # engage takes one id (exclusive) or several (parallel)
+macf_tools role create|edit|list|show|note|pause|resume|expire|retire|review|focus|unfocus|calendar
+macf_tools role duty add|edit|show|engage|note|done|defer|link|unlink|why   # engage takes one id (exclusive) or several (parallel)
 macf_tools task roles [--all]
 macf_tools task tree --roles none|collapsed|focused|all
 ```

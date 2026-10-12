@@ -55,10 +55,10 @@ def _epoch(dt: datetime) -> float:
 def _serviced_since(duty: Duty, since: datetime) -> bool:
     """Any breadcrumbed update at or after *since* counts as a service --
     except the declaration itself (declaring a duty that is already due-now
-    does not service it) and a disengagement (putting a duty down does nothing
-    for it)."""
+    does not service it), a disengagement (putting a duty down does nothing
+    for it) and a correction (an edit with no reason, such as a typo fix)."""
     for u in duty.updates:
-        if u.kind in ("declare", "disengage"):
+        if u.kind in ("declare", "disengage", "correction"):
             continue
         try:
             if datetime.fromisoformat(u.at) >= since:
@@ -83,8 +83,9 @@ def _calls_since(entered_epoch: float, role_id: str) -> Tuple[int, bool]:
         if ts < entered_epoch:
             break
         kind = ev.get("event")
-        if kind == FOCUS_EVENT and ev.get("data", {}).get("role_id") == role_id:
-            return n, True
+        data = ev.get("data", {})
+        if kind == FOCUS_EVENT and data.get("role_id") == role_id and not data.get("carried"):
+            return n, True                 # a carried focus continues one; it acknowledges nothing
         if kind == "tool_call_started":
             n += 1
     return n, False
