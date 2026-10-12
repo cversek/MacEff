@@ -602,6 +602,10 @@ def test_stanza_names_the_duty_an_engage_put_down(store, lab):
     tail = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)[-1]
     assert "return to" in tail and f"D{a.id}" in tail and "grade the reports" in tail and f"D{b.id}" in tail
     a = store.find_duty(a.id)[0]
+    store.note_duty(a, apath.parent, "waits for the TA reply")   # recording why it waits keeps the line
+    tail = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)[-1]
+    assert "return to" in tail and f"D{a.id}" in tail
+    a = store.find_duty(a.id)[0]
     store.engage(a, apath.parent)                      # returned: the line goes
     assert not any(f"D{a.id} grade" in l and "return to" in l
                    for l in disp.stanza(store, "focused", role.id, at=NOW, ansi=False))

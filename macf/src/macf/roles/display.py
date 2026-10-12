@@ -233,6 +233,11 @@ def duty_line(p: Placement, at: datetime, pointers: Sequence[Tuple[str, float]] 
 
 _PUT_DOWN_BY = re.compile(r"engaged (D\w+(?:, D\w+)*) instead")
 
+#: Updates that record something about a waiting duty without taking it up again. A
+#: note saying why it waits is what the policy asks for (9.4), so it must not end the
+#: line; engage, done and defer do.
+_WHILE_WAITING = frozenset({"note", "occurrence", "link", "unlink", "edit"})
+
 
 def return_point(pairs: Sequence[Tuple[Role, Sequence[Duty]]]) -> Optional[Tuple[Duty, float, str]]:
     """The duty an engage elsewhere last put down, while it waits to be taken up again.
@@ -240,17 +245,21 @@ def return_point(pairs: Sequence[Tuple[Role, Sequence[Duty]]]) -> Optional[Tuple
     Engagement is exclusive, so engaging one duty sends the one attention was on
     back to pending. Duties stay out of the work stack (1.4), so this is the
     return half of an interrupt: (duty, when, what displaced it), derived from the
-    records alone. A duty engaged again, closed, or put down by hand is not one."""
+    records alone. A duty engaged again, closed, or put down by hand is not one; a
+    note, link or edit while it waits leaves it one."""
     best = None
     for _, duties in pairs:
         for d in duties:
-            if d.state != "pending" or not d.updates or d.updates[-1].kind != "disengage":
+            if d.state != "pending":
                 continue
-            m = _PUT_DOWN_BY.search(d.updates[-1].description)
+            last = next((u for u in reversed(d.updates) if u.kind not in _WHILE_WAITING), None)
+            if last is None or last.kind != "disengage":
+                continue
+            m = _PUT_DOWN_BY.search(last.description)
             if not m:
                 continue
             try:
-                ts = datetime.fromisoformat(d.updates[-1].at).timestamp()
+                ts = datetime.fromisoformat(last.at).timestamp()
             except ValueError:
                 continue
             if best is None or ts > best[1]:
