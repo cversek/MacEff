@@ -21,9 +21,9 @@ from .priority import now as _clock
 from ..lifecycle import IllegalTransition, check_transition
 from ..utils.breadcrumbs import get_breadcrumb
 from ..utils.json_io import write_json_safely
+from .location import ROLES_DIR_ENV, roles_dir  # ROLES_DIR_ENV kept importable from here
 from .models import (DUTY_MACHINE, ROLE_MACHINE, Duty, Role, Update, dump)
 
-ROLES_DIR_ENV = "MACF_ROLES_DIR"
 SCAFFOLD_BOUNDARIES = "What this role may do, and what it must not."
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 CHARTER_SCAFFOLD = """# {title}
@@ -45,15 +45,6 @@ Spokes, corpora, people, handbooks.
 
 class RoleError(Exception):
     """A refusal. The message is printed on one ❌ line; exit 1."""
-
-
-def roles_dir() -> Path:
-    """``MACF_ROLES_DIR`` if set (tests, isolation), else the agent home's store."""
-    env = os.environ.get(ROLES_DIR_ENV)
-    if env:
-        return Path(env)
-    from ..utils.paths import find_agent_home
-    return find_agent_home() / "agent" / "public" / "roles"
 
 
 def slug(title: str) -> str:
