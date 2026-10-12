@@ -297,11 +297,22 @@ daily
 weekly:<day>[,<day>...]          weekly:tue     weekly:tue,thu
 monthly:<day-of-month>           monthly:15
 [at HH:MM] [dur <N>h|<N>m] [until YYYY-MM-DD]
+on:<event> [until YYYY-MM-DD]    on:compaction_detected
 ```
 
 `until` defaults to the role's `expires`; a cadence on a role with no `expires` and no `until` runs while the role is active. Day names are three-letter English; times are the agent's local timezone.
 
 **Example**: `weekly:tue at 11:45 dur 6h until 2026-12-15` -- every Tuesday, a six-hour block, through the end of the term.
+
+**Event cadences.** Many standing obligations recur on a state change, not on the calendar: before a rebuild, after a host reboot, after a compaction. `on:<event>` names an event in the agent's own events log, and each recording of it is an occurrence. Without this an event-triggered duty could only be declared untimed, indistinguishable in the record from a one-shot, with its recurrence kept in prose where neither the tiers nor the calendar can see it.
+
+- **The occurrence** is the most recent recording of the event after the duty was declared. It enters DUE_SOON the moment it is recorded, and a `done_on` note recorded after it closes it. Any other note is a service, not completion.
+- **The horizon is optional, and means grace.** There is no date to lead, so the questions in 4.2 that presuppose one don't apply. A horizon, if given, is how long after the event the duty may wait before it is OVERDUE. Without one it stays DUE_SOON until closed. The Stop gate still applies (9.2): an occurrence demands a service from the moment its event is recorded.
+- **It is read from the current cycle, and carried across a compaction.** Like every events-log query it reads one cycle, so the cycle carry re-records an occurrence still open at the boundary (`duty_occurrence_carried`) with the time its event happened. An obligation an event opened is still owed after the agent compacts, and its grace still runs from the real event. A closed occurrence is not carried.
+- **The nag sees a new occurrence within a minute, not at once.** It reuses its due-now list for up to 60 seconds unless the roles store changes (9.1), and a trigger event is not a store write.
+- **The calendar** shows a recorded occurrence at the time its event happened, and invents no future date. `at` and `dur` set a time of day, which an event has none of, so they are refused. Only `until` applies.
+
+**Example**: `on:compaction_detected` -- after every compaction, re-read the charter and the Boundaries.
 
 ### 4.4 Cadence and horizon
 

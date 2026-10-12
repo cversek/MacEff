@@ -21,6 +21,7 @@ from .priority import now as _clock
 from ..lifecycle import IllegalTransition, check_transition
 from ..utils.breadcrumbs import get_breadcrumb
 from ..utils.json_io import write_json_safely
+from .cadence import is_event_cadence
 from .location import ROLES_DIR_ENV, roles_dir  # ROLES_DIR_ENV kept importable from here
 from .models import (DUTY_MACHINE, ROLE_MACHINE, Duty, Role, Update, dump)
 
@@ -256,7 +257,7 @@ class RoleStore:
         # only relation between duties the store records.
         deps = [self.find_duty(d.strip())[0].id for d in depends_on if d.strip()]
         tr = self._check_tracks(tracks)
-        if (due is not None or cadence is not None) and horizon is None:
+        if (due is not None or (cadence is not None and not is_event_cadence(cadence))) and horizon is None:
             raise RoleError("a duty with --due or --cadence needs --horizon, reasoned from the duty "
                             "(roles policy: reasoning a horizon); record the reasoning with --why")
         if horizon is not None and not why:

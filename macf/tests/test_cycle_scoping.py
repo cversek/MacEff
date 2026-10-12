@@ -17,7 +17,7 @@ import json
 import pytest
 
 from macf.agent_events_log import CYCLE_BOUNDARY_EVENT, read_events
-from macf.cycle_carry import carry_state_forward
+from macf.cycle_carry import CARRY_FAMILIES, carry_state_forward
 
 
 def _write(log, records):
@@ -256,7 +256,7 @@ class TestCarryGapIsLoud:
                        for e in read_events(reverse=True, scope="all"))
 
 
-def _marker(ts, cycle, families=("mode", "scope", "timer", "focus"), complete=True):
+def _marker(ts, cycle, families=CARRY_FAMILIES, complete=True):
     return _ev("state_carried", ts, cycle=cycle, keys=[],
                families=list(families), complete=complete)
 
@@ -351,10 +351,11 @@ class TestCarryBaseCaseAndOrder:
         assert event_queries.get_auto_mode_from_events("sess1234")[0] is False
 
     @pytest.mark.parametrize("families, complete, expect_carried", [
-        (("mode", "scope", "timer", "focus"), True, False),   # a complete carry bounds the walk
+        (CARRY_FAMILIES, True, False),                        # a complete carry bounds the walk
         (("mode",), True, True),                              # an old-style marker does not
         (("mode", "scope", "timer"), True, True),             # nor one from before focus carried
-        (("mode", "scope", "timer", "focus"), False, True),   # nor a carry that failed
+        (("mode", "scope", "timer", "focus"), True, True),    # nor one from before occurrences carried
+        (CARRY_FAMILIES, False, True),                        # nor a carry that failed
     ])
     def test_the_walk_stops_at_a_complete_carry(self, isolated_events_log,
                                                  families, complete, expect_carried):
