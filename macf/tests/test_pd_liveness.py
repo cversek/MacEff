@@ -60,10 +60,12 @@ def test_a_loop_that_stops_passing_stops_the_events_within_one_interval(capsys):
     events, append = recorder()
     hb = lv.Heartbeat("Resident@1a2b3c", "u", 0.05, append=append).start()
     halt = _ticking(hb)
-    time.sleep(0.15)
+    deadline = time.monotonic() + 1.0   # generous under a loaded suite; returns at the first beat
+    while not events and time.monotonic() < deadline:
+        time.sleep(0.01)
     assert events, "a ticking loop wrote nothing"
     halt.set()                      # the loop wedges; the heartbeat thread runs on
-    time.sleep(0.06)                # at most one beat already due may still land
+    time.sleep(0.15)                # at most one beat already due may still land, even if late
     n = len(events)
     time.sleep(0.25)
     try:
@@ -165,23 +167,30 @@ def test_pd_alive_with_a_malformed_setting_fails(monkeypatch, tmp_path):
 
 # --- the mail broker ticks from its accept loop -------------------------------------------------
 
-def test_the_broker_server_calls_its_pass_hook_while_idle(tmp_path):
+def test_the_broker_server_calls_its_pass_hook_while_idle():
     """socketserver passes service_actions on every turn of the accept loop, idle or not, so
     the broker's heartbeat ticks while the loop runs and stops when it stops."""
+    import shutil
+    import tempfile
     import threading
     from macf.amail.broker import _Handler, _Server
-    server = _Server(str(tmp_path / "s.sock"), _Handler)
-    passes = []
-    server.on_pass = lambda: passes.append(1)
-    t = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
-    t.start()
+    # A short directory: pytest's tmp_path on macOS passes the 103-byte AF_UNIX limit.
+    sockdir = tempfile.mkdtemp(prefix="pd-", dir="/tmp")
     try:
-        time.sleep(0.2)
-        assert len(passes) >= 3, f"{len(passes)} passes in 0.2 s at a 0.02 s poll"
-        assert server.in_flight() == 0
+        server = _Server(os.path.join(sockdir, "s.sock"), _Handler)
+        passes = []
+        server.on_pass = lambda: passes.append(1)
+        t = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
+        t.start()
+        try:
+            time.sleep(0.2)
+            assert len(passes) >= 3, f"{len(passes)} passes in 0.2 s at a 0.02 s poll"
+            assert server.in_flight() == 0
+        finally:
+            server.shutdown()
+            server.server_close()
+        n = len(passes)
+        time.sleep(0.1)
+        assert len(passes) == n, "the hook ran after the loop stopped"
     finally:
-        server.shutdown()
-        server.server_close()
-    n = len(passes)
-    time.sleep(0.1)
-    assert len(passes) == n, "the hook ran after the loop stopped"
+        shutil.rmtree(sockdir, ignore_errors=True)
