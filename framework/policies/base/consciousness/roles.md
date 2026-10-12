@@ -248,7 +248,7 @@ The lifecycle runs on the same generic state machine the task system uses; the t
 
 ### 3.2 Duty states
 
-`pending` (declared, not yet worked) → `active` (engaged, so attention is on it, or active because it has a tracked task; only an engaged duty carries the stanza's pointer and is disengaged when attention moves to another) → `done` (evidence recorded) or `deferred` (set aside with a reason, kept for the record). A deferred duty may be reactivated. **`role duty engage` is the duty's `task start`**: it makes the duty active, records an engage update with its breadcrumb (a service, so the stanza pointer and the gate's bound both move), focuses the duty's role if another or none was focused, may attach the implementing tasks in the same step, and shows the formatted view of each duty it engaged followed by the role's charter. **Engagement is exclusive by default**: engaging a duty disengages every other active duty in the store (`active` → `pending` with a `disengage` update), because attention moved. A disengagement is not a service and not a touch -- putting a duty down does nothing for it, so neither the gate's bound nor the pointer moves to it. **A deliberate parallel engagement is one command with several ids** (`role duty engage A B`), all in one role; the set is engaged together and everything outside it is disengaged. Parallel engagement is the rarer case and the stanza says so (§7.2). A cadence duty is never `done` as a whole; its occurrences are, via `done_on` notes (§6.2).
+`pending` (declared, not yet worked) → `active` (engaged, so attention is on it, or active because it has a tracked task; only an engaged duty carries the stanza's pointer and is disengaged when attention moves to another) → `done` (evidence recorded) or `deferred` (set aside with a reason, kept for the record). A deferred duty may be reactivated. **`role duty engage` is the duty's `task start`**: it makes the duty active, records an engage update with its breadcrumb (a service, so the stanza pointer and the gate's bound both move), focuses the duty's role if another or none was focused, may attach the implementing tasks in the same step, and shows the formatted view of each duty it engaged followed by the role's charter. **Engagement is exclusive by default**: engaging a duty disengages every other active duty in the store (`active` → `pending` with a `disengage` update), because attention moved. A disengagement is not a service and not a touch -- putting a duty down does nothing for it, so neither the gate's bound nor the pointer moves to it. **An edit is a service**: `role duty edit` changes the declaration on the record (title, body, importance, due, horizon, cadence, dependencies), writes an `edit` update carrying each old and new value, the reason and the breadcrumb, and moves the pointer and the gate's bound like any touch. It never changes state, which is what engage, done, defer and reactivate are for, and a done or deferred duty refuses time edits: its declaration was satisfied or set aside as it stood. `role edit` does the same for a role, and never touches its state. **A deliberate parallel engagement is one command with several ids** (`role duty engage A B`), all in one role; the set is engaged together and everything outside it is disengaged. Parallel engagement is the rarer case and the stanza says so (§7.2). A cadence duty is never `done` as a whole; its occurrences are, via `done_on` notes (§6.2).
 
 ### 3.3 `done` requires evidence
 
@@ -284,6 +284,8 @@ Reason from the duty's nature, not from a default. Four questions:
 - *Semester-end status refresh, due the last day of term.* The refresh needs the operator's answer about renewal, which takes a week to get. Horizon: two weeks. `--horizon 14d --why "needs the operator's renewal answer, typically a week; a week of slack"`.
 
 The policy gives the questions and the examples. It never gives a number.
+
+**A change is reasoned like a declaration.** Moving a due date, a horizon or a cadence with `role duty edit` needs `--why`, stored as the edit update's text, and the edit refuses to leave a dated or recurring duty without a horizon, as `duty add` does. A role's expiry, review date and review horizon follow the same rule under `role edit`. The record of why a date moved is the record of the reasoning, and editing the JSON by hand leaves neither.
 
 ### 4.3 Cadence grammar
 
@@ -544,8 +546,8 @@ There is no registry of participating types (`scholarship.md`); the graph builde
 ## 12 CLI Surface
 
 ```
-macf_tools role create|list|show|note|pause|resume|expire|retire|review|focus|unfocus|calendar
-macf_tools role duty add|show|engage|note|done|defer|link|unlink|why   # engage takes one id (exclusive) or several (parallel)
+macf_tools role create|edit|list|show|note|pause|resume|expire|retire|review|focus|unfocus|calendar
+macf_tools role duty add|edit|show|engage|note|done|defer|link|unlink|why   # engage takes one id (exclusive) or several (parallel)
 macf_tools task roles [--all]
 macf_tools task tree --roles none|collapsed|focused|all
 ```

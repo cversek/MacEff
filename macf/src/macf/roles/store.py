@@ -14,7 +14,7 @@ import re
 import uuid
 from datetime import date, datetime
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ..agent_events_log import append_event
 from .priority import now as _clock
@@ -289,6 +289,76 @@ class RoleStore:
         self.save_role(role, folder)
         append_event("role_serviced", {"role_id": role.id, "kind": kind})
         return role
+
+    # ---- editing a declaration (#389, #390) --------------------------------
+
+    #: Fields that move a duty in time. Changing one needs a reason, as declaring one does
+    #: (roles policy 4.2), and a done or deferred duty refuses them: its declaration was
+    #: satisfied or set aside as it stood, and rewriting it would rewrite history.
+    DUTY_TIME_FIELDS = ("due", "horizon", "cadence")
+    ROLE_TIME_FIELDS = ("expires", "review_by", "review_horizon")
+
+    @staticmethod
+    def _changes(record: Any, changes: Dict[str, Any]) -> List[Tuple[str, Any, Any]]:
+        return [(k, getattr(record, k), v) for k, v in changes.items() if getattr(record, k) != v]
+
+    @staticmethod
+    def _shown(v: Any) -> str:
+        if v is None or v == []:
+            return "-"
+        if isinstance(v, datetime):
+            return v.strftime("%Y-%m-%dT%H:%M")
+        if isinstance(v, list):
+            return ",".join(str(x) for x in v)
+        return str(v)
+
+    def _edit_text(self, moved: List[Tuple[str, Any, Any]], why: str) -> str:
+        text = "; ".join(f"{k} {self._shown(a)} -> {self._shown(b)}" for k, a, b in moved)
+        return text + (f": {why}" if why else "")
+
+    def edit_duty(self, duty: Duty, folder: Path, changes: Dict[str, Any], why: str = "") -> Duty:
+        """Change a declared duty on the record. Never its state: engage, done, defer
+        and reactivate do that. An edit is a service (roles policy 3.2)."""
+        moved = self._changes(duty, changes)
+        if not moved:
+            raise RoleError(f"nothing to change on duty {duty.id}: every value given is already its value")
+        timed = [k for k, _, _ in moved if k in self.DUTY_TIME_FIELDS]
+        if timed and duty.state in ("done", "deferred"):
+            raise RoleError(f"duty {duty.id} is {duty.state}; its {', '.join(timed)} stand as they were "
+                            "(title and body corrections are still allowed)")
+        if timed and not why.strip():
+            raise RoleError(f"changing {', '.join(timed)} needs --why: a horizon or date is reasoned "
+                            "when it changes, as when it is declared (roles policy: reasoning a horizon)")
+        if "depends_on" in changes:
+            for dep in changes["depends_on"] or []:
+                self.find_duty(dep)
+        data = dump(duty)
+        for k, _, v in moved:
+            data[k] = v
+        edited = Duty.model_validate(data)        # the declaration's rules, applied to the result
+        edited.updates.append(_update(self._edit_text(moved, why), kind="edit"))
+        self.save_duty(edited, folder)
+        append_event("duty_edited", {"duty_id": edited.id, "role_id": edited.role_id,
+                                     "fields": [k for k, _, _ in moved]})
+        return edited
+
+    def edit_role(self, role: Role, folder: Path, changes: Dict[str, Any], why: str = "") -> Role:
+        """Change a role on the record. Never its state: pause, resume, expire and
+        retire do that."""
+        moved = self._changes(role, changes)
+        if not moved:
+            raise RoleError(f"nothing to change on role {role.id}: every value given is already its value")
+        timed = [k for k, _, _ in moved if k in self.ROLE_TIME_FIELDS]
+        if timed and not why.strip():
+            raise RoleError(f"changing {', '.join(timed)} needs --why, reasoned as when the role was assigned")
+        data = dump(role)
+        for k, _, v in moved:
+            data[k] = v
+        edited = Role.model_validate(data)
+        edited.updates.append(_update(self._edit_text(moved, why), kind="edit"))
+        self.save_role(edited, folder)
+        append_event("role_edited", {"role_id": edited.id, "fields": [k for k, _, _ in moved]})
+        return edited
 
     def note_duty(self, duty: Duty, folder: Path, text: str, kind: str = "note",
                   done_on: Optional[date] = None) -> Duty:
