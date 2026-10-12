@@ -63,6 +63,7 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 **8 What a Shared Container Shows You**
 - What can I see of the other agents in a shared container, and what can't I change?
 - Where does the container's budget come from, and who sets it?
+- What happens when a step of the container's start fails?
 
 **9 The Tray**
 - What does the tray show, and for whom?
@@ -321,6 +322,8 @@ In a container several agents share, you can see every agent's units and the con
 
 If the container is near its limit and a peer's unit holds most of it, tell the operator. Don't touch the peer's unit [MIS-0002-R07 (pd_MUST-NOT_control_other_agents)].
 
+**A failed start step never takes sshd down.** The container starts sshd before anything slow [MIS-0002-R57 (container_MUST_start_access_first)]. Each step after it runs on its own: a step that fails is logged as STEP FAILED, the steps that need it are logged as SKIPPED, and every other step still runs. The optional units, the policy index and the search service, come last, each under its own timeout [MIS-0002-R58 (optional_unit_MUST-NOT_delay_others)]. The start log ends "Startup complete with N step(s) failed or skipped", naming them, and the container stays up so the operator can log in and repair it. If you find a tool missing or your mail not running after a recreate, look for that line in the container's log and tell the operator. Don't take it to mean the deployment is broken in some way nobody knows about.
+
 ---
 
 ## 9 The Tray
@@ -467,6 +470,8 @@ On SIGTERM, SIGINT or SIGHUP the daemon removes its socket and its record and en
 The daemon listens on Unix sockets only, never on a network port [MIS-0002-R80 (pd_MUST-NOT_listen_on_network)]: the control socket here and, once the notifier lands, the channel socket of 1.3. Both live in the runtime directory, `$XDG_RUNTIME_DIR/maceff_pd/`, or `/tmp/maceff_pd-<uid>/` where that variable is unset, each named for the agent's card, so every path carries `maceff_pd` and the card [MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd)]. The daemon checks the socket path against the platform's length limit before binding, as the adapter does at install (3.1), with a message naming the path and the limit. Without the check, a path that's too long fails at bind with an error that names neither.
 
 **The runtime directory must be private.** The daemon creates it with mode 0700, and refuses to start when an existing one belongs to another user or is open to group or others. Under `/tmp`, another local user could have made the directory first, and every socket in it would then be theirs to replace.
+
+**A long-running daemon keeps its record from being swept.** On macOS, without `XDG_RUNTIME_DIR`, the runtime directory is under `/tmp`, and the system's `tmp_cleaner` deletes a regular file there once it has gone three days unread, unwritten and unchanged. The sockets are not regular files and their directory is never empty, so only the record is at risk, and `pd status` believes the daemon only through it. The daemon refreshes the record's times every hour, and writes it again if a cleaner has already taken it.
 
 ### 12.3 Who may connect, and what that proves
 
