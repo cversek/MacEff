@@ -4,6 +4,10 @@
     weekly:<day>[,<day>...]          weekly:tue     weekly:tue,thu
     monthly:<day-of-month>           monthly:15
     [at HH:MM] [dur <N>h|<N>m] [until YYYY-MM-DD]
+    on:<event> [until YYYY-MM-DD]    on:compaction_detected
+
+``on:`` recurs on an event in the agent's own log rather than on the calendar:
+each recording of the event is an occurrence (#389).
 
 Parsing lives here so ``duty add`` can refuse a malformed cadence at entry
 (the validator is where a bad value should be discovered, per the Python
@@ -19,6 +23,7 @@ DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 _DUR_RE = re.compile(r"^(\d+)([hm])$")
 _HORIZON_RE = re.compile(r"^(\d+)([dhm])$")
+_EVENT_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 
 
 class CadenceError(ValueError):
@@ -27,12 +32,13 @@ class CadenceError(ValueError):
 
 @dataclass
 class Cadence:
-    kind: str                              # daily | weekly | monthly
+    kind: str                              # daily | weekly | monthly | event
     weekdays: List[int] = field(default_factory=list)   # 0=mon .. 6=sun
     day_of_month: Optional[int] = None
     at: Optional[time] = None
     duration_minutes: Optional[int] = None
     until: Optional[date] = None
+    event: Optional[str] = None            # kind == "event": the event name it recurs on
     text: str = ""
 
     def __str__(self) -> str:
@@ -76,13 +82,21 @@ def parse_cadence(text: str) -> Cadence:
         if not body.isdigit() or not 1 <= int(body) <= 31:
             raise CadenceError("monthly needs a day of month 1-31: monthly:15")
         cad.day_of_month = int(body)
+    elif head.startswith("on:"):
+        cad.kind = "event"
+        name = head[len("on:"):]
+        if not _EVENT_RE.match(name):
+            raise CadenceError(f"on: needs an event name like compaction_detected, not {name!r}")
+        cad.event = name
     else:
-        raise CadenceError(f"cadence must start with daily, weekly:<day> or monthly:<n>, not {tokens[0]!r}")
+        raise CadenceError(f"cadence must start with daily, weekly:<day>, monthly:<n> or on:<event>, not {tokens[0]!r}")
 
     i = 0
     while i < len(rest):
         key = rest[i].lower()
         val = rest[i + 1] if i + 1 < len(rest) else None
+        if cad.kind == "event" and key in ("at", "dur"):
+            raise CadenceError(f"'{key}' sets a time of day, and an on:<event> cadence has none; only 'until' applies")
         if key == "at":
             if not val:
                 raise CadenceError("'at' needs HH:MM")
@@ -105,3 +119,8 @@ def parse_cadence(text: str) -> Cadence:
             raise CadenceError(f"unexpected token {rest[i]!r} in cadence")
         i += 2
     return cad
+
+
+def is_event_cadence(text: Optional[str]) -> bool:
+    """True for an ``on:<event>`` cadence, without parsing the rest."""
+    return bool(text) and text.strip().lower().startswith("on:")
