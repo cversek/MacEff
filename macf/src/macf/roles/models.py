@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .cadence import CadenceError, parse_cadence, parse_horizon_minutes
+from .cadence import CadenceError, is_event_cadence, parse_cadence, parse_horizon_minutes
 from .shelf import ICON_SHELF  # re-exported: importers still name the shelf's old home
 
 ID_RE = re.compile(r"^[0-9a-f]{6}$")
@@ -195,7 +195,10 @@ class Duty(BaseModel):
         # Horizon belongs to the duty: a dated or recurring duty with no
         # horizon can never become DUE_SOON, so the record refuses it. The
         # policy section on reasoning a horizon is the remedy, not a default.
-        if (self.due is not None or self.cadence is not None) and self.horizon is None:
+        # An on:<event> cadence has no date to lead, so its horizon is optional:
+        # given, it is the grace after the event before the occurrence is late.
+        timed = self.due is not None or (self.cadence is not None and not is_event_cadence(self.cadence))
+        if timed and self.horizon is None:
             raise ValueError("a duty with due or cadence needs a horizon (roles policy: reasoning a horizon)")
         if self.state == "done" and not self.evidence:
             raise ValueError("a done duty needs at least one evidence pointer (roles policy: done requires evidence)")

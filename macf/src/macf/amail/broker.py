@@ -264,6 +264,15 @@ def _how(sender: Any) -> str:
     return getattr(sender, "how", "so_peercred")
 
 
+
+def unprovisioned_box(agent: str, box: Path) -> str:
+    """Why mail for ``agent`` was not placed: its pickup box was never provisioned."""
+    return (f"the pickup box for '{agent}' ({box}) was never provisioned, and this broker "
+            f"runs as another uid, so a box it created would not be readable by "
+            f"'{agent}' (amail.md §2.3). Provision it with the agent's group, as "
+            f"container start-up does, and the next delivery will be placed")
+
+
 @dataclass
 class BrokerConfig:
     """Everything the broker needs. Paths, not secrets — the credential is read
@@ -387,6 +396,17 @@ class BrokerConfig:
 
     def address_for(self, agent: str) -> str:
         return f"{agent}@{self.domain}"
+
+    def may_create_pickup_box(self, agent: str) -> bool:
+        """Whether this broker may create ``agent``'s missing pickup box itself (amail.md
+        §2.3): only when it runs as a uid bound to that agent in its own authentication
+        table, so the box it makes is the recipient's own. Across a uid boundary an
+        unprivileged broker cannot place a box in the recipient's group, and a box it
+        made would be unreadable by the agent it belongs to while the sender was told
+        the mail was delivered. The test is the broker's own table, not the declared
+        tier: a host broker left at the default tier still shares its agents' uid."""
+        me = os.geteuid()
+        return self.agent_uids.get(me) == agent or agent in self.shared_uid_agents.get(me, ())
 
     def agent_for(self, address: str) -> Optional[str]:
         """Local agent owning this address, or None if it is not ours."""
@@ -924,7 +944,10 @@ class Broker:
                 "there is nowhere to hand this message. Refusing rather than "
                 "reporting a delivery that did not happen.")
         box = Path(self.config.inbound_handoff) / agent
-        box.mkdir(mode=0o2770, parents=True, exist_ok=True)
+        if not box.is_dir():
+            if not self.config.may_create_pickup_box(agent):
+                raise DeliveryError(unprovisioned_box(agent, box))
+            box.mkdir(mode=0o2770, parents=True, exist_ok=True)
         payload = message.serialize().encode("utf-8")
         stem = f"{int(time.time())}-{message.message_id}"
         sidecar = {

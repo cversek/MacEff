@@ -63,6 +63,7 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 **8 What a Shared Container Shows You**
 - What can I see of the other agents in a shared container, and what can't I change?
 - Where does the container's budget come from, and who sets it?
+- What happens when a step of the container's start fails?
 
 **9 The Tray**
 - What does the tray show, and for whom?
@@ -207,7 +208,7 @@ macOS attaches a privacy grant to the **responsible process**. A unit started by
 
 ### 3.3 Claude Code's own supervisor
 
-Claude Code can run a session in the background under its own daemon (`claude --bg`, `/background`). **Where it already runs the agent's session, the primal daemon adopts that session** instead of starting a second supervisor over it [MIS-0002-R66 (pd_MUST_adopt_harness_supervisor)].
+Claude Code can run a session in the background under its own daemon (`claude --bg`, `/background`). **Where it already runs the agent's session, the primal daemon is to adopt that session** instead of starting a second supervisor over it [MIS-0002-R66 (pd_MUST_adopt_harness_supervisor)]. The decision and the client verbs below are in `macf/utils/client_daemon.py`, and the readout already reports a hosted session. **Still to come:** the daemon does not call them yet, so today it neither adopts nor refuses a hosted session. The rules below are the ones the wiring will follow.
 
 - **Recognise a hosted session by its sidecar's `kind: "bg"`, never by argv.** A respawned worker runs in a pre-started spare whose argv is generic, so the session's launch flags, its channels among them, are read from the client's job record (`respawnFlags`).
 - **Adopt only when it is unambiguous.** Exactly one hosted session in the agent's home is adopted. Two or more are refused with their ids named, because picking by recency is a guess. With none, the daemon starts the session itself.
@@ -320,6 +321,8 @@ In a container several agents share, you can see every agent's units and the con
 - **Unknown is never empty.** A home that published nothing is UNPUBLISHED, one whose summary does not parse is UNREADABLE, and a budget file that cannot be read is unknown.
 
 If the container is near its limit and a peer's unit holds most of it, tell the operator. Don't touch the peer's unit [MIS-0002-R07 (pd_MUST-NOT_control_other_agents)].
+
+**A failed start step never takes sshd down.** The container starts sshd before anything slow [MIS-0002-R57 (container_MUST_start_access_first)]. Each step after it runs on its own: a step that fails is logged as STEP FAILED, the steps that need it are logged as SKIPPED, and every other step still runs. The optional units, the policy index and the search service, come last, each under its own timeout [MIS-0002-R58 (optional_unit_MUST-NOT_delay_others)]. The start log ends "Startup complete with N step(s) failed or skipped", naming them, and the container stays up so the operator can log in and repair it. If you find a tool missing or your mail not running after a recreate, look for that line in the container's log and tell the operator. Don't take it to mean the deployment is broken in some way nobody knows about.
 
 ---
 

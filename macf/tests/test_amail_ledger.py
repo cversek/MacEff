@@ -45,6 +45,8 @@ def two(tmp_path):
                        dispositions_dir=tmp_path / "disp",
                        inbound_handoff=tmp_path / "handoff",
                        inbound_quarantine=tmp_path / "q")
+    for agent in homes:                       # provisioned, as a deployment does (§2.3)
+        (tmp_path / "handoff" / agent).mkdir(mode=0o2770, parents=True)
     b = Broker(cfg)
 
     def pull(agent):

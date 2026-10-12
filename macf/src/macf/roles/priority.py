@@ -7,14 +7,20 @@ duty records and *now*.
 
     OVERDUE > DUE_SOON > BLOCKING > IMPORTANT > NORMAL > BLOCKED > DONE/DEFERRED
 """
+from __future__ import annotations
+
 import os
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from .cadence import Cadence, parse_cadence
-from .models import Duty, Role
+from .cadence import Cadence, is_event_cadence, parse_cadence
+
+if TYPE_CHECKING:
+    # Annotations only: the hooks import this module on every tool call, and building the
+    # pydantic models costs more than the hook's whole roles path (#460).
+    from .models import Duty, Role
 
 OVERDUE, DUE_SOON, BLOCKING, IMPORTANT, NORMAL, BLOCKED, DONE = range(7)
 TIER_NAMES = ("OVERDUE", "DUE_SOON", "BLOCKING", "IMPORTANT", "NORMAL", "BLOCKED", "DONE")
@@ -83,6 +89,68 @@ def end_of_day(dt: datetime) -> datetime:
     return dt
 
 
+def _declared_at(duty: Duty) -> Optional[datetime]:
+    if not duty.updates:
+        return None
+    try:
+        return datetime.fromisoformat(duty.updates[0].at)
+    except ValueError as e:
+        # An event duty never reaches declared_on(), so it says so here: with no floor,
+        # an event recorded before the declaration could pass for an occurrence.
+        print(f"⚠️ MACF: duty {duty.id} first update has an unparseable timestamp "
+              f"{duty.updates[0].at!r}; no declaration floor ({e})", file=sys.stderr)
+        return None
+
+
+def event_occurrence(duty: Duty, at: datetime, role_expires: Optional[date] = None) -> Tuple[Optional[datetime], bool]:
+    """An ``on:<event>`` duty's latest occurrence and whether it is closed.
+
+    The occurrence is the most recent recording of the duty's event at or before
+    *at*, after the duty was declared and within until/expires. It is closed by a
+    done_on note recorded after it, as a done_on note closes a calendar
+    occurrence; any other note is a service, not completion. Both are read from
+    the log's own order, because update times are to the second and an event in
+    the same second would be misplaced.
+
+    Read from the current cycle, as every event-log query is by default: an event
+    recorded in an earlier cycle and never closed is not carried across a
+    compaction. ``on:compaction_detected`` is the boundary itself, so it is always
+    in view."""
+    from ..agent_events_log import read_events
+    cad = parse_cadence(duty.cadence)
+    floor = _declared_at(duty)
+    limit = cad.until or role_expires
+    closed = False
+    for ev in read_events(reverse=True, only=[cad.event, "duty_added", "duty_serviced",
+                                              "duty_occurrence_carried"]):
+        kind, data = ev.get("event"), ev.get("data") or {}
+        when = datetime.fromtimestamp(float(ev.get("timestamp") or 0))
+        if kind == "duty_occurrence_carried":
+            # Re-recorded by the cycle carry (cycle_carry.OCCURRENCE_EVENT): the occurrence is
+            # the event's own time, so its grace keeps running from it.
+            if data.get("duty_id") != duty.id or when > at:
+                continue
+            return datetime.fromtimestamp(float(data.get("occurred_at") or 0)), closed
+        if when > at:
+            continue
+        if kind == "duty_added":
+            if data.get("duty_id") == duty.id:
+                return None, False
+            continue
+        if kind == "duty_serviced":
+            if data.get("duty_id") == duty.id and data.get("done_on"):
+                closed = True
+            continue
+        if kind != cad.event:
+            continue
+        if floor is not None and when < floor:
+            return None, False
+        if limit is not None and when.date() > limit:
+            continue
+        return when, closed
+    return None, False
+
+
 def occurrences(duty: Duty, start: date, end: date, role_expires: Optional[date] = None) -> List[datetime]:
     """Every occurrence of a cadence duty in [start, end], honouring until/expires
     and never before the duty was declared.
@@ -90,8 +158,8 @@ def occurrences(duty: Duty, start: date, end: date, role_expires: Optional[date]
     Walks day by day, which is cheap at the scale of a semester and immune to
     month-length and DST arithmetic: a day is a day.
     """
-    if not duty.cadence:
-        return []
+    if not duty.cadence or is_event_cadence(duty.cadence):
+        return []                      # an event duty has no calendar dates to expand
     cad = parse_cadence(duty.cadence)
     limit = cad.until or role_expires
     if limit is not None:
@@ -124,6 +192,9 @@ def current_occurrence(duty: Duty, at: datetime, role_expires: Optional[date] = 
         return duty.due
     if not duty.cadence:
         return None
+    if is_event_cadence(duty.cadence):
+        occ, closed = event_occurrence(duty, at, role_expires)
+        return occ if occ is not None and not closed else None
     done = set(duty.done_on_dates())
     lookback = at.date() - timedelta(days=62)
     past = [o for o in occurrences(duty, lookback, at.date(), role_expires) if end_of_day(o) <= at]
@@ -182,6 +253,18 @@ def classify(duty: Duty, open_duties: Sequence[Duty], at: Optional[datetime] = N
 
     if duty.state in ("done", "deferred"):
         return Placement(duty, DONE, f"{duty.state}", occ, None, (DONE, 0) + tie)
+
+    if occ is not None and is_event_cadence(duty.cadence):
+        # The event is the entry: DUE_SOON from the moment it is recorded. A horizon,
+        # if given, is the grace before the occurrence is late; without one it never is.
+        event = parse_cadence(duty.cadence).event
+        hz = _horizon_delta(duty)
+        if hz is not None and occ + hz < at:
+            days = (at.date() - (occ + hz).date()).days
+            return Placement(duty, OVERDUE, f"on {event} at {occ:%Y-%m-%d %H:%M}, grace {duty.horizon} passed {days}d ago",
+                             occ, occ + hz, (OVERDUE, 0) + tie)
+        grace = f", grace {duty.horizon}" if duty.horizon else ""
+        return Placement(duty, DUE_SOON, f"on {event} at {occ:%Y-%m-%d %H:%M}{grace}", occ, occ, (DUE_SOON, 0) + tie)
 
     if occ is not None:
         # A bare date is due 'during that day': late once the day ends, and
@@ -257,6 +340,11 @@ def approach_mark(occ: Optional[datetime], horizon_minutes: Optional[int], at: O
 def duty_mark(p: Placement, at: Optional[datetime] = None) -> str:
     if p.tier == DONE:
         return ""
+    if is_event_cadence(p.duty.cadence) and p.occurrence is not None:
+        if p.tier == OVERDUE:
+            past = ((at or now()).date() - p.entered.date()).days
+            return f"🔴 OVERDUE {past}d" if past else "🔴 OVERDUE today"
+        return "⏰ on " + parse_cadence(p.duty.cadence).event
     return approach_mark(p.occurrence, p.duty.horizon_minutes(), at)
 
 

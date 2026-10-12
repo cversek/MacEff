@@ -2468,6 +2468,32 @@ def _start_inbound_transport(interp: str) -> None:
         log("amail inbound tunnel: none configured (deployment choice)")
 
 
+def run_after_access(steps) -> List[str]:
+    """Run the steps that come after sshd, so that none of them can stop the container.
+
+    Each step is ``(name, call, needs)``. A step that raises is logged and recorded, and
+    every later step that names it in ``needs`` is skipped and recorded too; the rest
+    still run. Returns the names failed or skipped, in order. The access path outlives
+    every one of them (MIS-0002-R57 (container_MUST_start_access_first), MIS-0002-R58
+    (optional_unit_MUST-NOT_delay_others)).
+    """
+    import traceback
+    failed: List[str] = []
+    for name, call, needs in steps:
+        missing = [n for n in needs if n in failed]
+        if missing:
+            log(f"SKIPPED {name}: it needs {', '.join(missing)}, which did not complete")
+            failed.append(name)
+            continue
+        try:
+            call()
+        except Exception as e:  # noqa: BLE001 - GUARD, not handler: no start step may end the container
+            log(f"STEP FAILED {name} (sshd stays up): {e}")
+            traceback.print_exc()
+            failed.append(name)
+    return failed
+
+
 def main() -> int:
     """
     Container startup entry point.
@@ -2620,40 +2646,42 @@ def main() -> int:
         sshd_proc = _sp.Popen(['/usr/sbin/sshd', '-D'])
         log(f"sshd started (pid {sshd_proc.pid})")
 
-        # Create project workspaces
-        if projects_config:
-            for project_name, project_spec in projects_config.projects.items():
-                log(f"Setting up project: {project_name}")
-                create_project_workspace(project_name, project_spec)
+        # From here on sshd is the access path, and nothing may take it down
+        # (MIS-0002-R57, R58): each step runs in its own guard, and a failure
+        # skips only the steps that need it. Before this, one exception here
+        # returned 1 from main and the container exited with sshd in it.
+        def create_projects():
+            if projects_config:
+                for project_name, project_spec in projects_config.projects.items():
+                    log(f"Setting up project: {project_name}")
+                    create_project_workspace(project_name, project_spec)
 
-        # Create workspace structure with worktrees for assigned projects
-        for agent_name, agent_spec in agents_config.agents.items():
-            if agent_spec.assigned_projects:
-                create_workspace_structure(agent_spec.username, agent_spec.assigned_projects, projects_config)
+        def create_workspaces():
+            for agent_name, agent_spec in agents_config.agents.items():
+                if agent_spec.assigned_projects:
+                    create_workspace_structure(agent_spec.username, agent_spec.assigned_projects, projects_config)
 
-        # Install MACF tools
-        install_macf_tools()
+        failed = run_after_access([
+            ("project workspaces", create_projects, ()),
+            ("agent workspaces", create_workspaces, ("project workspaces",)),
+            ("MACF tools", lambda: install_macf_tools(), ()),
+            ("agent initialization", lambda: initialize_agents(agents_config), ("MACF tools",)),
+            ("policies", lambda: setup_policies(), ()),
+            ("policy editors", lambda: setup_policy_editors(agents_config.ids), ("policies",)),
+            # The broker refuses to start on a configured-and-absent credential,
+            # so placement precedes it, or a correct deployment looks broken.
+            ("secrets", lambda: place_secrets(agents_config), ()),
+            ("amail", lambda: start_amail_services(agents_config), ("secrets",)),
+            # Optional units, last, each under its own timeout (R58).
+            ("policy index", lambda: build_policy_index(agents_config), ("MACF tools",)),
+            ("search service", lambda: start_search_service_daemon(agents_config), ("policy index",)),
+        ])
 
-        # Initialize agents with macf_tools
-        initialize_agents(agents_config)
-
-        # Setup policies
-        setup_policies()
-        setup_policy_editors(agents_config.ids)
-
-        # Place declared secrets, then start amail. Order matters: the broker
-        # refuses to start on a configured-and-absent credential, so placement
-        # must precede it or a correct deployment looks like a broken one.
-        place_secrets(agents_config)
-        start_amail_services(agents_config)
-
-        # Build policy index for first PA (required for search service)
-        build_policy_index(agents_config)
-
-        # Start search service daemon for first PA (background process)
-        start_search_service_daemon(agents_config)
-
-        log("Startup complete")
+        if failed:
+            log(f"Startup complete with {len(failed)} step(s) failed or skipped: "
+                f"{', '.join(failed)}; sshd stays up so the operator can log in and repair")
+        else:
+            log("Startup complete")
         log("Run 'python scripts/deploy.py install' to deploy repos and worktrees")
 
         # Wait on sshd (keeps container alive)
