@@ -40,7 +40,11 @@ def emit_policy_injections_for_tasks(
     for task_id, task_type in active_tasks.items():
         policies = get_policies_for_task_type(task_type)
         for policy_name in policies:
-            policy_path = find_policy_file(policy_name)
+            try:
+                policy_path = find_policy_file(policy_name)
+            except LookupError as e:        # ambiguous across extra roots (#592): say so, go on
+                print(f"[policy] ⚠️ {e}", file=sys.stderr)
+                continue
             if policy_path:
                 append_event(POLICY_INJECTION_ACTIVATED, {
                     "policy_name": policy_name,

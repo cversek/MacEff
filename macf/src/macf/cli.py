@@ -3161,6 +3161,9 @@ def cmd_policy_list(args: argparse.Namespace) -> int:
         else:
             print("All Policies")
         print("=" * 50)
+        from .utils.manifest import extra_policy_roots
+        for root in extra_policy_roots():
+            print(f"  root {root.name}: {root.path} (MACEFF_POLICY_ROOTS; read as {root.name}:<policy>)")
 
         if not policies:
             # "None found" and "cannot look" are different facts, and reporting
@@ -8010,7 +8013,11 @@ def cmd_task_start(args: argparse.Namespace) -> int:
             already = {}
         policies = get_policies_for_task_type(task_type)
         for policy_name in policies:
-            policy_path = find_policy_file(policy_name)
+            try:
+                policy_path = find_policy_file(policy_name)
+            except LookupError as e:        # ambiguous across extra roots (#592)
+                print(f"⚠️ MACF: {e}", file=sys.stderr)
+                continue
             if not policy_path:
                 continue
             if policy_name in already:

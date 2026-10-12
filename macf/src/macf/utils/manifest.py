@@ -5,9 +5,79 @@ Policy manifest merge/filter/format.
 import json
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from .paths import find_maceff_root
+
+#: Extra policy roots, os.pathsep-separated, each ``path`` or ``name=path`` (#592). A package
+#: that ships policy in MacEff's format is read where it lives, never copied into the
+#: framework's tree (policy_awareness: where policies come from).
+POLICY_ROOTS_ENV = "MACEFF_POLICY_ROOTS"
+
+#: The framework root's name, for a qualified ``framework:<policy>``. No extra root may take it.
+FRAMEWORK_ROOT_NAME = "framework"
+
+
+@dataclass(frozen=True)
+class PolicyRoot:
+    name: str
+    path: Path
+    framework: bool = False
+
+
+class PolicyAmbiguous(LookupError):
+    """An unqualified policy name found in more than one extra root."""
+
+
+_reported: set = set()
+
+
+def _report_once(message: str) -> None:
+    """A skipped root or a shadowed name is said once per process, not on every lookup."""
+    if message not in _reported:
+        _reported.add(message)
+        print(f"⚠️ MACF: {message}", file=sys.stderr)
+
+
+def extra_policy_roots(environ=None) -> List[PolicyRoot]:
+    """The roots ``MACEFF_POLICY_ROOTS`` names, in order. An entry is ``path`` (named by its
+    directory) or ``name=path``. A missing or unreadable root, a bad name and a repeated name
+    are each reported once and left out, never skipped silently."""
+    environ = os.environ if environ is None else environ
+    roots: List[PolicyRoot] = []
+    for entry in (e.strip() for e in environ.get(POLICY_ROOTS_ENV, "").split(os.pathsep)):
+        if not entry:
+            continue
+        name, sep, raw = entry.partition("=")
+        if not sep:
+            name, raw = Path(entry).name, entry
+        path = Path(raw).expanduser()
+        if not name or any(c in name for c in "/:") or name == FRAMEWORK_ROOT_NAME:
+            _report_once(f"policy root {entry!r} skipped: a root's name may not be empty, "
+                         f"contain '/' or ':', or be {FRAMEWORK_ROOT_NAME!r} ({POLICY_ROOTS_ENV})")
+            continue
+        if any(r.name == name for r in roots):
+            _report_once(f"policy root {entry!r} skipped: the name {name!r} is already taken "
+                         f"by an earlier entry; give one a name=path ({POLICY_ROOTS_ENV})")
+            continue
+        if not path.is_dir():
+            _report_once(f"policy root {name!r} skipped: {path} is not a directory ({POLICY_ROOTS_ENV})")
+            continue
+        if not os.access(path, os.R_OK | os.X_OK):
+            _report_once(f"policy root {name!r} skipped: {path} is not readable by this user ({POLICY_ROOTS_ENV})")
+            continue
+        roots.append(PolicyRoot(name, path))
+    return roots
+
+
+def policy_roots(maceff_root: Optional[Path] = None) -> List[PolicyRoot]:
+    """Every root policies are read from: the framework's first, then the extra roots."""
+    roots = []
+    framework = get_framework_policies_path(maceff_root)
+    if framework:
+        roots.append(PolicyRoot(FRAMEWORK_ROOT_NAME, framework, framework=True))
+    return roots + extra_policy_roots()
 
 
 def get_framework_policies_path(maceff_root: Optional[Path] = None) -> Optional[Path]:
@@ -68,23 +138,62 @@ def get_framework_policies_path(maceff_root: Optional[Path] = None) -> Optional[
     return None
 
 
+def _find_in(root: Path, name: str, parents: Optional[List[str]]) -> Optional[Path]:
+    for md_file in root.rglob('*.md'):
+        if md_file.name == name:
+            if parents:
+                path_parts = md_file.relative_to(root).parts[:-1]
+                if all(p in path_parts for p in parents):
+                    return md_file
+            else:
+                return md_file
+    return None
+
+
+@dataclass(frozen=True, kw_only=True)
+class _Qualified:
+    root: Optional[str]
+    name: str
+    parents: Optional[List[str]]
+
+
+def _split_root(policy_name: str, parents: Optional[List[str]]) -> _Qualified:
+    """``<root>:<name>`` names a root. The prefix may sit on the name, or on the first parent
+    when a caller has already split ``<root>:<dir>/<name>`` on '/'."""
+    if parents and ":" in parents[0]:
+        root_name, first = parents[0].split(":", 1)
+        rest = ([first] if first else []) + list(parents[1:])
+        return _Qualified(root=root_name, name=policy_name, parents=rest or None)
+    if ":" in policy_name:
+        root_name, policy_name = policy_name.split(":", 1)
+        return _Qualified(root=root_name, name=policy_name, parents=parents)
+    return _Qualified(root=None, name=policy_name, parents=parents)
+
+
 def find_policy_file(
     policy_name: str,
     parents: Optional[List[str]] = None,
     maceff_root: Optional[Path] = None
 ) -> Optional[Path]:
     """
-    Find policy file by name, walking the framework policies tree.
+    Find policy file by name, across the framework root and any extra roots (#592).
 
     Args:
-        policy_name: Policy filename (with or without .md extension)
-                    e.g., 'task_management', 'task_management.md'
+        policy_name: Policy filename (with or without .md extension), optionally qualified
+                    by its root: 'task_management', 'framework:task_management',
+                    'agentcad:agentcad-usage'
         parents: Optional list of parent directory names to match
                 e.g., ['development'] to find development/task_management.md
         maceff_root: Optional MacEff installation root (auto-detected if None)
 
     Returns:
         Path to policy file, or None if not found
+
+    Raises:
+        PolicyAmbiguous: an unqualified name is in no framework policy but in more than one
+            extra root. The framework's own policies always resolve: a name the framework
+            has is the framework's, and a copy in an extra root is reported, not used, so a
+            package can never make a core policy unreadable.
 
     Examples:
         find_policy_file('task_management')
@@ -96,27 +205,38 @@ def find_policy_file(
         find_policy_file('checkpoints', parents=['consciousness'])
             → .../framework/policies/base/consciousness/checkpoints.md
     """
-    base_path = get_framework_policies_path(maceff_root)
-    if not base_path:
+    q = _split_root(policy_name, parents)
+    root_name, policy_name, parents = q.root, q.name, q.parents
+    name = policy_name if policy_name.endswith('.md') else f"{policy_name}.md"
+    roots = policy_roots(maceff_root)
+
+    if root_name is not None:
+        for root in roots:
+            if root.name == root_name:
+                return _find_in(root.path, name, parents)
         return None
 
-    # Normalize: ensure .md extension
-    name = policy_name if policy_name.endswith('.md') else f"{policy_name}.md"
-
-    # Walk the tree looking for matching files
-    for md_file in base_path.rglob('*.md'):
-        if md_file.name == name:
-            # If parents specified, check path contains them
-            if parents:
-                rel_path = md_file.relative_to(base_path)
-                path_parts = rel_path.parts[:-1]  # Exclude filename
-                # Check all parent requirements are in path
-                if all(p in path_parts for p in parents):
-                    return md_file
-            else:
-                return md_file
-
-    return None
+    framework_hit = None
+    extra_hits = []
+    for root in roots:
+        hit = _find_in(root.path, name, parents)
+        if hit is None:
+            continue
+        if root.framework:
+            framework_hit = hit
+        else:
+            extra_hits.append((root, hit))
+    if framework_hit is not None:
+        if extra_hits:
+            _report_once(f"policy {name} is also in root(s) {', '.join(r.name for r, _ in extra_hits)}; "
+                         f"the framework's is used. Read the other as <root>:{policy_name}")
+        return framework_hit
+    if len(extra_hits) > 1:
+        raise PolicyAmbiguous(
+            f"policy {policy_name!r} is in more than one root: "
+            + ", ".join(f"{r.name} ({p})" for r, p in extra_hits)
+            + f". Name one: " + " or ".join(f"{r.name}:{policy_name}" for r, _ in extra_hits))
+    return extra_hits[0][1] if extra_hits else None
 
 
 def list_policy_files(
@@ -135,12 +255,19 @@ def list_policy_files(
         include_tier: If True, read tier info for all policies (for display)
 
     Returns:
-        List of dicts with keys: name, path, relative_path, category, tier
+        List of dicts with keys: name, path, relative_path, category, tier, root. A policy
+        from an extra root (#592) has its root's name as the head of its category and its
+        relative path, so a listing names where each policy came from.
     """
-    base_path = get_framework_policies_path(maceff_root)
-    if not base_path:
-        return []
+    policies = []
+    for root in policy_roots(maceff_root):
+        policies.extend(_list_root(root, tier, category, include_tier))
+    return sorted(policies, key=lambda p: (p['root'] != FRAMEWORK_ROOT_NAME, p['relative_path']))
 
+
+def _list_root(root: PolicyRoot, tier: Optional[str], category: Optional[str],
+               include_tier: bool) -> List[Dict[str, Any]]:
+    base_path = root.path
     policies = []
     for md_file in base_path.rglob('*.md'):
         rel_path = md_file.relative_to(base_path)
@@ -148,6 +275,8 @@ def list_policy_files(
 
         # Determine category from path (full parent path for nested dirs)
         file_category = str(rel_path.parent) if len(path_parts) > 1 else 'root'
+        if not root.framework:
+            file_category = root.name if len(path_parts) == 1 else f"{root.name}/{rel_path.parent}"
 
         # Apply category filter (prefix match for nested categories)
         if category and not file_category.startswith(category):
@@ -173,12 +302,13 @@ def list_policy_files(
         policies.append({
             'name': md_file.stem,
             'path': str(md_file),
-            'relative_path': str(rel_path),
+            'relative_path': str(rel_path) if root.framework else f"{root.name}:{rel_path}",
             'category': file_category,
-            'tier': file_tier
+            'tier': file_tier,
+            'root': root.name,
         })
 
-    return sorted(policies, key=lambda p: p['relative_path'])
+    return policies
 
 
 def _deep_merge(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:

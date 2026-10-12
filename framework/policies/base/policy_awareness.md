@@ -101,6 +101,11 @@ You don't need to read everything. You need to recognize WHEN you need something
 - What development policies exist?
 - What language-specific policies?
 
+4.4 Package Policy Sets (Extra Roots)
+- How does a package's own policy set become readable without copying it into the framework?
+- How is a policy name resolved when it exists in more than one place?
+- What happens when a root is missing or two roots carry the same name?
+
 5 Practical Usage
 - How do I actually use this system?
 - What commands do I run?
@@ -344,6 +349,23 @@ Framework foundation policies:
 - **Language** (`lang/`): Language-specific guidance
 
 **Precedence Order**: Personal > Project > Core
+
+### 4.4 Package Policy Sets (Extra Roots)
+
+A package that ships its own policies in MacEff's format (policy ships with the capability) is read **where it lives**, never copied into the framework's tree. In a container, that tree is group-owned by the policy editors, and an agent can't add to it without provisioning.
+
+**`MACEFF_POLICY_ROOTS`** names extra directories, separated like `PATH`. Each entry is a path, which the directory's own name then names, or `name=path`, to choose the name. For example: `MACEFF_POLICY_ROOTS=agentcad=/path/to/agentcad/policies`. The framework's root is always searched first, and the extra roots follow in the order given. `macf_tools policy list` names each extra root and its path, and lists its policies under the root's name. `list`, `navigate`, `read` and `inject` all reach them.
+
+**How a name resolves:**
+- **`<root>:<policy>` names the root explicitly**, for example `agentcad:agentcad-usage` or `framework:task_management`. The separator is `:` because `/` already means parent directories (`development/task_management`), and both can combine: `agentcad:cad/agentcad-export`.
+- **A name the framework has is always the framework's.** If an extra root carries a file of the same name, it's reported once and not used. A package can add policy, but it can never make a core policy unreadable or replace one by accident. Read its copy by qualifying it.
+- **A name found in two or more extra roots, and not in the framework, is refused as ambiguous.** The refusal names every candidate and the qualified names that resolve each. Walk order never decides silently. Inside a hook (policy injection, task-start guides), the refusal is printed and that policy skipped, so a hook never fails over it.
+
+**What is refused at the root.** An entry whose directory is missing or unreadable, whose name is empty, contains `/` or `:`, or is `framework`, or repeats an earlier entry's name, is reported once and left out. It's never skipped silently, because "no policies found" and "this root couldn't be read" send a reader to different places.
+
+**Not covered yet:** `macf_tools policy search` and the search index read the framework's manifest, which extra roots don't have. A package's policies are found by name and by `list`, not by keyword search.
+
+**Prefix your files.** A set whose files share a prefix (`agentcad-*.md`) never meets the ambiguity refusal, and its names say where they came from.
 
 ## 5. Practical Usage
 
