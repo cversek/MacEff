@@ -1138,3 +1138,17 @@ def test_no_own_compaction(make_core, script):
     assert drive(core, lambda: core.pid("worker") not in (None, first, second))
     acts = [d.get("act") for d in events("pd_control", "worker")]
     assert acts and "compact" not in acts
+
+
+def test_the_record_outlives_a_temp_cleaner(tmp_path, script, base, run_daemon):
+    """Without XDG_RUNTIME_DIR the record lives in /tmp, where macOS's tmp_cleaner deletes a
+    regular file untouched for three days. A running daemon refreshes its record, and writes
+    it again if a cleaner already took it, so pd status keeps believing it."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    daemon = run_daemon(home, base, record_refresh_s=0.1)
+    old = time.time() - 4 * 86400
+    os.utime(daemon.record_path, (old, old))
+    assert wait_for(lambda: daemon.record_path.stat().st_mtime > old + 86400)
+    daemon.record_path.unlink()
+    assert wait_for(daemon.record_path.exists)
+    assert json.loads(daemon.record_path.read_text())["pid"] == os.getpid()

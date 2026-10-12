@@ -9,9 +9,20 @@ start.py began, with the MACF install skipped; after a rebuild that install take
 minutes, and nobody could log in during it.
 """
 import ast
+import importlib.util
 from pathlib import Path
 
 START_PY = Path(__file__).resolve().parents[2] / "docker" / "scripts" / "start.py"
+AFTER_ACCESS = ("create_workspace_structure", "install_macf_tools", "initialize_agents",
+                "setup_policies", "place_secrets", "start_amail_services",
+                "build_policy_index", "start_search_service_daemon")
+
+
+def _start_module():
+    spec = importlib.util.spec_from_file_location("maceff_start_order", START_PY)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _first_calls():
@@ -48,3 +59,42 @@ def test_optional_units_independent():
     for optional in ("build_policy_index", "start_search_service_daemon"):
         for required in ("sshd", "initialize_agents", "place_secrets", "start_amail_services"):
             assert at[required] < at[optional], f"{required} waits on the optional {optional}"
+
+
+def test_a_failing_step_skips_only_its_dependents():
+    """A step that raises after sshd is recorded; steps that need it are skipped, and
+    every other step still runs, so main goes on to wait on sshd (R57, R58)."""
+    start = _start_module()
+    ran = []
+
+    def boom():
+        raise RuntimeError("install failed")
+
+    failed = start.run_after_access([
+        ("tools", boom, ()),
+        ("agents", lambda: ran.append("agents"), ("tools",)),
+        ("secrets", lambda: ran.append("secrets"), ()),
+        ("amail", lambda: ran.append("amail"), ("secrets",)),
+        ("index", lambda: ran.append("index"), ("tools",)),
+        ("search", lambda: ran.append("search"), ("index",)),
+    ])
+    assert failed == ["tools", "agents", "index", "search"]
+    assert ran == ["secrets", "amail"]
+
+
+def test_every_step_after_sshd_runs_inside_the_guard():
+    """No slow step is called in main outside run_after_access, where one exception
+    would return from main and stop the container with sshd in it."""
+    tree = ast.parse(START_PY.read_text())
+    main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main")
+    guard = next(n for n in ast.walk(main) if isinstance(n, ast.Call)
+                 and getattr(n.func, "id", None) == "run_after_access")
+    guarded = {id(n) for n in ast.walk(guard)}
+    for helper in (n for n in ast.walk(main) if isinstance(n, ast.FunctionDef) and n is not main):
+        guarded |= {id(n) for n in ast.walk(helper)}
+    calls = [n for n in ast.walk(main) if isinstance(n, ast.Call)
+             and getattr(n.func, "id", None) in AFTER_ACCESS]
+    named = {n.func.id for n in calls}
+    assert named == set(AFTER_ACCESS), f"not called at all: {set(AFTER_ACCESS) - named}"
+    unguarded = sorted(n.func.id for n in calls if id(n) not in guarded)
+    assert not unguarded, f"called outside the guard: {unguarded}"
