@@ -176,6 +176,25 @@ EXIT_NOT_SEEN = -1000
 LIVE_STATES = ("starting", "running", "waiting_on_a_person")
 
 
+def start_epoch(start) -> Optional[float]:
+    """When the process whose start fingerprint is ``start`` began, in epoch seconds, or None.
+
+    macOS records the start as a UTC time already. Linux records clock ticks since boot,
+    which become a time with the boot time from ``/proc/stat``."""
+    key = proc_start_key(start)
+    if key is None:
+        return None
+    if sys.platform.startswith("linux"):
+        try:
+            with open("/proc/stat") as f:
+                btime = next(int(line.split()[1]) for line in f if line.startswith("btime "))
+            return btime + key / os.sysconf("SC_CLK_TCK")
+        except (OSError, StopIteration, ValueError) as e:
+            print(f"⚠️ MACF: pd: cannot read the boot time for a start time: {e}", file=sys.stderr)
+            return None
+    return float(key)
+
+
 def _describe_exit(code: int) -> str:
     if code == EXIT_NOT_SEEN:
         return "exited with a status this daemon cannot see (it adopted the unit, so it is not its parent)"
@@ -422,6 +441,9 @@ class Core:
             r.want_up = True
             self._transition(r, data["state"],
                              f"carried from the previous daemon: pid {pid}, its start time confirmed")
+            # Its state began with the process, not with this adoption, so a carried unit
+            # doesn't read as just restarted.
+            r.since = start_epoch(start) or r.since
             carried.add(name)
         return carried
 

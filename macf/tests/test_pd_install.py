@@ -160,3 +160,23 @@ def test_systemd_removal_tolerates_only_not_loaded(tmp_path):
     with pytest.raises(RuntimeError, match="Access denied"):
         adapters.SystemdAdapter(user_home=tmp_path, run=refused).uninstall(CARD)
     assert path.exists()
+
+
+def test_uninstall_waits_for_the_service_to_go_before_it_reports(tmp_path, monkeypatch, tier, capsys):
+    """launchctl bootout returns before the service is gone, so the line waits for "not
+    loaded" rather than reporting a state that's already ending."""
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(make_home(tmp_path)))
+    answers = iter(["loaded, pid 23510", "loaded, pid 23510", "not loaded"])
+    tier.status = lambda card: next(answers, "not loaded")
+    assert run("uninstall") == 0
+    out = capsys.readouterr().out
+    assert "no longer has it" in out and "pid 23510" not in out
+
+
+def test_uninstall_says_so_when_the_service_stays(tmp_path, monkeypatch, tier, capsys):
+    from macf.pd import cli as pd_cli
+    monkeypatch.setattr(pd_cli, "UNINSTALL_WAIT_S", 0.3)
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(make_home(tmp_path)))
+    tier.status = lambda card: "loaded, pid 23510"
+    assert run("uninstall") == 0
+    assert "still says: loaded, pid 23510" in capsys.readouterr().out

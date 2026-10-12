@@ -9,6 +9,7 @@ shown while touched since the last restart, hidden after one, always with
 --all. "Restart" is the latest ``session_started`` event, not the session id:
 a ``claude -c`` resume keeps the id, so an id test never hides anything.
 """
+import re
 import sys
 import time
 from datetime import datetime
@@ -230,6 +231,42 @@ def duty_line(p: Placement, at: datetime, pointers: Sequence[Tuple[str, float]] 
     return line
 
 
+_PUT_DOWN_BY = re.compile(r"engaged (D\w+(?:, D\w+)*) instead")
+
+#: Updates that record something about a waiting duty without taking it up again. A
+#: note saying why it waits is what the policy asks for (9.4), so it must not end the
+#: line; engage, done and defer do.
+_WHILE_WAITING = frozenset({"note", "occurrence", "link", "unlink", "edit", "correction"})
+
+
+def return_point(pairs: Sequence[Tuple[Role, Sequence[Duty]]]) -> Optional[Tuple[Duty, float, str]]:
+    """The duty an engage elsewhere last put down, while it waits to be taken up again.
+
+    Engagement is exclusive, so engaging one duty sends the one attention was on
+    back to pending. Duties stay out of the work stack (1.4), so this is the
+    return half of an interrupt: (duty, when, what displaced it), derived from the
+    records alone. A duty engaged again, closed, or put down by hand is not one; a
+    note, link or edit while it waits leaves it one."""
+    best = None
+    for _, duties in pairs:
+        for d in duties:
+            if d.state != "pending":
+                continue
+            last = next((u for u in reversed(d.updates) if u.kind not in _WHILE_WAITING), None)
+            if last is None or last.kind != "disengage":
+                continue
+            m = _PUT_DOWN_BY.search(last.description)
+            if not m:
+                continue
+            try:
+                ts = datetime.fromisoformat(last.at).timestamp()
+            except ValueError:
+                continue
+            if best is None or ts > best[1]:
+                best = (d, ts, m.group(1))
+    return best
+
+
 def stanza(store: RoleStore, mode: str = "focused", focused_id: Optional[str] = None,
            restart_epoch: Optional[float] = None, at: Optional[datetime] = None, ansi: bool = True,
            show_all: bool = False, title_width: Optional[int] = 80,
@@ -280,6 +317,10 @@ def stanza(store: RoleStore, mode: str = "focused", focused_id: Optional[str] = 
             lines.append(duty_line(p, at, duty_ptr, ansi, title_width))
         if hidden:
             lines.append(f"    {dim}({hidden} done/deferred hidden; task roles --all shows them){reset}")
+    back = return_point(pairs)
+    if back:
+        d, ts, by = back
+        lines.append(f"    ↩ return to D{d.id} {d.title}  {dim}(put down {rel_age(ts, at.timestamp())} ago for {by}){reset}")
     return lines
 
 

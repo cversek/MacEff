@@ -7,14 +7,20 @@ duty records and *now*.
 
     OVERDUE > DUE_SOON > BLOCKING > IMPORTANT > NORMAL > BLOCKED > DONE/DEFERRED
 """
+from __future__ import annotations
+
 import os
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .cadence import Cadence, is_event_cadence, parse_cadence
-from .models import Duty, Role
+
+if TYPE_CHECKING:
+    # Annotations only: the hooks import this module on every tool call, and building the
+    # pydantic models costs more than the hook's whole roles path (#460).
+    from .models import Duty, Role
 
 OVERDUE, DUE_SOON, BLOCKING, IMPORTANT, NORMAL, BLOCKED, DONE = range(7)
 TIER_NAMES = ("OVERDUE", "DUE_SOON", "BLOCKING", "IMPORTANT", "NORMAL", "BLOCKED", "DONE")
