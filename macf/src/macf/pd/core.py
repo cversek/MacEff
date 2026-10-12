@@ -260,6 +260,7 @@ class _Runner:
     then_start: bool = False            # the stop under way is half of a restart
     drain: Optional[tuple] = None       # (asker, reason, deadline) of a restart waiting on R49
     held_restart: Optional[tuple] = None  # (asker, reason, peer) of an asked restart a quiet window holds (R50)
+    client_session: Optional[str] = None  # session id, when the client's own daemon hosts this session (R66)
 
 
 class _LivenessTail:
@@ -313,6 +314,19 @@ class _LivenessTail:
         return events
 
 
+def _harness_hosted_sessions() -> list:
+    from macf.notify.session import harness_hosted_sessions
+    return harness_hosted_sessions()
+
+
+def _run_client(argv: List[str]) -> "subprocess.CompletedProcess":
+    """The client's own verb, bounded: a CLI that hangs must not hold the daemon's pass."""
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return subprocess.CompletedProcess(argv, 1, "", str(e))
+
+
 class Core:
     """Supervises one agent's declared units. Drive it with ``boot`` and then ``tick``.
 
@@ -334,6 +348,8 @@ class Core:
         drain_timeout_s: float = DRAIN_TIMEOUT_S,
         placeholders: Optional[Dict[str, str]] = None,
         probe: Callable[[int, str], bool] = verify_incarnation,
+        hosted: Optional[Callable[[], list]] = None,
+        client: Optional[Callable[[List[str]], "subprocess.CompletedProcess"]] = None,
     ):
         self.declaration = declaration
         self.card = card
@@ -343,6 +359,10 @@ class Core:
         self._placeholders = dict(placeholders or {})
         self._drain_timeout = drain_timeout_s
         self._probe = probe
+        # Claude Code's own background daemon, for the session unit (MIS-0002-R66): what it
+        # hosts, and how to give it the client's own verbs. Both are seams for tests.
+        self._hosted = hosted or _harness_hosted_sessions
+        self._client = client or _run_client
         self._units: Dict[str, _Runner] = {
             u.name: _Runner(spec=u, since=wall()) for u in declaration.units
         }
@@ -677,6 +697,59 @@ class Core:
                 f"{unit} is not a unit of this agent's declaration "
                 "(MIS-0002-R07 (pd_MUST-NOT_control_other_agents))") from None
 
+    def _from_client(self, r: _Runner) -> bool:
+        """For the session unit, give Claude Code's own daemon the first say, and return
+        True when it took the unit, so nothing is spawned (MIS-0002-R66
+        (pd_MUST_adopt_harness_supervisor)).
+
+        A session the client hosted before is respawned by the client, under the same
+        session id; if the client can no longer respawn it, it is decided afresh. A
+        session the client hosts in the agent home is adopted, and two or more are
+        refused, because picking one is a guess the operator makes (``client_daemon.decide``).
+        """
+        from macf.utils.client_daemon import ADOPT, REFUSE, client_command, decide
+        if r.spec.kind != "session":
+            return False
+        if r.client_session:
+            out = self._client(client_command("start", r.client_session))
+            if out.returncode != 0:
+                print(f"⚠️ MACF: pd: the client could not respawn session {r.client_session[:8]} "
+                      f"({(out.stderr or out.stdout or '').strip()[:200]}); deciding again", file=sys.stderr)
+                r.client_session = None
+        try:
+            hosted = self._hosted()
+        except OSError as e:
+            print(f"⚠️ MACF: pd: what the client hosts is unreadable ({e}); starting the session unit itself",
+                  file=sys.stderr)
+            return False
+        if r.client_session:
+            # Respawned under the same id: adopt whichever worker now carries it.
+            hosted = [h for h in hosted if h.session_id == r.client_session]
+            if not hosted:
+                r.client_session = None
+                return False
+        decision = decide(r.spec, hosted, Path(self._placeholders.get("agent_home", "")))
+        if decision.action == REFUSE:
+            r.want_up = False
+            r.proc, r.pid, r.proc_start = None, None, None
+            self._transition(r, "failed", f"not started: {decision.reason}")
+            return True
+        if decision.action != ADOPT:
+            return False
+        start = proc_start(decision.pid)
+        if not start:
+            return False   # the worker ended between the readout and now: start the unit as usual
+        r.proc, r.pid, r.proc_start = _Adopted(decision.pid, start, self._probe), decision.pid, start
+        r.client_session = decision.session_id
+        r.started_at = self._clock()
+        # The client's daemon supervises it, so its liveness is its process, probed by pid
+        # and start time; it writes no liveness of its own for a stale check to judge.
+        r.alive_at, r.alive_interval_s, r.in_flight = None, None, None
+        self._transition(r, "running", f"adopted: {decision.reason} (session {decision.session_id[:8]}, "
+                                       f"pid {decision.pid})")
+        r.since = start_epoch(start) or r.since
+        return True
+
     def _spawn(self, r: _Runner) -> None:
         """Start the unit as this process's child, with the declared environment and
         nothing inherited (MIS-0002-R12 (pd_MUST_start_units_itself)), read from the
@@ -684,7 +757,9 @@ class Core:
         (MIS-0002-R13 (pd_MUST_render_env_at_start)). The placeholders a declaration may
         use, the agent home, the card and the runtime directory, are filled in here from
         the daemon's own values, because the same agent's home differs between a host and a
-        container."""
+        container. The session unit asks Claude Code's own daemon first (``_from_client``)."""
+        if self._from_client(r):
+            return
         try:
             command = [render(a, self._placeholders) for a in r.spec.command]
             env = {k: render(v, self._placeholders) for k, v in r.spec.environment.items()}
@@ -728,8 +803,21 @@ class Core:
     def _signal_stop(self, r: _Runner, reason: str) -> None:
         """SIGTERM now, and SIGKILL once the unit's own declared grace has passed, so a
         unit that flushes a spool can be given longer than one that holds nothing
-        (MIS-0002-R48 (outside_stop_MUST_override_gates))."""
+        (MIS-0002-R48 (outside_stop_MUST_override_gates)).
+
+        A session the client hosts is stopped with the client's own ``claude stop``, which
+        keeps its conversation for a respawn; a signalled worker ends as done and nothing
+        brings it back. Only when the client refuses does the stop fall back to signals,
+        because an outside stop must still stop."""
         r.stopping = reason
+        if r.client_session:
+            from macf.utils.client_daemon import client_command
+            out = self._client(client_command("stop", r.client_session))
+            if out.returncode == 0:
+                r.kill_at = None
+                return
+            print(f"⚠️ MACF: pd: the client could not stop session {r.client_session[:8]} "
+                  f"({(out.stderr or out.stdout or '').strip()[:200]}); signalling it", file=sys.stderr)
         self._kill(r, signal.SIGTERM)
         r.kill_at = self._clock() + r.spec.stop_grace_s
 

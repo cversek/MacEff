@@ -83,7 +83,119 @@ class _Hosted:
     status: str = "idle"
 
 
+class _Client:
+    """Claude Code's own daemon, played by real sleep processes: ``hosted`` is what the
+    readout would list, and the client's verbs are recorded and acted out."""
+
+    def __init__(self, home):
+        self.home, self.calls, self.procs, self.sessions = home, [], [], {}
+
+    def host(self, session_id):
+        import subprocess
+        proc = subprocess.Popen(["/bin/sleep", "300"])
+        self.procs.append(proc)
+        self.sessions[session_id] = proc
+        return proc
+
+    def hosted(self):
+        return [_Hosted(p.pid, sid, str(self.home)) for sid, p in self.sessions.items() if p.poll() is None]
+
+    def __call__(self, argv):
+        import subprocess
+        self.calls.append(argv)
+        verb, sid = argv[1], argv[2]
+        if verb == "stop":
+            self.sessions[sid].terminate()
+            self.sessions[sid].wait()
+        elif verb == "respawn":
+            self.host(sid)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    def close(self):
+        for p in self.procs:
+            if p.poll() is None:
+                p.kill()
+                p.wait()
+
+
+def _core(home, client, marker):
+    import os
+    import pwd
+    from macf.pd.core import Core
+    from macf.pd.interface import Declaration, Unit
+    me = pwd.getpwuid(os.getuid()).pw_name
+    unit = Unit(name="session", kind="session", command=["/usr/bin/touch", str(marker)], account=me,
+                restart="always", liveness_interval_s=60, memory_limit_mb=64)
+    return Core(Declaration(version=1, agent="Tester@abc123", units=[unit]), "Tester@abc123",
+                placeholders={"agent_home": str(home)}, hosted=client.hosted, client=client,
+                backoff_base_s=0.01, backoff_cap_s=0.05)
+
+
+def _settle(core, until, timeout=5.0):
+    import time
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        core.tick()
+        if until():
+            return True
+        time.sleep(0.02)
+    return False
+
+
 def test_adopts_harness_supervisor(tmp_path):
+    """MIS-0002-R66: the daemon adopts the session Claude Code's own daemon hosts in the agent
+    home instead of starting a second one, and acts on it only through the client's verbs."""
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    client = _Client(home)
+    try:
+        hosted = client.host("3d52b89a-bbbb")
+        core = _core(home, client, marker)
+        core.boot()
+        assert core.state("session") == "running" and core.pid("session") == hosted.pid
+        assert not marker.exists()                                   # no second session started
+        core.restart("session", _policy(), "test restart")
+        assert _settle(core, lambda: core.pid("session") not in (None, hosted.pid))
+        assert [c[1] for c in client.calls] == ["stop", "respawn"]   # client verbs, never a signal
+        assert core.state("session") == "running" and not marker.exists()
+        core.stop("session", _policy(), "test stop")
+        assert _settle(core, lambda: core.state("session") == "stopped")
+        assert client.calls[-1][:2] == ["claude", "stop"]
+    finally:
+        client.close()
+
+
+def test_two_hosted_sessions_leave_the_session_unit_unstarted(tmp_path):
+    """Two hosted sessions in the home: the daemon refuses to guess, and starts nothing."""
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    client = _Client(home)
+    try:
+        client.host("aaaa1111-x")
+        client.host("bbbb2222-y")
+        core = _core(home, client, marker)
+        core.boot()
+        assert core.state("session") == "failed" and not marker.exists() and client.calls == []
+    finally:
+        client.close()
+
+
+def test_with_nothing_hosted_the_daemon_starts_the_session_itself(tmp_path):
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    client = _Client(home)
+    core = _core(home, client, marker)
+    core.boot()
+    assert _settle(core, marker.exists)
+    core.shutdown("the test is over")
+
+
+def _policy():
+    from macf.pd.interface import Asker
+    return Asker(kind="policy")
+
+
+def test_decide_adopts_the_hosted_session_in_the_home(tmp_path):
     """One hosted session in the agent home is adopted, and its control acts are client verbs."""
     home = tmp_path / "home"
     home.mkdir()
