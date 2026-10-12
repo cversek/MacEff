@@ -448,7 +448,7 @@ The only display preference is `roles.tree_display` in `.maceff/config.json`, on
 
 ## 9 Focus as Prioritized Auto-Scoping
 
-Focus turns a role's duty list into a scope the hooks act on, in the way a sprint's scoped task set is a scope the Stop hook acts on. Two behaviours, both derived from the events log and the duty records; no sidecar state, per the nag properties in `mode_system.md`: computed from observed state, naming the remedy, cleared by the action.
+Focus turns a role's duty list into a scope the hooks act on, in the way a sprint's scoped task set is a scope the Stop hook acts on. Two behaviours, both derived from the events log and the duty records; no sidecar state (the nag's read cache, 9.1, holds no fact of its own), per the nag properties in `mode_system.md`: computed from observed state, naming the remedy, cleared by the action.
 
 ### 9.1 Unfocused roles: the Conscientiousness nag
 
@@ -460,6 +460,8 @@ When a duty of an **unfocused** role enters DUE_SOON or OVERDUE, PreToolUse inje
 ```
 
 **Tier entry is deterministic** from the duty's own facts: DUE_SOON at `due - horizon`, OVERDUE at `due`. **Acknowledgement** is a `role_focus_change` to that role after the entry time. **Tool calls since entry** are the `tool_call_started` events after it. The nag therefore fires on a count of observed tool calls, never on a timer, and stops the moment the role is focused.
+
+**A read cache, not state.** Ranking every unfocused role's duties means building the role and duty models, which costs more than the rest of the hook, so PreToolUse reuses the list of due-now duties from a file in the agent's own home (`.maceff/cache/`), never a shared temporary directory, because the nag prints what the file holds into the agent's context. It is rebuilt whenever the roles store changes and at least once a minute. Nothing reads it as a fact: it is derived from the records, any copy may be deleted, and an unreadable one only costs the rebuild. Focus and the tool-call counts are never cached, so acknowledgement still stops the nag on the next call. What a minute of reuse can delay is noticing a tier entry that no write announced, and since the count runs from the entry time itself, not from when it was noticed, the schedule is unchanged.
 
 **Schedule**, in units of the touch-discipline base `B` (the existing constant the touch nag uses; see `MACF_TOUCH_NAG_BASE`): for DUE_SOON, at `B`, then `2B`, `4B`, ... (doubling); for OVERDUE, at every multiple of `B`, with the tone ramp 🌱 → 🌿 → 🌳 the touch nag already uses. A new tier entry (DUE_SOON → OVERDUE) re-arms the schedule. Unfocusing a role after acknowledgement does not re-arm it for the same entry; only a new entry does.
 
