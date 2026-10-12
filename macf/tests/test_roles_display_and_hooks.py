@@ -290,13 +290,14 @@ def test_nag_fires_on_the_schedule_and_stops_after_refocus(store, lab):
 def test_hook_nag_reads_through_a_cache_that_a_store_write_and_the_clock_expire(store, lab, monkeypatch, tmp_path):
     """#460: the hook's call (no arguments) says what the explicit call says, and reuses the
     due-now list until the store changes or the TTL passes. Focus and counts stay live."""
-    import tempfile
-    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     role, folder = lab
     store.add_duty(role, folder, "board plan", due=SOON3, horizon="3d", why="w")
     _tool_calls(4)
     hooked = rh.conscientiousness_nag()
     assert hooked and hooked == rh.conscientiousness_nag(store, NOW)
+    from macf.utils.paths import find_agent_home
+    cached = rh._nag_cache_path(rh.roles_dir())
+    assert cached.exists() and cached.parent == find_agent_home() / ".maceff" / "cache"
     built = []
     real = rh._due_now
     monkeypatch.setattr(rh, "_due_now", lambda st, at: built.append(1) or real(st, at))

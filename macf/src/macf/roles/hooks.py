@@ -12,7 +12,6 @@ import hashlib
 import json
 import os
 import sys
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
@@ -125,15 +124,20 @@ def _due_now(store: RoleStore, at: datetime) -> List[Dict[str, Any]]:
 
 
 def _nag_cache_path(root: Path) -> Path:
+    """In the agent's own home, which only the agent writes. Not a shared temp
+    directory: the nag prints what the cache holds into the agent's context, so a file
+    another account could plant there would read as the agent's own duties."""
+    from ..utils.paths import find_agent_home
     key = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:16]
-    return Path(tempfile.gettempdir()) / f"macf-roles-nag-{os.getuid()}-{key}.json"
+    return Path(find_agent_home()) / ".maceff" / "cache" / f"roles_nag_{key}.json"
 
 
 def _due_now_cached(at: datetime) -> List[Dict[str, Any]]:
     """``_due_now`` for the hook's own call, reused while the store is unchanged and for
     at most NAG_CACHE_TTL_S. Any write to the store rebuilds it at once; a duty crossing a
     tier boundary with no write shows up within the TTL, and its mark is at most that
-    stale. A cache that can't be read or written only costs the rebuild."""
+    stale. A cache that can't be read or written only costs the rebuild. It lives in
+    the agent home (``_nag_cache_path``)."""
     root = roles_dir()
     mtime = roles_store_mtime(root=root)
     path = _nag_cache_path(root)
@@ -146,6 +150,7 @@ def _due_now_cached(at: datetime) -> List[Dict[str, Any]]:
         pass
     due = _due_now(_store(None), at)
     try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         tmp = path.with_name(path.name + f".{os.getpid()}")
         tmp.write_text(json.dumps({"root": str(root), "mtime": mtime, "at": at.timestamp(), "due_now": due}))
         os.replace(tmp, path)
