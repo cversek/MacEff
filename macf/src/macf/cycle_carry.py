@@ -42,8 +42,9 @@ CARRY_KEY_FIELD = "mode"
 #: play-time scope are event-sourced and read cycle-scoped, so they are lost at a
 #: boundary unless carried, exactly like a mode. The play-time timer is read the
 #: same way and goes with them. The focused role is read on every tool call, so it
-#: is read cycle-scoped too, and carried (#460).
-CARRY_FAMILIES = ("mode", "scope", "timer", "focus", "occurrences")
+#: is read cycle-scoped too, and carried (#460). Open observations and present operator
+#: surfaces are what the per-call line's presence reads (MIS-0002-R91), so they cross too.
+CARRY_FAMILIES = ("mode", "scope", "timer", "focus", "occurrences", "observation", "surface")
 
 #: Written after every carry, whether or not anything was carried. It is what
 #: bounds the next boundary's walk: a cycle holding a COMPLETE marker (every
@@ -62,6 +63,43 @@ FOCUS_EVENT = "role_focus_change"
 #: Its own event rather than the trigger again, so no other reader of the trigger is told
 #: it happened twice.
 OCCURRENCE_EVENT = "duty_occurrence_carried"
+
+
+#: The observation acts (``macf.observe.acts``) and surface states (``macf.observe.presence``)
+#: the carry folds, named here as the focus event is; a test pins them equal.
+OBSERVE_EVENTS = frozenset({"pd_observe_invite", "pd_observe_pause", "pd_observe_resume",
+                            "pd_observe_end", "pd_surface_state", "pd_daemon_start"})
+
+
+def _open_observations(window: List[dict], now: float) -> List[dict]:
+    """Each observation still open at the boundary, as the events that re-assert it: its
+    invitation, then its pauses and resumes in their original order, so a pause open at
+    the boundary stays open and a resume after it closes the right one. An ended
+    observation, or one whose lease has run out, carries nothing, so an ending is final
+    across the boundary. The invitation is carried unchanged, ``lease_until`` included,
+    and that time is absolute, so a boundary never extends an invitation."""
+    from .observe.acts import EVENT_END, EVENT_INVITE, EVENT_PAUSE, EVENT_RESUME, fold, lapsed
+    acts: Dict[str, List[dict]] = {}
+    for event in window:
+        kind, who = event.get("event"), (event.get("data") or {}).get("onlooker")
+        if kind == EVENT_INVITE:
+            acts[who] = [event]
+        elif kind in (EVENT_PAUSE, EVENT_RESUME) and who in acts:
+            acts[who].append(event)
+        elif kind == EVENT_END:
+            acts.pop(who, None)
+    state = fold(e for events in acts.values() for e in events)
+    return [e for who, events in sorted(acts.items(), key=lambda kv: str(kv[0]))
+            if who in state and not lapsed(state[who], now) for e in events]
+
+
+def _present_surfaces(window: List[dict]) -> List[dict]:
+    """Each operator surface present at the boundary, as its state event: its latest state
+    since the newest daemon start, unless that is ``gone``. A surface that died without
+    recording ``gone`` is covered by the daemon's liveness, which reads presence as unknown."""
+    from .observe.presence import EVENT_SURFACE, fold_surfaces
+    return [{"event": EVENT_SURFACE, "timestamp": None, "data": {"surface": name, "state": st}}
+            for name, st in sorted(fold_surfaces(window).items())]
 
 
 def _event_duties() -> List[Tuple[str, str]]:
@@ -123,7 +161,7 @@ def _read_window(extra: frozenset = frozenset()) -> Tuple[List[dict], bool]:
     """
     from .task.scope import SCOPE_EVENT_TYPES
     relevant = (CARRIED_EVENT_TYPES | SCOPE_EVENT_TYPES | TIMER_EVENT_TYPES | {FOCUS_EVENT}
-                | {OCCURRENCE_EVENT, "duty_added", "duty_serviced"} | extra)
+                | {OCCURRENCE_EVENT, "duty_added", "duty_serviced"} | OBSERVE_EVENTS | extra)
 
     collected: List[dict] = []
     boundaries_seen = 0
@@ -295,6 +333,25 @@ def carry_state_forward(current_cycle: Optional[int] = None) -> List[str]:
     if occurrences:
         ok = all([append_event(OCCURRENCE_EVENT, dict(o, **provenance)) for o in occurrences])
         (carried if ok else failed).append("occurrences")
+
+    # Open observations: each is the observed agent's consent to be watched, so a carried
+    # one keeps the cycle it was given in and says it was carried, and never reads as a
+    # fresh invitation (MIS-0002-R91).
+    observations = _open_observations(window, time.time())
+    if observations:
+        ok = True
+        for source in observations:
+            data = dict(source.get("data") or {})
+            data["origin_cycle"] = _origin_cycle(source, data, current_cycle)
+            data["carried_from_timestamp"] = data.get("carried_from_timestamp") or source.get("timestamp")
+            data.update(provenance)
+            ok = append_event(source["event"], data) and ok
+        (carried if ok else failed).append("observation")
+
+    surfaces = _present_surfaces(window)
+    if surfaces:
+        ok = all([append_event(s["event"], dict(s["data"], **provenance)) for s in surfaces])
+        (carried if ok else failed).append("surface")
 
     marker = {
         "cycle": current_cycle,

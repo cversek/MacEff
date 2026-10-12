@@ -1,0 +1,127 @@
+"""Observations and operator surfaces cross a compaction (MIS-0002-R91).
+
+The per-call line reads presence from the current cycle's events. An invitation made in
+an earlier cycle has no events in this one, so it is carried at the boundary, as a mode
+or a focus is. A carried invitation is the observed agent's consent, so it keeps the
+cycle it was given in and never reads as fresh, and its lease runs from the original.
+"""
+import json
+import time
+
+from macf.agent_events_log import CYCLE_BOUNDARY_EVENT, append_event, read_events
+from macf.cycle_carry import carry_state_forward
+from macf.observe.acts import (
+    ACTIVE,
+    EVENT_END,
+    EVENT_INVITE,
+    EVENT_PAUSE,
+    EVENT_RESUME,
+    PAUSED,
+    fold,
+    lapsed,
+)
+from macf.observe.presence import DAEMON_START, EVENT_SURFACE, fold_surfaces
+
+WATCHER = "Watcher@abc123"
+OTHER = "Other@def456"
+
+
+def _write(log, records):
+    with open(log, "w") as f:
+        for r in records:
+            f.write(json.dumps(r) + "\n")
+
+
+def _ev(event, ts, **data):
+    return {"timestamp": ts, "event": event, "breadcrumb": "", "data": data}
+
+
+def _invite(ts, onlooker=WATCHER, **extra):
+    return _ev(EVENT_INVITE, ts, onlooker=onlooker, observed="Host@0a0a0a", stream_from=10,
+               secret_sha256="ab" * 32, cycle=1, **extra)
+
+
+def _this_cycle():
+    return list(read_events(reverse=False))
+
+
+def test_an_open_observation_crosses_and_an_ended_one_does_not(isolated_events_log):
+    _write(isolated_events_log, [
+        _invite(100),
+        _invite(101, onlooker=OTHER),
+        _ev(EVENT_END, 102, onlooker=OTHER, ended_by="onlooker"),
+        _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+    ])
+
+    assert "observation" in carry_state_forward(current_cycle=2)
+    state = fold(_this_cycle())
+    assert set(state) == {WATCHER}
+    assert state[WATCHER].status == ACTIVE and state[WATCHER].stream_from == 10
+
+
+def test_a_carried_invitation_keeps_its_origin_and_says_it_was_carried(isolated_events_log):
+    _write(isolated_events_log, [_invite(100), _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2)])
+    carry_state_forward(current_cycle=2)
+    append_event(CYCLE_BOUNDARY_EVENT, {"cycle": 3})
+    carry_state_forward(current_cycle=3)
+
+    invites = [e for e in _this_cycle() if e["event"] == EVENT_INVITE]
+    assert len(invites) == 1
+    data = invites[0]["data"]
+    assert (data["origin_cycle"], data["carried"], data["carried_into_cycle"]) == (1, True, 3)
+    assert data["carried_from_timestamp"] == 100
+
+
+def test_the_lease_runs_from_the_original_invitation(isolated_events_log):
+    """A boundary never extends an invitation: a lease due a minute after it reads lapsed
+    at that minute, and one already run out at the boundary isn't carried."""
+    now = time.time()
+    _write(isolated_events_log, [
+        _invite(100, lease_until=now + 60),
+        _invite(101, onlooker=OTHER, lease_until=now - 1),
+        _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+    ])
+    carry_state_forward(current_cycle=2)
+
+    state = fold(_this_cycle())
+    assert set(state) == {WATCHER}
+    assert not lapsed(state[WATCHER], now + 59) and lapsed(state[WATCHER], now + 61)
+
+
+def test_a_pause_open_at_the_boundary_is_still_withheld_and_a_later_resume_closes_it(isolated_events_log):
+    _write(isolated_events_log, [
+        _invite(100),
+        _ev(EVENT_PAUSE, 101, onlooker=WATCHER, by="observed", at=20),
+        _ev(EVENT_RESUME, 102, onlooker=WATCHER, by="observed", at=30),
+        _ev(EVENT_PAUSE, 103, onlooker=WATCHER, by="observed", at=40),
+        _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+    ])
+    carry_state_forward(current_cycle=2)
+
+    o = fold(_this_cycle())[WATCHER]
+    assert o.status == PAUSED and o.pauses == ((20, 30), (40, None))
+    append_event(EVENT_RESUME, {"onlooker": WATCHER, "by": "observed", "at": 50})
+    o = fold(_this_cycle())[WATCHER]
+    assert o.status == ACTIVE and o.pauses == ((20, 30), (40, 50))
+
+
+def test_present_surfaces_cross_and_gone_or_superseded_ones_do_not(isolated_events_log):
+    _write(isolated_events_log, [
+        _ev(EVENT_SURFACE, 100, surface="old-daemon-terminal", state="attached"),
+        _ev(DAEMON_START, 101),
+        _ev(EVENT_SURFACE, 102, surface="terminal", state="attached"),
+        _ev(EVENT_SURFACE, 103, surface="telegram", state="reachable"),
+        _ev(EVENT_SURFACE, 104, surface="remote-control", state="enabled"),
+        _ev(EVENT_SURFACE, 105, surface="remote-control", state="gone"),
+        _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+    ])
+
+    assert "surface" in carry_state_forward(current_cycle=2)
+    assert fold_surfaces(_this_cycle()) == {"terminal": "attached", "telegram": "reachable"}
+
+
+def test_the_carry_names_the_observe_events_it_folds():
+    """The carry names these events rather than importing the observe package at module
+    load; a renamed event would otherwise stop crossing without a word."""
+    from macf.cycle_carry import OBSERVE_EVENTS
+    assert OBSERVE_EVENTS == {EVENT_INVITE, EVENT_PAUSE, EVENT_RESUME, EVENT_END, EVENT_SURFACE, DAEMON_START}
