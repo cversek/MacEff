@@ -74,12 +74,20 @@ class Report:
                 if is_system(n) and is_overlap(n, hs)}
 
     @property
+    def nothing_compared(self) -> bool:
+        """The host was left out and no container was read: nothing was compared, so the
+        audit cannot call anything clean."""
+        return bool(self.host_left_out) and not self.unreadable and not self.places
+
+    @property
     def clean(self) -> bool:
-        return not self.unreadable and not any(self.overlaps(k) for k in KINDS)
+        return (not self.unreadable and not self.nothing_compared
+                and not any(self.overlaps(k) for k in KINDS))
 
     def exit_code(self) -> int:
-        """0 every place read and nothing overlaps; 1 an overlap; 2 a place could not be read."""
-        if self.unreadable:
+        """0 every place read and nothing overlaps; 1 an overlap; 2 a place could not be read,
+        or nothing was left to compare."""
+        if self.unreadable or self.nothing_compared:
             return 2
         return 0 if self.clean else 1
 
@@ -90,6 +98,7 @@ class Report:
             "unreadable": self.unreadable,
             "overlaps": {k: _as_json(self.overlaps(k)) for k in KINDS},
             "system_overlaps": {k: _as_json(self.system_overlaps(k)) for k in KINDS},
+            "nothing_compared": self.nothing_compared,
             "exit_code": self.exit_code(),
         }
 
@@ -155,13 +164,14 @@ NOT_SHARED_KERNEL = ("this host is not Linux: its containers run in a Linux VM w
 
 
 def audit(containers: Optional[List[str]] = None, run: Runner = run_command,
-          platform: str = sys.platform) -> Report:
+          platform: Optional[str] = None) -> Report:
     """Read the host and each container (every running one when *containers* is None).
 
     The host is compared only on Linux, where containers share its kernel. Elsewhere
     (Docker Desktop or Colima on macOS) they run in a VM, the host's own accounts may not
     even be in /etc/passwd, and only the containers, which share the VM's kernel, are
-    compared with each other."""
+    compared with each other. *platform* defaults to ``sys.platform``, read at the call."""
+    platform = sys.platform if platform is None else platform
     unreadable: Dict[str, str] = {}
     if containers is None:
         try:
@@ -218,7 +228,10 @@ def render(report: Report) -> str:
             lines.append(f"system {label}s under different names (allocated by each side's packages; "
                          f"reported, not counted): {len(system)}")
             lines.extend(rows(system))
-    verdict = {0: "CLEAN", 1: "OVERLAP", 2: "INCOMPLETE: a place could not be read"}[report.exit_code()]
+    if report.nothing_compared:
+        verdict = "NOTHING TO COMPARE: the host was left out and no container was read"
+    else:
+        verdict = {0: "CLEAN", 1: "OVERLAP", 2: "INCOMPLETE: a place could not be read"}[report.exit_code()]
     lines.append(verdict)
     return "\n".join(lines)
 

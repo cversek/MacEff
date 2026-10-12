@@ -2570,8 +2570,9 @@ macf_tools ids audit --container seat-a       # the host and one container (repe
 macf_tools ids audit --json
 ```
 
-- **Exit codes:** 0 when every place was read and nothing overlaps; 1 on an overlap; 2 when a place couldn't be read. A container it can't read is never counted as clear.
-- **Linux hosts.** The audit compares the host only on Linux, where containers share its kernel. On macOS (Docker Desktop, Colima) they run in a Linux VM, so the host is left out, the output says why, and the containers are compared with each other.
+- **Exit codes:** 0 when every place was read and nothing overlaps; 1 on an overlap; 2 when a place couldn't be read, or when nothing was compared. A container it can't read is never counted as clear.
+- **Nothing to compare.** When the host is left out (see below) and no container was read, because none is running or none was named, the verdict is `NOTHING TO COMPARE` and the exit code 2, not `CLEAN`: an empty comparison clears nothing. The JSON carries `nothing_compared: true`.
+- **Linux hosts.** The audit is meant for a Linux host running its containers natively. It compares the host only on Linux, where containers share its kernel. On macOS (Docker Desktop, Colima) they run in a Linux VM, so the host is left out, the output says why, and the containers are compared with each other.
 - **System ids below 1000** held under different names are listed in their own section and don't affect the exit code. Each side's packages allocate those, so renumbering can't reach them. A system account held under the same name everywhere, such as `root`, isn't listed.
 
 ## Environment Variables
