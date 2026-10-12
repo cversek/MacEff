@@ -1,6 +1,11 @@
 """Each declared unit's health, derived from events alone (MIS-0002-R15, R16)."""
+import json
 import os
+import pwd
+import shutil
+import tempfile
 import time
+from pathlib import Path
 
 import pytest
 
@@ -153,3 +158,45 @@ def test_a_malformed_row_costs_only_itself():
     rows = ["not an event", {"event": "pd_unit_alive", "data": "not data"}, alive("worker", at=now - 5)]
     found = by_unit(health(declaration("worker"), rows, now, lambda pid, start: True))
     assert found["worker"].liveness == ALIVE
+
+
+def test_tray_unavailable_said(tmp_path, monkeypatch, capsys):
+    """Where this host can't show the tray, the readout says so and why (R73): in the report
+    whatever its source, in the JSON, and on the printed readout."""
+    from macf.cli import main
+    from macf.pd import client
+    from macf.pd.interface import declaration_path
+    from macf.platform.tray_host import TrayHost
+
+    home = tmp_path / "home"
+    (home / ".maceff").mkdir(parents=True)
+    (home / ".maceff_primary_agent.id").write_text("abc123def4567890\n")
+    (home / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"moniker": "Tester"}}))
+    nobody = TrayHost(False, "nobody is logged in to the GUI")
+    said = "tray: unavailable (nobody is logged in to the GUI)"
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(home))
+
+    assert client.status(home, CARD, host=lambda: nobody).tray == said
+    declaration_path(home).parent.mkdir(parents=True)
+    me = pwd.getpwuid(os.getuid()).pw_name
+    declared = Declaration(version=1, agent=CARD, units=[
+        Unit(name="worker", command=["true"], account=me, restart="never",
+             liveness_interval_s=60, memory_limit_mb=64)])
+    declaration_path(home).write_text(declared.model_dump_json())
+    base = tempfile.mkdtemp(prefix="pd-", dir="/tmp")
+    try:
+        report = client.status(home, CARD, base=Path(base), host=lambda: nobody)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+    assert (report.source, report.tray) == ("event log", said)
+
+    monkeypatch.setattr(client, "tray_host", lambda: nobody)
+    for argv in (["pd", "status"], ["pd", "status", "--json"]):
+        with pytest.raises(SystemExit) as exited:
+            main(argv)
+        assert exited.value.code == 0
+        out = capsys.readouterr().out.strip().splitlines()
+        if "--json" in argv:
+            assert json.loads(out[-1])["tray"] == said
+        else:
+            assert out[-1] == said
