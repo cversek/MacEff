@@ -587,3 +587,21 @@ def test_lines_carry_their_codes_before_the_marker(store, lab):
     lines = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)
     assert lines[1].startswith(f"◼ R{role.id} 🎓 Lab Course Assistant")
     assert lines[2].startswith(f"    ◻ D{d.id} 📌 board plan")
+
+
+def test_stanza_names_the_duty_an_engage_put_down(store, lab):
+    """#389 B2: engaging a duty puts the one attention was on back to pending. The stanza
+    names it as the place to return to, until it is engaged again or closed."""
+    role, folder = lab
+    (folder / "charter.md").write_text("# x\n## Boundaries\nMay draft. Must not contact anyone.\n")
+    a, apath = store.add_duty(role, folder, "grade the reports")
+    b, bpath = store.add_duty(role, folder, "answer the TA mail")
+    store.engage(a, apath.parent)
+    assert not any("return to" in l for l in disp.stanza(store, "focused", role.id, at=NOW, ansi=False))
+    store.engage(b, bpath.parent)                      # the interrupt
+    tail = disp.stanza(store, "focused", role.id, at=NOW, ansi=False)[-1]
+    assert "return to" in tail and f"D{a.id}" in tail and "grade the reports" in tail and f"D{b.id}" in tail
+    a = store.find_duty(a.id)[0]
+    store.engage(a, apath.parent)                      # returned: the line goes
+    assert not any(f"D{a.id} grade" in l and "return to" in l
+                   for l in disp.stanza(store, "focused", role.id, at=NOW, ansi=False))
