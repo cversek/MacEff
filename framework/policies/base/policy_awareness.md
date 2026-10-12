@@ -365,10 +365,11 @@ A package that ships its own policies in MacEff's format (policy ships with the 
 - the root, every directory and `.md` file under it, and every directory above it are owned by this user or by root;
 - none is writable by every account, or by a group that has any account besides this user. A user-private group, whose only member is the user, grants nobody else anything, so its write bit is allowed;
 - a directory above the root may be writable by everyone if it is sticky, like `/tmp`, because there no one else can rename or replace the root.
+- no symlink under the root points outside it. A root's policies are the files in the root: a link's target lives in a directory the check above never reaches, so whoever can write that directory could unlink the target and put their own file in its place. Copy the file into the root instead, or name the directory that holds it as a root of its own. A link that stays inside the root is allowed, since its target is checked with the rest.
 
 A root that fails is refused once, naming the path and why. The framework's own tree meets this bar differently, through a group of policy editors someone granted on purpose. A root shared with an editors' group is not supported yet: grant it as the framework's tree is, and ask for that form if a package needs it.
 
-**What is refused at the root.** An entry whose directory is missing or unreadable, whose name is empty, contains `/` or `:`, or is `framework`, or repeats an earlier entry's name, or that someone else could write (above), is reported once and left out. It's never skipped silently, because "no policies found" and "this root couldn't be read" send a reader to different places.
+**What is refused at the root.** An entry whose directory is missing or unreadable, whose name is empty, contains `/` or `:`, or is `framework`, or repeats an earlier entry's name, or that someone else could write, or that holds a symlink out of it (above), is reported once and left out. It's never skipped silently, because "no policies found" and "this root couldn't be read" send a reader to different places.
 
 **Not covered yet:** `macf_tools policy search` and the search index read the framework's manifest, which extra roots don't have. A package's policies are found by name and by `list`, not by keyword search.
 

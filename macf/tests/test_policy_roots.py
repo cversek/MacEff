@@ -196,3 +196,45 @@ def test_a_non_sticky_directory_above_the_root_writable_by_all_is_refused(roots,
         assert f"{a.parent} is writable by every account" in capsys.readouterr().err
     finally:
         a.parent.chmod(0o755)
+
+
+def test_a_symlink_out_of_the_root_into_an_open_directory_refuses_the_root(roots, monkeypatch, tmp_path, capsys):
+    """The swap through a link (#592 review): the link's target is this user's and not
+    writable, but its directory is open and not sticky, so any account could unlink the
+    target and put its own file there. A root's policies are the files in the root."""
+    open_dir = tmp_path / "open"
+    open_dir.mkdir()
+    target = open_dir / "target.md"
+    target.write_text("# a policy kept elsewhere\n")
+    target.chmod(0o644)
+    open_dir.chmod(0o777)
+    a = roots.a
+    (a / "linked.md").symlink_to(target)
+    _set(monkeypatch, f"agentcad={a}")
+    try:
+        assert mf.extra_policy_roots() == []
+        assert mf.find_policy_file("agentcad-usage") is None
+        err = capsys.readouterr().err
+        assert "policy root 'agentcad' skipped" in err
+        assert f"{a / 'linked.md'} is a symlink to {target.resolve()}, outside the root" in err
+    finally:
+        open_dir.chmod(0o755)
+
+
+def test_a_symlink_that_stays_inside_the_root_is_allowed(roots, monkeypatch):
+    a = roots.a
+    (a / "alias.md").symlink_to(a / "cad" / "agentcad-export.md")
+    _set(monkeypatch, f"agentcad={a}")
+    assert [r.name for r in mf.extra_policy_roots()] == ["agentcad"]
+
+
+def test_a_group_is_asked_about_once_per_walk(roots, monkeypatch):
+    """Accounts from a directory service can make each getpwall slow: one answer per gid."""
+    a = roots.a
+    for p in (a, a / "cad", a / "agentcad-usage.md", a / "cad" / "agentcad-export.md"):
+        p.chmod(p.stat().st_mode | 0o020)
+    asked = []
+    monkeypatch.setattr(mf, "_private_group", lambda gid, uid: asked.append(gid) or True)
+    _set(monkeypatch, f"agentcad={a}")
+    assert [r.name for r in mf.extra_policy_roots()] == ["agentcad"]
+    assert len(asked) == len(set(asked)) == 1, asked

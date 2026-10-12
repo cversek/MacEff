@@ -60,9 +60,18 @@ def _writable_by_others(root: Path) -> str:
     no one can (#592 review). Checked: the root, every directory and .md file under it, and
     every directory above it. Each must be owned by this user or root, and not writable by
     others or by a group with anyone else in it. A directory above the root may be writable
-    by others if it is sticky (/tmp): there no one else can rename or replace the root."""
+    by others if it is sticky (/tmp): there no one else can rename or replace the root.
+    A symlink under the root whose target lies outside it is refused: a root's policies are
+    the files in the root, and a target's own directory is not checked, so whoever can write
+    there could replace the file the link names."""
     import stat
     uid = os.getuid()
+    private: Dict[int, bool] = {}   # gid -> _private_group, asked once per walk
+
+    def private_group(gid: int) -> bool:
+        if gid not in private:
+            private[gid] = _private_group(gid, uid)
+        return private[gid]
 
     def why(p: Path, ancestor: bool) -> str:
         try:
@@ -75,12 +84,16 @@ def _writable_by_others(root: Path) -> str:
             return ""
         if st.st_mode & stat.S_IWOTH:
             return f"{p} is writable by every account"
-        if st.st_mode & stat.S_IWGRP and not _private_group(st.st_gid, uid):
+        if st.st_mode & stat.S_IWGRP and not private_group(st.st_gid):
             return f"{p} is writable by group {st.st_gid}, which has other members"
         return ""
 
     root = root.resolve()
     for p in [root, *root.rglob("*")]:
+        if p.is_symlink():
+            target = p.resolve()
+            if not target.is_relative_to(root):
+                return f"{p} is a symlink to {target}, outside the root"
         if p.is_dir() or p.suffix == ".md":
             reason = why(p, ancestor=False)
             if reason:
