@@ -58,6 +58,7 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         return 0
     if report.source == "none":
         print(f"{card}: {report.why}")
+        _say_tray(report)
         return 0
     print(f"{card}: from the {report.source} ({report.why})")
     for unit in report.units:
@@ -70,7 +71,15 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         if "liveness" in unit:
             line += f"; liveness {unit['liveness']}: {unit['detail']}"
         print(line)
+    _say_tray(report)
     return 0
+
+
+def _say_tray(report) -> None:
+    # Whether this host can show the tray, and why not (MIS-0002-R73
+    # (readout_MUST_say_tray_unavailable)). A report built without it says nothing.
+    if report.tray:
+        print(report.tray)
 
 
 def _this_agent():
