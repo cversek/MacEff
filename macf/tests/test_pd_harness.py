@@ -334,3 +334,24 @@ def test_a_respawned_worker_listed_late_is_waited_for_not_doubled(tmp_path):
         assert not marker.exists()
     finally:
         client.close()
+
+
+def test_a_stop_during_the_respawn_wait_holds(tmp_path):
+    """R48 again, in a narrower window: a stop that lands while a respawn is awaited ends
+    with the unit stopped and the client's worker gone, not adopted and running (#636 review)."""
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    client = _SlowRespawnClient(home)
+    try:
+        hosted = client.host("3d52b89a-bbbb")
+        core = _core(home, client, marker)
+        core.boot()
+        core.restart("session", _policy(), "test restart")
+        assert _settle(core, lambda: core._units["session"].awaiting_respawn is not None)
+        core.stop("session", _policy(), "stopped mid-respawn")
+        workers = lambda: [p for p in client.procs if p is not hosted and p.poll() is None]
+        assert _settle(core, lambda: core.state("session") == "stopped" and not workers()
+                       and core._units["session"].awaiting_respawn is None)
+        assert not marker.exists()
+    finally:
+        client.close()

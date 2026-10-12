@@ -499,7 +499,9 @@ class Core:
         if r.proc is not None:
             self._signal_stop(r, f"stopped as asked: {reason}")
         elif r.state != "stopped":
-            self._transition(r, "stopped", f"stopped as asked: {reason}")
+            caught = " (a respawn was in flight; its worker is stopped when the client lists it)" \
+                if r.awaiting_respawn is not None else ""
+            self._transition(r, "stopped", f"stopped as asked: {reason}{caught}")
 
     def restart(self, unit: str, asked_by: Asker, reason: str, peer: Optional[Peer] = None) -> None:
         """Restart a unit, once its work in flight has drained or the drain has timed
@@ -863,6 +865,17 @@ class Core:
         except OSError as e:
             print(f"⚠️ MACF: pd: what the client hosts is unreadable ({e}); still waiting", file=sys.stderr)
             listed = []
+        if not r.want_up:
+            # A stop landed while the respawn was in flight. The worker the client brings up is
+            # adopted only to be stopped through the client, with the grace escalation (R48).
+            start = proc_start(listed[0].pid) if listed else None
+            if start:
+                r.awaiting_respawn = None
+                r.proc, r.pid, r.proc_start = _Adopted(listed[0].pid, start, self._probe), listed[0].pid, start
+                self._signal_stop(r, "stopped as asked while its respawn was in flight")
+            elif now >= r.awaiting_respawn:
+                r.awaiting_respawn = None
+            return
         if listed or now >= r.awaiting_respawn:
             if not listed:
                 print(f"⚠️ MACF: pd: session {r.client_session[:8]}'s respawned worker was not listed "
