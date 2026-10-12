@@ -759,8 +759,10 @@ def add_role_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--meta", action="store_true", help="the role's own upkeep (charter, review, migration): "
                    "untimed, done soon after; the charter meta duty is engageable while the Boundaries are the scaffold")
     p.add_argument("--due", help="YYYY-MM-DD or YYYY-MM-DDTHH:MM")
-    p.add_argument("--cadence", help="daily | weekly:tue[,thu] | monthly:15  [at HH:MM] [dur 6h] [until YYYY-MM-DD]")
-    p.add_argument("--horizon", help="lead time before due at which the duty is DUE_SOON: 3d, 36h, 90m")
+    p.add_argument("--cadence", help="daily | weekly:tue[,thu] | monthly:15  [at HH:MM] [dur 6h] [until YYYY-MM-DD]; "
+                        "or on:<event> [until ...], recurring on an event in the agent's log")
+    p.add_argument("--horizon", help="lead time before due at which the duty is DUE_SOON: 3d, 36h, 90m; "
+                        "for an on:<event> cadence, optional, the grace after the event before OVERDUE")
     p.add_argument("--why", help="the reasoning behind the horizon (required with --horizon); the duty's first note")
     p.add_argument("--depends-on", action="append", help="duty ids that must be done first, comma-separated")
     p.add_argument("--tracks", action="append", help="task ids implementing this duty, comma-separated")
