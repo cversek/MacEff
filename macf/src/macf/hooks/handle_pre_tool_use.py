@@ -496,6 +496,18 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         except (OSError, ValueError, ImportError, AttributeError) as e:
             print(f"⚠️ MACF: duty nag skipped: {e}", file=sys.stderr)
 
+        # Who can see the session (MIS-0002-R91): the onlookers and operator surfaces the
+        # agent's own log records, or "presence: unknown" while its daemon isn't alive.
+        # Nothing for an agent that declares no daemon. Never breaks the hook.
+        try:
+            from macf.observe.presence import segment
+            from macf.utils.paths import find_agent_home
+            seen = segment(find_agent_home())
+            if seen:
+                message_parts.append(f"👁️ {seen}")
+        except (OSError, ValueError, ImportError) as e:
+            print(f"⚠️ MACF: presence skipped: {e}", file=sys.stderr)
+
         # Format message (compact single line)
         message = " ".join(message_parts)
 
