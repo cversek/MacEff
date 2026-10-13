@@ -13362,6 +13362,9 @@ def _build_parser() -> argparse.ArgumentParser:
     from .pd.cli import add_pd_parser
     add_pd_parser(sub)
 
+    from .ids.cli import add_ids_parser
+    add_ids_parser(sub)
+
     idea_parser = sub.add_parser("idea", help="ideas — prospective knowledge capture")
     idea_sub = idea_parser.add_subparsers(dest="idea_cmd")
 
