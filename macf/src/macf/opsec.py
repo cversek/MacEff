@@ -26,7 +26,12 @@ from typing import Any, Dict, List, Optional
 ### with a wording that says why it is a style smell rather than a leak.
 DEFAULT_PROFILE: Dict[str, Any] = {
     "hard": [
-        [r"\bc[0-9]{1,2}\b(?![0-9a-fA-F])", "cycle code (c15/c22/c25...)"],
+        # Not between two slashes: a URL path segment is the content-addressed shape a
+        # package index uses (`packages/ff/c0/<hash>`), chosen by the file's hash, so a
+        # lockfile update was refused for a code nobody wrote. One slash still counts, so a
+        # list such as `c15/c22` is caught by its first code.
+        [r"(?<!/)\bc[0-9]{1,2}\b(?![0-9a-fA-F])|\bc[0-9]{1,2}\b(?![0-9a-fA-F/])",
+         "cycle code (c15/c22/c25...)"],
         [r"[Cc]ycle[-_ ][0-9]+", "cycle-N reference"],
         [r"\bEXPERIMENT\s*#?[0-9]", "experiment number"],
         [r"\bMISSION\b|\bDETOUR\b", "internal task-type label"],

@@ -90,6 +90,27 @@ def test_a_clean_control_passes(innocent):
     assert r.clean is True, f"false positive: {r.reason()}"
 
 
+@pytest.mark.parametrize("planted", [
+    "picked up in c15 after the restart",
+    "see the c15/c22 notes",            # a list: its first code is caught
+    "carried into dir/c15 and on",      # one slash is not a path segment
+    "from /c15 onward",
+    "kept in the c15/ folder",          # a slash after only
+])
+def test_a_cycle_code_is_caught_with_at_most_one_slash_beside_it(planted):
+    assert "cycle code (c15/c22/c25...)" in [f.label for f in scan(planted).findings]
+
+
+@pytest.mark.parametrize("innocent", [
+    # a package index's content-addressed download path, as a lockfile carries it
+    'url = "https://files.pythonhosted.org/packages/ff/c0/a70c32ea3299ebe00f44533740cb4"',
+    "https://files.pythonhosted.org/packages/c9/12/0b8e5a1f",
+])
+def test_a_code_between_two_slashes_is_a_path_segment_not_a_cycle_code(innocent):
+    r = scan(innocent)
+    assert "cycle code (c15/c22/c25...)" not in [f.label for f in r.findings], r.reason()
+
+
 def test_short_values_are_dropped_rather_than_matched():
     """A three-letter username makes every scan a wall of false positives, and
     a gate whose output is noise is muted within a week -- which leaves the
