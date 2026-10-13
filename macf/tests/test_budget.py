@@ -388,10 +388,11 @@ def test_ewma_time_constant_from_the_environment(monkeypatch):
 
 
 @pytest.mark.parametrize("rate,shown", [
-    (0, "0"), (-1, "0"), (0.046, "0.05"), (0.34, "0.3"), (0.96, "1"), (2.4, "2"),
-    (9.6, "10"), (12.4, "12"), (99.6, "100"), (155, "160"),
+    (0, "0"), (-1, "0"), (0.0463, "0.046"), (0.346, "0.35"), (0.6, "0.60"), (0.96, "0.96"),
+    (0.996, "1.0"), (1.24, "1.2"), (2.4, "2.4"), (9.96, "10"), (12.4, "12"), (99.6, "100"),
+    (155, "160"),
 ])
-def test_format_rate_one_figure_below_ten_two_at_ten_and_above(rate, shown):
+def test_format_rate_two_significant_figures(rate, shown):
     assert budget.format_rate(rate) == shown
 
 
@@ -401,9 +402,9 @@ def test_weekly_usage_shows_the_smoothed_rate(log, monkeypatch):
     for i, pct in enumerate((30, 31, 31, 32, 33)):
         clock["t"] = T0 + i * 1800
         budget.sample(fetch=lambda: jittered(10, pct, i), fresh=True)
-    assert budget.weekly_usage() == "33% (2%/hr)"
+    assert budget.weekly_usage() == "33% (1.6%/hr)"
     clock["t"] += 3 * 3600
-    assert budget.weekly_usage() == "33% (2%/hr, 3h old)"
+    assert budget.weekly_usage() == "33% (1.6%/hr, 3h old)"
 
 
 def test_weekly_usage_rate_starts_over_at_a_reset(log, monkeypatch):
@@ -415,4 +416,4 @@ def test_weekly_usage_rate_starts_over_at_a_reset(log, monkeypatch):
         r = reply_at(10, pct, 1); r["limits"][1]["resets_at"] = reset
         budget.sample(fetch=lambda: r, fresh=True)
     # The new window spans 40 minutes, smoothed to about 1.6%/h; the old window's 99% never enters it.
-    assert budget.weekly_usage() == "2% (2%/hr)"
+    assert budget.weekly_usage() == "2% (1.6%/hr)"
