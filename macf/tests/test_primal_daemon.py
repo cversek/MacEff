@@ -65,7 +65,7 @@ if spec.get("child_ignores_term"):
                       "    leader = os.getppid()\n"
                       "    while os.getppid() == leader:\n"
                       "        time.sleep(0.02)\n"
-                      "    if len(sys.argv) > 3:\n"
+                      "    if len(sys.argv) > 3 and sys.argv[3] != 'now':\n"
                       "        while not os.path.exists(sys.argv[3]):\n"
                       "            time.sleep(0.02)\n"
                       "    late = subprocess.Popen([sys.executable, '-c', 'import signal, time; "
@@ -1295,3 +1295,24 @@ def test_a_second_stop_during_the_remnant_wait_does_not_read_stopped_early(tmp_p
     assert not _alive(child)
     stopped = [d for d in events("pd_unit_state", "worker") if d["state"] == "stopped"]
     assert len(stopped) == 1, [d["reason"] for d in stopped]
+
+
+def test_a_fork_then_exit_as_the_leader_ends_is_reached(tmp_path, script, make_core):
+    """A child that forks a replacement and exits the moment its leader ends, as a wrapper or a
+    self-relaunching worker does, can race the first listing of the group: on Linux it is read
+    from /proc entry by entry, and the child may be listed, then gone, before the replacement
+    appears. The group is listed again when the first listing is empty. The race is not
+    deterministic, so several stops are run; any one that leaves the replacement fails."""
+    for i in range(6):
+        marker, late_file = tmp_path / f"child{i}.pid", tmp_path / f"late{i}.pid"
+        core = make_core([make_unit(f"worker{i}", script, {"child_ignores_term": str(marker),
+                                                           "child_forks_after": str(late_file),
+                                                           "child_forks_then_exits_on": "now"},
+                                    stop_grace_s=0.5)])
+        core.boot()
+        assert drive(core, lambda: core.state(f"worker{i}") == "running")
+        _child_pid(marker)
+        core.stop(f"worker{i}", OPERATOR, "test stop", peer=PEER)
+        late = _child_pid(late_file)
+        assert drive(core, lambda: core.state(f"worker{i}") == "stopped", timeout=6.0)
+        assert wait_for(lambda: not _alive(late), timeout=2.0), f"stop {i}: the replacement {late} outlived the stop"

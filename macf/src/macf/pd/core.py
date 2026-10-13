@@ -760,7 +760,10 @@ class Core:
             # A stop this core sent reaped the leader before its deadline. A member of the
             # unit's group that ignored SIGTERM is still the unit's, and the stop must reach it
             # (persistent_layer 10.2): keep the deadline for the group, not just the leader.
-            members = group_members(r.pid)
+            # A member that forks and exits while the group is read can leave this first
+            # listing empty, read before its replacement appeared and after it ended; the
+            # second listing starts after the first ends, so it sees the replacement (#639 review).
+            members = group_members(r.pid) or group_members(r.pid)
             if members:
                 r.remnant = (r.pid, members, r.kill_at, None)
         # An asked restart is half done when the old incarnation exits, whether this
