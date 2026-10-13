@@ -419,6 +419,12 @@ Schedules are declared in the same file, although step 2 of MIS-0002's landing r
 
 **`macf_tools pd install` puts the daemon under the platform's service manager, and `pd uninstall` takes it out.** Install reads the agent's card from its home and the declaration from that home first, and installs nothing from a declaration that fails (10.3). `--plan` prints the unit it would install and changes nothing, and a unit already installed that differs is replaced only with `--force`, so a hand edit is never lost silently. On Linux it says when linger is off, since without it the daemon stops at the user's last logout, and turning it on is the host operator's decision (6.1). Uninstall stops the daemon and removes its unit, and on Linux it stops at any failure other than a unit that isn't loaded. The units the daemon supervised keep running, as after any daemon's exit (12.6), for a later daemon to adopt.
 
+**In a container, the container's init is the outer tier.** A container has no systemd or launchd to restart a daemon, so the container's start script does it. For every agent whose home holds a declaration (`~/.maceff/pd/declaration.json`), it starts the daemon as that agent (`runuser`, then `python -m macf.pd <home>`) and restarts it whenever it exits, with the systemd unit's backoff: 10 s, doubling, at most one try a minute, starting over after a run of a minute or more [MIS-0002-R03 (outer_tier_MUST_restart_pd)].
+- Each agent's loop runs in its own thread, after the access path and before every optional unit, so a daemon that keeps failing never holds up sshd or another step [MIS-0002-R57 (container_MUST_start_access_first), MIS-0002-R58 (optional_unit_MUST-NOT_delay_others)].
+- It gives the daemon only who and where it is (`HOME`, `USER`, `LOGNAME`, a fixed `PATH`, `LANG`). The daemon renders each unit's environment from the declaration [MIS-0002-R04 (outer_tier_MUST-NOT_hold_agent_config)].
+- A daemon that exits 78 (its home can't be used) isn't restarted, and the log says to fix the home and restart the container. One that exits 75 (another daemon already serves the agent) is checked again once a minute, so the container takes over if that one ends.
+- **An agent with no declaration is started exactly as before.** A deployment opts in agent by agent, by writing the declaration.
+
 ---
 
 ## 11 The Events
