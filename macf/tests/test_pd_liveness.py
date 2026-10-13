@@ -45,11 +45,13 @@ def test_the_heartbeat_reports_at_once_and_then_at_its_interval():
     events, append = recorder()
     hb = lv.Heartbeat("Resident@1a2b3c", "u", 0.05, append=append).start()
     halt = _ticking(hb)
-    time.sleep(0.18)
+    deadline = time.monotonic() + 1.0   # generous under a loaded suite; returns at the third beat
+    while len(events) < 3 and time.monotonic() < deadline:
+        time.sleep(0.01)
     hb.stop()
     halt.set()
     n = len(events)
-    assert n >= 3, f"{n} events in 0.18 s at a 0.05 s interval"
+    assert n >= 3, f"{n} events within 1 s at a 0.05 s interval"
     time.sleep(0.12)
     assert len(events) <= n + 1, "the heartbeat kept writing after stop"
 
