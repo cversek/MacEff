@@ -7,6 +7,7 @@ command line typed in a session claims is still an open question, so no unit act
 """
 import argparse
 import json
+import os
 import sys
 import time
 from typing import Optional
@@ -30,6 +31,28 @@ def add_pd_parser(sub) -> None:
         "uninstall", help="stop this agent's primal daemon and remove its unit; the units it "
                           "supervises keep running, for a later daemon to adopt")
     rm.set_defaults(func=cmd_pd_uninstall)
+    alive = pd_sub.add_parser(
+        "alive", help="write one liveness event for the unit this process runs as (for shell "
+                      "units, once per pass); does nothing outside a primal daemon (MIS-0002-R14)")
+    alive.add_argument("--pid", type=int, default=None,
+                       help="the unit's own process (default: the parent of this command, the loop "
+                            "that runs it; the daemon credits only the process it started)")
+    alive.add_argument("--in-flight", type=int, default=None, metavar="N",
+                       help="work started and not finished, which the daemon checks before a restart")
+    alive.set_defaults(func=cmd_pd_alive)
+
+
+def cmd_pd_alive(args: argparse.Namespace) -> int:
+    """0 when written, or when the environment names no unit (run outside a daemon); 1 when it
+    names one unusably or the event log refused the write."""
+    from macf.pd import liveness
+    if not (os.environ.get(liveness.ENV_UNIT) or os.environ.get(liveness.ENV_INTERVAL)):
+        return 0
+    found = liveness.unit_from_env()
+    if found is None:
+        return 1
+    pid = args.pid or os.getppid()
+    return 0 if liveness.emit(found.card, found.unit, found.interval_s, args.in_flight, pid=pid) else 1
 
 
 def _when(epoch: Optional[float]) -> str:
