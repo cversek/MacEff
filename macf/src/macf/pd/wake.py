@@ -168,10 +168,9 @@ class Waker:
             self._submit(now)
             return None
         fresh = [i for i in waiting_ids if i not in self.woken and MESSAGE_ID.match(i)]
-        if not fresh and self.held is not None:
+        if not fresh:
             # The held stretch ends without a wake: whatever waited has been read meanwhile.
-            self.held = None
-            self._say(EVENT_RELEASED, {"reason": "nothing waits any more"})
+            self.release("nothing waits any more")
         if not fresh or now - self.last_sent < self.refractory_s:
             return None
         if self.day != self.today():
@@ -202,6 +201,12 @@ class Waker:
         self._say(EVENT_SENT, {"ids": sorted(self.woken & set(waiting_ids)), "chars": len(text)})
         self.enters, self.next_enter, self.verify_by = 0, now, now + VERIFY_S
         return "sent"
+
+    def release(self, reason: str) -> None:
+        """End a held stretch without a wake, saying why; nothing if none is held."""
+        if self.held is not None:
+            self.held = None
+            self._say(EVENT_RELEASED, {"reason": reason})
 
     def _say(self, event: str, data: dict) -> None:
         self.append(event, {"agent": self.card, **data} if self.card else data)

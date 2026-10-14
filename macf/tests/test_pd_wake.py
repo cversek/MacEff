@@ -314,3 +314,28 @@ def test_a_hold_followed_by_a_sent_wake_is_not_alerted(tmp_path):
         {"timestamp": now - 2500, "event": "pd_wake_sent", "data": {"agent": card}},
     ]))
     assert watch.check_wake(card, watch.last_wake_event(log, card, now), now).verdict == "ALIVE"
+
+
+def test_a_hold_that_a_channel_ends_is_released(tmp_path, isolated_events_log):
+    """CTB's probe on #663: a wake held by a dialog, then a channel attaches and takes the
+    mail. The hold is released, so the outside watch doesn't alert on mail already delivered."""
+    from macf.pd import watch
+    clock = [1000.0]
+    n = nt.Notifier(_home_with_mail(tmp_path, ID1), {"amail": "agent"}, clock=lambda: clock[0])
+    n.boot()
+    events = []
+    dialog = screen(below=("Do you want to proceed?", "❯ 1. Yes", "  2. No"))
+    n.waker = _waker(FakePane([dialog]), events, card="Tester@abc123").waker
+    clock[0] += nt.CHANNEL_GRACE_S + 1
+    n.wake()
+    assert [e for e, _ in events] == [wk.EVENT_HELD]
+    ours, theirs = socket.socketpair()
+    n.attach(ours)
+    n.flush()
+    n.wake()
+    n.wake()
+    assert [e for e, _ in events] == [wk.EVENT_HELD, wk.EVENT_RELEASED]
+    newest = {"timestamp": 0.0, "event": events[-1][0], "data": events[-1][1]}
+    assert watch.check_wake("Tester@abc123", newest, 3600.0).verdict == "ALIVE"
+    n.detach(ours)
+    theirs.close()
