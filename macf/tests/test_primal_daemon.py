@@ -186,7 +186,10 @@ def test_clean_parent(make_core, script, tmp_path, monkeypatch):
     assert seen["ppid"] == os.getpid()
     assert seen["env"]["DECLARED"] == "yes"
     assert "PD_TEST_UNDECLARED" not in seen["env"]
-    assert set(seen["env"]) == set(unit.environment)
+    # macOS's CoreFoundation adds __CF_USER_TEXT_ENCODING to a process's own environment as
+    # it starts (seen on CI's macOS image): the child's doing, like LC_CTYPE above.
+    own = {"__CF_USER_TEXT_ENCODING"} if sys.platform == "darwin" else set()
+    assert set(seen["env"]) - own == set(unit.environment)
 
 
 def test_env_rendered_at_start(make_core, script, tmp_path):

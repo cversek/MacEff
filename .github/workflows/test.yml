@@ -20,19 +20,25 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # One version on a PR push, both everywhere else.
-        python-version: ${{ fromJSON(github.event_name == 'pull_request' && '["3.12"]' || '["3.10", "3.12"]') }}
+        # Both entries on every event, so the merge queue can require test (3.10) and
+        # test (3.12) by name. On a PR push the 3.10 job skips its steps and reports success
+        # without running; the queue, main and nightly run both for real (CTB, on #676).
+        python-version: ['3.10', '3.12']
+    env:
+      RUN_TESTS: ${{ github.event_name != 'pull_request' || matrix.python-version == '3.12' }}
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
+        if: env.RUN_TESTS == 'true'
         with:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
           cache-dependency-path: macf/pyproject.toml
 
       - name: Install package with test dependencies
+        if: env.RUN_TESTS == 'true'
         # `proxy` too: the proxy tests import aiohttp, which lives in that extra,
         # so with [test] alone they could never pass in CI.
         # `amail` is here because the amail suite imports the crypto backend.
@@ -41,9 +47,11 @@ jobs:
         run: pip install -e "./macf[test,proxy,amail]"
 
       - name: Create CI environment directories
+        if: env.RUN_TESTS == 'true'
         run: mkdir -p ~/.claude/projects
 
       - name: Run tests (hermetic)
+        if: env.RUN_TESTS == 'true'
         # In parallel (pytest-xdist): 4,600 tests took ~4.5 min serially here; measured
         # Oct 14 at 87 s with 4 workers on Linux and ~95 s on macOS. -q, since nobody
         # reads thousands of PASSED lines; failures still print in full. A test marked
@@ -65,6 +73,7 @@ jobs:
         timeout-minutes: 6
 
       - name: Run tests (live external state)
+        if: env.RUN_TESTS == 'true'
         # MEASURED on this runner, not predicted: 26 passed, 7 skipped. The
         # image does ship tmux, so most of this set genuinely executes here;
         # what stays skipped is systemd-analyze, the real claude client, and

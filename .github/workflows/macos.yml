@@ -15,12 +15,15 @@ on:
       - 'macf/src/macf/pd/**'
       - 'macf/src/macf/platform/**'
       - 'macf/src/macf/supervisor.py'
+      # Process identity the daemon's reaps and the scheduler rely on: /proc against ps.
+      - 'macf/src/macf/notify/session.py'
+      - 'macf/src/macf/utils/peercred.py'
       - 'macf/tests/test_pd_*.py'
       - 'macf/tests/test_primal_daemon.py'
       - '.github/workflows/macos.yml'
 
 jobs:
-  test:
+  macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4

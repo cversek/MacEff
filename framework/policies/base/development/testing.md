@@ -548,7 +548,7 @@ on MacEff #552, 2026-10-14):
 
 | gate | runs | why |
 |---|---|---|
-| each push to a pull request | the full suite on Python 3.12, `-n auto`, about two minutes | the reviewer's evidence, fast enough not to wait on |
+| each push to a pull request | the full suite on Python 3.12, `-n auto`: the tests in about 2.5 minutes on a 4-CPU runner, where they took about 4.5 | the reviewer's evidence, without waiting on a second version |
 | the merge queue, and main | both Python versions, on the actual merge with current main | a pull request green against an old main can land a break; #654 was one, green before #665 changed what its test may declare |
 | nightly | both versions, and macOS | the daemon and process-group code differs by platform, and macOS breaks were otherwise found by hand |
 
