@@ -475,7 +475,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R70 | decidable | macf/tests/test_pd_tray.py::test_acts_through_pd | passing |
 | R71 | judgment | the head maintainer, at review of the tray | standing |
 | R72 | decidable | macf/tests/test_pd_tray.py::test_waiting_icon | passing |
-| R73 | decidable | macf/tests/test_pd_readout.py::test_tray_unavailable_said | planned |
+| R73 | decidable | macf/tests/test_pd_readout.py::test_tray_unavailable_said | passing |
 | R74 | decidable | macf/tests/test_pd_render.py::test_outside_watch_rendered | planned |
 | R75 | judgment | the operator, at review of each deployment's alert path | standing |
 | R76 | decidable | macf/tests/test_amail_deploy_config.py::test_hypervisor_value_accepted | passing |
@@ -493,7 +493,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R88 | decidable | macf/tests/test_pd_observe.py::test_lease_ends_invitation | passing |
 | R89 | decidable | macf/tests/test_pd_observe.py::test_lease_end_same_event | passing |
 | R90 | decidable | macf/tests/test_pd_observe.py::test_observation_events | passing |
-| R91 | decidable | macf/tests/test_pd_observe.py::test_presence_on_call_line | planned |
+| R91 | decidable | macf/tests/test_pd_observe.py::test_presence_on_call_line | passing |
 | R92 | decidable | macf/tests/test_pd_observe.py::test_pause_resume | passing |
 | R93 | decidable | macf/tests/test_pd_observe.py::test_pause_shown | passing |
 | R94 | decidable | macf/tests/test_pd_observe.py::test_onlooker_by_card | passing |
