@@ -93,6 +93,17 @@ class StoreSource:
         self._primed = True
         return self
 
+    def start(self) -> Optional[Set[str]]:
+        """Adopt the current contents as seen, as ``prime`` does, and return them, or None
+        when the store can't be read. For a caller that runs while the session is down
+        (the primal daemon's notifier), what was waiting at its start is news to announce
+        once, not history to drop."""
+        current = self._entry_ids()
+        if current is not None:
+            self._seen = current
+            self._primed = True
+        return current
+
     def poll(self) -> List[Detection]:
         """Return at most one Detection describing what is NEW since last poll.
 

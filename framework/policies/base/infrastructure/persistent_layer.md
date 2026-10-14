@@ -27,6 +27,7 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - How is a notice's receipt recorded, given that Claude Code acknowledges nothing?
 - Why does the channel offer no tools and relay no permission prompts?
 - How is the channel installed and loaded?
+- Where do notices wait while the session is down, and what happens to mail that arrived while no daemon ran?
 
 **2 The Harness's Own Compactions**
 - Who may compact my session, and what happens when the client compacts it on its own?
@@ -122,7 +123,7 @@ A channel event carries **a notice and nothing else**: the source's own fixed wo
 
 - The channel reaches its primal daemon only through a local Unix socket, never a network port [MIS-0002-R113 (channel_MUST_connect_by_unix_socket)]. The socket lives in the per-user runtime directory named `maceff_pd`.
 - **The channel checks that the listening peer is its own agent's primal daemon**: the same user, the pid the daemon published beside its socket, and that pid's process start time [MIS-0002-R123 (channel_MUST_check_its_peer_is_its_pd)]. Any process of the same user can bind a known path while the daemon is down, and a pid can be recycled. A peer that fails any of the three is refused, and the channel retries later.
-- **The daemon checks the channel the other way**: that the connecting process descends from the agent's live session, matched by pid and start time [MIS-0002-R122 (pd_MUST_check_channel_peer_lineage)]. The user alone cannot tell the channel from any other command the agent runs, and a channel left running after its session ended fails because its session is no longer its ancestor. The check is built and tested now (`macf.notify.session.descends_from`). The daemon applies it once it serves the channel socket, which arrives with the notifier (13).
+- **The daemon checks the channel the other way**: that the connecting process descends from the agent's live session, matched by pid and start time [MIS-0002-R122 (pd_MUST_check_channel_peer_lineage)]. The user alone cannot tell the channel from any other command the agent runs, and a channel left running after its session ended fails because its session is no longer its ancestor. The daemon serves the channel socket and applies the check to every channel that connects, against the session unit's live process; with no session unit running, a channel is refused and connects again later, and its notices wait (1.8).
 
 ### 1.4 Telling a MacEff notice from the operator
 
@@ -151,6 +152,18 @@ A channel not on Claude Code's allowlist loads only under the development flag, 
 **Test it the safe way.** A second Claude session under the same login inherits every plugin enabled for that login, and a second copy of the operator's messaging plugin takes the bot's connection from the first. Turn such plugins off in the test folder's project settings before starting a test session.
 
 ---
+
+### 1.8 The notifier: where notices wait
+
+The primal daemon hosts the notifier, because it runs while the session is down, and a notifier inside the session is down exactly when a notice has to wait [MIS-0002-R43 (wake_MUST_use_notifier)].
+
+- **It polls each source itself.** For each source the declaration routes to the agent (`notice_routes`, `agent` or `both`), the daemon reads the store's names, never its contents, and makes one detection per burst of arrivals [MIS-0002-R42 (notice_source_MUST_be_routed)]. A source routed only to the operator is not polled for the session, and a declared source the daemon has no poller for is said on its error stream, not ignored.
+- **The log is where a notice waits.** Every detection is appended to the agent's event log (`store_arrival_detected`, from the notifier `pd`) before anything is sent, and every notice written to a channel is recorded (`pd_notice_delivered`). A detection with no delivery after it is owed. A daemon that restarts reads that back, so a notice waits through a restart of the session or the daemon with nothing kept outside the log [MIS-0002-R41 (pd_MUST_hold_notices_while_down)].
+- **What waited while no daemon ran is announced once.** At its start the daemon gives one notice, a count with no names, for whatever already waits in a store, unless that same set was announced before. A source that adopted what it found without a word would lose exactly the mail that arrived while nothing watched.
+- **It is written to the newest channel.** Each owed notice goes out as one closed record (1.2), naming its source and carrying when the store was read and when the notice was sent; the session's prompt hook records when it was received (1.5) [MIS-0002-R38 (notice_MUST_name_source)] [MIS-0002-R39 (notice_MUST_carry_three_times)]. A channel that has gone away keeps the notice owed for the next one.
+- **Nothing is sent to say nothing changed.** A poll that finds no arrival produces nothing [MIS-0002-R46 (layer_MUST-NOT_report_no_change)].
+
+Still to come with step 2: the keystroke fallback for a session with no channel, the operator's routes, and the other sources (13).
 
 ## 2 The Harness's Own Compactions
 
@@ -539,7 +552,7 @@ The daemon starts its units as its children, but they don't die with it: the out
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
 - **The rest of the primal daemon:** health derived from runs owed and done; compaction on request, once the operator is established some other way than a claim on the socket (9.3, 12.3); the harness's compactions in the daemon's own control records [MIS-0002-R127 (harness_compaction_MUST_be_recorded)] (2.2); and a command-line act that stops every unit, with the question of which asker a command line claims (12.1) (MIS-0002 §6.1 to §6.4, §6.7).
-- **Schedules and the notifier,** including the keystroke fallback and the dark-channel event (MIS-0002 §6.5, §6.6, the rest of §6.14).
+- **Schedules, and the rest of the notifier** (1.8): the keystroke fallback and the dark-channel event, the operator's routes (`operator`, `both`, `held_until_present`), and sources besides mail (MIS-0002 §6.5, §6.6, the rest of §6.14).
 - **The end of R107's transitional rule** [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)] (1.4): until an agent declares `operator_channels`, every channel but the MacEff channel counts as the operator's.
 - **Mail and the rest of containers** (MIS-0002 §6.8, §6.9).
 - **Adopting a session Claude Code's own daemon already hosts** [MIS-0002-R66 (pd_MUST_adopt_harness_supervisor)] (3.3). Until it lands, the core starts a declared session unit itself.

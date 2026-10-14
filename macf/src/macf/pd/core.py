@@ -444,6 +444,15 @@ class Core:
     def pid(self, unit: str) -> Optional[int]:
         return self._runner(unit).pid
 
+    def session_incarnation(self) -> Optional[tuple]:
+        """The session unit's live process as (pid, proc_start), or None when no session
+        unit is declared or running. A channel is accepted only below this process
+        (MIS-0002-R122 (pd_MUST_check_channel_peer_lineage))."""
+        for r in self._units.values():
+            if r.spec.kind == "session" and r.proc is not None and r.pid and r.proc_start:
+                return r.pid, r.proc_start
+        return None
+
     def failures(self, unit: str) -> int:
         """Consecutive failures since the unit last ran stably; the restart backoff grows with them."""
         return self._runner(unit).failures
