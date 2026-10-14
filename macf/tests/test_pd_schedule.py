@@ -200,3 +200,162 @@ def test_schedules_name_their_timezone():
     declared = Declaration(version=1, agent="Tester@abc123", timezone="America/New_York", schedules=[schedule])
     assert declared.schedules[0].restarts_unit is False
     assert Declaration(version=1, agent="Tester@abc123").timezone is None
+
+
+# --- the scheduler: the daemon runs what the schedules owe ----------------------
+
+import os  # noqa: E402
+import signal  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+import time  # noqa: E402
+
+from macf.pd import scheduler as sc  # noqa: E402
+from macf.pd.interface import CommandRun, Declaration, PromptRun, Schedule  # noqa: E402
+
+CARD = "Tester@abc123"
+
+
+class Log:
+    """An event log in a list, read newest first as the daemon reads it."""
+
+    def __init__(self):
+        self.rows = []
+
+    def append(self, event, data):
+        self.rows.append({"event": event, "data": data})
+        return True
+
+    def read(self):
+        return list(reversed(self.rows))
+
+    def of(self, event):
+        return [r["data"] for r in self.rows if r["event"] == event]
+
+
+def command_schedule(command, name="check", cron="*/5 * * * *", kind="skip", timeout_s=30.0,
+                     wake_when="exit_code"):
+    return Schedule(name=name, cron=cron, missed_run=policy(kind), target="isolated",
+                    run=CommandRun(command=command, wake_when=wake_when), timeout_s=timeout_s)
+
+
+def make_scheduler(tmp_path, schedules, log, now):
+    decl = Declaration(version=1, agent=CARD, timezone="UTC", schedules=schedules)
+    s = sc.Scheduler(decl, CARD, {"agent_home": str(tmp_path)}, work_dir=tmp_path / "runs",
+                     append=log.append, events=log.read, now=lambda: now[0])
+    s.boot()
+    return s
+
+
+def finish(s, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while s.running and time.monotonic() < deadline:
+        s.tick()
+        time.sleep(0.02)
+    assert not s.running, "a run never ended"
+
+
+def test_advance_before_run(tmp_path, monkeypatch):
+    """The run's record, which moves the next run time on, is written before the run starts
+    (R26): before the record of its process, which exists only once the process does."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    seen = tmp_path / "seen"
+    s = make_scheduler(tmp_path, [command_schedule(
+        [sys.executable, "-c", f"open({str(seen)!r}, 'w').write('ran')"])], log, now)
+    recorded_at_spawn, real_popen = [], subprocess.Popen
+
+    def popen(*args, **kwargs):
+        if args and args[0] and args[0][0] == sys.executable:     # the run, not a ps it reads
+            recorded_at_spawn.append(bool(log.of(sc.EVENT_STARTED)))
+        return real_popen(*args, **kwargs)
+    monkeypatch.setattr(sc.subprocess, "Popen", popen)
+    now[0] = at("2026-10-14 12:05")
+    s.tick()
+    assert [d["scheduled_for"] for d in log.of(sc.EVENT_STARTED)] == ["2026-10-14T12:05:00+00:00"]
+    assert recorded_at_spawn == [True], "the run started before its record"
+    finish(s)
+    assert seen.read_text() == "ran"
+    s.tick()                                                    # the same firing is not run twice
+    assert len(log.of(sc.EVENT_STARTED)) == 1
+
+
+def test_late_run_says_so(tmp_path):
+    """A due run that starts late records how late (R34)."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    s = make_scheduler(tmp_path, [command_schedule(["/usr/bin/true"])], log, now)
+    now[0] = at("2026-10-14 12:07:30")
+    s.tick()
+    assert log.of(sc.EVENT_STARTED)[0]["late_s"] == 150.0
+    finish(s)
+
+
+def test_wall_clock_cap(tmp_path):
+    """A run past its limit has its process group killed, and says so (R36)."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    s = make_scheduler(tmp_path, [command_schedule(
+        ["/bin/sh", "-c", "trap '' TERM; sleep 60 & wait"], timeout_s=0.3)], log, now)
+    now[0] = at("2026-10-14 12:05")
+    s.tick()
+    finish(s, timeout=15.0)
+    done = log.of(sc.EVENT_DONE)[0]
+    assert done["outcome"].startswith("killed: past its 0.3 s limit") and done["wake"] is False
+
+
+def test_leases_released(tmp_path):
+    """A run still in flight when the daemon restarted is ended by the next daemon: stopped
+    if it is still that process, and recorded, so nothing it held outlives its daemon (R28)."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    first = make_scheduler(tmp_path, [command_schedule(["/bin/sleep", "60"])], log, now)
+    now[0] = at("2026-10-14 12:05")
+    first.tick()
+    pid = first.running["check"].proc.pid
+    second = make_scheduler(tmp_path, [command_schedule(["/bin/sleep", "60"])], log, now)   # restarted
+    done = log.of(sc.EVENT_DONE)
+    assert len(done) == 1 and done[0]["outcome"].startswith("abandoned")
+    assert "SIGTERM" in done[0]["outcome"]
+    first.running["check"].proc.wait(timeout=5)
+    second.tick()                                               # the abandoned firing is not run again
+    assert len(log.of(sc.EVENT_STARTED)) == 1
+    assert pid
+
+
+def test_a_condition_decides_the_wake(tmp_path):
+    """exit_code: 0 wakes, 1 says nothing, other codes fail. stdout: output wakes."""
+    cases = [(["/bin/sh", "-c", "exit 0"], "exit_code", True, "ok: its condition holds"),
+             (["/bin/sh", "-c", "exit 1"], "exit_code", False, "ok: nothing to say"),
+             (["/bin/sh", "-c", "exit 3"], "exit_code", False, "failed: exit 3"),
+             (["/bin/sh", "-c", "echo 2 new"], "stdout", True, "ok: it had something to say"),
+             (["/bin/sh", "-c", "true"], "stdout", False, "ok: nothing to say")]
+    for i, (command, when, wake, outcome) in enumerate(cases):
+        log, now = Log(), [at("2026-10-14 12:00")]
+        s = make_scheduler(tmp_path / str(i), [command_schedule(command, wake_when=when)], log, now)
+        now[0] = at("2026-10-14 12:05")
+        s.tick()
+        finish(s)
+        done = log.of(sc.EVENT_DONE)[0]
+        assert (done["wake"], done["outcome"]) == (wake, outcome), (command, when)
+
+
+def test_missed_runs_are_reported_once(tmp_path):
+    """A downtime's missed firings are recorded once by policy, not on every pass (R25)."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    make_scheduler(tmp_path, [command_schedule(["/usr/bin/true"], kind="report_only")], log, now)
+    log.append(sc.EVENT_STARTED, {"agent": CARD, "schedule": "check", "scheduled_for": "2026-10-14T12:00:00+00:00"})
+    log.append(sc.EVENT_DONE, {"agent": CARD, "schedule": "check", "scheduled_for": "2026-10-14T12:00:00+00:00"})
+    now[0] = at("2026-10-14 13:02")                             # the daemon was down an hour
+    s = make_scheduler(tmp_path, [command_schedule(["/usr/bin/true"], kind="report_only")], log, now)
+    for _ in range(3):
+        s.tick()
+    missed = log.of(sc.EVENT_MISSED)
+    assert len(missed) == 1 and missed[0]["policy"] == "report_only" and missed[0]["count"] == 12
+    assert len(log.of(sc.EVENT_STARTED)) == 1, "report_only ran a missed firing"
+
+
+def test_a_prompt_run_is_said_not_run_once(tmp_path):
+    log, now = Log(), [at("2026-10-14 12:00")]
+    prompt = Schedule(name="digest", cron="0 * * * *", missed_run=policy("skip"), target="isolated",
+                      run=PromptRun(prompt_file="p.md"), timeout_s=60)
+    s = make_scheduler(tmp_path, [prompt], log, now)
+    now[0] = at("2026-10-14 13:00")
+    s.tick()
+    assert len(log.of(sc.EVENT_NOT_RUN)) == 1 and not log.of(sc.EVENT_STARTED)
