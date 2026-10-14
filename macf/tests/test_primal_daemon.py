@@ -594,6 +594,48 @@ def test_an_adopted_unit_that_went_silent_is_failed(make_core, script):
     left["worker"].wait(timeout=5)
 
 
+def test_a_record_from_before_this_boot_is_never_adopted(make_core, script, monkeypatch):
+    """A Linux start counts ticks since boot, so after a reboot a new process can carry the
+    pid and the ticks a record from the last boot names (asked by an intern, Oct 14). A
+    record made before this boot is not adopted, however well it matches; the unit starts
+    fresh."""
+    from macf.pd import core as core_module
+    unit = make_unit("worker", script, {})
+    first = make_core([unit])
+    first.boot()
+    assert drive(first, lambda: first.state("worker") == "running")
+    pid = first.pid("worker")
+    left = _crash(first)
+    try:
+        monkeypatch.setattr(core_module, "boot_time", lambda: time.time() + 1)   # booted since
+        second = make_core([unit])
+        second.boot()
+        assert second.pid("worker") != pid, "a record from before this boot was adopted"
+        assert not any("carried" in d["reason"] for d in events("pd_unit_state", "worker")
+                       if d.get("pid") == pid and d["state"] == "running")
+    finally:
+        left["worker"].kill()
+        left["worker"].wait(timeout=5)
+
+
+def test_a_record_from_this_boot_is_still_adopted(make_core, script, monkeypatch):
+    from macf.pd import core as core_module
+    unit = make_unit("worker", script, {})
+    first = make_core([unit])
+    first.boot()
+    assert drive(first, lambda: first.state("worker") == "running")
+    pid = first.pid("worker")
+    left = _crash(first)
+    try:
+        monkeypatch.setattr(core_module, "boot_time", lambda: time.time() - 3600)
+        second = make_core([unit])
+        second.boot()
+        assert second.pid("worker") == pid
+    finally:
+        left["worker"].kill()
+        left["worker"].wait(timeout=5)
+
+
 def _windowed(script):
     """A core whose one session unit never fails, with a quiet window ahead of now that the
     test can move the core's wall clock into and out of."""

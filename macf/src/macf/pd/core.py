@@ -183,6 +183,20 @@ EXIT_NOT_SEEN = -1000
 LIVE_STATES = ("starting", "running", "waiting_on_a_person")
 
 
+def boot_time() -> Optional[float]:
+    """When this Linux host last booted, in epoch seconds (``btime`` in ``/proc/stat``), or
+    None elsewhere or when it can't be read. Only Linux needs it: there a start fingerprint
+    counts clock ticks since boot, while macOS records a UTC time."""
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        with open("/proc/stat") as f:
+            return float(next(int(line.split()[1]) for line in f if line.startswith("btime ")))
+    except (OSError, StopIteration, ValueError) as e:
+        print(f"⚠️ MACF: pd: cannot read the boot time: {e}", file=sys.stderr)
+        return None
+
+
 def start_epoch(start) -> Optional[float]:
     """When the process whose start fingerprint is ``start`` began, in epoch seconds, or None.
 
@@ -192,13 +206,8 @@ def start_epoch(start) -> Optional[float]:
     if key is None:
         return None
     if sys.platform.startswith("linux"):
-        try:
-            with open("/proc/stat") as f:
-                btime = next(int(line.split()[1]) for line in f if line.startswith("btime "))
-            return btime + key / os.sysconf("SC_CLK_TCK")
-        except (OSError, StopIteration, ValueError) as e:
-            print(f"⚠️ MACF: pd: cannot read the boot time for a start time: {e}", file=sys.stderr)
-            return None
+        btime = boot_time()
+        return None if btime is None else btime + key / os.sysconf("SC_CLK_TCK")
     return float(key)
 
 
@@ -580,13 +589,20 @@ class Core:
                 continue
             unit = data.get("unit")
             if unit in self._units and unit not in last:
-                last[unit] = data
+                last[unit] = {**data, "_recorded_at": event.get("timestamp")}
                 if len(last) == len(self._units):
                     break
         carried = set()
+        booted = boot_time()
         for name, data in last.items():
             pid, start = data.get("pid"), data.get("proc_start")
             if data.get("state") not in LIVE_STATES or not pid or not start:
+                continue
+            # A record made before this boot names no process that runs now, however well
+            # its pid and start match: a Linux start counts ticks since boot, so a process of
+            # this boot can carry the same pid and the same ticks as one of the last.
+            recorded = data.get("_recorded_at")
+            if booted is not None and isinstance(recorded, (int, float)) and recorded < booted:
                 continue
             if not self._probe(pid, start):
                 continue
