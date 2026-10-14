@@ -1,17 +1,27 @@
 name: Tests
 
+# Three gates (policy testing §3.1, agreed on #552 on Oct 14):
+# - a push to a pull request: the full suite in parallel on Python 3.12, about two minutes;
+# - the merge queue (merge_group) and main: both versions, on the actual merge with main,
+#   so a PR green against an old main can't land a break (#654 was the case);
+# - nightly: both versions here, and macOS in macos.yml.
 on:
   pull_request:
     branches: [main]
+  merge_group:
   push:
     branches: [main]
+  schedule:
+    - cron: '0 7 * * *'
+  workflow_dispatch:
 
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.10', '3.12']
+        # One version on a PR push, both everywhere else.
+        python-version: ${{ fromJSON(github.event_name == 'pull_request' && '["3.12"]' || '["3.10", "3.12"]') }}
 
     steps:
       - uses: actions/checkout@v4
@@ -34,8 +44,13 @@ jobs:
         run: mkdir -p ~/.claude/projects
 
       - name: Run tests (hermetic)
+        # In parallel (pytest-xdist): 4,600 tests took ~4.5 min serially here; measured
+        # Oct 14 at 87 s with 4 workers on Linux and ~95 s on macOS. -q, since nobody
+        # reads thousands of PASSED lines; failures still print in full. A test marked
+        # flaky (pytest-rerunfailures) is rerun once and the rerun shows in the summary;
+        # nothing else is ever retried (testing §3.1).
         run: >
-          pytest macf/tests/ -v --tb=short -m "not live"
+          pytest macf/tests/ -q -n auto -rR --tb=short -m "not live"
           --ignore=macf/tests/test_recommend.py
           --ignore=macf/tests/test_hybrid_search.py
           --ignore=macf/tests/test_lancedb_search.py

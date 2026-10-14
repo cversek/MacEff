@@ -520,7 +520,7 @@ after every edit rather than once per batch.
 | an edit during implementation | the touched subsystems' test files |
 | a sprint, per scoped item | the touched subsystems' test files |
 | before opening a PR | the full suite, once |
-| CI | the full suite, always |
+| CI | the full suite, always, at the three gates below |
 
 **The cost argument, which is the whole point.** A check that is expensive gets
 run rarely, and a check run rarely is not protecting the edit in front of you.
@@ -542,6 +542,30 @@ catch a change whose blast radius you misjudged. That is precisely what the
 pre-PR full run and CI are for. The targeted run is the fast inner loop, not a
 replacement for the outer one — and a disagreement between them is a finding
 about the blast radius, not a nuisance.
+
+**CI runs the full suite at three gates, in parallel** (agreed among the maintainers
+on MacEff #552, 2026-10-14):
+
+| gate | runs | why |
+|---|---|---|
+| each push to a pull request | the full suite on Python 3.12, `-n auto`, about two minutes | the reviewer's evidence, fast enough not to wait on |
+| the merge queue, and main | both Python versions, on the actual merge with current main | a pull request green against an old main can land a break; #654 was one, green before #665 changed what its test may declare |
+| nightly | both versions, and macOS | the daemon and process-group code differs by platform, and macOS breaks were otherwise found by hand |
+
+A pull request that touches `pd/` or `platform/` also runs on macOS. The suite is
+not narrowed to the touched subsystems at any gate: the worst break of the day
+it was decided was one change breaking another subsystem's test, which a
+touched-subsystems gate would have missed exactly as a stale-base run did.
+
+**No test is retried, except one marked flaky** with
+`@pytest.mark.flaky(reruns=1)` and a comment naming the open issue for its cause.
+The rerun shows in the run's summary. The mark comes off when the cause is
+fixed. A blanket retry would turn a race into a pass: the session unit's "flaky"
+stop test on 2026-10-14 was a real race, which a retry would have hidden.
+
+**Whoever merged owns a red main** until it is green or reverted, within the
+hour. The head maintainer watches main's runs and the nightly as part of the
+hourly check, and reverts first and asks after when the owner is away.
 
 ### 3.2 Progressive Verbosity Protocol
 
