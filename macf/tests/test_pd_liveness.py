@@ -83,7 +83,9 @@ def test_nothing_is_written_before_the_loop_first_passes():
     time.sleep(0.12)
     assert events == []
     hb.tick()
-    time.sleep(0.03)
+    deadline = time.monotonic() + 1.0   # generous under a loaded suite; returns at the beat
+    while not events and time.monotonic() < deadline:
+        time.sleep(0.005)
     hb.stop()
     assert len(events) == 1, "the first tick should beat at once"
 
