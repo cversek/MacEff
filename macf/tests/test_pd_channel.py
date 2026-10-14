@@ -254,3 +254,26 @@ def test_a_peer_outside_the_session_lineage_is_refused():
 
 def test_a_stale_session_incarnation_is_refused():
     assert descends_from(os.getpid(), os.getppid(), "1") is False
+
+
+# ---- the daemon's notices about the agent's own units (R60, R65, R47) ----------------
+
+@pytest.mark.parametrize("source", ["pd_limit_exceeded", "pd_grant_denied", "pd_carried"])
+def test_a_daemon_source_is_a_notice_about_the_agent_itself(source):
+    """Each daemon source is delivered as a never-masked notice with its fixed pointer and
+    nothing from the wire: an agent may decline news of the world, not news of itself."""
+    from macf.channels.maceff_channel import DAEMON_POINTERS
+    from macf.notify.masking import is_unmaskable
+    from macf.notify.notice import daemon_notice
+    record = NoticeRecord.model_validate_json(_record(source=source, count=None))
+    event = build_event(record)
+    expected = daemon_notice("msg-1-abc", DAEMON_POINTERS[source])
+    assert event["params"]["content"] == expected.render()
+    assert event["params"]["meta"]["notice_source"] == source
+    assert is_unmaskable(expected)
+    assert "msg-1-abc" not in event["params"]["content"]
+
+
+@pytest.mark.parametrize("source", ["pd_limit_exceeded", "pd_grant_denied", "pd_carried"])
+def test_a_daemon_notice_with_a_count_is_refused(source):
+    assert parse_record(_record(source=source, count=1)) is None
