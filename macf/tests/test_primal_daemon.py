@@ -1375,3 +1375,23 @@ def test_an_always_unit_that_ends_cleanly_restarts_after_its_group(tmp_path, scr
     assert drive(core, lambda: core.pid("worker") not in (None, first), timeout=8.0), \
         "a clean exit under restart=always was never restarted"
     assert not _alive(child)
+
+
+def test_an_optional_unit_that_hangs_at_start_delays_no_other(tmp_path, script, make_core):
+    """MIS-0002-R58 (optional_unit_MUST-NOT_delay_others): an optional unit that was started
+    and hangs, alive as a process but never live, does not hold up the start of another
+    unit, nor that unit's restart after a crash. The other unit runs within its own time
+    while the hung one still reads starting."""
+    hung = make_unit("indexer", script, {"alive_for": 0}, interval=10.0)
+    hung = hung.model_copy(update={"optional": True})
+    worker = make_unit("worker", script, {"crash_once": str(tmp_path / "crashed")})
+    core = make_core([hung, worker])
+    t0 = time.monotonic()
+    core.start("indexer", OPERATOR, "the optional unit, started first", peer=PEER)
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running", timeout=3.0), \
+        "the worker never ran while the optional unit hung"
+    assert time.monotonic() - t0 < 3.0
+    assert core.state("indexer") == "starting", "the optional unit was meant to still hang"
+    starts = [d for d in events("pd_unit_state", "worker") if d["state"] == "starting"]
+    assert len(starts) >= 2, "the worker's crash and restart were meant to happen meanwhile"
