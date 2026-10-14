@@ -316,6 +316,27 @@ def test_a_hold_followed_by_a_sent_wake_is_not_alerted(tmp_path):
     assert watch.check_wake(card, watch.last_wake_event(log, card, now), now).verdict == "ALIVE"
 
 
+def test_a_hold_whose_reason_changes_is_measured_from_its_first_hold(tmp_path):
+    """CTB's note on #663: a dialog then a draft writes a second hold, and the allowance must
+    not start again with it. A hold after a sent wake starts a new stretch."""
+    import json
+    from macf.pd import watch
+    card, now = "Tester@abc123", 10_000.0
+    log = tmp_path / "log.jsonl"
+    rows = [
+        {"timestamp": now - 5000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}},
+        {"timestamp": now - 4000, "event": "pd_wake_sent", "data": {"agent": card}},
+        {"timestamp": now - 2000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}},
+        {"timestamp": now - 900, "event": "pd_wake_sent", "data": {"agent": "Other@000000"}},
+        {"timestamp": now - 60, "event": "pd_wake_held", "data": {"agent": card, "reason": "draft"}},
+    ]
+    log.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    newest = watch.last_wake_event(log, card, now)
+    assert newest["held_since"] == now - 2000
+    finding = watch.check_wake(card, newest, now)
+    assert finding.verdict == "HELD" and "draft" in finding.detail
+
+
 def test_a_hold_that_a_channel_ends_is_released(tmp_path, isolated_events_log):
     """CTB's probe on #663: a wake held by a dialog, then a channel attaches and takes the
     mail. The hold is released, so the outside watch doesn't alert on mail already delivered."""

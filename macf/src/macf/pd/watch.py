@@ -189,8 +189,25 @@ _WAKE_EVENTS = ("pd_wake_held", "pd_wake_sent", "pd_wake_released")
 
 def last_wake_event(log_path: Path, card: str, now: float,
                     lookback_s: float = LOOKBACK_S) -> Optional[dict]:
-    """The newest held, sent or released wake event of agent *card* within the lookback."""
-    cutoff = now - lookback_s
+    """The newest held, sent or released wake event of agent *card* within the lookback.
+
+    A hold carries ``held_since``, the time of the first hold of its stretch: a hold whose
+    reason changes, a dialog then a draft, writes a new event, and the allowance must not
+    start again with it."""
+    newest = None
+    for event in _wake_events(log_path, card, now - lookback_s):
+        if newest is None:
+            if event.get("event") != "pd_wake_held":
+                return event
+            newest = dict(event)
+        elif event.get("event") != "pd_wake_held":
+            break
+        newest["held_since"] = event.get("timestamp")
+    return newest
+
+
+def _wake_events(log_path: Path, card: str, cutoff: float):
+    """Agent *card*'s wake events, newest first, back to *cutoff*."""
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
@@ -205,15 +222,14 @@ def last_wake_event(log_path: Path, card: str, now: float,
             continue
         data = event.get("data")
         if isinstance(data, dict) and data.get("agent") == card:
-            return event
-    return None
+            yield event
 
 
 def check_wake(card: str, event: Optional[dict], now: float,
                held_alert_s: float = WAKE_HELD_ALERT_S) -> Finding:
-    """A typed wake held too long: the newest wake event is a hold older than
-    ``held_alert_s``. A sent wake, or a stretch released because nothing waits, clears it."""
-    stamp = (event or {}).get("timestamp")
+    """A typed wake held too long: the newest wake event is a hold whose stretch began more
+    than ``held_alert_s`` ago. A sent wake, or a stretch released because nothing waits, clears it."""
+    stamp = (event or {}).get("held_since", (event or {}).get("timestamp"))
     if (event is None or event.get("event") != "pd_wake_held"
             or not isinstance(stamp, (int, float)) or now - stamp < held_alert_s):
         return Finding(card, "wake", "ALIVE", "no wake held past its allowance")
