@@ -368,3 +368,22 @@ def test_without_proc_a_zombie_group_counts_as_gone(monkeypatch):
     assert su._group_alive(pgid)
     assert su.reap_group(pgid, grace=0.5)   # p is not waited for until here: a zombie
     p.wait(timeout=5)
+
+
+def test_a_pane_read_before_its_setsid_still_gets_its_own_group(monkeypatch):
+    """tmux's pane child calls setsid() just after the fork. Read in between, it still has the
+    server's group, which is the unit's own; the group recorded must be the pane's, not
+    nothing, or a stop has no group to reap (seen in CI on a loaded runner)."""
+    own, pane = 4000, 4242
+    answers = iter([own, own, pane])                 # before setsid, then after
+    monkeypatch.setattr(su.os, "getpgid", lambda pid: next(answers))
+    assert su.pane_group(pane, own, timeout=1.0) == pane
+    monkeypatch.setattr(su.os, "getpgid", lambda pid: own)   # setsid never seen in time
+    assert su.pane_group(pane, own, timeout=0.05) == pane
+
+
+def test_a_pane_already_gone_has_no_group(monkeypatch):
+    def gone(pid):
+        raise ProcessLookupError(pid)
+    monkeypatch.setattr(su.os, "getpgid", gone)
+    assert su.pane_group(4242, 4000, timeout=0.05) is None
