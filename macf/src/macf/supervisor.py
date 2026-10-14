@@ -550,6 +550,13 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
         return send_keys(target, [cmd], enter=True, kind="inject")
     data = _find_own_supervisor()
     if not data:
+        pane = _own_session_unit_pane()
+        if pane:
+            # A session its primal daemon runs as a unit (pd.session_unit) has no
+            # supervisor: its pane is this process's own, on the unit's tmux server,
+            # which the inherited TMUX names.
+            data = {"name": pane}
+    if not data:
         # Two different situations, and the reader has to do different things
         # about them: with no supervisor running there is nothing to inject
         # into, while with supervisors running the resolution failed and
@@ -589,6 +596,22 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
     return rc
 
 
+#: A send-keys target that names a tmux pane directly rather than a supervisor.
+PANE_TARGET_PREFIX = "pane:"
+
+
+def _own_session_unit_pane() -> Optional[str]:
+    """``pane:<id>`` for this process's own pane when it runs inside a session unit,
+    else None. Both marks are required: the unit's variables say the session is a
+    daemon's unit, and TMUX with TMUX_PANE, which tmux sets for the pane's process and
+    every process under it, say which server and which pane."""
+    from .pd.liveness import ENV_SESSION_PID
+    pane = os.environ.get("TMUX_PANE", "")
+    if os.environ.get(ENV_SESSION_PID) and os.environ.get("TMUX") and pane.startswith("%"):
+        return PANE_TARGET_PREFIX + pane
+    return None
+
+
 def _start_compact_followup(target: str, text: str) -> None:
     """Start the detached follower that types *text* once the compaction has finished.
 
@@ -618,6 +641,12 @@ def _start_compact_followup(target: str, text: str) -> None:
               f"this session waits until something wakes it.", file=sys.stderr)
 
 
+def record_keys_sent(text: str, kind: str, tmux_session: str) -> None:
+    """Record keys the framework is about to type into a session's pane, for a sender that
+    types through a pane of its own (the primal daemon's keystroke wake)."""
+    _record_keys_sent(text, kind, tmux_session)
+
+
 def send_keys(target: str, keys: list, enter: bool = True, kind: str = "send-keys") -> int:
     """Inject literal text (plus an optional Enter) into a supervised session's
     tmux pane - the side channel for driving the live CC client (e.g. a real
@@ -632,7 +661,12 @@ def send_keys(target: str, keys: list, enter: bool = True, kind: str = "send-key
         print("[auto-restart] tmux not found; send-keys requires a tmux-backed session.",
               file=sys.stderr)
         return 1
-    data = _find_supervisor(target)
+    if target.startswith(PANE_TARGET_PREFIX):
+        # A session unit's own pane, from inside it (_own_session_unit_pane): the
+        # inherited TMUX already names the unit's server.
+        data = {"name": target, "tmux_session": target[len(PANE_TARGET_PREFIX):]}
+    else:
+        data = _find_supervisor(target)
     if not data:
         print(f"[auto-restart] No running supervised process matching '{target}'.",
               file=sys.stderr)

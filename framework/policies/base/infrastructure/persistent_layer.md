@@ -27,6 +27,8 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - How is a notice's receipt recorded, given that Claude Code acknowledges nothing?
 - Why does the channel offer no tools and relay no permission prompts?
 - How is the channel installed and loaded?
+- Where do notices wait while the session is down, and what happens to mail that arrived while no daemon ran?
+- When does the daemon type a wake instead, and what may it type?
 
 **2 The Harness's Own Compactions**
 - Who may compact my session, and what happens when the client compacts it on its own?
@@ -54,6 +56,8 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - How does a primal daemon run on Linux, and under what name?
 - What happens to the units a daemon manages when the daemon exits?
 - Who turns on linger, and what happens without it?
+- How does my Claude Code session itself run as a unit of my primal daemon, and how do I attach to it?
+- What reports a session's liveness, given that an idle session has no work loop?
 
 **7 The Outside Watch**
 - What checks a primal daemon from outside the agents, and what does it read?
@@ -114,13 +118,22 @@ A channel event carries **a notice and nothing else**: the source's own fixed wo
 
 **No text crosses from the daemon to the channel.** The daemon sends a closed record (a known source, an arrival identifier, an optional count, two times), and the channel rebuilds the notice through that source's factory. A record with an unknown source or any extra field is refused and the next one is still delivered. So nothing a sender chose can reach the session as an instruction, by construction rather than by care.
 
+**The sources the channel knows**, each added in code, never by a record that names it:
+- `amail`: mail arrived. It carries the count as a scheduling hint, and its pointer is the broker's store.
+- The daemon's notices about your own units:
+  - `pd_limit_exceeded`: a unit is past its declared memory limit [MIS-0002-R60 (pd_MUST_notice_limit_exceeded)].
+  - `pd_grant_denied`: a declared grant was denied [MIS-0002-R65 (denied_grant_MUST_raise_notice)].
+  - `pd_carried`: what a restart carried, changed and lost [MIS-0002-R47 (pd_MUST_report_carried_changed_lost)].
+
+The three daemon sources arrive as `macf-daemon` notices, which no mask hides: you may decline news of the world, not news of yourself. They carry no count, and a record that gives one a count is refused. Their pointer sends you to `macf_tools pd status` and the event log. **The facts, which unit and how far past its limit, are in the log, never in the notice.**
+
 **What a notice licenses** is unchanged: one action, consulting the store it points at. It is never the operator's word and never consent.
 
 ### 1.3 Who the channel will talk to
 
 - The channel reaches its primal daemon only through a local Unix socket, never a network port [MIS-0002-R113 (channel_MUST_connect_by_unix_socket)]. The socket lives in the per-user runtime directory named `maceff_pd`.
 - **The channel checks that the listening peer is its own agent's primal daemon**: the same user, the pid the daemon published beside its socket, and that pid's process start time [MIS-0002-R123 (channel_MUST_check_its_peer_is_its_pd)]. Any process of the same user can bind a known path while the daemon is down, and a pid can be recycled. A peer that fails any of the three is refused, and the channel retries later.
-- **The daemon checks the channel the other way**: that the connecting process descends from the agent's live session, matched by pid and start time [MIS-0002-R122 (pd_MUST_check_channel_peer_lineage)]. The user alone cannot tell the channel from any other command the agent runs, and a channel left running after its session ended fails because its session is no longer its ancestor. The check is built and tested now (`macf.notify.session.descends_from`). The daemon applies it once it serves the channel socket, which arrives with the notifier (13).
+- **The daemon checks the channel the other way**: that the connecting process descends from the agent's live session, matched by pid and start time [MIS-0002-R122 (pd_MUST_check_channel_peer_lineage)]. The user alone cannot tell the channel from any other command the agent runs, and a channel left running after its session ended fails because its session is no longer its ancestor. The daemon serves the channel socket and applies the check to every channel that connects, against the session unit's live process; with no session unit running, a channel is refused and connects again later, and its notices wait (1.8).
 
 ### 1.4 Telling a MacEff notice from the operator
 
@@ -149,6 +162,52 @@ A channel not on Claude Code's allowlist loads only under the development flag, 
 **Test it the safe way.** A second Claude session under the same login inherits every plugin enabled for that login, and a second copy of the operator's messaging plugin takes the bot's connection from the first. Turn such plugins off in the test folder's project settings before starting a test session.
 
 ---
+
+### 1.8 The notifier: where notices wait
+
+The primal daemon hosts the notifier, because it runs while the session is down, and a notifier inside the session is down exactly when a notice has to wait [MIS-0002-R43 (wake_MUST_use_notifier)].
+
+- **It polls each source itself.** For each source the declaration routes to the agent (`notice_routes`, `agent` or `both`), the daemon reads the store's names, never its contents, and makes one detection per burst of arrivals [MIS-0002-R42 (notice_source_MUST_be_routed)]. A source routed only to the operator is not polled for the session, and a declared source the daemon has no poller for is said on its error stream, not ignored.
+- **The log is where a notice waits.** Every detection is appended to the agent's event log (`store_arrival_detected`, from the notifier `pd`) before anything is sent, and every notice written to a channel is recorded (`pd_notice_delivered`). A detection with no delivery after it is owed. A daemon that restarts reads that back, so a notice waits through a restart of the session or the daemon with nothing kept outside the log [MIS-0002-R41 (pd_MUST_hold_notices_while_down)].
+- **What waited while no daemon ran is announced once.** At its start the daemon gives one notice, a count with no names, for whatever already waits in a store, unless that same set was announced before. A source that adopted what it found without a word would lose exactly the mail that arrived while nothing watched.
+- **It is written to the newest channel.** Each owed notice goes out as one closed record (1.2), naming its source and carrying when the store was read and when the notice was sent; the session's prompt hook records when it was received (1.5) [MIS-0002-R38 (notice_MUST_name_source)] [MIS-0002-R39 (notice_MUST_carry_three_times)]. A channel that has gone away keeps the notice owed for the next one.
+- **Nothing is sent to say nothing changed.** A poll that finds no arrival produces nothing [MIS-0002-R46 (layer_MUST-NOT_report_no_change)].
+
+### 1.9 The keystroke fallback
+
+When no channel has taken the mail notices owed for a minute, the daemon types a wake into the session unit's own pane instead [MIS-0002-R105 (keystroke_wake_MUST_be_fallback_only)] [MIS-0002-R43 (wake_MUST_use_notifier)]. The rules are the ones the mail clocks learned typing wakes before the daemon did:
+
+- **Only fixed words and message ids** [MIS-0002-R77 (wake_MUST_carry_fixed_words_only)]. The wake opens with the wake words, and names every message waiting, in the broker's id shape only, oldest first, eight at most, then a count. An agent consumes by position, so naming only the newest loses the rest.
+- **Only into an empty box of an idle session** [MIS-0002-R45 (keystroke_wake_MUST_need_empty_idle_box)], read from the screen and failing closed. The input box must be on screen with nothing but a faint suggestion in it. No dialog, menu or question may be below it, because the wake carries digits and a digit or an Enter selects an option. No turn may be running, read from its phrase or from the spinner alone. Only the box's own text counts as a wake in the prompt, never the echo of one already sent.
+- **Recorded before it is typed**, through the framework's keystroke record, so neither producer of the operator's activity counts it [MIS-0002-R106 (wake_MUST-NOT_count_as_operator_activity)].
+- **Enter only while the wake is still in the box**, at most three times, since an Enter that lands on a dialog the new turn raised would approve it. A wake counts as sent when it is typed, so a misread status never sends it twice; the turn's start is then looked for, and the log says whether it came (`pd_wake_turn`).
+- **A refractory window, ten minutes**, in which arrivals wait for the next wake, and a daily cap. A held wake (`pd_wake_held`) and a reached cap (`pd_wake_cap_reached`) are each recorded once, not on every poll.
+
+A typed wake delivers the mail notices it covers, so a channel that connects later doesn't deliver them again.
+
+**A wake held too long reaches the operator.**
+- While a dialog, a draft or a running turn holds a wake, the fallback records a `pd_wake_held`, naming the agent and the reason, once per stretch and again only if the reason changes.
+- The stretch ends with a sent wake (`pd_wake_sent`), or with `pd_wake_released` when you read your mail on your own meanwhile, or when a channel attaches and takes over the notices.
+- If the newest of those is a hold, and its stretch began more than 30 minutes ago, the outside watch alerts the operator once, through its own credential (verdict `HELD`, subject `wake`). A dialog waits on a person, and nothing in your session can say so.
+- If you find your mail was announced late, look for a `pd_wake_held` with a dialog as its reason.
+
+Still to come with step 2: the operator's routes, the dark-channel event and the operator's notice when a wake is held for long (R115), and the sources besides mail (13).
+
+### 1.10 A dark channel
+
+A channel is **dark** when your session is running and no MacEff channel is attached to your daemon [MIS-0002-R115 (dark_channel_MUST_raise_event)]. It happens one of two ways:
+- the channel dropped while the session kept running;
+- it never attached within `channel_connect_s` of the session's start. `channel_connect_s` is a declaration field: set it where a channel is expected, and leave it unset where none is, so nothing is watched.
+
+**A restart is not a dark channel.** The old incarnation's channel goes with it, and the new incarnation gets its own window.
+
+The daemon derives this each pass and writes it to the event log only:
+- one `pd_channel_dark`, with the reason, opens a stretch;
+- one `pd_channel_back` closes it, when a channel attaches or the session restarts.
+
+**The operator hears of it through the outside watch**, which reads those events and alerts once per stretch through its own credential (R75). A dark channel can't carry the news of itself, and the daemon has no other way to reach a person.
+
+**What it means for you:** while your channel is dark, notices from your daemon wait (1.8). The keystroke fallback types a wake when it can (1.9). If you find a `pd_channel_dark` with no `pd_channel_back` after it, your notices aren't reaching you by channel. Check that the MacEff channel plugin is loaded, and tell the operator if it isn't.
 
 ## 2 The Harness's Own Compactions
 
@@ -275,10 +334,12 @@ The operator may attach to any session without an invitation [MIS-0002-R81 (oper
 
 ### 5.3 Presence
 
-**Presence is one record of each onlooker that watches and each operator surface that is present**, with a paused onlooker marked as paused, and a segment of the per-call line that shows it [MIS-0002-R91 (call_line_MUST_show_presence)]. **The per-call line carries it once the per-call hook calls `call_line`,** which comes with the primal daemon or in a small pull request of its own. Until then the line shows no presence.
+**Presence is one record of each onlooker that watches and each operator surface that is present**, with a paused onlooker marked as paused, and a segment of the per-call line that shows it [MIS-0002-R91 (call_line_MUST_show_presence)]. **The per-call hook shows it for an agent that declares a primal daemon,** read from the cycle's own events. An agent with no declaration has no daemon to vouch for presence, so its line carries no segment rather than "unknown" on every call. The declaration is the test because it holds on every platform: a container under the start script has no unit file, and the daemon's record goes when the daemon stops. The daemon is alive when its record names a live process by pid and start time.
 
+- **Open observations and present surfaces cross a compaction.** The carry re-asserts each open observation's invitation unchanged, then its pauses and resumes in order, and each surface's latest state since the newest daemon start, unless gone. A carried invitation keeps the cycle it was given in and is marked carried, because it is a consent and must never read as fresh. Its lease is an absolute time, so a compaction never extends it, and an ended or lapsed observation carries nothing.
 - **A surface claims only what it can know.** A keyboard surface that can see its viewer says `attached` while someone is there. One that cannot detect its viewer says `enabled`, never `attached` [MIS-0002-R98 (presence_MUST_say_enabled_when_undetectable)]. A channel, which carries messages and no keyboard, says `reachable`, so an operator reachable by channel is told apart from one attached at a keyboard [MIS-0002-R102 (presence_SHOULD_show_reachable)]. Which keyboard surfaces set presence is judged per surface [MIS-0002-R97 (keyboard_surface_MUST_set_presence)].
 - **Presence is derived, not stored.** It is folded from the agent's own event log: onlookers from the observation acts, surfaces from their recorded states. A copy kept elsewhere could drift from the acts or outlive its writer.
+- **A row that won't parse costs only itself.** Other processes write these rows, so both folds skip one they can't read, with a line on stderr, and the carry keeps a row only once it folds, so it carries what the line showed. A failure nobody foresaw fails its own carry family, and the carry still writes its marker, so a compaction keeps its recovery output.
 - **When the primal daemon is not alive, presence is unknown,** and the segment says so. It never shows a stale onlooker, and never "nobody".
 
 ---
@@ -296,6 +357,22 @@ The operator may attach to any session without an invitation [MIS-0002-R81 (oper
 - **The unit holds nothing of the agent's** [MIS-0002-R04 (outer_tier_MUST-NOT_hold_agent_config)]: no environment, no declaration, no credential. Its program is `python -m macf.pd <agent home>`, and the daemon reads everything from that home.
 - **The units outlive the daemon.** The daemon is the parent of every unit it manages, so they share its cgroup. With `KillMode=process` only the daemon is signalled when it exits; under systemd's default, a daemon crash would stop the session and every other unit with no drain and no regard for a quiet window. macOS renders the same with `AbandonProcessGroup` (3.1).
 - **Linger is the operator's switch.** Without it the user's systemd, and the daemon with it, stops at the user's last logout. `linger_enabled` reports it, and says why when it cannot tell. Turning it on (`loginctl enable-linger`) is the operator's decision on the host, never the tool's.
+
+### 6.2 The session as a unit
+
+**An agent's Claude Code session runs as its daemon's `session` unit through `macf_tools harness unit`**, which keeps the daemon the session's parent [MIS-0002-R12 (pd_MUST_start_units_itself)]. The legacy harness can't be that child: `tmux new-session` asks a tmux server to run the session, and the server detaches from whoever started it. The process the daemon started would end at once, while the session went on out of its reach.
+
+- **The chain is primal daemon → wrapper → tmux server → `claude`.** The wrapper runs the agent's own tmux server in the foreground (`tmux -D`) as its child. It creates the agent's session there, running the harness child script, which runs `claude -c` with the declared channels. Only then does it turn the server's `exit-empty` on. From that point the session's end is the server's end, and the server's end is the unit's exit.
+- **An outside stop reaches the session too** [MIS-0002-R48 (outside_stop_MUST_override_gates)]. tmux runs each pane in a process group of its own, so the daemon's stop of the unit's group reaches `claude` only through the server's hangup. The wrapper records the pane's process group when it creates the session, and once the server has gone it sends that group SIGTERM, then SIGKILL after 10 seconds. It records the group's leader's start time too, and before each signal confirms the group is still the session's: a group number is free again once its members have gone, and a leader under that number with another start is someone else's group, which is left alone. It returns only when the group is gone, so a restart never starts a second session beside one that outlived its unit. So **a session unit's `stop_grace_s` must exceed those 10 seconds**: otherwise the daemon's SIGKILL reaches the wrapper first, and nothing is left to stop the session. A wrapper killed outright can't do this; covering that case belongs to the daemon, which can learn the pane from the session's monitor, and is still to come.
+- **Restarts belong to the daemon alone.** There is no auto-restart loop inside the pane. When `claude` exits, the unit exits, and the daemon restarts it under the unit's declared policy and backoff. Every restart is then an event naming who acted. **A session unit's restart is `always`, and a declaration that says otherwise is refused by name**: the wrapper exits 0 however `claude` ends, so under `on-failure` or `never` an ended session would stay down.
+- **The server has a socket of its own.** It lives in a private directory in the daemon's runtime directory, `<runtime>/<id>.tmux`, mode 0700, with tmux's default socket name inside. No other login's sessions can share the server, or keep it alive after the agent's session ends. The wrapper refuses a directory that is open to others, and a socket path the kernel would refuse [MIS-0002-R129 (adapter_MUST_check_socket_path_length)]. It also refuses to start while a server already answers on the socket, because a second one would double the session. **A refusal no restart can fix exits 78**: a missing project directory, a socket path too long, a directory open to others. 78 is in a unit's default `no_restart`, so the daemon records why and stops, instead of retrying with backoff forever. A server still answering exits 1, because that one can clear. When the server has gone, the wrapper removes the socket tmux leaves behind and its private directory.
+- **Clients reach it through `TMUX_TMPDIR`.** `macf_tools harness attach` and `harness status` find the session unit's server first and the legacy harness's session second. When the session is the daemon's, `harness status` says the systemd harness isn't used, in place of its unit and init-system lines. `macf_tools env` names the daemon as the session's supervisor, once the daemon itself confirms it runs the unit on the pid the session was handed. The session's own variables are only its claim, and a claim the daemon doesn't confirm is shown as unconfirmed, with why. The mail clock reaches the pane through `TMUX_TMPDIR` in its declared environment, unchanged otherwise. Attach resolved from the daemon (4.1) finds the session's pane by its descent from the unit's process [MIS-0002-R100 (attach_MUST_resolve_from_pd)].
+- **`macf_tools inject` still reaches the session.** It used to find its pane through the auto-restart supervisor's registry, and a session unit has no supervisor. So it falls back to its own pane: when it runs inside a session unit (the session variables are set) under tmux (`TMUX` and `TMUX_PANE`), it types into `TMUX_PANE` on the server `TMUX` names, and so does the follow-up prompt after a compaction.
+- **Clear `TMUX` when you name `TMUX_TMPDIR`.** tmux follows `TMUX` over `TMUX_TMPDIR`, so a client run from inside another tmux session asks that session's server instead. The wrapper and the attach helpers drop it.
+- **End the legacy session before the unit starts.** A transcript monitor stands down when an older one already serves the transcript. The legacy session's monitor carries no session variables, so it writes no liveness for the unit, and the unit reads failed after three intervals. Only an interpreter running the monitor counts as one: a wrapper such as `timeout` that carries a monitor's arguments in its own isn't taken for it.
+- **The declaration states the session's whole environment** (R12, R13). The wrapper adds only the context window, the terminal type, and the proxy attachment, which it probes as the legacy start script does. A declared project directory that is missing starts nothing, because `claude -c` would resume a different conversation anywhere else.
+
+**A session's liveness comes from its transcript monitor** [MIS-0002-R14 (unit_MUST_emit_liveness_events)], as the operator decided on 2026-10-12. An idle session has no work loop. The monitor's loop reads the transcript and confirms the client process on every pass, so its beat means both are running. The wrapper hands the session `MACF_PD_SESSION_UNIT`, `MACF_PD_SESSION_LIVENESS_S` and `MACF_PD_SESSION_PID`, the last naming the wrapper, the process the daemon started. The monitor beats once per pass for that pid (11.2), and stops beating when its client ends. The wrapper removes its own `MACF_PD_UNIT` and `MACF_PD_LIVENESS_S` from the session's environment: under names of their own, the variables can't be taken by any other process the session starts as its own unit's.
 
 ---
 
@@ -398,8 +475,13 @@ A declaration with one unit:
 - `agent` is the card in the home's identity file.
 - `account` is the login the daemon itself runs as (10.3).
 - `liveness_interval_s` is a promise the unit makes: it writes its liveness at least this often, and the core judges it by that promise (11.2).
+- **`memory_limit_mb` is watched, not enforced** [MIS-0002-R60 (pd_MUST_notice_limit_exceeded)].
+  - Every 30 s, starting 30 s after each start, the core reads the resident memory of the unit's whole process tree. It counts the tree, not just the process group, so a session unit's `claude` under its tmux server counts.
+  - The first reading above the limit records `pd_unit_over_limit` with the unit, its use and its limit. If the declaration routes `pd_limit_exceeded` to the agent in `notice_routes`, a notice is owed and held like mail's (1.8).
+  - The first reading back below records `pd_unit_back_under_limit`. Readings that don't cross record nothing.
+  - **The unit keeps running.** If you get the notice, read `macf_tools pd status` and the event log, find what is growing, and tell the operator if you can't fix it. Don't restart the unit only to make the notice go away.
 
-**The core starts each unit itself, as the unit's parent, with the declared environment and nothing inherited** [MIS-0002-R12 (pd_MUST_start_units_itself)]. It renders that environment at each start, rather than reading files a persistent volume carried forward [MIS-0002-R13 (pd_MUST_render_env_at_start)]. Nothing inherited includes `PATH`, so a unit names its command by its absolute path, as the example does, or declares the `PATH` it needs. A unit that reads or writes the agent's event log declares `MACEFF_AGENT_HOME_DIR` as `{agent_home}`, which the core fills in at the start. Each unit leads a process group of its own, so a stop reaches every process the unit started.
+**The core starts each unit itself, as the unit's parent, with the declared environment and nothing inherited** [MIS-0002-R12 (pd_MUST_start_units_itself)]. It renders that environment at each start, rather than reading files a persistent volume carried forward [MIS-0002-R13 (pd_MUST_render_env_at_start)]. Nothing inherited includes `PATH`, so a unit names its command by its absolute path, as the example does, or declares the `PATH` it needs. A unit that reads or writes the agent's event log declares `MACEFF_AGENT_HOME_DIR` as `{agent_home}`, which the core fills in at the start. Each unit leads a process group of its own, so a stop reaches every process the unit started. A member of the group that outlives its leader's exit, by ignoring SIGTERM, is killed with the group when the stop's grace ends, provided a member the core recorded by pid and start time still holds the group's id, so the signal can't reach a stranger who took a recycled id. A restart starts the new incarnation only once the old group is empty, so two copies never run side by side. A leader that exits on its own, crashed or done, takes its group with it the same way: what it left running is sent SIGTERM at once and SIGKILL at the unit's grace, as systemd ends a unit's cgroup and launchd a job's process group, and the unit reads stopped, or restarts, only once the group is empty. A session the client's own daemon hosts is left to that daemon (3.3). The reach ends at the process group: a child that leaves it, by `setsid()` or `setpgid()`, is beyond a stop, so a unit that daemonizes a worker must end that worker itself.
 
 ### 10.3 Validation, and the account a unit runs as
 
@@ -453,6 +535,7 @@ An event carries states, times and identities. It never carries file content fro
 **How a unit writes it.** A unit learns which unit it is only from its declaration's environment, since that's the only environment it gets (R12, R13). So a unit that reports its own liveness is declared with `MACF_PD_UNIT` (its unit name) and `MACF_PD_LIVENESS_S` (its interval) beside `MACEFF_AGENT_HOME_DIR`.
 - **A Python unit** calls `macf.pd.liveness.heartbeat_from_env()` and has its work loop call `tick()` on the result once per pass. A beat follows a pass, not the clock: the first `pd_unit_alive` event goes out on the first tick, then at most one per interval, and only when the loop has ticked since the last one. Each names the unit's own pid and start time. A heartbeat thread on its own timer would keep writing while a wedged loop does nothing, which is the failure liveness exists to catch [R18]. So a loop that can block longer than its interval, waiting on a quiet socket say, takes a timeout that makes it pass at least once per interval. The mail broker ticks from its accept loop, which passes at least every half second, idle or not.
 - **A unit in any other language,** a shell loop for example, runs `macf_tools pd alive` once per pass, with `--in-flight N` when it has work under way. It writes one event from the same variables, naming its parent process (the loop that runs it, which is the unit the daemon started; `--pid` overrides), and exits 1 when it can't.
+- **A unit whose loop runs in another process** names the unit's pid in its beat. The session unit's transcript monitor does this (6.2): `session_heartbeat_from_env()` reads the session variables, and its beats name the wrapper's pid, so the daemon credits them to the process it started.
 - **Outside a daemon** the variables are absent, and the call does nothing, so the same program runs with or without a daemon.
 - **A partial or malformed setting** writes nothing and says why on stderr, because liveness credited to the wrong unit or agent is worse than none.
 - **Silence:** a unit that writes no liveness reads `starting` for as long as it runs. The mail broker reports this way.
@@ -519,7 +602,7 @@ The daemon starts its units as its children, but they don't die with it: the out
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
 - **The rest of the primal daemon:** health derived from runs owed and done; compaction on request, once the operator is established some other way than a claim on the socket (9.3, 12.3); and a command-line act that stops every unit, with the question of which asker a command line claims (12.1) (MIS-0002 §6.1 to §6.4, §6.7).
-- **Schedules and the notifier,** including the keystroke fallback and the dark-channel event (MIS-0002 §6.5, §6.6, the rest of §6.14).
+- **Schedules, and the rest of the notifier** (1.8): the dark-channel event, the operator's routes (`operator`, `both`, `held_until_present`), and sources besides mail (MIS-0002 §6.5, §6.6, the rest of §6.14).
 - **The end of R107's transitional rule** [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)] (1.4): until an agent declares `operator_channels`, every channel but the MacEff channel counts as the operator's.
 - **Mail and the rest of containers** (MIS-0002 §6.8, §6.9).
 - **Adopting a session Claude Code's own daemon already hosts** [MIS-0002-R66 (pd_MUST_adopt_harness_supervisor)] (3.3). Until it lands, the core starts a declared session unit itself.
