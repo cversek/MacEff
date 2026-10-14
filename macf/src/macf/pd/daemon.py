@@ -40,6 +40,7 @@ from macf.pd.interface import (
     record_path,
     runtime_dir,
 )
+from macf.pd.channel_watch import DarkChannel
 from macf.pd.notifier import Notifier
 from macf.utils.peercred import peer_credentials
 
@@ -104,6 +105,9 @@ class Daemon:
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound
         self.notifier = Notifier(self.home, self.core.declaration.notice_routes)
         self.core.on_notice = self.notifier.raise_notice    # the core's own notices (R60)
+        connect_s = self.core.declaration.channel_connect_s
+        #: Where a channel is expected, whether it is dark (R115); the outside watch tells the operator.
+        self.dark_channel = DarkChannel(self.card, connect_s) if connect_s else None
         self._sel: Optional[selectors.BaseSelector] = None
         self._wake_r, self._wake_w = os.pipe()
         os.set_blocking(self._wake_w, False)
@@ -164,6 +168,8 @@ class Daemon:
                 self.core.tick()
                 self.notifier.poll()
                 self.notifier.flush()
+                if self.dark_channel is not None:
+                    self.dark_channel.tick(self.core.session_incarnation(), bool(self.notifier.channels))
                 self._keep_record()
         finally:
             for conn in self.notifier.channels:

@@ -174,6 +174,22 @@ The primal daemon hosts the notifier, because it runs while the session is down,
 
 Still to come with step 2: the keystroke fallback for a session with no channel, the operator's routes, and the other sources (13).
 
+### 1.10 A dark channel
+
+A channel is **dark** when your session is running and no MacEff channel is attached to your daemon [MIS-0002-R115 (dark_channel_MUST_raise_event)]. It happens one of two ways:
+- the channel dropped while the session kept running;
+- it never attached within `channel_connect_s` of the session's start. `channel_connect_s` is a declaration field: set it where a channel is expected, and leave it unset where none is, so nothing is watched.
+
+**A restart is not a dark channel.** The old incarnation's channel goes with it, and the new incarnation gets its own window.
+
+The daemon derives this each pass and writes it to the event log only:
+- one `pd_channel_dark`, with the reason, opens a stretch;
+- one `pd_channel_back` closes it, when a channel attaches or the session restarts.
+
+**The operator hears of it through the outside watch**, which reads those events and alerts once per stretch through its own credential (R75). A dark channel can't carry the news of itself, and the daemon has no other way to reach a person.
+
+**What it means for you:** while your channel is dark, notices from your daemon wait (1.8). The keystroke fallback types a wake when it can (1.9). If you find a `pd_channel_dark` with no `pd_channel_back` after it, your notices aren't reaching you by channel. Check that the MacEff channel plugin is loaded, and tell the operator if it isn't.
+
 ## 2 The Harness's Own Compactions
 
 ### 2.1 Turning off the client's idle compaction

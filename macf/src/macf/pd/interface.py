@@ -244,6 +244,9 @@ class Declaration(_Closed):
     schedules: List[Schedule] = Field(default_factory=list)
     operator_channels: Optional[List[str]] = None
     notice_routes: Dict[str, NoticeRoute] = Field(default_factory=dict)
+    #: How long a new session incarnation may run before its MacEff channel attaches; past it,
+    #: the channel is dark (MIS-0002-R115). None: no channel is expected, and none is watched.
+    channel_connect_s: Optional[float] = Field(default=None, gt=0)
     quiet_windows: List[Window] = Field(default_factory=list)
     keep_harness_idle_compaction: bool = False
     wind_down: Optional[WindDown] = None
@@ -286,6 +289,9 @@ EVENT_CONTROL = "pd_control"
 #: A running unit crossed above its declared memory limit, and back below it (MIS-0002-R60).
 EVENT_OVER_LIMIT = "pd_unit_over_limit"
 EVENT_UNDER_LIMIT = "pd_unit_back_under_limit"
+#: The session's MacEff channel went dark, and came back (MIS-0002-R115).
+EVENT_CHANNEL_DARK = "pd_channel_dark"
+EVENT_CHANNEL_BACK = "pd_channel_back"
 EVENT_DAEMON_START = "pd_daemon_start"
 
 
