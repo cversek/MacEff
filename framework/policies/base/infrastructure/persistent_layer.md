@@ -175,7 +175,7 @@ A compaction ends the agent's working memory. The persistent layer compacts a se
 - **The hook records `trigger` as the client sent it**, and `unknown` when the field is absent, never a guess.
 - No event carries the content of the work, only who asked, how and when.
 
-The transcript monitor makes these records today. Once the daemon supervises the session unit, its control record for a harness compaction names the harness in its `asked_by` (`Asker.kind == "harness"`), with no peer, because nobody requested it [MIS-0002-R127 (harness_compaction_MUST_be_recorded)]. That is still to come (13).
+The transcript monitor makes these records. **The primal daemon turns the monitor's `harness_compaction_detected` into a control act of its own,** `compact` on its session unit, naming the harness in its `asked_by` (`Asker.kind == "harness"`), with no peer, because nobody requested it [MIS-0002-R127 (harness_compaction_MUST_be_recorded)]. The monitor's event is the observation, and the daemon's record is the decision. It reads the event in the same tail of the agent's log that credits liveness, which starts at the log's end when the daemon starts. So a compaction made while no daemon runs is recorded by the monitor alone. A declaration with no session unit has no session of the daemon's to name, so nothing is recorded.
 
 ---
 
@@ -518,7 +518,7 @@ The daemon starts its units as its children, but they don't die with it: the out
 ## 13 Not Yet Landed
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
-- **The rest of the primal daemon:** health derived from runs owed and done; compaction on request, once the operator is established some other way than a claim on the socket (9.3, 12.3); the harness's compactions in the daemon's own control records [MIS-0002-R127 (harness_compaction_MUST_be_recorded)] (2.2); and a command-line act that stops every unit, with the question of which asker a command line claims (12.1) (MIS-0002 §6.1 to §6.4, §6.7).
+- **The rest of the primal daemon:** health derived from runs owed and done; compaction on request, once the operator is established some other way than a claim on the socket (9.3, 12.3); and a command-line act that stops every unit, with the question of which asker a command line claims (12.1) (MIS-0002 §6.1 to §6.4, §6.7).
 - **Schedules and the notifier,** including the keystroke fallback and the dark-channel event (MIS-0002 §6.5, §6.6, the rest of §6.14).
 - **The end of R107's transitional rule** [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)] (1.4): until an agent declares `operator_channels`, every channel but the MacEff channel counts as the operator's.
 - **Mail and the rest of containers** (MIS-0002 §6.8, §6.9).

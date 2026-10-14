@@ -84,6 +84,12 @@ POLICY_POINTER = "macf_tools policy navigate persistent_layer"
 #: The asker for what the declaration itself calls for: boot starts, and restarts
 #: under a unit's restart policy.
 POLICY = Asker(kind="policy")
+#: The asker of a compaction the client started on its own: found by the absence of an ask,
+#: so it has no card and no peer (MIS-0002-R127 (harness_compaction_MUST_be_recorded)).
+HARNESS = Asker(kind="harness")
+#: The transcript monitor's record of such a compaction
+#: (``transcript_monitor.daemon.detect_harness_compaction``, pinned equal by a test).
+EVENT_HARNESS_COMPACTION = "harness_compaction_detected"
 
 
 class DeclarationRefused(ValueError):
@@ -266,8 +272,9 @@ class _Runner:
     client_binary: Optional[str] = None  # the claude found on the session unit's declared PATH
 
 
-class _LivenessTail:
-    """The liveness events appended to the agent's event log since the core started.
+class _LogTail:
+    """The events the core acts on, appended to the agent's event log since the core started:
+    liveness, and the detector's record of a compaction nobody asked for.
 
     It reads only what is new, from an offset, so a long log costs nothing per pass, and
     it starts at the end: liveness written before this daemon started belongs to units
@@ -276,8 +283,10 @@ class _LivenessTail:
     credited: liveness that cannot be read is unknown, and unknown is not alive.
     """
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, kinds=(EVENT_LIVENESS, EVENT_HARNESS_COMPACTION)):
         self.path = path
+        self.kinds = tuple(kinds)
+        self._needles = tuple(k.encode() for k in self.kinds)
         self.unreadable = 0
         self._partial = b""
         try:
@@ -303,16 +312,20 @@ class _LivenessTail:
         self._partial = lines.pop()
         events = []
         for line in lines:
-            if EVENT_LIVENESS.encode() not in line:
+            if not any(needle in line for needle in self._needles):
                 continue
             try:
                 event = json.loads(line)
             except ValueError as e:
-                self.unreadable += 1
-                print(f"⚠️ MACF: pd: a liveness line in {self.path} does not parse "
-                      f"(not credited): {e}", file=sys.stderr)
+                if EVENT_LIVENESS.encode() in line:
+                    self.unreadable += 1
+                    print(f"⚠️ MACF: pd: a liveness line in {self.path} does not parse "
+                          f"(not credited): {e}", file=sys.stderr)
+                else:
+                    print(f"⚠️ MACF: pd: a line in {self.path} does not parse (not acted on): {e}",
+                          file=sys.stderr)
                 continue
-            if event.get("event") == EVENT_LIVENESS:
+            if event.get("event") in self.kinds:
                 events.append(event)
         return events
 
@@ -378,7 +391,7 @@ class Core:
         self._units: Dict[str, _Runner] = {
             u.name: _Runner(spec=u, since=wall()) for u in declaration.units
         }
-        self._tail = _LivenessTail(get_log_path())
+        self._tail = _LogTail(get_log_path())
         self._own_start: Optional[tuple] = None  # (pid, proc_start) once record_start has run
 
     # ------------------------------------------------------------------ queries
@@ -563,10 +576,14 @@ class Core:
     # ------------------------------------------------------------------ the pass
 
     def tick(self) -> None:
-        """One pass: credit new liveness, reap exits, and act on every timer that is due."""
+        """One pass: credit new liveness, record a compaction nobody asked for, reap exits,
+        and act on every timer that is due."""
         now = self._clock()
         for event in self._tail.read():
-            self._on_liveness(event, now)
+            if event.get("event") == EVENT_HARNESS_COMPACTION:
+                self._on_harness_compaction(event)
+            else:
+                self._on_liveness(event, now)
         for r in self._units.values():
             try:
                 self._tick_unit(r, now)
@@ -646,6 +663,21 @@ class Core:
                 r.failures = 0
 
     # ------------------------------------------------------------------ events in
+
+    def _on_harness_compaction(self, event: dict) -> None:
+        """The client compacted the session on its own: record that as this daemon's control
+        act on its session unit, naming the harness, with no peer, since nobody asked
+        (MIS-0002-R127 (harness_compaction_MUST_be_recorded)). The detector's event is the
+        observation and this record the decision. A declaration with no session unit has no
+        session of this daemon's to name, so nothing is recorded. The tail starts at the log's
+        end, so a compaction made while no daemon ran is the detector's record alone."""
+        data = event.get("data") or {}
+        when = data.get("timestamp") or event.get("timestamp")
+        for r in self._units.values():
+            if r.spec.kind == "session":
+                self._control("compact", r, HARNESS,
+                              f"the client compacted the session on its own "
+                              f"({data.get('marker') or 'no ask found'}, at {when}); nobody asked")
 
     def _on_liveness(self, event: dict, now: float) -> None:
         data = dict(event.get("data") or {})
