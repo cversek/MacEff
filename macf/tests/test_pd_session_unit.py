@@ -263,3 +263,42 @@ def test_attach_finds_the_session_units_pane_on_its_own_server():
     plain = plan_attach(resp, "session", read_info=lambda pid: None, verify=lambda pid, s: True,
                         ancestors=lambda pid: chains.get(pid, [pid]), tmux_panes=panes)
     assert plain.kind != TMUX
+
+
+# --- inject from inside a session unit ------------------------------------------------
+
+def test_inside_a_session_unit_inject_targets_its_own_pane(monkeypatch):
+    from macf import supervisor as sv
+    monkeypatch.setenv(lv.ENV_SESSION_PID, "4321")
+    monkeypatch.setenv("TMUX", "/run/x/R.tmux/tmux-1000/default,99,0")
+    monkeypatch.setenv("TMUX_PANE", "%3")
+    assert sv._own_session_unit_pane() == "pane:%3"
+    monkeypatch.delenv(lv.ENV_SESSION_PID)
+    assert sv._own_session_unit_pane() is None, "a legacy pane is the supervisor's to resolve"
+
+
+def test_inject_without_a_supervisor_types_into_the_session_units_pane(monkeypatch):
+    from macf import supervisor as sv
+    monkeypatch.setenv(lv.ENV_SESSION_PID, "4321")
+    monkeypatch.setenv("TMUX", "/run/x/R.tmux/tmux-1000/default,99,0")
+    monkeypatch.setenv("TMUX_PANE", "%3")
+    monkeypatch.setattr(sv, "_find_own_supervisor", lambda: None)
+    monkeypatch.setattr(sv, "_tmux_available", lambda: True)
+    monkeypatch.setattr(sv, "_record_keys_sent", lambda *a: None)
+    followed = []
+    monkeypatch.setattr(sv, "_start_compact_followup", lambda target, text: followed.append(target))
+    import macf.stop_bypass
+    monkeypatch.setattr(macf.stop_bypass, "arm", lambda c: None)
+    import macf.agent_events_log
+    monkeypatch.setattr(macf.agent_events_log, "append_event", lambda *a, **k: True)
+    calls = []
+
+    class _Done:
+        returncode = 0
+
+    monkeypatch.setattr(sv.subprocess, "run", lambda argv, **k: calls.append(argv) or _Done())
+    assert sv.send_slash_to_self("compact", then="resume") == 0
+    assert calls[0] == ["tmux", "send-keys", "-t", "%3", "-l", "--", "/compact"]
+    assert calls[1] == ["tmux", "send-keys", "-t", "%3", "Enter"]
+    # the follow-up types into the same pane
+    assert followed == ["pane:%3"]
