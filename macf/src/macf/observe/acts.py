@@ -117,6 +117,9 @@ def _fold_one(state: Dict[str, Observation], ev: dict) -> None:
             # or one that can't be a key at all.
             raise TypeError(f"the onlooker must be a calling card, not {who!r}")
         if kind == EVENT_INVITE:
+            lease = data.get("lease_until")
+            if lease is not None and (isinstance(lease, bool) or not isinstance(lease, (int, float))):
+                raise TypeError(f"lease_until must be a time, not {lease!r}")
             state[who] = Observation(onlooker=who, status=ACTIVE, stream_from=int(data["stream_from"]),
                                      secret_sha256=data["secret_sha256"], lease_until=data.get("lease_until"),
                                      history=(EVENT_INVITE,))

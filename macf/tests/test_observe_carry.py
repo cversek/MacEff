@@ -199,3 +199,19 @@ def test_a_family_that_raises_is_reported_failed_and_the_carry_still_finishes(is
     assert marker["complete"] is False
     err = capsys.readouterr().err
     assert "observation" in err and "surface" in err and "a shape nobody thought of" in err
+
+
+def test_a_lease_that_is_not_a_time_costs_only_its_own_invitation(isolated_events_log, capsys):
+    """CTB's probe: a lease the carry can't compare with the clock is skipped where it folds,
+    so the two good consents beside it still cross. Taken as given, it raised in the carry
+    and the family guard then dropped every open observation."""
+    _write(isolated_events_log, [
+        _invite(100),
+        _invite(101, onlooker=OTHER),
+        _invite(102, onlooker="Third@aaa111", lease_until="soon"),
+        _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+    ])
+
+    assert "observation" in carry_state_forward(current_cycle=2)
+    assert set(fold(_this_cycle())) == {WATCHER, OTHER}
+    assert "lease_until must be a time" in capsys.readouterr().err
