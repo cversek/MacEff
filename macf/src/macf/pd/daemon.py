@@ -104,6 +104,15 @@ class Daemon:
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound
         self.notifier = Notifier(self.home, self.core.declaration.notice_routes)
         self.core.on_notice = self.notifier.raise_notice    # the core's own notices (R60)
+        if any(u.kind == "session" for u in self.core.declaration.units):
+            # The keystroke fallback types into the session unit's own pane (pd.session_unit),
+            # recording each wake first so it never reads as the operator (MIS-0002-R105).
+            from macf.pd.wake import TmuxPane, Waker
+            from macf.supervisor import record_keys_sent
+            from macf.utils.identity import session_identifier
+            ident = session_identifier(self.card)
+            self.notifier.waker = Waker(TmuxPane(ident, self.base),
+                                        record_keys=lambda text, kind: record_keys_sent(text, kind, ident))
         self._sel: Optional[selectors.BaseSelector] = None
         self._wake_r, self._wake_w = os.pipe()
         os.set_blocking(self._wake_w, False)
@@ -164,6 +173,7 @@ class Daemon:
                 self.core.tick()
                 self.notifier.poll()
                 self.notifier.flush()
+                self.notifier.wake()
                 self._keep_record()
         finally:
             for conn in self.notifier.channels:
