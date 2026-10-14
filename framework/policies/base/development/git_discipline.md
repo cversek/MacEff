@@ -487,6 +487,8 @@ One-line overview of release scope.
 - Technical implementation details
 ```
 
+Between releases a pull request adds its entry as a fragment in `changelog.d/`, never to `CHANGELOG.md` itself, and the fragments are gathered at release (`release_workflow` §3.5).
+
 ### Migration Documentation
 
 Major versions require:
