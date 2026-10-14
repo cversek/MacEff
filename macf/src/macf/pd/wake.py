@@ -102,33 +102,47 @@ def _visible(line: str) -> str:
     return "".join(out)
 
 
-def classify(screen: str) -> str:
-    """What a captured screen shows, failing closed: anything not recognized as an idle
-    session with an empty input box is one of the busy states."""
+def _box(screen: str):
+    """``(state, text)``: a busy state and None when the screen is not an idle session's
+    input box, else None and the box's text (empty for an empty box)."""
     raw = screen.splitlines()
     plain = [_ANSI.sub("", line) for line in raw]
     rules = [i for i, line in enumerate(plain) if _RULE.match(line)]
     if len(rules) < 2:
-        return DIALOG                                      # no input box on screen
+        return DIALOG, None                                # no input box on screen
     top, bottom = rules[-2], rules[-1]
     box = [i for i in range(top + 1, bottom) if plain[i].strip()]
     if not box or not plain[box[0]].lstrip().startswith(("❯", ">")):
-        return DIALOG
+        return DIALOG, None
     below = [line for line in plain[bottom + 1:] if line.strip()]
     if len(below) > 8 or any(m in line.lower() for line in below for m in _DIALOG_MARKERS):
-        return DIALOG
+        return DIALOG, None
     # The spinner can sit well above the box, with the turn's output between them; the
     # clock looks fifteen lines up, and 2.1.288 prints only the spinner.
     near = plain[max(0, top - RUNNING_LOOKBACK):]
     if any(_RUNNING_MARKER in line.lower() or _SPINNER.search(line) for line in near):
-        return RUNNING
+        return RUNNING, None
     first = _visible(raw[box[0]]).lstrip()[1:]            # past the prompt mark
-    text = " ".join([first] + [_visible(raw[i]) for i in box[1:]]).strip()
+    return None, " ".join([first] + [_visible(raw[i]) for i in box[1:]]).strip()
+
+
+def classify(screen: str) -> str:
+    """What a captured screen shows, failing closed: anything not recognized as an idle
+    session with an empty input box is one of the busy states."""
+    state, text = _box(screen)
+    if state is not None:
+        return state
     if not text:
         return IDLE_EMPTY
     if text.startswith(WAKE_OPENING):
         return WAKE_IN_BOX                                 # only the box counts, never an echo
     return DRAFT
+
+
+def box_text(screen: str) -> Optional[str]:
+    """The text in an idle session's input box, empty when the box is empty; None while the
+    screen shows a running turn, a dialog, or no box. Only the box counts, never an echo."""
+    return _box(screen)[1]
 
 
 class Pane(Protocol):

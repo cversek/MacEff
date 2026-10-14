@@ -647,6 +647,35 @@ def record_keys_sent(text: str, kind: str, tmux_session: str) -> None:
     _record_keys_sent(text, kind, tmux_session)
 
 
+def _resolve_pane_target(target: str) -> Optional[dict]:
+    """The supervisor record, or a session unit's own pane, that *target* names."""
+    if target.startswith(PANE_TARGET_PREFIX):
+        # A session unit's own pane, from inside it (_own_session_unit_pane): the
+        # inherited TMUX already names the unit's server.
+        return {"name": target, "tmux_session": target[len(PANE_TARGET_PREFIX):]}
+    return _find_supervisor(target)
+
+
+def capture_pane(target: str) -> Optional[str]:
+    """The screen of *target*'s pane, with its escape codes (the faint suggestion text is
+    told apart by them), or None when it can't be read."""
+    data = _resolve_pane_target(target)
+    session = (data or {}).get("tmux_session")
+    if not session or not _tmux_available():
+        return None
+    r = subprocess.run(["tmux", "capture-pane", "-p", "-e", "-t", session],
+                       capture_output=True, text=True)
+    return r.stdout if r.returncode == 0 else None
+
+
+def press_enter(target: str) -> int:
+    """One Enter into *target*'s pane; the tmux exit status."""
+    session = (_resolve_pane_target(target) or {}).get("tmux_session")
+    if not session or not _tmux_available():
+        return 1
+    return subprocess.run(["tmux", "send-keys", "-t", session, "Enter"]).returncode
+
+
 def send_keys(target: str, keys: list, enter: bool = True, kind: str = "send-keys") -> int:
     """Inject literal text (plus an optional Enter) into a supervised session's
     tmux pane - the side channel for driving the live CC client (e.g. a real
@@ -661,12 +690,7 @@ def send_keys(target: str, keys: list, enter: bool = True, kind: str = "send-key
         print("[auto-restart] tmux not found; send-keys requires a tmux-backed session.",
               file=sys.stderr)
         return 1
-    if target.startswith(PANE_TARGET_PREFIX):
-        # A session unit's own pane, from inside it (_own_session_unit_pane): the
-        # inherited TMUX already names the unit's server.
-        data = {"name": target, "tmux_session": target[len(PANE_TARGET_PREFIX):]}
-    else:
-        data = _find_supervisor(target)
+    data = _resolve_pane_target(target)
     if not data:
         print(f"[auto-restart] No running supervised process matching '{target}'.",
               file=sys.stderr)
