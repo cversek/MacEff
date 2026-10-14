@@ -377,6 +377,33 @@ def test_reaping_a_group_escalates_to_sigkill(tmp_path):
     p.wait(timeout=5)
 
 
+def test_a_group_number_that_now_leads_another_process_is_left_alone(monkeypatch, capsys):
+    """CTB on #652: a group number is free again once all its members are gone. A leader
+    under the number with another start than the pane's is someone else's group."""
+    from macf.pd import core
+    sent = []
+    monkeypatch.setattr(su, "_group_alive", lambda pgid: True)
+    monkeypatch.setattr(su.os, "killpg", lambda pgid, sig: sent.append((pgid, sig)))
+    monkeypatch.setattr(core, "group_members", lambda pgid: [(4242, "started-later"), (4250, "x")])
+    assert su.reap_group(4242, grace=0.01, leader_start="the-pane")
+    assert sent == []
+    assert "no longer the session's" in capsys.readouterr().err
+    # the session's own group: its leader, or only members once the leader has exited
+    for members in ([(4242, "the-pane"), (4250, "x")], [(4250, "x")]):
+        monkeypatch.setattr(core, "group_members", lambda pgid, m=members: m)
+        sent.clear()
+        su.reap_group(4242, grace=0.01, poll=0.005, leader_start="the-pane")
+        assert sent and sent[0] == (4242, su.signal.SIGTERM)
+
+
+def test_the_sessions_own_group_is_reaped_with_its_recorded_start():
+    import subprocess
+    p = subprocess.Popen(["bash", "-c", "trap '' TERM; sleep 300"], start_new_session=True)
+    time.sleep(0.2)
+    assert su.reap_group(os.getpgid(p.pid), grace=0.5, leader_start=su.proc_start(p.pid))
+    p.wait(timeout=5)
+
+
 def test_without_proc_a_zombie_group_counts_as_gone(monkeypatch):
     """Where there is no /proc (macOS), ``ps`` lists the members, and a killed child of
     ours, a zombie until we wait for it, does not keep its group alive."""
