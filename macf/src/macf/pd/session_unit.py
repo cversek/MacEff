@@ -272,7 +272,10 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
             return EXIT_NOT_STARTED
         time.sleep(0.1)
 
-    new = ["new-session", "-d", "-s", agent] + (["-c", str(project_dir)] if project_dir else []) + [str(child)]
+    # -P prints the new pane's pid in the reply that creates it, while the server is
+    # certainly up. Asked for afterwards (list-panes), it was lost when a stop reached the
+    # server in between, and the session was then never reaped: CI saw it twice.
+    new = ["new-session", "-d", "-P", "-F", "#{pane_pid}", "-s", agent] + (["-c", str(project_dir)] if project_dir else []) + [str(child)]
     made = _tmux(tmux, env, *new)
     if made.returncode != 0:
         print(f"⚠️ MACF: session unit: could not create session {agent}: "
@@ -282,7 +285,7 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
         return EXIT_NOT_STARTED
     # The session's process group, read now while the pane exists: after the server has gone
     # it is the one thing that can still name the session's processes (reap_group).
-    panes = _tmux(tmux, env, "list-panes", "-s", "-t", f"={agent}", "-F", "#{pane_pid}").stdout.split()
+    panes = made.stdout.split()
     pane_groups = set()
     for pane in panes:
         try:
