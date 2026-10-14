@@ -496,6 +496,11 @@ def _monitor_from_argv(pid: int, started: int, argv: List[str]) -> Optional[Moni
     transcript, owner = after("--transcript"), after("--owner") or "0"
     if after("-m") != MONITOR_MODULE or transcript is None or not owner.isdigit():
         return None
+    # The interpreter is the process: only its own options may stand before "-m". A forking
+    # wrapper such as "timeout 60 python -m ..." carries the monitor's arguments in its own,
+    # and taken for an older monitor it made the real one stand down.
+    if any(not a.startswith("-") for a in argv[1:argv.index("-m")]):
+        return None
     return MonitorProcess(pid, started, int(owner), Path(transcript))
 
 

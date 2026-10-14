@@ -52,8 +52,13 @@ TMUX_DIR_SUFFIX = ".tmux"
 READY_TIMEOUT_S = 10.0
 
 #: Exit status when the session could not be created: the server is stopped, and the
-#: daemon restarts the unit under its declared policy.
+#: daemon restarts the unit under its declared policy. Used for what a later start can
+#: clear, such as a server that still serves an earlier session.
 EXIT_NOT_STARTED = 1
+#: Exit status when no restart can help: the project directory is missing, the socket
+#: path is too long, or the tmux directory is not private. 78 is in a unit's default
+#: ``no_restart``, so the daemon stops retrying and records why (Ira, on #652).
+EXIT_REFUSED = 78
 
 #: How long the session's own process group gets after SIGTERM before SIGKILL, once the
 #: server has gone. A unit's declared ``stop_grace_s`` must exceed it, or the daemon's
@@ -225,15 +230,19 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
         print(f"⚠️ MACF: session unit: the declared project directory {project_dir} does not exist; "
               f"not starting, because 'claude -c' would resume a different conversation",
               file=sys.stderr)
-        return EXIT_NOT_STARTED
+        return EXIT_REFUSED
     try:
         # MIS-0002-R129 (adapter_MUST_check_socket_path_length): tmux's own refusal names
         # only the path, after the wrapper has started a server that cannot listen.
         check_socket_path(tmux_socket(agent, base))
     except OSError as e:
         print(f"⚠️ MACF: session unit: {e}", file=sys.stderr)
-        return EXIT_NOT_STARTED
-    directory = _private_dir(tmux_dir(agent, base))
+        return EXIT_REFUSED
+    try:
+        directory = _private_dir(tmux_dir(agent, base))
+    except PermissionError as e:
+        print(f"⚠️ MACF: session unit: {e}; not starting a server others could reach", file=sys.stderr)
+        return EXIT_REFUSED
     env = session_environment(environ, os.getpid(), directory, extra_env)
     if tmux_socket(agent, base).exists() and _tmux(tmux, env, "has-session").returncode == 0:
         # The socket is private, so a server answering on it is this agent's, from an
@@ -296,7 +305,28 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
         if not reap_group(pgid):
             print(f"⚠️ MACF: session unit: process group {pgid} of session {agent} survived SIGKILL",
                   file=sys.stderr)
+    _remove_leftovers(tmux, env, directory)
     return status
+
+
+def _remove_leftovers(tmux: str, env: Mapping[str, str], directory: Path) -> None:
+    """Remove what the ended server left in its tmux directory: the socket tmux does not
+    unlink on Linux, then the directories (Ira, on #652). Nothing goes while a server still
+    answers on the socket, and a directory holding anything else stays."""
+    socket = directory / f"tmux-{os.getuid()}" / "default"
+    if socket.is_socket() and _tmux(tmux, env, "has-session").returncode != 0:
+        try:
+            socket.unlink()
+        except OSError:
+            pass
+    for path in (socket.parent, directory):
+        if not path.is_dir() or any(path.iterdir()):
+            break                      # something else is in it: it stays
+        try:
+            path.rmdir()
+        except OSError as e:
+            print(f"⚠️ MACF: session unit: could not remove {path}: {e}", file=sys.stderr)
+            break
 
 
 def main(argv: Optional[List[str]] = None) -> int:

@@ -210,6 +210,8 @@ exit 0
     env = su.client_environment("Resident_1a2b3c", base)
     assert env is None or subprocess.run(["tmux", "has-session"], env=env,
                                          capture_output=True).returncode != 0
+    # and its directory with it, left empty by the server (Ira on #652)
+    assert not su.tmux_dir("Resident_1a2b3c", base).exists()
 
 
 @needs_tmux
@@ -231,7 +233,7 @@ def test_a_missing_project_directory_starts_nothing(tmp_path, capsys):
     base = tmp_path / "rt"
     rc = su.run("Resident_1a2b3c", tmp_path / "child.sh", project_dir=tmp_path / "gone",
                 environ=_unit_env(tmp_path), base=base)
-    assert rc == su.EXIT_NOT_STARTED
+    assert rc == su.EXIT_REFUSED
     assert not su.tmux_dir("Resident_1a2b3c", base).exists()
     assert "different conversation" in capsys.readouterr().err
 
@@ -239,9 +241,29 @@ def test_a_missing_project_directory_starts_nothing(tmp_path, capsys):
 def test_a_socket_path_too_long_for_the_kernel_starts_nothing(tmp_path, capsys):
     base = tmp_path / ("x" * 120)
     rc = su.run("Resident_1a2b3c", tmp_path / "child.sh", environ=_unit_env(tmp_path), base=base)
-    assert rc == su.EXIT_NOT_STARTED
+    assert rc == su.EXIT_REFUSED
     assert "longer than" in capsys.readouterr().err
     assert not base.exists()
+
+
+def test_a_tmux_directory_open_to_others_is_a_refusal_not_a_crash(tmp_path, short_base, capsys):
+    base = short_base
+    d = su.tmux_dir("Resident_1a2b3c", base)
+    d.mkdir(parents=True, mode=0o755)
+    d.chmod(0o755)
+    rc = su.run("Resident_1a2b3c", tmp_path / "child.sh", environ=_unit_env(tmp_path), base=base)
+    assert rc == su.EXIT_REFUSED
+    assert "not private" in capsys.readouterr().err
+
+
+def test_a_refusal_no_restart_can_fix_is_one_the_daemon_does_not_retry():
+    """Ira on #652: exiting 1 for these was retried forever with backoff. The literal is
+    stated, so redefining the constant cannot move the assertion with it; and it must be
+    in a unit's default no_restart, which is what stops the daemon's retries."""
+    from macf.pd.interface import ExitCodes
+    assert su.EXIT_REFUSED == 78
+    assert su.EXIT_REFUSED in ExitCodes().no_restart
+    assert su.EXIT_NOT_STARTED not in ExitCodes().no_restart
 
 
 # --- attach -------------------------------------------------------------------------
