@@ -59,6 +59,8 @@ EXIT_NOT_STARTED = 1
 #: server has gone. A unit's declared ``stop_grace_s`` must exceed it, or the daemon's
 #: SIGKILL reaches the wrapper first and nothing is left to stop the session.
 PANE_GRACE_S = 10.0
+#: How long a new pane has to call setsid() before its pid is taken as its group.
+PANE_SETSID_WAIT_S = 2.0
 
 
 def _group_alive(pgid: int) -> bool:
@@ -91,6 +93,27 @@ def _group_alive(pgid: int) -> bool:
         return False
     except PermissionError:
         return True   # a member we may not signal still lives
+
+
+def pane_group(pane_pid: int, own: int, timeout: float = PANE_SETSID_WAIT_S) -> Optional[int]:
+    """The process group of a pane's process, once it has one of its own; None if it is gone.
+
+    tmux forks a pane and the child calls ``setsid()`` before it runs the pane's command. Read
+    in between, the child still has the server's group, which is this unit's, and a stop would
+    then have no group to reap. So wait for the group to differ from *own*. If it never does
+    within *timeout*, the pane's pid is the answer: ``setsid()`` makes the group the pid's own.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            group = os.getpgid(pane_pid)
+        except ProcessLookupError:
+            return None  # noqa: MACEFF003 - a pane already gone has no group to reap; None is the documented answer
+        if group != own:
+            return group
+        if time.monotonic() >= deadline:
+            return pane_pid
+        time.sleep(0.01)
 
 
 def reap_group(pgid: int, grace: float = PANE_GRACE_S, poll: float = 0.1) -> bool:
@@ -254,10 +277,13 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
     pane_groups = set()
     for pane in panes:
         try:
-            pane_groups.add(os.getpgid(int(pane)))
-        except (ValueError, ProcessLookupError):
-            pass
-    pane_groups.discard(os.getpgid(0))   # never this unit's own group
+            group = pane_group(int(pane), os.getpgid(0))
+        except ValueError:
+            print(f"⚠️ MACF: session unit: tmux named a pane pid {pane!r} that is not a number; "
+                  f"a stop will not reach that pane's group", file=sys.stderr)
+            continue
+        if group is not None:
+            pane_groups.add(group)
     # Only now, with a session in it, may the server end when it is empty: from here on
     # the session's end is the server's, and the server's is this unit's.
     _tmux(tmux, env, "set-option", "-s", "exit-empty", "on")
