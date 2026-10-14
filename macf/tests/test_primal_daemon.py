@@ -1248,6 +1248,41 @@ def test_a_stop_never_signals_a_process_that_took_an_adopted_units_pid(make_core
         stranger.wait()
 
 
+def test_unasked_compaction_recorded(make_core, script):
+    """MIS-0002-R127 (harness_compaction_MUST_be_recorded): the detector's record of a
+    compaction the client started on its own becomes this daemon's control act on its
+    session unit, naming the harness with no peer, since nobody asked. A record written
+    before the daemon started isn't its to make: its tail starts at the end of the log."""
+    def detected(when):
+        append_event("harness_compaction_detected", {"asker": "harness", "marker": "compacted_while_idle",
+                                                      "timestamp": when, "detector": "transcript_monitor"})
+
+    detected("before the daemon")
+    # A session unit restarts 'always', which the declaration now requires (#665).
+    session = make_unit("session", script, {}, restart="always").model_copy(update={"kind": "session"})
+    core = make_core([session, make_unit("worker", script, {}, restart="never")], hosted=lambda: [])
+    core.boot()
+    detected("while it runs")
+
+    def compacts():
+        return [c for c in events("pd_control") if c["act"] == "compact"]
+    assert drive(core, lambda: compacts())
+    core.tick()
+    assert len(compacts()) == 1
+    act = compacts()[0]
+    assert (act["unit"], act["asked_by"], act["peer"]) == ("session", {"kind": "harness", "card": None}, None)
+    assert "while it runs" in act["reason"] and "nobody asked" in act["reason"]
+
+
+def test_the_core_acts_on_the_event_the_detector_writes():
+    """The two names are kept apart so the core needn't import the monitor; this keeps them equal."""
+    from macf.pd.core import EVENT_HARNESS_COMPACTION
+    from macf.transcript_monitor.daemon import detect_harness_compaction
+    found = detect_harness_compaction({"type": "system", "subtype": "informational",
+                                       "content": "Compacted while idle, before the prompt cache expired"})
+    assert found is not None and found.event_name == EVENT_HARNESS_COMPACTION
+
+
 def _alive(pid):
     try:
         os.kill(pid, 0)

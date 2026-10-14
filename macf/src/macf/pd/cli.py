@@ -8,9 +8,11 @@ command line typed in a session claims is still an open question, so no unit act
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Tuple
 
 
 def add_pd_parser(sub) -> None:
@@ -116,9 +118,31 @@ def _this_agent():
     return home, card_for_home(home)
 
 
-def cmd_pd_install(args: argparse.Namespace) -> int:
-    from pathlib import Path
+#: What the service manager passes the daemon's interpreter: who and where it is, and none of the
+#: installing shell's Python settings (``PYTHONPATH``, ``PYTHONHOME``, a virtualenv's), which the
+#: unit doesn't carry.
+_SERVICE_ENV_KEEP = ("HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG")
+_SERVICE_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 
+
+def daemon_macf(python: str) -> Tuple[Optional[Path], str]:
+    """The macf that ``python -m macf.pd`` imports when the service manager runs it, or None and
+    why not. Asked of the interpreter itself, from ``/`` and without the installing shell's Python
+    settings, because the unit carries neither (#650)."""
+    env = {k: os.environ[k] for k in _SERVICE_ENV_KEEP if k in os.environ}
+    env["PATH"] = _SERVICE_PATH
+    try:
+        out = subprocess.run([python, "-c", "import macf.pd, macf; print(macf.__file__)"],
+                             cwd="/", env=env, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, str(e)
+    if out.returncode != 0:
+        lines = out.stderr.strip().splitlines()
+        return None, lines[-1] if lines else f"exit {out.returncode}"
+    return Path(out.stdout.strip()).resolve().parent, ""
+
+
+def cmd_pd_install(args: argparse.Namespace) -> int:
     from macf.pd import adapter as adapters
     from macf.pd.core import POLICY_POINTER, DeclarationRefused, load_declaration
 
@@ -130,7 +154,18 @@ def cmd_pd_install(args: argparse.Namespace) -> int:
         print(f"maceff_pd: nothing installed: {e}\n{POLICY_POINTER}", file=sys.stderr)
         return 1
     import macf
-    runs = f"it runs {sys.executable}, with macf from {Path(macf.__file__).resolve().parent}"
+    planned = Path(macf.__file__).resolve().parent
+    daemon, why = daemon_macf(sys.executable)
+    if daemon != planned:
+        # The unit runs this interpreter with no environment of the shell's, so the macf it
+        # names must be the one the daemon will import, or the daemon runs other code, or none.
+        found = f"imports macf from {daemon}" if daemon else f"can't import macf.pd ({why})"
+        print(f"maceff_pd: nothing {'planned' if args.plan else 'installed'}: run as the service manager "
+              f"runs it, {sys.executable} {found}, not the macf this command runs ({planned}). Install "
+              f"from an interpreter whose own macf is the one the daemon should run, such as a virtual "
+              f"environment it is installed in.\n{POLICY_POINTER}", file=sys.stderr)
+        return 1
+    runs = f"it runs {sys.executable}, with macf from {planned}"
     if args.plan:
         print(f"# {card}: the outer tier for {home} on {sys.platform}, not installed (--plan); {runs}")
         print(tier.render(card, home))
