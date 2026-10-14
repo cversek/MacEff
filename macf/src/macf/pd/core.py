@@ -916,6 +916,13 @@ class Core:
     def _kill(self, r: _Runner, sig: signal.Signals) -> None:
         if r.pid is None:
             return
+        if isinstance(r.proc, _Adopted) and not self._probe(r.pid, r.proc_start or ""):
+            # Not this daemon's child, so its pid may have ended and been reused since the last
+            # pass. Signal only the process adopted, by pid and start time (MIS-0002-R15
+            # (readout_MUST_probe_liveness)); its end is seen on the next pass.
+            print(f"⚠️ MACF: pd: {r.spec.name}'s adopted pid {r.pid} is no longer the process "
+                  f"adopted; not signalling it", file=sys.stderr)
+            return
         try:
             # A unit this daemon started leads its own group; a worker the client hosts may not,
             # and killpg on a pid that leads no group reaches nothing.
