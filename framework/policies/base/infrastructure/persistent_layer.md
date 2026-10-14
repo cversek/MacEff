@@ -440,7 +440,7 @@ A declaration with one unit:
 - `account` is the login the daemon itself runs as (10.3).
 - `liveness_interval_s` is a promise the unit makes: it writes its liveness at least this often, and the core judges it by that promise (11.2).
 - **`memory_limit_mb` is watched, not enforced** [MIS-0002-R60 (pd_MUST_notice_limit_exceeded)].
-  - Every 30 s the core reads the resident memory of the unit's whole process tree. It counts the tree, not just the process group, so a session unit's `claude` under its tmux server counts.
+  - Every 30 s, starting 30 s after each start, the core reads the resident memory of the unit's whole process tree. It counts the tree, not just the process group, so a session unit's `claude` under its tmux server counts.
   - The first reading above the limit records `pd_unit_over_limit` with the unit, its use and its limit. If the declaration routes `pd_limit_exceeded` to the agent in `notice_routes`, a notice is owed and held like mail's (1.8).
   - The first reading back below records `pd_unit_back_under_limit`. Readings that don't cross record nothing.
   - **The unit keeps running.** If you get the notice, read `macf_tools pd status` and the event log, find what is growing, and tell the operator if you can't fix it. Don't restart the unit only to make the notice go away.

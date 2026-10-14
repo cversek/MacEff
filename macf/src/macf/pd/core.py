@@ -592,7 +592,7 @@ class Core:
                 continue
             r = self._units[name]
             r.proc, r.pid, r.proc_start = _Adopted(pid, start, self._probe), pid, start
-            r.over_limit, r.memory_checked_at = False, float("-inf")   # a new incarnation's memory is its own (R60)
+            r.over_limit, r.memory_checked_at = False, self._clock()   # its own memory, first read one check after it starts (R60)
             r.started_at = self._clock()
             # Its first liveness under this daemon is judged from the adoption, as a start is,
             # so a unit that went silent while no daemon ran becomes overdue, not running forever.
@@ -963,7 +963,7 @@ class Core:
         if not start:
             return False   # the worker ended between the readout and now: start the unit as usual
         r.proc, r.pid, r.proc_start = _Adopted(decision.pid, start, self._probe), decision.pid, start
-        r.over_limit, r.memory_checked_at = False, float("-inf")   # a new incarnation's memory is its own (R60)
+        r.over_limit, r.memory_checked_at = False, self._clock()   # its own memory, first read one check after it starts (R60)
         r.client_session = decision.session_id
         r.started_at = self._clock()
         # The client's daemon supervises it, so its liveness is its process, probed by pid
@@ -1014,7 +1014,7 @@ class Core:
             return
         r.proc, r.pid = proc, proc.pid
         r.proc_start = proc_start(proc.pid)
-        r.over_limit, r.memory_checked_at = False, float("-inf")   # a new incarnation's memory is its own (R60)
+        r.over_limit, r.memory_checked_at = False, self._clock()   # its own memory, first read one check after it starts (R60)
         r.started_at = self._clock()
         r.alive_at, r.alive_interval_s, r.in_flight = None, None, None
         self._transition(r, "starting", f"started as pid {proc.pid}")
