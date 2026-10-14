@@ -117,6 +117,49 @@ def _hosted_sessions() -> list:
         return []
 
 
+def primal_daemon_unit(card: Optional[str], environ=None, ask=None) -> Optional[Dict[str, Any]]:
+    """This session as its primal daemon's unit, or None when it says it is not one.
+
+    The session unit's wrapper hands the session ``MACF_PD_SESSION_UNIT`` and
+    ``MACF_PD_SESSION_PID`` (persistent_layer 6.2). Those are the session's claim; the
+    daemon is asked whether it runs that unit on that pid, and only its answer confirms it.
+    """
+    from ..pd.liveness import ENV_SESSION_PID, ENV_SESSION_UNIT
+    env = os.environ if environ is None else environ
+    unit, pid = env.get(ENV_SESSION_UNIT), env.get(ENV_SESSION_PID)
+    if not unit or not pid:
+        return None
+    found: Dict[str, Any] = {"unit": unit, "pid": pid, "confirmed": False, "state": None, "why": ""}
+    if not card:
+        found["why"] = "no calling card was resolved, so no daemon could be asked"
+        return found
+    if ask is None:
+        from pathlib import Path
+        from ..pd.client import status
+        home = Path(env.get("MACEFF_AGENT_HOME_DIR") or Path.home())
+        ask = lambda: status(home, card)  # noqa: E731
+    try:
+        report = ask()
+    except Exception as e:  # a diagnostic must not break the readout it is part of
+        found["why"] = f"the daemon could not be asked: {type(e).__name__}: {e}"
+        return found
+    if report.source != "daemon":
+        found["why"] = f"not from the daemon ({report.source}): {report.why}"
+        return found
+    mine = [u for u in report.units if u.get("unit") == unit]
+    if not mine:
+        found["why"] = f"the daemon runs no unit named {unit}"
+        return found
+    found["state"] = mine[0].get("state")
+    if str(mine[0].get("pid")) != str(pid):
+        found["why"] = f"the daemon's {unit} is pid {mine[0].get('pid')}, not this session's {pid}"
+    elif found["state"] != "running":
+        found["why"] = f"the daemon reads {unit} as {found['state']}"
+    else:
+        found["confirmed"], found["why"] = True, "the daemon runs it on that pid"
+    return found
+
+
 def diagnose(agent: Optional[str] = None) -> Dict[str, Any]:
     """Full supervision picture: who supervises me, in what session, how healthy."""
     from .harness import default_params, installed_agents, resolve_agent
@@ -145,6 +188,10 @@ def diagnose(agent: Optional[str] = None) -> Dict[str, Any]:
         mine = [s for s in sups if s.get("name") == expected]
         resolved_by = "name" if mine else None
     mine_pids = {s.get("supervisor_pid") for s in mine}
+    # A session that is its primal daemon's unit has no auto-restart supervisor: the
+    # daemon is its supervisor, and restarts it under the unit's policy (6.2).
+    pd_unit = None if (ambiguous or agent is not None) else primal_daemon_unit(
+        calling_card_from_identifier(expected) if expected else None)
     others = [s for s in sups if s.get("supervisor_pid") not in mine_pids]
 
     # --- this process's own session ----------------------------------------
@@ -183,7 +230,8 @@ def diagnose(agent: Optional[str] = None) -> Dict[str, Any]:
             "installed": installed_agents(),
         },
         "supervision": {
-            "supervised": bool(mine),
+            "supervised": bool(mine) or bool(pd_unit and pd_unit["confirmed"]),
+            "primal_daemon": pd_unit,
             "resolved_by": resolved_by,
             # Informational, never the verdict: a supervisor named for a session
             # rather than the card is a normal deployment choice.
@@ -245,15 +293,23 @@ def format_diagnosis(d: Dict[str, Any]) -> str:
     for h in cd.get("hosted_sessions") or []:
         ch = "unknown" if h["channels"] is None else (", ".join(h["channels"]) or "none")
         lines.append(f"  Hosted:       pid {h['pid']}, session {h['session']}, channels {ch} (Claude Code's daemon)")
-    if s["supervised"]:
+    pd_unit = s.get("primal_daemon")
+    if pd_unit and pd_unit["confirmed"]:
+        lines.append(f"  Supervisor:   the primal daemon -- this session is its unit {pd_unit['unit']}, "
+                     f"pid {pd_unit['pid']}, running; the daemon restarts it under the unit's policy")
+    elif pd_unit:
+        lines.append(f"  ⚠️  DAEMON:     this session says it is the primal daemon's unit {pd_unit['unit']} "
+                     f"(pid {pd_unit['pid']}), unconfirmed: {pd_unit['why']}")
+    if s["supervisors"]:
         how = f", found by {s['resolved_by']}" if s.get("resolved_by") else ""
         for sup in s["supervisors"]:
             named = (f", named {sup['name']}" if s.get("name_differs") else "")
             lines.append(f"  Supervisor:   pid {sup['pid']} — {sup['restarts']} restart(s), "
                          f"session {sup['session']}{named}{how}")
-    else:
+    elif not s["supervised"]:
         lines.append(f"  Supervisor:   NONE running for {a['identifier'] or 'any resolved agent'} "
-                     f"(this session is not supervised — a crash will not restart it)")
+                     f"(this session is not supervised: no auto-restart supervisor, and no "
+                     f"primal daemon confirms it as its unit — a crash will not restart it)")
 
     if s["name_collision"]:
         lines.append("  ⚠️  COLLISION:  more than one live supervisor claims this agent name — "
