@@ -28,6 +28,7 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - Why does the channel offer no tools and relay no permission prompts?
 - How is the channel installed and loaded?
 - Where do notices wait while the session is down, and what happens to mail that arrived while no daemon ran?
+- When does the daemon type a wake instead, and what may it type?
 
 **2 The Harness's Own Compactions**
 - Who may compact my session, and what happens when the client compacts it on its own?
@@ -172,7 +173,19 @@ The primal daemon hosts the notifier, because it runs while the session is down,
 - **It is written to the newest channel.** Each owed notice goes out as one closed record (1.2), naming its source and carrying when the store was read and when the notice was sent; the session's prompt hook records when it was received (1.5) [MIS-0002-R38 (notice_MUST_name_source)] [MIS-0002-R39 (notice_MUST_carry_three_times)]. A channel that has gone away keeps the notice owed for the next one.
 - **Nothing is sent to say nothing changed.** A poll that finds no arrival produces nothing [MIS-0002-R46 (layer_MUST-NOT_report_no_change)].
 
-Still to come with step 2: the keystroke fallback for a session with no channel, the operator's routes, and the other sources (13).
+### 1.9 The keystroke fallback
+
+When no channel has taken the mail notices owed for a minute, the daemon types a wake into the session unit's own pane instead [MIS-0002-R105 (keystroke_wake_MUST_be_fallback_only)] [MIS-0002-R43 (wake_MUST_use_notifier)]. The rules are the ones the mail clocks learned typing wakes before the daemon did:
+
+- **Only fixed words and message ids** [MIS-0002-R77 (wake_MUST_carry_fixed_words_only)]. The wake opens with the wake words, and names every message waiting, in the broker's id shape only, oldest first, eight at most, then a count. An agent consumes by position, so naming only the newest loses the rest.
+- **Only into an empty box of an idle session** [MIS-0002-R45 (keystroke_wake_MUST_need_empty_idle_box)], read from the screen and failing closed. The input box must be on screen with nothing but a faint suggestion in it. No dialog, menu or question may be below it, because the wake carries digits and a digit or an Enter selects an option. No turn may be running, read from its phrase or from the spinner alone. Only the box's own text counts as a wake in the prompt, never the echo of one already sent.
+- **Recorded before it is typed**, through the framework's keystroke record, so neither producer of the operator's activity counts it [MIS-0002-R106 (wake_MUST-NOT_count_as_operator_activity)].
+- **Enter only while the wake is still in the box**, at most three times, since an Enter that lands on a dialog the new turn raised would approve it. A wake counts as sent when it is typed, so a misread status never sends it twice; the turn's start is then looked for, and the log says whether it came (`pd_wake_turn`).
+- **A refractory window, ten minutes**, in which arrivals wait for the next wake, and a daily cap. A held wake (`pd_wake_held`) and a reached cap (`pd_wake_cap_reached`) are each recorded once, not on every poll.
+
+A typed wake delivers the mail notices it covers, so a channel that connects later doesn't deliver them again.
+
+Still to come with step 2: the operator's routes, the dark-channel event and the operator's notice when a wake is held for long (R115), and the sources besides mail (13).
 
 ### 1.10 A dark channel
 
@@ -582,7 +595,7 @@ The daemon starts its units as its children, but they don't die with it: the out
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
 - **The rest of the primal daemon:** health derived from runs owed and done; compaction on request, once the operator is established some other way than a claim on the socket (9.3, 12.3); the harness's compactions in the daemon's own control records [MIS-0002-R127 (harness_compaction_MUST_be_recorded)] (2.2); and a command-line act that stops every unit, with the question of which asker a command line claims (12.1) (MIS-0002 §6.1 to §6.4, §6.7).
-- **Schedules, and the rest of the notifier** (1.8): the keystroke fallback and the dark-channel event, the operator's routes (`operator`, `both`, `held_until_present`), and sources besides mail (MIS-0002 §6.5, §6.6, the rest of §6.14).
+- **Schedules, and the rest of the notifier** (1.8): the dark-channel event, the operator's routes (`operator`, `both`, `held_until_present`), and sources besides mail (MIS-0002 §6.5, §6.6, the rest of §6.14).
 - **The end of R107's transitional rule** [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)] (1.4): until an agent declares `operator_channels`, every channel but the MacEff channel counts as the operator's.
 - **Mail and the rest of containers** (MIS-0002 §6.8, §6.9).
 - **Adopting a session Claude Code's own daemon already hosts** [MIS-0002-R66 (pd_MUST_adopt_harness_supervisor)] (3.3). Until it lands, the core starts a declared session unit itself.

@@ -108,6 +108,15 @@ class Daemon:
         connect_s = self.core.declaration.channel_connect_s
         #: Where a channel is expected, whether it is dark (R115); the outside watch tells the operator.
         self.dark_channel = DarkChannel(self.card, connect_s) if connect_s else None
+        if any(u.kind == "session" for u in self.core.declaration.units):
+            # The keystroke fallback types into the session unit's own pane (pd.session_unit),
+            # recording each wake first so it never reads as the operator (MIS-0002-R105).
+            from macf.pd.wake import TmuxPane, Waker
+            from macf.supervisor import record_keys_sent
+            from macf.utils.identity import session_identifier
+            ident = session_identifier(self.card)
+            self.notifier.waker = Waker(TmuxPane(ident, self.base),
+                                        record_keys=lambda text, kind: record_keys_sent(text, kind, ident))
         self._sel: Optional[selectors.BaseSelector] = None
         self._wake_r, self._wake_w = os.pipe()
         os.set_blocking(self._wake_w, False)
@@ -168,6 +177,7 @@ class Daemon:
                 self.core.tick()
                 self.notifier.poll()
                 self.notifier.flush()
+                self.notifier.wake()
                 if self.dark_channel is not None:
                     self.dark_channel.tick(self.core.session_incarnation(), bool(self.notifier.channels))
                 self._keep_record()

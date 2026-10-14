@@ -641,6 +641,12 @@ def _start_compact_followup(target: str, text: str) -> None:
               f"this session waits until something wakes it.", file=sys.stderr)
 
 
+def record_keys_sent(text: str, kind: str, tmux_session: str) -> None:
+    """Record keys the framework is about to type into a session's pane, for a sender that
+    types through a pane of its own (the primal daemon's keystroke wake)."""
+    _record_keys_sent(text, kind, tmux_session)
+
+
 def send_keys(target: str, keys: list, enter: bool = True, kind: str = "send-keys") -> int:
     """Inject literal text (plus an optional Enter) into a supervised session's
     tmux pane - the side channel for driving the live CC client (e.g. a real

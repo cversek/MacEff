@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import socket
 import sys
 import time
@@ -52,6 +53,12 @@ NOTIFIER = "pd"
 #: How far back a restarted daemon looks for notices it still owes. Older ones were
 #: either delivered, or describe mail the agent has long since read or been told of.
 HOLD_MAX_S = 24 * 3600
+
+#: A message id inside a pickup box's file name, ``<epoch>-<id>[-<local>].amsg``.
+_MESSAGE_IN_NAME = re.compile(r"msg-\d{10}-[0-9a-f]{12}")
+
+#: How long a notice waits for a channel before the keystroke fallback may type a wake.
+CHANNEL_GRACE_S = 60.0
 
 #: The routes whose notices go to the agent's session.
 AGENT_ROUTES = ("agent", "both")
@@ -86,6 +93,8 @@ class Notifier:
         self._events = events or (lambda: read_events(reverse=True, scope="all",
                                                       only=(EVENT_DETECTED, EVENT_DELIVERED)))
         self.owed: "OrderedDict[str, Owed]" = OrderedDict()
+        #: The keystroke fallback for a session with no channel (``pd.wake``), or None.
+        self.waker = None
         self.sources: List[StoreSource] = []
         self._channels: List[socket.socket] = []
         #: Called with a channel just before it is closed, so its owner can stop watching it.
@@ -180,6 +189,33 @@ class Notifier:
     @property
     def channels(self) -> List[socket.socket]:
         return list(self._channels)
+
+    def wake(self) -> bool:
+        """The fallback, MIS-0002-R105 (keystroke_wake_MUST_be_fallback_only): with no channel
+        attached, and mail owed for longer than ``CHANNEL_GRACE_S`` (time for a channel to
+        connect), type a wake naming what waits in the box. A typed wake delivers the mail
+        notices it covers. A wake already typed is followed through on every call, until its
+        turn is seen starting or the look gives up. Returns whether a wake was typed now."""
+        if self.waker is None or self._channels:
+            return False
+        mail = [o for o in self.owed.values() if o.source == "amail"]
+        pending = self.waker.verify_by is not None
+        if not pending and (not mail or self._clock() - mail[0].read_at < CHANNEL_GRACE_S):
+            return False
+        names = set()
+        for source in self.sources:
+            if source.name == "amail":
+                names |= source.names() or set()
+        ids = sorted({m.group(0) for n in names for m in [_MESSAGE_IN_NAME.search(n)] if m})
+        if self.waker.tick(ids) != "sent":
+            return False
+        sent_at = self._clock()
+        for owed in mail:
+            self._append(EVENT_DELIVERED, {"source": owed.source, "arrival_id": owed.arrival_id,
+                                           "read_at": owed.read_at, "sent_at": sent_at,
+                                           "via": "keystroke", "notifier": NOTIFIER})
+            del self.owed[owed.arrival_id]
+        return True
 
     def flush(self) -> int:
         """Write every owed notice to the newest channel that takes it; return how many went."""
