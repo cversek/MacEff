@@ -306,3 +306,13 @@ def test_pd_imports_without_amail():
     )
     out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "[]", out.stdout
+
+
+def test_a_session_unit_must_restart_always():
+    """Ira on #652: the session unit's wrapper exits 0 however the session ends, so under
+    on-failure or never an ended session would stay down. Refused by name at validation."""
+    pdi.Unit.model_validate(_unit(name="session", kind="session"))
+    for policy in ("on-failure", "never"):
+        with pytest.raises(ValidationError, match="'session' is the session unit"):
+            pdi.Unit.model_validate(_unit(name="session", kind="session", restart=policy))
+    pdi.Unit.model_validate(_unit(restart="on-failure"))
