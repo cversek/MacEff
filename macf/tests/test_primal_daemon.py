@@ -1152,3 +1152,24 @@ def test_the_record_outlives_a_temp_cleaner(tmp_path, script, base, run_daemon):
     daemon.record_path.unlink()
     assert wait_for(daemon.record_path.exists)
     assert json.loads(daemon.record_path.read_text())["pid"] == os.getpid()
+
+
+def test_a_stop_never_signals_a_process_that_took_an_adopted_units_pid(make_core, script):
+    """An adopted unit is not this daemon's child, so its pid can end and be reused between
+    passes without the kernel telling the daemon. A stop probes the pid and start time first
+    (MIS-0002-R15 (readout_MUST_probe_liveness)), and signals nothing that is no longer the
+    process it adopted."""
+    from macf.pd.core import _Adopted
+    core = make_core([make_unit("worker", script, {})])
+    stranger = subprocess.Popen(["/bin/sleep", "30"], start_new_session=True)
+    try:
+        r = core._units["worker"]
+        recorded = "a start that is not this process's"
+        r.proc, r.pid, r.proc_start = _Adopted(stranger.pid, recorded, core._probe), stranger.pid, recorded
+        r.state = "running"
+        core.stop("worker", OPERATOR, "test stop", peer=PEER)
+        time.sleep(0.3)
+        assert stranger.poll() is None, "the stop signalled a process that only took the adopted unit's pid"
+    finally:
+        stranger.kill()
+        stranger.wait()
