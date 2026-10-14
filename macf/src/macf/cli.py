@@ -1791,8 +1791,13 @@ def cmd_harness_attach(args: argparse.Namespace) -> int:
         # "=" forces an exact match; tmux resolves targets by prefix, so a bare
         # name would happily attach to "<agent>-stale-ssh".
         target = f"={agent}"
+        # A session the primal daemon runs as its session unit lives on the unit's own
+        # tmux server, reached through TMUX_TMPDIR (pd.session_unit); otherwise the
+        # legacy harness's session on the default server.
+        from .pd.session_unit import client_environment
+        env = client_environment(agent) or dict(os.environ)
         if subprocess.run(["tmux", "has-session", "-t", target],
-                          capture_output=True).returncode != 0:
+                          capture_output=True, env=env).returncode != 0:
             print(f"No tmux session '{agent}' on this host.", file=sys.stderr)
             print(f"   start it:  {'maceff_' + agent.rpartition('_')[0].lower() + '_harness_launch'}",
                   file=sys.stderr)
@@ -1811,10 +1816,26 @@ def cmd_harness_attach(args: argparse.Namespace) -> int:
         # -d evicts other clients: two clients of different geometries is the
         # cause of the fragmented redraws. Read-only observers skip it.
         cmd.append("-r" if getattr(args, "read_only", False) else "-d")
-        os.execvp("tmux", cmd)
+        os.execvpe("tmux", cmd, env)
     except Exception as e:
         print(f"Error attaching to harness: {e}", file=sys.stderr)
         return 1
+
+
+def cmd_harness_unit(args: argparse.Namespace) -> int:
+    """Be the session unit: the agent's own tmux server, parented by this process.
+
+    The primal daemon runs this as the declared ``session`` unit (MIS-0002-R12). It
+    returns when the session ends, which is the unit's exit; restarts are the daemon's.
+    """
+    from .pd.session_unit import main as session_unit_main
+    argv = []
+    for flag, value in (("--agent", args.agent), ("--home", args.home), ("--project-dir", args.project_dir)):
+        if value:
+            argv += [flag, str(value)]
+    if args.no_proxy:
+        argv.append("--no-proxy")
+    return session_unit_main(argv)
 
 
 def cmd_harness_status(args: argparse.Namespace) -> int:
@@ -1871,10 +1892,21 @@ def cmd_harness_status(args: argparse.Namespace) -> int:
         # "thm-stale-ssh" -- which is precisely the name someone gives the
         # imposter while moving it out of the way, so the workaround for the
         # name collision silently did not resolve the collision.
-        has_session = subprocess.run(["tmux", "has-session", "-t", f"={p.agent}"],
-                                     capture_output=True).returncode == 0
-        print(f"session: {'up' if has_session else f'absent for {p.agent}'} "
-              f"(tmux -t ={p.agent})")
+        from .pd.session_unit import client_environment
+        unit_env = client_environment(p.agent)
+        has_unit_session = unit_env is not None and subprocess.run(
+            ["tmux", "has-session", "-t", f"={p.agent}"], capture_output=True, env=unit_env).returncode == 0
+        if has_unit_session:
+            # The session unit's server socket is private to this user, so a session on
+            # it is the primal daemon's, whose own status names the unit's process.
+            print(f"session: up as the primal daemon's session unit "
+                  f"(TMUX_TMPDIR={unit_env['TMUX_TMPDIR']} tmux -t ={p.agent}; see macf_tools pd status)")
+            has_session = False
+        else:
+            has_session = subprocess.run(["tmux", "has-session", "-t", f"={p.agent}"],
+                                         capture_output=True).returncode == 0
+            print(f"session: {'up' if has_session else f'absent for {p.agent}'} "
+                  f"(tmux -t ={p.agent})")
 
         # Presence is not ownership. A session under this name may be anyone's
         # — that is how the harness stayed down for days while every surface
@@ -12120,6 +12152,15 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_status = harness_sub.add_parser("status", help="show harness unit and session state")
     harness_status.add_argument("--agent", help="agent slug")
     harness_status.set_defaults(func=cmd_harness_status)
+
+    harness_unit = harness_sub.add_parser(
+        "unit", help="run the agent's session as its primal daemon's session unit (the command a "
+                     "declaration names; it runs until the session ends)")
+    harness_unit.add_argument("--agent", help="agent slug (default: resolved from identity)")
+    harness_unit.add_argument("--home", help="agent home directory")
+    harness_unit.add_argument("--project-dir", help="where the session starts (default: the installed choice)")
+    harness_unit.add_argument("--no-proxy", action="store_true", help="never attach the API proxy")
+    harness_unit.set_defaults(func=cmd_harness_unit)
 
     harness_parser.set_defaults(func=cmd_harness_status)
 
