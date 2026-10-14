@@ -264,7 +264,9 @@ def test_liveness_verdicts(make_core, script):
     names = ("silent", "stale", "garbled", "imposter", "wrong_start")
     core = make_core([
         make_unit("silent", script, {"alive_for": 0}, restart="never"),
-        make_unit("stale", script, {"alive_for": 0.2}, restart="never"),
+        # A unit that must beat before it goes quiet gets an interval a cold start on a
+        # loaded runner can meet: at 0.05 s its first beat was due within 0.15 s (CI, Oct 14).
+        make_unit("stale", script, {"alive_for": 1.0}, interval=0.5, restart="never"),
         make_unit("garbled", script, {"garbage": True}, restart="never"),
         make_unit("imposter", script, {"imposter": True}, restart="never"),
         make_unit("wrong_start", script, {"wrong_start": True}, restart="never"),
@@ -280,12 +282,14 @@ def test_liveness_verdicts(make_core, script):
 
 def test_no_restart_while_waiting(make_core, script):
     """A unit waiting on a person is reported so, and its silence is not taken for death (R21, R22)."""
-    core = make_core([make_unit("worker", script, {"waiting_on": "a permission prompt", "alive_for": 0.2})])
+    core = make_core([make_unit("worker", script, {"waiting_on": "a permission prompt", "alive_for": 1.0},
+                                interval=0.5)])   # its first beat must meet a cold start
     core.boot()
 
     assert drive(core, lambda: core.state("worker") == "waiting_on_a_person")
     pid = core.pid("worker")
-    assert not drive(core, lambda: core.state("worker") != "waiting_on_a_person", timeout=1.0)
+    # silent for longer than three intervals, which a unit not waiting would fail for
+    assert not drive(core, lambda: core.state("worker") != "waiting_on_a_person", timeout=3.0)
     assert core.pid("worker") == pid
     assert "failed" not in states("worker")
     assert "a permission prompt" in events("pd_unit_state", "worker")[-1]["reason"]
@@ -574,18 +578,19 @@ def test_a_survivor_is_adopted_across_a_compaction(make_core, script):
 def test_an_adopted_unit_that_went_silent_is_failed(make_core, script):
     """A unit that stopped writing liveness while no daemon ran is judged from its adoption,
     as a start is, so it becomes overdue instead of reading running forever (R15, R17)."""
-    unit = make_unit("worker", script, {"alive_for": 0.3}, restart="never")
+    unit = make_unit("worker", script, {"alive_for": 1.0}, interval=0.5,   # its first beat
+                     restart="never")                                     # must meet a cold start
     first = make_core([unit])
     first.boot()
     assert drive(first, lambda: first.state("worker") == "running")
     pid = first.pid("worker")
     left = _crash(first)
-    time.sleep(0.5)   # silent now, with no daemon watching
+    time.sleep(1.2)   # silent now, with no daemon watching
 
     second = make_core([unit])
     second.boot()
     assert second.pid("worker") == pid
-    assert drive(second, lambda: second.state("worker") == "failed", timeout=3.0)
+    assert drive(second, lambda: second.state("worker") == "failed", timeout=5.0)
     left["worker"].wait(timeout=5)
 
 
@@ -1199,6 +1204,41 @@ def test_a_stop_never_signals_a_process_that_took_an_adopted_units_pid(make_core
     finally:
         stranger.kill()
         stranger.wait()
+
+
+def test_unasked_compaction_recorded(make_core, script):
+    """MIS-0002-R127 (harness_compaction_MUST_be_recorded): the detector's record of a
+    compaction the client started on its own becomes this daemon's control act on its
+    session unit, naming the harness with no peer, since nobody asked. A record written
+    before the daemon started isn't its to make: its tail starts at the end of the log."""
+    def detected(when):
+        append_event("harness_compaction_detected", {"asker": "harness", "marker": "compacted_while_idle",
+                                                      "timestamp": when, "detector": "transcript_monitor"})
+
+    detected("before the daemon")
+    # A session unit restarts 'always', which the declaration now requires (#665).
+    session = make_unit("session", script, {}, restart="always").model_copy(update={"kind": "session"})
+    core = make_core([session, make_unit("worker", script, {}, restart="never")], hosted=lambda: [])
+    core.boot()
+    detected("while it runs")
+
+    def compacts():
+        return [c for c in events("pd_control") if c["act"] == "compact"]
+    assert drive(core, lambda: compacts())
+    core.tick()
+    assert len(compacts()) == 1
+    act = compacts()[0]
+    assert (act["unit"], act["asked_by"], act["peer"]) == ("session", {"kind": "harness", "card": None}, None)
+    assert "while it runs" in act["reason"] and "nobody asked" in act["reason"]
+
+
+def test_the_core_acts_on_the_event_the_detector_writes():
+    """The two names are kept apart so the core needn't import the monitor; this keeps them equal."""
+    from macf.pd.core import EVENT_HARNESS_COMPACTION
+    from macf.transcript_monitor.daemon import detect_harness_compaction
+    found = detect_harness_compaction({"type": "system", "subtype": "informational",
+                                       "content": "Compacted while idle, before the prompt cache expired"})
+    assert found is not None and found.event_name == EVENT_HARNESS_COMPACTION
 
 
 def _alive(pid):
