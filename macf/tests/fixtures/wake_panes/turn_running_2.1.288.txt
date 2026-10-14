@@ -1,0 +1,37 @@
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  (conversation text)
+
+  (conversation text)
+  (conversation text)
+  (conversation text)
+
+  agent | project | 400k/1000k
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  agent | project | 400k/1000k
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  (conversation text)
+
+[38;5;174m●[39m [38;5;174mBloviating… [38;5;246m(5m 5s · ↓[39m [38;5;246m25.3k tokens)[39m
+  (conversation text)
+  (conversation text)
+
+  (conversation text)
+  (conversation text)
+
+────────────────────────────────────────────────────────────────────────────────
+[38;5;246m❯ [39m
+────────────────────────────────────────────────────────────────────────────────
+  agent | project | 400k/1000k
+  [38;5;220m⏵⏵[39m [38;5;220mauto[39m [38;5;220mmode[39m [38;5;220mon[38;5;246m (shift+tab[39m [38;5;246mto[39m [38;5;246mcycle)[39m [38;5;246m·[39m [38;5;246m←[39m [38;5;246mfor[39m [38;5;246magents[39m
+  (conversation text)
+  (conversation text)
+  (conversation text)
+

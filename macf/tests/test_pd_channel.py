@@ -277,3 +277,17 @@ def test_a_daemon_source_is_a_notice_about_the_agent_itself(source):
 @pytest.mark.parametrize("source", ["pd_limit_exceeded", "pd_grant_denied", "pd_carried"])
 def test_a_daemon_notice_with_a_count_is_refused(source):
     assert parse_record(_record(source=source, count=1)) is None
+
+
+def test_dark_channel_event():
+    """MIS-0002-R115's named test: a running session whose channel dropped is recorded dark
+    once, and back once a channel attaches (the cases are in test_pd_channel_watch.py)."""
+    from macf.pd.channel_watch import DarkChannel
+    from macf.pd.interface import EVENT_CHANNEL_BACK, EVENT_CHANNEL_DARK
+    said = []
+    t = DarkChannel(CARD, 60.0, append=lambda e, d: said.append(e) or True, clock=lambda: 0.0)
+    t.tick((1, "s"), True)
+    t.tick((1, "s"), False)
+    t.tick((1, "s"), False)
+    t.tick((1, "s"), True)
+    assert said == [EVENT_CHANNEL_DARK, EVENT_CHANNEL_BACK]
