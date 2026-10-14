@@ -443,7 +443,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **How**:
 - Name the fragment after the branch, with `/` as `-` (`fix-session-unit-reap.md`).
 - Write a category heading from §3.2 (`### Fixed`), then the entry as a bullet in the CHANGELOG's own style. A fragment may hold more than one category. `changelog.d/README.md` shows the form.
-- `python tools/changelog_gather.py` checks every fragment and changes nothing. `--write` files each entry under its category in `[Unreleased]`, oldest fragment first, and removes the fragments. A malformed fragment is refused by name, and nothing is written.
+- An entry starts with `- `, and any further line of it is indented. Only `.md` files belong in `changelog.d/`.
+- `python tools/changelog_gather.py` checks every fragment and changes nothing. `--write` files each entry under its category in `[Unreleased]` and removes the fragments. **Newest first**, as that list reads: the newest fragment is the one whose adding commit is latest, by git. A file's modification time can't decide it, because git doesn't keep it, so a fresh clone would gather a different order. A malformed fragment, or any other file in the directory, is refused by name, and nothing is written.
 - The test suite reads every fragment checked in, so a malformed one fails in its own pull request, not at release.
 
 **At release**: gather first (`--write`), then turn `[Unreleased]` into the version's section as §3.1 describes, and edit the gathered entries into thematic groups (§3.3) if the release calls for it.

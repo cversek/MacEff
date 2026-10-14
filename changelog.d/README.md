@@ -16,5 +16,7 @@ The rule and its reason are in policy `release_workflow` §3.5.
 ```
 
 Categories: `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`. A fragment may
-hold more than one. `python tools/changelog_gather.py` (without `--write`) checks every
+hold more than one. An entry starts with `- `; any further line of it is indented. Only `.md`
+files belong here. At release the entries are filed newest first, by the commit that added
+each fragment. `python tools/changelog_gather.py` (without `--write`) checks every
 fragment and changes nothing.

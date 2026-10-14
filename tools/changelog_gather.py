@@ -12,13 +12,17 @@ the same list did. At release, this gathers them:
 A fragment is markdown: one or more category headings (``### Added``, ``### Changed``,
 ``### Deprecated``, ``### Removed``, ``### Fixed``, ``### Security``), each followed by its
 bullets. Each bullet is filed under that category of the ``## [Unreleased]`` section,
-oldest fragment first, ahead of the entries already there. A fragment that names no known
-category, or holds text outside a category, is refused by name and nothing is written.
+ahead of the entries already there, newest first as that list reads: the newest is the
+fragment whose adding commit is latest, by git, so every checkout gathers the same order. A
+fragment that names no known category, holds text outside a category, or a line that is
+neither an entry (``- ``) nor an indented continuation is refused by name, as is a file in
+``changelog.d/`` that isn't ``.md``, and nothing is written.
 """
 from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -50,19 +54,39 @@ def read_fragment(path: Path) -> Dict[str, List[str]]:
             raise FragmentError(f"{path.name}:{n}: text before any category heading")
         if line.startswith("- "):
             current.append(line)
-        elif current:
-            current[-1] += "\n" + line                     # a bullet's continuation line
+        elif current and line[:1] in (" ", "\t"):
+            current[-1] += "\n" + line                     # a bullet's indented continuation
         else:
-            raise FragmentError(f"{path.name}:{n}: a category's text must start with '- '")
+            raise FragmentError(f"{path.name}:{n}: an entry starts with '- ', and its further lines "
+                                f"are indented")
     if not any(out.values()):
         raise FragmentError(f"{path.name}: no entries")
     return out
 
 
+def _added_at(path: Path) -> float:
+    """When the commit that added *path* was made, from git; a fragment git doesn't know
+    yet counts as the newest. A file's mtime can't serve: git doesn't keep it, so a fresh
+    clone or a checkout would decide the order (CTB, on #675)."""
+    try:
+        out = subprocess.run(["git", "-C", str(path.parent), "log", "--diff-filter=A",
+                              "--format=%ct", "-1", "--", path.name],
+                             capture_output=True, text=True, timeout=30)
+        return float(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else float("inf")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return float("inf")
+
+
 def fragments(directory: Path) -> List[Path]:
-    """The fragments, oldest first by their file's change time, the README left out."""
+    """The fragments, newest first by the commit that added each, as the ``[Unreleased]``
+    list reads; the README left out. Any other file in the directory is refused, so a
+    fragment saved as ``.txt`` isn't skipped in silence."""
+    stray = [p.name for p in directory.iterdir()
+             if p.is_file() and p.suffix != ".md" and not p.name.startswith(".")]
+    if stray:
+        raise FragmentError(f"not a fragment (fragments end in .md): {', '.join(sorted(stray))}")
     files = [p for p in directory.glob("*.md") if p.name.lower() != "readme.md"]
-    return sorted(files, key=lambda p: (p.stat().st_mtime, p.name))
+    return sorted(files, key=lambda p: (-_added_at(p), p.name))
 
 
 def gather(changelog: str, entries: List[Tuple[str, str]]) -> str:
@@ -103,7 +127,11 @@ def main(argv=None) -> int:
     p.add_argument("--root", type=Path, default=ROOT)
     a = p.parse_args(argv)
     directory, path = a.root / "changelog.d", a.root / "CHANGELOG.md"
-    found = fragments(directory) if directory.is_dir() else []
+    try:
+        found = fragments(directory) if directory.is_dir() else []
+    except FragmentError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 1
     if not found:
         print("no fragments to gather")
         return 0
