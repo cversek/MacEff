@@ -40,6 +40,7 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional
 
+from macf.notify.session import proc_start
 from macf.pd.interface import check_socket_path, runtime_dir
 from macf.pd.liveness import (ENV_HOME, ENV_INTERVAL, ENV_SESSION_INTERVAL, ENV_SESSION_PID,
                               ENV_SESSION_UNIT, ENV_UNIT)
@@ -121,14 +122,24 @@ def pane_group(pane_pid: int, own: int, timeout: float = PANE_SETSID_WAIT_S) -> 
         time.sleep(0.01)
 
 
-def reap_group(pgid: int, grace: float = PANE_GRACE_S, poll: float = 0.1) -> bool:
+def reap_group(pgid: int, grace: float = PANE_GRACE_S, poll: float = 0.1,
+               leader_start: Optional[str] = None) -> bool:
     """Stop process group *pgid*: SIGTERM, then SIGKILL after *grace* seconds; True once it is
     gone. tmux runs each pane in a session, and so a process group, of its own, so the daemon's
     stop, which signals the unit's group, reaches the session only through the server's SIGHUP.
     A session that outlives that would run on after the unit ended, and a restart would start a
-    second ``claude -c`` beside it (MIS-0002-R48 (outside_stop_MUST_override_gates))."""
+    second ``claude -c`` beside it (MIS-0002-R48 (outside_stop_MUST_override_gates)).
+
+    *leader_start* is the start of the group's leader, the pane, read when the session was made.
+    A group number is free again once all its members have gone, so before each signal the
+    group is confirmed as the session's: a leader under that number with another start means
+    the number now names someone else's group, which is left alone."""
     for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, grace)):
         if not _group_alive(pgid):
+            return True
+        if not _still_ours(pgid, leader_start):
+            print(f"⚠️ MACF: session unit: process group {pgid} is no longer the session's: its "
+                  f"number now leads another process; not signalling it", file=sys.stderr)
             return True
         try:
             os.killpg(pgid, sig)
@@ -138,6 +149,16 @@ def reap_group(pgid: int, grace: float = PANE_GRACE_S, poll: float = 0.1) -> boo
         while time.monotonic() < deadline and _group_alive(pgid):
             time.sleep(poll)
     return not _group_alive(pgid)
+
+
+def _still_ours(pgid: int, leader_start: Optional[str]) -> bool:
+    """Whether group *pgid* is still the one whose leader started at *leader_start*. A group
+    whose leader has exited, members still running, keeps its number, which can't be reused
+    while any member lives; so only a leader with a different start says the group is new."""
+    if leader_start is None:
+        return True
+    from macf.pd.core import group_members
+    return all(start == leader_start for pid, start in group_members(pgid) if pid == pgid)
 
 
 def tmux_dir(agent: str, base: Optional[Path] = None) -> Path:
@@ -286,7 +307,7 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
     # The session's process group, read now while the pane exists: after the server has gone
     # it is the one thing that can still name the session's processes (reap_group).
     panes = made.stdout.split()
-    pane_groups = set()
+    pane_groups: Dict[int, Optional[str]] = {}       # the group, and its leader's start
     for pane in panes:
         try:
             group = pane_group(int(pane), os.getpgid(0))
@@ -295,7 +316,7 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
                   f"a stop will not reach that pane's group", file=sys.stderr)
             continue
         if group is not None:
-            pane_groups.add(group)
+            pane_groups[group] = proc_start(group)
     # Only now, with a session in it, may the server end when it is empty: from here on
     # the session's end is the server's, and the server's is this unit's.
     _tmux(tmux, env, "set-option", "-s", "exit-empty", "on")
@@ -304,8 +325,8 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
     status = server.wait()
     # The unit ends only when the session has: a pane that outlived the server's hangup is
     # stopped here, so a restart never starts a second session beside it.
-    for pgid in pane_groups:
-        if not reap_group(pgid):
+    for pgid, leader_start in pane_groups.items():
+        if not reap_group(pgid, leader_start=leader_start):
             print(f"⚠️ MACF: session unit: process group {pgid} of session {agent} survived SIGKILL",
                   file=sys.stderr)
     _remove_leftovers(tmux, env, directory)
