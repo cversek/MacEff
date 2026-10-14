@@ -259,3 +259,104 @@ def test_the_wake_reaches_a_session_units_own_pane():
     finally:
         subprocess.run(["tmux", "kill-server"], env=env, capture_output=True)
         shutil.rmtree(base, ignore_errors=True)
+
+
+# --- rule 14: a wake held too long reaches the operator through the outside watch ----------
+
+def test_a_held_stretch_names_the_agent_and_is_released_when_nothing_waits():
+    """The held event names the agent, so the outside watch can attribute it in a shared log,
+    and a stretch that ends because the agent read its mail meanwhile is released, not left
+    open for the watch to alert on."""
+    events = []
+    dialog = screen(below=("Do you want to proceed?", "❯ 1. Yes", "  2. No"))
+    rig = _waker(FakePane([dialog]), events, card="Tester@abc123")
+    ids = ["msg-1790000001-aaaaaaaaaaaa"]
+    rig.waker.tick(ids)
+    rig.waker.tick(ids)
+    rig.waker.tick([])                          # the agent read it on its own
+    rig.waker.tick([])
+    names = [e for e, _ in events]
+    assert names == [wk.EVENT_HELD, wk.EVENT_RELEASED]
+    assert all(d.get("agent") == "Tester@abc123" for _, d in events)
+
+
+def test_the_outside_watch_alerts_only_on_a_hold_past_its_allowance():
+    from macf.pd import watch
+    card, now = "Tester@abc123", 10_000.0
+    held = {"timestamp": now - 2000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}}
+    assert watch.check_wake(card, held, now).verdict == "HELD"
+    young = dict(held, timestamp=now - 60)
+    assert watch.check_wake(card, young, now).verdict == "ALIVE"
+    for clearing in ("pd_wake_sent", "pd_wake_released"):
+        assert watch.check_wake(card, dict(held, event=clearing), now).verdict == "ALIVE"
+    assert watch.check_wake(card, None, now).verdict == "ALIVE"
+
+
+def test_the_outside_watch_reads_this_agents_newest_wake_event(tmp_path):
+    import json
+    from macf.pd import watch
+    card, now = "Tester@abc123", 10_000.0
+    log = tmp_path / "log.jsonl"
+    log.write_text("".join(json.dumps(r) + "\n" for r in [
+        {"timestamp": now - 3000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}},
+        {"timestamp": now - 100, "event": "pd_wake_sent", "data": {"agent": "Other@000000"}},
+    ]))
+    assert watch.last_wake_event(log, card, now)["event"] == "pd_wake_held"
+
+
+def test_a_hold_followed_by_a_sent_wake_is_not_alerted(tmp_path):
+    import json
+    from macf.pd import watch
+    card, now = "Tester@abc123", 10_000.0
+    log = tmp_path / "log.jsonl"
+    log.write_text("".join(json.dumps(r) + "\n" for r in [
+        {"timestamp": now - 3000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}},
+        {"timestamp": now - 2500, "event": "pd_wake_sent", "data": {"agent": card}},
+    ]))
+    assert watch.check_wake(card, watch.last_wake_event(log, card, now), now).verdict == "ALIVE"
+
+
+def test_a_hold_whose_reason_changes_is_measured_from_its_first_hold(tmp_path):
+    """CTB's note on #663: a dialog then a draft writes a second hold, and the allowance must
+    not start again with it. A hold after a sent wake starts a new stretch."""
+    import json
+    from macf.pd import watch
+    card, now = "Tester@abc123", 10_000.0
+    log = tmp_path / "log.jsonl"
+    rows = [
+        {"timestamp": now - 5000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}},
+        {"timestamp": now - 4000, "event": "pd_wake_sent", "data": {"agent": card}},
+        {"timestamp": now - 2000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}},
+        {"timestamp": now - 900, "event": "pd_wake_sent", "data": {"agent": "Other@000000"}},
+        {"timestamp": now - 60, "event": "pd_wake_held", "data": {"agent": card, "reason": "draft"}},
+    ]
+    log.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    newest = watch.last_wake_event(log, card, now)
+    assert newest["held_since"] == now - 2000
+    finding = watch.check_wake(card, newest, now)
+    assert finding.verdict == "HELD" and "draft" in finding.detail
+
+
+def test_a_hold_that_a_channel_ends_is_released(tmp_path, isolated_events_log):
+    """CTB's probe on #663: a wake held by a dialog, then a channel attaches and takes the
+    mail. The hold is released, so the outside watch doesn't alert on mail already delivered."""
+    from macf.pd import watch
+    clock = [1000.0]
+    n = nt.Notifier(_home_with_mail(tmp_path, ID1), {"amail": "agent"}, clock=lambda: clock[0])
+    n.boot()
+    events = []
+    dialog = screen(below=("Do you want to proceed?", "❯ 1. Yes", "  2. No"))
+    n.waker = _waker(FakePane([dialog]), events, card="Tester@abc123").waker
+    clock[0] += nt.CHANNEL_GRACE_S + 1
+    n.wake()
+    assert [e for e, _ in events] == [wk.EVENT_HELD]
+    ours, theirs = socket.socketpair()
+    n.attach(ours)
+    n.flush()
+    n.wake()
+    n.wake()
+    assert [e for e, _ in events] == [wk.EVENT_HELD, wk.EVENT_RELEASED]
+    newest = {"timestamp": 0.0, "event": events[-1][0], "data": events[-1][1]}
+    assert watch.check_wake("Tester@abc123", newest, 3600.0).verdict == "ALIVE"
+    n.detach(ours)
+    theirs.close()

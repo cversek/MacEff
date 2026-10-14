@@ -116,7 +116,8 @@ class Daemon:
             from macf.utils.identity import session_identifier
             ident = session_identifier(self.card)
             self.notifier.waker = Waker(TmuxPane(ident, self.base),
-                                        record_keys=lambda text, kind: record_keys_sent(text, kind, ident))
+                                        record_keys=lambda text, kind: record_keys_sent(text, kind, ident),
+                                        card=self.card)
         self._sel: Optional[selectors.BaseSelector] = None
         self._wake_r, self._wake_w = os.pipe()
         os.set_blocking(self._wake_w, False)

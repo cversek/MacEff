@@ -196,7 +196,12 @@ class Notifier:
         connect), type a wake naming what waits in the box. A typed wake delivers the mail
         notices it covers. A wake already typed is followed through on every call, until its
         turn is seen starting or the look gives up. Returns whether a wake was typed now."""
-        if self.waker is None or self._channels:
+        if self.waker is None:
+            return False
+        if self._channels:
+            # A channel took over: the notices a held wake waited on are its to deliver, so
+            # the hold ends here rather than staying open for the outside watch to alert on.
+            self.waker.release("a channel attached")
             return False
         mail = [o for o in self.owed.values() if o.source == "amail"]
         pending = self.waker.verify_by is not None
