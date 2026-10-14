@@ -1395,3 +1395,47 @@ def test_an_optional_unit_that_hangs_at_start_delays_no_other(tmp_path, script, 
     assert core.state("indexer") == "starting", "the optional unit was meant to still hang"
     starts = [d for d in events("pd_unit_state", "worker") if d["state"] == "starting"]
     assert len(starts) >= 2, "the worker's crash and restart were meant to happen meanwhile"
+
+
+def test_a_unit_past_its_memory_limit_is_recorded_once_per_crossing(tmp_path, script, make_core, monkeypatch):
+    """MIS-0002-R60: a running unit read above its declared limit is recorded once, with a
+    notice owed, and recorded once more when it is read back below; readings that don't
+    cross record nothing. The limit is not enforced: the unit keeps running."""
+    import macf.pd.core as core_module
+    readings = iter([10.0, 80.0, 90.0, 20.0, 30.0])           # limit is 64 MB
+    monkeypatch.setattr(core_module, "tree_rss_mb", lambda pid: next(readings, 30.0))
+    core = make_core([make_unit("worker", script, {})], memory_check_s=0.0)
+    owed = []
+    core.on_notice = lambda source, nid: owed.append((source, nid))
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    for _ in range(6):
+        core.tick()
+    over = events("pd_unit_over_limit", "worker")
+    under = events("pd_unit_back_under_limit", "worker")
+    assert [(d["used_mb"], d["limit_mb"]) for d in over] == [(80.0, 64)]
+    assert [d["used_mb"] for d in under] == [20.0]
+    assert [s for s, _ in owed] == ["pd_limit_exceeded"]
+    assert core.state("worker") == "running"
+
+
+def test_memory_is_read_over_the_whole_process_tree():
+    """A child in a session of its own, as a session unit's claude under its tmux server, is
+    still counted: the tree, not the process group."""
+    import macf.pd.core as core_module
+    child = subprocess.Popen([sys.executable, "-c", "import time; x = bytearray(60 * 1024 * 1024); time.sleep(30)"],
+                             start_new_session=True)
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and (core_module.tree_rss_mb(child.pid) or 0) < 50:
+            time.sleep(0.1)
+        assert core_module.tree_rss_mb(child.pid) >= 50
+        alone = core_module.tree_rss_mb(child.pid)
+        statm = Path("/proc/self/statm")
+        if statm.exists():                  # this process's own resident memory, in MB
+            own = int(statm.read_text().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 2 ** 20
+            assert core_module.tree_rss_mb(os.getpid()) >= own + 0.9 * alone, "the child is under this test's tree"
+        assert core_module.tree_rss_mb(2 ** 22 + 12345) is None
+    finally:
+        child.kill()
+        child.wait()

@@ -43,6 +43,9 @@ from macf.transcript_monitor.sources import StoreSource, agent_store_source
 EVENT_DETECTED = "store_arrival_detected"
 #: One notice written to a channel.
 EVENT_DELIVERED = "pd_notice_delivered"
+#: Notices the daemon raises itself about the agent's own units, not read from a store. Each
+#: is delivered only where the declaration routes it to the agent (MIS-0002-R42).
+INTERNAL_SOURCES = frozenset({"pd_limit_exceeded"})
 #: Who wrote a detection: the daemon's notifier, as against any other poller of a store.
 NOTIFIER = "pd"
 
@@ -87,8 +90,9 @@ class Notifier:
         self._channels: List[socket.socket] = []
         #: Called with a channel just before it is closed, so its owner can stop watching it.
         self.on_detach: Optional[Callable[[socket.socket], None]] = None
+        self._routes = dict(routes)
         for name, route in sorted(routes.items()):
-            if route not in AGENT_ROUTES:
+            if route not in AGENT_ROUTES or name in INTERNAL_SOURCES:
                 continue
             make = SOURCES.get(name)
             if make is None:
@@ -116,7 +120,8 @@ class Notifier:
                 continue
             if event.get("event") == EVENT_DELIVERED:
                 delivered.add(aid)
-            elif aid not in delivered and aid not in detected and data.get("source") in SOURCES:
+            elif (aid not in delivered and aid not in detected
+                  and (data.get("source") in SOURCES or data.get("source") in INTERNAL_SOURCES)):
                 count = data.get("count")
                 count = count if isinstance(count, int) and not isinstance(count, bool) and count >= 0 else None
                 detected[aid] = Owed(data["source"], aid, count, float(ts))
@@ -135,10 +140,23 @@ class Notifier:
             for d in source.poll():
                 self._detect(source.name, d.data["arrival_id"], d.data.get("count"), source.store_dir)
 
-    def _detect(self, source: str, arrival_id: str, count: Optional[int], store: Path) -> None:
+    def raise_notice(self, source: str, notice_id: str) -> bool:
+        """Owe the agent a notice the daemon raised itself, such as a unit past its memory
+        limit. Owed, and so held and delivered like mail's, only where the declaration routes
+        the source to the agent; otherwise refused here, and the event log keeps the facts.
+        Returns whether it is owed."""
+        if source not in INTERNAL_SOURCES:
+            raise ValueError(f"{source!r} is not a notice this daemon raises")
+        if self._routes.get(source) not in AGENT_ROUTES:
+            return False
+        self._detect(source, notice_id, None, None)
+        return True
+
+    def _detect(self, source: str, arrival_id: str, count: Optional[int], store: Optional[Path]) -> None:
         now = self._clock()
         self._append(EVENT_DETECTED, {"source": source, "arrival_id": arrival_id, "count": count,
-                                      "store": str(store), "notifier": NOTIFIER})
+                                      "store": str(store) if store else "the event log",
+                                      "notifier": NOTIFIER})
         self.owed[arrival_id] = Owed(source, arrival_id, count, now)
 
     # ------------------------------------------------------------------ delivery
