@@ -259,3 +259,58 @@ def test_the_wake_reaches_a_session_units_own_pane():
     finally:
         subprocess.run(["tmux", "kill-server"], env=env, capture_output=True)
         shutil.rmtree(base, ignore_errors=True)
+
+
+# --- rule 14: a wake held too long reaches the operator through the outside watch ----------
+
+def test_a_held_stretch_names_the_agent_and_is_released_when_nothing_waits():
+    """The held event names the agent, so the outside watch can attribute it in a shared log,
+    and a stretch that ends because the agent read its mail meanwhile is released, not left
+    open for the watch to alert on."""
+    events = []
+    dialog = screen(below=("Do you want to proceed?", "❯ 1. Yes", "  2. No"))
+    rig = _waker(FakePane([dialog]), events, card="Tester@abc123")
+    ids = ["msg-1790000001-aaaaaaaaaaaa"]
+    rig.waker.tick(ids)
+    rig.waker.tick(ids)
+    rig.waker.tick([])                          # the agent read it on its own
+    rig.waker.tick([])
+    names = [e for e, _ in events]
+    assert names == [wk.EVENT_HELD, wk.EVENT_RELEASED]
+    assert all(d.get("agent") == "Tester@abc123" for _, d in events)
+
+
+def test_the_outside_watch_alerts_only_on_a_hold_past_its_allowance():
+    from macf.pd import watch
+    card, now = "Tester@abc123", 10_000.0
+    held = {"timestamp": now - 2000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}}
+    assert watch.check_wake(card, held, now).verdict == "HELD"
+    young = dict(held, timestamp=now - 60)
+    assert watch.check_wake(card, young, now).verdict == "ALIVE"
+    for clearing in ("pd_wake_sent", "pd_wake_released"):
+        assert watch.check_wake(card, dict(held, event=clearing), now).verdict == "ALIVE"
+    assert watch.check_wake(card, None, now).verdict == "ALIVE"
+
+
+def test_the_outside_watch_reads_this_agents_newest_wake_event(tmp_path):
+    import json
+    from macf.pd import watch
+    card, now = "Tester@abc123", 10_000.0
+    log = tmp_path / "log.jsonl"
+    log.write_text("".join(json.dumps(r) + "\n" for r in [
+        {"timestamp": now - 3000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}},
+        {"timestamp": now - 100, "event": "pd_wake_sent", "data": {"agent": "Other@000000"}},
+    ]))
+    assert watch.last_wake_event(log, card, now)["event"] == "pd_wake_held"
+
+
+def test_a_hold_followed_by_a_sent_wake_is_not_alerted(tmp_path):
+    import json
+    from macf.pd import watch
+    card, now = "Tester@abc123", 10_000.0
+    log = tmp_path / "log.jsonl"
+    log.write_text("".join(json.dumps(r) + "\n" for r in [
+        {"timestamp": now - 3000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}},
+        {"timestamp": now - 2500, "event": "pd_wake_sent", "data": {"agent": card}},
+    ]))
+    assert watch.check_wake(card, watch.last_wake_event(log, card, now), now).verdict == "ALIVE"

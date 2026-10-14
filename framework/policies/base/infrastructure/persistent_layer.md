@@ -185,6 +185,12 @@ When no channel has taken the mail notices owed for a minute, the daemon types a
 
 A typed wake delivers the mail notices it covers, so a channel that connects later doesn't deliver them again.
 
+**A wake held too long reaches the operator.**
+- While a dialog, a draft or a running turn holds a wake, the fallback records one `pd_wake_held`, naming the agent and the reason, per stretch.
+- The stretch ends with a sent wake (`pd_wake_sent`), or with `pd_wake_released` when you read your mail on your own meanwhile.
+- If the newest of those is a hold older than 30 minutes, the outside watch alerts the operator once, through its own credential (verdict `HELD`, subject `wake`). A dialog waits on a person, and nothing in your session can say so.
+- If you find your mail was announced late, look for a `pd_wake_held` with a dialog as its reason.
+
 Still to come with step 2: the operator's routes, the dark-channel event and the operator's notice when a wake is held for long (R115), and the sources besides mail (13).
 
 ### 1.10 A dark channel
