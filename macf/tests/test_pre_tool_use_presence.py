@@ -81,3 +81,25 @@ def test_a_malformed_row_does_not_cost_the_line(tmp_path, monkeypatch, isolated_
     with patch.object(presence, "daemon_alive", return_value=True):
         out = _line(_home(tmp_path, declared=True), monkeypatch)
     assert "PreToolUse hook error" not in out and f"onlookers: {WATCHER}" in out
+
+
+def test_an_invitation_without_an_onlooker_does_not_cost_the_line(tmp_path, monkeypatch, isolated_events_log):
+    """Skipped where it folds. Folded under None, it sorted against a card and took the whole
+    segment down, and the carry would have brought it back every cycle."""
+    append_event(EVENT_INVITE, {"observed": "Tester@abc123", "stream_from": 0, "secret_sha256": "cd" * 32})
+    _invite()
+    with patch.object(presence, "daemon_alive", return_value=True):
+        out = _line(_home(tmp_path, declared=True), monkeypatch)
+    assert f"onlookers: {WATCHER}" in out
+
+
+def test_a_malformed_surface_row_does_not_cost_the_line(tmp_path, monkeypatch, isolated_events_log):
+    append_event(presence.EVENT_SURFACE, {"surface": "terminal", "state": "attached"})
+    with open(isolated_events_log, "a") as f:
+        f.write(json.dumps({"timestamp": 1.0, "event": presence.EVENT_SURFACE, "breadcrumb": "",
+                            "data": ["bad"]}) + "\n")
+        f.write(json.dumps({"timestamp": 2.0, "event": presence.EVENT_SURFACE, "breadcrumb": "",
+                            "data": {"surface": ["unhashable"], "state": "attached"}}) + "\n")
+    with patch.object(presence, "daemon_alive", return_value=True):
+        out = _line(_home(tmp_path, declared=True), monkeypatch)
+    assert "operator: terminal attached" in out

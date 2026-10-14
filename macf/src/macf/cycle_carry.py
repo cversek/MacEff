@@ -77,22 +77,26 @@ def _open_observations(window: List[dict], now: float) -> List[dict]:
     the boundary stays open and a resume after it closes the right one. An ended
     observation, or one whose lease has run out, carries nothing, so an ending is final
     across the boundary. The invitation is carried unchanged, ``lease_until`` included,
-    and that time is absolute, so a boundary never extends an invitation."""
-    from .observe.acts import EVENT_END, EVENT_INVITE, EVENT_PAUSE, EVENT_RESUME, fold, lapsed
+    and that time is absolute, so a boundary never extends an invitation.
+
+    A row is kept only once it folds, so the carry keeps exactly the rows the per-call line
+    used: a malformed re-invitation can't replace the good one before it, and a row that
+    won't parse costs only itself."""
+    from .observe.acts import EVENT_END, EVENT_INVITE, EVENT_PAUSE, EVENT_RESUME, fold_into, lapsed
+    kinds = (EVENT_INVITE, EVENT_PAUSE, EVENT_RESUME, EVENT_END)
+    state: dict = {}
     acts: Dict[str, List[dict]] = {}
     for event in window:
-        data = event.get("data") or {}
-        if not isinstance(data, dict):
-            continue  # malformed; ``fold`` below says so for the rows it is given
-        kind, who = event.get("event"), data.get("onlooker")
+        if event.get("event") not in kinds or not fold_into(state, event):
+            continue
+        kind, who = event["event"], event["data"]["onlooker"]
         if kind == EVENT_INVITE:
             acts[who] = [event]
         elif kind in (EVENT_PAUSE, EVENT_RESUME) and who in acts:
             acts[who].append(event)
         elif kind == EVENT_END:
             acts.pop(who, None)
-    state = fold(e for events in acts.values() for e in events)
-    return [e for who, events in sorted(acts.items(), key=lambda kv: str(kv[0]))
+    return [e for who, events in sorted(acts.items())
             if who in state and not lapsed(state[who], now) for e in events]
 
 
@@ -101,7 +105,7 @@ def _present_surfaces(window: List[dict]) -> List[dict]:
     since the newest daemon start, unless that is ``gone``. A surface that died without
     recording ``gone`` is covered by the daemon's liveness, which reads presence as unknown."""
     from .observe.presence import EVENT_SURFACE, fold_surfaces
-    return [{"event": EVENT_SURFACE, "timestamp": None, "data": {"surface": name, "state": st}}
+    return [{"event": EVENT_SURFACE, "data": {"surface": name, "state": st}}
             for name, st in sorted(fold_surfaces(window).items())]
 
 
@@ -340,21 +344,32 @@ def carry_state_forward(current_cycle: Optional[int] = None) -> List[str]:
     # Open observations: each is the observed agent's consent to be watched, so a carried
     # one keeps the cycle it was given in and says it was carried, and never reads as a
     # fresh invitation (MIS-0002-R91).
-    observations = _open_observations(window, time.time())
-    if observations:
-        ok = True
-        for source in observations:
-            data = dict(source.get("data") or {})
-            data["origin_cycle"] = _origin_cycle(source, data, current_cycle)
-            data["carried_from_timestamp"] = data.get("carried_from_timestamp") or source.get("timestamp")
-            data.update(provenance)
-            ok = append_event(source["event"], data) and ok
-        (carried if ok else failed).append("observation")
+    # Both observe families read rows other processes write. The folds skip the shapes we
+    # know are malformed; a shape nobody thought of fails its own family here, so the marker
+    # is still written and the session-start hook keeps its recovery output.
+    try:
+        observations = _open_observations(window, time.time())
+        if observations:
+            ok = True
+            for source in observations:
+                data = dict(source.get("data") or {})
+                data["origin_cycle"] = _origin_cycle(source, data, current_cycle)
+                data["carried_from_timestamp"] = data.get("carried_from_timestamp") or source.get("timestamp")
+                data.update(provenance)
+                ok = append_event(source["event"], data) and ok
+            (carried if ok else failed).append("observation")
+    except Exception as e:  # noqa: BLE001 - GUARD: an unforeseen row must not abort the carry
+        print(f"⚠️ MACF: carry: open observations not carried: {e!r}", file=sys.stderr)
+        failed.append("observation")
 
-    surfaces = _present_surfaces(window)
-    if surfaces:
-        ok = all([append_event(s["event"], dict(s["data"], **provenance)) for s in surfaces])
-        (carried if ok else failed).append("surface")
+    try:
+        surfaces = _present_surfaces(window)
+        if surfaces:
+            ok = all([append_event(s["event"], dict(s["data"], **provenance)) for s in surfaces])
+            (carried if ok else failed).append("surface")
+    except Exception as e:  # noqa: BLE001 - GUARD: an unforeseen row must not abort the carry
+        print(f"⚠️ MACF: carry: operator surfaces not carried: {e!r}", file=sys.stderr)
+        failed.append("surface")
 
     marker = {
         "cycle": current_cycle,

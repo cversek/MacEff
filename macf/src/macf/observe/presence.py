@@ -16,6 +16,7 @@ When the daemon is not alive, presence is said as unknown, never shown as nobody
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
@@ -81,14 +82,22 @@ def surface_event(s: Surface) -> dict:
 def fold_surfaces(events: Iterable[dict]) -> Dict[str, str]:
     """Each surface's latest state since the newest daemon start; a surface last recorded
     gone is absent. A state an earlier daemon recorded says nothing about the operator now,
-    so a daemon's start begins the fold again."""
+    so a daemon's start begins the fold again. A row that doesn't name a surface and its
+    state as strings costs only itself, as in ``fold``: the per-call line and the carry
+    both read this."""
     states: Dict[str, str] = {}
     for ev in events:
         if ev.get("event") == DAEMON_START:
             states.clear()
         elif ev.get("event") == EVENT_SURFACE:
-            data = ev.get("data") or {}
-            states[data.get("surface")] = data.get("state")
+            data = ev.get("data")
+            name = data.get("surface") if isinstance(data, dict) else None
+            st = data.get("state") if isinstance(data, dict) else None
+            if not (isinstance(name, str) and isinstance(st, str)):
+                print(f"⚠️ MACF: observe: skipped a malformed {EVENT_SURFACE} at {ev.get('timestamp')}: "
+                      f"{data!r}", file=sys.stderr)
+                continue
+            states[name] = st
     return {name: st for name, st in states.items() if name and st and st != GONE}
 
 

@@ -142,3 +142,60 @@ def test_a_malformed_invitation_costs_only_itself(isolated_events_log, capsys):
     assert set(fold(_this_cycle())) == {WATCHER}
     assert any(e["event"] == "state_carried" for e in _this_cycle())
     assert "skipped" in capsys.readouterr().err
+
+
+def test_malformed_surfaces_and_onlookers_cost_only_themselves_and_the_carry_completes(isolated_events_log, capsys):
+    """A surface row whose data isn't a mapping, a surface named by a list, and invitations
+    whose onlooker is a list or missing are each skipped with a line saying so. The good
+    surface and invitation beside them still carry, and the marker says the carry is
+    complete, so the next boundary does not walk back into the same rows again."""
+    _write(isolated_events_log, [
+        _ev(EVENT_SURFACE, 100, surface="terminal", state="attached"),
+        {"timestamp": 101, "event": EVENT_SURFACE, "breadcrumb": "", "data": ["bad"]},
+        _ev(EVENT_SURFACE, 102, surface=["unhashable"], state="attached"),
+        _invite(103),
+        _invite(104, onlooker=["also", "unhashable"]),
+        _ev(EVENT_INVITE, 105, observed="Host@0a0a0a", stream_from=10, secret_sha256="cd" * 32),
+        _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+    ])
+
+    assert {"observation", "surface"} <= set(carry_state_forward(current_cycle=2))
+    assert set(fold(_this_cycle())) == {WATCHER}
+    assert fold_surfaces(_this_cycle()) == {"terminal": "attached"}
+    marker = [e for e in _this_cycle() if e["event"] == "state_carried"][-1]["data"]
+    assert marker["complete"] is True
+    assert capsys.readouterr().err.count("skipped a malformed") >= 4
+
+
+def test_a_malformed_reinvitation_does_not_drop_the_good_one_from_the_carry(isolated_events_log):
+    """The carry keeps a row only once it folds, so a bad re-invitation for the same onlooker
+    can't replace the good one: the per-call line said they were watching before the
+    boundary, and it says so after."""
+    _write(isolated_events_log, [
+        _invite(100),
+        _ev(EVENT_INVITE, 101, onlooker=WATCHER, observed="Host@0a0a0a"),   # no offset or secret
+        _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+    ])
+
+    assert "observation" in carry_state_forward(current_cycle=2)
+    state = fold(_this_cycle())
+    assert set(state) == {WATCHER} and state[WATCHER].stream_from == 10
+
+
+def test_a_family_that_raises_is_reported_failed_and_the_carry_still_finishes(isolated_events_log, monkeypatch, capsys):
+    """For a row shape nobody has thought of yet: an exception in the observation or surface
+    family is that family's failure, said on stderr. The carry still writes its marker, so
+    the session-start hook keeps its recovery output instead of reporting a hook error."""
+    from macf import cycle_carry
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("a shape nobody thought of")
+    monkeypatch.setattr(cycle_carry, "_open_observations", boom)
+    monkeypatch.setattr(cycle_carry, "_present_surfaces", boom)
+    _write(isolated_events_log, [_invite(100), _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2)])
+
+    carry_state_forward(current_cycle=2)
+    marker = [e for e in _this_cycle() if e["event"] == "state_carried"][-1]["data"]
+    assert marker["complete"] is False
+    err = capsys.readouterr().err
+    assert "observation" in err and "surface" in err and "a shape nobody thought of" in err
