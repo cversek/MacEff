@@ -262,3 +262,29 @@ def test_a_credential_named_variable_is_reported_set_but_never_shown(monkeypatch
     assert "sekrit" not in extra["CLAUDE_CODE_MESSAGING_TOKEN"]
     assert "hidden" in extra["CLAUDE_CODE_MESSAGING_TOKEN"]
     assert extra["CLAUDE_CODE_MESSAGING_SOCKET"] == "/run/x.sock"
+
+
+@pytest.mark.parametrize("name", ["PGPASSWORD", "OPENAI_APIKEY", "GITHUB_PAT", "CLAUDE_APIKEY",
+                                  "CLAUDE_CODE_MESSAGING_TOKEN", "AWS_SECRET_ACCESS_KEY",
+                                  "MACF_PRIVATE_THING", "CLAUDE_COOKIE"])
+def test_a_credential_word_anywhere_in_the_name_hides_the_value(name):
+    """CTB's probe on #667: the word between underscores only let PGPASSWORD,
+    OPENAI_APIKEY and GITHUB_PAT through whole."""
+    from macf.utils.environment import masked
+    assert "abcd1234" not in masked(name, "abcd1234")
+
+
+@pytest.mark.parametrize("name, value", [
+    ("PATH", "/usr/bin"), ("CLAUDE_CODE_EXECPATH", "/a/b"), ("MACF_PD_SESSION_PID", "645719"),
+    ("CLAUDE_CODE_MESSAGING_SOCKET", "/run/x.sock"), ("MACF_CONTEXT_WINDOW", "1000000"),
+])
+def test_names_that_hold_no_credential_are_still_shown(name, value):
+    from macf.utils.environment import masked
+    assert masked(name, value) == value
+
+
+def test_a_password_inside_a_url_is_hidden_whatever_the_name():
+    from macf.utils.environment import masked
+    shown = masked("MACF_DB", "postgres://user:sekrit@host:5432/db")
+    assert "sekrit" not in shown and shown.startswith("postgres://user:") and "@host:5432/db" in shown
+    assert masked("MACF_URL", "https://host/x?a=b:c@d") == "https://host/x?a=b:c@d"
