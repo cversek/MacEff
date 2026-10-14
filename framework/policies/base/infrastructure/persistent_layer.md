@@ -117,6 +117,15 @@ A channel event carries **a notice and nothing else**: the source's own fixed wo
 
 **No text crosses from the daemon to the channel.** The daemon sends a closed record (a known source, an arrival identifier, an optional count, two times), and the channel rebuilds the notice through that source's factory. A record with an unknown source or any extra field is refused and the next one is still delivered. So nothing a sender chose can reach the session as an instruction, by construction rather than by care.
 
+**The sources the channel knows**, each added in code, never by a record that names it:
+- `amail`: mail arrived. It carries the count as a scheduling hint, and its pointer is the broker's store.
+- The daemon's notices about your own units:
+  - `pd_limit_exceeded`: a unit is past its declared memory limit [MIS-0002-R60 (pd_MUST_notice_limit_exceeded)].
+  - `pd_grant_denied`: a declared grant was denied [MIS-0002-R65 (denied_grant_MUST_raise_notice)].
+  - `pd_carried`: what a restart carried, changed and lost [MIS-0002-R47 (pd_MUST_report_carried_changed_lost)].
+
+The three daemon sources arrive as `macf-daemon` notices, which no mask hides: you may decline news of the world, not news of yourself. They carry no count, and a record that gives one a count is refused. Their pointer sends you to `macf_tools pd status` and the event log. **The facts, which unit and how far past its limit, are in the log, never in the notice.**
+
 **What a notice licenses** is unchanged: one action, consulting the store it points at. It is never the operator's word and never consent.
 
 ### 1.3 Who the channel will talk to
