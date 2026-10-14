@@ -353,3 +353,18 @@ def test_reaping_a_group_escalates_to_sigkill(tmp_path):
     assert su.reap_group(os.getpgid(p.pid), grace=0.5)
     assert time.monotonic() - t0 < 5
     p.wait(timeout=5)
+
+
+def test_without_proc_a_zombie_group_counts_as_gone(monkeypatch):
+    """Where there is no /proc (macOS), ``ps`` lists the members, and a killed child of
+    ours, a zombie until we wait for it, does not keep its group alive."""
+    import subprocess
+    real_path = su.Path
+    monkeypatch.setattr(su, "Path", lambda p: real_path("/nonexistent-proc") if p == "/proc"
+                        else real_path(p))
+    p = subprocess.Popen(["bash", "-c", "trap '' TERM; sleep 300"], start_new_session=True)
+    time.sleep(0.2)
+    pgid = os.getpgid(p.pid)
+    assert su._group_alive(pgid)
+    assert su.reap_group(pgid, grace=0.5)   # p is not waited for until here: a zombie
+    p.wait(timeout=5)

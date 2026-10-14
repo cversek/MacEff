@@ -64,8 +64,8 @@ PANE_GRACE_S = 10.0
 def _group_alive(pgid: int) -> bool:
     """True while a member of process group *pgid* runs. A zombie does not count: it has
     exited, and only waits for a parent to reap it, which may be slow for a pane orphaned by
-    its server. On Linux the members are read from /proc; elsewhere a signal 0 is the probe,
-    which also counts a zombie."""
+    its server. On Linux the members are read from /proc, elsewhere (macOS) from ``ps``; a
+    signal 0, which also counts a zombie, is the probe only when neither can be read."""
     proc = Path("/proc")
     if proc.is_dir() and (proc / "self" / "stat").exists():
         for stat in proc.glob("[0-9]*/stat"):
@@ -76,6 +76,14 @@ def _group_alive(pgid: int) -> bool:
             if len(fields) > 2 and fields[2] == str(pgid) and fields[0] != "Z":
                 return True
         return False
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "pgid=,stat="], capture_output=True,
+                             text=True, timeout=10, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        out = None
+    if out is not None:
+        return any(len(f) == 2 and f[0] == str(pgid) and not f[1].startswith("Z")
+                   for f in (line.split() for line in out.splitlines()))
     try:
         os.killpg(pgid, 0)
         return True
