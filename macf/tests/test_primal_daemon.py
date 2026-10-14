@@ -1316,3 +1316,62 @@ def test_a_fork_then_exit_as_the_leader_ends_is_reached(tmp_path, script, make_c
         late = _child_pid(late_file)
         assert drive(core, lambda: core.state(f"worker{i}") == "stopped", timeout=6.0)
         assert wait_for(lambda: not _alive(late), timeout=2.0), f"stop {i}: the replacement {late} outlived the stop"
+
+
+def test_a_leader_that_crashes_takes_its_group_with_it(tmp_path, script, make_core):
+    """A leader that exits on its own leaves no member of its group running: the group is
+    sent SIGTERM, then SIGKILL at the unit's grace, as systemd ends a unit's cgroup and
+    launchd a job's process group. The restart waits for the group, so two copies of the
+    unit never run side by side."""
+    marker = tmp_path / "child.pid"
+    core = make_core([make_unit("worker", script, {"child_ignores_term": str(marker),
+                                                   "exit_after": 0.5, "code": 1},
+                                stop_grace_s=0.5)])
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    first, child = core.pid("worker"), _child_pid(marker)
+    marker.unlink()
+    seen_alive_with_new = []
+
+    def restarted():
+        pid = core.pid("worker")
+        if pid not in (None, first) and _alive(child):
+            seen_alive_with_new.append(pid)
+        return pid not in (None, first)
+    assert drive(core, restarted, timeout=8.0)
+    assert not seen_alive_with_new, "the unit restarted while its crashed leader's child still ran"
+    assert not _alive(child), f"the crashed leader's child {child} outlived it"
+    failed = [d for d in events("pd_unit_state", "worker") if d["state"] == "failed"]
+    assert failed and "sent SIGTERM" in failed[0]["reason"], failed
+
+
+def test_a_leader_that_ends_cleanly_reads_stopped_once_its_group_has(tmp_path, script, make_core):
+    """A leader that exits with a success code and leaves a member running reads stopped
+    only once that member has ended, as after a stop this core sent."""
+    marker = tmp_path / "child.pid"
+    core = make_core([make_unit("worker", script, {"child_ignores_term": str(marker),
+                                                   "exit_after": 0.5, "code": 0},
+                                restart="on-failure", stop_grace_s=0.5)])
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    child = _child_pid(marker)
+    assert drive(core, lambda: core.state("worker") == "stopped", timeout=6.0)
+    assert not _alive(child), f"the unit read stopped while its child {child} still ran"
+    last = events("pd_unit_state", "worker")[-1]
+    assert last["state"] == "stopped" and "killed at the stop's deadline" in last["reason"], last
+
+
+def test_an_always_unit_that_ends_cleanly_restarts_after_its_group(tmp_path, script, make_core):
+    """Under restart=always a clean exit restarts the unit, and with a member still running
+    the start waits for that member's end rather than being lost while the stop is pending."""
+    marker = tmp_path / "child.pid"
+    core = make_core([make_unit("worker", script, {"child_ignores_term": str(marker),
+                                                   "exit_after": 0.5, "code": 0},
+                                restart="always", stop_grace_s=0.5)])
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    first, child = core.pid("worker"), _child_pid(marker)
+    marker.unlink()
+    assert drive(core, lambda: core.pid("worker") not in (None, first), timeout=8.0), \
+        "a clean exit under restart=always was never restarted"
+    assert not _alive(child)
