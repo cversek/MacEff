@@ -3,6 +3,7 @@
 A compaction opens no turn. An agent that ends its wind-down with ``inject compact``
 otherwise sits at an empty input box, recovery unread, until something else wakes it.
 """
+from dataclasses import dataclass
 from unittest.mock import patch
 
 from macf import compact_followup as cf
@@ -43,33 +44,90 @@ def test_a_prompt_before_the_compaction_is_not_a_wake():
     assert cf.decide(rows, T0, T0 + 60) == "send"
 
 
-def _run(rows_by_call, timeout=10.0):
-    sent, now = [], [T0]
+RULE = "─" * 40
+
+
+def screen(box):
+    """An idle session's screen with *box* in its input box."""
+    return f"some output\n{RULE}\n❯ {box}\n{RULE}\n  ⏵⏵ auto mode on\n"
+
+
+@dataclass
+class Run:
+    outcome: str
+    sent: list
+    enters: list
+
+
+def _run(rows_by_call, timeout=10.0, takes_on=1, box=None):
+    """A pane whose Enter starts a turn on the *takes_on*-th press (0: never); until then
+    the typed text stays in the box. *box* overrides what the box shows."""
+    sent, enters, now = [], [], [T0]
     calls = iter(rows_by_call)
+    typed = {}
 
     def read(since):
-        return next(calls, rows_by_call[-1])
+        rows = list(next(calls, rows_by_call[-1]))
+        if takes_on and len(enters) >= takes_on:
+            rows.append(ev("dev_drv_started", enters[takes_on - 1] + 0.5))
+        return rows
+
+    def capture():
+        if box is not None:
+            return screen(box)
+        done = takes_on and len(enters) >= takes_on
+        return screen("" if done else typed.get("text", ""))
+
+    def send(t, keys):
+        sent.append((t, keys))
+        typed["text"] = " ".join(keys)
+        return 0
+
+    def enter():
+        enters.append(now[0])
+        return 0
 
     def sleep(s):
         now[0] += s
 
-    outcome = cf.follow("seat", T0, "recover", timeout=timeout, poll=2.0, read=read,
-                        send=lambda t, keys: sent.append((t, keys)) or 0,
-                        clock=lambda: now[0], sleep=sleep)
-    return outcome, sent
+    outcome = cf.follow("seat", T0, "recover", timeout=timeout, poll=2.0, read=read, send=send,
+                        capture=capture, enter=enter, clock=lambda: now[0], sleep=sleep)
+    return Run(outcome, sent, enters)
 
 
 def test_follow_types_the_text_into_the_target_once():
     rows = [ev("compaction_detected", T0 + 1)]
-    outcome, sent = _run([[], rows, rows, rows, rows])
-    assert outcome == "sent"
-    assert sent == [("seat", ["recover"])]
+    r = _run([[], rows, rows, rows, rows])
+    assert r.outcome == "sent"
+    assert r.sent == [("seat", ["recover"])] and len(r.enters) == 1
 
 
 def test_follow_gives_up_without_typing_when_no_compaction_comes():
-    outcome, sent = _run([[]], timeout=10.0)
-    assert outcome.startswith("gave up")
-    assert sent == []
+    r = _run([[]], timeout=10.0)
+    assert r.outcome.startswith("gave up")
+    assert r.sent == [] and r.enters == []
+
+
+def test_an_enter_taken_into_the_text_is_pressed_again():
+    """A seat's box held the prompt, unsent, for fourteen hours while the log said sent
+    (Oct 14): the Enter had landed with the text. Enter is pressed again while the text
+    is still in the box."""
+    rows = [ev("compaction_detected", T0 + 1)]
+    r = _run([[], rows, rows], takes_on=2)
+    assert r.outcome == "sent" and len(r.enters) == 2
+
+
+def test_without_a_turn_it_says_so_instead_of_sent():
+    rows = [ev("compaction_detected", T0 + 1)]
+    r = _run([[], rows, rows], takes_on=0)
+    assert r.outcome.startswith("typed, but no turn started") and len(r.enters) == cf.MAX_ENTERS
+
+
+def test_enter_is_never_pressed_on_text_that_is_not_ours():
+    """Someone else's draft in the box is never submitted."""
+    rows = [ev("compaction_detected", T0 + 1)]
+    r = _run([[], rows, rows], takes_on=0, box="the operator was typing this")
+    assert r.enters == [] and r.outcome.startswith("typed, but no turn started")
 
 
 def test_inject_compact_starts_the_follower_only_after_delivery():
@@ -107,9 +165,9 @@ def test_cli_defaults_to_the_recovery_text_and_no_then_turns_it_off():
 
 def test_follow_types_nothing_when_something_else_woke_the_agent():
     rows = [ev("compaction_detected", T0 + 1), ev("dev_drv_started", T0 + 3)]
-    outcome, sent = _run([[], rows])
-    assert outcome.startswith("skipped")
-    assert sent == []
+    r = _run([[], rows])
+    assert r.outcome.startswith("skipped")
+    assert r.sent == [] and r.enters == []
 
 
 def test_the_recovery_prompt_is_never_the_operators_activity(isolated_events_log):
