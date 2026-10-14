@@ -203,3 +203,28 @@ def test_daemon_releases_the_channel_socket(tmp_path, base, isolated_events_log)
     daemon.stop()
     daemon.serve()
     assert not daemon.channel_path.exists()
+
+
+def test_a_unit_past_its_limit_is_a_notice_held_and_delivered(tmp_path, isolated_events_log):
+    """MIS-0002-R60: the daemon's own over-limit notice is owed only where the declaration
+    routes it to the agent (R42), held through a restart like mail's (R41), and arrives on
+    the channel as the never-masked pd_limit_exceeded notice."""
+    home = _home(tmp_path)
+    unrouted = nt.Notifier(home, {"amail": "agent"})
+    assert unrouted.raise_notice("pd_limit_exceeded", "limit-worker-1") is False
+    assert not unrouted.owed
+    first = nt.Notifier(home, {"pd_limit_exceeded": "agent"})
+    first.boot()
+    assert first.raise_notice("pd_limit_exceeded", "limit-worker-2") is True
+    assert first.flush() == 0                                # no channel: held
+    second = nt.Notifier(home, {"pd_limit_exceeded": "agent"})   # the restarted daemon's
+    second.boot()
+    assert list(second.owed) == ["limit-worker-2"]
+    ours, theirs = _pair()
+    second.attach(ours)
+    assert second.flush() == 1
+    [record] = _records(theirs)
+    assert record.source == "pd_limit_exceeded" and record.count is None
+    assert "macf-daemon" in build_event(record)["params"]["content"]
+    with pytest.raises(ValueError):
+        second.raise_notice("amail", "not-raised-by-the-daemon")

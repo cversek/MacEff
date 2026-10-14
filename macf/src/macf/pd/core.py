@@ -37,6 +37,8 @@ from macf.agent_events_log import append_event, get_log_path, read_events
 from macf.notify.session import proc_start, proc_start_key, verify_incarnation
 from macf.pd.interface import (
     EVENT_CONTROL,
+    EVENT_OVER_LIMIT,
+    EVENT_UNDER_LIMIT,
     EVENT_DAEMON_START,
     EVENT_LIVENESS,
     EVENT_STATE,
@@ -75,6 +77,10 @@ STABLE_INTERVALS = 10
 #: How long an asked restart waits for a unit's work in flight to drain (R49) before
 #: it goes ahead anyway, and says so.
 DRAIN_TIMEOUT_S = 300.0
+#: How often a running unit's memory is read against its declared limit (MIS-0002-R60).
+MEMORY_CHECK_S = 30.0
+#: The notice source for a unit past its memory limit, as the MacEff channel knows it.
+LIMIT_NOTICE_SOURCE = "pd_limit_exceeded"
 
 #: Where the reasoning behind every refusal lives. A refusal names it, so a reader who
 #: has just been stopped finds the why without the message restating it
@@ -259,6 +265,55 @@ def group_members(pgid: int) -> List[tuple]:
     return members
 
 
+def tree_rss_mb(root: int) -> Optional[float]:
+    """Resident memory of process ``root`` and every process below it, in MB, or None when
+    the process table can't be read or ``root`` isn't in it.
+
+    The tree, not the process group: a session unit's ``claude`` runs in a group of its own
+    under the unit's tmux server, and the tree still holds it. Read from /proc on Linux and
+    from one ``ps`` snapshot on macOS.
+    """
+    rows: Dict[int, tuple] = {}             # pid -> (ppid, rss in kB)
+    proc = Path("/proc")
+    if proc.is_dir():
+        page_kb = os.sysconf("SC_PAGE_SIZE") / 1024
+        for entry in proc.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                stat = (entry / "stat").read_text()
+            except OSError:
+                continue  # noqa: MACEFF003 - ended while the table was read; it holds no memory now
+            fields = stat[stat.rfind(")") + 2:].split()
+            if len(fields) > 21:
+                rows[int(entry.name)] = (int(fields[1]), int(fields[21]) * page_kb)
+    else:
+        try:
+            out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,rss="], capture_output=True,
+                                 text=True, timeout=10, env={**os.environ, "LC_ALL": "C"})
+        except (OSError, subprocess.TimeoutExpired) as e:
+            print(f"⚠️ MACF: pd: cannot read the process table for memory: {e}", file=sys.stderr)
+            return None
+        for line in out.stdout.splitlines():
+            parts = line.split()
+            if len(parts) == 3 and all(x.isdigit() for x in parts):
+                rows[int(parts[0])] = (int(parts[1]), float(parts[2]))
+    if root not in rows:
+        return None
+    children: Dict[int, List[int]] = {}
+    for pid, (ppid, _) in rows.items():
+        children.setdefault(ppid, []).append(pid)
+    total, todo, seen = 0.0, [root], set()
+    while todo:
+        pid = todo.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        total += rows[pid][1]
+        todo.extend(children.get(pid, ()))
+    return total / 1024
+
+
 class _Adopted:
     """A unit the previous daemon started that outlived it, in the place of a ``Popen``.
 
@@ -298,6 +353,8 @@ class _Runner:
     state: State = "declared"
     since: float = 0.0                  # wall time of the last state change
     proc: Optional[object] = None       # a Popen, or _Adopted after a restart
+    over_limit: bool = False            # last read was above memory_limit_mb (R60)
+    memory_checked_at: float = float("-inf")  # monotonic time of the last memory read
     pid: Optional[int] = None
     proc_start: Optional[str] = None
     started_at: float = 0.0             # monotonic, at the last start
@@ -413,6 +470,7 @@ class Core:
         backoff_base_s: float = BACKOFF_BASE_S,
         backoff_cap_s: float = BACKOFF_CAP_S,
         drain_timeout_s: float = DRAIN_TIMEOUT_S,
+        memory_check_s: float = MEMORY_CHECK_S,
         placeholders: Optional[Dict[str, str]] = None,
         probe: Callable[[int, str], bool] = verify_incarnation,
         hosted: Optional[Callable[[], list]] = None,
@@ -425,6 +483,10 @@ class Core:
         self._backoff = (backoff_base_s, backoff_cap_s)
         self._placeholders = dict(placeholders or {})
         self._drain_timeout = drain_timeout_s
+        self._memory_check = memory_check_s
+        #: Called with (source, notice id) when the core owes the agent a notice; the daemon
+        #: wires it to its notifier. None in a core with no notifier, as in most tests.
+        self.on_notice: Optional[Callable[[str, str], None]] = None
         self._probe = probe
         # Claude Code's own background daemon, for the session unit (MIS-0002-R66): what it
         # hosts, and how to give it the client's own verbs. Both are seams for tests.
@@ -530,6 +592,7 @@ class Core:
                 continue
             r = self._units[name]
             r.proc, r.pid, r.proc_start = _Adopted(pid, start, self._probe), pid, start
+            r.over_limit, r.memory_checked_at = False, self._clock()   # its own memory, first read one check after it starts (R60)
             r.started_at = self._clock()
             # Its first liveness under this daemon is judged from the adoption, as a start is,
             # so a unit that went silent while no daemon ran becomes overdue, not running forever.
@@ -650,6 +713,7 @@ class Core:
         for r in self._units.values():
             try:
                 self._tick_unit(r, now)
+                self._check_memory(r, now)
             except Exception as e:  # noqa: BLE001 - GUARD, not handler: one unit must not stop the rest
                 # Deliberately broad: a GUARD, not a handler. One unit's fault must not
                 # stop the others from being supervised; it is announced, never absorbed.
@@ -899,6 +963,7 @@ class Core:
         if not start:
             return False   # the worker ended between the readout and now: start the unit as usual
         r.proc, r.pid, r.proc_start = _Adopted(decision.pid, start, self._probe), decision.pid, start
+        r.over_limit, r.memory_checked_at = False, self._clock()   # its own memory, first read one check after it starts (R60)
         r.client_session = decision.session_id
         r.started_at = self._clock()
         # The client's daemon supervises it, so its liveness is its process, probed by pid
@@ -949,6 +1014,7 @@ class Core:
             return
         r.proc, r.pid = proc, proc.pid
         r.proc_start = proc_start(proc.pid)
+        r.over_limit, r.memory_checked_at = False, self._clock()   # its own memory, first read one check after it starts (R60)
         r.started_at = self._clock()
         r.alive_at, r.alive_interval_s, r.in_flight = None, None, None
         self._transition(r, "starting", f"started as pid {proc.pid}")
@@ -989,6 +1055,30 @@ class Core:
             self._end_remnant(r, f"{len(live)} process(es) of its group outlived SIGKILL and were left")
         else:
             r.remnant = (pgid, live, kill_at, killed_at)
+
+    def _check_memory(self, r: _Runner, now: float) -> None:
+        """Read a running unit's memory against its declared limit, at most every
+        ``memory_check_s``. A crossing above the limit is recorded once, with a notice owed to
+        the agent; the crossing back below is recorded once too (MIS-0002-R60
+        (pd_MUST_notice_limit_exceeded)). The limit is not enforced: this says, it doesn't kill."""
+        if r.state != "running" or r.pid is None or now - r.memory_checked_at < self._memory_check:
+            return
+        r.memory_checked_at = now
+        used = tree_rss_mb(r.pid)
+        if used is None:
+            return
+        over = used > r.spec.memory_limit_mb
+        if over == r.over_limit:
+            return
+        r.over_limit = over
+        data = {"agent": self.card, "unit": r.spec.name, "pid": r.pid,
+                "used_mb": round(used, 1), "limit_mb": r.spec.memory_limit_mb}
+        if over:
+            self._emit(EVENT_OVER_LIMIT, data)
+            if self.on_notice is not None:
+                self.on_notice(LIMIT_NOTICE_SOURCE, f"limit-{r.spec.name}-{int(self._wall())}")
+        else:
+            self._emit(EVENT_UNDER_LIMIT, data)
 
     def _stopped(self, r: _Runner, reason: str) -> None:
         """Record the unit stopped, or, while members of its group outlive the leader, once

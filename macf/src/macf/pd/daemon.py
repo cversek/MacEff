@@ -103,6 +103,7 @@ class Daemon:
         self._channel_listener: Optional[socket.socket] = None
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound
         self.notifier = Notifier(self.home, self.core.declaration.notice_routes)
+        self.core.on_notice = self.notifier.raise_notice    # the core's own notices (R60)
         self._sel: Optional[selectors.BaseSelector] = None
         self._wake_r, self._wake_w = os.pipe()
         os.set_blocking(self._wake_w, False)

@@ -283,6 +283,9 @@ class Declaration(_Closed):
 EVENT_LIVENESS = "pd_unit_alive"
 EVENT_STATE = "pd_unit_state"
 EVENT_CONTROL = "pd_control"
+#: A running unit crossed above its declared memory limit, and back below it (MIS-0002-R60).
+EVENT_OVER_LIMIT = "pd_unit_over_limit"
+EVENT_UNDER_LIMIT = "pd_unit_back_under_limit"
 EVENT_DAEMON_START = "pd_daemon_start"
 
 
