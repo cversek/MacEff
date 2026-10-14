@@ -100,6 +100,12 @@ class Daemon:
         placeholders = {"agent_home": str(self.home), "card": self.card, "runtime_dir": str(self.base)}
         self.core = Core(load_declaration(self.home, self.card), self.card,
                          placeholders=placeholders, **core_options)
+        #: The declared schedules, run by this daemon (MIS-0002 step 2), or None without any.
+        self.scheduler = None
+        if self.core.declaration.schedules:
+            from macf.pd.scheduler import Scheduler
+            self.scheduler = Scheduler(self.core.declaration, self.card, placeholders,
+                                       work_dir=self.base / f"{self.record_path.stem}.runs")
         self._listener: Optional[socket.socket] = None
         self._channel_listener: Optional[socket.socket] = None
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound
@@ -154,6 +160,8 @@ class Daemon:
         self.core.record_start(record.pid, record.proc_start)
         self.core.boot()
         self.notifier.boot()
+        if self.scheduler is not None:
+            self.scheduler.boot()
 
     def serve(self) -> None:
         """Run until ``stop``, then remove the socket and record. The units keep running for
@@ -176,6 +184,8 @@ class Daemon:
                     else:
                         os.read(self._wake_r, 512)
                 self.core.tick()
+                if self.scheduler is not None:
+                    self.scheduler.tick()
                 self.notifier.poll()
                 self.notifier.flush()
                 self.notifier.wake()
@@ -186,6 +196,8 @@ class Daemon:
             for conn in self.notifier.channels:
                 self.notifier.detach(conn)
             self.notifier.on_detach = None
+            if self.scheduler is not None:
+                self.scheduler.shutdown()
             sel.close()
             self._sel = None
             if self._stop_units:
