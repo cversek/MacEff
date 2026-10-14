@@ -766,6 +766,22 @@ class Core:
             members = group_members(r.pid) or group_members(r.pid)
             if members:
                 r.remnant = (r.pid, members, r.kill_at, None)
+        elif stopping is None and r.pid is not None and not r.client_session:
+            # The leader exited on its own and left members of its group running. They are
+            # still the unit's, and a restart beside them would run two copies, so the group
+            # gets the stop it would have had: SIGTERM now, SIGKILL at the unit's own grace,
+            # as systemd does for a unit's cgroup and launchd for a job's process group. The
+            # client's own daemon owns a session it hosts, and its group with it.
+            members = group_members(r.pid) or group_members(r.pid)
+            if members:
+                try:
+                    os.killpg(r.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass  # emptied since the listing; the remnant's first pass sees that
+                except PermissionError as e:
+                    print(f"⚠️ MACF: pd: cannot signal what {r.spec.name}'s leader left "
+                          f"(group {r.pid}): {e}", file=sys.stderr)
+                r.remnant = (r.pid, members, now + r.spec.stop_grace_s, None)
         # An asked restart is half done when the old incarnation exits, whether this
         # core stopped it or it exited while the restart waited on its work in flight.
         asked_restart = r.then_start or r.drain is not None
@@ -773,26 +789,26 @@ class Core:
         r.alive_at, r.in_flight = None, None
 
         if stopping is None:
-            # It exited on its own: record how.
+            # It exited on its own: record how. A stopped unit whose leader left members
+            # running reads stopped once they have ended, as after a stop this core sent; a
+            # failed one reads failed at once, which claims nothing about its group.
             if code in r.spec.exit_codes.no_restart:
-                self._transition(r, "stopped", f"{why}, which asks not to be restarted")
+                self._stopped(r, f"{why}, which asks not to be restarted")
                 if not asked_restart:
                     r.want_up = False
                     return
             elif code in r.spec.exit_codes.success:
-                self._transition(r, "stopped", why)
+                self._stopped(r, why)
             else:
                 r.failures += 1
-                self._transition(r, "failed", why)
+                self._transition(r, "failed", why if r.remnant is None
+                                 else f"{why}; the rest of its group was sent SIGTERM")
         elif not r.want_up or r.state != "failed":
             # A stop this core sent. After a liveness failure the unit is already
             # recorded failed, and stays so unless the stop was asked for. While members of
             # its group outlive the leader, the unit has not stopped: the transition waits
             # for the group to end, so no reader is told the stop is done while it isn't.
-            if r.remnant is not None:
-                r.stop_pending = f"{stopping} ({why})"
-            else:
-                self._transition(r, "stopped", f"{stopping} ({why})")
+            self._stopped(r, f"{stopping} ({why})")
 
         if not r.want_up:
             return
@@ -802,6 +818,9 @@ class Core:
             r.restart_at = now + backoff_s(r.failures, *self._backoff)
         elif r.state == "stopped" and r.spec.restart == "always":
             r.restart_at = now + self._backoff[0]
+        elif stopping is None and r.stop_pending is not None and r.spec.restart == "always":
+            # Stopped on its own with members still running: the start follows their end.
+            r.start_after_remnant = True
 
     # ------------------------------------------------------------------ helpers
 
@@ -961,6 +980,14 @@ class Core:
             self._end_remnant(r, f"{len(live)} process(es) of its group outlived SIGKILL and were left")
         else:
             r.remnant = (pgid, live, kill_at, killed_at)
+
+    def _stopped(self, r: _Runner, reason: str) -> None:
+        """Record the unit stopped, or, while members of its group outlive the leader, once
+        they have ended, so no reader is told it stopped while it hasn't."""
+        if r.remnant is not None:
+            r.stop_pending = reason
+        else:
+            self._transition(r, "stopped", reason)
 
     def _end_remnant(self, r: _Runner, how: str) -> None:
         r.remnant = None
