@@ -45,6 +45,7 @@ from zoneinfo import ZoneInfo
 
 from macf.agent_events_log import append_event, read_events
 from macf.notify.session import proc_start, verify_incarnation
+from macf.pd.core import group_members
 from macf.pd.interface import CommandRun, Declaration, Schedule, render
 from macf.pd.schedule import CronExpr, plan_runs
 
@@ -82,6 +83,8 @@ class _Run:
     stdout_path: Path
     killed_at: Optional[float] = None
     stopped_by: Optional[str] = None     # the daemon stopped it, and why
+    term_at: Optional[float] = None      # when its group was sent SIGTERM
+    group_left: bool = False             # its leader ended with members still running
 
 
 @dataclass
@@ -159,18 +162,11 @@ class Scheduler:
         """A run the previous daemon started and never recorded ending: stop it if it is
         still that process, and record it ended, so its lease does not outlive that daemon."""
         pid, start = data.get("pid"), data.get("proc_start")
-        stopped = False
-        if isinstance(pid, int) and start and verify_incarnation(pid, start):
-            try:
-                os.killpg(pid, signal.SIGTERM)
-                stopped = True
-            except ProcessLookupError:
-                pass  # noqa: MACEFF003 - it ended between the probe and the signal; nothing to stop
-            except PermissionError as e:
-                print(f"⚠️ MACF: pd: cannot stop abandoned run {name} (pid {pid}): {e}", file=sys.stderr)
+        stopped = isinstance(pid, int) and bool(start) and _still_the_runs(pid, start) \
+            and _stop_group(pid, name)
         self._say(EVENT_DONE, {"schedule": name, "scheduled_for": scheduled_for,
                                "outcome": "abandoned: the daemon restarted while it ran"
-                                          + ("; its process group was sent SIGTERM" if stopped else ""),
+                                          + ("; its process group was stopped" if stopped else ""),
                                "exit_code": None, "wake": False})
 
     # ------------------------------------------------------------------ the pass
@@ -226,15 +222,24 @@ class Scheduler:
     def _check_run(self, run: _Run) -> None:
         code = run.proc.poll()
         now = self.clock()
+        if code is None and run.killed_at is None and now - run.started > run.schedule.timeout_s:
+            run.killed_at = now
+            self._term(run, now)
+        # A run ends when its process group does, not its leader: a member left running
+        # would hold whatever the run held past the run's record (R36, R28).
+        if code is not None and group_members(run.proc.pid):
+            if run.term_at is None:
+                run.group_left = True
+                self._term(run, now)
+            code = None
         if code is None:
-            if run.killed_at is None and now - run.started > run.schedule.timeout_s:
-                run.killed_at = now
-                self._signal(run, signal.SIGTERM)
-            elif run.killed_at is not None and now - run.killed_at > KILL_GRACE_S:
+            if run.term_at is not None and now - run.term_at > KILL_GRACE_S:
                 self._signal(run, signal.SIGKILL)
             return
         del self.running[run.schedule.name]
         outcome, wake = self._judge(run, code)
+        if run.group_left and run.stopped_by is None and run.killed_at is None:
+            outcome += "; the rest of its process group was stopped"
         try:
             run.stdout_path.unlink()
         except FileNotFoundError:
@@ -262,6 +267,10 @@ class Scheduler:
             said = b""
         return ("ok: it had something to say", True) if said else ("ok: nothing to say", False)
 
+    def _term(self, run: _Run, now: float) -> None:
+        run.term_at = now
+        self._signal(run, signal.SIGTERM)
+
     def _signal(self, run: _Run, sig) -> None:
         try:
             os.killpg(run.proc.pid, sig)
@@ -272,9 +281,42 @@ class Scheduler:
         """Stop the runs in flight as the daemon stops; each is recorded as it ends."""
         for run in list(self.running.values()):
             run.stopped_by = "the daemon stopped"
-            self._signal(run, signal.SIGTERM)
-        deadline = self.clock() + KILL_GRACE_S
+            self._term(run, self.clock())
+        # The grace, then SIGKILL (in _check_run), then time for the kill to land.
+        deadline = self.clock() + KILL_GRACE_S + 2.0
         while self.running and self.clock() < deadline:
             for run in list(self.running.values()):
                 self._check_run(run)
             time.sleep(0.05)
+
+
+def _still_the_runs(pgid: int, start: str) -> bool:
+    """Whether process group ``pgid`` is still the recorded run's: its leader is alive with
+    the recorded start, or no process leads that number and members remain. A number can't
+    be reused while any member of its group lives. A leader there with another start means
+    the number now names someone else's group, which is left alone."""
+    if verify_incarnation(pgid, start):
+        return True
+    return proc_start(pgid) is None and bool(group_members(pgid))
+
+
+def _stop_group(pgid: int, name: str) -> bool:
+    """Send group ``pgid`` SIGTERM, then SIGKILL after the grace, and follow it until it is
+    empty. Used at boot, where no pass loop is running yet. Returns whether it was signalled."""
+    signalled = False
+    for sig, wait in ((signal.SIGTERM, KILL_GRACE_S), (signal.SIGKILL, 2.0)):
+        try:
+            os.killpg(pgid, sig)
+            signalled = True
+        except ProcessLookupError:
+            return signalled  # the group has ended
+        except PermissionError as e:
+            print(f"⚠️ MACF: pd: cannot stop abandoned run {name} (group {pgid}): {e}", file=sys.stderr)
+            return signalled
+        end = time.monotonic() + wait
+        while time.monotonic() < end and group_members(pgid):
+            time.sleep(0.05)
+        if not group_members(pgid):
+            return signalled
+    print(f"⚠️ MACF: pd: abandoned run {name} (group {pgid}) outlived SIGKILL", file=sys.stderr)
+    return signalled

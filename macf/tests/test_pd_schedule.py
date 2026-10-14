@@ -312,7 +312,7 @@ def test_leases_released(tmp_path):
     second = make_scheduler(tmp_path, [command_schedule(["/bin/sleep", "60"])], log, now)   # restarted
     done = log.of(sc.EVENT_DONE)
     assert len(done) == 1 and done[0]["outcome"].startswith("abandoned")
-    assert "SIGTERM" in done[0]["outcome"]
+    assert "its process group was stopped" in done[0]["outcome"]
     first.running["check"].proc.wait(timeout=5)
     second.tick()                                               # the abandoned firing is not run again
     assert len(log.of(sc.EVENT_STARTED)) == 1
@@ -359,3 +359,91 @@ def test_a_prompt_run_is_said_not_run_once(tmp_path):
     now[0] = at("2026-10-14 13:00")
     s.tick()
     assert len(log.of(sc.EVENT_NOT_RUN)) == 1 and not log.of(sc.EVENT_STARTED)
+
+
+def _alive(pid):
+    """Whether ``pid`` runs: present and not a zombie, on Linux and macOS alike."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    return bool(state.stdout.strip()) and not state.stdout.strip().startswith("Z")
+
+
+def _pid_in(path, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists() and path.read_text().strip():
+            return int(path.read_text())
+        time.sleep(0.05)
+    raise AssertionError("the run never wrote its pid")
+
+
+def _reap(pid):
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+# A child that ignores SIGTERM and writes its own pid. The \$\$ is escaped so that the
+# outer shell passes it on and the child, not its leader, expands it.
+_STUBBORN_CHILD = "trap '' TERM; echo \\$\\$ > {f}; while true; do sleep 1; done"
+
+
+def test_a_run_past_its_limit_takes_its_group(tmp_path):
+    """A run past its limit whose leader dies on SIGTERM still has the rest of its group
+    killed, and is recorded ended only once the group has (R36)."""
+    f = tmp_path / "child.pid"
+    log, now = Log(), [at("2026-10-14 12:00")]
+    cmd = ["/bin/sh", "-c", f'/bin/sh -c "{_STUBBORN_CHILD.format(f=f)}" & sleep 60']
+    s = make_scheduler(tmp_path, [command_schedule(cmd, timeout_s=0.5)], log, now)
+    now[0] = at("2026-10-14 12:05")
+    s.tick()
+    kid = _pid_in(f)
+    try:
+        finish(s, timeout=20.0)
+        assert not _alive(kid), "the run's child outlived the run"
+        assert log.of(sc.EVENT_DONE)[0]["outcome"].startswith("killed: past its 0.5 s limit")
+    finally:
+        _reap(kid)
+
+
+def test_a_daemon_stop_ends_a_run_that_ignores_sigterm(tmp_path):
+    """The daemon's stop escalates to SIGKILL after the grace, so no run outlives it (R48)."""
+    f = tmp_path / "run.pid"
+    log, now = Log(), [at("2026-10-14 12:00")]
+    cmd = ["/bin/sh", "-c", f"trap '' TERM; echo $$ > {f}; while true; do sleep 1; done"]
+    s = make_scheduler(tmp_path, [command_schedule(cmd, timeout_s=600)], log, now)
+    now[0] = at("2026-10-14 12:05")
+    s.tick()
+    run = _pid_in(f)
+    try:
+        s.shutdown()
+        assert not _alive(run), "the run outlived the daemon's stop"
+        assert log.of(sc.EVENT_DONE)[0]["outcome"] == "stopped: the daemon stopped"
+    finally:
+        _reap(run)
+
+
+def test_an_abandoned_run_whose_leader_exited_is_stopped(tmp_path):
+    """A run whose leader exited, leaving a member that ignores SIGTERM, is still ended by
+    the next daemon: the group is the run's while its number leads nothing else (R28)."""
+    f = tmp_path / "child.pid"
+    log, now = Log(), [at("2026-10-14 12:00")]
+    cmd = ["/bin/sh", "-c", f'/bin/sh -c "{_STUBBORN_CHILD.format(f=f)}" & sleep 1']
+    first = make_scheduler(tmp_path, [command_schedule(cmd, timeout_s=600)], log, now)
+    now[0] = at("2026-10-14 12:05")
+    first.tick()
+    kid = _pid_in(f)
+    try:
+        first.running["check"].proc.wait(timeout=5)
+        make_scheduler(tmp_path, [command_schedule(cmd, timeout_s=600)], log, now)   # restarted
+        assert not _alive(kid), "the abandoned run's child outlived the daemon that started it"
+        done = log.of(sc.EVENT_DONE)
+        assert len(done) == 1 and "its process group was stopped" in done[0]["outcome"]
+    finally:
+        _reap(kid)
