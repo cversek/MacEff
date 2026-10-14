@@ -26,6 +26,13 @@ from macf.pd.interface import EVENT_LIVENESS, IdentityError, Liveness, agent_car
 ENV_UNIT = "MACF_PD_UNIT"
 ENV_INTERVAL = "MACF_PD_LIVENESS_S"
 ENV_HOME = "MACEFF_AGENT_HOME_DIR"
+#: The session unit's identity, handed by its wrapper (``pd.session_unit``) to the
+#: session's transcript monitor, which reports liveness for it naming the wrapper's pid.
+#: Names of their own, so that no other process the session starts, which inherits them,
+#: can take them for its own unit.
+ENV_SESSION_UNIT = "MACF_PD_SESSION_UNIT"
+ENV_SESSION_INTERVAL = "MACF_PD_SESSION_LIVENESS_S"
+ENV_SESSION_PID = "MACF_PD_SESSION_PID"
 
 
 def liveness_event(card: str, unit: str, interval_s: float,
@@ -56,8 +63,11 @@ class Heartbeat:
 
     def __init__(self, card: str, unit: str, interval_s: float,
                  in_flight: Optional[Callable[[], Optional[int]]] = None,
-                 append: Optional[Callable[[str, dict], bool]] = None):
-        self.card, self.unit, self.interval_s = card, unit, interval_s
+                 append: Optional[Callable[[str, dict], bool]] = None,
+                 pid: Optional[int] = None):
+        # pid: the unit's process when the beat speaks for another one (the session
+        # unit's wrapper, from its transcript monitor); this process by default.
+        self.card, self.unit, self.interval_s, self.pid = card, unit, interval_s, pid
         self._in_flight = in_flight or (lambda: None)
         self._append = append
         self._stop = threading.Event()
@@ -89,7 +99,7 @@ class Heartbeat:
                 return
             self._ticked.clear()
             stalled = False
-            if not emit(self.card, self.unit, self.interval_s, self._in_flight(), self._append):
+            if not emit(self.card, self.unit, self.interval_s, self._in_flight(), self._append, self.pid):
                 print(f"⚠️ MACF: pd: liveness for {self.unit} was not recorded (the unit will read "
                       f"overdue if this persists)", file=sys.stderr)
             if self._stop.wait(self.interval_s):
@@ -117,6 +127,7 @@ class DeclaredUnit:
     card: str
     unit: str
     interval_s: float
+    pid: Optional[int] = None
 
 
 def unit_from_env(environ=os.environ) -> Optional[DeclaredUnit]:
@@ -135,3 +146,32 @@ def unit_from_env(environ=os.environ) -> Optional[DeclaredUnit]:
         print(f"⚠️ MACF: pd: no liveness from this unit ({ENV_UNIT}={unit!r}, "
               f"{ENV_INTERVAL}={raw!r}): {e}", file=sys.stderr)
         return None
+
+
+def session_unit_from_env(environ=os.environ) -> Optional[DeclaredUnit]:
+    """The session unit a transcript monitor reports for, from what the session unit's
+    wrapper put in the session's environment; None outside such a session. A partial or
+    malformed setting is reported and read as None, as ``unit_from_env`` does."""
+    unit, raw, pid, home = (environ.get(ENV_SESSION_UNIT), environ.get(ENV_SESSION_INTERVAL),
+                            environ.get(ENV_SESSION_PID), environ.get(ENV_HOME))
+    if not unit and not raw and not pid:
+        return None
+    try:
+        interval, owner = float(raw or ""), int(pid or "")
+        if interval <= 0 or owner <= 1 or not unit or not home:
+            raise ValueError("needs a unit name, a positive interval, the unit's pid and the agent home")
+        return DeclaredUnit(agent_card(Path(home)), unit, interval, owner)
+    except (ValueError, IdentityError) as e:
+        print(f"⚠️ MACF: pd: no session liveness from this monitor ({ENV_SESSION_UNIT}={unit!r}, "
+              f"{ENV_SESSION_INTERVAL}={raw!r}, {ENV_SESSION_PID}={pid!r}): {e}", file=sys.stderr)
+        return None
+
+
+def session_heartbeat_from_env(environ=os.environ,
+                               append: Optional[Callable[[str, dict], bool]] = None) -> Optional[Heartbeat]:
+    """Start the session unit's heartbeat in its transcript monitor, else return None.
+    The beat names the wrapper's pid, so the daemon credits it to the process it started."""
+    found = session_unit_from_env(environ)
+    if found is None:
+        return None
+    return Heartbeat(found.card, found.unit, found.interval_s, append=append, pid=found.pid).start()
