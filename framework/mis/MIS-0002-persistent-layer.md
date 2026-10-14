@@ -209,7 +209,7 @@ stateDiagram-v2
 - **R108** [MUST · decidable: macf/tests/test_primal_daemon.py::test_compaction_askers (planned)] The primal daemon MUST compact a session only when the operator, or the agent's own declared wind-down, asks for it. (compaction_MUST_be_asked_by_operator_or_wind-down)
 - **R52** [MUST · decidable: macf/tests/test_primal_daemon.py::test_control_events (planned)] Each stop, restart or compaction that the persistent layer performs MUST be an event that names who asked and why. (control_act_MUST_name_who_asked)
 - **R126** [MUST · decidable: macf/tests/test_pd_harness.py::test_idle_compaction_off (planned)] Where the harness can compact an idle session on its own, the harness adapter MUST turn that off unless the declaration keeps it. (adapter_MUST_turn_off_harness_idle_compaction)
-- **R127** [MUST · decidable: macf/tests/test_primal_daemon.py::test_unasked_compaction_recorded (planned)] When the harness compacts a session that nobody asked to compact, the primal daemon MUST record a control event naming the harness as the asker. (harness_compaction_MUST_be_recorded)
+- **R127** [MUST · decidable: macf/tests/test_primal_daemon.py::test_unasked_compaction_recorded (passing)] When the harness compacts a session that nobody asked to compact, the primal daemon MUST record a control event naming the harness as the asker. (harness_compaction_MUST_be_recorded)
 
 ### 6.8 Mail
 
@@ -529,7 +529,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R124 | decidable | macf/tests/test_pd_declaration.py::test_allowlist_lists_every_channel | planned |
 | R125 | judgment | the head maintainer, at review of the Claude Code harness adapter | standing |
 | R126 | decidable | macf/tests/test_pd_harness.py::test_idle_compaction_off | passing |
-| R127 | decidable | macf/tests/test_primal_daemon.py::test_unasked_compaction_recorded | planned |
+| R127 | decidable | macf/tests/test_primal_daemon.py::test_unasked_compaction_recorded | passing |
 | R128 | decidable | macf/tests/test_mode_activity.py::test_dialog_answer_counts | passing |
 | R129 | decidable | macf/tests/test_pd_render.py::test_socket_path_length | planned |
 
