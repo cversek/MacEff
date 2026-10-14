@@ -140,7 +140,7 @@ def primal_daemon_unit(card: Optional[str], environ=None, ask=None) -> Optional[
         ask = lambda: status(home, card)  # noqa: E731
     try:
         report = ask()
-    except Exception as e:  # a diagnostic must not break the readout it is part of
+    except Exception as e:  # noqa: BLE001 - GUARD: a diagnostic must not break the readout it is part of
         found["why"] = f"the daemon could not be asked: {type(e).__name__}: {e}"
         return found
     if report.source != "daemon":
