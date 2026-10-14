@@ -30,6 +30,7 @@ starts can report liveness as this unit.
 """
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -67,6 +68,9 @@ EXIT_REFUSED = 78
 PANE_GRACE_S = 10.0
 #: How long a new pane has to call setsid() before its pid is taken as its group.
 PANE_SETSID_WAIT_S = 2.0
+#: Where a wrapper names its session's pane groups, in its private tmux directory, so the
+#: next wrapper can end a session that a SIGKILL left running.
+PANE_RECORD = "pane_groups.json"
 
 
 def _group_alive(pgid: int) -> bool:
@@ -271,7 +275,10 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
         print(f"⚠️ MACF: session unit: a tmux server already serves {agent}; not starting a second",
               file=sys.stderr)
         return EXIT_NOT_STARTED
-    server_cmd = [tmux] + (["-f", str(conf)] if conf and Path(conf).is_file() else ["-f", "/dev/null"]) + ["-D"]
+    # No server answers, so no wrapper serves this agent: a session a killed predecessor left
+    # behind is ended before a second one starts beside it.
+    _reap_predecessor(directory, agent)
+    server_cmd =[tmux] + (["-f", str(conf)] if conf and Path(conf).is_file() else ["-f", "/dev/null"]) + ["-D"]
     server = subprocess.Popen(server_cmd, env=env, stdin=subprocess.DEVNULL)
 
     def _stop(signum, _frame):
@@ -317,6 +324,9 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
             continue
         if group is not None:
             pane_groups[group] = proc_start(group)
+    # Kept where the next wrapper looks, so a SIGKILL that ends this one before its reap
+    # still leaves the session's group named to whoever starts next.
+    _write_pane_record(directory, pane_groups)
     # Only now, with a session in it, may the server end when it is empty: from here on
     # the session's end is the server's, and the server's is this unit's.
     _tmux(tmux, env, "set-option", "-s", "exit-empty", "on")
@@ -329,8 +339,56 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
         if not reap_group(pgid, leader_start=leader_start):
             print(f"⚠️ MACF: session unit: process group {pgid} of session {agent} survived SIGKILL",
                   file=sys.stderr)
+    _pane_record(directory).unlink(missing_ok=True)
     _remove_leftovers(tmux, env, directory)
     return status
+
+
+def _pane_record(directory: Path) -> Path:
+    return directory / PANE_RECORD
+
+
+def _write_pane_record(directory: Path, pane_groups: Mapping[int, Optional[str]]) -> None:
+    """Name the session's pane groups, with their leaders' starts, for the next wrapper."""
+    path = _pane_record(directory)
+    tmp = path.with_suffix(".tmp")
+    try:
+        tmp.write_text(json.dumps([[pgid, start] for pgid, start in pane_groups.items()]))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except OSError as e:
+        print(f"⚠️ MACF: session unit: could not record the pane groups ({e}); a wrapper killed "
+              f"outright would leave this session for the next to find unnamed", file=sys.stderr)
+
+
+def _reap_predecessor(directory: Path, agent: str) -> None:
+    """End the session a wrapper killed outright left running, from the groups it recorded.
+
+    A wrapper reaps its pane's group itself once its server has gone, but a SIGKILL, the
+    daemon's after a stop's grace or the kernel's out-of-memory killer, ends it first, and a
+    pane that ignores the hangup runs on. Each recorded group is reaped only while its
+    leader's start still matches (reap_group), and one recorded with no start is left: its
+    number can't be told from another's."""
+    path = _pane_record(directory)
+    try:
+        recorded = json.loads(path.read_text())
+    except FileNotFoundError:
+        return  # noqa: MACEFF003 - no record is the normal case: no wrapper was killed before its reap
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: session unit: the previous pane record is unreadable ({e}); not reaping "
+              f"from it", file=sys.stderr)
+        path.unlink(missing_ok=True)
+        return
+    for entry in recorded if isinstance(recorded, list) else []:
+        if not (isinstance(entry, list) and len(entry) == 2 and isinstance(entry[0], int) and entry[1]):
+            continue
+        pgid, start = entry
+        if _group_alive(pgid):
+            print(f"⚠️ MACF: session unit: a previous session of {agent} outlived its wrapper "
+                  f"(process group {pgid}); ending it before starting another", file=sys.stderr)
+            if not reap_group(pgid, leader_start=start):
+                print(f"⚠️ MACF: session unit: process group {pgid} survived SIGKILL", file=sys.stderr)
+    path.unlink(missing_ok=True)
 
 
 def _remove_leftovers(tmux: str, env: Mapping[str, str], directory: Path) -> None:
