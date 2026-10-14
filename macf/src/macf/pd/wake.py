@@ -57,6 +57,8 @@ RUNNING_LOOKBACK = 15
 
 EVENT_SENT = "pd_wake_sent"
 EVENT_HELD = "pd_wake_held"
+#: A held stretch that ended with nothing left waiting: the agent read its mail on its own.
+EVENT_RELEASED = "pd_wake_released"
 EVENT_TURN = "pd_wake_turn"
 EVENT_CAP = "pd_wake_cap_reached"
 
@@ -155,6 +157,9 @@ class Waker:
     enters: int = 0
     next_enter: float = 0.0
     verify_by: Optional[float] = None
+    #: The agent's calling card, named in every event so the outside watch can tell whose a
+    #: held wake is in a log several agents share (rule 14 of the clock's list, on #552).
+    card: str = ""
 
     def tick(self, waiting_ids: List[str]) -> Optional[str]:
         """One step. Returns "sent" on the step a wake is typed, else None."""
@@ -163,6 +168,9 @@ class Waker:
             self._submit(now)
             return None
         fresh = [i for i in waiting_ids if i not in self.woken and MESSAGE_ID.match(i)]
+        if not fresh:
+            # The held stretch ends without a wake: whatever waited has been read meanwhile.
+            self.release("nothing waits any more")
         if not fresh or now - self.last_sent < self.refractory_s:
             return None
         if self.day != self.today():
@@ -170,14 +178,14 @@ class Waker:
         if self.sent_today >= self.daily_cap:
             if self.cap_said != self.day:
                 self.cap_said = self.day
-                self.append(EVENT_CAP, {"cap": self.daily_cap, "day": self.day.isoformat()})
+                self._say(EVENT_CAP, {"cap": self.daily_cap, "day": self.day.isoformat()})
             return None
         screen = self.pane.capture()
         state = classify(screen) if screen is not None else DIALOG
         if state != IDLE_EMPTY:
             if self.held != state:                         # once per busy stretch
                 self.held = state
-                self.append(EVENT_HELD, {"reason": state, "waiting": len(fresh)})
+                self._say(EVENT_HELD, {"reason": state, "waiting": len(fresh)})
             return None
         self.held = None
         text = wake_text(waiting_ids)
@@ -185,14 +193,23 @@ class Waker:
             return None
         self.record_keys(text, "pd-wake")                  # before the keys, so they read as the framework's
         if not self.pane.type(text):
-            self.append(EVENT_HELD, {"reason": "the pane could not be typed into", "waiting": len(fresh)})
+            self._say(EVENT_HELD, {"reason": "the pane could not be typed into", "waiting": len(fresh)})
             return None
         # Sent, from here: recorded at the send, so a misread status can't send it again.
         self.woken.update(i for i in waiting_ids if MESSAGE_ID.match(i))
         self.last_sent, self.sent_today = now, self.sent_today + 1
-        self.append(EVENT_SENT, {"ids": sorted(self.woken & set(waiting_ids)), "chars": len(text)})
+        self._say(EVENT_SENT, {"ids": sorted(self.woken & set(waiting_ids)), "chars": len(text)})
         self.enters, self.next_enter, self.verify_by = 0, now, now + VERIFY_S
         return "sent"
+
+    def release(self, reason: str) -> None:
+        """End a held stretch without a wake, saying why; nothing if none is held."""
+        if self.held is not None:
+            self.held = None
+            self._say(EVENT_RELEASED, {"reason": reason})
+
+    def _say(self, event: str, data: dict) -> None:
+        self.append(event, {"agent": self.card, **data} if self.card else data)
 
     def _submit(self, now: float) -> None:
         """Press Enter only while the wake is still in the box, at most three times; then
@@ -201,7 +218,7 @@ class Waker:
         state = classify(screen) if screen is not None else DIALOG
         if state == RUNNING:
             self.verify_by = None
-            self.append(EVENT_TURN, {"started": True})
+            self._say(EVENT_TURN, {"started": True})
             return
         if state == WAKE_IN_BOX and self.enters < MAX_ENTERS and now >= self.next_enter:
             self.pane.enter()
@@ -209,7 +226,7 @@ class Waker:
             return
         if now >= self.verify_by:
             self.verify_by = None
-            self.append(EVENT_TURN, {"started": False, "screen": state, "enters": self.enters})
+            self._say(EVENT_TURN, {"started": False, "screen": state, "enters": self.enters})
 
 
 class TmuxPane:
