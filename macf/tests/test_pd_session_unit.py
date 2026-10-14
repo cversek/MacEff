@@ -302,3 +302,54 @@ def test_inject_without_a_supervisor_types_into_the_session_units_pane(monkeypat
     assert calls[1] == ["tmux", "send-keys", "-t", "%3", "Enter"]
     # the follow-up types into the same pane
     assert followed == ["pane:%3"]
+
+
+# --- an outside stop reaches the session's own process group ---------------------------
+
+@needs_tmux
+def test_a_stop_of_the_unit_also_stops_a_session_that_ignores_the_hangup(tmp_path, short_base):
+    """tmux runs each pane in a process group of its own, so the daemon's stop of the unit's
+    group reaches the session only through the server's SIGHUP. A session that ignores it, and
+    SIGTERM too, must still be gone before the wrapper returns (MIS-0002-R48), or a restart
+    would start a second session beside it. CTB's probe on #652, as a test."""
+    import subprocess
+    import sys
+    pidfile = tmp_path / "child.pid"
+    child = _child(tmp_path, f"trap '' HUP TERM\necho $$ > {pidfile}\nsleep 300\n")
+    code = (
+        "import sys; from pathlib import Path; from macf.pd import session_unit as su; "
+        f"sys.exit(su.run('Resident_1a2b3c', Path({str(child)!r}), environ={_unit_env(tmp_path)!r}, "
+        f"base=Path({str(short_base)!r})))"
+    )
+    env = {k: v for k, v in os.environ.items() if k != "TMUX"}
+    wrapper = subprocess.Popen([sys.executable, "-c", code], env=env, start_new_session=True)
+    deadline = time.monotonic() + 15
+    while not (pidfile.exists() and pidfile.read_text().strip()) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    stand_in = int(pidfile.read_text())
+    os.killpg(wrapper.pid, signal.SIGTERM)          # the daemon's stop: the unit's group
+    assert wrapper.wait(timeout=30) == 0
+    assert not _alive(stand_in), "the session outlived its unit"
+
+
+def _alive(pid: int) -> bool:
+    """Running, not a zombie waiting to be reaped."""
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rpartition(")")[2].split()[0]
+    except (OSError, IndexError):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+    return state != "Z"
+
+
+def test_reaping_a_group_escalates_to_sigkill(tmp_path):
+    import subprocess
+    p = subprocess.Popen(["bash", "-c", "trap '' TERM; sleep 300"], start_new_session=True)
+    time.sleep(0.2)
+    t0 = time.monotonic()
+    assert su.reap_group(os.getpgid(p.pid), grace=0.5)
+    assert time.monotonic() - t0 < 5
+    p.wait(timeout=5)

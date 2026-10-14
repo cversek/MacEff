@@ -55,6 +55,54 @@ READY_TIMEOUT_S = 10.0
 #: daemon restarts the unit under its declared policy.
 EXIT_NOT_STARTED = 1
 
+#: How long the session's own process group gets after SIGTERM before SIGKILL, once the
+#: server has gone. A unit's declared ``stop_grace_s`` must exceed it, or the daemon's
+#: SIGKILL reaches the wrapper first and nothing is left to stop the session.
+PANE_GRACE_S = 10.0
+
+
+def _group_alive(pgid: int) -> bool:
+    """True while a member of process group *pgid* runs. A zombie does not count: it has
+    exited, and only waits for a parent to reap it, which may be slow for a pane orphaned by
+    its server. On Linux the members are read from /proc; elsewhere a signal 0 is the probe,
+    which also counts a zombie."""
+    proc = Path("/proc")
+    if proc.is_dir() and (proc / "self" / "stat").exists():
+        for stat in proc.glob("[0-9]*/stat"):
+            try:
+                fields = stat.read_text().rpartition(")")[2].split()
+            except OSError:
+                continue
+            if len(fields) > 2 and fields[2] == str(pgid) and fields[0] != "Z":
+                return True
+        return False
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True   # a member we may not signal still lives
+
+
+def reap_group(pgid: int, grace: float = PANE_GRACE_S, poll: float = 0.1) -> bool:
+    """Stop process group *pgid*: SIGTERM, then SIGKILL after *grace* seconds; True once it is
+    gone. tmux runs each pane in a session, and so a process group, of its own, so the daemon's
+    stop, which signals the unit's group, reaches the session only through the server's SIGHUP.
+    A session that outlives that would run on after the unit ended, and a restart would start a
+    second ``claude -c`` beside it (MIS-0002-R48 (outside_stop_MUST_override_gates))."""
+    for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, grace)):
+        if not _group_alive(pgid):
+            return True
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            return True
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline and _group_alive(pgid):
+            time.sleep(poll)
+    return not _group_alive(pgid)
+
 
 def tmux_dir(agent: str, base: Optional[Path] = None) -> Path:
     """The private directory holding the agent's tmux socket, ``TMUX_TMPDIR`` for every
@@ -192,12 +240,29 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
         _stop(None, None)
         server.wait()
         return EXIT_NOT_STARTED
+    # The session's process group, read now while the pane exists: after the server has gone
+    # it is the one thing that can still name the session's processes (reap_group).
+    panes = _tmux(tmux, env, "list-panes", "-s", "-t", f"={agent}", "-F", "#{pane_pid}").stdout.split()
+    pane_groups = set()
+    for pane in panes:
+        try:
+            pane_groups.add(os.getpgid(int(pane)))
+        except (ValueError, ProcessLookupError):
+            pass
+    pane_groups.discard(os.getpgid(0))   # never this unit's own group
     # Only now, with a session in it, may the server end when it is empty: from here on
     # the session's end is the server's, and the server's is this unit's.
     _tmux(tmux, env, "set-option", "-s", "exit-empty", "on")
     print(f"📡 MACF: session unit: session {agent} runs under tmux server {server.pid} "
           f"(TMUX_TMPDIR={directory})", file=sys.stderr)
-    return server.wait()
+    status = server.wait()
+    # The unit ends only when the session has: a pane that outlived the server's hangup is
+    # stopped here, so a restart never starts a second session beside it.
+    for pgid in pane_groups:
+        if not reap_group(pgid):
+            print(f"⚠️ MACF: session unit: process group {pgid} of session {agent} survived SIGKILL",
+                  file=sys.stderr)
+    return status
 
 
 def main(argv: Optional[List[str]] = None) -> int:
