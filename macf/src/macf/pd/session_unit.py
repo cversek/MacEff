@@ -1,0 +1,227 @@
+"""The session unit: an agent's Claude Code session as a unit its primal daemon parents.
+
+MIS-0002-R12 (pd_MUST_start_units_itself): the daemon starts each unit as its own child.
+The legacy harness cannot be that child. ``tmux new-session`` asks a tmux server to run
+the session, and the server detaches from whoever started it, so the process the
+daemon would start ends at once while the session lives on under the server, out of
+the daemon's reach. Restarts there belong to MacEff's auto-restart loop inside the pane.
+
+This wrapper keeps the chain primal daemon → wrapper → tmux server → ``claude``:
+- it runs the agent's own tmux server in the foreground (``tmux -D``), as its child;
+- the server lives on a socket of its own, under a private directory in the daemon's
+  runtime directory, so no other login's sessions can keep it alive or share it;
+- it creates the agent's session there, running the harness child script, which runs
+  ``claude -c`` directly with no restart loop around it: restarts belong to the daemon
+  alone, under the unit's declared policy;
+- it turns the server's ``exit-empty`` on once the session exists, so the server, and
+  then this wrapper, end when ``claude`` does. The daemon sees the unit exit.
+
+Every tmux client reaches the server through ``TMUX_TMPDIR`` set to that directory,
+with tmux's default socket name inside it: the attach helpers, and the mail clock by a
+variable in its declared environment, with no change to the clock itself.
+
+**Liveness** (MIS-0002-R14) comes from the session's transcript monitor, which the
+operator chose on 2026-10-12: the monitor's loop reads the transcript and confirms the
+client process each pass, so its beat means both run. The wrapper hands the monitor
+the unit's identity through ``MACF_PD_SESSION_*`` variables naming this wrapper's pid,
+the process the daemon started, and removes its own ``MACF_PD_UNIT`` and
+``MACF_PD_LIVENESS_S`` from the session's environment, so no other process the session
+starts can report liveness as this unit.
+"""
+from __future__ import annotations
+
+import os
+import signal
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Callable, Dict, List, Mapping, Optional
+
+from macf.pd.interface import check_socket_path, runtime_dir
+from macf.pd.liveness import (ENV_HOME, ENV_INTERVAL, ENV_SESSION_INTERVAL, ENV_SESSION_PID,
+                              ENV_SESSION_UNIT, ENV_UNIT)
+
+#: What the agent's tmux directory is called inside the runtime directory, after the
+#: agent's session identifier.
+TMUX_DIR_SUFFIX = ".tmux"
+
+#: How long the wrapper waits for its tmux server to answer before giving up.
+READY_TIMEOUT_S = 10.0
+
+#: Exit status when the session could not be created: the server is stopped, and the
+#: daemon restarts the unit under its declared policy.
+EXIT_NOT_STARTED = 1
+
+
+def tmux_dir(agent: str, base: Optional[Path] = None) -> Path:
+    """The private directory holding the agent's tmux socket, ``TMUX_TMPDIR`` for every
+    client. ``agent`` is the session identifier (``TheHarborMaster_ee5cd8``)."""
+    return (base or runtime_dir()) / f"{agent}{TMUX_DIR_SUFFIX}"
+
+
+def tmux_socket(agent: str, base: Optional[Path] = None) -> Path:
+    """Where tmux puts the server's socket under ``tmux_dir``: tmux's own layout."""
+    return tmux_dir(agent, base) / f"tmux-{os.getuid()}" / "default"
+
+
+def client_environment(agent: str, base: Optional[Path] = None,
+                       environ: Optional[Mapping[str, str]] = None) -> Optional[Dict[str, str]]:
+    """The environment a tmux client needs to reach the agent's session unit, or None when
+    no session unit's server socket exists here (the legacy harness's default server)."""
+    if not tmux_socket(agent, base).exists():
+        return None
+    env = {k: v for k, v in (os.environ if environ is None else environ).items() if k != "TMUX"}
+    env["TMUX_TMPDIR"] = str(tmux_dir(agent, base))
+    return env
+
+
+def _private_dir(path: Path) -> Path:
+    """Create *path* 0700, or refuse one that another user owns or others can open: a
+    socket in it is a keyboard into the agent's session."""
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    st = path.stat()
+    if st.st_uid != os.getuid() or st.st_mode & 0o077:
+        raise PermissionError(f"{path} is not private to this user (mode {st.st_mode & 0o777:o})")
+    return path
+
+
+def session_environment(environ: Mapping[str, str], wrapper_pid: int, tmux_tmpdir: Path,
+                        extra: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
+    """The environment the tmux server starts with, which tmux copies into every session.
+
+    The unit's own variables become the session's: ``MACF_PD_UNIT`` and its interval
+    are removed, and ``MACF_PD_SESSION_*`` name the unit and this wrapper's pid for the
+    transcript monitor. Without a declared unit there is no liveness to hand on."""
+    env = {k: v for k, v in environ.items() if k not in (ENV_UNIT, ENV_INTERVAL, "TMUX", "TMUX_PANE")}
+    unit, interval = environ.get(ENV_UNIT), environ.get(ENV_INTERVAL)
+    if unit and interval and environ.get(ENV_HOME):
+        env[ENV_SESSION_UNIT] = unit
+        env[ENV_SESSION_INTERVAL] = interval
+        env[ENV_SESSION_PID] = str(wrapper_pid)
+    env["TMUX_TMPDIR"] = str(tmux_tmpdir)
+    env.update(extra or {})
+    return env
+
+
+def proxy_environment(port: int, probe: Optional[Callable[[str], bool]] = None) -> Dict[str, str]:
+    """The proxy attachment, probed as the legacy start script does: a proxy that does
+    not answer leaves the session direct rather than down. The base URL and the
+    first-party flag are one assignment, or the client silently falls back to a 200K
+    window (``utils.harness.render_start``)."""
+    url = f"http://127.0.0.1:{port}/"
+
+    def _answers(u: str) -> bool:
+        try:
+            urllib.request.urlopen(u, timeout=2)
+            return True
+        except urllib.error.HTTPError:
+            return True       # it answered, with an error status: it is up
+        except (OSError, ValueError):
+            return False
+
+    if not (probe or _answers)(url):
+        return {}
+    return {"ANTHROPIC_BASE_URL": f"http://localhost:{port}",
+            "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL": "1"}
+
+
+def _tmux(tmux: str, env: Mapping[str, str], *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run([tmux, *args], env=dict(env), capture_output=True, text=True, timeout=15)
+
+
+def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
+        conf: Optional[Path] = None, extra_env: Optional[Mapping[str, str]] = None,
+        environ: Optional[Mapping[str, str]] = None, tmux: str = "tmux",
+        base: Optional[Path] = None, ready_timeout: float = READY_TIMEOUT_S) -> int:
+    """Be the session unit until the session ends; return the tmux server's exit status.
+
+    ``child`` is the command the session runs (the harness child script). A declared
+    project directory that is missing is reported and the session is not started, since
+    ``claude -c`` would resume a different conversation from anywhere else."""
+    environ = os.environ if environ is None else environ
+    if project_dir is not None and not Path(project_dir).is_dir():
+        print(f"⚠️ MACF: session unit: the declared project directory {project_dir} does not exist; "
+              f"not starting, because 'claude -c' would resume a different conversation",
+              file=sys.stderr)
+        return EXIT_NOT_STARTED
+    try:
+        # MIS-0002-R129 (adapter_MUST_check_socket_path_length): tmux's own refusal names
+        # only the path, after the wrapper has started a server that cannot listen.
+        check_socket_path(tmux_socket(agent, base))
+    except OSError as e:
+        print(f"⚠️ MACF: session unit: {e}", file=sys.stderr)
+        return EXIT_NOT_STARTED
+    directory = _private_dir(tmux_dir(agent, base))
+    env = session_environment(environ, os.getpid(), directory, extra_env)
+    if tmux_socket(agent, base).exists() and _tmux(tmux, env, "has-session").returncode == 0:
+        # The socket is private, so a server answering on it is this agent's, from an
+        # earlier wrapper whose session still runs: a second would double the session.
+        print(f"⚠️ MACF: session unit: a tmux server already serves {agent}; not starting a second",
+              file=sys.stderr)
+        return EXIT_NOT_STARTED
+    server_cmd = [tmux] + (["-f", str(conf)] if conf and Path(conf).is_file() else ["-f", "/dev/null"]) + ["-D"]
+    server = subprocess.Popen(server_cmd, env=env, stdin=subprocess.DEVNULL)
+
+    def _stop(signum, _frame):
+        # The daemon's stop reaches the whole process group, the server included; this
+        # covers a signal sent to the wrapper alone.
+        if server.poll() is None:
+            server.terminate()
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, _stop)
+
+    deadline = time.monotonic() + ready_timeout
+    while _tmux(tmux, env, "show-options", "-s", "exit-empty").returncode != 0:
+        if server.poll() is not None or time.monotonic() > deadline:
+            print(f"⚠️ MACF: session unit: the tmux server did not answer within {ready_timeout:g} s",
+                  file=sys.stderr)
+            _stop(None, None)
+            server.wait()
+            return EXIT_NOT_STARTED
+        time.sleep(0.1)
+
+    new = ["new-session", "-d", "-s", agent] + (["-c", str(project_dir)] if project_dir else []) + [str(child)]
+    made = _tmux(tmux, env, *new)
+    if made.returncode != 0:
+        print(f"⚠️ MACF: session unit: could not create session {agent}: "
+              f"{(made.stderr or made.stdout).strip()[:200]}", file=sys.stderr)
+        _stop(None, None)
+        server.wait()
+        return EXIT_NOT_STARTED
+    # Only now, with a session in it, may the server end when it is empty: from here on
+    # the session's end is the server's, and the server's is this unit's.
+    _tmux(tmux, env, "set-option", "-s", "exit-empty", "on")
+    print(f"📡 MACF: session unit: session {agent} runs under tmux server {server.pid} "
+          f"(TMUX_TMPDIR={directory})", file=sys.stderr)
+    return server.wait()
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """``macf_tools harness unit``: the session unit's command in a declaration."""
+    import argparse
+    from dataclasses import replace
+
+    from macf.utils.harness import default_params, load_settings
+
+    parser = argparse.ArgumentParser(prog="macf_tools harness unit")
+    parser.add_argument("--agent", help="the session identifier (default: from the calling card)")
+    parser.add_argument("--home", help="the agent home (default: MACEFF_AGENT_HOME_DIR)")
+    parser.add_argument("--project-dir", help="where the session starts (default: the installed choice)")
+    parser.add_argument("--no-proxy", action="store_true", help="never attach the API proxy")
+    args = parser.parse_args(argv)
+    p = load_settings(default_params(agent=args.agent, home=args.home))
+    if args.project_dir:
+        p = replace(p, project_dir=Path(args.project_dir))
+    extra = {"MACF_CONTEXT_WINDOW": str(p.context_window), "TERM": p.term}
+    if not args.no_proxy:
+        extra.update(proxy_environment(p.proxy_port))
+    conf = p.home / f".tmux-{p.agent}.conf"
+    return run(p.agent, p.child_path, project_dir=p.project_dir, conf=conf, extra_env=extra)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
