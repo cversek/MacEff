@@ -1439,3 +1439,25 @@ def test_memory_is_read_over_the_whole_process_tree():
     finally:
         child.kill()
         child.wait()
+
+
+def test_a_new_incarnation_over_its_limit_is_recorded_again(tmp_path, script, make_core, monkeypatch):
+    """CTB's probe on #660: the over-limit state belongs to an incarnation, not the unit. A
+    unit over its limit that restarts and goes over again is recorded and noticed again,
+    naming the new pid."""
+    import macf.pd.core as core_module
+    monkeypatch.setattr(core_module, "tree_rss_mb", lambda pid: 80.0)   # limit is 64 MB
+    core = make_core([make_unit("worker", script, {})], memory_check_s=0.0)
+    owed = []
+    core.on_notice = lambda source, nid: owed.append(source)
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    core.tick()
+    first = core.pid("worker")
+    core.restart("worker", OPERATOR, "a new setting", peer=PEER)
+    assert drive(core, lambda: core.state("worker") == "running" and core.pid("worker") not in (None, first),
+                 timeout=8.0)
+    core.tick()
+    over = events("pd_unit_over_limit", "worker")
+    assert [d["pid"] for d in over] == [first, core.pid("worker")]
+    assert owed == ["pd_limit_exceeded", "pd_limit_exceeded"]
