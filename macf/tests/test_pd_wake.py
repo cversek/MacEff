@@ -39,6 +39,14 @@ def test_a_running_turn_is_seen_by_its_phrase_or_by_the_spinner_alone():
     assert wk.classify(screen(above=("✻ Pondering… (1m 12s · ↓ 2.1k tokens)",))) == wk.RUNNING
 
 
+def test_a_spinner_well_above_the_box_is_still_a_running_turn():
+    """The shape of a real 2.1.288 capture: the spinner seven lines above the box's top rule,
+    with the turn's output between them. Read as idle, the wake would be typed into a turn
+    that is running."""
+    output = ["  ⎿  line of the turn's output"] * 7
+    assert wk.classify(screen(above=("● Bloviating… (5m 5s · ↓ 25.3k tokens)", *output))) == wk.RUNNING
+
+
 def test_only_the_box_counts_as_a_wake_in_the_prompt_never_its_echo():
     echo = f"> {WAKE_OPENING} mail waiting: {ID1}. Read it with macf_tools amail read."
     assert wk.classify(screen(above=(echo, "⏺ Read 1 message."))) == wk.IDLE_EMPTY

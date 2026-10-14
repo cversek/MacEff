@@ -52,6 +52,9 @@ MAX_ENTERS, ENTER_SPACING_S = 3, 0.7
 #: How long the turn has to be seen starting after the first Enter.
 VERIFY_S = 6.0
 
+#: How many lines above the box a running turn's phrase or spinner is looked for.
+RUNNING_LOOKBACK = 15
+
 EVENT_SENT = "pd_wake_sent"
 EVENT_HELD = "pd_wake_held"
 EVENT_TURN = "pd_wake_turn"
@@ -112,7 +115,9 @@ def classify(screen: str) -> str:
     below = [line for line in plain[bottom + 1:] if line.strip()]
     if len(below) > 8 or any(m in line.lower() for line in below for m in _DIALOG_MARKERS):
         return DIALOG
-    near = plain[max(0, top - 6):]
+    # The spinner can sit well above the box, with the turn's output between them; the
+    # clock looks fifteen lines up, and 2.1.288 prints only the spinner.
+    near = plain[max(0, top - RUNNING_LOOKBACK):]
     if any(_RUNNING_MARKER in line.lower() or _SPINNER.search(line) for line in near):
         return RUNNING
     first = _visible(raw[box[0]]).lstrip()[1:]            # past the prompt mark
