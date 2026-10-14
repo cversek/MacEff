@@ -1871,31 +1871,36 @@ def cmd_harness_status(args: argparse.Namespace) -> int:
                   f"environment, config or any installed unit)")
         else:
             print(f"agent:   {p.agent}  ({card}, via {source})")
-        print(f"unit:    {unit_path} "
-              f"{'(present)' if unit_path.exists() else f'(ABSENT for agent {p.agent})'}")
-
-        # A HOST WITH NO INIT SYSTEM IS A SUPPORTED HOST, not an error. This
-        # call used to raise FileNotFoundError straight into the broad handler
-        # below, aborting the whole command -- so on a container the reader
-        # lost the session, owner and proxy lines as well and got an exception
-        # where a status belonged. Whether the unit is manageable says nothing
-        # about whether the session is UP, which is what the command is asked.
-        if shutil.which("systemctl") is None:
-            active = "no init system (systemctl absent) -- unit not managed here"
+        # Asked first: a session under the primal daemon has no systemd harness, and on a
+        # host without systemd (macOS) its lines were only noise above the one that answers.
+        from .pd.session_unit import client_environment
+        unit_env = client_environment(p.agent)
+        has_unit_session = unit_env is not None and subprocess.run(
+            ["tmux", "has-session", "-t", f"={p.agent}"], capture_output=True, env=unit_env).returncode == 0
+        if has_unit_session:
+            print("harness: not used -- the session runs as the primal daemon's session unit")
         else:
-            active = subprocess.run(["systemctl", "--user", "is-active", p.unit_name],
-                                    capture_output=True, text=True).stdout.strip()
-        print(f"active:  {active or 'unknown'}")
+            print(f"unit:    {unit_path} "
+                  f"{'(present)' if unit_path.exists() else f'(ABSENT for agent {p.agent})'}")
+
+            # A HOST WITH NO INIT SYSTEM IS A SUPPORTED HOST, not an error. This
+            # call used to raise FileNotFoundError straight into the broad handler
+            # below, aborting the whole command -- so on a container the reader
+            # lost the session, owner and proxy lines as well and got an exception
+            # where a status belonged. Whether the unit is manageable says nothing
+            # about whether the session is UP, which is what the command is asked.
+            if shutil.which("systemctl") is None:
+                active = "no init system (systemctl absent) -- unit not managed here"
+            else:
+                active = subprocess.run(["systemctl", "--user", "is-active", p.unit_name],
+                                        capture_output=True, text=True).stdout.strip()
+            print(f"active:  {active or 'unknown'}")
 
         # "=" forces an EXACT session match. Without it tmux resolves a target
         # by prefix, so `-t thm` happily matches a session called
         # "thm-stale-ssh" -- which is precisely the name someone gives the
         # imposter while moving it out of the way, so the workaround for the
         # name collision silently did not resolve the collision.
-        from .pd.session_unit import client_environment
-        unit_env = client_environment(p.agent)
-        has_unit_session = unit_env is not None and subprocess.run(
-            ["tmux", "has-session", "-t", f"={p.agent}"], capture_output=True, env=unit_env).returncode == 0
         if has_unit_session:
             # The session unit's server socket is private to this user, so a session on
             # it is the primal daemon's, whose own status names the unit's process.

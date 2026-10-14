@@ -6,10 +6,18 @@
     {
       "name": "session",
       "command": [
-        "maceff_harness_start_ExampleAgent_abc123"
+        "macf_tools",
+        "harness",
+        "unit",
+        "--agent",
+        "ExampleAgent_abc123",
+        "--home",
+        "{agent_home}",
+        "--project-dir",
+        "{agent_home}"
       ],
       "account": "example",
-      "restart": "on-failure",
+      "restart": "always",
       "liveness_interval_s": 60,
       "memory_limit_mb": 4096,
       "kind": "session",

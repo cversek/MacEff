@@ -172,6 +172,34 @@ def test_harness_status_reports_missing_init_system_instead_of_raising(monkeypat
     assert "session:" in out, "aborted before the systemd-independent lines"
 
 
+def test_harness_status_under_the_primal_daemon_skips_the_systemd_lines(monkeypatch, capsys):
+    """Ira's macOS run on #652: with the session the daemon's unit, the systemd unit and
+    init-system lines were noise above the one line that answered. They give way to one
+    line saying the harness is not used."""
+    import argparse
+    import subprocess as sp
+
+    from macf import cli
+    from macf.pd import session_unit
+
+    monkeypatch.setattr(session_unit, "client_environment", lambda agent, base=None: {"TMUX_TMPDIR": "/x"})
+    real_run = sp.run
+
+    def run(cmd, *a, **kw):
+        if cmd[:2] == ["tmux", "has-session"] and kw.get("env") == {"TMUX_TMPDIR": "/x"}:
+            return sp.CompletedProcess(cmd, 0, b"", b"")
+        if cmd[0] == "curl":
+            return sp.CompletedProcess(cmd, 7, b"", b"")
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(cli.subprocess, "run", run)
+    rc = cli.cmd_harness_status(argparse.Namespace(agent="demo", home=None))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "harness: not used" in out and "session: up as the primal daemon's session unit" in out
+    assert "unit:" not in out and "active:" not in out
+
+
 def test_decline_status_is_distinguishable_from_generic_failure():
     """Pin the LITERAL, because the requirement is about a specific number.
 

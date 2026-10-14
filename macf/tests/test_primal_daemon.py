@@ -600,7 +600,7 @@ def _windowed(script):
     ahead = datetime.now(ZoneInfo(zone))
     window = Window(start=(ahead + timedelta(hours=1)).strftime("%H:%M"),
                     end=(ahead + timedelta(hours=3)).strftime("%H:%M"))
-    unit = make_unit("worker", script, {}).model_copy(update={"kind": "session"})
+    unit = make_unit("worker", script, {}, restart="always").model_copy(update={"kind": "session"})
     shift = {"s": 0.0}
     core = Core(Declaration(version=1, agent=CARD, units=[unit], quiet_windows=[window], timezone=zone),
                 CARD, wall=lambda: time.time() + shift["s"], backoff_base_s=0.05, backoff_cap_s=0.2)

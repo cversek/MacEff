@@ -148,6 +148,16 @@ class Unit(_Closed):
                              f"automation:<bundle id>")
         return v
 
+    @model_validator(mode="after")
+    def _session_restarts_always(self) -> "Unit":
+        # The session unit's wrapper exits 0 however the session ends, since it reports its
+        # tmux server, not claude: under on-failure or never, an ended session stays down.
+        if self.kind == "session" and self.restart != "always":
+            raise ValueError(f"unit {self.name!r} is the session unit, whose restart must be 'always', "
+                             f"not {self.restart!r}: its wrapper exits 0 however the session ends, "
+                             f"so nothing else would bring the session back")
+        return self
+
 
 class Window(_Closed):
     start: str = Field(pattern=r"^\d{2}:\d{2}$")
