@@ -189,17 +189,19 @@ EXIT_NOT_SEEN = -1000
 LIVE_STATES = ("starting", "running", "waiting_on_a_person")
 
 
-def boot_time() -> Optional[float]:
-    """When this Linux host last booted, in epoch seconds (``btime`` in ``/proc/stat``), or
-    None elsewhere or when it can't be read. Only Linux needs it: there a start fingerprint
-    counts clock ticks since boot, while macOS records a UTC time."""
+def boot_id() -> Optional[str]:
+    """This Linux host's boot, as the random id the kernel draws at each boot, or None
+    elsewhere or when it can't be read. A Linux start fingerprint counts clock ticks since
+    boot, so a pid and start can recur in another boot; the id tells the boots apart. The
+    boot time can't: it moves when the clock is stepped, as a host without a battery clock
+    does once NTP answers. macOS records a UTC start time and needs no id."""
     if not sys.platform.startswith("linux"):
         return None
     try:
-        with open("/proc/stat") as f:
-            return float(next(int(line.split()[1]) for line in f if line.startswith("btime ")))
-    except (OSError, StopIteration, ValueError) as e:
-        print(f"⚠️ MACF: pd: cannot read the boot time: {e}", file=sys.stderr)
+        with open("/proc/sys/kernel/random/boot_id") as f:
+            return f.read().strip() or None
+    except OSError as e:
+        print(f"⚠️ MACF: pd: cannot read the boot id: {e}", file=sys.stderr)
         return None
 
 
@@ -212,8 +214,13 @@ def start_epoch(start) -> Optional[float]:
     if key is None:
         return None
     if sys.platform.startswith("linux"):
-        btime = boot_time()
-        return None if btime is None else btime + key / os.sysconf("SC_CLK_TCK")
+        try:
+            with open("/proc/stat") as f:
+                btime = next(int(line.split()[1]) for line in f if line.startswith("btime "))
+            return btime + key / os.sysconf("SC_CLK_TCK")
+        except (OSError, StopIteration, ValueError) as e:
+            print(f"⚠️ MACF: pd: cannot read the boot time for a start time: {e}", file=sys.stderr)
+            return None
     return float(key)
 
 
@@ -519,6 +526,7 @@ class Core:
         }
         self._tail = _LogTail(get_log_path())
         self._own_start: Optional[tuple] = None  # (pid, proc_start) once record_start has run
+        self._boot_id = boot_id()
 
     # ------------------------------------------------------------------ queries
 
@@ -602,20 +610,20 @@ class Core:
                 continue
             unit = data.get("unit")
             if unit in self._units and unit not in last:
-                last[unit] = {**data, "_recorded_at": event.get("timestamp")}
+                last[unit] = data
                 if len(last) == len(self._units):
                     break
         carried = set()
-        booted = boot_time()
         for name, data in last.items():
             pid, start = data.get("pid"), data.get("proc_start")
             if data.get("state") not in LIVE_STATES or not pid or not start:
                 continue
-            # A record made before this boot names no process that runs now, however well
-            # its pid and start match: a Linux start counts ticks since boot, so a process of
-            # this boot can carry the same pid and the same ticks as one of the last.
-            recorded = data.get("_recorded_at")
-            if booted is not None and isinstance(recorded, (int, float)) and recorded < booted:
+            # A record from another boot names no process that runs now, however well its
+            # pid and start match: a Linux start counts ticks since boot, so a process of
+            # this boot can carry the same pid and ticks as one of the last. A record with
+            # no boot id, from before the field or a platform without one, rests on the probe.
+            recorded = data.get("boot_id")
+            if recorded and self._boot_id and recorded != self._boot_id:
                 continue
             if not self._probe(pid, start):
                 continue
@@ -1258,7 +1266,7 @@ class Core:
         r.since = self._wall()
         self._emit(EVENT_STATE, UnitState(
             agent=self.card, unit=r.spec.name, state=state,
-            pid=r.pid, proc_start=r.proc_start, reason=reason,
+            pid=r.pid, proc_start=r.proc_start, reason=reason, boot_id=self._boot_id,
         ).model_dump())
 
     def _control(self, act: str, r: _Runner, asked_by: Asker, reason: str,
