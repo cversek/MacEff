@@ -360,6 +360,19 @@ def test_a_command_environment_names_only_known_placeholders():
         CommandRun(command=["true"], wake_when="exit_code", environment={"X": "{nonsense}"})
 
 
+@pytest.mark.parametrize("name", ["", "A=B", "1ABC", "WITH SPACE", "DASH-ED"])
+def test_an_environment_name_a_process_cant_carry_is_refused_at_load(name):
+    """Loaded, it would fail every run in subprocess; refused, it fails where it's written.
+    Units get the same check."""
+    from macf.pd.interface import Unit
+    with pytest.raises(ValueError, match="environment names"):
+        CommandRun(command=["true"], wake_when="exit_code", environment={name: "x"})
+    with pytest.raises(ValueError, match="environment names"):
+        Unit(name="u", command=["true"], account="a", restart="always", liveness_interval_s=1,
+             memory_limit_mb=1, environment={name: "x"})
+    CommandRun(command=["true"], wake_when="exit_code", environment={"_OK_1": "x"})
+
+
 def test_missed_runs_are_reported_once(tmp_path):
     """A downtime's missed firings are recorded once by policy, not on every pass (R25)."""
     log, now = Log(), [at("2026-10-14 12:00")]
