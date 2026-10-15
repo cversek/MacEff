@@ -4,6 +4,7 @@ import json
 import os
 import socket
 import time
+from dataclasses import dataclass
 
 import pytest
 
@@ -228,3 +229,181 @@ def test_a_unit_past_its_limit_is_a_notice_held_and_delivered(tmp_path, isolated
     assert "macf-daemon" in build_event(record)["params"]["content"]
     with pytest.raises(ValueError):
         second.raise_notice("amail", "not-raised-by-the-daemon")
+
+
+# ---------------------------------------------------------------- unread mail (MIS-0002-R55)
+
+class _Clock:
+    def __init__(self, now):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
+@dataclass(frozen=True)
+class _Rig:
+    """A tracker, the events it wrote, the notices it raised, and the clock it reads."""
+    tracker: object
+    said: list
+    notices: list
+    clock: _Clock
+
+
+def _unread(home, threshold=600.0, now=10_000.0, events=()) -> _Rig:
+    from macf.pd.unread_mail import UnreadMail, pickup_box
+    said, notices, clock = [], [], _Clock(now)
+    tracker = UnreadMail("Resident@1a2b3c", threshold, pickup_box(home),
+                         lambda source, nid: notices.append((source, nid)),
+                         append=lambda e, d: said.append((e, d)) or True, wall=clock,
+                         events=lambda: list(events))
+    tracker.boot()
+    return _Rig(tracker, said, notices, clock)
+
+
+def _arrive(home, name, at):
+    _mail(home, name)
+    os.utime(_box(home) / f"{name}.amsg", (at, at))
+
+
+def test_unread_mail_notice(tmp_path):
+    """R55: one notice per unread spell, however many messages arrive in it; a read box and
+    a new arrival past the threshold is a second spell; mail read in time gives none."""
+    from macf.pd.interface import EVENT_UNREAD_MAIL, EVENT_UNREAD_MAIL_CLEARED
+    home = _home(tmp_path)
+    r = _unread(home)
+    tracker, said, notices, clock = r.tracker, r.said, r.notices, r.clock
+    # a spell with three arrivals: one notice
+    _arrive(home, "a", 10_000)
+    tracker.tick(0.0)
+    assert notices == []                                  # not yet past the threshold
+    _arrive(home, "b", 10_100)
+    clock.now = 10_700
+    tracker.tick(0.0)
+    _arrive(home, "c", 10_800)
+    clock.now = 12_000
+    tracker.tick(0.0)
+    assert len(notices) == 1 and notices[0][0] == "pd_unread_mail"
+    assert [e for e, _ in said] == [EVENT_UNREAD_MAIL]
+    assert said[0][1]["count"] == 2 and said[0][1]["agent"] == "Resident@1a2b3c"
+    # read, then a new arrival past the threshold: a second spell, a second notice
+    for name in "abc":
+        (_box(home) / f"{name}.amsg").unlink()
+    tracker.tick(0.0)
+    assert [e for e, _ in said] == [EVENT_UNREAD_MAIL, EVENT_UNREAD_MAIL_CLEARED]
+    _arrive(home, "d", 12_100)
+    clock.now = 12_800
+    tracker.tick(0.0)
+    assert len(notices) == 2
+    # mail read before the threshold: no notice, and no spell to clear
+    (_box(home) / "d.amsg").unlink()
+    tracker.tick(0.0)
+    _arrive(home, "e", 13_000)
+    clock.now = 13_300
+    tracker.tick(0.0)
+    (_box(home) / "e.amsg").unlink()
+    tracker.tick(0.0)
+    assert len(notices) == 2
+    assert [e for e, _ in said].count(EVENT_UNREAD_MAIL) == 2
+
+
+def test_unread_mail_counts_only_the_time_the_session_ran(tmp_path):
+    """A wait counts from arrival or the running session's start, whichever is later, and
+    nothing is noticed while the declared session is down: an agent that wasn't there to
+    read hasn't left its mail unread (the storm amail.alerting records)."""
+    home = _home(tmp_path)
+    r = _unread(home)
+    tracker, said, notices, clock = r.tracker, r.said, r.notices, r.clock
+    _arrive(home, "a", 1_000)                             # long before the session started
+    clock.now = 10_000
+    tracker.tick(None)                                    # the session isn't running
+    assert notices == []
+    tracker.tick(9_800)                                   # it started 200 s ago
+    assert notices == []
+    clock.now = 10_500                                    # 700 s of the session's own time
+    tracker.tick(9_800)
+    assert len(notices) == 1
+
+
+def test_an_agent_without_a_session_counts_on_the_wall_clock(tmp_path):
+    from macf.pd.unread_mail import ALWAYS_ACTIVE
+    home = _home(tmp_path)
+    r = _unread(home)
+    tracker, said, notices, clock = r.tracker, r.said, r.notices, r.clock
+    _arrive(home, "a", 9_000)
+    tracker.tick(ALWAYS_ACTIVE)
+    assert len(notices) == 1
+
+
+def test_a_restarted_daemon_does_not_notice_an_open_spell_again(tmp_path):
+    from macf.pd.interface import EVENT_UNREAD_MAIL, EVENT_UNREAD_MAIL_CLEARED
+    home = _home(tmp_path)
+    _arrive(home, "a", 1_000)
+    opened = [{"event": EVENT_UNREAD_MAIL, "data": {"agent": "Other@000000"}},
+              {"event": EVENT_UNREAD_MAIL, "data": {"agent": "Resident@1a2b3c"}}]
+    r = _unread(home, events=opened)
+    tracker, said, notices, clock = r.tracker, r.said, r.notices, r.clock
+    tracker.tick(0.0)
+    assert notices == [] and said == []
+    closed = [{"event": EVENT_UNREAD_MAIL_CLEARED, "data": {"agent": "Resident@1a2b3c"}},
+              {"event": EVENT_UNREAD_MAIL, "data": {"agent": "Resident@1a2b3c"}}]
+    r = _unread(home, events=closed)
+    tracker, said, notices, clock = r.tracker, r.said, r.notices, r.clock
+    tracker.tick(0.0)
+    assert len(notices) == 1
+
+
+def test_an_unreadable_box_is_not_an_empty_one(tmp_path, monkeypatch):
+    """A box that can't be read neither opens nor closes a spell."""
+    from macf.pd import unread_mail
+    home = _home(tmp_path)
+    r = _unread(home)
+    tracker, said, notices, clock = r.tracker, r.said, r.notices, r.clock
+    _arrive(home, "a", 1_000)
+    tracker.tick(0.0)
+    assert len(notices) == 1
+    monkeypatch.setattr(unread_mail, "unread_arrivals", lambda box: None)
+    tracker.tick(0.0)
+    assert [e for e, _ in said] == ["pd_unread_mail"]
+
+
+def test_a_threshold_must_be_routed(tmp_path):
+    from macf.pd.interface import Declaration
+    with pytest.raises(ValueError, match="pd_unread_mail"):
+        Declaration(version=1, agent="Resident@1a2b3c", unread_mail_threshold_s=600)
+    d = Declaration(version=1, agent="Resident@1a2b3c", unread_mail_threshold_s=600,
+                    notice_routes={"pd_unread_mail": "both"})
+    assert d.unread_mail_threshold_s == 600
+
+
+def test_the_unread_mail_notice_is_held_and_delivered_to_the_agent(tmp_path, isolated_events_log):
+    home = _home(tmp_path)
+    notifier = nt.Notifier(home, {"pd_unread_mail": "agent"})
+    notifier.boot()
+    assert notifier.raise_notice("pd_unread_mail", "unread-mail-1") is True
+    ours, theirs = _pair()
+    notifier.attach(ours)
+    assert notifier.flush() == 1
+    [record] = _records(theirs)
+    assert record.source == "pd_unread_mail"
+    operator_only = nt.Notifier(home, {"pd_unread_mail": "operator"})
+    assert operator_only.raise_notice("pd_unread_mail", "unread-mail-2") is False
+
+
+def test_a_daemon_with_a_threshold_notices_unread_mail(tmp_path, base, run_daemon, isolated_events_log):
+    """End to end: the declaration's threshold builds the tracker, the serve loop ticks it,
+    and an agent with no session unit counts on the wall clock."""
+    from macf.pd.interface import Declaration, EVENT_UNREAD_MAIL, declaration_path
+    home = make_home(tmp_path, [])
+    declaration_path(home).write_text(Declaration(
+        version=1, agent="Tester@abc123", unread_mail_threshold_s=0.2,
+        notice_routes={"pd_unread_mail": "agent"}).model_dump_json())
+    _mail(home, "waiting")
+    daemon = run_daemon(home, base)
+    assert daemon.unread_mail is not None and daemon.core.session_active_since() == float("-inf")
+    deadline = time.time() + 5
+    while time.time() < deadline and not list(read_events(only=(EVENT_UNREAD_MAIL,))):
+        time.sleep(0.1)                                   # the serve loop ticks on its own
+    [event] = list(read_events(only=(EVENT_UNREAD_MAIL,)))
+    assert event["data"]["agent"] == "Tester@abc123" and event["data"]["count"] == 1
+    assert any(o.source == "pd_unread_mail" for o in daemon.notifier.owed.values())
