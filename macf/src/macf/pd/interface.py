@@ -337,6 +337,9 @@ class UnitState(_Closed):
     pid: Optional[int] = None
     proc_start: Optional[str] = None
     reason: str = ""
+    #: The host boot this was recorded in (Linux's ``boot_id``), so a later daemon adopts
+    #: the pid only within the same boot. None where the platform has no boot id.
+    boot_id: Optional[str] = None
 
 
 class Asker(_Closed):
