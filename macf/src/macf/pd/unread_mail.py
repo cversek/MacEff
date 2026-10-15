@@ -24,7 +24,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional
+from typing import Callable, Dict, Iterable, Optional
 
 from macf.agent_events_log import append_event, read_events
 from macf.pd.interface import EVENT_UNREAD_MAIL, EVENT_UNREAD_MAIL_CLEARED, UNREAD_MAIL_SOURCE
@@ -38,23 +38,23 @@ def pickup_box(agent_home: Path) -> Path:
     return Path(agent_home) / "amail" / "pickup"
 
 
-def unread_arrivals(box: Path) -> Optional[List[float]]:
-    """The arrival times (mtimes) of the messages in *box*, or None when it can't be read.
-    A box that doesn't exist yet is empty. Names and times only, never contents."""
+def unread_arrivals(box: Path) -> Optional[Dict[str, float]]:
+    """Each message in *box* by name, with its arrival time (mtime), or None when the box
+    can't be read. A box that doesn't exist yet is empty. Names and times only, never contents."""
     try:
         entries = list(os.scandir(box))
     except FileNotFoundError:
-        return []
+        return {}
     except OSError as e:
         print(f"⚠️ MACF: pd: the pickup box can't be read, so unread mail can't be judged: {e}",
               file=sys.stderr)
         return None
-    times = []
+    times = {}
     for entry in entries:
         if not entry.name.endswith(STORE_SUFFIXES):
             continue
         try:
-            times.append(entry.stat().st_mtime)
+            times[entry.name] = entry.stat().st_mtime
         except FileNotFoundError:
             continue        # ingested between the listing and the stat
     return times
@@ -93,24 +93,36 @@ class UnreadMail:
         arrivals = unread_arrivals(self.box)
         if arrivals is None:
             return                              # can't tell; the box said so
+        # A spell opens and closes in the log first: the state here changes only once its
+        # event is recorded, so a restart reads back what this daemon did and a notice never
+        # goes out that the log (and the operator's watch) doesn't hold. An event that fails
+        # to record is tried again next pass.
         if not arrivals:
-            if self.in_spell:
+            if self.in_spell and self._say(EVENT_UNREAD_MAIL_CLEARED, 0, 0.0, None, "the pickup box is empty"):
                 self.in_spell = False
-                self._say(EVENT_UNREAD_MAIL_CLEARED, 0, 0.0, "the pickup box is empty")
             return
         if self.in_spell or active_since is None:
             return
         now = self.wall()
-        waited = now - max(min(arrivals), active_since)
+        oldest = min(arrivals, key=arrivals.get)
+        waited = now - max(arrivals[oldest], active_since)
         if waited < self.threshold_s:
             return
-        self.in_spell = True
-        reason = (f"{len(arrivals)} message(s) unread; the oldest has waited {waited:.0f} s "
+        # The oldest entry is named, since one that `amail list` can't take in (an unreadable
+        # pair, a hash mismatch) stays in the box and holds the spell open: only a person
+        # can clear it, and the name is what they need.
+        reason = (f"{len(arrivals)} message(s) unread; the oldest, {oldest}, has waited {waited:.0f} s "
                   f"while the agent ran, past its threshold of {self.threshold_s:g} s")
-        self._say(EVENT_UNREAD_MAIL, len(arrivals), waited, reason)
-        self.notice(UNREAD_MAIL_SOURCE, f"unread-mail-{int(now)}")
+        if self._say(EVENT_UNREAD_MAIL, len(arrivals), waited, oldest, reason):
+            self.in_spell = True
+            self.notice(UNREAD_MAIL_SOURCE, f"unread-mail-{int(now)}")
 
-    def _say(self, event: str, count: int, waited: float, reason: str) -> None:
+    def _say(self, event: str, count: int, waited: float, oldest: Optional[str], reason: str) -> bool:
         data = {"agent": self.card, "count": count, "waited_s": round(waited, 1), "reason": reason}
-        if not self.append(event, data):
-            print(f"⚠️ MACF: pd: the {event} event was not recorded: {reason}", file=sys.stderr)
+        if oldest:
+            data["oldest"] = oldest
+        if self.append(event, data):
+            return True
+        print(f"⚠️ MACF: pd: the {event} event was not recorded, so the spell is unchanged and "
+              f"tried again next pass: {reason}", file=sys.stderr)
+        return False

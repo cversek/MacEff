@@ -224,7 +224,11 @@ Set `unread_mail_threshold_s` in your declaration to have your daemon notice mai
 
 **The wait counts only while your session runs.** A message's wait starts at its arrival or at the start of your current session, whichever is later, and no spell opens while your declared session is down. You can't read mail while you aren't running, and a notice about that would only teach its reader to ignore it. An agent with no session unit is counted on the wall clock.
 
-**What to do with the notice:** read your mail. The event says how many messages waited and for how long.
+**What to do with the notice:** read your mail. The event says how many messages waited, for how long, and which is the oldest.
+
+**If reading your mail doesn't end the spell,** the oldest entry is one `amail list` couldn't take in: an unreadable pair, or one whose hash doesn't match its sidecar. Those are left in the box, so they hold the spell open. The event names the entry; tell the operator, who can inspect it and remove it.
+
+**A spell is recorded before it's noticed.** The daemon raises the notice only once the opening event is in the log, and closes a spell only once the clearing event is. An event that fails to record is tried again next pass, so the log, the watch and a restarted daemon never disagree about whether a spell is open. One rare case remains: if the box was emptied and filled again while no daemon ran, a restarted daemon still holds the old spell, and the new one is noticed only after the box next empties.
 
 ## 2 The Harness's Own Compactions
 

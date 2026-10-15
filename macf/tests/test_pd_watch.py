@@ -290,6 +290,16 @@ def test_unread_mail_routed_to_the_operator_is_one_alert_per_spell(tmp_path):
     assert len(watch.transitions(mail, after, NOW)[0]) == 1
 
 
+def test_a_spell_older_than_the_lookback_still_reads_open(tmp_path):
+    """The opening event is a spell's only record; a cutoff would turn a week-old spell into
+    an all-clear while the daemon still holds it (host-side maintainer, on review)."""
+    home = _home(tmp_path)
+    _route_unread_mail(home, "operator")
+    _unread_event(home, pdi.EVENT_UNREAD_MAIL, watch.LOOKBACK_S + 3600)
+    mail = [f for f in watch.check_home(home, NOW) if f.subject == "mail"]
+    assert [f.verdict for f in mail] == ["UNREAD"]
+
+
 def test_unread_mail_routed_to_the_agent_alone_is_not_the_watchs(tmp_path):
     home = _home(tmp_path)
     _route_unread_mail(home, "agent")

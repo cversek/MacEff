@@ -184,10 +184,12 @@ def check_channel(card: str, event: Optional[dict], now: float) -> Finding:
 
 
 def last_unread_mail_event(log_path: Path, card: str, now: float,
-                           lookback_s: float = LOOKBACK_S) -> Optional[dict]:
-    """The newest ``pd_unread_mail`` or ``pd_unread_mail_cleared`` of agent *card* within the
-    lookback, or None."""
-    cutoff = now - lookback_s
+                           lookback_s: Optional[float] = None) -> Optional[dict]:
+    """The newest ``pd_unread_mail`` or ``pd_unread_mail_cleared`` of agent *card*, or None.
+    Not bounded by the usual lookback: a spell's opening event is the only record that it
+    is open, so a spell older than the lookback would read as cleared and the operator would
+    get an all-clear while the daemon still holds it (host-side maintainer, on review)."""
+    cutoff = now - lookback_s if lookback_s is not None else float("-inf")
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)

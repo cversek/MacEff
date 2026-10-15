@@ -367,6 +367,42 @@ def test_an_unreadable_box_is_not_an_empty_one(tmp_path, monkeypatch):
     assert [e for e, _ in said] == ["pd_unread_mail"]
 
 
+def test_no_notice_goes_out_without_its_record(tmp_path):
+    """A spell opens in the log first: an event that fails to record raises no notice and
+    leaves the spell closed, to be tried again, so a restart never notices it twice and the
+    operator's watch, which reads only the log, never misses one (host-side maintainer)."""
+    home = _home(tmp_path)
+    r = _unread(home)
+    _arrive(home, "a", 1_000)
+    log_ok = [False]
+    r.tracker.append = lambda e, d: log_ok[0] and (r.said.append((e, d)) or True)
+    r.tracker.tick(0.0)
+    assert r.notices == [] and r.tracker.in_spell is False
+    log_ok[0] = True
+    r.tracker.tick(0.0)
+    assert len(r.notices) == 1 and r.tracker.in_spell is True
+    # and a clearing that fails to record leaves the spell open, as the log still says
+    (_box(home) / "a.amsg").unlink()
+    log_ok[0] = False
+    r.tracker.tick(0.0)
+    assert r.tracker.in_spell is True
+    log_ok[0] = True
+    r.tracker.tick(0.0)
+    assert r.tracker.in_spell is False and r.said[-1][0] == "pd_unread_mail_cleared"
+
+
+def test_the_oldest_entry_is_named(tmp_path):
+    """An entry `amail list` can't take in stays in the box and holds the spell open; the
+    event and its reason name the oldest, so a person can find it."""
+    home = _home(tmp_path)
+    r = _unread(home)
+    _arrive(home, "newer", 1_500)
+    _arrive(home, "stuck", 1_000)
+    r.tracker.tick(0.0)
+    data = r.said[0][1]
+    assert data["oldest"] == "stuck.amsg" and "stuck.amsg" in data["reason"]
+
+
 def test_a_threshold_must_be_routed(tmp_path):
     from macf.pd.interface import Declaration
     with pytest.raises(ValueError, match="pd_unread_mail"):
