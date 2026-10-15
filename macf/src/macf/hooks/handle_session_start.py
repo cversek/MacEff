@@ -157,6 +157,38 @@ def _identity_block() -> str:
     return f"<system-reminder>\n{text}\n</system-reminder>\n"
 
 
+def _supervision_block(environ=None, ask=None) -> str:
+    """A line when this agent has a primal daemon but this session isn't confirmed as its
+    session unit (persistent_layer 6.2): such a session isn't restarted by the daemon if it
+    crashes, and nothing told the agent so until it asked ``macf_tools env``. Silent where
+    the daemon confirms the session, and for an agent that declares no daemon at all. It
+    is also the check for moving sessions onto their daemons: after the move, no session
+    says it. A failure here must never break session start."""
+    env = os.environ if environ is None else environ
+    try:
+        from ..pd.interface import declaration_path
+        from ..utils.supervision import primal_daemon_unit
+        home = Path(env.get("MACEFF_AGENT_HOME_DIR") or Path.home())
+        if not declaration_path(home).is_file():
+            return ""
+        unit = primal_daemon_unit(get_agent_identity(), environ=env, ask=ask)
+    except Exception as e:  # noqa: BLE001 - GUARD: a readout must not break session start
+        emit_warning(Warning(source="session_start", kind="supervision_unread",
+                             detail=f"could not tell whether the daemon supervises this session: {e}"))
+        return ""
+    if unit and unit["confirmed"]:
+        return ""
+    if unit:
+        text = (f"🧭 This session says it is your primal daemon's unit {unit['unit']} (pid {unit['pid']}), "
+                f"but the daemon doesn't confirm it: {unit['why']}. Until it does, a crash may not be "
+                "restarted. Run `macf_tools pd status` and tell the operator.")
+    else:
+        text = ("🧭 You have a primal daemon, but this session isn't running as its session unit, "
+                "so the daemon won't restart it if it crashes. `macf_tools env` shows what supervises "
+                "it. Moving a session onto its daemon is the operator's step (persistent_layer 6.2).")
+    return f"<system-reminder>\n{text}\n</system-reminder>\n"
+
+
 def _focused_charter_block() -> str:
     """The focused role's charter as one more system-reminder, or ''. A failure
     here must never break session start; it is reported and skipped."""
@@ -358,7 +390,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                     "continue": True,
                     "hookSpecificOutput": {
                         "hookEventName": "SessionStart",
-                        "additionalContext": _identity_block()
+                        "additionalContext": _identity_block() + _supervision_block()
                                              + f"<system-reminder>\n{migration_msg}\n</system-reminder>"
                     }
                 }
@@ -558,7 +590,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 "systemMessage": recovery_msg,  # TOP LEVEL - user sees this
                 "hookSpecificOutput": {
                     "hookEventName": "SessionStart",
-                    "additionalContext": _identity_block()
+                    "additionalContext": _identity_block() + _supervision_block()
                                          + f"<system-reminder>\n{recovery_msg}\n</system-reminder>"
                                          + _focused_charter_block()
                 }
@@ -668,7 +700,7 @@ Session Context:
             emit_warning(Warning(source="session_start", kind="telegram_send_failed", detail=f"session-start telegram notification failed: {e}"))
 
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
-        additional_context = (_identity_block()
+        additional_context = (_identity_block() + _supervision_block()
                               + f"<system-reminder>\n{message}\n</system-reminder>"
                               + _focused_charter_block())
 
