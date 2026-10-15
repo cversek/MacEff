@@ -194,11 +194,20 @@ class CommandRun(_Closed):
 
     command: List[str] = Field(min_length=1)
     wake_when: Literal["exit_code", "stdout"]
+    #: Added to the run's fixed ``PATH`` and ``HOME``, rendered like a unit's environment;
+    #: a key declared here overrides those two.
+    environment: Dict[str, str] = Field(default_factory=dict)
 
     @field_validator("command")
     @classmethod
     def _command_placeholders(cls, v: List[str]) -> List[str]:
         return _known_placeholders(v)
+
+    @field_validator("environment")
+    @classmethod
+    def _environment_placeholders(cls, v: Dict[str, str]) -> Dict[str, str]:
+        _known_placeholders(list(v.values()))
+        return v
 
 
 class Schedule(_Closed):
