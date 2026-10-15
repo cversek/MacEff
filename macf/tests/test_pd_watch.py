@@ -129,6 +129,21 @@ def test_each_external_state_has_its_own_exit_code(tmp_path):
     assert len({watch.EXIT_HEALTHY, watch.EXIT_UNHEALTHY, watch.EXIT_UNREACHABLE, watch.EXIT_CHECK_FAILED}) == 4
 
 
+@pytest.mark.parametrize("verdict", __import__("typing").get_args(watch.Verdict))
+def test_every_verdict_has_an_exit_code(verdict):
+    """A verdict added without a code made the pass raise after its alert was sent, on every
+    pass while a channel was dark or a wake held. Only ALIVE is healthy."""
+    code = watch.exit_code([watch.Finding("Resident@1a2b3c", "subject", verdict, "why")])
+    assert (code == watch.EXIT_HEALTHY) == (verdict == "ALIVE")
+
+
+def test_a_dark_channel_pass_exits_unhealthy_after_its_alert(tmp_path):
+    findings = [watch.check_channel("Resident@1a2b3c", {"event": pdi.EVENT_CHANNEL_DARK, "timestamp": NOW - 60,
+                                                         "data": {"agent": "Resident@1a2b3c", "reason": "dropped"}}, NOW)]
+    assert [f.verdict for f in findings] == ["DARK"]
+    assert watch.exit_code(findings) == watch.EXIT_UNHEALTHY
+
+
 def test_a_failed_push_is_recorded_and_loud_and_echoes_nothing_from_the_command(tmp_path, capsys):
     durable = tmp_path / "state" / "alerts.jsonl"
     secret_url = "https://api.example/bot123:SECRET/send"
