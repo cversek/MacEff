@@ -73,7 +73,10 @@ class TestCompactionDetection:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
 
             assert result is False
-            # With retry logic: 3 attempts × (read + 50ms delay) = ~150-200ms max
-            assert elapsed_ms < 200, f"Detection took {elapsed_ms:.1f}ms, expected < 200ms"
+            # With retry logic: 3 attempts × (read + 50ms delay) = ~150-200ms on an idle
+            # machine. CI runs the suite in parallel on shared runners, and macOS's took
+            # 301 ms there (Oct 14), so the bound guards against an order-of-magnitude
+            # regression (a full read per retry, say) rather than timing the happy path.
+            assert elapsed_ms < 1000, f"Detection took {elapsed_ms:.1f}ms, expected < 1000ms"
         finally:
             transcript_path.unlink()
