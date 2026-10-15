@@ -1,0 +1,3 @@
+### Added
+
+- **Hostile stand-ins for supervision tests: the `hostile` fixture** (`tests/hostile.py`, `tests/conftest.py`): processes a stop has to beat. One ignores HUP, INT and TERM; one leaves a TERM-ignoring child in its group when its leader dies, or leaves on its own; one's child escapes into its own session; one leaves a zombie. Each is a Python script, the same on macOS, with no shell quoting to get wrong. Every pid a stand-in reports, the leader's included, is SIGKILLed at teardown, and only while its start still matches, so a failing test leaves nothing running and teardown never kills a reused pid. Seven self-tests check that each resists as it claims; three planted defects each turn one red.
