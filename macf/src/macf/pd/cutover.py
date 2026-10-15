@@ -22,7 +22,7 @@ from pydantic import ValidationError
 
 from macf.pd.interface import Declaration, declaration_path
 from macf.pd.names import systemd_unit
-from macf.pd.session_unit import PANE_GRACE_S, tmux_dir
+from macf.pd.session_unit import PANE_GRACE_S, tmux_socket
 
 #: Where a declaration with the session unit is staged before the move.
 STAGED_SUFFIX = ".cutover"
@@ -95,7 +95,7 @@ def staged_path(home: Path) -> Path:
     return path.with_name(path.name + STAGED_SUFFIX)
 
 
-def _staged_check(path: Path, card: str) -> Check:
+def _staged_check(path: Path, card: str, runtime: Optional[str]) -> Check:
     try:
         declaration = Declaration.model_validate_json(path.read_text())
     except FileNotFoundError:
@@ -112,16 +112,53 @@ def _staged_check(path: Path, card: str) -> Check:
         return Check("staged declaration", False,
                      f"the session unit's stop_grace_s {session.stop_grace_s:g} must exceed the "
                      f"wrapper's {PANE_GRACE_S:g} s pane grace (persistent_layer 6.2)")
+    # A unit gets only its declared environment. Without these, the session never beats, so
+    # it never reads running and the move rolls back after its wait: found in the first trial.
+    from macf.pd.liveness import ENV_INTERVAL, ENV_UNIT
+    env = session.environment
+    try:
+        interval_matches = float(env.get(ENV_INTERVAL, "")) == session.liveness_interval_s
+    except ValueError:
+        interval_matches = False
+    if env.get(ENV_UNIT) != session.name or not interval_matches:
+        return Check("staged declaration", False,
+                     f"the session unit's environment must declare {ENV_UNIT}={session.name} and "
+                     f"{ENV_INTERVAL}={session.liveness_interval_s:g} (it declares "
+                     f"{env.get(ENV_UNIT)!r} and {env.get(ENV_INTERVAL)!r}), or the session never "
+                     "reads running")
+    # Without this, its tmux server sits under /tmp, where attach, harness status and the
+    # rollback look for it in vain.
+    declared = session.environment.get("XDG_RUNTIME_DIR")
+    if not declared or (runtime and declared != runtime):
+        return Check("staged declaration", False,
+                     f"the session unit's environment must declare XDG_RUNTIME_DIR={runtime or '<yours>'} "
+                     f"(it declares {declared or 'none'}), or its tmux server lands where nothing looks")
     return Check("staged declaration", True, f"{path} validates, with session unit {session.name}")
+
+
+def default_socket(uid: Optional[int] = None) -> Path:
+    """The default tmux server's socket, where the legacy harness runs. Every tmux command
+    in a plan names its server's socket with ``-S``: inside a tmux client, ``TMUX`` outranks
+    ``TMUX_TMPDIR``, so a pasted ``TMUX_TMPDIR=... tmux kill-server`` would end the server
+    the operator is typing in."""
+    import os
+    return Path("/tmp") / f"tmux-{os.getuid() if uid is None else uid}" / "default"
 
 
 def build_plan(home: Path, card: str, agent: str, probes: Probes,
                staged: Optional[Path] = None, harness_unit: Optional[str] = None,
-               base: Optional[Path] = None) -> Plan:
+               runtime: Optional[str] = None) -> Plan:
     """What moving *agent*'s session onto its daemon would do, and whether it can be done now.
 
-    *agent* is the session identifier (``Name_uuid6``), *card* the calling card.
+    *agent* is the session identifier (``Name_uuid6``), *card* the calling card, *runtime*
+    the caller's ``XDG_RUNTIME_DIR`` (the process environment's by default), which the
+    session unit must declare so its tmux server is where every client looks.
     """
+    import os
+    from macf.pd.names import PD_IDENTIFIER
+    runtime = runtime if runtime is not None else os.environ.get("XDG_RUNTIME_DIR")
+    # Where the unit's tmux server will be, from the runtime directory it must declare.
+    unit_base = Path(runtime) / PD_IDENTIFIER if runtime else None
     staged = staged or staged_path(home)
     harness_unit = harness_unit or f"cc-harness-{agent}.service"
     daemon_unit = systemd_unit(card)
@@ -139,7 +176,7 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
                             "goes through launchd (persistent_layer 6.3)"))
         return Plan(agent, card, False, checks)
 
-    checks.append(_staged_check(staged, card))
+    checks.append(_staged_check(staged, card, runtime))
     why = probes.daemon_answers()
     checks.append(Check("daemon", why is None, "answers on its socket" if why is None else why))
     legacy = probes.unit_active(harness_unit) == "active"
@@ -161,7 +198,7 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
                           [systemctl("disable", "--now", u) for u in clocks]))
     if legacy or held:
         stop = [systemctl("stop", harness_unit), systemctl("disable", harness_unit)] if legacy else []
-        stop.append(Command(["tmux", "kill-session", "-t", f"={agent}"],
+        stop.append(Command(["tmux", "-S", str(default_socket()), "kill-session", "-t", f"={agent}"],
                             note="the pane a stop left behind, if any", may_fail=True))
         steps.append(Step("Stop the legacy session (a session running here ends at this step)", stop))
     steps.append(Step("Install the declaration with the session unit, keeping the old one",
@@ -171,7 +208,7 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
                       [Command(["macf_tools", "pd", "status"]), Command(["macf_tools", "harness", "status"])]))
 
     rollback = [Command(["cp", str(saved), str(live)]), systemctl("restart", daemon_unit),
-                Command(["tmux", "kill-server"], env={"TMUX_TMPDIR": str(tmux_dir(agent, base))},
+                Command(["tmux", "-S", str(tmux_socket(agent, unit_base)), "kill-server"],
                         note="the unit's session, no longer declared, before the legacy one starts",
                         may_fail=True)]
     if legacy:
@@ -210,7 +247,8 @@ def host_probes(home: Path, card: str) -> Probes:
         systemd=shutil.which("systemctl") is not None,
         unit_active=lambda unit: run("systemctl", "--user", "is-active", unit).stdout.strip(),
         active_units=active_units,
-        default_session=lambda agent: run("tmux", "has-session", "-t", f"={agent}").returncode == 0,
+        default_session=lambda agent: run("tmux", "-S", str(default_socket()), "has-session",
+                                          "-t", f"={agent}").returncode == 0,
         unit_session=unit_session,
         daemon_answers=daemon_answers,
     )
@@ -297,11 +335,17 @@ def came_up_by_status(home: Path, card: str, unit: str, timeout_s: float = COME_
     return poll
 
 
-def arm_argv(agent: str, home: Path, staged: Path, log_path: Path, python: str) -> List[str]:
+def arm_argv(agent: str, home: Path, staged: Path, log_path: Path, python: str,
+             environ: Optional[Dict[str, str]] = None) -> List[str]:
     """The transient unit that carries the plan out, outside the session it stops: the
-    session's own process tree ends at step 2, so nothing of the move may live in it."""
+    session's own process tree ends at step 2, so nothing of the move may live in it.
+    A ``PYTHONPATH`` the caller runs under is passed on, so the unit imports the same macf
+    that printed the plan rather than whatever its manager's environment finds."""
+    import os
+    env = os.environ if environ is None else environ
+    setenv = [f"--setenv=PYTHONPATH={env['PYTHONPATH']}"] if env.get("PYTHONPATH") else []
     return ["systemd-run", "--user", "--unit", f"{RUN_UNIT_PREFIX}{agent}", "--collect",
-            "--property", "Type=exec", "--",
+            "--property", "Type=exec", *setenv, "--",
             python, "-m", "macf.cli", "harness", "cutover", "--agent", agent, "--home", str(home),
             "--staged", str(staged), "--execute", "--log", str(log_path)]
 

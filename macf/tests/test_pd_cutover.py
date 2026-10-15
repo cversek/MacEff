@@ -8,6 +8,7 @@ from macf.pd.cutover import Probes, build_plan, format_plan, staged_path
 from macf.pd.interface import Declaration, Unit, declaration_path
 
 CARD, AGENT = "Resident@1a2b3c", "Resident_1a2b3c"
+RUNTIME = "/run/user/4242"
 
 
 def _probes(**over) -> Probes:
@@ -22,13 +23,16 @@ def _probes(**over) -> Probes:
     return Probes(**base)
 
 
-def _stage(home: Path, *, grace=30.0, agent=CARD, session=True):
+def _stage(home: Path, *, grace=30.0, agent=CARD, session=True, runtime=RUNTIME, liveness=True):
     units = [Unit(name="amail-broker", command=["broker"], account="resident", restart="always",
                   liveness_interval_s=30, memory_limit_mb=64)]
     if session:
+        env = {"XDG_RUNTIME_DIR": runtime} if runtime else {}
+        if liveness:
+            env.update(MACF_PD_UNIT="session", MACF_PD_LIVENESS_S="120")
         units.append(Unit(name="session", kind="session", command=["macf_tools", "harness", "unit"],
                           account="resident", restart="always", liveness_interval_s=120,
-                          memory_limit_mb=16384, stop_grace_s=grace))
+                          memory_limit_mb=16384, stop_grace_s=grace, environment=env))
     path = staged_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(Declaration(version=1, agent=agent, units=units).model_dump_json())
@@ -37,7 +41,7 @@ def _stage(home: Path, *, grace=30.0, agent=CARD, session=True):
 
 def test_a_ready_host_gets_every_step_in_the_runbooks_order(tmp_path):
     _stage(tmp_path)
-    plan = build_plan(tmp_path, CARD, AGENT, _probes(), base=tmp_path / "run")
+    plan = build_plan(tmp_path, CARD, AGENT, _probes(), runtime=RUNTIME)
     assert plan.ready and all(c.ok for c in plan.checks)
     whats = [s.what.split(" (")[0] for s in plan.steps]
     assert whats == ["Stop the clocks that would type into the pane beside the daemon's",
@@ -55,12 +59,15 @@ def test_a_ready_host_gets_every_step_in_the_runbooks_order(tmp_path):
     rollback = [str(c) for c in plan.rollback]
     assert rollback[0] == f"cp {live}.pre-cutover {live}"
     kill = next(i for i, c in enumerate(rollback) if "kill-server" in c)
-    assert str(tmp_path / "run" / f"{AGENT}.tmux") in rollback[kill]
+    assert f"-S {RUNTIME}/maceff_pd/{AGENT}.tmux/" in rollback[kill]
     assert kill < rollback.index(f"systemctl --user enable --now cc-harness-{AGENT}.service")
+    # every tmux command names its server's socket: inside a tmux client TMUX outranks TMUX_TMPDIR
+    assert all(" -S " in c for c in flat + rollback if c.startswith("tmux"))
+    assert not any("TMUX_TMPDIR=" in c for c in flat + rollback)
 
 
 def test_an_already_moved_session_has_nothing_to_do(tmp_path):
-    plan = build_plan(tmp_path, CARD, AGENT, _probes(unit_session=lambda agent: True))
+    plan = build_plan(tmp_path, CARD, AGENT, _probes(unit_session=lambda agent: True), runtime=RUNTIME)
     assert not plan.ready and not plan.steps and "nothing to move" in plan.checks[0].detail
 
 
@@ -70,19 +77,23 @@ def test_each_unmet_check_says_not_ready(tmp_path):
         "another agent's": (lambda: _stage(tmp_path, agent="Other@000000"), _probes(), "declares Other"),
         "no session unit": (lambda: _stage(tmp_path, session=False), _probes(), "no session unit"),
         "grace too short": (lambda: _stage(tmp_path, grace=5.0), _probes(), "must exceed"),
+        "no runtime dir": (lambda: _stage(tmp_path, runtime=None), _probes(), "must declare XDG_RUNTIME_DIR"),
+        "no liveness variables": (lambda: _stage(tmp_path, liveness=False), _probes(), "never reads running"),
+        "another runtime dir": (lambda: _stage(tmp_path, runtime="/run/user/1"), _probes(),
+                                "declares /run/user/1"),
         "daemon silent": (lambda: _stage(tmp_path), _probes(daemon_answers=lambda: "no record"), "no record"),
     }
     for name, (stage, probes, words) in cases.items():
         staged_path(tmp_path).unlink(missing_ok=True)
         stage()
-        plan = build_plan(tmp_path, CARD, AGENT, probes)
+        plan = build_plan(tmp_path, CARD, AGENT, probes, runtime=RUNTIME)
         assert not plan.ready, name
         assert any(not c.ok and words in c.detail for c in plan.checks), (name, plan.checks)
         assert "NOT READY" in format_plan(plan), name
 
 
 def test_no_systemd_is_said_not_guessed(tmp_path):
-    plan = build_plan(tmp_path, CARD, AGENT, _probes(systemd=False))
+    plan = build_plan(tmp_path, CARD, AGENT, _probes(systemd=False), runtime=RUNTIME)
     assert not plan.ready and not plan.steps and "launchd" in plan.checks[0].detail
 
 
@@ -91,7 +102,8 @@ def test_only_what_is_installed_is_named(tmp_path):
     _stage(tmp_path)
     plan = build_plan(tmp_path, CARD, AGENT, _probes(unit_active=lambda unit: "inactive",
                                                      active_units=lambda: [],
-                                                     default_session=lambda agent: False))
+                                                     default_session=lambda agent: False),
+                      runtime=RUNTIME)
     assert plan.ready
     assert [s.what.split(",")[0] for s in plan.steps] == [
         "Install the declaration with the session unit", "Watch the session unit come up: starting"]
@@ -100,7 +112,7 @@ def test_only_what_is_installed_is_named(tmp_path):
 
 def _ready(tmp_path):
     _stage(tmp_path)
-    return build_plan(tmp_path, CARD, AGENT, _probes(), base=tmp_path / "run")
+    return build_plan(tmp_path, CARD, AGENT, _probes(), runtime=RUNTIME)
 
 
 def _runner(fail_at=None):
@@ -150,7 +162,7 @@ def test_a_session_that_never_comes_up_rolls_back(tmp_path):
 
 def test_an_unready_plan_changes_nothing(tmp_path):
     from macf.pd.cutover import execute
-    plan = build_plan(tmp_path, CARD, AGENT, _probes())          # nothing staged
+    plan = build_plan(tmp_path, CARD, AGENT, _probes(), runtime=RUNTIME)   # nothing staged
     run, ran = _runner()
     lines = []
     assert execute(plan, run, lambda: True, lines.append) is False
@@ -159,8 +171,12 @@ def test_an_unready_plan_changes_nothing(tmp_path):
 
 def test_the_move_is_armed_outside_the_session(tmp_path):
     from macf.pd.cutover import arm_argv
-    argv = arm_argv(AGENT, tmp_path, tmp_path / "staged", tmp_path / "log", "/usr/bin/python3")
+    argv = arm_argv(AGENT, tmp_path, tmp_path / "staged", tmp_path / "log", "/usr/bin/python3", environ={})
     assert argv[:3] == ["systemd-run", "--user", "--unit"] and argv[3] == f"maceff-cutover-{AGENT}"
+    assert not any(a.startswith("--setenv") for a in argv)
+    with_path = arm_argv(AGENT, tmp_path, tmp_path / "staged", tmp_path / "log", "/usr/bin/python3",
+                         environ={"PYTHONPATH": "/src"})
+    assert "--setenv=PYTHONPATH=/src" in with_path[:with_path.index("--")]
     assert argv[argv.index("--") + 1:argv.index("--") + 3] == ["/usr/bin/python3", "-m"]
     assert "--execute" in argv and argv[argv.index("--log") + 1] == str(tmp_path / "log")
 
@@ -189,5 +205,6 @@ def test_coming_up_is_read_from_the_daemon(tmp_path, monkeypatch):
 def test_the_plan_serializes_for_json(tmp_path):
     import dataclasses
     _stage(tmp_path)
-    data = json.loads(json.dumps(dataclasses.asdict(build_plan(tmp_path, CARD, AGENT, _probes()))))
+    data = json.loads(json.dumps(dataclasses.asdict(build_plan(tmp_path, CARD, AGENT, _probes(),
+                                                               runtime=RUNTIME))))
     assert data["ready"] is True and data["steps"][0]["commands"]
