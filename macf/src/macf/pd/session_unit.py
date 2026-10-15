@@ -278,7 +278,7 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
     # No server answers, so no wrapper serves this agent: a session a killed predecessor left
     # behind is ended before a second one starts beside it.
     _reap_predecessor(directory, agent)
-    server_cmd =[tmux] + (["-f", str(conf)] if conf and Path(conf).is_file() else ["-f", "/dev/null"]) + ["-D"]
+    server_cmd = [tmux] + (["-f", str(conf)] if conf and Path(conf).is_file() else ["-f", "/dev/null"]) + ["-D"]
     server = subprocess.Popen(server_cmd, env=env, stdin=subprocess.DEVNULL)
 
     def _stop(signum, _frame):
