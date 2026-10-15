@@ -3,7 +3,7 @@
 ## Meta-Policy: Policy Classification
 - **Tier**: MANDATORY
 - **Category**: Framework Foundation
-- **Version**: 1.1.0
+- **Version**: 1.2.0
 - **Dependencies**: policy_awareness, core_principles
 - **Authority**: MacEff Framework
 - **Status**: ACTIVE
@@ -90,6 +90,12 @@ Primary Agents must delegate specialized tasks appropriately, understanding when
 - When is background delegation appropriate?
 - How does operating mode affect the choice?
 - What happens when background SA needs Write/Edit?
+
+3.6 What a Delegated Agent Must Never Run
+- Which commands hang a background SA on a permission prompt?
+- What forbidden list must every delegation prompt carry?
+- Where does a deployment keep its own list, and how does it reach the SA?
+- What does an SA do when it's blocked?
 
 4 Specialist Capabilities
 - What specialists exist?
@@ -251,7 +257,7 @@ SA gets ONE SHOT - no clarification possible. Everything needed must be upfront.
 ```
 You have authority to:
 - Create/modify files in tools/src/macf/cli/
-- Install Python dependencies via pip
+- Install Python dependencies into a venv in your scratch directory
 - Make implementation decisions for command structure
 - Choose error handling approaches
 
@@ -259,9 +265,10 @@ You do NOT have authority to:
 - Commit to git (PA only)
 - Modify files outside your domain
 - Change core architecture
+- Run anything on the forbidden list below (3.6)
 ```
 
-**Why Important**: SA cannot ask permission, so grant authority upfront.
+**Why Important**: SA cannot ask permission, so grant authority upfront. A grant says what the SA may do; the forbidden list (3.6) says what it must never run, and both go in the prompt.
 
 ### 3.3 Deliverables Specification
 
@@ -334,6 +341,7 @@ The Task tool's `run_in_background` parameter controls whether delegation runs i
 | Condition | Use Foreground | Use Background |
 |-----------|---------------|----------------|
 | SA needs Write/Edit and permissions not pre-granted | **REQUIRED** | **NEVER** |
+| SA may run a shell command that asks for approval, and the prompt doesn't forbid it (3.6) | **REQUIRED** | **NEVER** |
 | MANUAL_MODE (user wants code review) | **REQUIRED** for code-producing tasks | Only for read-only research |
 | AUTO_MODE with pre-granted Write/Edit | Either (PA choice) | Appropriate |
 | Read-only research or exploration | Either (PA choice) | Appropriate |
@@ -362,6 +370,25 @@ Task(subagent_type="devops-eng", run_in_background=False, prompt="Implement feat
 - Task is read-only (research, exploration, code analysis)
 - Write/Edit permissions are already granted in project settings
 - Operating in AUTO_MODE where blanket grants are acceptable
+- The prompt carries the forbidden list (3.6), so the SA has no reason to run a command that asks
+
+### 3.6 What a Delegated Agent Must Never Run
+
+**A background SA that runs a command needing approval stops until a person answers.** Write/Edit are not the only such calls: so is any shell command the permission settings ask about. The person who answers is the operator, whose attention is the scarcest resource in the system, and who is often not there. A review SA that couldn't reach a test database once started its own container, then removed it at the end. The removal asked for approval, and the SA sat on that prompt for most of an hour. Nothing in its prompt said not to, because the PA's own rules never reached it.
+
+**So every delegation prompt that can touch the host carries a forbidden list, in words.** An SA knows nothing the prompt doesn't say. The base list:
+- **Containers and services:** never create, start, stop or remove a container, image, volume or network, or a system service. Use only what already runs. A test that needs a service the SA can't reach is reported as not run, with why.
+- **Privilege and process control:** no `sudo`, no `su`, no killing processes it didn't start.
+- **Deletes** outside its own scratch directory.
+- **Publishing:** no pushes, commits outside its scratch, or writes to GitHub, mail, chat or any other outside service. The SA drafts; the PA reads the draft and publishes it. This is 1.3's "never delegate git commits or user communication", stated as commands.
+- **Installs** outside a venv in its scratch directory.
+- **Secrets:** no `.env` files, credential files, keys, tokens, or a container's environment where a password lives.
+
+**When blocked, it stops and reports.** A missing password, an unreachable service or a refused command is a complete answer once it is said. Working around it, with a new container, a borrowed credential or a different command for the same effect, is the failure this section exists to prevent.
+
+**A deployment's own list lives in `~/agent/policies/personal/delegation.md`,** the predictable path every personal policy uses. It adds what the base list can't know: a deployment's container names, commands its operator has barred, and its own publishing rules. The PA reads that file fresh at each dispatch and pastes the whole of it into the prompt. Kept in one file, the list is not something the PA has to remember at dispatch time, which is exactly when it is forgotten.
+
+**This is a PA duty, not the SA's.** A skill or agent definition that dispatches SAs on its own carries the list in its prompt template, or takes it from the PA. Before each dispatch, ask: could this SA, meaning well, run something that asks for approval or can't be undone? If so, the prompt says not to.
 
 ## 4. Specialist Capabilities
 
@@ -579,6 +606,7 @@ Write comprehensive tests for handle_session_start.py with 100% coverage.
 - Specialist exists + complex task + well-defined = Delegate
 - Simple task or cross-cutting = Do yourself
 - User communication or git commits = NEVER delegate
+- Every prompt that can touch the host carries the forbidden list (3.6) and the deployment's `~/agent/policies/personal/delegation.md`; a blocked SA reports, never works around
 
 **Stateless Reality**:
 - Fresh agent every delegation
