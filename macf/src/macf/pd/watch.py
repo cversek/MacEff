@@ -53,8 +53,11 @@ Verdict = Literal["ALIVE", "STALE", "GONE", "ABSENT", "UNREADABLE", "UNREACHABLE
 
 #: Exit codes, worst wins (``service_supervision`` section 4.2): each state its own code.
 EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_UNREACHABLE, EXIT_CHECK_FAILED = 0, 1, 2, 3
+#: Every verdict has its code: a verdict added without one made ``exit_code`` raise, after the
+#: alert was sent, on every pass while a channel was dark or a wake held.
 _EXIT_FOR = {"ALIVE": EXIT_HEALTHY, "STALE": EXIT_UNHEALTHY, "GONE": EXIT_UNHEALTHY,
-             "ABSENT": EXIT_UNHEALTHY, "UNREACHABLE": EXIT_UNREACHABLE,
+             "ABSENT": EXIT_UNHEALTHY, "DARK": EXIT_UNHEALTHY, "HELD": EXIT_UNHEALTHY,
+             "UNREACHABLE": EXIT_UNREACHABLE,
              "UNREADABLE": EXIT_CHECK_FAILED, "CHECK-FAILED": EXIT_CHECK_FAILED}
 
 #: ``(pid, recorded start) -> is that process still the one recorded``, in the shape of
