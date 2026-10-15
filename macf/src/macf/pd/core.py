@@ -55,6 +55,7 @@ from macf.pd.interface import (
     declaration_path,
     render,
 )
+from macf.pd.liveness import ENV_HOME, ENV_INTERVAL, ENV_UNIT
 from macf.pd.schedule import CronExpr, check_window
 
 #: A unit is overdue once its last liveness is older than this many of its intervals.
@@ -1048,6 +1049,13 @@ class Core:
         try:
             command = [render(a, self._placeholders) for a in r.spec.command]
             env = {k: render(v, self._placeholders) for k, v in r.spec.environment.items()}
+            # Which unit it is and how often it beats come from the unit itself, never typed
+            # again in its environment, where a missing or mistyped value silently stopped
+            # its liveness (persistent_layer 11.2; two of three cutover trial runs).
+            env.setdefault(ENV_UNIT, r.spec.name)
+            env.setdefault(ENV_INTERVAL, f"{r.spec.liveness_interval_s:g}")
+            if "agent_home" in self._placeholders:
+                env.setdefault(ENV_HOME, self._placeholders["agent_home"])
         except KeyError as e:
             r.proc, r.pid, r.proc_start = None, None, None
             r.want_up = False
