@@ -1838,6 +1838,32 @@ def cmd_harness_unit(args: argparse.Namespace) -> int:
     return session_unit_main(argv)
 
 
+def cmd_harness_cutover(args: argparse.Namespace) -> int:
+    """Print the plan for moving the agent's session onto its primal daemon (persistent_layer
+    6.3). Read-only: exit 0 when every check holds, 1 when one doesn't or there is nothing
+    to move, 2 when the agent can't be resolved."""
+    import dataclasses
+    from pathlib import Path
+    from .pd.cutover import build_plan, format_plan, host_probes
+    from .utils.harness import resolve_agent
+    from .utils.identity import calling_card_from_identifier
+
+    agent, source = resolve_agent(getattr(args, "agent", None))
+    if source in ("ambiguous", "default"):
+        print("⚠️ MACF: harness cutover: name the agent with --agent; "
+              f"it couldn't be resolved here ({source})", file=sys.stderr)
+        return 2
+    card = calling_card_from_identifier(agent)
+    home = Path(args.home) if getattr(args, "home", None) else Path.home()
+    plan = build_plan(home, card, agent, host_probes(home, card),
+                      staged=Path(args.staged) if getattr(args, "staged", None) else None)
+    if getattr(args, "json", False):
+        print(json.dumps(dataclasses.asdict(plan), indent=2))
+    else:
+        print(format_plan(plan))
+    return 0 if plan.ready else 1
+
+
 def cmd_harness_status(args: argparse.Namespace) -> int:
     """Report unit state, session presence and proxy attachment.
 
@@ -12157,6 +12183,16 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_status = harness_sub.add_parser("status", help="show harness unit and session state")
     harness_status.add_argument("--agent", help="agent slug")
     harness_status.set_defaults(func=cmd_harness_status)
+
+    harness_cutover = harness_sub.add_parser(
+        "cutover", help="print the plan for moving this agent's session onto its primal daemon "
+                        "(read-only: checks, steps and rollback for this host; changes nothing)")
+    harness_cutover.add_argument("--agent", help="agent slug (default: resolved from identity)")
+    harness_cutover.add_argument("--home", help="agent home directory")
+    harness_cutover.add_argument("--staged", help="the declaration with the session unit "
+                                                  "(default: <declaration>.cutover)")
+    harness_cutover.add_argument("--json", action="store_true", help="the plan as JSON")
+    harness_cutover.set_defaults(func=cmd_harness_cutover)
 
     harness_unit = harness_sub.add_parser(
         "unit", help="run the agent's session as its primal daemon's session unit (the command a "
