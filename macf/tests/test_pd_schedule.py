@@ -336,6 +336,43 @@ def test_a_condition_decides_the_wake(tmp_path):
         assert (done["wake"], done["outcome"]) == (wake, outcome), (command, when)
 
 
+def test_a_command_runs_with_its_declared_environment(tmp_path):
+    """A run gets PATH and HOME, plus what its CommandRun declares, rendered like a unit's
+    environment; a declared PATH overrides the default; nothing else of the daemon's leaks in."""
+    seen = tmp_path / "seen"
+    command = ["/bin/sh", "-c", f"env > {seen}"]
+    schedule = Schedule(name="check", cron="*/5 * * * *", missed_run=policy("skip"), target="isolated",
+                        timeout_s=30.0, run=CommandRun(command=command, wake_when="exit_code", environment={
+                            "TMUX_TMPDIR": "{agent_home}/tmux", "PATH": "/opt/bin:/usr/bin:/bin"}))
+    log, now = Log(), [at("2026-10-14 12:00")]
+    s = make_scheduler(tmp_path, [schedule], log, now)
+    now[0] = at("2026-10-14 12:05")
+    s.tick()
+    finish(s)
+    env = dict(line.split("=", 1) for line in seen.read_text().splitlines() if "=" in line)
+    assert env["TMUX_TMPDIR"] == f"{tmp_path}/tmux"
+    assert env["PATH"] == "/opt/bin:/usr/bin:/bin" and env["HOME"] == str(tmp_path)
+    assert "MACF_EVENTS_LOG_PATH" not in env and "USER" not in env
+
+
+def test_a_command_environment_names_only_known_placeholders():
+    with pytest.raises(ValueError, match="unknown placeholder"):
+        CommandRun(command=["true"], wake_when="exit_code", environment={"X": "{nonsense}"})
+
+
+@pytest.mark.parametrize("name", ["", "A=B", "1ABC", "WITH SPACE", "DASH-ED"])
+def test_an_environment_name_a_process_cant_carry_is_refused_at_load(name):
+    """Loaded, it would fail every run in subprocess; refused, it fails where it's written.
+    Units get the same check."""
+    from macf.pd.interface import Unit
+    with pytest.raises(ValueError, match="environment names"):
+        CommandRun(command=["true"], wake_when="exit_code", environment={name: "x"})
+    with pytest.raises(ValueError, match="environment names"):
+        Unit(name="u", command=["true"], account="a", restart="always", liveness_interval_s=1,
+             memory_limit_mb=1, environment={name: "x"})
+    CommandRun(command=["true"], wake_when="exit_code", environment={"_OK_1": "x"})
+
+
 def test_missed_runs_are_reported_once(tmp_path):
     """A downtime's missed firings are recorded once by policy, not on every pass (R25)."""
     log, now = Log(), [at("2026-10-14 12:00")]

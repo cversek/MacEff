@@ -195,6 +195,8 @@ class Scheduler:
         self.last_due[s.name] = scheduled_for
         try:
             command = [render(a, self.placeholders) for a in s.run.command]
+            env = {"PATH": "/usr/bin:/bin", "HOME": self.placeholders.get("agent_home", "")}
+            env.update({k: render(v, self.placeholders) for k, v in s.run.environment.items()})
         except KeyError as e:
             self._say(EVENT_DONE, {"schedule": s.name, "scheduled_for": _iso(scheduled_for),
                                    "outcome": f"not started: no value for the placeholder {{{e.args[0]}}}",
@@ -208,7 +210,7 @@ class Scheduler:
             with open(out, "wb") as sink:
                 proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=sink,
                                         stderr=subprocess.DEVNULL, cwd=str(self.work_dir),
-                                        env={"PATH": "/usr/bin:/bin", "HOME": self.placeholders.get("agent_home", "")},
+                                        env=env,
                                         start_new_session=True, close_fds=True)
         except OSError as e:
             self._say(EVENT_DONE, {"schedule": s.name, "scheduled_for": _iso(scheduled_for),
