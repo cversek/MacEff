@@ -1857,6 +1857,41 @@ def cmd_harness_cutover(args: argparse.Namespace) -> int:
     home = Path(args.home) if getattr(args, "home", None) else Path.home()
     plan = build_plan(home, card, agent, host_probes(home, card),
                       staged=Path(args.staged) if getattr(args, "staged", None) else None)
+    if getattr(args, "execute", False):
+        from datetime import datetime
+        from .pd.cutover import came_up_by_status, execute, run_command
+        log_path = Path(args.log) if getattr(args, "log", None) else None
+
+        def log(line: str) -> None:
+            stamped = f"{datetime.now().isoformat(timespec='seconds')} {line}"
+            print(stamped, flush=True)
+            if log_path is not None:
+                with log_path.open("a") as fh:
+                    fh.write(stamped + "\n")
+        came_up = came_up_by_status(home, card, plan.session_unit or "session")
+        return 0 if execute(plan, run_command, came_up, log) else 1
+    if getattr(args, "run", False):
+        from datetime import datetime
+        from .pd.cutover import COME_UP_S, arm_argv, staged_path
+        if not plan.ready:
+            print(format_plan(plan))
+            print("\n⚠️ MACF: harness cutover --run: not ready, so nothing was started", file=sys.stderr)
+            return 1
+        log_path = home / ".maceff" / "logs" / f"cutover-{datetime.now():%Y%m%d-%H%M%S}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        staged = Path(args.staged) if getattr(args, "staged", None) else staged_path(home)
+        argv = arm_argv(agent, home, staged, log_path, sys.executable)
+        started = subprocess.run(argv, capture_output=True, text=True)
+        if started.returncode != 0:
+            print(f"⚠️ MACF: harness cutover --run: the transient unit didn't start: "
+                  f"{started.stderr.strip()}", file=sys.stderr)
+            return 1
+        print(format_plan(plan))
+        print(f"\nStarted, outside this session. Follow it from any terminal:\n"
+              f"     tail -f {log_path}\n"
+              f"It rolls back by itself on any failure, or if the session unit isn't running "
+              f"within {COME_UP_S:g} s.")
+        return 0
     if getattr(args, "json", False):
         print(json.dumps(dataclasses.asdict(plan), indent=2))
     else:
@@ -12192,6 +12227,12 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_cutover.add_argument("--staged", help="the declaration with the session unit "
                                                   "(default: <declaration>.cutover)")
     harness_cutover.add_argument("--json", action="store_true", help="the plan as JSON")
+    harness_cutover.add_argument("--run", action="store_true",
+                                 help="carry the plan out: start it as a transient unit outside this "
+                                      "session, which rolls back on any failure, and print where it logs")
+    harness_cutover.add_argument("--execute", action="store_true",
+                                 help="what the transient unit runs: carry the plan out here and now")
+    harness_cutover.add_argument("--log", help="where --execute writes its progress")
     harness_cutover.set_defaults(func=cmd_harness_cutover)
 
     harness_unit = harness_sub.add_parser(

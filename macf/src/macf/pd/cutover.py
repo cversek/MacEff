@@ -13,6 +13,7 @@ from __future__ import annotations
 import shlex
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -66,6 +67,8 @@ class Plan:
     checks: List[Check]
     steps: List[Step] = field(default_factory=list)
     rollback: List[Command] = field(default_factory=list)
+    #: The staged declaration's session unit, whose state says whether the move took.
+    session_unit: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -175,7 +178,11 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
         rollback.append(systemctl("enable", "--now", harness_unit))
     rollback += [systemctl("enable", "--now", u) for u in clocks]
     ready = all(c.ok for c in checks)
-    return Plan(agent, card, ready, checks, steps, rollback)
+    session_unit = None
+    if checks[0].ok:      # the staged declaration validated, so it reads cleanly here
+        declaration = Declaration.model_validate_json(staged.read_text())
+        session_unit = next(u.name for u in declaration.units if u.kind == "session")
+    return Plan(agent, card, ready, checks, steps, rollback, session_unit)
 
 
 def host_probes(home: Path, card: str) -> Probes:
@@ -207,6 +214,96 @@ def host_probes(home: Path, card: str) -> Probes:
         unit_session=unit_session,
         daemon_answers=daemon_answers,
     )
+
+
+# ============================================================================
+# Running the plan: armed outside the session, rolled back on any failure
+# ============================================================================
+
+#: How long the session unit has to read running after the daemon restarts.
+COME_UP_S = 300.0
+#: The transient unit ``--run`` starts, one per agent, so two moves can't overlap.
+RUN_UNIT_PREFIX = "maceff-cutover-"
+
+Runner = Callable[[Command], int]
+Log = Callable[[str], None]
+
+
+def run_command(command: Command) -> int:
+    import os
+    env = {**os.environ, **command.env} if command.env else None
+    try:
+        return subprocess.run(command.argv, env=env, stdin=subprocess.DEVNULL,
+                              capture_output=True, timeout=120).returncode
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f"⚠️ MACF: cutover: {command.argv[0]} did not run: {e}", file=sys.stderr)
+        return 127
+
+
+def execute(plan: Plan, run: Runner, came_up: Callable[[], bool], log: Log) -> bool:
+    """Carry out *plan*'s steps in order; on the first failure, or if the session unit never
+    reads running, carry out its rollback. Returns whether the move took. Only a ready plan
+    is carried out: a check that fails here changes nothing."""
+    if not plan.ready:
+        log("not ready, so nothing was changed: " +
+            "; ".join(f"{c.name}: {c.detail}" for c in plan.checks if not c.ok))
+        return False
+    for i, step in enumerate(plan.steps, 1):
+        if step.what.startswith("Watch"):
+            log(f"step {i}: waiting for the session unit to read running")
+            if came_up():
+                log("the session unit is running: the move took")
+                return True
+            log("the session unit didn't read running in time")
+            break
+        log(f"step {i}: {step.what}")
+        failed = next((c for c in step.commands if _ran(c, run, log) != 0 and not c.may_fail), None)
+        if failed is not None:
+            log(f"step {i} failed at: {failed}")
+            break
+    log("rolling back")
+    for command in plan.rollback:
+        _ran(command, run, log)       # every rollback command is tried, whatever came before
+    log("rolled back: the saved declaration and the legacy units are back; check macf_tools harness status")
+    return False
+
+
+def _ran(command: Command, run: Runner, log: Log) -> int:
+    code = run(command)
+    log(f"  {'ok' if code == 0 else f'exit {code}'}: {command}")
+    return code
+
+
+def came_up_by_status(home: Path, card: str, unit: str, timeout_s: float = COME_UP_S,
+                      interval_s: float = 5.0, sleep=None, clock=None) -> Callable[[], bool]:
+    """Whether the daemon reports the session *unit* running within *timeout_s*."""
+    import time
+    from macf.pd.client import status
+    sleep, clock = sleep or time.sleep, clock or time.monotonic
+
+    def poll() -> bool:
+        deadline = clock() + timeout_s
+        while clock() < deadline:
+            try:
+                report = status(home, card)
+            except Exception as e:  # noqa: BLE001 - GUARD: a daemon mid-restart may refuse; ask again
+                print(f"⚠️ MACF: cutover: the daemon couldn't be asked yet: {e}", file=sys.stderr)
+            else:
+                if report.source == "daemon" and any(
+                        u.get("unit") == unit and u.get("state") == "running" for u in report.units):
+                    return True
+            sleep(interval_s)
+        return False
+    return poll
+
+
+def arm_argv(agent: str, home: Path, staged: Path, log_path: Path, python: str) -> List[str]:
+    """The transient unit that carries the plan out, outside the session it stops: the
+    session's own process tree ends at step 2, so nothing of the move may live in it."""
+    return ["systemd-run", "--user", "--unit", f"{RUN_UNIT_PREFIX}{agent}", "--collect",
+            "--property", "Type=exec", "--",
+            python, "-m", "macf.cli", "harness", "cutover", "--agent", agent, "--home", str(home),
+            "--staged", str(staged), "--execute", "--log", str(log_path)]
 
 
 def format_plan(plan: Plan) -> str:

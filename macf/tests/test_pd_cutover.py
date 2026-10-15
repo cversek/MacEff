@@ -98,6 +98,94 @@ def test_only_what_is_installed_is_named(tmp_path):
     assert not any("enable --now" in str(c) for c in plan.rollback)
 
 
+def _ready(tmp_path):
+    _stage(tmp_path)
+    return build_plan(tmp_path, CARD, AGENT, _probes(), base=tmp_path / "run")
+
+
+def _runner(fail_at=None):
+    ran = []
+
+    def run(command):
+        ran.append(str(command))
+        return 1 if fail_at is not None and len(ran) - 1 == fail_at else 0
+    return run, ran
+
+
+def test_a_move_that_comes_up_runs_every_step_and_no_rollback(tmp_path):
+    from macf.pd.cutover import execute
+    plan = _ready(tmp_path)
+    run, ran = _runner()
+    lines = []
+    assert execute(plan, run, lambda: True, lines.append) is True
+    acting = [str(c) for s in plan.steps if not s.what.startswith("Watch") for c in s.commands]
+    assert ran == acting and plan.session_unit == "session"
+    assert "the move took" in lines[-1]
+
+
+def test_a_failure_at_any_command_rolls_back_whole(tmp_path):
+    """A planted failure at each command of each step: nothing after it runs, and every
+    rollback command runs, in order. Ending a session already gone isn't a failure."""
+    from macf.pd.cutover import execute
+    plan = _ready(tmp_path)
+    acting = [c for s in plan.steps if not s.what.startswith("Watch") for c in s.commands]
+    rollback = [str(c) for c in plan.rollback]
+    for i, command in enumerate(acting):
+        run, ran = _runner(fail_at=i)
+        took = execute(plan, run, lambda: True, lambda line: None)
+        if command.may_fail:
+            assert took is True, str(command)
+            continue
+        assert took is False, str(command)
+        assert ran == [str(c) for c in acting[:i + 1]] + rollback, str(command)
+
+
+def test_a_session_that_never_comes_up_rolls_back(tmp_path):
+    from macf.pd.cutover import execute
+    plan = _ready(tmp_path)
+    run, ran = _runner()
+    assert execute(plan, run, lambda: False, lambda line: None) is False
+    assert ran[-len(plan.rollback):] == [str(c) for c in plan.rollback]
+
+
+def test_an_unready_plan_changes_nothing(tmp_path):
+    from macf.pd.cutover import execute
+    plan = build_plan(tmp_path, CARD, AGENT, _probes())          # nothing staged
+    run, ran = _runner()
+    lines = []
+    assert execute(plan, run, lambda: True, lines.append) is False
+    assert ran == [] and "nothing was changed" in lines[0]
+
+
+def test_the_move_is_armed_outside_the_session(tmp_path):
+    from macf.pd.cutover import arm_argv
+    argv = arm_argv(AGENT, tmp_path, tmp_path / "staged", tmp_path / "log", "/usr/bin/python3")
+    assert argv[:3] == ["systemd-run", "--user", "--unit"] and argv[3] == f"maceff-cutover-{AGENT}"
+    assert argv[argv.index("--") + 1:argv.index("--") + 3] == ["/usr/bin/python3", "-m"]
+    assert "--execute" in argv and argv[argv.index("--log") + 1] == str(tmp_path / "log")
+
+
+def test_coming_up_is_read_from_the_daemon(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from macf.pd import client
+    from macf.pd.cutover import came_up_by_status
+    reports = iter([RuntimeError("restarting"),
+                    SimpleNamespace(source="event_log", why="", units=[]),
+                    SimpleNamespace(source="daemon", why="", units=[{"unit": "session", "state": "starting"}]),
+                    SimpleNamespace(source="daemon", why="", units=[{"unit": "session", "state": "running"}])])
+
+    def status(home, card):
+        r = next(reports)
+        if isinstance(r, Exception):
+            raise r
+        return r
+    monkeypatch.setattr(client, "status", status)
+    clock = [0.0]
+    poll = came_up_by_status(tmp_path, CARD, "session", timeout_s=100, interval_s=1,
+                             sleep=lambda s: clock.__setitem__(0, clock[0] + s), clock=lambda: clock[0])
+    assert poll() is True and clock[0] == 3
+
+
 def test_the_plan_serializes_for_json(tmp_path):
     import dataclasses
     _stage(tmp_path)
