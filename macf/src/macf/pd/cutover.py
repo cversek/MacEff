@@ -10,11 +10,12 @@ tmux or a daemon: ``build_plan(..., probes=Probes(...))``. ``host_probes`` are t
 """
 from __future__ import annotations
 
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from pydantic import ValidationError
 
@@ -37,9 +38,24 @@ class Check:
 
 
 @dataclass(frozen=True)
+class Command:
+    """One command of a step, as an argument list, so what is printed is what would run.
+    ``env`` is added to the caller's environment; ``may_fail`` marks a command whose failure
+    means only that there was nothing to do, such as ending a session already gone."""
+    argv: List[str]
+    note: str = ""
+    env: Dict[str, str] = field(default_factory=dict)
+    may_fail: bool = False
+
+    def __str__(self) -> str:
+        prefix = "".join(f"{k}={shlex.quote(v)} " for k, v in self.env.items())
+        return prefix + shlex.join(self.argv) + (f"      # {self.note}" if self.note else "")
+
+
+@dataclass(frozen=True)
 class Step:
     what: str
-    commands: List[str]
+    commands: List[Command]
 
 
 @dataclass(frozen=True)
@@ -49,7 +65,7 @@ class Plan:
     ready: bool
     checks: List[Check]
     steps: List[Step] = field(default_factory=list)
-    rollback: List[str] = field(default_factory=list)
+    rollback: List[Command] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -133,28 +149,31 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
     checks.append(Check("duplicate clocks", True, ", ".join(clocks) + " running beside the daemon's"
                         if clocks else "none running beside the daemon's"))
 
+    def systemctl(*args: str) -> Command:
+        return Command(["systemctl", "--user", *args])
+
     steps: List[Step] = []
     if clocks:
         steps.append(Step("Stop the clocks that would type into the pane beside the daemon's",
-                          [f"systemctl --user disable --now {u}" for u in clocks]))
+                          [systemctl("disable", "--now", u) for u in clocks]))
     if legacy or held:
-        stop = []
-        if legacy:
-            stop += [f"systemctl --user stop {harness_unit}", f"systemctl --user disable {harness_unit}"]
-        stop.append(f"tmux kill-session -t ={agent}      # the pane a stop left behind, if any")
+        stop = [systemctl("stop", harness_unit), systemctl("disable", harness_unit)] if legacy else []
+        stop.append(Command(["tmux", "kill-session", "-t", f"={agent}"],
+                            note="the pane a stop left behind, if any", may_fail=True))
         steps.append(Step("Stop the legacy session (a session running here ends at this step)", stop))
     steps.append(Step("Install the declaration with the session unit, keeping the old one",
-                      [f"cp {live} {saved}", f"cp {staged} {live}",
-                       f"systemctl --user restart {daemon_unit}"]))
+                      [Command(["cp", str(live), str(saved)]), Command(["cp", str(staged), str(live)]),
+                       systemctl("restart", daemon_unit)]))
     steps.append(Step("Watch the session unit come up: starting, then running",
-                      ["macf_tools pd status", "macf_tools harness status"]))
+                      [Command(["macf_tools", "pd", "status"]), Command(["macf_tools", "harness", "status"])]))
 
-    rollback = [f"cp {saved} {live}", f"systemctl --user restart {daemon_unit}",
-                f"TMUX_TMPDIR={tmux_dir(agent, base)} tmux kill-server   # the unit's session, "
-                "no longer declared, before the legacy one starts"]
+    rollback = [Command(["cp", str(saved), str(live)]), systemctl("restart", daemon_unit),
+                Command(["tmux", "kill-server"], env={"TMUX_TMPDIR": str(tmux_dir(agent, base))},
+                        note="the unit's session, no longer declared, before the legacy one starts",
+                        may_fail=True)]
     if legacy:
-        rollback.append(f"systemctl --user enable --now {harness_unit}")
-    rollback += [f"systemctl --user enable --now {u}" for u in clocks]
+        rollback.append(systemctl("enable", "--now", harness_unit))
+    rollback += [systemctl("enable", "--now", u) for u in clocks]
     ready = all(c.ok for c in checks)
     return Plan(agent, card, ready, checks, steps, rollback)
 
