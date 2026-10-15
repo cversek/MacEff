@@ -100,7 +100,7 @@ while True:
         write('{"event": "pd_unit_alive", "data": ')
     elif t < spec.get("alive_for", 1e9):
         data = {"agent": spec["agent"], "unit": spec["unit"], "pid": me,
-                "proc_start": start, "interval_s": spec["interval"]}
+                "proc_start": start, "interval_s": spec.get("declared", spec["interval"])}
         if spec.get("imposter"):
             data["pid"], data["proc_start"] = os.getppid(), proc_start(os.getppid())
         if spec.get("wrong_start"):
@@ -120,13 +120,25 @@ def script(tmp_path):
     return path
 
 
+#: The least liveness interval a test unit declares unless the test is about staleness. A
+#: unit is overdue after three intervals, and at 0.05 s that was 0.15 s: less than a loaded
+#: runner can pause a process, so a running unit read as hung and was ended and restarted,
+#: and a unit that exited 0 under "on-failure" came back (CI, Oct 14). The stand-in still
+#: beats every ``interval``, so exits and beats keep their fast timing.
+DECLARED_INTERVAL_MIN_S = 0.5
+
+
 def make_unit(name, script, behaviour, *, interval=0.05, restart="on-failure", environment=None,
-              stop_grace_s=1.0):
+              stop_grace_s=1.0, declared_interval=None):
+    """A stand-in unit that beats every ``interval`` and declares ``declared_interval``,
+    by default the larger of ``interval`` and DECLARED_INTERVAL_MIN_S. A test of how
+    quickly silence is noticed passes ``declared_interval`` itself."""
     env = {"MACF_EVENTS_LOG_PATH": str(get_log_path()), "PYTHONPATH": MACF_SRC}
     env.update(environment or {})
-    spec = dict(behaviour, unit=name, agent=CARD, interval=interval)
+    declared = declared_interval if declared_interval is not None else max(interval, DECLARED_INTERVAL_MIN_S)
+    spec = dict(behaviour, unit=name, agent=CARD, interval=interval, declared=declared)
     return Unit(name=name, command=[sys.executable, str(script), json.dumps(spec)], account=ME,
-                restart=restart, liveness_interval_s=interval, memory_limit_mb=64, environment=env,
+                restart=restart, liveness_interval_s=declared, memory_limit_mb=64, environment=env,
                 stop_grace_s=stop_grace_s)
 
 
