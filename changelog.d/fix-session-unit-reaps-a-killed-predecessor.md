@@ -1,0 +1,3 @@
+### Fixed
+
+- **A session a killed wrapper left running is ended by the next wrapper** (`pd/session_unit.py`, policy `persistent_layer` §6.2): a SIGKILL, the daemon's after a stop's grace or the out-of-memory killer's, ended the wrapper before it could reap the pane's own group, and a pane ignoring the hangup ran on, so the restart started a second `claude -c` on the same conversation beside it. Each wrapper now names its pane groups, with their leaders' starts, in `pane_groups.json` in its private tmux directory, and the next wrapper ends any still running before it starts. One test reproduces the gap and its close; with the reap planted out it fails.
