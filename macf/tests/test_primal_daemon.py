@@ -60,9 +60,12 @@ if spec.get("child_ignores_term"):
                       "def mark(path, pid):\n"
                       "    open(path + '.tmp', 'w').write(str(pid))\n"
                       "    os.replace(path + '.tmp', path)\n"
+                      # The leader is read before the pid is marked: the test stops the unit
+                      # once it sees the mark, and a leader gone before this read would leave
+                      # the child watching its new parent, waiting for a change that never comes.
+                      "leader = os.getppid()\n"
                       "mark(sys.argv[1], os.getpid())\n"
                       "if len(sys.argv) > 2:\n"
-                      "    leader = os.getppid()\n"
                       "    while os.getppid() == leader:\n"
                       "        time.sleep(0.02)\n"
                       "    if len(sys.argv) > 3 and sys.argv[3] != 'now':\n"
