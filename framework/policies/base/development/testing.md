@@ -548,9 +548,18 @@ on MacEff #552, 2026-10-14):
 
 | gate | runs | why |
 |---|---|---|
-| each push to a pull request | the full suite on Python 3.12, `-n auto`: the tests in about 2.5 minutes on a 4-CPU runner, where they took about 4.5 | the reviewer's evidence, without waiting on a second version |
-| the merge queue, and main | both Python versions, on the actual merge with current main | a pull request green against an old main can land a break; #654 was one, green before #665 changed what its test may declare |
+| each push to a pull request | the full suite on Python 3.12, split across four runners by a hash of each test's id (`MACF_TEST_SHARD`), each running `-n auto` | the reviewer's evidence, without waiting on a second version |
+| before a merge | the branch must be up to date with main (the ruleset's "Require branches to be up to date"), so the pull request's own run is a run of the actual merge | a pull request green against an old main can land a break; #654 was one, green before #665 changed what its test may declare |
+| main | both Python versions, after each merge | a break on 3.10 alone is caught here, by whoever merged |
 | nightly | both versions, and macOS | the daemon and process-group code differs by platform, and macOS breaks were otherwise found by hand |
+
+A merge queue would run both versions on the actual merge before it lands, but
+GitHub offers one only to a repository an organization owns, and MacEff's owner
+is a personal account. Up-to-date branches give the actual-merge guarantee on one
+version instead. Each merge then asks the other open pull requests to update and
+rerun, which is what the split across runners keeps short. The required checks
+are `test (3.10)`, `test (3.12)` and `style`. Each `test` check passes only when
+every shard passed, so the ruleset doesn't change when the shard count does.
 
 A pull request that touches `pd/` or `platform/` also runs on macOS. The suite is
 not narrowed to the touched subsystems at any gate: the worst break of the day
