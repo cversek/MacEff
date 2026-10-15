@@ -168,7 +168,8 @@ def _supervision_block(environ=None, ask=None) -> str:
     try:
         from ..pd.interface import declaration_path
         from ..utils.supervision import primal_daemon_unit
-        home = Path(env.get("MACEFF_AGENT_HOME_DIR") or Path.home())
+        from ..utils.paths import find_agent_home
+        home = Path(env["MACEFF_AGENT_HOME_DIR"]) if env.get("MACEFF_AGENT_HOME_DIR") else find_agent_home()
         if not declaration_path(home).is_file():
             return ""
         unit = primal_daemon_unit(get_agent_identity(), environ=env, ask=ask)

@@ -46,7 +46,17 @@ def test_a_claim_the_daemon_does_not_confirm_is_named(home):
     _declare(home)
     env = {"MACEFF_AGENT_HOME_DIR": str(home), ENV_SESSION_UNIT: "session", ENV_SESSION_PID: "4242"}
     text = hss._supervision_block(environ=env, ask=_daemon_says(pid="9999"))
-    assert "doesn't confirm it" in text and "pid 9999" in text
+    assert "unit session (pid 4242), but the daemon doesn't confirm it" in text
+    assert "the daemon's session is pid 9999, not this session's 4242" in text
+
+
+def test_without_the_variable_the_home_is_found_as_the_other_hooks_find_it(home, monkeypatch):
+    """Several agents can share one login, with homes below ~; the bare login home would be
+    the wrong place to look (host-side maintainer, on review)."""
+    from macf.utils import paths
+    _declare(home)
+    monkeypatch.setattr(paths, "find_agent_home", lambda: home)
+    assert "isn't running as its session unit" in hss._supervision_block(environ={})
 
 
 def test_a_failure_never_breaks_session_start(home, monkeypatch):
