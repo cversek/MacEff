@@ -55,8 +55,12 @@ class Command:
 
 @dataclass(frozen=True)
 class Step:
+    """A step, and the commands that undo it. A failed move undoes only the steps it
+    reached, last first, so a step that never ran is never undone (head maintainer, on
+    review: the old single rollback could copy a stale saved declaration back)."""
     what: str
     commands: List[Command]
+    undo: List[Command] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -66,7 +70,11 @@ class Plan:
     ready: bool
     checks: List[Check]
     steps: List[Step] = field(default_factory=list)
-    rollback: List[Command] = field(default_factory=list)
+
+    @property
+    def rollback(self) -> List[Command]:
+        """Every step's undo, last step first: what a failure at the last step runs."""
+        return [c for step in reversed(self.steps) for c in step.undo]
     #: The staged declaration's session unit, whose state says whether the move took.
     session_unit: Optional[str] = None
 
@@ -188,6 +196,11 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
     clocks = sorted(u for u in probes.active_units() if "mail-clock" in u and u != daemon_unit)
     checks.append(Check("duplicate clocks", True, ", ".join(clocks) + " running beside the daemon's"
                         if clocks else "none running beside the daemon's"))
+    # A saved declaration from an earlier attempt is not this move's to restore or overwrite:
+    # it may hold what the live one has since lost, or the reverse (head maintainer, on review).
+    checks.append(Check("saved declaration", not saved.exists(),
+                        f"{saved} is left from an earlier attempt: compare it with {live}, keep what "
+                        "you need, and remove it" if saved.exists() else f"no {saved.name} from an earlier attempt"))
 
     def systemctl(*args: str) -> Command:
         return Command(["systemctl", "--user", *args])
@@ -195,31 +208,35 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
     steps: List[Step] = []
     if clocks:
         steps.append(Step("Stop the clocks that would type into the pane beside the daemon's",
-                          [systemctl("disable", "--now", u) for u in clocks]))
+                          [systemctl("disable", "--now", u) for u in clocks],
+                          undo=[systemctl("enable", "--now", u) for u in clocks]))
     if legacy or held:
         stop = [systemctl("stop", harness_unit), systemctl("disable", harness_unit)] if legacy else []
         stop.append(Command(["tmux", "-S", str(default_socket()), "kill-session", "-t", f"={agent}"],
                             note="the pane a stop left behind, if any", may_fail=True))
-        steps.append(Step("Stop the legacy session (a session running here ends at this step)", stop))
+        # A monitor the old session's hooks started is not a unit, so stopping the session
+        # doesn't always end it; left running, it holds the transcript and the new session's
+        # monitor stands down, so the unit never beats (host-side maintainer, on review).
+        stop.append(Command([sys.executable, "-m", "macf.pd.cutover", "end-stale-monitors", str(home)],
+                            note="transcript monitors of this agent whose session has ended"))
+        steps.append(Step("Stop the legacy session (a session running here ends at this step)", stop,
+                          undo=[systemctl("enable", "--now", harness_unit)] if legacy else []))
     steps.append(Step("Install the declaration with the session unit, keeping the old one",
                       [Command(["cp", str(live), str(saved)]), Command(["cp", str(staged), str(live)]),
-                       systemctl("restart", daemon_unit)]))
+                       systemctl("restart", daemon_unit)],
+                      undo=[Command(["cp", str(saved), str(live)]), systemctl("restart", daemon_unit),
+                            Command(["tmux", "-S", str(tmux_socket(agent, unit_base)), "kill-server"],
+                                    note="the unit's session, no longer declared, before the legacy one starts",
+                                    may_fail=True),
+                            Command(["rm", str(saved)], note="restored, so no later attempt finds it")]))
     steps.append(Step("Watch the session unit come up: starting, then running",
                       [Command(["macf_tools", "pd", "status"]), Command(["macf_tools", "harness", "status"])]))
-
-    rollback = [Command(["cp", str(saved), str(live)]), systemctl("restart", daemon_unit),
-                Command(["tmux", "-S", str(tmux_socket(agent, unit_base)), "kill-server"],
-                        note="the unit's session, no longer declared, before the legacy one starts",
-                        may_fail=True)]
-    if legacy:
-        rollback.append(systemctl("enable", "--now", harness_unit))
-    rollback += [systemctl("enable", "--now", u) for u in clocks]
     ready = all(c.ok for c in checks)
     session_unit = None
     if checks[0].ok:      # the staged declaration validated, so it reads cleanly here
         declaration = Declaration.model_validate_json(staged.read_text())
         session_unit = next(u.name for u in declaration.units if u.kind == "session")
-    return Plan(agent, card, ready, checks, steps, rollback, session_unit)
+    return Plan(agent, card, ready, checks, steps, session_unit=session_unit)
 
 
 def host_probes(home: Path, card: str) -> Probes:
@@ -286,6 +303,7 @@ def execute(plan: Plan, run: Runner, came_up: Callable[[], bool], log: Log) -> b
         log("not ready, so nothing was changed: " +
             "; ".join(f"{c.name}: {c.detail}" for c in plan.checks if not c.ok))
         return False
+    reached: List[Step] = []
     for i, step in enumerate(plan.steps, 1):
         if step.what.startswith("Watch"):
             log(f"step {i}: waiting for the session unit to read running")
@@ -295,14 +313,16 @@ def execute(plan: Plan, run: Runner, came_up: Callable[[], bool], log: Log) -> b
             log("the session unit didn't read running in time")
             break
         log(f"step {i}: {step.what}")
+        reached.append(step)          # begun, so undone on failure, even part-way through
         failed = next((c for c in step.commands if _ran(c, run, log) != 0 and not c.may_fail), None)
         if failed is not None:
             log(f"step {i} failed at: {failed}")
             break
-    log("rolling back")
-    for command in plan.rollback:
-        _ran(command, run, log)       # every rollback command is tried, whatever came before
-    log("rolled back: the saved declaration and the legacy units are back; check macf_tools harness status")
+    log(f"rolling back the {len(reached)} step(s) reached, last first")
+    for step in reversed(reached):
+        for command in step.undo:
+            _ran(command, run, log)   # every undo command is tried, whatever came before
+    log("rolled back what the move had done; check macf_tools harness status")
     return False
 
 
@@ -361,8 +381,64 @@ def format_plan(plan: Plan) -> str:
                  "NOT READY: fix what the checks above name before running any step.")
     for i, step in enumerate(plan.steps, 1):
         lines += ["", f"{i}. {step.what}"] + [f"     {c}" for c in step.commands]
-    lines += ["", "Rollback, at any step:"] + [f"     {c}" for c in plan.rollback]
+        if step.undo:
+            lines += [f"   undo step {i}:"] + [f"     {c}" for c in step.undo]
+    lines += ["", "If a step fails, undo it and every step before it, last first. Never undo a "
+              "step that wasn't reached: its undo may restore what it never saved."]
     lines += ["", "Run the steps from a terminal outside the session they stop (step "
               f"{next(i for i, s in enumerate(plan.steps, 1) if s.what.startswith('Install'))} "
               "restarts the daemon; an earlier step may end the session you are typing in)."]
+    # What only a person can do (host-side maintainer, on review).
+    lines += ["", "When the new session starts:",
+              "  - if it asks how to resume, answer \"continue\", never \"summarize\";",
+              "  - scheduled jobs the old session made for itself lived in its process: "
+              "recreate them once the move holds."]
     return "\n".join(lines)
+
+
+def end_stale_monitors(home: Path, find=None, alive=None, signal_pid=None,
+                       wait_s: float = 5.0, sleep=None) -> List[int]:
+    """End this agent's transcript monitors whose session has ended: those reading a
+    transcript under *home* whose owning process is gone. Returns the pids still alive
+    afterwards (empty on success). A monitor whose owner lives is someone's, and left."""
+    import os
+    import signal as sig
+    import time
+    from macf.transcript_monitor.daemon import find_monitors
+    find, sleep = find or find_monitors, sleep or time.sleep
+
+    def _alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+    alive = alive or _alive
+    signal_pid = signal_pid or (lambda pid: os.kill(pid, sig.SIGTERM))
+    root = Path(home).resolve()
+    stale = [m.pid for m in (find() or [])
+             if m.owner and not alive(m.owner) and Path(m.transcript).resolve().is_relative_to(root)]
+    for pid in stale:
+        try:
+            signal_pid(pid)
+        except ProcessLookupError:
+            pass  # noqa: MACEFF003 - ended between the listing and the signal, as wanted
+    deadline = time.monotonic() + wait_s
+    left = [p for p in stale if alive(p)]
+    while left and time.monotonic() < deadline:
+        sleep(0.1)
+        left = [p for p in left if alive(p)]
+    return left
+
+
+if __name__ == "__main__":
+    # python -m macf.pd.cutover end-stale-monitors <agent home>: a step of the move.
+    if len(sys.argv) == 3 and sys.argv[1] == "end-stale-monitors":
+        left = end_stale_monitors(Path(sys.argv[2]))
+        if left:
+            print(f"⚠️ MACF: cutover: transcript monitor(s) {left} didn't end", file=sys.stderr)
+        sys.exit(1 if left else 0)
+    print("usage: python -m macf.pd.cutover end-stale-monitors <agent home>", file=sys.stderr)
+    sys.exit(2)

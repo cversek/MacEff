@@ -135,21 +135,73 @@ def test_a_move_that_comes_up_runs_every_step_and_no_rollback(tmp_path):
     assert "the move took" in lines[-1]
 
 
-def test_a_failure_at_any_command_rolls_back_whole(tmp_path):
-    """A planted failure at each command of each step: nothing after it runs, and every
-    rollback command runs, in order. Ending a session already gone isn't a failure."""
+def test_a_failure_undoes_only_the_steps_reached_last_first(tmp_path):
+    """A planted failure at each command of each step: nothing after it runs, and the undo
+    of every step begun runs, last step first. No step that wasn't reached is undone.
+    Ending a session already gone isn't a failure."""
     from macf.pd.cutover import execute
     plan = _ready(tmp_path)
-    acting = [c for s in plan.steps if not s.what.startswith("Watch") for c in s.commands]
-    rollback = [str(c) for c in plan.rollback]
-    for i, command in enumerate(acting):
+    acting = [(s, c) for s in plan.steps if not s.what.startswith("Watch") for c in s.commands]
+    for i, (step, command) in enumerate(acting):
         run, ran = _runner(fail_at=i)
         took = execute(plan, run, lambda: True, lambda line: None)
         if command.may_fail:
             assert took is True, str(command)
             continue
         assert took is False, str(command)
-        assert ran == [str(c) for c in acting[:i + 1]] + rollback, str(command)
+        reached = plan.steps[:plan.steps.index(step) + 1]
+        undo = [str(c) for s in reversed(reached) for c in s.undo]
+        assert ran == [str(c) for _, c in acting[:i + 1]] + undo, str(command)
+
+
+def test_a_failure_before_the_install_never_touches_the_declaration(tmp_path):
+    """The head maintainer's case: a saved declaration left by an earlier attempt, and a
+    failure at the first step. The plan refuses to start while one is there, and even a
+    move that failed at step 1 runs no command that copies a declaration."""
+    from macf.pd.cutover import execute
+    plan = _ready(tmp_path)
+    run, ran = _runner(fail_at=0)
+    assert execute(plan, run, lambda: True, lambda line: None) is False
+    assert not any(c.startswith("cp ") or c.startswith("rm ") for c in ran)
+    live = declaration_path(tmp_path)
+    live.with_name(live.name + ".pre-cutover").write_text("{}")
+    stale = build_plan(tmp_path, CARD, AGENT, _probes(), runtime=RUNTIME)
+    assert not stale.ready
+    assert any(not c.ok and "left from an earlier attempt" in c.detail for c in stale.checks)
+
+
+def test_the_install_undo_removes_the_saved_declaration_it_restored(tmp_path):
+    plan = _ready(tmp_path)
+    install = next(s for s in plan.steps if s.what.startswith("Install"))
+    undo = [str(c) for c in install.undo]
+    live = declaration_path(tmp_path)
+    assert undo[0] == f"cp {live}.pre-cutover {live}"
+    assert undo[-1].startswith(f"rm {live}.pre-cutover")
+
+
+def test_stale_monitors_are_ended_and_live_ones_left(tmp_path):
+    """A monitor of this agent whose session ended is ended; one whose owner lives, or one of
+    another agent's home, is left (host-side maintainer, on review)."""
+    from types import SimpleNamespace
+    from macf.pd.cutover import end_stale_monitors
+    mine = tmp_path / ".claude" / "projects" / "t.jsonl"
+    other = tmp_path.parent / "elsewhere.jsonl"
+    monitors = [SimpleNamespace(pid=11, owner=101, transcript=mine),      # owner gone: stale
+                SimpleNamespace(pid=12, owner=102, transcript=mine),      # owner alive: left
+                SimpleNamespace(pid=13, owner=103, transcript=other),     # another home: left
+                SimpleNamespace(pid=14, owner=0, transcript=mine)]        # no owner: left
+    living = {102, 12, 13, 14, 11}
+    signalled = []
+
+    def kill(pid):
+        signalled.append(pid)
+        living.discard(pid)
+    left = end_stale_monitors(tmp_path, find=lambda: monitors, alive=lambda p: p in living,
+                              signal_pid=kill, wait_s=0.1, sleep=lambda s: None)
+    assert signalled == [11] and left == []
+    plan = _ready(tmp_path)
+    stop = next(s for s in plan.steps if s.what.startswith("Stop the legacy"))
+    assert any("end-stale-monitors" in str(c) and str(tmp_path) in str(c) for c in stop.commands)
 
 
 def test_a_session_that_never_comes_up_rolls_back(tmp_path):
