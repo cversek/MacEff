@@ -116,6 +116,18 @@ def clean_temp_dir(tmp_path):
     # Cleanup happens automatically with tmp_path
 
 
+@pytest.fixture
+def hostile(tmp_path):
+    """Stand-ins that resist a stop (``tests/hostile.py``, idea 405), each pid they report
+    SIGKILLed at teardown, whether the test passed or not."""
+    from hostile import Hostile
+    h = Hostile(tmp_path / "hostile")
+    try:
+        yield h
+    finally:
+        h.cleanup()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def isolated_session_root(tmp_path_factory):
     """Point the per-session directories (the hook log among them) at a temporary root.

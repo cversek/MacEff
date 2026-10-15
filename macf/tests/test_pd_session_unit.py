@@ -354,6 +354,51 @@ def test_a_stop_of_the_unit_also_stops_a_session_that_ignores_the_hangup(tmp_pat
     assert not _alive(stand_in), "the session outlived its unit"
 
 
+@needs_tmux
+def test_a_session_a_killed_wrapper_left_is_ended_by_the_next(tmp_path, short_base):
+    """A SIGKILL ends the wrapper before it can reap the pane's own group (the daemon's,
+    after a stop's grace, or the out-of-memory killer's), and a pane that ignores the hangup
+    runs on. The next wrapper ends it from the groups the first recorded, before it starts
+    a second session beside it."""
+    import subprocess
+    import sys
+    pidfile = tmp_path / "child.pid"
+    child = _child(tmp_path, f"trap '' HUP TERM\necho $$ > {pidfile}\nsleep 300\n")
+
+    def wrapper(command_child):
+        code = (
+            "import sys; from pathlib import Path; from macf.pd import session_unit as su; "
+            f"sys.exit(su.run('Resident_1a2b3c', Path({str(command_child)!r}), "
+            f"environ={_unit_env(tmp_path)!r}, base=Path({str(short_base)!r})))"
+        )
+        env = {k: v for k, v in os.environ.items() if k != "TMUX"}
+        return subprocess.Popen([sys.executable, "-c", code], env=env, start_new_session=True)
+
+    first = wrapper(child)
+    deadline = time.monotonic() + 15
+    while not (pidfile.exists() and pidfile.read_text().strip()) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    stand_in = int(pidfile.read_text())
+    record = su.tmux_dir("Resident_1a2b3c", short_base) / su.PANE_RECORD
+    deadline = time.monotonic() + 5
+    while not record.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    try:
+        os.killpg(first.pid, signal.SIGKILL)               # the wrapper and its server, outright
+        first.wait(timeout=10)
+        time.sleep(0.3)
+        assert _alive(stand_in), "the gap this closes: the pane outlives a killed wrapper"
+        second = wrapper(_child(tmp_path, "exit 0\n"))
+        assert second.wait(timeout=60) == 0
+        assert not _alive(stand_in), "the next wrapper started beside the session it left"
+        assert not record.exists()
+    finally:
+        try:
+            os.killpg(stand_in, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
 def _alive(pid: int) -> bool:
     """Running, not a zombie waiting to be reaped."""
     try:
