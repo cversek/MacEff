@@ -1,10 +1,13 @@
 name: Tests
 
 # Three gates (policy testing §3.1, agreed on #552 on Oct 14):
-# - a push to a pull request: the full suite in parallel on Python 3.12, about two minutes;
-# - the merge queue (merge_group) and main: both versions, on the actual merge with main,
-#   so a PR green against an old main can't land a break (#654 was the case);
+# - a push to a pull request: the full suite on Python 3.12, split across four runners;
+#   main's ruleset requires the branch to be up to date with main before it merges, so
+#   these results are for the actual merge (#654 was green against an old main);
+# - main: both versions, after each merge;
 # - nightly: both versions here, and macOS in macos.yml.
+# merge_group stays for the day the repository can have a merge queue (an organization's
+# can; a personal account's cannot).
 on:
   pull_request:
     branches: [main]
@@ -16,16 +19,23 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
+  shard:
+    # Four runners per version, each running a quarter of the tests: MACF_TEST_SHARD
+    # picks a test's shard by a hash of its id (macf/tests/conftest.py). One runner with
+    # four workers took about 3 minutes, most of it tests that wait on real processes.
+    name: shard (${{ matrix.python-version }}, ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        # Both entries on every event, so the merge queue can require test (3.10) and
-        # test (3.12) by name. On a PR push the 3.10 job skips its steps and reports success
-        # without running; the queue, main and nightly run both for real (CTB, on #676).
+        # Both versions on every event, so the gate jobs below exist by name on every
+        # event. On a PR push the 3.10 shards skip their steps and report success without
+        # running; main and nightly run both for real (CTB, on #676).
         python-version: ['3.10', '3.12']
+        shard: [1, 2, 3, 4]
     env:
       RUN_TESTS: ${{ github.event_name != 'pull_request' || matrix.python-version == '3.12' }}
+      MACF_TEST_SHARD: ${{ matrix.shard }}/4
 
     steps:
       - uses: actions/checkout@v4
@@ -73,7 +83,10 @@ jobs:
         timeout-minutes: 6
 
       - name: Run tests (live external state)
-        if: env.RUN_TESTS == 'true'
+        # Small and quick, so whole on the first shard rather than split.
+        if: env.RUN_TESTS == 'true' && matrix.shard == 1
+        env:
+          MACF_TEST_SHARD: ''
         # MEASURED on this runner, not predicted: 26 passed, 7 skipped. The
         # image does ship tmux, so most of this set genuinely executes here;
         # what stays skipped is systemd-analyze, the real claude client, and
@@ -92,6 +105,21 @@ jobs:
           --ignore=macf/tests/test_get_token_info.py
           --ignore=macf/tests/test_handle_session_start.py
         timeout-minutes: 2
+
+  test:
+    # The checks main's ruleset requires, test (3.10) and test (3.12), kept under their
+    # names so the ruleset needs no change when the shard count does. Each passes only
+    # when every shard passed, of both versions: a failing or cancelled shard fails both.
+    name: test (${{ matrix.python-version }})
+    needs: shard
+    if: always()
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.12']
+    steps:
+      - name: Every shard passed
+        run: test "${{ needs.shard.result }}" = success
 
   style:
     # The gate `ruff.toml` describes as blocking. It was configured, scripted,
