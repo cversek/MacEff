@@ -384,7 +384,9 @@ The operator may attach to any session without an invitation [MIS-0002-R81 (oper
 
 It exits 0 when every check holds and 1 otherwise. A session already running as its unit has nothing to move, and a host without systemd is told so rather than given systemd steps: a macOS move goes through launchd.
 
-**Run the steps from a terminal outside the session they stop.** Stopping the legacy session ends the session you may be typing in, and the host's first move was finished only because a second copy of the remote session survived. Nothing else is stopped: the API proxy and the host's watches stay as they are, so the move changes one thing at a time. A command that runs the plan itself, from outside the session and rolling back on any failure, will build on this one.
+**Run the steps from a terminal outside the session they stop.** Stopping the legacy session ends the session you may be typing in, and the host's first move was finished only because a second copy of the remote session survived. Nothing else is stopped: the API proxy and the host's watches stay as they are, so the move changes one thing at a time.
+
+**`--run` carries the plan out, from outside the session.** It refuses unless every check holds. Then it starts the move as a transient user unit, `maceff-cutover-<agent>`, which is no part of the session it stops, and prints the `tail -f` line for its log under `~/.maceff/logs/`, to follow from any terminal or a phone. The unit runs the printed steps exactly, in order, then waits up to 300 s for the daemon to report the session unit running. **The first failing command, or a session unit that isn't running in time, rolls the move back whole:** every rollback command runs, in order, whatever came before. Ending a session that was already gone isn't a failure. What `--run` changes is your session, so on a seat it runs in an operator's window, with the operator's word for that move.
 
 ---
 
