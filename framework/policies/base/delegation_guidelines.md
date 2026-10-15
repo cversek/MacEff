@@ -386,7 +386,7 @@ Task(subagent_type="devops-eng", run_in_background=False, prompt="Implement feat
 
 **When blocked, it stops and reports.** A missing password, an unreachable service or a refused command is a complete answer once it is said. Working around it, with a new container, a borrowed credential or a different command for the same effect, is the failure this section exists to prevent.
 
-**A deployment's own list lives in `~/agent/policies/personal/delegation.md`,** the predictable path every personal policy uses. It adds what the base list can't know: a deployment's container names, commands its operator has barred, and its own publishing rules. The PA reads that file fresh at each dispatch and pastes the whole of it into the prompt. Kept in one file, the list is not something the PA has to remember at dispatch time, which is exactly when it is forgotten.
+**A deployment's own list lives in `agent/policies/personal/delegation.md` under the agent home,** the predictable path every personal policy uses (`~/agent/...` where the agent home is the login home, as in a container; elsewhere on a host). It adds what the base list can't know: a deployment's container names, commands its operator has barred, and its own publishing rules. The PA reads that file fresh at each dispatch and pastes the whole of it into the prompt. Kept in one file, the list is not something the PA has to remember at dispatch time, which is exactly when it is forgotten.
 
 **This is a PA duty, not the SA's.** A skill or agent definition that dispatches SAs on its own carries the list in its prompt template, or takes it from the PA. Before each dispatch, ask: could this SA, meaning well, run something that asks for approval or can't be undone? If so, the prompt says not to.
 
@@ -606,7 +606,7 @@ Write comprehensive tests for handle_session_start.py with 100% coverage.
 - Specialist exists + complex task + well-defined = Delegate
 - Simple task or cross-cutting = Do yourself
 - User communication or git commits = NEVER delegate
-- Every prompt that can touch the host carries the forbidden list (3.6) and the deployment's `~/agent/policies/personal/delegation.md`; a blocked SA reports, never works around
+- Every prompt that can touch the host carries the forbidden list (3.6) and the deployment's `agent/policies/personal/delegation.md` under the agent home; a blocked SA reports, never works around
 
 **Stateless Reality**:
 - Fresh agent every delegation
