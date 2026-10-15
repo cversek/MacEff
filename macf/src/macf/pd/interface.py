@@ -88,6 +88,20 @@ class _Closed(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _usable_environment(env: Dict[str, str]) -> Dict[str, str]:
+    """A declared environment whose names a process can carry, and whose values name only
+    placeholders the daemon fills. An empty name, or one with ``=`` in it, would load and
+    then fail every start, so it is refused where it is written."""
+    bad = sorted(k for k in env if not _ENV_NAME.match(k))
+    if bad:
+        raise ValueError(f"environment names must match {_ENV_NAME.pattern}: {', '.join(repr(k) for k in bad)}")
+    _known_placeholders(list(env.values()))
+    return env
+
+
 def _known_placeholders(values: List[str]) -> List[str]:
     unknown = sorted({m for v in values for m in _PLACEHOLDER.findall(v) if m not in PLACEHOLDERS})
     if unknown:
@@ -136,8 +150,7 @@ class Unit(_Closed):
     @field_validator("environment")
     @classmethod
     def _environment_placeholders(cls, v: Dict[str, str]) -> Dict[str, str]:
-        _known_placeholders(list(v.values()))
-        return v
+        return _usable_environment(v)
 
     @field_validator("privacy_grants")
     @classmethod
@@ -194,11 +207,19 @@ class CommandRun(_Closed):
 
     command: List[str] = Field(min_length=1)
     wake_when: Literal["exit_code", "stdout"]
+    #: Added to the run's fixed ``PATH`` and ``HOME``, rendered like a unit's environment;
+    #: a key declared here overrides those two.
+    environment: Dict[str, str] = Field(default_factory=dict)
 
     @field_validator("command")
     @classmethod
     def _command_placeholders(cls, v: List[str]) -> List[str]:
         return _known_placeholders(v)
+
+    @field_validator("environment")
+    @classmethod
+    def _environment_placeholders(cls, v: Dict[str, str]) -> Dict[str, str]:
+        return _usable_environment(v)
 
 
 class Schedule(_Closed):
@@ -355,6 +376,9 @@ class UnitState(_Closed):
     pid: Optional[int] = None
     proc_start: Optional[str] = None
     reason: str = ""
+    #: The host boot this was recorded in (Linux's ``boot_id``), so a later daemon adopts
+    #: the pid only within the same boot. None where the platform has no boot id.
+    boot_id: Optional[str] = None
 
 
 class Asker(_Closed):
