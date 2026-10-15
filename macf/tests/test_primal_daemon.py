@@ -186,7 +186,10 @@ def test_clean_parent(make_core, script, tmp_path, monkeypatch):
     assert seen["ppid"] == os.getpid()
     assert seen["env"]["DECLARED"] == "yes"
     assert "PD_TEST_UNDECLARED" not in seen["env"]
-    assert set(seen["env"]) == set(unit.environment)
+    # macOS's CoreFoundation adds __CF_USER_TEXT_ENCODING to a process's own environment as
+    # it starts (seen on CI's macOS image): the child's doing, like LC_CTYPE above.
+    own = {"__CF_USER_TEXT_ENCODING"} if sys.platform == "darwin" else set()
+    assert set(seen["env"]) - own == set(unit.environment)
 
 
 def test_env_rendered_at_start(make_core, script, tmp_path):
@@ -325,7 +328,11 @@ def test_unreported_work_is_taken_as_idle_and_said_so(make_core, script):
 
 def test_no_restart_exit_code(make_core, script):
     """A unit that exits with a no-restart code stays stopped, whatever its policy."""
-    core = make_core([make_unit("worker", script, {"exit_after": 0.1, "code": 78}, restart="always")])
+    # Its first beat must meet a cold start on a loaded runner (as in test_liveness_verdicts):
+    # at 0.05 s it was due within 0.15 s, and missing it failed the unit, which 'always' then
+    # restarted (macOS CI, Oct 14).
+    core = make_core([make_unit("worker", script, {"exit_after": 0.1, "code": 78}, interval=0.5,
+                                restart="always")])
     core.boot()
 
     assert drive(core, lambda: core.state("worker") == "stopped")

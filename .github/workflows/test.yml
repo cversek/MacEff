@@ -1,28 +1,44 @@
 name: Tests
 
+# Three gates (policy testing §3.1, agreed on #552 on Oct 14):
+# - a push to a pull request: the full suite in parallel on Python 3.12, about two minutes;
+# - the merge queue (merge_group) and main: both versions, on the actual merge with main,
+#   so a PR green against an old main can't land a break (#654 was the case);
+# - nightly: both versions here, and macOS in macos.yml.
 on:
   pull_request:
     branches: [main]
+  merge_group:
   push:
     branches: [main]
+  schedule:
+    - cron: '0 7 * * *'
+  workflow_dispatch:
 
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
+        # Both entries on every event, so the merge queue can require test (3.10) and
+        # test (3.12) by name. On a PR push the 3.10 job skips its steps and reports success
+        # without running; the queue, main and nightly run both for real (CTB, on #676).
         python-version: ['3.10', '3.12']
+    env:
+      RUN_TESTS: ${{ github.event_name != 'pull_request' || matrix.python-version == '3.12' }}
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
+        if: env.RUN_TESTS == 'true'
         with:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
           cache-dependency-path: macf/pyproject.toml
 
       - name: Install package with test dependencies
+        if: env.RUN_TESTS == 'true'
         # `proxy` too: the proxy tests import aiohttp, which lives in that extra,
         # so with [test] alone they could never pass in CI.
         # `amail` is here because the amail suite imports the crypto backend.
@@ -31,11 +47,18 @@ jobs:
         run: pip install -e "./macf[test,proxy,amail]"
 
       - name: Create CI environment directories
+        if: env.RUN_TESTS == 'true'
         run: mkdir -p ~/.claude/projects
 
       - name: Run tests (hermetic)
+        if: env.RUN_TESTS == 'true'
+        # In parallel (pytest-xdist): 4,600 tests took ~4.5 min serially here; measured
+        # Oct 14 at 87 s with 4 workers on Linux and ~95 s on macOS. -q, since nobody
+        # reads thousands of PASSED lines; failures still print in full. A test marked
+        # flaky (pytest-rerunfailures) is rerun once and the rerun shows in the summary;
+        # nothing else is ever retried (testing §3.1).
         run: >
-          pytest macf/tests/ -v --tb=short -m "not live"
+          pytest macf/tests/ -q -n auto -rR --tb=short -m "not live"
           --ignore=macf/tests/test_recommend.py
           --ignore=macf/tests/test_hybrid_search.py
           --ignore=macf/tests/test_lancedb_search.py
@@ -50,6 +73,7 @@ jobs:
         timeout-minutes: 6
 
       - name: Run tests (live external state)
+        if: env.RUN_TESTS == 'true'
         # MEASURED on this runner, not predicted: 26 passed, 7 skipped. The
         # image does ship tmux, so most of this set genuinely executes here;
         # what stays skipped is systemd-analyze, the real claude client, and

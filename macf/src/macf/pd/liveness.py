@@ -83,8 +83,12 @@ class Heartbeat:
         self._ticked.set()
 
     def stop(self) -> None:
+        """Stop, and return only once no beat can follow: a beat already past its stop
+        check finishes first, so nothing is written for a loop that has ended."""
         self._stop.set()
         self._ticked.set()
+        if self._thread.is_alive() and self._thread is not threading.current_thread():
+            self._thread.join(timeout=5)
 
     def _run(self) -> None:
         stalled = False

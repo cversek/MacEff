@@ -132,7 +132,10 @@ class TestRunningSessionVersion:
     def test_the_system_names_this_processs_own_binary(self, monkeypatch):
         monkeypatch.setattr("platform.system", REAL_SYSTEM)
         named = formatting._running_executable(os.getpid())
-        assert os.path.realpath(named) == os.path.realpath(sys.executable)
+        # python.org's macOS framework build re-execs its bin/ stub as the app binary inside
+        # the framework, and that is the binary the system names (seen on CI's macOS image).
+        framework_app = os.path.join(sys.base_prefix, "Resources", "Python.app", "Contents", "MacOS", "Python")
+        assert os.path.realpath(named) in {os.path.realpath(sys.executable), os.path.realpath(framework_app)}
 
 
 class TestStrategy1HookRecursionRegression:
