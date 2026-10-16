@@ -545,6 +545,17 @@ class Core:
                 return r.pid, r.proc_start
         return None
 
+    def session_active_since(self) -> Optional[float]:
+        """When the running session started, in epoch seconds; ``-inf`` when no session unit
+        is declared, so a wait counts from its start; None while the declared one isn't
+        running. What the unread-mail notice counts a wait from (MIS-0002-R55)."""
+        session = next((r for r in self._units.values() if r.spec.kind == "session"), None)
+        if session is None:
+            return float("-inf")
+        if session.proc is None or not session.pid:
+            return None
+        return (start_epoch(session.proc_start) if session.proc_start else None) or session.since
+
     def failures(self, unit: str) -> int:
         """Consecutive failures since the unit last ran stably; the restart backoff grows with them."""
         return self._runner(unit).failures

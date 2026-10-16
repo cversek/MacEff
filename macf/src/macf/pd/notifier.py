@@ -44,9 +44,10 @@ from macf.transcript_monitor.sources import StoreSource, agent_store_source
 EVENT_DETECTED = "store_arrival_detected"
 #: One notice written to a channel.
 EVENT_DELIVERED = "pd_notice_delivered"
-#: Notices the daemon raises itself about the agent's own units, not read from a store. Each
-#: is delivered only where the declaration routes it to the agent (MIS-0002-R42).
-INTERNAL_SOURCES = frozenset({"pd_limit_exceeded"})
+#: Notices the daemon raises itself, about the agent's own units or its unread mail, not read
+#: from a store. Each is delivered only where the declaration routes it to the agent
+#: (MIS-0002-R42).
+INTERNAL_SOURCES = frozenset({"pd_limit_exceeded", "pd_unread_mail"})
 #: Who wrote a detection: the daemon's notifier, as against any other poller of a store.
 NOTIFIER = "pd"
 
