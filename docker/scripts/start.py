@@ -2180,10 +2180,48 @@ def provision_pickup_boxes(broker_config: Path, handoff_root: Path) -> None:
             box.chmod(0o2770)
             log(f"amail pickup box {box} -> amail_broker:{account}'s group "
                 f"(2770) provisioned")
+            write_amail_settings(Path(pw.pw_dir), handoff_root, agent, pw.pw_uid, pw.pw_gid)
         except (OSError, KeyError) as e:
             log(f"⚠️ MACF: could not provision pickup box for {agent!r} ({e}); "
                 f"mail delivered to it will be unreadable BY ITS RECIPIENT, "
                 f"while every send reports success.")
+
+def write_amail_settings(home: Path, handoff_root: Path, agent: str, uid: int, gid: int) -> None:
+    """Name the agent's pickup box in its own `.maceff/amail.json` (`handoff`, `agent`).
+
+    `amail list` and the agent's primal daemon find the box from these two keys
+    (`macf.amail.pickup`). A session gets `MACEFF_AGENT_NAME` from its shell, but the
+    outer tier starts a daemon with identity variables only, so without this file a
+    seat's daemon watches a guessed path and sees no mail. Declared, from the same
+    addressing entry that made the box, never derived elsewhere. Other keys already
+    in the file are kept; the file is the agent's, 0600.
+    """
+    path = home / ".maceff" / "amail.json"
+    try:
+        current = json.loads(path.read_text()) if path.exists() else {}
+    except (OSError, ValueError) as e:
+        log(f"⚠️ MACF: {path} is unreadable ({e}); not rewriting it, so {agent!r}'s "
+            f"daemon may not find its pickup box")
+        return
+    if not isinstance(current, dict):
+        log(f"⚠️ MACF: {path} holds no JSON object; not rewriting it")
+        return
+    wanted = {"handoff": str(handoff_root), "agent": agent}
+    if all(current.get(k) == v for k, v in wanted.items()):
+        return
+    current.update(wanted)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(current, indent=2) + "\n")
+        os.chown(tmp, uid, gid)
+        tmp.chmod(0o600)
+        os.replace(tmp, path)
+        log(f"amail settings {path}: pickup box {handoff_root / agent}")
+    except OSError as e:
+        log(f"⚠️ MACF: could not write {path} ({e}); {agent!r}'s daemon may not find "
+            f"its pickup box")
+
 
 def start_amail_services(agents_config: AgentsConfig) -> None:
     """Start the broker and the inbound watcher, and schedule the sweep.
