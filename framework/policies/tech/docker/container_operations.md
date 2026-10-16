@@ -515,7 +515,7 @@ configs:
 
 **So every account and group the framework creates takes a declared number from the deployment's id block, never a number assigned by creation order.**
 
-- **The block.** `ids.base` in agents.yaml, a multiple of 1000 and at least 20000. The block is `base` to `base + 999`. The same number is the image's build argument `MACEFF_ID_BASE`.
+- **The block.** `ids.base` in agents.yaml, a multiple of 1000 and at least 20000. The block is `base` to `base + 999`. The same number is the image's build argument `MACEFF_ID_BASE`. Set it in the environment of every build: `docker compose build` and `make build` pass it from there, `make build-deploy` does too, and each refuses to build without it. There is no default, because a block chosen for you could be another deployment's.
   - The floor is 20000 because hosts give human accounts numbers from 1000 upward (`useradd`'s `UID_MIN`) and system services numbers below 1000. A host would need about 19,000 accounts to reach the floor (the measured host had 4).
   - Choosing a block is a procedure, not a constant: pick one that no other deployment on the host uses, and that covers no account the host itself created at an explicit number (a CI runner account, say). Then check with `macf_tools ids audit`.
 - **Fixed slots,** the same in every block, as offsets from `base`:
