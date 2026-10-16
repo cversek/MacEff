@@ -49,12 +49,15 @@ LOOKBACK_S = 7 * 86400
 #: How long an alert command may take before it counts as failed.
 SEND_TIMEOUT_S = 30
 
-Verdict = Literal["ALIVE", "STALE", "GONE", "ABSENT", "UNREADABLE", "UNREACHABLE", "CHECK-FAILED"]
+Verdict = Literal["ALIVE", "STALE", "GONE", "ABSENT", "UNREADABLE", "UNREACHABLE", "CHECK-FAILED", "DARK", "HELD", "UNREAD"]
 
 #: Exit codes, worst wins (``service_supervision`` section 4.2): each state its own code.
 EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_UNREACHABLE, EXIT_CHECK_FAILED = 0, 1, 2, 3
+#: Every verdict has its code: a verdict added without one made ``exit_code`` raise, after the
+#: alert was sent, on every pass while a channel was dark or a wake held.
 _EXIT_FOR = {"ALIVE": EXIT_HEALTHY, "STALE": EXIT_UNHEALTHY, "GONE": EXIT_UNHEALTHY,
-             "ABSENT": EXIT_UNHEALTHY, "UNREACHABLE": EXIT_UNREACHABLE,
+             "ABSENT": EXIT_UNHEALTHY, "DARK": EXIT_UNHEALTHY, "HELD": EXIT_UNHEALTHY, "UNREAD": EXIT_UNHEALTHY,
+             "UNREACHABLE": EXIT_UNREACHABLE,
              "UNREADABLE": EXIT_CHECK_FAILED, "CHECK-FAILED": EXIT_CHECK_FAILED}
 
 #: ``(pid, recorded start) -> is that process still the one recorded``, in the shape of
@@ -145,6 +148,135 @@ def last_liveness(log_path: Path, card: str, units: Sequence[str], now: float,
     return found
 
 
+def last_channel_event(log_path: Path, card: str, now: float,
+                       lookback_s: float = LOOKBACK_S) -> Optional[dict]:
+    """The newest ``pd_channel_dark`` or ``pd_channel_back`` of agent *card* within the
+    lookback, or None. Read newest first, stopping at the first event past the lookback."""
+    cutoff = now - lookback_s
+    for line in iter_lines_reverse(log_path):
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        if event.get("event") not in (interface.EVENT_CHANNEL_DARK, interface.EVENT_CHANNEL_BACK):
+            continue
+        data = event.get("data")
+        if isinstance(data, dict) and data.get("agent") == card:
+            return event
+    return None
+
+
+def check_channel(card: str, event: Optional[dict], now: float) -> Finding:
+    """The session's MacEff channel, from the daemon's own record of it (MIS-0002-R115).
+    The daemon derives dark and back; this watch is how the operator hears of it, since a
+    dark channel can't carry its own news."""
+    if event is None or event.get("event") == interface.EVENT_CHANNEL_BACK:
+        return Finding(card, "channel", "ALIVE", "no dark channel recorded")
+    data = event.get("data") or {}
+    stamp = event.get("timestamp")
+    age = f", {_age(now - stamp)} ago" if isinstance(stamp, (int, float)) else ""
+    return Finding(card, "channel", "DARK", f"{data.get('reason', 'dark')}{age}")
+
+
+def last_unread_mail_event(log_path: Path, card: str, now: float,
+                           lookback_s: Optional[float] = None) -> Optional[dict]:
+    """The newest ``pd_unread_mail`` or ``pd_unread_mail_cleared`` of agent *card*, or None.
+    Not bounded by the usual lookback: a spell's opening event is the only record that it
+    is open, so a spell older than the lookback would read as cleared and the operator would
+    get an all-clear while the daemon still holds it (host-side maintainer, on review)."""
+    cutoff = now - lookback_s if lookback_s is not None else float("-inf")
+    for line in iter_lines_reverse(log_path):
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        if event.get("event") not in (interface.EVENT_UNREAD_MAIL, interface.EVENT_UNREAD_MAIL_CLEARED):
+            continue
+        data = event.get("data")
+        if isinstance(data, dict) and data.get("agent") == card:
+            return event
+    return None
+
+
+def check_unread_mail(card: str, event: Optional[dict], now: float) -> Finding:
+    """Mail left unread past the agent's threshold, from the daemon's own record of the
+    spell (MIS-0002-R55), for a declaration that routes the notice to the operator. One
+    alert when a spell opens and one line when the box is emptied, by the watch's stretches."""
+    if event is None or event.get("event") == interface.EVENT_UNREAD_MAIL_CLEARED:
+        return Finding(card, "mail", "ALIVE", "no mail unread past its threshold")
+    data = event.get("data") or {}
+    stamp = event.get("timestamp")
+    age = f", {_age(now - stamp)} ago" if isinstance(stamp, (int, float)) else ""
+    return Finding(card, "mail", "UNREAD", f"{data.get('reason', 'mail unread past its threshold')}{age}")
+
+
+#: How long a typed wake may be held, by a dialog or a draft in the session's pane, before
+#: the operator is told: rule 14 of the mail clock's list (on #552). A dialog waits on a
+#: person, and nothing in the session can say so.
+WAKE_HELD_ALERT_S = 1800.0
+_WAKE_EVENTS = ("pd_wake_held", "pd_wake_sent", "pd_wake_released")
+
+
+def last_wake_event(log_path: Path, card: str, now: float,
+                    lookback_s: float = LOOKBACK_S) -> Optional[dict]:
+    """The newest held, sent or released wake event of agent *card* within the lookback.
+
+    A hold carries ``held_since``, the time of the first hold of its stretch: a hold whose
+    reason changes, a dialog then a draft, writes a new event, and the allowance must not
+    start again with it."""
+    newest = None
+    for event in _wake_events(log_path, card, now - lookback_s):
+        if newest is None:
+            if event.get("event") != "pd_wake_held":
+                return event
+            newest = dict(event)
+        elif event.get("event") != "pd_wake_held":
+            break
+        newest["held_since"] = event.get("timestamp")
+    return newest
+
+
+def _wake_events(log_path: Path, card: str, cutoff: float):
+    """Agent *card*'s wake events, newest first, back to *cutoff*."""
+    for line in iter_lines_reverse(log_path):
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        if event.get("event") not in _WAKE_EVENTS:
+            continue
+        data = event.get("data")
+        if isinstance(data, dict) and data.get("agent") == card:
+            yield event
+
+
+def check_wake(card: str, event: Optional[dict], now: float,
+               held_alert_s: float = WAKE_HELD_ALERT_S) -> Finding:
+    """A typed wake held too long: the newest wake event is a hold whose stretch began more
+    than ``held_alert_s`` ago. A sent wake, or a stretch released because nothing waits, clears it."""
+    stamp = (event or {}).get("held_since", (event or {}).get("timestamp"))
+    if (event is None or event.get("event") != "pd_wake_held"
+            or not isinstance(stamp, (int, float)) or now - stamp < held_alert_s):
+        return Finding(card, "wake", "ALIVE", "no wake held past its allowance")
+    reason = (event.get("data") or {}).get("reason", "held")
+    return Finding(card, "wake", "HELD", f"a wake has waited {_age(now - stamp)} on the pane: {reason}")
+
+
 def check_unit(card: str, unit: interface.Unit, event: Optional[dict], now: float,
                probe: Optional[Probe]) -> Finding:
     """A unit's verdict by the rule the readout uses (``health.read_liveness``): a unit is
@@ -195,6 +327,22 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
     except OSError as e:
         return findings + [Finding(card, "home", "CHECK-FAILED", f"the event log cannot be read: {e.strerror}")]
     findings += [check_unit(card, u, events[u.name], now, probe) for u in declaration.units]
+    if any(u.kind == "session" for u in declaration.units):   # a session the fallback types into
+        try:
+            findings.append(check_wake(card, last_wake_event(log_path, card, now), now))
+        except FileNotFoundError:
+            findings.append(check_wake(card, None, now))
+    if declaration.channel_connect_s is not None:      # a channel is expected, so watch it
+        try:
+            findings.append(check_channel(card, last_channel_event(log_path, card, now), now))
+        except FileNotFoundError:
+            findings.append(check_channel(card, None, now))
+    if (declaration.unread_mail_threshold_s is not None
+            and declaration.notice_routes.get(interface.UNREAD_MAIL_SOURCE) in ("operator", "both")):
+        try:
+            findings.append(check_unread_mail(card, last_unread_mail_event(log_path, card, now), now))
+        except FileNotFoundError:
+            findings.append(check_unread_mail(card, None, now))
     return findings
 
 

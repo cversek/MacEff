@@ -1,0 +1,48 @@
+  (conversation text)
+  (conversation text)
+
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  agent | project | 400k/1000k
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  [38;5;220m⏵⏵[39m [38;5;220mauto[39m [38;5;220mmode[39m [38;5;220mon[38;5;246m (shift+tab[39m [38;5;246mto[39m [38;5;246mcycle)[39m [38;5;246m·[39m [38;5;246mesc[39m [38;5;246mto[39m [38;5;246minterrupt[39m [38;5;246m·[39m [38;5;246m←[39m [38;5;246mfor[39m [38;5;246magents[39m
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  (conversation text)
+
+  (conversation text)
+  (conversation text)
+  (conversation text)
+
+  (conversation text)
+  (conversation text)
+  (conversation text)
+
+────────────────────────────────────────────────────────────────────────────────
+ [1m[38;5;153mBash command[0m
+
+   [2m│[0m macf_tools task grant-update --help 2>&1 | head -20; echo ---;
+   [2m│[0m macf_tools task reparent --help 2>&1 | head -12
+  (conversation text)
+
+ [2m│[0m Ask rule [1mBash(macf_tools task grant-update:*)[0m overrides auto mode for this
+ [2m│[0m command.
+  (conversation text)
+
+ Do you want to proceed?
+ [38;5;153m❯[39m [38;5;246m1.[39m [38;5;153mYes[39m
+   [38;5;246m2.[39m Yes, and don’t ask again for: macf_tools task *
+   [38;5;246m3.[39m No
+
+ [38;5;246mEsc[39m [38;5;246mto[39m [38;5;246mcancel[39m [38;5;246m·[39m [38;5;246mTab[39m [38;5;246mto[39m [38;5;246mamend[39m
+

@@ -7,9 +7,12 @@ command line typed in a session claims is still an open question, so no unit act
 """
 import argparse
 import json
+import os
+import subprocess
 import sys
 import time
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Tuple
 
 
 def add_pd_parser(sub) -> None:
@@ -30,6 +33,28 @@ def add_pd_parser(sub) -> None:
         "uninstall", help="stop this agent's primal daemon and remove its unit; the units it "
                           "supervises keep running, for a later daemon to adopt")
     rm.set_defaults(func=cmd_pd_uninstall)
+    alive = pd_sub.add_parser(
+        "alive", help="write one liveness event for the unit this process runs as (for shell "
+                      "units, once per pass); does nothing outside a primal daemon (MIS-0002-R14)")
+    alive.add_argument("--pid", type=int, default=None,
+                       help="the unit's own process (default: the parent of this command, the loop "
+                            "that runs it; the daemon credits only the process it started)")
+    alive.add_argument("--in-flight", type=int, default=None, metavar="N",
+                       help="work started and not finished, which the daemon checks before a restart")
+    alive.set_defaults(func=cmd_pd_alive)
+
+
+def cmd_pd_alive(args: argparse.Namespace) -> int:
+    """0 when written, or when the environment names no unit (run outside a daemon); 1 when it
+    names one unusably or the event log refused the write."""
+    from macf.pd import liveness
+    if not (os.environ.get(liveness.ENV_UNIT) or os.environ.get(liveness.ENV_INTERVAL)):
+        return 0
+    found = liveness.unit_from_env()
+    if found is None:
+        return 1
+    pid = args.pid or os.getppid()
+    return 0 if liveness.emit(found.card, found.unit, found.interval_s, args.in_flight, pid=pid) else 1
 
 
 def _when(epoch: Optional[float]) -> str:
@@ -58,6 +83,7 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         return 0
     if report.source == "none":
         print(f"{card}: {report.why}")
+        _say_tray(report)
         return 0
     print(f"{card}: from the {report.source} ({report.why})")
     for unit in report.units:
@@ -70,7 +96,15 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         if "liveness" in unit:
             line += f"; liveness {unit['liveness']}: {unit['detail']}"
         print(line)
+    _say_tray(report)
     return 0
+
+
+def _say_tray(report) -> None:
+    # Whether this host can show the tray, and why not (MIS-0002-R73
+    # (readout_MUST_say_tray_unavailable)). A report built without it says nothing.
+    if report.tray:
+        print(report.tray)
 
 
 def _this_agent():
@@ -84,9 +118,31 @@ def _this_agent():
     return home, card_for_home(home)
 
 
-def cmd_pd_install(args: argparse.Namespace) -> int:
-    from pathlib import Path
+#: What the service manager passes the daemon's interpreter: who and where it is, and none of the
+#: installing shell's Python settings (``PYTHONPATH``, ``PYTHONHOME``, a virtualenv's), which the
+#: unit doesn't carry.
+_SERVICE_ENV_KEEP = ("HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG")
+_SERVICE_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 
+
+def daemon_macf(python: str) -> Tuple[Optional[Path], str]:
+    """The macf that ``python -m macf.pd`` imports when the service manager runs it, or None and
+    why not. Asked of the interpreter itself, from ``/`` and without the installing shell's Python
+    settings, because the unit carries neither (#650)."""
+    env = {k: os.environ[k] for k in _SERVICE_ENV_KEEP if k in os.environ}
+    env["PATH"] = _SERVICE_PATH
+    try:
+        out = subprocess.run([python, "-c", "import macf.pd, macf; print(macf.__file__)"],
+                             cwd="/", env=env, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, str(e)
+    if out.returncode != 0:
+        lines = out.stderr.strip().splitlines()
+        return None, lines[-1] if lines else f"exit {out.returncode}"
+    return Path(out.stdout.strip()).resolve().parent, ""
+
+
+def cmd_pd_install(args: argparse.Namespace) -> int:
     from macf.pd import adapter as adapters
     from macf.pd.core import POLICY_POINTER, DeclarationRefused, load_declaration
 
@@ -98,7 +154,18 @@ def cmd_pd_install(args: argparse.Namespace) -> int:
         print(f"maceff_pd: nothing installed: {e}\n{POLICY_POINTER}", file=sys.stderr)
         return 1
     import macf
-    runs = f"it runs {sys.executable}, with macf from {Path(macf.__file__).resolve().parent}"
+    planned = Path(macf.__file__).resolve().parent
+    daemon, why = daemon_macf(sys.executable)
+    if daemon != planned:
+        # The unit runs this interpreter with no environment of the shell's, so the macf it
+        # names must be the one the daemon will import, or the daemon runs other code, or none.
+        found = f"imports macf from {daemon}" if daemon else f"can't import macf.pd ({why})"
+        print(f"maceff_pd: nothing {'planned' if args.plan else 'installed'}: run as the service manager "
+              f"runs it, {sys.executable} {found}, not the macf this command runs ({planned}). Install "
+              f"from an interpreter whose own macf is the one the daemon should run, such as a virtual "
+              f"environment it is installed in.\n{POLICY_POINTER}", file=sys.stderr)
+        return 1
+    runs = f"it runs {sys.executable}, with macf from {planned}"
     if args.plan:
         print(f"# {card}: the outer tier for {home} on {sys.platform}, not installed (--plan); {runs}")
         print(tier.render(card, home))

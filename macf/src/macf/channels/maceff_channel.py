@@ -39,10 +39,10 @@ import time
 from pathlib import Path
 from typing import Callable, Dict, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from macf.channels.channel_tag import SERVER_NAME
-from macf.notify.notice import Notice, amail_notice
+from macf.notify.notice import Notice, amail_notice, daemon_notice
 from macf.notify.session import verify_incarnation
 # The socket, the record, the runtime directory and the path check are the step-1
 # interface's, one definition for the daemon and every client: a name kept here as well
@@ -65,8 +65,27 @@ _INSTRUCTIONS = (
 
 #: The sources this channel delivers, each with the factory that authors its notice.
 #: A source is added here, in code, never by a record that names it.
+#: The daemon's notices about the agent's own units are ``macf-daemon`` notices, which no
+#: mask can hide (an agent may decline news of the world, not news of itself). Each carries
+#: no count and no detail: its pointer names where the facts are, and the event log holds them.
+DAEMON_POINTERS: Dict[str, str] = {
+    # MIS-0002-R60 (pd_MUST_notice_limit_exceeded)
+    "pd_limit_exceeded": "A unit of yours is past its declared memory limit. Run `macf_tools pd status`; "
+                         "the event log's pd_unit_over_limit entry names the unit, its use and its limit.",
+    # MIS-0002-R65 (denied_grant_MUST_raise_notice)
+    "pd_grant_denied": "A grant your declaration names was denied. Run `macf_tools pd status`; "
+                       "the event log names the grant.",
+    # MIS-0002-R47 (pd_MUST_report_carried_changed_lost)
+    "pd_carried": "Your primal daemon restarted, or your session did. Run `macf_tools pd status`; "
+                  "the event log's pd_unit_state entries say what was carried, changed and lost.",
+    # MIS-0002-R55 (unread_mail_MUST_raise_notice)
+    "pd_unread_mail": "Mail has waited in your pickup box past your declared threshold. Run "
+                      "`macf_tools amail list` to read it; the event log's pd_unread_mail entry says how long.",
+}
+
 SOURCES: Dict[str, Callable[["NoticeRecord"], Notice]] = {
     "amail": lambda r: amail_notice(r.arrival_id, r.count),
+    **{source: (lambda r, p=pointer: daemon_notice(r.arrival_id, p)) for source, pointer in DAEMON_POINTERS.items()},
 }
 
 
@@ -79,11 +98,20 @@ class NoticeRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    source: Literal["amail"]
+    source: Literal["amail", "pd_limit_exceeded", "pd_grant_denied", "pd_carried", "pd_unread_mail"]
     arrival_id: str = Field(pattern=r"^[A-Za-z0-9._:-]{1,128}$")
     count: Optional[int] = Field(default=None, ge=0)
     read_at: float
     sent_at: float
+
+    @model_validator(mode="after")
+    def _daemon_notices_carry_no_count(self) -> "NoticeRecord":
+        """A notice about the agent itself has nothing to count, so a count on one is a
+        record this channel did not agree to (``daemon_notice`` drops it, and silently
+        dropping a field is what ``extra="forbid"`` exists to prevent)."""
+        if self.source in DAEMON_POINTERS and self.count is not None:
+            raise ValueError(f"a {self.source} notice carries no count")
+        return self
 
 
 def build_event(record: NoticeRecord) -> dict:

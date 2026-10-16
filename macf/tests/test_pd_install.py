@@ -56,8 +56,13 @@ class _Recorder:
 
 @pytest.fixture
 def tier(monkeypatch):
+    """This platform's adapter, recording; and the service manager's interpreter importing the
+    macf these tests run, unless a test says otherwise."""
+    import macf
+    from macf.pd import cli as pd_cli
     recorder = _Recorder()
     monkeypatch.setattr(adapters, "_ADAPTERS", {sys.platform: recorder})
+    monkeypatch.setattr(pd_cli, "daemon_macf", lambda python: (Path(macf.__file__).resolve().parent, ""))
     return recorder
 
 
@@ -180,3 +185,43 @@ def test_uninstall_says_so_when_the_service_stays(tmp_path, monkeypatch, tier, c
     tier.status = lambda card: "loaded, pid 23510"
     assert run("uninstall") == 0
     assert "still says: loaded, pid 23510" in capsys.readouterr().out
+
+
+def test_nothing_is_installed_when_the_daemon_would_import_another_macf(tmp_path, monkeypatch, tier, capsys):
+    """The unit runs the interpreter without the shell's Python settings, so a macf the shell
+    put on the path is not the one the daemon runs: the plan named one tree, the daemon ran
+    another (#650)."""
+    from macf.pd import cli as pd_cli
+    other = tmp_path / "elsewhere" / "macf"
+    monkeypatch.setattr(pd_cli, "daemon_macf", lambda python: (other, ""))
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(make_home(tmp_path)))
+    assert run("install") == 1
+    assert run("install", "--plan") == 1
+    err = capsys.readouterr().err
+    assert tier.installed == [] and "nothing installed" in err and "nothing planned" in err
+    assert str(other) in err
+
+
+def test_nothing_is_installed_when_the_daemon_cannot_import_macf(tmp_path, monkeypatch, tier, capsys):
+    """An interpreter whose own macf has no daemon would start, fail and be restarted every
+    few seconds by the service manager."""
+    from macf.pd import cli as pd_cli
+    monkeypatch.setattr(pd_cli, "daemon_macf", lambda python: (None, "ModuleNotFoundError: No module named 'macf.pd'"))
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(make_home(tmp_path)))
+    assert run("install") == 1
+    err = capsys.readouterr().err
+    assert tier.installed == [] and "No module named 'macf.pd'" in err
+
+
+def test_the_check_asks_the_interpreter_from_root_without_the_shell_python_path(tmp_path, monkeypatch):
+    """A macf that only the shell's PYTHONPATH, or the directory install ran from, provides is
+    never the answer, because the service manager gives the daemon neither."""
+    from macf.pd.cli import daemon_macf
+    decoy = tmp_path / "decoy"
+    (decoy / "macf" / "pd").mkdir(parents=True)
+    (decoy / "macf" / "__init__.py").write_text("")
+    (decoy / "macf" / "pd" / "__init__.py").write_text("")
+    monkeypatch.setenv("PYTHONPATH", str(decoy))
+    monkeypatch.chdir(decoy)
+    found, _ = daemon_macf(sys.executable)
+    assert found != (decoy / "macf").resolve()
