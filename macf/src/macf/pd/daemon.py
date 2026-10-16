@@ -41,6 +41,7 @@ from macf.pd.interface import (
     runtime_dir,
 )
 from macf.pd.channel_watch import DarkChannel
+from macf.pd.unread_mail import UnreadMail, pickup_box
 from macf.pd.notifier import Notifier
 from macf.utils.peercred import peer_credentials
 
@@ -114,6 +115,10 @@ class Daemon:
         connect_s = self.core.declaration.channel_connect_s
         #: Where a channel is expected, whether it is dark (R115); the outside watch tells the operator.
         self.dark_channel = DarkChannel(self.card, connect_s) if connect_s else None
+        #: Where a threshold is declared, mail left unread past it (R55): one notice per spell.
+        threshold = self.core.declaration.unread_mail_threshold_s
+        self.unread_mail = UnreadMail(self.card, threshold, pickup_box(self.home),
+                                      self.notifier.raise_notice) if threshold else None
         if any(u.kind == "session" for u in self.core.declaration.units):
             # The keystroke fallback types into the session unit's own pane (pd.session_unit),
             # recording each wake first so it never reads as the operator (MIS-0002-R105).
@@ -160,6 +165,8 @@ class Daemon:
         self.core.record_start(record.pid, record.proc_start)
         self.core.boot()
         self.notifier.boot()
+        if self.unread_mail is not None:
+            self.unread_mail.boot()
         if self.scheduler is not None:
             self.scheduler.boot()
 
@@ -191,6 +198,8 @@ class Daemon:
                 self.notifier.wake()
                 if self.dark_channel is not None:
                     self.dark_channel.tick(self.core.session_incarnation(), bool(self.notifier.channels))
+                if self.unread_mail is not None:
+                    self.unread_mail.tick(self.core.session_active_since())
                 self._keep_record()
         finally:
             for conn in self.notifier.channels:

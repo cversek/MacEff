@@ -49,14 +49,14 @@ LOOKBACK_S = 7 * 86400
 #: How long an alert command may take before it counts as failed.
 SEND_TIMEOUT_S = 30
 
-Verdict = Literal["ALIVE", "STALE", "GONE", "ABSENT", "UNREADABLE", "UNREACHABLE", "CHECK-FAILED", "DARK", "HELD"]
+Verdict = Literal["ALIVE", "STALE", "GONE", "ABSENT", "UNREADABLE", "UNREACHABLE", "CHECK-FAILED", "DARK", "HELD", "UNREAD"]
 
 #: Exit codes, worst wins (``service_supervision`` section 4.2): each state its own code.
 EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_UNREACHABLE, EXIT_CHECK_FAILED = 0, 1, 2, 3
 #: Every verdict has its code: a verdict added without one made ``exit_code`` raise, after the
 #: alert was sent, on every pass while a channel was dark or a wake held.
 _EXIT_FOR = {"ALIVE": EXIT_HEALTHY, "STALE": EXIT_UNHEALTHY, "GONE": EXIT_UNHEALTHY,
-             "ABSENT": EXIT_UNHEALTHY, "DARK": EXIT_UNHEALTHY, "HELD": EXIT_UNHEALTHY,
+             "ABSENT": EXIT_UNHEALTHY, "DARK": EXIT_UNHEALTHY, "HELD": EXIT_UNHEALTHY, "UNREAD": EXIT_UNHEALTHY,
              "UNREACHABLE": EXIT_UNREACHABLE,
              "UNREADABLE": EXIT_CHECK_FAILED, "CHECK-FAILED": EXIT_CHECK_FAILED}
 
@@ -183,6 +183,43 @@ def check_channel(card: str, event: Optional[dict], now: float) -> Finding:
     return Finding(card, "channel", "DARK", f"{data.get('reason', 'dark')}{age}")
 
 
+def last_unread_mail_event(log_path: Path, card: str, now: float,
+                           lookback_s: Optional[float] = None) -> Optional[dict]:
+    """The newest ``pd_unread_mail`` or ``pd_unread_mail_cleared`` of agent *card*, or None.
+    Not bounded by the usual lookback: a spell's opening event is the only record that it
+    is open, so a spell older than the lookback would read as cleared and the operator would
+    get an all-clear while the daemon still holds it (host-side maintainer, on review)."""
+    cutoff = now - lookback_s if lookback_s is not None else float("-inf")
+    for line in iter_lines_reverse(log_path):
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        if event.get("event") not in (interface.EVENT_UNREAD_MAIL, interface.EVENT_UNREAD_MAIL_CLEARED):
+            continue
+        data = event.get("data")
+        if isinstance(data, dict) and data.get("agent") == card:
+            return event
+    return None
+
+
+def check_unread_mail(card: str, event: Optional[dict], now: float) -> Finding:
+    """Mail left unread past the agent's threshold, from the daemon's own record of the
+    spell (MIS-0002-R55), for a declaration that routes the notice to the operator. One
+    alert when a spell opens and one line when the box is emptied, by the watch's stretches."""
+    if event is None or event.get("event") == interface.EVENT_UNREAD_MAIL_CLEARED:
+        return Finding(card, "mail", "ALIVE", "no mail unread past its threshold")
+    data = event.get("data") or {}
+    stamp = event.get("timestamp")
+    age = f", {_age(now - stamp)} ago" if isinstance(stamp, (int, float)) else ""
+    return Finding(card, "mail", "UNREAD", f"{data.get('reason', 'mail unread past its threshold')}{age}")
+
+
 #: How long a typed wake may be held, by a dialog or a draft in the session's pane, before
 #: the operator is told: rule 14 of the mail clock's list (on #552). A dialog waits on a
 #: person, and nothing in the session can say so.
@@ -300,6 +337,12 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
             findings.append(check_channel(card, last_channel_event(log_path, card, now), now))
         except FileNotFoundError:
             findings.append(check_channel(card, None, now))
+    if (declaration.unread_mail_threshold_s is not None
+            and declaration.notice_routes.get(interface.UNREAD_MAIL_SOURCE) in ("operator", "both")):
+        try:
+            findings.append(check_unread_mail(card, last_unread_mail_event(log_path, card, now), now))
+        except FileNotFoundError:
+            findings.append(check_unread_mail(card, None, now))
     return findings
 
 

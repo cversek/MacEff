@@ -78,6 +78,9 @@ DAEMON_POINTERS: Dict[str, str] = {
     # MIS-0002-R47 (pd_MUST_report_carried_changed_lost)
     "pd_carried": "Your primal daemon restarted, or your session did. Run `macf_tools pd status`; "
                   "the event log's pd_unit_state entries say what was carried, changed and lost.",
+    # MIS-0002-R55 (unread_mail_MUST_raise_notice)
+    "pd_unread_mail": "Mail has waited in your pickup box past your declared threshold. Run "
+                      "`macf_tools amail list` to read it; the event log's pd_unread_mail entry says how long.",
 }
 
 SOURCES: Dict[str, Callable[["NoticeRecord"], Notice]] = {
@@ -95,7 +98,7 @@ class NoticeRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    source: Literal["amail", "pd_limit_exceeded", "pd_grant_denied", "pd_carried"]
+    source: Literal["amail", "pd_limit_exceeded", "pd_grant_denied", "pd_carried", "pd_unread_mail"]
     arrival_id: str = Field(pattern=r"^[A-Za-z0-9._:-]{1,128}$")
     count: Optional[int] = Field(default=None, ge=0)
     read_at: float

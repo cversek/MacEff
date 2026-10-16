@@ -124,8 +124,10 @@ A channel event carries **a notice and nothing else**: the source's own fixed wo
   - `pd_limit_exceeded`: a unit is past its declared memory limit [MIS-0002-R60 (pd_MUST_notice_limit_exceeded)].
   - `pd_grant_denied`: a declared grant was denied [MIS-0002-R65 (denied_grant_MUST_raise_notice)].
   - `pd_carried`: what a restart carried, changed and lost [MIS-0002-R47 (pd_MUST_report_carried_changed_lost)].
+- The daemon's notice about your mail:
+  - `pd_unread_mail`: mail has waited in your pickup box past your declared threshold [MIS-0002-R55 (unread_mail_MUST_raise_notice)]. See 1.11.
 
-The three daemon sources arrive as `macf-daemon` notices, which no mask hides: you may decline news of the world, not news of yourself. They carry no count, and a record that gives one a count is refused. Their pointer sends you to `macf_tools pd status` and the event log. **The facts, which unit and how far past its limit, are in the log, never in the notice.**
+The daemon sources arrive as `macf-daemon` notices, which no mask hides: you may decline news of the world, not news of yourself. They carry no count, and a record that gives one a count is refused. Their pointer sends you to `macf_tools pd status` and the event log. **The facts, which unit and how far past its limit, are in the log, never in the notice.**
 
 **What a notice licenses** is unchanged: one action, consulting the store it points at. It is never the operator's word and never consent.
 
@@ -208,6 +210,25 @@ The daemon derives this each pass and writes it to the event log only:
 **The operator hears of it through the outside watch**, which reads those events and alerts once per stretch through its own credential (R75). A dark channel can't carry the news of itself, and the daemon has no other way to reach a person.
 
 **What it means for you:** while your channel is dark, notices from your daemon wait (1.8). The keystroke fallback types a wake when it can (1.9). If you find a `pd_channel_dark` with no `pd_channel_back` after it, your notices aren't reaching you by channel. Check that the MacEff channel plugin is loaded, and tell the operator if it isn't.
+
+### 1.11 Mail left unread
+
+Set `unread_mail_threshold_s` in your declaration to have your daemon notice mail you haven't read [MIS-0002-R55 (unread_mail_MUST_raise_notice)]. Mail is unread while it sits in your pickup box; reading it with `macf_tools amail list` takes it out. Leave the field unset and nothing is watched.
+
+**Route it, or the declaration is refused.** A threshold needs `pd_unread_mail` in `notice_routes`:
+- `agent` sends the notice to your session, held and delivered like any other (1.8);
+- `operator` has the outside watch tell the operator;
+- `both` does both.
+
+**One notice per unread spell, not per message.** A spell opens when the oldest message in the box has waited past the threshold, and closes when the box is empty. More mail during a spell adds nothing; the next spell, after the box was emptied, gets its own notice. The daemon writes one `pd_unread_mail` when a spell opens and one `pd_unread_mail_cleared` when it closes, and nothing else is kept. A restarted daemon reads back whether a spell is open, so it never notices one twice.
+
+**The wait counts only while your session runs.** A message's wait starts at its arrival or at the start of your current session, whichever is later, and no spell opens while your declared session is down. You can't read mail while you aren't running, and a notice about that would only teach its reader to ignore it. An agent with no session unit is counted on the wall clock.
+
+**What to do with the notice:** read your mail. The event says how many messages waited, for how long, and which is the oldest.
+
+**If reading your mail doesn't end the spell,** the oldest entry is one `amail list` couldn't take in: an unreadable pair, or one whose hash doesn't match its sidecar. Those are left in the box, so they hold the spell open. The event names the entry; tell the operator, who can inspect it and remove it.
+
+**A spell is recorded before it's noticed.** The daemon raises the notice only once the opening event is in the log, and closes a spell only once the clearing event is. An event that fails to record is tried again next pass, so the log, the watch and a restarted daemon never disagree about whether a spell is open. One rare case remains: if the box was emptied and filled again while no daemon ran, a restarted daemon still holds the old spell, and the new one is noticed only after the box next empties.
 
 ## 2 The Harness's Own Compactions
 
