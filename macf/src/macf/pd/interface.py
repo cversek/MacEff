@@ -152,6 +152,25 @@ class Unit(_Closed):
     def _environment_placeholders(cls, v: Dict[str, str]) -> Dict[str, str]:
         return _usable_environment(v)
 
+    @model_validator(mode="after")
+    def _liveness_names_this_unit(self) -> "Unit":
+        # The daemon sets both from the unit itself (persistent_layer 11.2); a declaration may
+        # still state them, but never different, or the unit would beat as another or late.
+        env = self.environment
+        if "MACF_PD_UNIT" in env and env["MACF_PD_UNIT"] != self.name:
+            raise ValueError(f"unit {self.name}: MACF_PD_UNIT is {env['MACF_PD_UNIT']!r}; the daemon "
+                             f"sets it to the unit's name, so leave it out")
+        if "MACF_PD_LIVENESS_S" in env:
+            try:
+                same = float(env["MACF_PD_LIVENESS_S"]) == self.liveness_interval_s
+            except ValueError:
+                same = False
+            if not same:
+                raise ValueError(f"unit {self.name}: MACF_PD_LIVENESS_S is {env['MACF_PD_LIVENESS_S']!r}, "
+                                 f"not its liveness_interval_s {self.liveness_interval_s:g}; the daemon "
+                                 "sets it, so leave it out")
+        return self
+
     @field_validator("privacy_grants")
     @classmethod
     def _grants_known(cls, v: List[str]) -> List[str]:
