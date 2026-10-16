@@ -209,3 +209,82 @@ def test_an_artifact_check_that_could_not_run_says_so(monkeypatch):
     monkeypatch.setenv("MACEFF_AGENT_NAME", "probe")
     text = supervision.format_diagnosis(supervision.diagnose())
     assert "ARTIFACTS:  not checked -- OSError: harness home unreadable" in text
+
+
+# --- the primal daemon's session unit (persistent_layer 6.2) -----------------------
+
+class _Report:
+    def __init__(self, source="daemon", units=(), why="its record and its socket agree"):
+        self.source, self.units, self.why = source, list(units), why
+
+
+_SESSION_ENV = {"MACF_PD_SESSION_UNIT": "session", "MACF_PD_SESSION_PID": "4242"}
+
+
+def test_a_session_unit_the_daemon_runs_is_supervised():
+    """env said NONE for a session its primal daemon runs and restarts (Oct 14)."""
+    from macf.utils import supervision
+    found = supervision.primal_daemon_unit(
+        "A@1a2b3c", _SESSION_ENV,
+        ask=lambda: _Report(units=[{"unit": "session", "pid": 4242, "state": "running"}]))
+    assert found["confirmed"]
+    d = TestFormatting()._d(supervision={"supervised": True, "primal_daemon": found})
+    out = format_diagnosis(d)
+    assert "the primal daemon" in out and "NONE" not in out
+
+
+@pytest.mark.parametrize("report, said", [
+    (_Report(units=[{"unit": "session", "pid": 99, "state": "running"}]), "not this session's 4242"),
+    (_Report(units=[{"unit": "session", "pid": 4242, "state": "failed"}]), "as failed"),
+    (_Report(units=[]), "no unit named session"),
+    (_Report(source="event log", why="no daemon can be asked"), "not from the daemon"),
+])
+def test_the_sessions_claim_alone_does_not_confirm_it(report, said):
+    """The variables are the session's claim; only the daemon's answer confirms it."""
+    from macf.utils import supervision
+    found = supervision.primal_daemon_unit("A@1a2b3c", _SESSION_ENV, ask=lambda: report)
+    assert not found["confirmed"] and said in found["why"]
+    out = format_diagnosis(TestFormatting()._d(supervision={"primal_daemon": found}))
+    assert "unconfirmed" in out and "NONE running" in out
+
+
+def test_without_the_session_variables_there_is_no_daemon_claim():
+    from macf.utils import supervision
+    assert supervision.primal_daemon_unit("A@1a2b3c", {}, ask=lambda: 1 / 0) is None
+
+
+def test_a_credential_named_variable_is_reported_set_but_never_shown(monkeypatch):
+    """env printed CLAUDE_CODE_MESSAGING_TOKEN whole, into a transcript (Oct 14)."""
+    from macf.utils.environment import get_env_var_report
+    monkeypatch.setenv("CLAUDE_CODE_MESSAGING_TOKEN", "c5f5ef27sekrit")
+    monkeypatch.setenv("CLAUDE_CODE_MESSAGING_SOCKET", "/run/x.sock")
+    _, extra = get_env_var_report()
+    assert "sekrit" not in extra["CLAUDE_CODE_MESSAGING_TOKEN"]
+    assert "hidden" in extra["CLAUDE_CODE_MESSAGING_TOKEN"]
+    assert extra["CLAUDE_CODE_MESSAGING_SOCKET"] == "/run/x.sock"
+
+
+@pytest.mark.parametrize("name", ["PGPASSWORD", "OPENAI_APIKEY", "GITHUB_PAT", "CLAUDE_APIKEY",
+                                  "CLAUDE_CODE_MESSAGING_TOKEN", "AWS_SECRET_ACCESS_KEY",
+                                  "MACF_PRIVATE_THING", "CLAUDE_COOKIE"])
+def test_a_credential_word_anywhere_in_the_name_hides_the_value(name):
+    """CTB's probe on #667: the word between underscores only let PGPASSWORD,
+    OPENAI_APIKEY and GITHUB_PAT through whole."""
+    from macf.utils.environment import masked
+    assert "abcd1234" not in masked(name, "abcd1234")
+
+
+@pytest.mark.parametrize("name, value", [
+    ("PATH", "/usr/bin"), ("CLAUDE_CODE_EXECPATH", "/a/b"), ("MACF_PD_SESSION_PID", "645719"),
+    ("CLAUDE_CODE_MESSAGING_SOCKET", "/run/x.sock"), ("MACF_CONTEXT_WINDOW", "1000000"),
+])
+def test_names_that_hold_no_credential_are_still_shown(name, value):
+    from macf.utils.environment import masked
+    assert masked(name, value) == value
+
+
+def test_a_password_inside_a_url_is_hidden_whatever_the_name():
+    from macf.utils.environment import masked
+    shown = masked("MACF_DB", "postgres://user:sekrit@host:5432/db")
+    assert "sekrit" not in shown and shown.startswith("postgres://user:") and "@host:5432/db" in shown
+    assert masked("MACF_URL", "https://host/x?a=b:c@d") == "https://host/x?a=b:c@d"

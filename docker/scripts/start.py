@@ -2232,10 +2232,48 @@ def provision_pickup_boxes(broker_config: Path, handoff_root: Path) -> None:
             box.chmod(0o2770)
             log(f"amail pickup box {box} -> amail_broker:{account}'s group "
                 f"(2770) provisioned")
+            write_amail_settings(Path(pw.pw_dir), handoff_root, agent, pw.pw_uid, pw.pw_gid)
         except (OSError, KeyError) as e:
             log(f"⚠️ MACF: could not provision pickup box for {agent!r} ({e}); "
                 f"mail delivered to it will be unreadable BY ITS RECIPIENT, "
                 f"while every send reports success.")
+
+def write_amail_settings(home: Path, handoff_root: Path, agent: str, uid: int, gid: int) -> None:
+    """Name the agent's pickup box in its own `.maceff/amail.json` (`handoff`, `agent`).
+
+    `amail list` and the agent's primal daemon find the box from these two keys
+    (`macf.amail.pickup`). A session gets `MACEFF_AGENT_NAME` from its shell, but the
+    outer tier starts a daemon with identity variables only, so without this file a
+    seat's daemon watches a guessed path and sees no mail. Declared, from the same
+    addressing entry that made the box, never derived elsewhere. Other keys already
+    in the file are kept; the file is the agent's, 0600.
+    """
+    path = home / ".maceff" / "amail.json"
+    try:
+        current = json.loads(path.read_text()) if path.exists() else {}
+    except (OSError, ValueError) as e:
+        log(f"⚠️ MACF: {path} is unreadable ({e}); not rewriting it, so {agent!r}'s "
+            f"daemon may not find its pickup box")
+        return
+    if not isinstance(current, dict):
+        log(f"⚠️ MACF: {path} holds no JSON object; not rewriting it")
+        return
+    wanted = {"handoff": str(handoff_root), "agent": agent}
+    if all(current.get(k) == v for k, v in wanted.items()):
+        return
+    current.update(wanted)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(current, indent=2) + "\n")
+        os.chown(tmp, uid, gid)
+        tmp.chmod(0o600)
+        os.replace(tmp, path)
+        log(f"amail settings {path}: pickup box {handoff_root / agent}")
+    except OSError as e:
+        log(f"⚠️ MACF: could not write {path} ({e}); {agent!r}'s daemon may not find "
+            f"its pickup box")
+
 
 def start_amail_services(agents_config: AgentsConfig) -> None:
     """Start the broker and the inbound watcher, and schedule the sweep.
@@ -2468,6 +2506,97 @@ def _start_inbound_transport(interp: str) -> None:
         log("amail inbound tunnel: none configured (deployment choice)")
 
 
+#: Where an agent's primal daemon declaration sits in its home (persistent_layer 10.1). An
+#: agent with none is started exactly as before: the container outer tier is opt-in.
+PD_DECLARATION = Path('.maceff') / 'pd' / 'declaration.json'
+
+#: The outer tier's backoff, as the systemd unit's (#620): 10 s, doubling, at most one try a
+#: minute. A daemon that ran this long before exiting counts as stable, and the next restart
+#: starts the backoff over.
+PD_BACKOFF_BASE_S = 10.0
+PD_BACKOFF_CAP_S = 60.0
+PD_STABLE_S = 60.0
+
+#: The daemon's exit status for a home it cannot use (EX_CONFIG). Restarting can't fix
+#: that, so the outer tier stops trying for that agent and says so.
+PD_EXIT_UNUSABLE_HOME = 78
+
+#: The daemon's exit status when the agent's daemon already runs (EX_TEMPFAIL).
+PD_EXIT_ALREADY_RUNS = 75
+
+
+def primal_daemon_argv(username: str, home: Path) -> List[str]:
+    """The command that runs one agent's primal daemon as that agent."""
+    venv_py = '/opt/maceff-venv/bin/python'
+    interp = venv_py if Path(venv_py).exists() else '/usr/bin/python3'
+    # By absolute path: the daemon's own PATH (primal_daemon_env) is the one Popen searches, and
+    # it doesn't hold /usr/sbin, where runuser lives. Found by the first live run.
+    runuser = shutil.which('runuser', path='/usr/sbin:/usr/bin:/sbin:/bin') or '/usr/sbin/runuser'
+    return [runuser, '-u', username, '--', interp, '-m', 'macf.pd', str(home)]
+
+
+def primal_daemon_env(username: str, home: Path) -> Dict[str, str]:
+    """The environment the outer tier gives a daemon: who and where it is, and nothing an
+    agent configured. The daemon renders each unit's environment from the declaration
+    itself (MIS-0002-R04, R13)."""
+    return {'HOME': str(home), 'USER': username, 'LOGNAME': username,
+            'PATH': '/opt/maceff-venv/bin:/usr/local/bin:/usr/bin:/bin',
+            'LANG': os.environ.get('LANG', 'C.UTF-8')}
+
+
+def pd_backoff_s(failures: int) -> float:
+    return min(PD_BACKOFF_CAP_S, PD_BACKOFF_BASE_S * 2 ** max(0, failures - 1))
+
+
+def supervise_primal_daemon(username: str, home: Path, *, run=subprocess.Popen,
+                            sleep=time.sleep, clock=time.monotonic,
+                            keep_going=lambda: True) -> None:
+    """The container's outer tier for one agent: start its primal daemon and restart it
+    whenever it exits, with backoff (MIS-0002-R03). Runs in a thread of start.py, so a
+    daemon that keeps failing never holds up sshd or another step (R57, R58)."""
+    failures = 0
+    while keep_going():
+        started = clock()
+        try:
+            code = run(primal_daemon_argv(username, home), env=primal_daemon_env(username, home)).wait()
+        except OSError as e:
+            code = None
+            log(f"primal daemon of {username} could not be started: {e}")
+        ran = clock() - started
+        if code == PD_EXIT_UNUSABLE_HOME:
+            log(f"primal daemon of {username} exited {code}: its home {home} can't be used; "
+                f"not restarting it (fix the home, then restart the container)")
+            return
+        failures = 0 if ran >= PD_STABLE_S else failures + 1
+        delay = pd_backoff_s(failures) if failures else PD_BACKOFF_BASE_S
+        if code == PD_EXIT_ALREADY_RUNS:
+            # Another daemon serves this agent (started by hand, say). Keep checking, at the
+            # slowest pace, so the outer tier takes over if that one ends.
+            delay = PD_BACKOFF_CAP_S
+            log(f"primal daemon of {username}: another one already runs; checking again in {delay:g} s")
+        else:
+            log(f"primal daemon of {username} exited ({code}) after {ran:.0f} s; restarting in {delay:g} s")
+        sleep(delay)
+
+
+def start_primal_daemons(agents_config: AgentsConfig) -> List[str]:
+    """Start the outer tier for every agent whose home declares a primal daemon, each in a
+    thread of its own. Returns the users started for."""
+    import threading
+    started = []
+    for agent_spec in agents_config.agents.values():
+        home = HOME_ROOT / agent_spec.username
+        if not (home / PD_DECLARATION).exists():
+            continue
+        threading.Thread(target=supervise_primal_daemon, args=(agent_spec.username, home),
+                         name=f"pd-{agent_spec.username}", daemon=True).start()
+        started.append(agent_spec.username)
+        log(f"primal daemon of {agent_spec.username}: started under the container outer tier")
+    if not started:
+        log("primal daemons: no agent declares one (~/.maceff/pd/declaration.json); none started")
+    return started
+
+
 def run_after_access(steps) -> List[str]:
     """Run the steps that come after sshd, so that none of them can stop the container.
 
@@ -2672,6 +2801,10 @@ def main() -> int:
             # so placement precedes it, or a correct deployment looks broken.
             ("secrets", lambda: place_secrets(agents_config), ()),
             ("amail", lambda: start_amail_services(agents_config), ("secrets",)),
+            # Each declaring agent's primal daemon, under the container outer tier, before
+            # any optional unit (R57). A no-op for an agent with no declaration.
+            ("primal daemons", lambda: start_primal_daemons(agents_config),
+             ("MACF tools", "agent initialization")),
             # Optional units, last, each under its own timeout (R58).
             ("policy index", lambda: build_policy_index(agents_config), ("MACF tools",)),
             ("search service", lambda: start_search_service_daemon(agents_config), ("policy index",)),

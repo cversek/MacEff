@@ -245,3 +245,20 @@ def test_schedule_without_policy_fails():
     with pytest.raises(ValidationError, match="missed_run"):
         interface.Schedule.model_validate(schedule)
     interface.Schedule.model_validate({**schedule, "missed_run": {"kind": "skip"}})
+
+
+def test_every_unit_declared(tmp_path):
+    """MIS-0002-R08 (unit_MUST_be_declared): the daemon manages exactly the units its
+    agent declares. It holds one runner per declared unit, and a start, stop or restart
+    asked for any other name is refused before anything is recorded or run, so a process
+    nobody declared can't become a managed unit by being named on the socket."""
+    from macf.pd.core import Core
+    from macf.pd.interface import Asker
+    operator = Asker(kind="operator", card="Operator@000000")
+    core = Core(_declaration(units=[_unit("broker"), _unit("watcher")]), "Manny2@78e0aa",
+                placeholders={"agent_home": str(tmp_path)})
+    assert {name: core.state(name) for name in ("broker", "watcher")}
+    for act in (core.start, core.stop, core.restart):
+        with pytest.raises(KeyError, match="not a unit of this agent's declaration"):
+            act("stray", operator, "a name the declaration lacks")
+    assert core.pid("broker") is None and core.pid("watcher") is None

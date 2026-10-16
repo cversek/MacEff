@@ -1791,8 +1791,13 @@ def cmd_harness_attach(args: argparse.Namespace) -> int:
         # "=" forces an exact match; tmux resolves targets by prefix, so a bare
         # name would happily attach to "<agent>-stale-ssh".
         target = f"={agent}"
+        # A session the primal daemon runs as its session unit lives on the unit's own
+        # tmux server, reached through TMUX_TMPDIR (pd.session_unit); otherwise the
+        # legacy harness's session on the default server.
+        from .pd.session_unit import client_environment
+        env = client_environment(agent) or dict(os.environ)
         if subprocess.run(["tmux", "has-session", "-t", target],
-                          capture_output=True).returncode != 0:
+                          capture_output=True, env=env).returncode != 0:
             print(f"No tmux session '{agent}' on this host.", file=sys.stderr)
             print(f"   start it:  {'maceff_' + agent.rpartition('_')[0].lower() + '_harness_launch'}",
                   file=sys.stderr)
@@ -1811,10 +1816,87 @@ def cmd_harness_attach(args: argparse.Namespace) -> int:
         # -d evicts other clients: two clients of different geometries is the
         # cause of the fragmented redraws. Read-only observers skip it.
         cmd.append("-r" if getattr(args, "read_only", False) else "-d")
-        os.execvp("tmux", cmd)
+        os.execvpe("tmux", cmd, env)
     except Exception as e:
         print(f"Error attaching to harness: {e}", file=sys.stderr)
         return 1
+
+
+def cmd_harness_unit(args: argparse.Namespace) -> int:
+    """Be the session unit: the agent's own tmux server, parented by this process.
+
+    The primal daemon runs this as the declared ``session`` unit (MIS-0002-R12). It
+    returns when the session ends, which is the unit's exit; restarts are the daemon's.
+    """
+    from .pd.session_unit import main as session_unit_main
+    argv = []
+    for flag, value in (("--agent", args.agent), ("--home", args.home), ("--project-dir", args.project_dir)):
+        if value:
+            argv += [flag, str(value)]
+    if args.no_proxy:
+        argv.append("--no-proxy")
+    return session_unit_main(argv)
+
+
+def cmd_harness_cutover(args: argparse.Namespace) -> int:
+    """Print the plan for moving the agent's session onto its primal daemon (persistent_layer
+    6.3). Read-only: exit 0 when every check holds, 1 when one doesn't or there is nothing
+    to move, 2 when the agent can't be resolved."""
+    import dataclasses
+    from pathlib import Path
+    from .pd.cutover import build_plan, format_plan, host_probes
+    from .utils.harness import resolve_agent
+    from .utils.identity import calling_card_from_identifier
+
+    agent, source = resolve_agent(getattr(args, "agent", None))
+    if source in ("ambiguous", "default"):
+        print("⚠️ MACF: harness cutover: name the agent with --agent; "
+              f"it couldn't be resolved here ({source})", file=sys.stderr)
+        return 2
+    card = calling_card_from_identifier(agent)
+    home = Path(args.home) if getattr(args, "home", None) else Path.home()
+    plan = build_plan(home, card, agent, host_probes(home, card),
+                      staged=Path(args.staged) if getattr(args, "staged", None) else None)
+    if getattr(args, "execute", False):
+        from datetime import datetime
+        from .pd.cutover import came_up_by_status, execute, run_command
+        log_path = Path(args.log) if getattr(args, "log", None) else None
+
+        def log(line: str) -> None:
+            stamped = f"{datetime.now().isoformat(timespec='seconds')} {line}"
+            print(stamped, flush=True)
+            if log_path is not None:
+                with log_path.open("a") as fh:
+                    fh.write(stamped + "\n")
+        came_up = came_up_by_status(home, card, plan.session_unit or "session")
+        return 0 if execute(plan, run_command, came_up, log) else 1
+    if getattr(args, "run", False):
+        from datetime import datetime
+        from .pd.cutover import COME_UP_S, arm_argv, staged_path
+        if not plan.ready:
+            print(format_plan(plan))
+            print("\n⚠️ MACF: harness cutover --run: not ready, so nothing was started", file=sys.stderr)
+            return 1
+        log_path = home / ".maceff" / "logs" / f"cutover-{datetime.now():%Y%m%d-%H%M%S}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        staged = Path(args.staged) if getattr(args, "staged", None) else staged_path(home)
+        argv = arm_argv(agent, home, staged, log_path, sys.executable)
+        started = subprocess.run(argv, capture_output=True, text=True)
+        if started.returncode != 0:
+            print(f"⚠️ MACF: harness cutover --run: the transient unit didn't start: "
+                  f"{started.stderr.strip()}", file=sys.stderr)
+            return 1
+        print(format_plan(plan))
+        print(f"\nStarted, outside this session. Follow it from any terminal:\n"
+              f"     tail -f {log_path}\n"
+              f"It rolls back by itself on any failure, or if the session unit isn't running "
+              f"within {COME_UP_S:g} s.")
+        return 0
+    if getattr(args, "json", False):
+        print(json.dumps(dataclasses.asdict(plan), indent=2))
+    else:
+        print(format_plan(plan))
+    return 0 if plan.ready else 1
 
 
 def cmd_harness_status(args: argparse.Namespace) -> int:
@@ -1850,31 +1932,47 @@ def cmd_harness_status(args: argparse.Namespace) -> int:
                   f"environment, config or any installed unit)")
         else:
             print(f"agent:   {p.agent}  ({card}, via {source})")
-        print(f"unit:    {unit_path} "
-              f"{'(present)' if unit_path.exists() else f'(ABSENT for agent {p.agent})'}")
-
-        # A HOST WITH NO INIT SYSTEM IS A SUPPORTED HOST, not an error. This
-        # call used to raise FileNotFoundError straight into the broad handler
-        # below, aborting the whole command -- so on a container the reader
-        # lost the session, owner and proxy lines as well and got an exception
-        # where a status belonged. Whether the unit is manageable says nothing
-        # about whether the session is UP, which is what the command is asked.
-        if shutil.which("systemctl") is None:
-            active = "no init system (systemctl absent) -- unit not managed here"
+        # Asked first: a session under the primal daemon has no systemd harness, and on a
+        # host without systemd (macOS) its lines were only noise above the one that answers.
+        from .pd.session_unit import client_environment
+        unit_env = client_environment(p.agent)
+        has_unit_session = unit_env is not None and subprocess.run(
+            ["tmux", "has-session", "-t", f"={p.agent}"], capture_output=True, env=unit_env).returncode == 0
+        if has_unit_session:
+            print("harness: not used -- the session runs as the primal daemon's session unit")
         else:
-            active = subprocess.run(["systemctl", "--user", "is-active", p.unit_name],
-                                    capture_output=True, text=True).stdout.strip()
-        print(f"active:  {active or 'unknown'}")
+            print(f"unit:    {unit_path} "
+                  f"{'(present)' if unit_path.exists() else f'(ABSENT for agent {p.agent})'}")
+
+            # A HOST WITH NO INIT SYSTEM IS A SUPPORTED HOST, not an error. This
+            # call used to raise FileNotFoundError straight into the broad handler
+            # below, aborting the whole command -- so on a container the reader
+            # lost the session, owner and proxy lines as well and got an exception
+            # where a status belonged. Whether the unit is manageable says nothing
+            # about whether the session is UP, which is what the command is asked.
+            if shutil.which("systemctl") is None:
+                active = "no init system (systemctl absent) -- unit not managed here"
+            else:
+                active = subprocess.run(["systemctl", "--user", "is-active", p.unit_name],
+                                        capture_output=True, text=True).stdout.strip()
+            print(f"active:  {active or 'unknown'}")
 
         # "=" forces an EXACT session match. Without it tmux resolves a target
         # by prefix, so `-t thm` happily matches a session called
         # "thm-stale-ssh" -- which is precisely the name someone gives the
         # imposter while moving it out of the way, so the workaround for the
         # name collision silently did not resolve the collision.
-        has_session = subprocess.run(["tmux", "has-session", "-t", f"={p.agent}"],
-                                     capture_output=True).returncode == 0
-        print(f"session: {'up' if has_session else f'absent for {p.agent}'} "
-              f"(tmux -t ={p.agent})")
+        if has_unit_session:
+            # The session unit's server socket is private to this user, so a session on
+            # it is the primal daemon's, whose own status names the unit's process.
+            print(f"session: up as the primal daemon's session unit "
+                  f"(TMUX_TMPDIR={unit_env['TMUX_TMPDIR']} tmux -t ={p.agent}; see macf_tools pd status)")
+            has_session = False
+        else:
+            has_session = subprocess.run(["tmux", "has-session", "-t", f"={p.agent}"],
+                                         capture_output=True).returncode == 0
+            print(f"session: {'up' if has_session else f'absent for {p.agent}'} "
+                  f"(tmux -t ={p.agent})")
 
         # Presence is not ownership. A session under this name may be anyone's
         # — that is how the harness stayed down for days while every surface
@@ -3161,6 +3259,9 @@ def cmd_policy_list(args: argparse.Namespace) -> int:
         else:
             print("All Policies")
         print("=" * 50)
+        from .utils.manifest import extra_policy_roots
+        for root in extra_policy_roots():
+            print(f"  root {root.name}: {root.path} (MACEFF_POLICY_ROOTS; read as {root.name}:<policy>)")
 
         if not policies:
             # "None found" and "cannot look" are different facts, and reporting
@@ -8010,7 +8111,11 @@ def cmd_task_start(args: argparse.Namespace) -> int:
             already = {}
         policies = get_policies_for_task_type(task_type)
         for policy_name in policies:
-            policy_path = find_policy_file(policy_name)
+            try:
+                policy_path = find_policy_file(policy_name)
+            except LookupError as e:        # ambiguous across extra roots (#592)
+                print(f"⚠️ MACF: {e}", file=sys.stderr)
+                continue
             if not policy_path:
                 continue
             if policy_name in already:
@@ -8879,6 +8984,11 @@ def _gh_issue_closeout(task_id: int, mtmd, args, breadcrumb: str) -> None:
     # the fix has actually landed (at least one --commit hash is in a merged
     # PR). Otherwise leave it open and let the natural PR-merge auto-close
     # path take over once the user reviews+merges the PR.
+    # --no-closeout means the issue is left as it is, not only uncommented: a task can end
+    # here (handed off, say) while its issue stays open for its owner.
+    if choice is False:
+        print(f"   ℹ️  Issue {repo_slug}#{gh_issue_number} left as it is (--no-closeout)")
+        return
     fix_landed = _commit_landed_in_merged_pr(repo_slug, list(args.commit or []))
     if not fix_landed:
         print(
@@ -12114,6 +12224,31 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_status.add_argument("--agent", help="agent slug")
     harness_status.set_defaults(func=cmd_harness_status)
 
+    harness_cutover = harness_sub.add_parser(
+        "cutover", help="print the plan for moving this agent's session onto its primal daemon "
+                        "(read-only: checks, steps and rollback for this host; changes nothing)")
+    harness_cutover.add_argument("--agent", help="agent slug (default: resolved from identity)")
+    harness_cutover.add_argument("--home", help="agent home directory")
+    harness_cutover.add_argument("--staged", help="the declaration with the session unit "
+                                                  "(default: <declaration>.cutover)")
+    harness_cutover.add_argument("--json", action="store_true", help="the plan as JSON")
+    harness_cutover.add_argument("--run", action="store_true",
+                                 help="carry the plan out: start it as a transient unit outside this "
+                                      "session, which rolls back on any failure, and print where it logs")
+    harness_cutover.add_argument("--execute", action="store_true",
+                                 help="what the transient unit runs: carry the plan out here and now")
+    harness_cutover.add_argument("--log", help="where --execute writes its progress")
+    harness_cutover.set_defaults(func=cmd_harness_cutover)
+
+    harness_unit = harness_sub.add_parser(
+        "unit", help="run the agent's session as its primal daemon's session unit (the command a "
+                     "declaration names; it runs until the session ends)")
+    harness_unit.add_argument("--agent", help="agent slug (default: resolved from identity)")
+    harness_unit.add_argument("--home", help="agent home directory")
+    harness_unit.add_argument("--project-dir", help="where the session starts (default: the installed choice)")
+    harness_unit.add_argument("--no-proxy", action="store_true", help="never attach the API proxy")
+    harness_unit.set_defaults(func=cmd_harness_unit)
+
     harness_parser.set_defaults(func=cmd_harness_status)
 
     # Breadcrumb command
@@ -12841,7 +12976,7 @@ def _build_parser() -> argparse.ArgumentParser:
     closeout_choice.add_argument("--closeout", dest="closeout", action="store_const", const=True, default=None,
                                  help="GH_ISSUE/GH_PR: post the close-out even when someone else closed or merged the item")
     closeout_choice.add_argument("--no-closeout", dest="closeout", action="store_const", const=False,
-                                 help="GH_ISSUE/GH_PR: complete without posting a close-out")
+                                 help="GH_ISSUE/GH_PR: complete without posting a close-out; a GH_ISSUE's issue is also left open")
     task_complete_parser.set_defaults(func=cmd_task_complete)
 
     # task block - add blocking relationship

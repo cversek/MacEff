@@ -22,7 +22,7 @@ from typing import List, Optional
 
 from pydantic import ValidationError
 
-from macf.notify.session import proc_start, verify_incarnation
+from macf.notify.session import descends_from, proc_start, verify_incarnation
 from macf.pd.core import POLICY_POINTER, Core, DeclarationRefused, load_declaration
 from macf.pd.interface import (
     ActRequest,
@@ -32,6 +32,7 @@ from macf.pd.interface import (
     Response,
     StatusRequest,
     agent_card,
+    channel_socket,
     check_socket_path,
     control_socket,
     parse_request,
@@ -39,6 +40,9 @@ from macf.pd.interface import (
     record_path,
     runtime_dir,
 )
+from macf.pd.channel_watch import DarkChannel
+from macf.pd.unread_mail import UnreadMail, pickup_box
+from macf.pd.notifier import Notifier
 from macf.utils.peercred import peer_credentials
 
 #: The askers a control-socket request may name. The daemon's own policy and the harness
@@ -48,6 +52,12 @@ SOCKET_ASKERS = ("operator", "wind_down")
 
 #: How often the core makes its pass when nothing else wakes the loop.
 TICK_S = 0.25
+
+#: How often a running daemon refreshes its record. Without XDG_RUNTIME_DIR the record
+#: lives in /tmp, and macOS's tmp_cleaner deletes a regular file there once it has gone
+#: three days unread, unwritten and unchanged; the sockets and their directory are never
+#: taken. An hour keeps the record far inside that window at no measurable cost.
+RECORD_REFRESH_S = 3600.0
 
 #: How long a connected client has to send its whole request line, and the daemon to send
 #: its reply.
@@ -76,17 +86,50 @@ def card_for_home(agent_home: Path) -> str:
 class Daemon:
     """One agent's primal daemon: ``start``, then ``serve`` until ``stop``."""
 
-    def __init__(self, agent_home: Path, *, base: Optional[Path] = None, **core_options):
+    def __init__(self, agent_home: Path, *, base: Optional[Path] = None,
+                 record_refresh_s: float = RECORD_REFRESH_S, **core_options):
+        self._record_refresh_s = record_refresh_s
+        self._record_kept = time.monotonic()
         self.home = Path(agent_home)
         self.card = card_for_home(self.home)
         self.base = Path(base) if base else runtime_dir()
         self.control_path = control_socket(self.card, self.base)
         self.record_path = record_path(self.card, self.base)
+        self.channel_path = channel_socket(self.card, self.base)
         check_socket_path(self.control_path)
+        check_socket_path(self.channel_path)
         placeholders = {"agent_home": str(self.home), "card": self.card, "runtime_dir": str(self.base)}
         self.core = Core(load_declaration(self.home, self.card), self.card,
                          placeholders=placeholders, **core_options)
+        #: The declared schedules, run by this daemon (MIS-0002 step 2), or None without any.
+        self.scheduler = None
+        if self.core.declaration.schedules:
+            from macf.pd.scheduler import Scheduler
+            self.scheduler = Scheduler(self.core.declaration, self.card, placeholders,
+                                       work_dir=self.base / f"{self.record_path.stem}.runs")
         self._listener: Optional[socket.socket] = None
+        self._channel_listener: Optional[socket.socket] = None
+        self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound
+        self.notifier = Notifier(self.home, self.core.declaration.notice_routes)
+        self.core.on_notice = self.notifier.raise_notice    # the core's own notices (R60)
+        connect_s = self.core.declaration.channel_connect_s
+        #: Where a channel is expected, whether it is dark (R115); the outside watch tells the operator.
+        self.dark_channel = DarkChannel(self.card, connect_s) if connect_s else None
+        #: Where a threshold is declared, mail left unread past it (R55): one notice per spell.
+        threshold = self.core.declaration.unread_mail_threshold_s
+        self.unread_mail = UnreadMail(self.card, threshold, pickup_box(self.home),
+                                      self.notifier.raise_notice) if threshold else None
+        if any(u.kind == "session" for u in self.core.declaration.units):
+            # The keystroke fallback types into the session unit's own pane (pd.session_unit),
+            # recording each wake first so it never reads as the operator (MIS-0002-R105).
+            from macf.pd.wake import TmuxPane, Waker
+            from macf.supervisor import record_keys_sent
+            from macf.utils.identity import session_identifier
+            ident = session_identifier(self.card)
+            self.notifier.waker = Waker(TmuxPane(ident, self.base),
+                                        record_keys=lambda text, kind: record_keys_sent(text, kind, ident),
+                                        card=self.card)
+        self._sel: Optional[selectors.BaseSelector] = None
         self._wake_r, self._wake_w = os.pipe()
         os.set_blocking(self._wake_w, False)
         self._stopping = False
@@ -109,27 +152,63 @@ class Daemon:
         listener.listen(8)
         listener.setblocking(False)
         self._listener = listener
+        self.channel_path.unlink(missing_ok=True)   # the slot is ours, so a socket left here is a dead daemon's
+        channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        channel.bind(str(self.channel_path))
+        st = os.stat(self.channel_path)
+        self._channel_bound = (st.st_dev, st.st_ino)
+        os.chmod(self.channel_path, 0o600)
+        channel.listen(4)
+        channel.setblocking(False)
+        self._channel_listener = channel
         record = self._record = self._write_record()
         self.core.record_start(record.pid, record.proc_start)
         self.core.boot()
+        self.notifier.boot()
+        if self.unread_mail is not None:
+            self.unread_mail.boot()
+        if self.scheduler is not None:
+            self.scheduler.boot()
 
     def serve(self) -> None:
         """Run until ``stop``, then remove the socket and record. The units keep running for
         the next daemon to adopt unless the stop asked for them too, so a restart through
         the outer tier restarts the daemon alone."""
-        sel = selectors.DefaultSelector()
+        sel = self._sel = selectors.DefaultSelector()
+        self.notifier.on_detach = sel.unregister
         sel.register(self._listener, selectors.EVENT_READ, "control")
+        sel.register(self._channel_listener, selectors.EVENT_READ, "channel")
         sel.register(self._wake_r, selectors.EVENT_READ, "wake")
         try:
             while not self._stopping:
                 for key, _ in sel.select(timeout=TICK_S):
                     if key.data == "control":
                         self._accept()
+                    elif key.data == "channel":
+                        self._accept_channel()
+                    elif key.data == "attached":
+                        self._channel_readable(key.fileobj)
                     else:
                         os.read(self._wake_r, 512)
                 self.core.tick()
+                if self.scheduler is not None:
+                    self.scheduler.tick()
+                self.notifier.poll()
+                self.notifier.flush()
+                self.notifier.wake()
+                if self.dark_channel is not None:
+                    self.dark_channel.tick(self.core.session_incarnation(), bool(self.notifier.channels))
+                if self.unread_mail is not None:
+                    self.unread_mail.tick(self.core.session_active_since())
+                self._keep_record()
         finally:
+            for conn in self.notifier.channels:
+                self.notifier.detach(conn)
+            self.notifier.on_detach = None
+            if self.scheduler is not None:
+                self.scheduler.shutdown()
             sel.close()
+            self._sel = None
             if self._stop_units:
                 self.core.shutdown("every unit stopped as asked, with the daemon")
             self._release()
@@ -176,6 +255,23 @@ class Daemon:
         finally:
             probe.close()
 
+    def _keep_record(self) -> None:
+        """Touch the record now and then, so a temp-directory cleaner never takes it for
+        abandoned; write it again if one already has. It is this daemon's own record, and
+        ``pd status`` believes the daemon only through it."""
+        now = time.monotonic()
+        if now - self._record_kept < self._record_refresh_s:
+            return
+        self._record_kept = now
+        try:
+            os.utime(self.record_path)
+        except FileNotFoundError:
+            print(f"⚠️ MACF: pd: the record at {self.record_path} was removed while the daemon ran; "
+                  "writing it again", file=sys.stderr)
+            self._record = self._write_record()
+        except OSError as e:
+            print(f"⚠️ MACF: pd: could not refresh the record at {self.record_path}: {e}", file=sys.stderr)
+
     def _write_record(self) -> DaemonRecord:
         record = DaemonRecord(pid=os.getpid(), proc_start=proc_start(os.getpid()) or "unknown")
         tmp = self.record_path.with_name(self.record_path.name + ".tmp")
@@ -189,7 +285,10 @@ class Daemon:
         started after a missing record may already have bound the path and written its own."""
         if self._listener is not None:
             self._listener.close()
+        if self._channel_listener is not None:
+            self._channel_listener.close()
         for path, still_mine in ((self.control_path, self._socket_is_mine),
+                                 (self.channel_path, self._channel_is_mine),
                                  (self.record_path, self._record_is_mine)):
             try:
                 if still_mine():
@@ -199,6 +298,10 @@ class Daemon:
             except (OSError, ValidationError) as e:
                 print(f"⚠️ MACF: pd: could not release {path}: {e}", file=sys.stderr)
 
+    def _channel_is_mine(self) -> bool:
+        st = os.stat(self.channel_path)
+        return (st.st_dev, st.st_ino) == self._channel_bound
+
     def _socket_is_mine(self) -> bool:
         st = os.stat(self.control_path)
         return (st.st_dev, st.st_ino) == self._bound
@@ -207,6 +310,53 @@ class Daemon:
         record = DaemonRecord.model_validate_json(self.record_path.read_text())
         return self._record is not None and (record.pid, record.proc_start) == (
             self._record.pid, self._record.proc_start)
+
+    # ------------------------------------------------------------------ requests
+
+    # ------------------------------------------------------------------ the channel
+
+    def _accept_channel(self) -> None:
+        """Attach a MacEff channel to the notifier, but only one whose process descends
+        from the session unit's live process. Every command the agent runs has the same
+        uid, so the uid alone can't tell the session's channel from anything else
+        (MIS-0002-R122 (pd_MUST_check_channel_peer_lineage)). A channel that connects
+        while no session runs is refused, and connects again: its notices are held."""
+        try:
+            conn, _ = self._channel_listener.accept()
+        except BlockingIOError:
+            return  # noqa: MACEFF003 - nothing was pending: a spurious wakeup, not a failure
+        try:
+            peer = peer_credentials(conn)
+        except OSError as e:
+            print(f"⚠️ MACF: pd: cannot read a channel's peer (refusing it): {e}", file=sys.stderr)
+            conn.close()
+            return
+        session = self.core.session_incarnation()
+        if peer.uid != os.getuid() or session is None or not descends_from(peer.pid, *session):
+            why = ("no session unit runs" if session is None
+                   else f"pid {peer.pid} (uid {peer.uid}) is not below the session unit's pid {session[0]}")
+            print(f"⚠️ MACF: pd: refused a channel: {why}", file=sys.stderr)
+            conn.close()
+            return
+        conn.setblocking(False)
+        self.notifier.attach(conn)
+        if self._sel is not None:
+            self._sel.register(conn, selectors.EVENT_READ, "attached")
+        print(f"📡 MACF: pd: channel attached (pid {peer.pid}); "
+              f"{len(self.notifier.owed)} notice(s) owed", file=sys.stderr)
+
+    def _channel_readable(self, conn: socket.socket) -> None:
+        """A channel never writes, so a readable channel has closed (or broke the protocol)."""
+        try:
+            data = conn.recv(512)
+        except BlockingIOError:
+            return  # noqa: MACEFF003 - a spurious wakeup, not a failure
+        except OSError:
+            data = b""
+        if data:
+            print("⚠️ MACF: pd: a channel wrote to the daemon, which channels never do; "
+                  "dropping it", file=sys.stderr)
+        self.notifier.detach(conn)
 
     # ------------------------------------------------------------------ requests
 
