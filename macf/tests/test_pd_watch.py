@@ -129,6 +129,21 @@ def test_each_external_state_has_its_own_exit_code(tmp_path):
     assert len({watch.EXIT_HEALTHY, watch.EXIT_UNHEALTHY, watch.EXIT_UNREACHABLE, watch.EXIT_CHECK_FAILED}) == 4
 
 
+@pytest.mark.parametrize("verdict", __import__("typing").get_args(watch.Verdict))
+def test_every_verdict_has_an_exit_code(verdict):
+    """A verdict added without a code made the pass raise after its alert was sent, on every
+    pass while a channel was dark or a wake held. Only ALIVE is healthy."""
+    code = watch.exit_code([watch.Finding("Resident@1a2b3c", "subject", verdict, "why")])
+    assert (code == watch.EXIT_HEALTHY) == (verdict == "ALIVE")
+
+
+def test_a_dark_channel_pass_exits_unhealthy_after_its_alert(tmp_path):
+    findings = [watch.check_channel("Resident@1a2b3c", {"event": pdi.EVENT_CHANNEL_DARK, "timestamp": NOW - 60,
+                                                         "data": {"agent": "Resident@1a2b3c", "reason": "dropped"}}, NOW)]
+    assert [f.verdict for f in findings] == ["DARK"]
+    assert watch.exit_code(findings) == watch.EXIT_UNHEALTHY
+
+
 def test_a_failed_push_is_recorded_and_loud_and_echoes_nothing_from_the_command(tmp_path, capsys):
     durable = tmp_path / "state" / "alerts.jsonl"
     secret_url = "https://api.example/bot123:SECRET/send"
@@ -242,3 +257,51 @@ def test_a_row_whose_unit_is_not_a_name_does_not_stop_the_watch(tmp_path):
     log.write_text(json.dumps(good) + "\n" + json.dumps(bad) + "\n")
     found = watch.last_liveness(log, "Resident@1a2b3c", ["broker"], now)
     assert found["broker"]["data"]["pid"] == 4242
+
+
+def _route_unread_mail(home, route):
+    path = pdi.declaration_path(home)
+    declaration = json.loads(path.read_text())
+    declaration.update(unread_mail_threshold_s=600, notice_routes={pdi.UNREAD_MAIL_SOURCE: route})
+    path.write_text(json.dumps(declaration))
+
+
+def _unread_event(home, event, age_s):
+    with (home / ".maceff" / "agent_events_log.jsonl").open("a") as fh:
+        fh.write(json.dumps({"timestamp": NOW - age_s, "event": event,
+                             "data": {"agent": CARD, "count": 2, "reason": "2 message(s) unread"}}) + "\n")
+
+
+def test_unread_mail_routed_to_the_operator_is_one_alert_per_spell(tmp_path):
+    """R55's operator half: the watch reads the daemon's spell events. One alert when a spell
+    opens, one line when the box is emptied."""
+    home = _home(tmp_path)
+    _route_unread_mail(home, "both")
+    _stamp(home, "broker", 5)
+    _unread_event(home, pdi.EVENT_UNREAD_MAIL, 30)
+    mail = [f for f in watch.check_home(home, NOW) if f.subject == "mail"]
+    assert [(f.verdict, "2 message(s) unread" in f.detail) for f in mail] == [("UNREAD", True)]
+    lines, after = watch.transitions(mail, {}, NOW)
+    assert len(lines) == 1 and lines[0].startswith(f"ALERT: {CARD} mail: UNREAD")
+    assert watch.transitions(mail, after, NOW + 60)[0] == []          # still open: nothing more
+    _unread_event(home, pdi.EVENT_UNREAD_MAIL_CLEARED, 0)
+    mail = [f for f in watch.check_home(home, NOW) if f.subject == "mail"]
+    assert [f.verdict for f in mail] == ["ALIVE"]
+    assert len(watch.transitions(mail, after, NOW)[0]) == 1
+
+
+def test_a_spell_older_than_the_lookback_still_reads_open(tmp_path):
+    """The opening event is a spell's only record; a cutoff would turn a week-old spell into
+    an all-clear while the daemon still holds it (host-side maintainer, on review)."""
+    home = _home(tmp_path)
+    _route_unread_mail(home, "operator")
+    _unread_event(home, pdi.EVENT_UNREAD_MAIL, watch.LOOKBACK_S + 3600)
+    mail = [f for f in watch.check_home(home, NOW) if f.subject == "mail"]
+    assert [f.verdict for f in mail] == ["UNREAD"]
+
+
+def test_unread_mail_routed_to_the_agent_alone_is_not_the_watchs(tmp_path):
+    home = _home(tmp_path)
+    _route_unread_mail(home, "agent")
+    _unread_event(home, pdi.EVENT_UNREAD_MAIL, 30)
+    assert not [f for f in watch.check_home(home, NOW) if f.subject == "mail"]

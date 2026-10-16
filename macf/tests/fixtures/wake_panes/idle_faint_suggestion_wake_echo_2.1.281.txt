@@ -1,0 +1,40 @@
+  (conversation text)
+  (conversation text)
+❯ MAIL CLOCK: 1 new amail pair(s) in your pickup box (1 waiting). Read EACH, oldest first: msg-1790000001-aaaaaaaaaaaa. Run 'macf_tools amail list', act on any
+  ACTION: line, and reply only where a reply is asked for.
+
+  (conversation text)
+
+  (conversation text)
+
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  (conversation text)
+
+  (conversation text)
+  (conversation text)
+
+  (conversation text)
+  (conversation text)
+
+  (conversation text)
+  (conversation text)
+
+[38;5;246m✻[39m [38;5;246mCooked for 13s · done 10:34 AM[39m
+
+────────────────────────────────────────────────────────────────────────────────
+[39m❯ [2myes, re-arm the Wednesday reminders[0m
+────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;220m⏵⏵ auto mode on[38;5;246m (shift+tab to cycle) · ← for agents[39m
+  (conversation text)
+  (conversation text)
+  (conversation text)
+  (conversation text)
+

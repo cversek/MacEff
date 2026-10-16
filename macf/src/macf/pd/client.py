@@ -10,9 +10,9 @@ nothing: any process of the same user can bind the path while the daemon is down
 import json
 import socket
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from pydantic import ValidationError
 
@@ -30,6 +30,7 @@ from macf.pd.interface import (
     declaration_path,
     record_path,
 )
+from macf.platform.tray_host import TrayHost, tray_host
 from macf.utils.peercred import peer_credentials
 
 #: How long a client waits for the daemon to connect and reply.
@@ -89,18 +90,29 @@ def _read_line(conn: socket.socket) -> bytes:
 @dataclass(frozen=True, kw_only=True)
 class StatusReport:
     """The agent's units, and where the answer came from: ``daemon``, ``event log``, or
-    ``none`` when the agent declares no daemon. ``why`` says how that source was chosen."""
+    ``none`` when the agent declares no daemon. ``why`` says how that source was chosen.
+    ``tray`` is the readout's line on whether this host can show the tray, and why not
+    (MIS-0002-R73 (readout_MUST_say_tray_unavailable)); it is the host's answer, so it is
+    given whatever the source."""
 
     card: str
     source: str
     why: str
     units: List[dict] = field(default_factory=list)
+    tray: str = ""
 
 
 def status(home: Path, card: str, *, base: Optional[Path] = None,
-           now: Optional[float] = None) -> StatusReport:
+           now: Optional[float] = None,
+           host: Optional[Callable[[], TrayHost]] = None) -> StatusReport:
     """Each declared unit as the daemon reports it, or as the event log shows it when no
-    daemon can be believed."""
+    daemon can be believed, with whether this host can show the tray."""
+    report = _units(home, card, base=base, now=now)
+    return replace(report, tray=(host or tray_host)().said())
+
+
+def _units(home: Path, card: str, *, base: Optional[Path] = None,
+           now: Optional[float] = None) -> StatusReport:
     path = declaration_path(home)
     if not path.exists():
         return StatusReport(card=card, source="none",

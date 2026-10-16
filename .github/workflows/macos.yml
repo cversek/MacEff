@@ -1,0 +1,53 @@
+name: Tests (macOS)
+
+# The daemon and process-group code differs by platform (/proc against ps, systemd against
+# launchd), and until Oct 14 CI ran Linux only, so macOS breaks were found by hand (#652's
+# zombie-counting probe, #650). Nightly, on demand, and on a pull request that touches the
+# platform code (testing §3.1, agreed on #552). Hosted macOS minutes cost more, so not on
+# every pull request.
+on:
+  schedule:
+    - cron: '30 7 * * *'
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'macf/src/macf/pd/**'
+      - 'macf/src/macf/platform/**'
+      - 'macf/src/macf/supervisor.py'
+      # Process identity the daemon's reaps and the scheduler rely on: /proc against ps.
+      - 'macf/src/macf/notify/session.py'
+      - 'macf/src/macf/utils/peercred.py'
+      - 'macf/tests/test_pd_*.py'
+      - 'macf/tests/test_primal_daemon.py'
+      - '.github/workflows/macos.yml'
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: macf/pyproject.toml
+
+      - name: Install package with test dependencies
+        run: pip install -e "./macf[test,proxy,amail]"
+
+      - name: Create CI environment directories
+        run: mkdir -p ~/.claude/projects
+
+      - name: Run tests (hermetic)
+        run: >
+          pytest macf/tests/ -q -n auto -rR --tb=short -m "not live"
+          --ignore=macf/tests/test_recommend.py
+          --ignore=macf/tests/test_hybrid_search.py
+          --ignore=macf/tests/test_lancedb_search.py
+          --ignore=macf/tests/test_search_service.py
+          --ignore=macf/tests/test_env_cli.py
+          --ignore=macf/tests/test_get_token_info.py
+          --ignore=macf/tests/test_handle_session_start.py
+        timeout-minutes: 10

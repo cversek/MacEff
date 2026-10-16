@@ -83,6 +83,11 @@ Release workflow policy ensures consistent, traceable, and reversible software r
 - GitHub URL format?
 - Breadcrumb integration?
 
+**3.5 One Fragment per Pull Request**
+- Where does a pull request put its CHANGELOG entry, and why not in CHANGELOG.md?
+- How is a fragment named and written?
+- How are the fragments gathered at release?
+
 **4 Git Tagging Protocol**
 - What tag format should I use?
 - Annotated vs lightweight tags?
@@ -207,7 +212,7 @@ pytest {package}/tests/ -v
 
 **Required documentation updates**:
 
-1. **CHANGELOG.md**: Draft entry for this version (see §3)
+1. **CHANGELOG.md**: Gather the fragments (`python tools/changelog_gather.py --write`, §3.5), then draft the entry for this version (see §3)
 2. **README.md**: Update version references, new features
 3. **Migration guides**: If breaking changes or database migrations
 4. **API documentation**: If public API changed
@@ -428,6 +433,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Users can trace feature to exact commit
 - Forensic reconstruction: "When did X change?"
 - GitHub automatically linkifies commit hashes and PR numbers
+
+### 3.5 One Fragment per Pull Request
+
+**A pull request never edits `CHANGELOG.md`. It adds its entry as a new file in `changelog.d/`**, and the fragments are gathered into `CHANGELOG.md` at release.
+
+**Why**: when every pull request added its entry at the top of the same `[Unreleased]` list, merging any one put every other open pull request into conflict on that file. On 2026-10-14 one merge left four approved pull requests conflicting, and each needed main merged in again. A fragment is a file no other pull request touches, so it can't conflict. The entry is still written by its author while the change is fresh, which is what a release-time reconstruction from pull request descriptions would lose.
+
+**How**:
+- Name the fragment after the branch, with `/` as `-` (`fix-session-unit-reap.md`).
+- Write a category heading from §3.2 (`### Fixed`), then the entry as a bullet in the CHANGELOG's own style. A fragment may hold more than one category. `changelog.d/README.md` shows the form.
+- An entry starts with `- `, and any further line of it is indented. Only `.md` files belong in `changelog.d/`.
+- `python tools/changelog_gather.py` checks every fragment and changes nothing. `--write` files each entry under its category in `[Unreleased]` and removes the fragments. **Newest first**, as that list reads: the newest fragment is the one whose adding commit is latest, by git. A file's modification time can't decide it, because git doesn't keep it, so a fresh clone would gather a different order. A malformed fragment, or any other file in the directory, is refused by name, and nothing is written.
+- The test suite reads every fragment checked in, so a malformed one fails in its own pull request, not at release.
+
+**At release**: gather first (`--write`), then turn `[Unreleased]` into the version's section as §3.1 describes, and edit the gathered entries into thematic groups (§3.3) if the release calls for it.
 
 ---
 

@@ -116,6 +116,18 @@ def clean_temp_dir(tmp_path):
     # Cleanup happens automatically with tmp_path
 
 
+@pytest.fixture
+def hostile(tmp_path):
+    """Stand-ins that resist a stop (``tests/hostile.py``, idea 405), each pid they report
+    SIGKILLed at teardown, whether the test passed or not."""
+    from hostile import Hostile
+    h = Hostile(tmp_path / "hostile")
+    try:
+        yield h
+    finally:
+        h.cleanup()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def isolated_session_root(tmp_path_factory):
     """Point the per-session directories (the hook log among them) at a temporary root.
@@ -1064,6 +1076,32 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.container)
         elif "host" in item.name.lower():
             item.add_marker(pytest.mark.host)
+
+    _select_shard(config, items)
+
+
+def _select_shard(config, items):
+    """Keep only this shard's tests when MACF_TEST_SHARD is "i/n" (CI's parallel runners).
+
+    A test's shard is a hash of its node id, so every runner and every xdist worker
+    agrees on it without a list to keep, and the slow daemon tests spread across
+    shards instead of landing together as a whole file would. Unset, nothing is
+    deselected."""
+    spec = os.environ.get("MACF_TEST_SHARD")
+    if not spec:
+        return
+    import zlib
+
+    index, count = (int(x) for x in spec.split("/"))
+    if not 1 <= index <= count:
+        raise pytest.UsageError(f"MACF_TEST_SHARD={spec}: want i/n with 1 <= i <= n")
+    keep, drop = [], []
+    for item in items:
+        mine = zlib.crc32(item.nodeid.encode()) % count == index - 1
+        (keep if mine else drop).append(item)
+    if drop:
+        config.hook.pytest_deselected(items=drop)
+        items[:] = keep
 
 
 # Hook-specific fixtures for handle_* module tests

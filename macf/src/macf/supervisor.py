@@ -548,8 +548,8 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
             print("[inject] --target names another session, so no recovery prompt follows "
                   "(--then applies only to this agent's own pane).", file=sys.stderr)
         return send_keys(target, [cmd], enter=True, kind="inject")
-    data = _find_own_supervisor()
-    if not data:
+    own = own_pane_target()
+    if not own:
         # Two different situations, and the reader has to do different things
         # about them: with no supervisor running there is nothing to inject
         # into, while with supervisors running the resolution failed and
@@ -567,8 +567,15 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
                   "--target <name|pid> (see `auto-restart list`).",
                   file=sys.stderr)
         return 1
-    rc = send_keys(data.get("name") or str(data.get("supervisor_pid")),
-                   [cmd], enter=True, kind="inject")
+    draft = _draft_in_box(own)
+    if draft:
+        # Typed after a draft, the command is sent with it as one prompt and the client
+        # never runs it: a follower's unsent text once turned /compact into plain text.
+        print(f"[inject] The input box already holds text ({draft[:60]!r}), so {cmd} typed "
+              f"now would be sent with it as one prompt and not run. Clear the box, then "
+              f"run this again.", file=sys.stderr)
+        return 1
+    rc = send_keys(own, [cmd], enter=True, kind="inject")
     if rc == 0:
         # A queued /compact is only submitted when the turn ends, and the Stop
         # gates exist to refuse that. Arm one passage, only after delivery and
@@ -585,11 +592,60 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
             except (OSError, ValueError) as e:
                 print(f"⚠️ MACF: could not record the compaction ask: {e}", file=sys.stderr)
         if then and command.lstrip("/") == "compact":
-            _start_compact_followup(data.get("name") or str(data.get("supervisor_pid")), then)
+            _start_compact_followup(own, then)
     return rc
 
 
-def _start_compact_followup(target: str, text: str) -> None:
+def _draft_in_box(target: str) -> Optional[str]:
+    """The text already in *target*'s input box, read whether or not a turn is running;
+    None when the screen can't be read or shows no box, since then nothing is known."""
+    from .pd.wake import draft_text
+    screen = capture_pane(target)
+    return draft_text(screen) if screen is not None else None
+
+
+def own_pane_target() -> Optional[str]:
+    """The send-keys target for this agent's own pane, or None: the supervisor whose client
+    this process descends from, else this process's own pane in a session unit."""
+    data = _find_own_supervisor()
+    if data:
+        return data.get("name") or str(data.get("supervisor_pid"))
+    # A session its primal daemon runs as a unit (pd.session_unit) has no supervisor: its
+    # pane is this process's own, on the unit's tmux server, which the inherited TMUX names.
+    return _own_session_unit_pane()
+
+
+#: A send-keys target that names a tmux pane directly rather than a supervisor.
+PANE_TARGET_PREFIX = "pane:"
+
+
+def _own_session_unit_pane() -> Optional[str]:
+    """``pane:<id>`` for this process's own pane when it runs inside a session unit,
+    else None. Both marks are required: the unit's variables say the session is a
+    daemon's unit, and TMUX with TMUX_PANE, which tmux sets for the pane's process and
+    every process under it, say which server and which pane."""
+    from .pd.liveness import ENV_SESSION_PID
+    pane = os.environ.get("TMUX_PANE", "")
+    if os.environ.get(ENV_SESSION_PID) and os.environ.get("TMUX") and pane.startswith("%"):
+        return PANE_TARGET_PREFIX + pane
+    return None
+
+
+def start_compaction_resume(since: float) -> bool:
+    """Start the follower with the AUTO_MODE resume prompt for a compaction detected at or
+    after *since*, whatever asked for it (autonomous_operation 5.4). Called by the SessionStart
+    hook on a compaction while AUTO_MODE is on, since nothing a hook returns can open a turn.
+    Returns whether a follower was started; it is the follower's lock, not this, that keeps
+    one prompt per compaction when ``inject compact`` started one too."""
+    from .compact_followup import RESUME_TEXT
+    target = own_pane_target()
+    if not target:
+        return False                                   # no pane of our own to type into
+    return _start_compact_followup(target, RESUME_TEXT, since=since, quiet=True)
+
+
+def _start_compact_followup(target: str, text: str, since: Optional[float] = None,
+                            quiet: bool = False) -> bool:
     """Start the detached follower that types *text* once the compaction has finished.
 
     Self-resolved path only, like the Stop passage above: the follower reads THIS agent's
@@ -597,8 +653,8 @@ def _start_compact_followup(target: str, text: str) -> None:
     it (start_new_session), because the /compact it waits for runs only after that turn.
     """
     import time as _time
-    argv = [sys.executable, "-m", "macf.compact_followup", target, repr(_time.time()),
-            "--text", text]
+    argv = [sys.executable, "-m", "macf.compact_followup", target,
+            repr(_time.time() if since is None else since), "--text", text]
     # Its stderr goes to the transcript monitor's log in the user's runtime directory, so a
     # follower that dies before recording its outcome still leaves a traceback somewhere.
     log = subprocess.DEVNULL
@@ -611,11 +667,52 @@ def _start_compact_followup(target: str, text: str) -> None:
     try:
         subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=log, start_new_session=True)
-        print("[inject] After the compaction, a recovery prompt will be typed into this pane "
-              "(skipped if something else wakes the session first).")
     except OSError as e:
         print(f"[inject] Could not start the recovery follow-up ({e}); after the compaction, "
               f"this session waits until something wakes it.", file=sys.stderr)
+        return False
+    finally:
+        if log is not subprocess.DEVNULL:
+            os.close(log)
+    if not quiet:                       # a hook's stdout is its reply, so a hook passes quiet
+        print("[inject] After the compaction, a recovery prompt will be typed into this pane "
+              "(skipped if something else wakes the session first).")
+    return True
+
+
+def record_keys_sent(text: str, kind: str, tmux_session: str) -> None:
+    """Record keys the framework is about to type into a session's pane, for a sender that
+    types through a pane of its own (the primal daemon's keystroke wake)."""
+    _record_keys_sent(text, kind, tmux_session)
+
+
+def _resolve_pane_target(target: str) -> Optional[dict]:
+    """The supervisor record, or a session unit's own pane, that *target* names."""
+    if target.startswith(PANE_TARGET_PREFIX):
+        # A session unit's own pane, from inside it (_own_session_unit_pane): the
+        # inherited TMUX already names the unit's server.
+        return {"name": target, "tmux_session": target[len(PANE_TARGET_PREFIX):]}
+    return _find_supervisor(target)
+
+
+def capture_pane(target: str) -> Optional[str]:
+    """The screen of *target*'s pane, with its escape codes (the faint suggestion text is
+    told apart by them), or None when it can't be read."""
+    data = _resolve_pane_target(target)
+    session = (data or {}).get("tmux_session")
+    if not session or not _tmux_available():
+        return None
+    r = subprocess.run(["tmux", "capture-pane", "-p", "-e", "-t", session],
+                       capture_output=True, text=True)
+    return r.stdout if r.returncode == 0 else None
+
+
+def press_enter(target: str) -> int:
+    """One Enter into *target*'s pane; the tmux exit status."""
+    session = (_resolve_pane_target(target) or {}).get("tmux_session")
+    if not session or not _tmux_available():
+        return 1
+    return subprocess.run(["tmux", "send-keys", "-t", session, "Enter"]).returncode
 
 
 def send_keys(target: str, keys: list, enter: bool = True, kind: str = "send-keys") -> int:
@@ -632,7 +729,7 @@ def send_keys(target: str, keys: list, enter: bool = True, kind: str = "send-key
         print("[auto-restart] tmux not found; send-keys requires a tmux-backed session.",
               file=sys.stderr)
         return 1
-    data = _find_supervisor(target)
+    data = _resolve_pane_target(target)
     if not data:
         print(f"[auto-restart] No running supervised process matching '{target}'.",
               file=sys.stderr)

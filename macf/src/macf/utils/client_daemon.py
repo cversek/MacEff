@@ -91,6 +91,17 @@ def decide(unit, hosted: Iterable, agent_home: Path) -> AdoptionDecision:
                             reason="the client's daemon already supervises this session")
 
 
+def job_id(session_id: str) -> str:
+    """The id the client's verbs take: its job's, the session id's first eight characters.
+
+    MEASURED on 2.1.290 (macOS), in the first live run of adoption: ``claude stop`` and
+    ``claude rm`` answer "No job matching" to the full session id and act on the eight
+    characters ``claude --bg`` prints, which name the job's directory under
+    ``~/.claude/jobs/`` (the readout finds a job record the same way).
+    """
+    return session_id[:8]
+
+
 def client_command(act: str, session_id: str, claude: str = "claude") -> List[str]:
     """The client's own command for a control act on an adopted session.
 
@@ -103,7 +114,7 @@ def client_command(act: str, session_id: str, claude: str = "claude") -> List[st
         raise ValueError(f"no client verb for control act {act!r}; known: {', '.join(sorted(CLIENT_VERBS))}")
     if not session_id:
         raise ValueError("an adopted session needs its session id")
-    return [claude, verb, session_id]
+    return [claude, verb, job_id(session_id)]
 
 
 def unit_state(hosted_status: str) -> tuple:

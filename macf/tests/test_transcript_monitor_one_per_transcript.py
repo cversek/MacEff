@@ -93,6 +93,21 @@ def test_proc_gives_each_monitor_its_exact_arguments_and_start(tmp_path):
         MonitorProcess(201, 5 * ticks, 7, Path("/p/with space/t.jsonl"))]  # ticks, as proc_start_key
 
 
+def test_a_forking_wrapper_is_not_taken_for_a_monitor(tmp_path):
+    """Ira's macOS run on #652: a monitor started under ``timeout`` left the wrapper in the
+    process table with the monitor's arguments in its own, and the real monitor stood down
+    for it. Only the interpreter's own options may stand before ``-m``."""
+    tail = ["-m", "macf.transcript_monitor", "--interval", "1.0", "--owner", "7", "--transcript", "/p/t.jsonl"]
+    assert daemon._monitor_from_argv(1, 1, ["/usr/bin/timeout", "60", sys.executable, *tail]) is None
+    assert daemon._monitor_from_argv(2, 1, ["nohup", sys.executable, *tail]) is None
+    assert daemon._monitor_from_argv(3, 1, [sys.executable, "-u", "-I", *tail]) is not None
+    ps = ("  301 Mon Sep 21 18:18:25 2026     timeout 60 /usr/bin/python3 -m macf.transcript_monitor"
+          " --interval 1.0 --owner 7 --transcript /p/t.jsonl\n"
+          "  302 Mon Sep 21 18:18:26 2026     /usr/bin/python3 -m macf.transcript_monitor"
+          " --interval 1.0 --owner 7 --transcript /p/t.jsonl\n")
+    assert [m.pid for m in daemon._parse_ps(ps)] == [302]
+
+
 def test_a_monitor_counts_only_for_its_own_transcript(monkeypatch):
     """The #529 case: another agent's monitor, or one on an older session of
     this agent, does not stand for this session's."""

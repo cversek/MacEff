@@ -496,6 +496,11 @@ def _monitor_from_argv(pid: int, started: int, argv: List[str]) -> Optional[Moni
     transcript, owner = after("--transcript"), after("--owner") or "0"
     if after("-m") != MONITOR_MODULE or transcript is None or not owner.isdigit():
         return None
+    # The interpreter is the process: only its own options may stand before "-m". A forking
+    # wrapper such as "timeout 60 python -m ..." carries the monitor's arguments in its own,
+    # and taken for an older monitor it made the real one stand down.
+    if any(not a.startswith("-") for a in argv[1:argv.index("-m")]):
+        return None
     return MonitorProcess(pid, started, int(owner), Path(transcript))
 
 
@@ -815,8 +820,12 @@ class TranscriptMonitor:
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         detectors: Optional[List[Detector]] = None,
         owner: int = 0,
+        on_pass: Optional[Callable[[], None]] = None,
     ):
         self.jsonl_path = jsonl_path
+        # Called once per pass of the loop: the session unit's heartbeat ticks here, so
+        # a beat follows a pass that read the transcript and checked the owner.
+        self.on_pass = on_pass
         self.poll_interval = poll_interval
         self.detectors = detectors or list(DEFAULT_DETECTORS)
         self.sources = []
@@ -1062,6 +1071,8 @@ class TranscriptMonitor:
                     self.last_file_size = f.tell()
 
                 while self.running:
+                    if self.on_pass is not None:
+                        self.on_pass()
                     data = f.read(CHUNK_SIZE)
 
                     if data:
@@ -1279,7 +1290,13 @@ def run_monitor(transcript: Path, poll_interval: float = DEFAULT_POLL_INTERVAL, 
                 "owner": owner, "transcript": str(transcript)}
     append_event("transcript_monitor_started", identity)
 
-    monitor = TranscriptMonitor(transcript, poll_interval=poll_interval, owner=owner)
+    # Under a session unit (pd.session_unit), this monitor is the unit's liveness
+    # (MIS-0002-R14): it beats for the unit's own pid on each pass, and stops beating
+    # within one interval once its session, and with it the loop, has ended.
+    from ..pd.liveness import session_heartbeat_from_env
+    heartbeat = None if older is not None else session_heartbeat_from_env()
+    monitor = TranscriptMonitor(transcript, poll_interval=poll_interval, owner=owner,
+                                on_pass=heartbeat.tick if heartbeat else None)
     if older is not None:
         monitor.stop(f"monitor {older.pid} already serves this transcript")
     else:
@@ -1292,6 +1309,8 @@ def run_monitor(transcript: Path, poll_interval: float = DEFAULT_POLL_INTERVAL, 
         if older is None:
             monitor.run(start_from_end=True)
     finally:
+        if heartbeat is not None:
+            heartbeat.stop()
         append_event("transcript_monitor_stopped", {
             **identity,
             "reason": monitor.stop_reason or "ended without a reason (see the monitor log)",

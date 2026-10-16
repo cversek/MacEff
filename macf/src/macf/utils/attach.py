@@ -53,11 +53,12 @@ def _ancestors(pid: int) -> List[int]:
     return chain
 
 
-def _tmux_panes() -> Dict[int, str]:
-    """Each tmux pane's shell pid, mapped to its session's name. Empty without tmux."""
+def _tmux_panes(env: Optional[Dict[str, str]] = None) -> Dict[int, str]:
+    """Each tmux pane's shell pid, mapped to its session's name. Empty without tmux.
+    ``env`` selects another server, a session unit's (``TMUX_TMPDIR``)."""
     try:
         out = subprocess.run(["tmux", "list-panes", "-a", "-F", "#{pane_pid} #{session_name}"],
-                             capture_output=True, text=True, timeout=5)
+                             capture_output=True, text=True, timeout=5, env=env)
     except (OSError, subprocess.TimeoutExpired):
         return {}
     panes = {}
@@ -84,8 +85,9 @@ def plan_attach(response: Optional[dict], session_unit: str, *,
                 read_info: Optional[Callable] = None,
                 verify: Optional[Callable] = None,
                 ancestors: Callable[[int], List[int]] = _ancestors,
-                tmux_panes: Callable[[], Dict[int, str]] = _tmux_panes,
-                read_only: bool = False, control: bool = False) -> AttachPlan:
+                tmux_panes: Callable[..., Dict[int, str]] = _tmux_panes,
+                read_only: bool = False, control: bool = False,
+                tmux_tmpdir: Optional[str] = None) -> AttachPlan:
     """Decide how to attach to ``session_unit`` from the daemon's status ``response``.
 
     ``response`` is the daemon's status ``Response`` as a dict. There is no fallback to a
@@ -119,6 +121,19 @@ def plan_attach(response: Optional[dict], session_unit: str, *,
             argv = ["tmux"] + (["-CC"] if control else []) + ["attach", "-t", f"={panes[p]}"]
             argv.append("-r" if read_only else "-d")
             return AttachPlan(TMUX, argv, reason=f"the session runs in tmux session {panes[p]!r}")
+    if tmux_tmpdir:
+        # A session unit (pd.session_unit): the unit's process is the wrapper, which
+        # parents its own tmux server, so the session's pane descends from the unit
+        # rather than the other way round, on the server under ``tmux_tmpdir``.
+        import os
+        env = {**os.environ, "TMUX_TMPDIR": tmux_tmpdir}
+        env.pop("TMUX", None)
+        for pane, name in tmux_panes(env).items():
+            if pid in ancestors(pane):
+                argv = (["env", f"TMUX_TMPDIR={tmux_tmpdir}", "tmux"] + (["-CC"] if control else [])
+                        + ["attach", "-t", f"={name}", "-r" if read_only else "-d"])
+                return AttachPlan(TMUX, argv, reason=f"the session unit runs tmux session {name!r} "
+                                                     f"on its own server")
     return AttachPlan(NONE, reason=f"pid {pid} runs in a plain terminal, "
                                    f"not hosted by the client's daemon and not under tmux")
 
