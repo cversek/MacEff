@@ -267,15 +267,17 @@ def ewma_rate(series: list[tuple[float, float]], tau_h: Optional[float] = None) 
 
 
 def format_rate(rate: float) -> str:
-    """A burn rate for a one-line display: one significant figure below 10, two at 10 and above.
+    """A burn rate for a one-line display, to two significant figures.
 
-    So 0.34 shows as 0.3, 2.4 as 2 and 12.4 as 12. Rounding happens first, so 0.96 shows as 1, not
-    1.0. Zero and anything below it show as 0.
+    So 0.346 shows as 0.35, 2.43 as 2.4 and 12.4 as 12. Two figures, because even pace for a
+    weekly cap is about 0.6%/hr: one figure rounded 0.55 to 0.94 all to "0.6" to "0.9", and 0.95 to
+    1.49 all to "1", hiding the difference between on pace and half again over. Rounding happens
+    first, so 0.996 shows as 1.0, and 9.96 as 10. Zero and anything below it show as 0.
     """
     if rate <= 0:
         return "0"
     def digits(x: float) -> int:  # decimal places that keep this many significant figures
-        return (2 if x >= 10 else 1) - 1 - math.floor(math.log10(x))
+        return 1 - math.floor(math.log10(x))
     v = round(rate, digits(rate))
     return f"{v:.{max(0, digits(v))}f}" if v > 0 else "0"
 

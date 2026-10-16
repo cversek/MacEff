@@ -209,7 +209,7 @@ stateDiagram-v2
 - **R108** [MUST · decidable: macf/tests/test_primal_daemon.py::test_compaction_askers (planned)] The primal daemon MUST compact a session only when the operator, or the agent's own declared wind-down, asks for it. (compaction_MUST_be_asked_by_operator_or_wind-down)
 - **R52** [MUST · decidable: macf/tests/test_primal_daemon.py::test_control_events (planned)] Each stop, restart or compaction that the persistent layer performs MUST be an event that names who asked and why. (control_act_MUST_name_who_asked)
 - **R126** [MUST · decidable: macf/tests/test_pd_harness.py::test_idle_compaction_off (planned)] Where the harness can compact an idle session on its own, the harness adapter MUST turn that off unless the declaration keeps it. (adapter_MUST_turn_off_harness_idle_compaction)
-- **R127** [MUST · decidable: macf/tests/test_primal_daemon.py::test_unasked_compaction_recorded (planned)] When the harness compacts a session that nobody asked to compact, the primal daemon MUST record a control event naming the harness as the asker. (harness_compaction_MUST_be_recorded)
+- **R127** [MUST · decidable: macf/tests/test_primal_daemon.py::test_unasked_compaction_recorded (passing)] When the harness compacts a session that nobody asked to compact, the primal daemon MUST record a control event naming the harness as the asker. (harness_compaction_MUST_be_recorded)
 
 ### 6.8 Mail
 
@@ -405,12 +405,12 @@ Every decidable requirement names a planned test; every judgment names its revie
 |---|---|---|---|
 | R01 | decidable | macf/tests/test_primal_daemon.py::test_one_per_agent | passing |
 | R02 | decidable | macf/tests/test_primal_daemon.py::test_identity_not_from_env | passing |
-| R03 | decidable | macf/tests/test_pd_render.py::test_outer_tier_restarts_pd | planned |
+| R03 | decidable | macf/tests/test_pd_render.py::test_outer_tier_restarts_pd | passing |
 | R04 | judgment | the head maintainer, at review of each rendering | standing |
-| R05 | decidable | macf/tests/test_pd_render.py::test_launchd_is_launchagent | planned |
-| R06 | decidable | macf/tests/test_pd_render.py::test_identifier | planned |
+| R05 | decidable | macf/tests/test_pd_render.py::test_launchd_is_launchagent | passing |
+| R06 | decidable | macf/tests/test_pd_render.py::test_identifier | passing |
 | R07 | decidable | macf/tests/test_primal_daemon.py::test_no_cross_agent_control | passing |
-| R08 | decidable | macf/tests/test_pd_declaration.py::test_every_unit_declared | planned |
+| R08 | decidable | macf/tests/test_pd_declaration.py::test_every_unit_declared | passing |
 | R09 | decidable | macf/tests/test_pd_declaration.py::test_unit_fields | planned |
 | R10 | decidable | macf/tests/test_pd_declaration.py::test_renderings_exist | passing |
 | R11 | decidable | macf/tests/test_pd_declaration.py::test_schedules_hosted | planned |
@@ -428,23 +428,23 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R23 | judgment | the head maintainer, at review of each harness adapter | standing |
 | R24 | decidable | macf/tests/test_pd_schedule.py::test_policy_declared | planned |
 | R25 | decidable | macf/tests/test_pd_schedule.py::test_policy_values | planned |
-| R26 | decidable | macf/tests/test_pd_schedule.py::test_advance_before_run | planned |
-| R27 | decidable | macf/tests/test_pd_schedule.py::test_no_replayed_restart | planned |
-| R28 | decidable | macf/tests/test_pd_schedule.py::test_leases_released | planned |
+| R26 | decidable | macf/tests/test_pd_schedule.py::test_advance_before_run | passing |
+| R27 | decidable | macf/tests/test_pd_schedule.py::test_no_replayed_restart | passing |
+| R28 | decidable | macf/tests/test_pd_schedule.py::test_leases_released | passing |
 | R29 | decidable | macf/tests/test_pd_schedule.py::test_target_declared | planned |
 | R30 | judgment | the Secretary, at review of each declaration | standing |
 | R31 | decidable | macf/tests/test_pd_schedule.py::test_permissions_settled | planned |
 | R32 | decidable | macf/tests/test_pd_schedule.py::test_prompt_fails_run | planned |
 | R33 | decidable | macf/tests/test_pd_schedule.py::test_run_cannot_schedule | planned |
-| R34 | decidable | macf/tests/test_pd_schedule.py::test_late_run_says_so | planned |
+| R34 | decidable | macf/tests/test_pd_schedule.py::test_late_run_says_so | passing |
 | R35 | judgment | the Secretary, at review of each declaration | standing |
-| R36 | decidable | macf/tests/test_pd_schedule.py::test_wall_clock_cap | planned |
+| R36 | decidable | macf/tests/test_pd_schedule.py::test_wall_clock_cap | passing |
 | R37 | judgment | the Secretary, at review of each declaration | standing |
-| R38 | decidable | macf/tests/test_pd_notice.py::test_source_named | planned |
-| R39 | decidable | macf/tests/test_pd_notice.py::test_three_times | planned |
+| R38 | decidable | macf/tests/test_pd_notice.py::test_source_named | passing |
+| R39 | decidable | macf/tests/test_pd_notice.py::test_three_times | passing |
 | R40 | judgment | the head maintainer, at review of the notifier | standing |
-| R41 | decidable | macf/tests/test_pd_notice.py::test_held_while_down | planned |
-| R42 | decidable | macf/tests/test_pd_notice.py::test_routing_declared | planned |
+| R41 | decidable | macf/tests/test_pd_notice.py::test_held_while_down | passing |
+| R42 | decidable | macf/tests/test_pd_notice.py::test_routing_declared | passing |
 | R43 | decidable | macf/tests/test_pd_notice.py::test_wake_through_notifier | planned |
 | R44 | judgment | the head maintainer, at review of each harness adapter | standing |
 | R45 | decidable | macf/tests/test_pd_harness.py::test_keystrokes_only_into_empty_idle_box | planned |
@@ -457,7 +457,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R52 | decidable | macf/tests/test_primal_daemon.py::test_control_events | passing |
 | R53 | decidable | macf/tests/test_pd_declaration.py::test_mail_units | planned |
 | R54 | decidable | macf/tests/test_pd_declaration.py::test_periodic_clock_is_schedule | planned |
-| R55 | decidable | macf/tests/test_pd_notice.py::test_unread_mail_notice | planned |
+| R55 | decidable | macf/tests/test_pd_notice.py::test_unread_mail_notice | passing |
 | R56 | judgment | the head maintainer, at review of the mail landing | pending |
 | R57 | decidable | macf/tests/test_pd_render.py::test_container_start_order | planned |
 | R58 | decidable | macf/tests/test_pd_render.py::test_optional_units_independent | planned |
@@ -465,17 +465,17 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R60 | decidable | macf/tests/test_primal_daemon.py::test_limit_notice | planned |
 | R61 | decidable | macf/tests/test_pd_render.py::test_limits_checked_after_recreate | planned |
 | R62 | judgment | the head maintainer, at review of the container landing | pending |
-| R63 | decidable | macf/tests/test_pd_declaration.py::test_grants_declared | planned |
+| R63 | decidable | macf/tests/test_pd_declaration.py::test_grants_declared | passing |
 | R64 | decidable | macf/tests/test_pd_render.py::test_grants_tested_at_install | planned |
 | R65 | decidable | macf/tests/test_primal_daemon.py::test_denied_grant_notice | planned |
 | R66 | decidable | macf/tests/test_pd_harness.py::test_adopts_harness_supervisor | planned |
 | R67 | judgment | the operator | standing |
-| R68 | decidable | macf/tests/test_pd_render.py::test_runs_without_tray | planned |
-| R69 | decidable | macf/tests/test_pd_tray.py::test_icon_per_card | planned |
-| R70 | decidable | macf/tests/test_pd_tray.py::test_acts_through_pd | planned |
+| R68 | decidable | macf/tests/test_pd_render.py::test_runs_without_tray | passing |
+| R69 | decidable | macf/tests/test_pd_tray.py::test_icon_per_card | passing |
+| R70 | decidable | macf/tests/test_pd_tray.py::test_acts_through_pd | passing |
 | R71 | judgment | the head maintainer, at review of the tray | standing |
-| R72 | decidable | macf/tests/test_pd_tray.py::test_waiting_icon | planned |
-| R73 | decidable | macf/tests/test_pd_readout.py::test_tray_unavailable_said | planned |
+| R72 | decidable | macf/tests/test_pd_tray.py::test_waiting_icon | passing |
+| R73 | decidable | macf/tests/test_pd_readout.py::test_tray_unavailable_said | passing |
 | R74 | decidable | macf/tests/test_pd_render.py::test_outside_watch_rendered | planned |
 | R75 | judgment | the operator, at review of each deployment's alert path | standing |
 | R76 | decidable | macf/tests/test_amail_deploy_config.py::test_hypervisor_value_accepted | passing |
@@ -484,27 +484,27 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R79 | judgment | the head maintainer, at review of each landing pull request | standing |
 | R80 | decidable | macf/tests/test_primal_daemon.py::test_no_network_listener | passing |
 | R81 | judgment | the operator | standing |
-| R82 | decidable | macf/tests/test_pd_observe.py::test_onlooker_needs_invitation | planned |
-| R83 | decidable | macf/tests/test_pd_observe.py::test_onlooker_has_no_keyboard | planned |
-| R84 | decidable | macf/tests/test_pd_observe.py::test_stream_starts_at_invitation | planned |
-| R85 | decidable | macf/tests/test_pd_observe.py::test_stream_stops_at_end | planned |
-| R86 | decidable | macf/tests/test_pd_observe.py::test_either_party_ends | planned |
-| R87 | decidable | macf/tests/test_pd_observe.py::test_operator_ends | planned |
-| R88 | decidable | macf/tests/test_pd_observe.py::test_lease_ends_invitation | planned |
-| R89 | decidable | macf/tests/test_pd_observe.py::test_lease_end_same_event | planned |
-| R90 | decidable | macf/tests/test_pd_observe.py::test_observation_events | planned |
-| R91 | decidable | macf/tests/test_pd_observe.py::test_presence_on_call_line | planned |
-| R92 | decidable | macf/tests/test_pd_observe.py::test_pause_resume | planned |
-| R93 | decidable | macf/tests/test_pd_observe.py::test_pause_shown | planned |
-| R94 | decidable | macf/tests/test_pd_observe.py::test_onlooker_by_card | planned |
+| R82 | decidable | macf/tests/test_pd_observe.py::test_onlooker_needs_invitation | passing |
+| R83 | decidable | macf/tests/test_pd_observe.py::test_onlooker_has_no_keyboard | passing |
+| R84 | decidable | macf/tests/test_pd_observe.py::test_stream_starts_at_invitation | passing |
+| R85 | decidable | macf/tests/test_pd_observe.py::test_stream_stops_at_end | passing |
+| R86 | decidable | macf/tests/test_pd_observe.py::test_either_party_ends | passing |
+| R87 | decidable | macf/tests/test_pd_observe.py::test_operator_ends | passing |
+| R88 | decidable | macf/tests/test_pd_observe.py::test_lease_ends_invitation | passing |
+| R89 | decidable | macf/tests/test_pd_observe.py::test_lease_end_same_event | passing |
+| R90 | decidable | macf/tests/test_pd_observe.py::test_observation_events | passing |
+| R91 | decidable | macf/tests/test_pd_observe.py::test_presence_on_call_line | passing |
+| R92 | decidable | macf/tests/test_pd_observe.py::test_pause_resume | passing |
+| R93 | decidable | macf/tests/test_pd_observe.py::test_pause_shown | passing |
+| R94 | decidable | macf/tests/test_pd_observe.py::test_onlooker_by_card | passing |
 | R95 | decidable | macf/tests/test_pd_observe.py::test_source_from_transport | planned |
 | R96 | judgment | the head maintainer, at review of the observation channel | standing |
 | R97 | judgment | the head maintainer, at review of each operator surface | standing |
-| R98 | decidable | macf/tests/test_pd_observe.py::test_undetectable_viewer_said | planned |
+| R98 | decidable | macf/tests/test_pd_observe.py::test_undetectable_viewer_said | passing |
 | R99 | decidable | macf/tests/test_pd_observe.py::test_onlooker_no_operator_surface | planned |
-| R100 | decidable | macf/tests/test_pd_observe.py::test_attach_resolves_from_pd | planned |
-| R101 | decidable | macf/tests/test_pd_observe.py::test_nothing_attachable_said | planned |
-| R102 | decidable | macf/tests/test_pd_observe.py::test_reachable_state | planned |
+| R100 | decidable | macf/tests/test_pd_observe.py::test_attach_resolves_from_pd | passing |
+| R101 | decidable | macf/tests/test_pd_observe.py::test_nothing_attachable_said | passing |
+| R102 | decidable | macf/tests/test_pd_observe.py::test_reachable_state | passing |
 | R103 | decidable | macf/tests/test_pd_declaration.py::test_shared_budget_operator_only | passing |
 | R104 | decidable | macf/tests/test_pd_harness.py::test_channel_first | planned |
 | R105 | decidable | macf/tests/test_pd_harness.py::test_keystrokes_only_as_fallback | planned |
@@ -513,11 +513,11 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R108 | decidable | macf/tests/test_primal_daemon.py::test_compaction_askers | planned |
 | R109 | decidable | macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails | passing |
 | R110 | decidable | macf/tests/test_pd_schedule.py::test_no_default_policy | planned |
-| R111 | decidable | macf/tests/test_pd_observe.py::test_no_invitation_across_containers | planned |
+| R111 | decidable | macf/tests/test_pd_observe.py::test_no_invitation_across_containers | passing |
 | R112 | judgment | the head maintainer, at review of the Claude Code harness adapter | standing |
 | R113 | decidable | macf/tests/test_pd_channel.py::test_unix_socket_peer | passing |
 | R114 | decidable | macf/tests/test_pd_channel.py::test_notice_metadata | passing |
-| R115 | decidable | macf/tests/test_pd_channel.py::test_dark_channel_event | planned |
+| R115 | decidable | macf/tests/test_pd_channel.py::test_dark_channel_event | passing |
 | R116 | decidable | macf/tests/test_pd_channel.py::test_onlooker_card_from_invitation | planned |
 | R117 | decidable | macf/tests/test_pd_channel.py::test_no_permission_relay | passing |
 | R118 | decidable | macf/tests/test_pd_harness.py::test_restart_needs_no_confirmation | planned |
@@ -528,10 +528,10 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R123 | decidable | macf/tests/test_pd_channel.py::test_channel_checks_its_pd | passing |
 | R124 | decidable | macf/tests/test_pd_declaration.py::test_allowlist_lists_every_channel | planned |
 | R125 | judgment | the head maintainer, at review of the Claude Code harness adapter | standing |
-| R126 | decidable | macf/tests/test_pd_harness.py::test_idle_compaction_off | planned |
-| R127 | decidable | macf/tests/test_primal_daemon.py::test_unasked_compaction_recorded | planned |
+| R126 | decidable | macf/tests/test_pd_harness.py::test_idle_compaction_off | passing |
+| R127 | decidable | macf/tests/test_primal_daemon.py::test_unasked_compaction_recorded | passing |
 | R128 | decidable | macf/tests/test_mode_activity.py::test_dialog_answer_counts | passing |
-| R129 | decidable | macf/tests/test_pd_render.py::test_socket_path_length | planned |
+| R129 | decidable | macf/tests/test_pd_render.py::test_socket_path_length | passing |
 
 The test for **R106** is the head maintainer's (P25): set USER_REMOTE, type a wake through the adapter, and assert that USER_REMOTE and USER_IDLE are unchanged. Its channel form sends a notice through the MacEff channel and asserts the same. Both forms run at idle and again while a turn is running, because the queued path is the one main gets wrong (P30). The tests for R120 and R121 likewise include an event absorbed into a running turn (P31), and the test for R122 a channel whose session has ended.
 
@@ -645,6 +645,8 @@ Objections recorded:
 - 2026-10-10: conformance, from the pull request for the shared health verdict (landing step 1): R15 passing. The readout and the outside watch read liveness by one rule, and the readout's default probe tells a unit's own start time from another process's. No requirement changed.
 - 2026-10-10: conformance, from the pull request for the outer tier's adapters (landing step 1): R10 and R109 passing. R10 is read as the policy's 10.5 reads it, while every unit is the core's child: the outer tier renders the daemon, and the daemon starts the units. No requirement changed.
 - 2026-10-10: conformance, from the pull request for the primal daemon's process (landing step 1): R01, R02, R52 and R80 passing. At the operator's ruling of 2026-10-10, a daemon that ends on a signal leaves its units running for the next one to adopt, and stopping every unit is its own act. The operator asker over the control socket is recorded as an attribution, and compaction on request (R108) waits until the operator is established some other way. No requirement changed.
+- 2026-10-11: conformance sweep, editorial (mis 8.1). Each row still `planned` whose named test now exists on main was run on its own. Twenty-five decidable rows whose test passes, and whose state carried no recorded reason to stay planned, move to passing: R27, R63, R68, R69, R70, R72, R82 to R94, R98, R100, R101, R102, R111 and R126. Left planned although their named test passes, each for a reason recorded earlier: R106 and R107 (their entries above), R122 (its state text), and R66 ("not built yet" when the core landed; whether the later adoption pull request changes that is the Secretary's to judge). Not changed here: 49 rows name a test that doesn't exist under that name, because the landing pull requests wrote their tests under other names (R03's Linux test, for example, lives in `test_pd_render_systemd.py`). Pointing a row at the test that actually checks it may change the row's check, so it waits on the Secretary's judgment. No requirement changed.
+- 2026-10-16: conformance sweep 2, editorial (mis 8.1), by the same rule as the first. Of the 54 decidable rows still `planned`, 18 now name a test that exists on main, and each was run on its own on main at 770bbcfb: all 18 pass. Fifteen move to passing: R03, R05, R06, R08, R26, R28, R34, R36, R38, R39, R41, R42, R55, R115 and R129. Left planned for the reasons recorded above: R66 and R107 (unchanged), and R106. R106's two reasons may now be met: the notifier writes the wake words (a typed wake was seen on a live host on 2026-10-16, recorded as the framework's before it was typed), and the MacEff channel never counts as the operator under R107's build. Whether that makes R106 passing is the Secretary's to judge. Not changed here: 36 rows name a test that doesn't exist under that name. No requirement changed.
 
 ## Wiki-Links
 

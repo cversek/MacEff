@@ -37,6 +37,8 @@ from macf.agent_events_log import append_event, get_log_path, read_events
 from macf.notify.session import proc_start, proc_start_key, verify_incarnation
 from macf.pd.interface import (
     EVENT_CONTROL,
+    EVENT_OVER_LIMIT,
+    EVENT_UNDER_LIMIT,
     EVENT_DAEMON_START,
     EVENT_LIVENESS,
     EVENT_STATE,
@@ -53,6 +55,7 @@ from macf.pd.interface import (
     declaration_path,
     render,
 )
+from macf.pd.liveness import ENV_HOME, ENV_INTERVAL, ENV_UNIT
 from macf.pd.schedule import CronExpr, check_window
 
 #: A unit is overdue once its last liveness is older than this many of its intervals.
@@ -75,6 +78,10 @@ STABLE_INTERVALS = 10
 #: How long an asked restart waits for a unit's work in flight to drain (R49) before
 #: it goes ahead anyway, and says so.
 DRAIN_TIMEOUT_S = 300.0
+#: How often a running unit's memory is read against its declared limit (MIS-0002-R60).
+MEMORY_CHECK_S = 30.0
+#: The notice source for a unit past its memory limit, as the MacEff channel knows it.
+LIMIT_NOTICE_SOURCE = "pd_limit_exceeded"
 
 #: Where the reasoning behind every refusal lives. A refusal names it, so a reader who
 #: has just been stopped finds the why without the message restating it
@@ -84,6 +91,12 @@ POLICY_POINTER = "macf_tools policy navigate persistent_layer"
 #: The asker for what the declaration itself calls for: boot starts, and restarts
 #: under a unit's restart policy.
 POLICY = Asker(kind="policy")
+#: The asker of a compaction the client started on its own: found by the absence of an ask,
+#: so it has no card and no peer (MIS-0002-R127 (harness_compaction_MUST_be_recorded)).
+HARNESS = Asker(kind="harness")
+#: The transcript monitor's record of such a compaction
+#: (``transcript_monitor.daemon.detect_harness_compaction``, pinned equal by a test).
+EVENT_HARNESS_COMPACTION = "harness_compaction_detected"
 
 
 class DeclarationRefused(ValueError):
@@ -125,6 +138,14 @@ def load_declaration(agent_home: Path, card: str) -> Declaration:
             check_window(window)
         except ValueError as e:
             raise DeclarationRefused(f"{path}: quiet window: {e}") from e
+    # The daemon gives each unit this home (persistent_layer 11.2); a declared one may say so,
+    # but a different home would have the unit write its events where the daemon never reads.
+    home = Path(agent_home).resolve()
+    for unit in declaration.units:
+        declared = unit.environment.get(ENV_HOME)
+        if declared is not None and Path(declared.replace("{agent_home}", str(agent_home))).resolve() != home:
+            raise DeclarationRefused(f"{path}: unit {unit.name}: {ENV_HOME} is {declared!r}, not this "
+                                     f"agent's home {home}; the daemon sets it, so leave it out")
     me = pwd.getpwuid(os.getuid()).pw_name
     foreign = [u.name for u in declaration.units if u.account != me]
     if foreign:
@@ -164,7 +185,8 @@ def backoff_s(failures: int, base: float = BACKOFF_BASE_S, cap: float = BACKOFF_
     return min(cap, base * 2 ** (failures - 1))
 
 
-#: How long shutdown waits for a unit to end after SIGKILL.
+#: How long a unit, or what is left of its group, is given to end after SIGKILL, by
+#: shutdown and by a stop's remnant, before the core stops waiting and says so.
 KILL_WAIT_S = 5.0
 
 #: The exit status of a unit this daemon adopted rather than started. It is not the
@@ -174,6 +196,22 @@ EXIT_NOT_SEEN = -1000
 
 #: Unit states with a process behind them, which a restarted daemon may adopt.
 LIVE_STATES = ("starting", "running", "waiting_on_a_person")
+
+
+def boot_id() -> Optional[str]:
+    """This Linux host's boot, as the random id the kernel draws at each boot, or None
+    elsewhere or when it can't be read. A Linux start fingerprint counts clock ticks since
+    boot, so a pid and start can recur in another boot; the id tells the boots apart. The
+    boot time can't: it moves when the clock is stepped, as a host without a battery clock
+    does once NTP answers. macOS records a UTC start time and needs no id."""
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        with open("/proc/sys/kernel/random/boot_id") as f:
+            return f.read().strip() or None
+    except OSError as e:
+        print(f"⚠️ MACF: pd: cannot read the boot id: {e}", file=sys.stderr)
+        return None
 
 
 def start_epoch(start) -> Optional[float]:
@@ -205,6 +243,106 @@ def _describe_exit(code: int) -> str:
             name = str(-code)
         return f"killed by {name}"
     return f"exited {code}"
+
+
+def _pid_in_use(pid: int) -> bool:
+    """Whether some process holds ``pid``. Permission to signal it doesn't matter: a pid
+    that exists, whoever owns it, is in use."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def group_members(pgid: int) -> List[tuple]:
+    """The live members of process group ``pgid``, as (pid, start time), zombies left out.
+
+    A unit leads its own group, so once its leader is reaped these are the processes it
+    started that outlived it. Read from /proc on Linux and from ``ps`` on macOS, where
+    there is no /proc; a member that ends while it is read is left out.
+    """
+    pids: List[int] = []
+    proc = Path("/proc")
+    if proc.is_dir():
+        for entry in proc.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                stat = (entry / "stat").read_text()
+            except OSError:
+                continue  # ended while the table was read
+            fields = stat[stat.rfind(")") + 2:].split()
+            if len(fields) > 2 and fields[0] != "Z" and fields[2] == str(pgid):
+                pids.append(int(entry.name))
+    else:
+        try:
+            out = subprocess.run(["ps", "-A", "-o", "pid=,pgid=,stat="], capture_output=True,
+                                 text=True, timeout=10, env={**os.environ, "LC_ALL": "C"})
+        except (OSError, subprocess.TimeoutExpired) as e:
+            print(f"⚠️ MACF: pd: cannot list process group {pgid}: {e}", file=sys.stderr)
+            return []
+        for line in out.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 3 and parts[1] == str(pgid) and not parts[2].startswith("Z"):
+                pids.append(int(parts[0]))
+    members = []
+    for pid in pids:
+        start = proc_start(pid)
+        if start:
+            members.append((pid, start))
+    return members
+
+
+def tree_rss_mb(root: int) -> Optional[float]:
+    """Resident memory of process ``root`` and every process below it, in MB, or None when
+    the process table can't be read or ``root`` isn't in it.
+
+    The tree, not the process group: a session unit's ``claude`` runs in a group of its own
+    under the unit's tmux server, and the tree still holds it. Read from /proc on Linux and
+    from one ``ps`` snapshot on macOS.
+    """
+    rows: Dict[int, tuple] = {}             # pid -> (ppid, rss in kB)
+    proc = Path("/proc")
+    if proc.is_dir():
+        page_kb = os.sysconf("SC_PAGE_SIZE") / 1024
+        for entry in proc.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                stat = (entry / "stat").read_text()
+            except OSError:
+                continue  # noqa: MACEFF003 - ended while the table was read; it holds no memory now
+            fields = stat[stat.rfind(")") + 2:].split()
+            if len(fields) > 21:
+                rows[int(entry.name)] = (int(fields[1]), int(fields[21]) * page_kb)
+    else:
+        try:
+            out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,rss="], capture_output=True,
+                                 text=True, timeout=10, env={**os.environ, "LC_ALL": "C"})
+        except (OSError, subprocess.TimeoutExpired) as e:
+            print(f"⚠️ MACF: pd: cannot read the process table for memory: {e}", file=sys.stderr)
+            return None
+        for line in out.stdout.splitlines():
+            parts = line.split()
+            if len(parts) == 3 and all(x.isdigit() for x in parts):
+                rows[int(parts[0])] = (int(parts[1]), float(parts[2]))
+    if root not in rows:
+        return None
+    children: Dict[int, List[int]] = {}
+    for pid, (ppid, _) in rows.items():
+        children.setdefault(ppid, []).append(pid)
+    total, todo, seen = 0.0, [root], set()
+    while todo:
+        pid = todo.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        total += rows[pid][1]
+        todo.extend(children.get(pid, ()))
+    return total / 1024
 
 
 class _Adopted:
@@ -246,6 +384,8 @@ class _Runner:
     state: State = "declared"
     since: float = 0.0                  # wall time of the last state change
     proc: Optional[object] = None       # a Popen, or _Adopted after a restart
+    over_limit: bool = False            # last read was above memory_limit_mb (R60)
+    memory_checked_at: float = float("-inf")  # monotonic time of the last memory read
     pid: Optional[int] = None
     proc_start: Optional[str] = None
     started_at: float = 0.0             # monotonic, at the last start
@@ -260,10 +400,18 @@ class _Runner:
     then_start: bool = False            # the stop under way is half of a restart
     drain: Optional[tuple] = None       # (asker, reason, deadline) of a restart waiting on R49
     held_restart: Optional[tuple] = None  # (asker, reason, peer) of an asked restart a quiet window holds (R50)
+    client_session: Optional[str] = None  # session id, when the client's own daemon hosts this session (R66)
+    awaiting_respawn: Optional[float] = None  # monotonic deadline for a respawned worker to be listed
+    client_escalated: bool = False      # a stop the client accepted outlived its grace, so signals followed
+    client_binary: Optional[str] = None  # the claude found on the session unit's declared PATH
+    remnant: Optional[tuple] = None     # (pgid, [(pid, start)], kill_at, killed_at): members left after a stop reaped the leader
+    start_after_remnant: bool = False   # a start waits for the remnant to end
+    stop_pending: Optional[str] = None  # the stopped transition's reason, recorded once the remnant ends
 
 
-class _LivenessTail:
-    """The liveness events appended to the agent's event log since the core started.
+class _LogTail:
+    """The events the core acts on, appended to the agent's event log since the core started:
+    liveness, and the detector's record of a compaction nobody asked for.
 
     It reads only what is new, from an offset, so a long log costs nothing per pass, and
     it starts at the end: liveness written before this daemon started belongs to units
@@ -272,8 +420,10 @@ class _LivenessTail:
     credited: liveness that cannot be read is unknown, and unknown is not alive.
     """
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, kinds=(EVENT_LIVENESS, EVENT_HARNESS_COMPACTION)):
         self.path = path
+        self.kinds = tuple(kinds)
+        self._needles = tuple(k.encode() for k in self.kinds)
         self.unreadable = 0
         self._partial = b""
         try:
@@ -299,18 +449,44 @@ class _LivenessTail:
         self._partial = lines.pop()
         events = []
         for line in lines:
-            if EVENT_LIVENESS.encode() not in line:
+            if not any(needle in line for needle in self._needles):
                 continue
             try:
                 event = json.loads(line)
             except ValueError as e:
-                self.unreadable += 1
-                print(f"⚠️ MACF: pd: a liveness line in {self.path} does not parse "
-                      f"(not credited): {e}", file=sys.stderr)
+                if EVENT_LIVENESS.encode() in line:
+                    self.unreadable += 1
+                    print(f"⚠️ MACF: pd: a liveness line in {self.path} does not parse "
+                          f"(not credited): {e}", file=sys.stderr)
+                else:
+                    print(f"⚠️ MACF: pd: a line in {self.path} does not parse (not acted on): {e}",
+                          file=sys.stderr)
                 continue
-            if event.get("event") == EVENT_LIVENESS:
+            if event.get("event") in self.kinds:
                 events.append(event)
         return events
+
+
+def _harness_hosted_sessions() -> list:
+    from macf.notify.session import harness_hosted_sessions
+    return harness_hosted_sessions()
+
+
+#: How long a client verb may run. The serve loop answers requests between passes, so a
+#: hung CLI holds a pd status or an operator's stop for at most this long.
+CLIENT_TIMEOUT_S = 10.0
+
+#: How long a respawn the client accepted may take to show its worker in the readout,
+#: checked on each pass, before the session unit is decided afresh.
+RESPAWN_WAIT_S = 30.0
+
+
+def _run_client(argv: List[str]) -> "subprocess.CompletedProcess":
+    """The client's own verb, bounded by CLIENT_TIMEOUT_S."""
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=CLIENT_TIMEOUT_S)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return subprocess.CompletedProcess(argv, 1, "", str(e))
 
 
 class Core:
@@ -332,8 +508,11 @@ class Core:
         backoff_base_s: float = BACKOFF_BASE_S,
         backoff_cap_s: float = BACKOFF_CAP_S,
         drain_timeout_s: float = DRAIN_TIMEOUT_S,
+        memory_check_s: float = MEMORY_CHECK_S,
         placeholders: Optional[Dict[str, str]] = None,
         probe: Callable[[int, str], bool] = verify_incarnation,
+        hosted: Optional[Callable[[], list]] = None,
+        client: Optional[Callable[[List[str]], "subprocess.CompletedProcess"]] = None,
     ):
         self.declaration = declaration
         self.card = card
@@ -342,12 +521,21 @@ class Core:
         self._backoff = (backoff_base_s, backoff_cap_s)
         self._placeholders = dict(placeholders or {})
         self._drain_timeout = drain_timeout_s
+        self._memory_check = memory_check_s
+        #: Called with (source, notice id) when the core owes the agent a notice; the daemon
+        #: wires it to its notifier. None in a core with no notifier, as in most tests.
+        self.on_notice: Optional[Callable[[str, str], None]] = None
         self._probe = probe
+        # Claude Code's own background daemon, for the session unit (MIS-0002-R66): what it
+        # hosts, and how to give it the client's own verbs. Both are seams for tests.
+        self._hosted = hosted or _harness_hosted_sessions
+        self._client = client or _run_client
         self._units: Dict[str, _Runner] = {
             u.name: _Runner(spec=u, since=wall()) for u in declaration.units
         }
-        self._tail = _LivenessTail(get_log_path())
+        self._tail = _LogTail(get_log_path())
         self._own_start: Optional[tuple] = None  # (pid, proc_start) once record_start has run
+        self._boot_id = boot_id()
 
     # ------------------------------------------------------------------ queries
 
@@ -356,6 +544,26 @@ class Core:
 
     def pid(self, unit: str) -> Optional[int]:
         return self._runner(unit).pid
+
+    def session_incarnation(self) -> Optional[tuple]:
+        """The session unit's live process as (pid, proc_start), or None when no session
+        unit is declared or running. A channel is accepted only below this process
+        (MIS-0002-R122 (pd_MUST_check_channel_peer_lineage))."""
+        for r in self._units.values():
+            if r.spec.kind == "session" and r.proc is not None and r.pid and r.proc_start:
+                return r.pid, r.proc_start
+        return None
+
+    def session_active_since(self) -> Optional[float]:
+        """When the running session started, in epoch seconds; ``-inf`` when no session unit
+        is declared, so a wait counts from its start; None while the declared one isn't
+        running. What the unread-mail notice counts a wait from (MIS-0002-R55)."""
+        session = next((r for r in self._units.values() if r.spec.kind == "session"), None)
+        if session is None:
+            return float("-inf")
+        if session.proc is None or not session.pid:
+            return None
+        return (start_epoch(session.proc_start) if session.proc_start else None) or session.since
 
     def failures(self, unit: str) -> int:
         """Consecutive failures since the unit last ran stably; the restart backoff grows with them."""
@@ -430,10 +638,18 @@ class Core:
             pid, start = data.get("pid"), data.get("proc_start")
             if data.get("state") not in LIVE_STATES or not pid or not start:
                 continue
+            # A record from another boot names no process that runs now, however well its
+            # pid and start match: a Linux start counts ticks since boot, so a process of
+            # this boot can carry the same pid and ticks as one of the last. A record with
+            # no boot id, from before the field or a platform without one, rests on the probe.
+            recorded = data.get("boot_id")
+            if recorded and self._boot_id and recorded != self._boot_id:
+                continue
             if not self._probe(pid, start):
                 continue
             r = self._units[name]
             r.proc, r.pid, r.proc_start = _Adopted(pid, start, self._probe), pid, start
+            r.over_limit, r.memory_checked_at = False, self._clock()   # its own memory, first read one check after it starts (R60)
             r.started_at = self._clock()
             # Its first liveness under this daemon is judged from the adoption, as a start is,
             # so a unit that went silent while no daemon ran becomes overdue, not running forever.
@@ -467,8 +683,15 @@ class Core:
         r.held_restart = None  # a stop also ends a restart a quiet window was holding
         if r.proc is not None:
             self._signal_stop(r, f"stopped as asked: {reason}")
+        elif r.remnant is not None:
+            # An earlier stop's group is still being ended. The unit reads stopped once, when
+            # that is done; this act is already recorded above, with who asked (R52).
+            if r.stop_pending is None:
+                r.stop_pending = f"stopped as asked: {reason}"
         elif r.state != "stopped":
-            self._transition(r, "stopped", f"stopped as asked: {reason}")
+            caught = " (a respawn was in flight; its worker is stopped when the client lists it)" \
+                if r.awaiting_respawn is not None else ""
+            self._transition(r, "stopped", f"stopped as asked: {reason}{caught}")
 
     def restart(self, unit: str, asked_by: Asker, reason: str, peer: Optional[Peer] = None) -> None:
         """Restart a unit, once its work in flight has drained or the drain has timed
@@ -510,7 +733,7 @@ class Core:
                 self._signal_stop(r, reason)
                 grace = max(grace, r.spec.stop_grace_s)
         deadline = time.monotonic() + grace
-        while any(r.proc is not None for r in self._units.values()):
+        while any(r.proc is not None or r.remnant is not None for r in self._units.values()):
             if time.monotonic() >= deadline:
                 for r in self._units.values():
                     if r.proc is not None:
@@ -523,19 +746,35 @@ class Core:
                             print(f"⚠️ MACF: pd: {r.spec.name} (pid {r.pid}) has not ended "
                                   f"{KILL_WAIT_S:g} s after SIGKILL; leaving it", file=sys.stderr)
                             r.proc = None
+                    if r.remnant is not None:
+                        # The daemon is going: what is left of a stopped unit is killed now,
+                        # if a recorded member still pins its group, and not waited on again.
+                        pgid, members = r.remnant[0], r.remnant[1]
+                        if any(self._probe(pid, start) for pid, start in members):
+                            try:
+                                os.killpg(pgid, signal.SIGKILL)
+                            except (ProcessLookupError, PermissionError) as e:
+                                print(f"⚠️ MACF: pd: cannot signal what is left of {r.spec.name} "
+                                      f"(group {pgid}): {e}", file=sys.stderr)
+                        self._end_remnant(r, "the rest of its group was killed as the daemon stopped")
             self.tick()
             time.sleep(0.02)
 
     # ------------------------------------------------------------------ the pass
 
     def tick(self) -> None:
-        """One pass: credit new liveness, reap exits, and act on every timer that is due."""
+        """One pass: credit new liveness, record a compaction nobody asked for, reap exits,
+        and act on every timer that is due."""
         now = self._clock()
         for event in self._tail.read():
-            self._on_liveness(event, now)
+            if event.get("event") == EVENT_HARNESS_COMPACTION:
+                self._on_harness_compaction(event)
+            else:
+                self._on_liveness(event, now)
         for r in self._units.values():
             try:
                 self._tick_unit(r, now)
+                self._check_memory(r, now)
             except Exception as e:  # noqa: BLE001 - GUARD, not handler: one unit must not stop the rest
                 # Deliberately broad: a GUARD, not a handler. One unit's fault must not
                 # stop the others from being supervised; it is announced, never absorbed.
@@ -543,6 +782,13 @@ class Core:
                       f"(continuing with the others): {e}", file=sys.stderr)
 
     def _tick_unit(self, r: _Runner, now: float) -> None:
+        if r.remnant is not None:
+            self._tick_remnant(r, now)
+            if r.remnant is not None:
+                return
+        if r.proc is None and r.awaiting_respawn is not None:
+            self._await_respawn(r, now)
+            return
         if r.held_restart is not None and quiet_window_at(self.declaration, self._wall()) is None:
             asked_by, reason, peer = r.held_restart
             r.held_restart = None
@@ -555,6 +801,15 @@ class Core:
                 self._on_exit(r, code, now)
                 return
             if r.kill_at is not None and now >= r.kill_at:
+                if r.client_session and not r.client_escalated:
+                    # The client accepted the stop and the worker outlived the grace: an outside
+                    # stop must still stop (R48), so signals follow, as for a refused stop.
+                    print(f"⚠️ MACF: pd: session {r.client_session[:8]} still runs "
+                          f"{r.spec.stop_grace_s:g} s after the client's stop; signalling it", file=sys.stderr)
+                    r.client_escalated = True
+                    self._kill(r, signal.SIGTERM)
+                    r.kill_at = now + r.spec.stop_grace_s
+                    return
                 self._kill(r, signal.SIGKILL)
                 r.kill_at = None
                 return
@@ -601,6 +856,21 @@ class Core:
 
     # ------------------------------------------------------------------ events in
 
+    def _on_harness_compaction(self, event: dict) -> None:
+        """The client compacted the session on its own: record that as this daemon's control
+        act on its session unit, naming the harness, with no peer, since nobody asked
+        (MIS-0002-R127 (harness_compaction_MUST_be_recorded)). The detector's event is the
+        observation and this record the decision. A declaration with no session unit has no
+        session of this daemon's to name, so nothing is recorded. The tail starts at the log's
+        end, so a compaction made while no daemon ran is the detector's record alone."""
+        data = event.get("data") or {}
+        when = data.get("timestamp") or event.get("timestamp")
+        for r in self._units.values():
+            if r.spec.kind == "session":
+                self._control("compact", r, HARNESS,
+                              f"the client compacted the session on its own "
+                              f"({data.get('marker') or 'no ask found'}, at {when}); nobody asked")
+
     def _on_liveness(self, event: dict, now: float) -> None:
         data = dict(event.get("data") or {})
         if data.get("agent") != self.card:
@@ -635,6 +905,32 @@ class Core:
     def _on_exit(self, r: _Runner, code: int, now: float) -> None:
         why = _describe_exit(code)
         stopping = r.stopping
+        if stopping is not None and r.kill_at is not None and r.pid is not None:
+            # A stop this core sent reaped the leader before its deadline. A member of the
+            # unit's group that ignored SIGTERM is still the unit's, and the stop must reach it
+            # (persistent_layer 10.2): keep the deadline for the group, not just the leader.
+            # A member that forks and exits while the group is read can leave this first
+            # listing empty, read before its replacement appeared and after it ended; the
+            # second listing starts after the first ends, so it sees the replacement (#639 review).
+            members = group_members(r.pid) or group_members(r.pid)
+            if members:
+                r.remnant = (r.pid, members, r.kill_at, None)
+        elif stopping is None and r.pid is not None and not r.client_session:
+            # The leader exited on its own and left members of its group running. They are
+            # still the unit's, and a restart beside them would run two copies, so the group
+            # gets the stop it would have had: SIGTERM now, SIGKILL at the unit's own grace,
+            # as systemd does for a unit's cgroup and launchd for a job's process group. The
+            # client's own daemon owns a session it hosts, and its group with it.
+            members = group_members(r.pid) or group_members(r.pid)
+            if members:
+                try:
+                    os.killpg(r.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass  # emptied since the listing; the remnant's first pass sees that
+                except PermissionError as e:
+                    print(f"⚠️ MACF: pd: cannot signal what {r.spec.name}'s leader left "
+                          f"(group {r.pid}): {e}", file=sys.stderr)
+                r.remnant = (r.pid, members, now + r.spec.stop_grace_s, None)
         # An asked restart is half done when the old incarnation exits, whether this
         # core stopped it or it exited while the restart waited on its work in flight.
         asked_restart = r.then_start or r.drain is not None
@@ -642,21 +938,26 @@ class Core:
         r.alive_at, r.in_flight = None, None
 
         if stopping is None:
-            # It exited on its own: record how.
+            # It exited on its own: record how. A stopped unit whose leader left members
+            # running reads stopped once they have ended, as after a stop this core sent; a
+            # failed one reads failed at once, which claims nothing about its group.
             if code in r.spec.exit_codes.no_restart:
-                self._transition(r, "stopped", f"{why}, which asks not to be restarted")
+                self._stopped(r, f"{why}, which asks not to be restarted")
                 if not asked_restart:
                     r.want_up = False
                     return
             elif code in r.spec.exit_codes.success:
-                self._transition(r, "stopped", why)
+                self._stopped(r, why)
             else:
                 r.failures += 1
-                self._transition(r, "failed", why)
+                self._transition(r, "failed", why if r.remnant is None
+                                 else f"{why}; the rest of its group was sent SIGTERM")
         elif not r.want_up or r.state != "failed":
             # A stop this core sent. After a liveness failure the unit is already
-            # recorded failed, and stays so unless the stop was asked for.
-            self._transition(r, "stopped", f"{stopping} ({why})")
+            # recorded failed, and stays so unless the stop was asked for. While members of
+            # its group outlive the leader, the unit has not stopped: the transition waits
+            # for the group to end, so no reader is told the stop is done while it isn't.
+            self._stopped(r, f"{stopping} ({why})")
 
         if not r.want_up:
             return
@@ -666,6 +967,9 @@ class Core:
             r.restart_at = now + backoff_s(r.failures, *self._backoff)
         elif r.state == "stopped" and r.spec.restart == "always":
             r.restart_at = now + self._backoff[0]
+        elif stopping is None and r.stop_pending is not None and r.spec.restart == "always":
+            # Stopped on its own with members still running: the start follows their end.
+            r.start_after_remnant = True
 
     # ------------------------------------------------------------------ helpers
 
@@ -677,6 +981,75 @@ class Core:
                 f"{unit} is not a unit of this agent's declaration "
                 "(MIS-0002-R07 (pd_MUST-NOT_control_other_agents))") from None
 
+    def _from_client(self, r: _Runner) -> bool:
+        """For the session unit, give Claude Code's own daemon the first say, and return
+        True when it took the unit, so nothing is spawned (MIS-0002-R66
+        (pd_MUST_adopt_harness_supervisor)).
+
+        A session the client hosted before is respawned by the client, under the same
+        session id; if the client can no longer respawn it, it is decided afresh. A
+        session the client hosts in the agent home is adopted, and two or more are
+        refused, because picking one is a guess the operator makes (``client_daemon.decide``).
+        """
+        from macf.utils.client_daemon import ADOPT, REFUSE, client_command, decide
+        if r.spec.kind != "session":
+            return False
+        respawned = False
+        if r.client_session:
+            if not self._find_client(r):
+                return True
+            out = self._client(client_command("start", r.client_session, claude=r.client_binary))
+            if out.returncode != 0:
+                print(f"⚠️ MACF: pd: the client could not respawn session {r.client_session[:8]} "
+                      f"({(out.stderr or out.stdout or '').strip()[:200]}); deciding again", file=sys.stderr)
+                r.client_session = None
+            else:
+                respawned = True
+        try:
+            hosted = self._hosted()
+        except OSError as e:
+            print(f"⚠️ MACF: pd: what the client hosts is unreadable ({e}); starting the session unit itself",
+                  file=sys.stderr)
+            return False
+        if r.client_session:
+            # Respawned under the same id: adopt whichever worker now carries it. The client
+            # may list it a little later, so a respawn it accepted is waited for across passes;
+            # starting the unit now would put a second session beside the client's.
+            hosted = [h for h in hosted if h.session_id == r.client_session]
+            if not hosted and respawned:
+                r.awaiting_respawn = self._clock() + RESPAWN_WAIT_S
+                r.proc, r.pid, r.proc_start = None, None, None
+                self._transition(r, "starting", f"respawned by the client; waiting for session "
+                                                f"{r.client_session[:8]}'s worker")
+                return True
+            if not hosted:
+                r.client_session = None
+                return False
+        decision = decide(r.spec, hosted, Path(self._placeholders.get("agent_home", "")))
+        if decision.action == REFUSE:
+            r.want_up = False
+            r.proc, r.pid, r.proc_start = None, None, None
+            self._transition(r, "failed", f"not started: {decision.reason}")
+            return True
+        if decision.action != ADOPT:
+            return False
+        if not self._find_client(r):
+            return True       # a hosted session exists: starting the unit's own would double it
+        start = proc_start(decision.pid)
+        if not start:
+            return False   # the worker ended between the readout and now: start the unit as usual
+        r.proc, r.pid, r.proc_start = _Adopted(decision.pid, start, self._probe), decision.pid, start
+        r.over_limit, r.memory_checked_at = False, self._clock()   # its own memory, first read one check after it starts (R60)
+        r.client_session = decision.session_id
+        r.started_at = self._clock()
+        # The client's daemon supervises it, so its liveness is its process, probed by pid
+        # and start time; it writes no liveness of its own for a stale check to judge.
+        r.alive_at, r.alive_interval_s, r.in_flight = None, None, None
+        self._transition(r, "running", f"adopted: {decision.reason} (session {decision.session_id[:8]}, "
+                                       f"pid {decision.pid})")
+        r.since = start_epoch(start) or r.since
+        return True
+
     def _spawn(self, r: _Runner) -> None:
         """Start the unit as this process's child, with the declared environment and
         nothing inherited (MIS-0002-R12 (pd_MUST_start_units_itself)), read from the
@@ -684,10 +1057,24 @@ class Core:
         (MIS-0002-R13 (pd_MUST_render_env_at_start)). The placeholders a declaration may
         use, the agent home, the card and the runtime directory, are filled in here from
         the daemon's own values, because the same agent's home differs between a host and a
-        container."""
+        container. While the previous incarnation's group still has members, the start
+        waits for them, so two copies never run side by side. The session unit asks Claude
+        Code's own daemon first (``_from_client``)."""
+        if r.remnant is not None:
+            r.start_after_remnant = True
+            return
+        if self._from_client(r):
+            return
         try:
             command = [render(a, self._placeholders) for a in r.spec.command]
             env = {k: render(v, self._placeholders) for k, v in r.spec.environment.items()}
+            # Which unit it is and how often it beats come from the unit itself, never typed
+            # again in its environment, where a missing or mistyped value silently stopped
+            # its liveness (persistent_layer 11.2; two of three cutover trial runs).
+            env.setdefault(ENV_UNIT, r.spec.name)
+            env.setdefault(ENV_INTERVAL, f"{r.spec.liveness_interval_s:g}")
+            if "agent_home" in self._placeholders:
+                env.setdefault(ENV_HOME, self._placeholders["agent_home"])
         except KeyError as e:
             r.proc, r.pid, r.proc_start = None, None, None
             r.want_up = False
@@ -710,9 +1097,89 @@ class Core:
             return
         r.proc, r.pid = proc, proc.pid
         r.proc_start = proc_start(proc.pid)
+        r.over_limit, r.memory_checked_at = False, self._clock()   # its own memory, first read one check after it starts (R60)
         r.started_at = self._clock()
         r.alive_at, r.alive_interval_s, r.in_flight = None, None, None
         self._transition(r, "starting", f"started as pid {proc.pid}")
+
+    def _tick_remnant(self, r: _Runner, now: float) -> None:
+        """Members of a stopped unit's group that outlived its leader. A member still the
+        process recorded, by pid and start time, keeps the group's id from being reused, so
+        at the stop's deadline a SIGKILL to the group reaches only the unit's processes. If no
+        recorded member is left, the pids may be others' now and nothing is signalled.
+
+        A member that has ended but not been reaped still answers the probe. Where something
+        reaps orphans promptly (tini in the images, systemd on a host) that is brief; if the
+        daemon were ever PID 1 itself, such a zombie would hold the remnant until KILL_WAIT_S."""
+        pgid, members, kill_at, killed_at = r.remnant
+        live = [(pid, start) for pid, start in members if self._probe(pid, start)]
+        if not live and not _pid_in_use(pgid):
+            # Every recorded member is gone, but one may have forked and exited between two
+            # passes, as a wrapper running `cmd &` does. While no process holds the group's id
+            # as its pid, the id can't have been given to another group, so whatever is still
+            # in the group is the unit's (#639 review).
+            live = group_members(pgid)
+        if not live:
+            self._end_remnant(r, "the rest of its group was killed at the stop's deadline"
+                              if killed_at is not None else "the rest of its group ended")
+            return
+        if killed_at is None and now >= kill_at:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass  # emptied between the probe and the signal
+            except PermissionError as e:
+                print(f"⚠️ MACF: pd: cannot signal what is left of {r.spec.name} (group {pgid}): {e}",
+                      file=sys.stderr)
+            r.remnant = (pgid, live, kill_at, now)
+        elif killed_at is not None and now - killed_at >= KILL_WAIT_S:
+            print(f"⚠️ MACF: pd: {len(live)} process(es) of {r.spec.name}'s group {pgid} have not ended "
+                  f"{KILL_WAIT_S:g} s after SIGKILL; leaving them", file=sys.stderr)
+            self._end_remnant(r, f"{len(live)} process(es) of its group outlived SIGKILL and were left")
+        else:
+            r.remnant = (pgid, live, kill_at, killed_at)
+
+    def _check_memory(self, r: _Runner, now: float) -> None:
+        """Read a running unit's memory against its declared limit, at most every
+        ``memory_check_s``. A crossing above the limit is recorded once, with a notice owed to
+        the agent; the crossing back below is recorded once too (MIS-0002-R60
+        (pd_MUST_notice_limit_exceeded)). The limit is not enforced: this says, it doesn't kill."""
+        if r.state != "running" or r.pid is None or now - r.memory_checked_at < self._memory_check:
+            return
+        r.memory_checked_at = now
+        used = tree_rss_mb(r.pid)
+        if used is None:
+            return
+        over = used > r.spec.memory_limit_mb
+        if over == r.over_limit:
+            return
+        r.over_limit = over
+        data = {"agent": self.card, "unit": r.spec.name, "pid": r.pid,
+                "used_mb": round(used, 1), "limit_mb": r.spec.memory_limit_mb}
+        if over:
+            self._emit(EVENT_OVER_LIMIT, data)
+            if self.on_notice is not None:
+                self.on_notice(LIMIT_NOTICE_SOURCE, f"limit-{r.spec.name}-{int(self._wall())}")
+        else:
+            self._emit(EVENT_UNDER_LIMIT, data)
+
+    def _stopped(self, r: _Runner, reason: str) -> None:
+        """Record the unit stopped, or, while members of its group outlive the leader, once
+        they have ended, so no reader is told it stopped while it hasn't."""
+        if r.remnant is not None:
+            r.stop_pending = reason
+        else:
+            self._transition(r, "stopped", reason)
+
+    def _end_remnant(self, r: _Runner, how: str) -> None:
+        r.remnant = None
+        if r.stop_pending is not None:
+            reason, r.stop_pending = r.stop_pending, None
+            self._transition(r, "stopped", f"{reason}; {how}")
+        if r.start_after_remnant:
+            r.start_after_remnant = False
+            if r.want_up and r.proc is None:
+                self._spawn(r)
 
     def _begin_restart(self, r: _Runner, reason: str) -> None:
         r.then_start = True
@@ -728,15 +1195,91 @@ class Core:
     def _signal_stop(self, r: _Runner, reason: str) -> None:
         """SIGTERM now, and SIGKILL once the unit's own declared grace has passed, so a
         unit that flushes a spool can be given longer than one that holds nothing
-        (MIS-0002-R48 (outside_stop_MUST_override_gates))."""
+        (MIS-0002-R48 (outside_stop_MUST_override_gates)).
+
+        A session the client hosts is stopped with the client's own ``claude stop``, which
+        keeps its conversation for a respawn; a signalled worker ends as done and nothing
+        brings it back. Only when the client refuses does the stop fall back to signals,
+        because an outside stop must still stop."""
         r.stopping = reason
+        if r.client_session:
+            from macf.utils.client_daemon import client_command
+            out = self._client(client_command("stop", r.client_session, claude=r.client_binary or "claude"))
+            if out.returncode == 0:
+                r.client_escalated = False
+                r.kill_at = self._clock() + r.spec.stop_grace_s   # escalates if the worker outlives it
+                return
+            print(f"⚠️ MACF: pd: the client could not stop session {r.client_session[:8]} "
+                  f"({(out.stderr or out.stdout or '').strip()[:200]}); signalling it", file=sys.stderr)
         self._kill(r, signal.SIGTERM)
         r.kill_at = self._clock() + r.spec.stop_grace_s
+
+    def _find_client(self, r: _Runner) -> bool:
+        """Find ``claude`` on the session unit's own declared PATH, the environment the
+        session runs in (MIS-0002-R12), else the daemon's. An installed daemon gets its
+        service manager's PATH, launchd's /usr/bin:/bin:/usr/sbin:/sbin on macOS, where the
+        client is rarely found. A client that cannot be found is not a client that refused:
+        the unit is recorded failed with the binary and the PATH searched, nothing is
+        signalled, and the hosted session is left alone."""
+        import shutil
+        try:
+            declared = render(r.spec.environment["PATH"], self._placeholders) if "PATH" in r.spec.environment else None
+        except KeyError:
+            declared = None
+        path = declared or os.environ.get("PATH", os.defpath)
+        found = shutil.which("claude", path=path)
+        if found:
+            r.client_binary = found
+            return True
+        r.want_up = False
+        r.proc, r.pid, r.proc_start = None, None, None
+        where = "the session unit's declared PATH" if declared else "the daemon's PATH"
+        self._transition(r, "failed", f"not adopted: claude is not on {where} ({path}); declare a PATH "
+                                      f"that holds it in the session unit's environment")
+        return False
+
+    def _await_respawn(self, r: _Runner, now: float) -> None:
+        """Adopt the respawned worker once the client lists it; past the deadline, decide afresh."""
+        try:
+            listed = [h for h in self._hosted() if h.session_id == r.client_session]
+        except OSError as e:
+            print(f"⚠️ MACF: pd: what the client hosts is unreadable ({e}); still waiting", file=sys.stderr)
+            listed = []
+        if not r.want_up:
+            # A stop landed while the respawn was in flight. The worker the client brings up is
+            # adopted only to be stopped through the client, with the grace escalation (R48).
+            start = proc_start(listed[0].pid) if listed else None
+            if start:
+                r.awaiting_respawn = None
+                r.proc, r.pid, r.proc_start = _Adopted(listed[0].pid, start, self._probe), listed[0].pid, start
+                self._signal_stop(r, "stopped as asked while its respawn was in flight")
+            elif now >= r.awaiting_respawn:
+                r.awaiting_respawn = None
+            return
+        if listed or now >= r.awaiting_respawn:
+            if not listed:
+                print(f"⚠️ MACF: pd: session {r.client_session[:8]}'s respawned worker was not listed "
+                      f"within {RESPAWN_WAIT_S:g} s; deciding again", file=sys.stderr)
+                r.client_session = None
+            r.awaiting_respawn = None
+            self._spawn(r)
 
     def _kill(self, r: _Runner, sig: signal.Signals) -> None:
         if r.pid is None:
             return
+        if isinstance(r.proc, _Adopted) and not self._probe(r.pid, r.proc_start or ""):
+            # Not this daemon's child, so its pid may have ended and been reused since the last
+            # pass. Signal only the process adopted, by pid and start time (MIS-0002-R15
+            # (readout_MUST_probe_liveness)); its end is seen on the next pass.
+            print(f"⚠️ MACF: pd: {r.spec.name}'s adopted pid {r.pid} is no longer the process "
+                  f"adopted; not signalling it", file=sys.stderr)
+            return
         try:
+            # A unit this daemon started leads its own group; a worker the client hosts may not,
+            # and killpg on a pid that leads no group reaches nothing.
+            if os.getpgid(r.pid) != r.pid:
+                os.kill(r.pid, sig)
+                return
             os.killpg(r.pid, sig)
         except ProcessLookupError:
             pass  # already gone; the exit is reaped on the next pass
@@ -750,7 +1293,7 @@ class Core:
         r.since = self._wall()
         self._emit(EVENT_STATE, UnitState(
             agent=self.card, unit=r.spec.name, state=state,
-            pid=r.pid, proc_start=r.proc_start, reason=reason,
+            pid=r.pid, proc_start=r.proc_start, reason=reason, boot_id=self._boot_id,
         ).model_dump())
 
     def _control(self, act: str, r: _Runner, asked_by: Asker, reason: str,

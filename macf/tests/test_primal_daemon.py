@@ -50,6 +50,35 @@ if spec.get("crash_once") and not os.path.exists(spec["crash_once"]):
 if spec.get("ignore_term"):
     import signal
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
+if spec.get("child_ignores_term"):
+    # A child in the unit's process group that outlives SIGTERM, as a worker a unit
+    # forked can; it writes its own pid once its handler is set.
+    import subprocess
+    subprocess.Popen([sys.executable, "-c",
+                      "import os, signal, subprocess, sys, time\n"
+                      "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                      "def mark(path, pid):\n"
+                      "    open(path + '.tmp', 'w').write(str(pid))\n"
+                      "    os.replace(path + '.tmp', path)\n"
+                      # The leader is read before the pid is marked: the test stops the unit
+                      # once it sees the mark, and a leader gone before this read would leave
+                      # the child watching its new parent, waiting for a change that never comes.
+                      "leader = os.getppid()\n"
+                      "mark(sys.argv[1], os.getpid())\n"
+                      "if len(sys.argv) > 2:\n"
+                      "    while os.getppid() == leader:\n"
+                      "        time.sleep(0.02)\n"
+                      "    if len(sys.argv) > 3 and sys.argv[3] != 'now':\n"
+                      "        while not os.path.exists(sys.argv[3]):\n"
+                      "            time.sleep(0.02)\n"
+                      "    late = subprocess.Popen([sys.executable, '-c', 'import signal, time; "
+                      "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)'])\n"
+                      "    mark(sys.argv[2], late.pid)\n"
+                      "    if len(sys.argv) > 3:\n"
+                      "        os._exit(0)\n"
+                      "time.sleep(300)\n", spec["child_ignores_term"]]
+                     + ([spec["child_forks_after"]] if spec.get("child_forks_after") else [])
+                     + ([spec["child_forks_then_exits_on"]] if spec.get("child_forks_then_exits_on") else []))
 log, me = os.environ["MACF_EVENTS_LOG_PATH"], os.getpid()
 start, began = proc_start(me), time.monotonic()
 if spec.get("dump"):
@@ -71,7 +100,7 @@ while True:
         write('{"event": "pd_unit_alive", "data": ')
     elif t < spec.get("alive_for", 1e9):
         data = {"agent": spec["agent"], "unit": spec["unit"], "pid": me,
-                "proc_start": start, "interval_s": spec["interval"]}
+                "proc_start": start, "interval_s": spec.get("declared", spec["interval"])}
         if spec.get("imposter"):
             data["pid"], data["proc_start"] = os.getppid(), proc_start(os.getppid())
         if spec.get("wrong_start"):
@@ -91,13 +120,25 @@ def script(tmp_path):
     return path
 
 
+#: The least liveness interval a test unit declares unless the test is about staleness. A
+#: unit is overdue after three intervals, and at 0.05 s that was 0.15 s: less than a loaded
+#: runner can pause a process, so a running unit read as hung and was ended and restarted,
+#: and a unit that exited 0 under "on-failure" came back (CI, Oct 14). The stand-in still
+#: beats every ``interval``, so exits and beats keep their fast timing.
+DECLARED_INTERVAL_MIN_S = 0.5
+
+
 def make_unit(name, script, behaviour, *, interval=0.05, restart="on-failure", environment=None,
-              stop_grace_s=1.0):
+              stop_grace_s=1.0, declared_interval=None):
+    """A stand-in unit that beats every ``interval`` and declares ``declared_interval``,
+    by default the larger of ``interval`` and DECLARED_INTERVAL_MIN_S. A test of how
+    quickly silence is noticed passes ``declared_interval`` itself."""
     env = {"MACF_EVENTS_LOG_PATH": str(get_log_path()), "PYTHONPATH": MACF_SRC}
     env.update(environment or {})
-    spec = dict(behaviour, unit=name, agent=CARD, interval=interval)
+    declared = declared_interval if declared_interval is not None else max(interval, DECLARED_INTERVAL_MIN_S)
+    spec = dict(behaviour, unit=name, agent=CARD, interval=interval, declared=declared)
     return Unit(name=name, command=[sys.executable, str(script), json.dumps(spec)], account=ME,
-                restart=restart, liveness_interval_s=interval, memory_limit_mb=64, environment=env,
+                restart=restart, liveness_interval_s=declared, memory_limit_mb=64, environment=env,
                 stop_grace_s=stop_grace_s)
 
 
@@ -160,7 +201,13 @@ def test_clean_parent(make_core, script, tmp_path, monkeypatch):
     assert seen["ppid"] == os.getpid()
     assert seen["env"]["DECLARED"] == "yes"
     assert "PD_TEST_UNDECLARED" not in seen["env"]
-    assert set(seen["env"]) == set(unit.environment)
+    # macOS's CoreFoundation adds __CF_USER_TEXT_ENCODING to a process's own environment as
+    # it starts (seen on CI's macOS image): the child's doing, like LC_CTYPE above.
+    own = {"__CF_USER_TEXT_ENCODING"} if sys.platform == "darwin" else set()
+    # Beside the declaration, only what the daemon itself says about the unit (11.2): its
+    # name and interval. This core has no agent_home placeholder, so no home is added.
+    from_daemon = {"MACF_PD_UNIT", "MACF_PD_LIVENESS_S"}
+    assert set(seen["env"]) - own == set(unit.environment) | from_daemon
 
 
 def test_env_rendered_at_start(make_core, script, tmp_path):
@@ -238,7 +285,9 @@ def test_liveness_verdicts(make_core, script):
     names = ("silent", "stale", "garbled", "imposter", "wrong_start")
     core = make_core([
         make_unit("silent", script, {"alive_for": 0}, restart="never"),
-        make_unit("stale", script, {"alive_for": 0.2}, restart="never"),
+        # A unit that must beat before it goes quiet gets an interval a cold start on a
+        # loaded runner can meet: at 0.05 s its first beat was due within 0.15 s (CI, Oct 14).
+        make_unit("stale", script, {"alive_for": 1.0}, interval=0.5, restart="never"),
         make_unit("garbled", script, {"garbage": True}, restart="never"),
         make_unit("imposter", script, {"imposter": True}, restart="never"),
         make_unit("wrong_start", script, {"wrong_start": True}, restart="never"),
@@ -254,12 +303,14 @@ def test_liveness_verdicts(make_core, script):
 
 def test_no_restart_while_waiting(make_core, script):
     """A unit waiting on a person is reported so, and its silence is not taken for death (R21, R22)."""
-    core = make_core([make_unit("worker", script, {"waiting_on": "a permission prompt", "alive_for": 0.2})])
+    core = make_core([make_unit("worker", script, {"waiting_on": "a permission prompt", "alive_for": 1.0},
+                                interval=0.5)])   # its first beat must meet a cold start
     core.boot()
 
     assert drive(core, lambda: core.state("worker") == "waiting_on_a_person")
     pid = core.pid("worker")
-    assert not drive(core, lambda: core.state("worker") != "waiting_on_a_person", timeout=1.0)
+    # silent for longer than three intervals, which a unit not waiting would fail for
+    assert not drive(core, lambda: core.state("worker") != "waiting_on_a_person", timeout=3.0)
     assert core.pid("worker") == pid
     assert "failed" not in states("worker")
     assert "a permission prompt" in events("pd_unit_state", "worker")[-1]["reason"]
@@ -295,7 +346,11 @@ def test_unreported_work_is_taken_as_idle_and_said_so(make_core, script):
 
 def test_no_restart_exit_code(make_core, script):
     """A unit that exits with a no-restart code stays stopped, whatever its policy."""
-    core = make_core([make_unit("worker", script, {"exit_after": 0.1, "code": 78}, restart="always")])
+    # Its first beat must meet a cold start on a loaded runner (as in test_liveness_verdicts):
+    # at 0.05 s it was due within 0.15 s, and missing it failed the unit, which 'always' then
+    # restarted (macOS CI, Oct 14).
+    core = make_core([make_unit("worker", script, {"exit_after": 0.1, "code": 78}, interval=0.5,
+                                restart="always")])
     core.boot()
 
     assert drive(core, lambda: core.state("worker") == "stopped")
@@ -548,19 +603,69 @@ def test_a_survivor_is_adopted_across_a_compaction(make_core, script):
 def test_an_adopted_unit_that_went_silent_is_failed(make_core, script):
     """A unit that stopped writing liveness while no daemon ran is judged from its adoption,
     as a start is, so it becomes overdue instead of reading running forever (R15, R17)."""
-    unit = make_unit("worker", script, {"alive_for": 0.3}, restart="never")
+    unit = make_unit("worker", script, {"alive_for": 1.0}, interval=0.5,   # its first beat
+                     restart="never")                                     # must meet a cold start
     first = make_core([unit])
     first.boot()
     assert drive(first, lambda: first.state("worker") == "running")
     pid = first.pid("worker")
     left = _crash(first)
-    time.sleep(0.5)   # silent now, with no daemon watching
+    time.sleep(1.2)   # silent now, with no daemon watching
 
     second = make_core([unit])
     second.boot()
     assert second.pid("worker") == pid
-    assert drive(second, lambda: second.state("worker") == "failed", timeout=3.0)
+    assert drive(second, lambda: second.state("worker") == "failed", timeout=5.0)
     left["worker"].wait(timeout=5)
+
+
+def _adopted_across(make_core, script, monkeypatch, first_boot, second_boot):
+    """Run a unit under a core in ``first_boot``, crash that core, and boot a second core in
+    ``second_boot``; whether the second adopted the unit's process."""
+    from macf.pd import core as core_module
+    unit = make_unit("worker", script, {})
+    monkeypatch.setattr(core_module, "boot_id", lambda: first_boot)
+    first = make_core([unit])
+    first.boot()
+    assert drive(first, lambda: first.state("worker") == "running")
+    pid = first.pid("worker")
+    left = _crash(first)
+    try:
+        monkeypatch.setattr(core_module, "boot_id", lambda: second_boot)
+        second = make_core([unit])
+        second.boot()
+        return second.pid("worker") == pid
+    finally:
+        left["worker"].kill()
+        left["worker"].wait(timeout=5)
+
+
+def test_a_record_from_another_boot_is_never_adopted(make_core, script, monkeypatch):
+    """A Linux start counts ticks since boot, so after a reboot a new process can carry the
+    pid and the ticks a record from the last boot names (asked by an intern, Oct 14). A
+    record from another boot is not adopted, however well it matches; the unit starts
+    fresh. Boots are told apart by id, not by time: the boot time moves when the clock is
+    stepped, which would make this boot's records look older than it (CTB, on #673)."""
+    assert not _adopted_across(make_core, script, monkeypatch, "boot-a", "boot-b"), \
+        "a record from another boot was adopted"
+
+
+def test_a_record_from_this_boot_is_still_adopted(make_core, script, monkeypatch):
+    assert _adopted_across(make_core, script, monkeypatch, "boot-a", "boot-a")
+
+
+def test_a_record_without_a_boot_id_rests_on_the_probe(make_core, script, monkeypatch):
+    """A record from before the field, or from a platform with no boot id, is adopted when
+    its pid and start still match, as before."""
+    assert _adopted_across(make_core, script, monkeypatch, None, "boot-a")
+
+
+def test_the_boot_id_is_recorded_on_linux():
+    from macf.pd.core import boot_id
+    if not sys.platform.startswith("linux"):
+        assert boot_id() is None
+        return
+    assert boot_id() == Path("/proc/sys/kernel/random/boot_id").read_text().strip()
 
 
 def _windowed(script):
@@ -574,7 +679,7 @@ def _windowed(script):
     ahead = datetime.now(ZoneInfo(zone))
     window = Window(start=(ahead + timedelta(hours=1)).strftime("%H:%M"),
                     end=(ahead + timedelta(hours=3)).strftime("%H:%M"))
-    unit = make_unit("worker", script, {}).model_copy(update={"kind": "session"})
+    unit = make_unit("worker", script, {}, restart="always").model_copy(update={"kind": "session"})
     shift = {"s": 0.0}
     core = Core(Declaration(version=1, agent=CARD, units=[unit], quiet_windows=[window], timezone=zone),
                 CARD, wall=lambda: time.time() + shift["s"], backoff_base_s=0.05, backoff_cap_s=0.2)
@@ -1138,3 +1243,335 @@ def test_no_own_compaction(make_core, script):
     assert drive(core, lambda: core.pid("worker") not in (None, first, second))
     acts = [d.get("act") for d in events("pd_control", "worker")]
     assert acts and "compact" not in acts
+
+
+def test_the_record_outlives_a_temp_cleaner(tmp_path, script, base, run_daemon):
+    """Without XDG_RUNTIME_DIR the record lives in /tmp, where macOS's tmp_cleaner deletes a
+    regular file untouched for three days. A running daemon refreshes its record, and writes
+    it again if a cleaner already took it, so pd status keeps believing it."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    daemon = run_daemon(home, base, record_refresh_s=0.1)
+    old = time.time() - 4 * 86400
+    os.utime(daemon.record_path, (old, old))
+    assert wait_for(lambda: daemon.record_path.stat().st_mtime > old + 86400)
+    daemon.record_path.unlink()
+    assert wait_for(daemon.record_path.exists)
+    assert json.loads(daemon.record_path.read_text())["pid"] == os.getpid()
+
+
+def test_a_stop_never_signals_a_process_that_took_an_adopted_units_pid(make_core, script):
+    """An adopted unit is not this daemon's child, so its pid can end and be reused between
+    passes without the kernel telling the daemon. A stop probes the pid and start time first
+    (MIS-0002-R15 (readout_MUST_probe_liveness)), and signals nothing that is no longer the
+    process it adopted."""
+    from macf.pd.core import _Adopted
+    core = make_core([make_unit("worker", script, {})])
+    stranger = subprocess.Popen(["/bin/sleep", "30"], start_new_session=True)
+    try:
+        r = core._units["worker"]
+        recorded = "a start that is not this process's"
+        r.proc, r.pid, r.proc_start = _Adopted(stranger.pid, recorded, core._probe), stranger.pid, recorded
+        r.state = "running"
+        core.stop("worker", OPERATOR, "test stop", peer=PEER)
+        time.sleep(0.3)
+        assert stranger.poll() is None, "the stop signalled a process that only took the adopted unit's pid"
+    finally:
+        stranger.kill()
+        stranger.wait()
+
+
+def test_unasked_compaction_recorded(make_core, script):
+    """MIS-0002-R127 (harness_compaction_MUST_be_recorded): the detector's record of a
+    compaction the client started on its own becomes this daemon's control act on its
+    session unit, naming the harness with no peer, since nobody asked. A record written
+    before the daemon started isn't its to make: its tail starts at the end of the log."""
+    def detected(when):
+        append_event("harness_compaction_detected", {"asker": "harness", "marker": "compacted_while_idle",
+                                                      "timestamp": when, "detector": "transcript_monitor"})
+
+    detected("before the daemon")
+    # A session unit restarts 'always', which the declaration now requires (#665).
+    session = make_unit("session", script, {}, restart="always").model_copy(update={"kind": "session"})
+    core = make_core([session, make_unit("worker", script, {}, restart="never")], hosted=lambda: [])
+    core.boot()
+    detected("while it runs")
+
+    def compacts():
+        return [c for c in events("pd_control") if c["act"] == "compact"]
+    assert drive(core, lambda: compacts())
+    core.tick()
+    assert len(compacts()) == 1
+    act = compacts()[0]
+    assert (act["unit"], act["asked_by"], act["peer"]) == ("session", {"kind": "harness", "card": None}, None)
+    assert "while it runs" in act["reason"] and "nobody asked" in act["reason"]
+
+
+def test_the_core_acts_on_the_event_the_detector_writes():
+    """The two names are kept apart so the core needn't import the monitor; this keeps them equal."""
+    from macf.pd.core import EVENT_HARNESS_COMPACTION
+    from macf.transcript_monitor.daemon import detect_harness_compaction
+    found = detect_harness_compaction({"type": "system", "subtype": "informational",
+                                       "content": "Compacted while idle, before the prompt cache expired"})
+    assert found is not None and found.event_name == EVENT_HARNESS_COMPACTION
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _child_pid(path):
+    assert wait_for(path.exists, timeout=5.0), "the unit's child never wrote its pid"
+    return int(path.read_text())
+
+
+def test_a_stop_reaches_the_units_whole_group(tmp_path, script, make_core):
+    """A stop reaches every process the unit started (persistent_layer 10.2): a child in
+    the unit's group that ignores SIGTERM outlives its leader's exit, and is killed at the
+    stop's deadline rather than left running."""
+    marker = tmp_path / "child.pid"
+    core = make_core([make_unit("worker", script, {"child_ignores_term": str(marker)}, stop_grace_s=1.0)])
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    child = _child_pid(marker)
+    core.stop("worker", OPERATOR, "test stop", peer=PEER)
+    # The unit reads stopped only once its whole group has ended: at the first moment it
+    # does, the child is already gone, and the reason says the group was killed.
+    assert drive(core, lambda: core.state("worker") == "stopped", timeout=5.0)
+    assert not _alive(child), f"the unit read stopped while its child {child} still ran"
+    last = events("pd_unit_state", "worker")[-1]
+    assert last["state"] == "stopped" and "killed at the stop's deadline" in last["reason"], last
+
+
+def test_a_member_forked_after_the_leader_ended_is_reached_too(tmp_path, script, make_core):
+    """A recorded member that forks after the leader's reap, then exits at once, as a wrapper
+    running `cmd &` does, leaves only a process the first listing never saw. The group is
+    listed again before the remnant is given up, so the newcomer is recorded and killed, and
+    the unit reads stopped only once it is gone."""
+    marker, grandchild, go = tmp_path / "child.pid", tmp_path / "grandchild.pid", tmp_path / "go"
+    core = make_core([make_unit("worker", script, {"child_ignores_term": str(marker),
+                                                   "child_forks_after": str(grandchild),
+                                                   "child_forks_then_exits_on": str(go)},
+                                stop_grace_s=1.5)])
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    child = _child_pid(marker)
+    core.stop("worker", OPERATOR, "test stop", peer=PEER)
+    assert drive(core, lambda: core._units["worker"].remnant is not None, timeout=3.0)
+    # Between two passes: the recorded child forks the late process and exits.
+    go.touch()
+    late = _child_pid(grandchild)
+    assert wait_for(lambda: not _alive(child), timeout=5.0)
+    assert drive(core, lambda: core.state("worker") == "stopped", timeout=6.0)
+    assert not _alive(child) and not _alive(late), f"child {_alive(child)}, late {_alive(late)}"
+
+
+def test_a_restart_waits_for_the_old_group(tmp_path, script, make_core):
+    """A restart starts the new incarnation only once the old one's group is gone, so two
+    copies never run side by side, as systemd waits for a unit's cgroup to empty."""
+    marker = tmp_path / "child.pid"
+    core = make_core([make_unit("worker", script, {"child_ignores_term": str(marker)}, stop_grace_s=0.5)])
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    first, child = core.pid("worker"), _child_pid(marker)
+    marker.unlink()
+    core.restart("worker", OPERATOR, "test restart", peer=PEER)
+    seen_alive_with_new = []
+
+    def new_incarnation():
+        pid = core.pid("worker")
+        if pid not in (None, first) and _alive(child):
+            seen_alive_with_new.append(pid)
+        return pid not in (None, first) and core.state("worker") == "running"
+    assert drive(core, new_incarnation, timeout=8.0)
+    assert not seen_alive_with_new, "the new incarnation started while the old group's child still ran"
+    assert not _alive(child)
+
+
+def test_a_second_stop_during_the_remnant_wait_does_not_read_stopped_early(tmp_path, script, make_core):
+    """A stop asked again while the first one's remnant is still running records nothing new:
+    the unit reads stopped once, when its group has ended."""
+    marker = tmp_path / "child.pid"
+    core = make_core([make_unit("worker", script, {"child_ignores_term": str(marker)}, stop_grace_s=1.5)])
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    child = _child_pid(marker)
+    core.stop("worker", OPERATOR, "first stop", peer=PEER)
+    assert drive(core, lambda: core._units["worker"].remnant is not None, timeout=3.0)
+    core.stop("worker", OPERATOR, "second stop", peer=PEER)
+    assert not (core.state("worker") == "stopped" and _alive(child)), "stopped while the group still ran"
+    assert drive(core, lambda: core.state("worker") == "stopped", timeout=6.0)
+    assert not _alive(child)
+    stopped = [d for d in events("pd_unit_state", "worker") if d["state"] == "stopped"]
+    assert len(stopped) == 1, [d["reason"] for d in stopped]
+
+
+def test_a_fork_then_exit_as_the_leader_ends_is_reached(tmp_path, script, make_core):
+    """A child that forks a replacement and exits the moment its leader ends, as a wrapper or a
+    self-relaunching worker does, can race the first listing of the group: on Linux it is read
+    from /proc entry by entry, and the child may be listed, then gone, before the replacement
+    appears. The group is listed again when the first listing is empty. The race is not
+    deterministic, so several stops are run; any one that leaves the replacement fails."""
+    for i in range(6):
+        marker, late_file = tmp_path / f"child{i}.pid", tmp_path / f"late{i}.pid"
+        core = make_core([make_unit(f"worker{i}", script, {"child_ignores_term": str(marker),
+                                                           "child_forks_after": str(late_file),
+                                                           "child_forks_then_exits_on": "now"},
+                                    stop_grace_s=0.5)])
+        core.boot()
+        assert drive(core, lambda: core.state(f"worker{i}") == "running")
+        _child_pid(marker)
+        core.stop(f"worker{i}", OPERATOR, "test stop", peer=PEER)
+        late = _child_pid(late_file)
+        assert drive(core, lambda: core.state(f"worker{i}") == "stopped", timeout=6.0)
+        assert wait_for(lambda: not _alive(late), timeout=2.0), f"stop {i}: the replacement {late} outlived the stop"
+
+
+def test_a_leader_that_crashes_takes_its_group_with_it(tmp_path, script, make_core):
+    """A leader that exits on its own leaves no member of its group running: the group is
+    sent SIGTERM, then SIGKILL at the unit's grace, as systemd ends a unit's cgroup and
+    launchd a job's process group. The restart waits for the group, so two copies of the
+    unit never run side by side."""
+    marker = tmp_path / "child.pid"
+    core = make_core([make_unit("worker", script, {"child_ignores_term": str(marker),
+                                                   "exit_after": 0.5, "code": 1},
+                                stop_grace_s=0.5)])
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    first, child = core.pid("worker"), _child_pid(marker)
+    marker.unlink()
+    seen_alive_with_new = []
+
+    def restarted():
+        pid = core.pid("worker")
+        if pid not in (None, first) and _alive(child):
+            seen_alive_with_new.append(pid)
+        return pid not in (None, first)
+    assert drive(core, restarted, timeout=8.0)
+    assert not seen_alive_with_new, "the unit restarted while its crashed leader's child still ran"
+    assert not _alive(child), f"the crashed leader's child {child} outlived it"
+    failed = [d for d in events("pd_unit_state", "worker") if d["state"] == "failed"]
+    assert failed and "sent SIGTERM" in failed[0]["reason"], failed
+
+
+def test_a_leader_that_ends_cleanly_reads_stopped_once_its_group_has(tmp_path, script, make_core):
+    """A leader that exits with a success code and leaves a member running reads stopped
+    only once that member has ended, as after a stop this core sent."""
+    marker = tmp_path / "child.pid"
+    core = make_core([make_unit("worker", script, {"child_ignores_term": str(marker),
+                                                   "exit_after": 0.5, "code": 0},
+                                restart="on-failure", stop_grace_s=0.5)])
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    child = _child_pid(marker)
+    assert drive(core, lambda: core.state("worker") == "stopped", timeout=6.0)
+    assert not _alive(child), f"the unit read stopped while its child {child} still ran"
+    last = events("pd_unit_state", "worker")[-1]
+    assert last["state"] == "stopped" and "killed at the stop's deadline" in last["reason"], last
+
+
+def test_an_always_unit_that_ends_cleanly_restarts_after_its_group(tmp_path, script, make_core):
+    """Under restart=always a clean exit restarts the unit, and with a member still running
+    the start waits for that member's end rather than being lost while the stop is pending."""
+    marker = tmp_path / "child.pid"
+    core = make_core([make_unit("worker", script, {"child_ignores_term": str(marker),
+                                                   "exit_after": 0.5, "code": 0},
+                                restart="always", stop_grace_s=0.5)])
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    first, child = core.pid("worker"), _child_pid(marker)
+    marker.unlink()
+    assert drive(core, lambda: core.pid("worker") not in (None, first), timeout=8.0), \
+        "a clean exit under restart=always was never restarted"
+    assert not _alive(child)
+
+
+def test_an_optional_unit_that_hangs_at_start_delays_no_other(tmp_path, script, make_core):
+    """MIS-0002-R58 (optional_unit_MUST-NOT_delay_others): an optional unit that was started
+    and hangs, alive as a process but never live, does not hold up the start of another
+    unit, nor that unit's restart after a crash. The other unit runs within its own time
+    while the hung one still reads starting."""
+    hung = make_unit("indexer", script, {"alive_for": 0}, interval=10.0)
+    hung = hung.model_copy(update={"optional": True})
+    worker = make_unit("worker", script, {"crash_once": str(tmp_path / "crashed")})
+    core = make_core([hung, worker])
+    t0 = time.monotonic()
+    core.start("indexer", OPERATOR, "the optional unit, started first", peer=PEER)
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running", timeout=3.0), \
+        "the worker never ran while the optional unit hung"
+    assert time.monotonic() - t0 < 3.0
+    assert core.state("indexer") == "starting", "the optional unit was meant to still hang"
+    starts = [d for d in events("pd_unit_state", "worker") if d["state"] == "starting"]
+    assert len(starts) >= 2, "the worker's crash and restart were meant to happen meanwhile"
+
+
+def test_a_unit_past_its_memory_limit_is_recorded_once_per_crossing(tmp_path, script, make_core, monkeypatch):
+    """MIS-0002-R60: a running unit read above its declared limit is recorded once, with a
+    notice owed, and recorded once more when it is read back below; readings that don't
+    cross record nothing. The limit is not enforced: the unit keeps running."""
+    import macf.pd.core as core_module
+    readings = iter([10.0, 80.0, 90.0, 20.0, 30.0])           # limit is 64 MB
+    monkeypatch.setattr(core_module, "tree_rss_mb", lambda pid: next(readings, 30.0))
+    core = make_core([make_unit("worker", script, {})], memory_check_s=0.0)
+    owed = []
+    core.on_notice = lambda source, nid: owed.append((source, nid))
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    for _ in range(6):
+        core.tick()
+    over = events("pd_unit_over_limit", "worker")
+    under = events("pd_unit_back_under_limit", "worker")
+    assert [(d["used_mb"], d["limit_mb"]) for d in over] == [(80.0, 64)]
+    assert [d["used_mb"] for d in under] == [20.0]
+    assert [s for s, _ in owed] == ["pd_limit_exceeded"]
+    assert core.state("worker") == "running"
+
+
+def test_memory_is_read_over_the_whole_process_tree():
+    """A child in a session of its own, as a session unit's claude under its tmux server, is
+    still counted: the tree, not the process group."""
+    import macf.pd.core as core_module
+    child = subprocess.Popen([sys.executable, "-c", "import time; x = bytearray(60 * 1024 * 1024); time.sleep(30)"],
+                             start_new_session=True)
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and (core_module.tree_rss_mb(child.pid) or 0) < 50:
+            time.sleep(0.1)
+        assert core_module.tree_rss_mb(child.pid) >= 50
+        alone = core_module.tree_rss_mb(child.pid)
+        statm = Path("/proc/self/statm")
+        if statm.exists():                  # this process's own resident memory, in MB
+            own = int(statm.read_text().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 2 ** 20
+            assert core_module.tree_rss_mb(os.getpid()) >= own + 0.9 * alone, "the child is under this test's tree"
+        assert core_module.tree_rss_mb(2 ** 22 + 12345) is None
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_a_new_incarnation_over_its_limit_is_recorded_again(tmp_path, script, make_core, monkeypatch):
+    """CTB's probe on #660: the over-limit state belongs to an incarnation, not the unit. A
+    unit over its limit that restarts and goes over again is recorded and noticed again,
+    naming the new pid."""
+    import macf.pd.core as core_module
+    monkeypatch.setattr(core_module, "tree_rss_mb", lambda pid: 80.0)   # limit is 64 MB
+    core = make_core([make_unit("worker", script, {})], memory_check_s=0.0)
+    owed = []
+    core.on_notice = lambda source, nid: owed.append(source)
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    core.tick()
+    first = core.pid("worker")
+    core.restart("worker", OPERATOR, "a new setting", peer=PEER)
+    assert drive(core, lambda: core.state("worker") == "running" and core.pid("worker") not in (None, first),
+                 timeout=8.0)
+    core.tick()
+    over = events("pd_unit_over_limit", "worker")
+    assert [d["pid"] for d in over] == [first, core.pid("worker")]
+    assert owed == ["pd_limit_exceeded", "pd_limit_exceeded"]

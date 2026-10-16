@@ -36,7 +36,7 @@ intends for them. This policy says where the numbers come from, what may be kept
 - What does `budget status` report, and how is a burn rate computed?
 - What is a window, and why are rates never computed across a reset?
 - When do two samples belong to the same window, given that reset times jitter?
-- What is the smoothed burn rate, and what does `wk 38% (2%/hr)` on a hook line mean?
+- What is the smoothed burn rate, and what does `wk 38% (2.4%/hr)` on a hook line mean?
 - How often may the endpoint be asked?
 
 **3.1 Unasked Reminders**
@@ -124,11 +124,13 @@ to read the next one.
   (`MACEFF_BUDGET_WALL`). Running out of the window stops work with no hook afterwards, unlike a compaction, so the
   remedy it names is a task note or checkpoint for the work in hand.
 
-**The weekly field** rides on every hook line, beside the context level: `wk 38% (2%/hr)`, the all-models weekly
+**The weekly field** rides on every hook line, beside the context level: `wk 38% (2.4%/hr)`, the all-models weekly
 cap and its smoothed burn rate. It is not a reminder and carries no remedy; it is an instrument the agent paces
-against. The rate is shown to one significant figure below ten percent an hour and two above (`0.3`, `2`, `12`),
-because a finer figure would claim a precision whole-number samples do not have. A sample over an hour old says so:
-`wk 38% (2%/hr, 3h old)`. For scale, a cap spent evenly over a week burns about 0.6 percent an hour.
+against. The rate is shown to two significant figures (`0.35`, `2.4`, `12`). For scale, a cap spent evenly over a week
+burns about 0.6 percent an hour, so pacing is read in the range where one figure collapsed "on pace" and "half again
+over" into the same `1`. The samples are whole percents, so the second figure is the smoothing's trend over hours of
+those steps, not a measurement to that precision: read a change in it as a direction, and its value against the even
+pace. A sample over an hour old says so: `wk 38% (2.4%/hr, 3h old)`.
 
 The hooks refresh the sample themselves at most every ten minutes (`MACEFF_BUDGET_AUTOSAMPLE_MIN`) with a short
 timeout, and **only for an agent that has sampled in the last week**: an installation that never asked for its budget

@@ -1,0 +1,3 @@
+### Changed
+
+- **A pull request's CHANGELOG entry is a fragment in `changelog.d/`, gathered at release** (`tools/changelog_gather.py`, `changelog.d/README.md`, policy `release_workflow` §3.5, `git_discipline`): every pull request added its entry at the top of the same `[Unreleased]` list, so merging one put every other open pull request into conflict; on Oct 14 one merge left four approved pull requests conflicting. A fragment is a file no other pull request touches. `python tools/changelog_gather.py` checks the fragments and `--write` files them under their categories and removes them; a malformed fragment is refused by name, and the test suite reads every fragment checked in.

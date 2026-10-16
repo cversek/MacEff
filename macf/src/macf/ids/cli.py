@@ -10,7 +10,8 @@ def add_ids_parser(sub) -> None:
     ids_sub = ids.add_subparsers(dest="ids_cmd")
     a = ids_sub.add_parser(
         "audit", help="name every uid or gid held by more than one identity across the host and "
-                      "its running containers; exit 1 on an overlap, 2 when a place can't be read")
+                      "its running containers; exit 1 on an overlap, 2 when a place can't be read or nothing "
+                      "was compared")
     a.add_argument("--container", action="append", dest="containers", metavar="NAME",
                    help="read only this container (repeatable); default: every running one")
     a.add_argument("--json", action="store_true", help="one JSON object")

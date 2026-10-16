@@ -15,10 +15,13 @@ When the daemon is not alive, presence is said as unknown, never shown as nobody
 """
 from __future__ import annotations
 
+import json
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
-from .acts import ENDED, PAUSED, Observation, fold
+from .acts import ENDED, EVENT_END, EVENT_INVITE, EVENT_PAUSE, EVENT_RESUME, PAUSED, Observation, fold
 
 ATTACHED = "attached"
 ENABLED = "enabled"
@@ -79,14 +82,22 @@ def surface_event(s: Surface) -> dict:
 def fold_surfaces(events: Iterable[dict]) -> Dict[str, str]:
     """Each surface's latest state since the newest daemon start; a surface last recorded
     gone is absent. A state an earlier daemon recorded says nothing about the operator now,
-    so a daemon's start begins the fold again."""
+    so a daemon's start begins the fold again. A row that doesn't name a surface and its
+    state as strings costs only itself, as in ``fold``: the per-call line and the carry
+    both read this."""
     states: Dict[str, str] = {}
     for ev in events:
         if ev.get("event") == DAEMON_START:
             states.clear()
         elif ev.get("event") == EVENT_SURFACE:
-            data = ev.get("data") or {}
-            states[data.get("surface")] = data.get("state")
+            data = ev.get("data")
+            name = data.get("surface") if isinstance(data, dict) else None
+            st = data.get("state") if isinstance(data, dict) else None
+            if not (isinstance(name, str) and isinstance(st, str)):
+                print(f"⚠️ MACF: observe: skipped a malformed {EVENT_SURFACE} at {ev.get('timestamp')}: "
+                      f"{data!r}", file=sys.stderr)
+                continue
+            states[name] = st
     return {name: st for name, st in states.items() if name and st and st != GONE}
 
 
@@ -120,3 +131,46 @@ def call_line(record: Optional[dict]) -> str:
     if surfaces:
         parts.append("operator: " + ", ".join(f"{s['surface']} {s['state']}" for s in surfaces))
     return " · ".join(parts)
+
+
+#: What the segment reads from the cycle's own events. A compaction carries open
+#: observations and present surfaces across (``macf.cycle_carry``), so the cycle is enough.
+OBSERVE_EVENTS = (EVENT_INVITE, EVENT_PAUSE, EVENT_RESUME, EVENT_END, EVENT_SURFACE, DAEMON_START)
+
+
+def daemon_alive(card: str, base: Optional[Path] = None) -> bool:
+    """Whether the agent's primal daemon is alive: its record names a live process by pid
+    and start time. The record alone is not enough, since a pid is reused; ``ps`` is asked
+    for the start time, a few milliseconds on macOS."""
+    from macf.notify.session import verify_incarnation
+    from macf.pd.names import record_path
+    try:
+        record = json.loads(record_path(card, base).read_text())
+        pid, start = record["pid"], record["proc_start"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    return isinstance(pid, int) and isinstance(start, str) and verify_incarnation(pid, start)
+
+
+def segment(agent_home: Path, events: Optional[Iterable[dict]] = None) -> str:
+    """The presence segment of the agent's per-call line (R91), '' when there is none.
+
+    Shown only for an agent that declares a daemon, so an agent without one isn't told
+    "unknown" on every call. The declaration is the test, because it is the one sign a
+    daemon is meant to run that holds on every platform: a container under the start
+    script has no unit file, and the daemon's record goes when it stops. Declared and not
+    alive is ``presence: unknown``, never nobody.
+    """
+    from macf.pd.names import IdentityError, agent_card, declaration_path
+    if not declaration_path(agent_home).exists():
+        return ""
+    try:
+        card = agent_card(agent_home)
+    except IdentityError:
+        return call_line(None)
+    if not daemon_alive(card):
+        return call_line(None)
+    if events is None:
+        from macf.agent_events_log import read_events
+        events = read_events(reverse=False, only=OBSERVE_EVENTS)
+    return call_line(from_events(events, True))
