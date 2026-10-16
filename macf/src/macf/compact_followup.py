@@ -32,10 +32,17 @@ empty box.
 import argparse
 import sys
 import time
+from pathlib import Path
 from typing import Callable, Iterable, Optional
 
 DEFAULT_TEXT = ("🏗️ MACF | The compaction you queued with inject compact has finished. "
                 "Run your recovery now: follow the recovery instructions above.")
+#: The SessionStart hook's prompt after any compaction while AUTO_MODE is on.
+RESUME_TEXT = ("🏗️ MACF | Your session compacted while in AUTO_MODE, and nothing has started "
+               "a turn since. Run your recovery now: follow the recovery instructions above, "
+               "then resume your work.")
+#: Held by the follower that is waiting, so a second one for the same compaction steps aside.
+LOCK_NAME = "compact_followup.lock"
 SETTLE_SECONDS = 5.0
 MAX_ENTERS = 3
 ENTER_SPACING_S = 2.0
@@ -137,13 +144,37 @@ def follow(target: str, since: float, text: str = DEFAULT_TEXT, *,
     return "gave up: no compaction within the timeout"
 
 
+def _take_lock(path: Optional[Path] = None):
+    """The open lock file, held until this process exits, or None when another follower
+    holds it. ``inject compact`` and the SessionStart hook each start one for the same
+    compaction, and two would type the prompt twice. Can't take it at all: proceed."""
+    import fcntl
+    if path is None:
+        from .utils.paths import find_agent_home
+        path = find_agent_home() / ".maceff" / LOCK_NAME
+    try:
+        fh = open(path, "a")
+    except OSError as e:
+        print(f"[inject] compact follow-up: no lock ({e}); proceeding without one",
+              file=sys.stderr)
+        return sys.stderr                              # any non-None: nothing to hold
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        fh.close()
+        return None
+    return fh
+
+
 def main(argv: Optional[list] = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("target", help="supervisor name or pid whose pane receives the prompt")
     p.add_argument("since", type=float, help="epoch seconds of the injection")
     p.add_argument("--text", default=DEFAULT_TEXT)
     a = p.parse_args(argv)
-    outcome = follow(a.target, a.since, a.text)
+    lock = _take_lock()
+    outcome = follow(a.target, a.since, a.text) if lock is not None else \
+        "skipped: another follower is already waiting"
     from .agent_events_log import append_event
     # append_event catches its own I/O errors and returns False; a wrapper here could only
     # hide a defect, so a failed record is said, not swallowed.
