@@ -574,8 +574,16 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
                   "--target <name|pid> (see `auto-restart list`).",
                   file=sys.stderr)
         return 1
-    rc = send_keys(data.get("name") or str(data.get("supervisor_pid")),
-                   [cmd], enter=True, kind="inject")
+    own = data.get("name") or str(data.get("supervisor_pid"))
+    draft = _draft_in_box(own)
+    if draft:
+        # Typed after a draft, the command is sent with it as one prompt and the client
+        # never runs it: a follower's unsent text once turned /compact into plain text.
+        print(f"[inject] The input box already holds text ({draft[:60]!r}), so {cmd} typed "
+              f"now would be sent with it as one prompt and not run. Clear the box, then "
+              f"run this again.", file=sys.stderr)
+        return 1
+    rc = send_keys(own, [cmd], enter=True, kind="inject")
     if rc == 0:
         # A queued /compact is only submitted when the turn ends, and the Stop
         # gates exist to refuse that. Arm one passage, only after delivery and
@@ -592,8 +600,16 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
             except (OSError, ValueError) as e:
                 print(f"⚠️ MACF: could not record the compaction ask: {e}", file=sys.stderr)
         if then and command.lstrip("/") == "compact":
-            _start_compact_followup(data.get("name") or str(data.get("supervisor_pid")), then)
+            _start_compact_followup(own, then)
     return rc
+
+
+def _draft_in_box(target: str) -> Optional[str]:
+    """The text already in *target*'s input box, read whether or not a turn is running;
+    None when the screen can't be read or shows no box, since then nothing is known."""
+    from .pd.wake import draft_text
+    screen = capture_pane(target)
+    return draft_text(screen) if screen is not None else None
 
 
 #: A send-keys target that names a tmux pane directly rather than a supervisor.

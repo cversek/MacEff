@@ -65,7 +65,11 @@ EVENT_CAP = "pd_wake_cap_reached"
 # The screen states, from the most to the least cautious.
 DIALOG, RUNNING, DRAFT, WAKE_IN_BOX, IDLE_EMPTY = "dialog", "running", "draft", "wake_in_box", "idle_empty"
 
-_RULE = re.compile(r"^\s*─{20,}\s*$")
+#: A border of the input box: a run of rule characters, which since client 2.1.300 may be
+#: broken once by a label (the session's name, near the right end of the top border).
+_RULE = re.compile(r"^\s*─+(?: \S(?:.*\S)? ─+)?\s*$")
+#: Rule characters a border has at least, so a short rule in the conversation is not one.
+_RULE_MIN = 20
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 _SPINNER = re.compile(r"…\s*\((\d+h )?(\d+m )?\d+s")
 _DIALOG_MARKERS = ("esc to cancel", "enter to select", "do you want to")
@@ -103,11 +107,12 @@ def _visible(line: str) -> str:
 
 
 def _box(screen: str):
-    """``(state, text)``: a busy state and None when the screen is not an idle session's
-    input box, else None and the box's text (empty for an empty box)."""
+    """``(state, text)``: None and the box's text (empty for an empty box) for an idle
+    session; RUNNING and the box's text while a turn runs; DIALOG and None with no box."""
     raw = screen.splitlines()
     plain = [_ANSI.sub("", line) for line in raw]
-    rules = [i for i, line in enumerate(plain) if _RULE.match(line)]
+    rules = [i for i, line in enumerate(plain)
+             if _RULE.match(line) and line.count("─") >= _RULE_MIN]
     if len(rules) < 2:
         return DIALOG, None                                # no input box on screen
     top, bottom = rules[-2], rules[-1]
@@ -120,10 +125,11 @@ def _box(screen: str):
     # The spinner can sit well above the box, with the turn's output between them; the
     # clock looks fifteen lines up, and 2.1.288 prints only the spinner.
     near = plain[max(0, top - RUNNING_LOOKBACK):]
-    if any(_RUNNING_MARKER in line.lower() or _SPINNER.search(line) for line in near):
-        return RUNNING, None
     first = _visible(raw[box[0]]).lstrip()[1:]            # past the prompt mark
-    return None, " ".join([first] + [_visible(raw[i]) for i in box[1:]]).strip()
+    text = " ".join([first] + [_visible(raw[i]) for i in box[1:]]).strip()
+    if any(_RUNNING_MARKER in line.lower() or _SPINNER.search(line) for line in near):
+        return RUNNING, text
+    return None, text
 
 
 def classify(screen: str) -> str:
@@ -142,6 +148,13 @@ def classify(screen: str) -> str:
 def box_text(screen: str) -> Optional[str]:
     """The text in an idle session's input box, empty when the box is empty; None while the
     screen shows a running turn, a dialog, or no box. Only the box counts, never an echo."""
+    state, text = _box(screen)
+    return text if state is None else None
+
+
+def draft_text(screen: str) -> Optional[str]:
+    """The text in the input box whether or not a turn is running, empty when the box is
+    empty; None for a dialog or no box. Anything typed now lands after this text."""
     return _box(screen)[1]
 
 

@@ -11,7 +11,10 @@ after the turn that queued it ends. So it starts this follower, detached, which 
 agent's own event log and types one prompt into the same pane when it is safe to:
 
 - **send** once a ``compaction_detected`` newer than the injection is in the log and
-  ``SETTLE_SECONDS`` have passed since it, so the SessionStart hook has finished;
+  ``SETTLE_SECONDS`` have passed since it, so the SessionStart hook has finished, and only
+  into an idle, empty input box. Text typed after a draft is sent with it as one prompt:
+  a follower's unsent text once sat in a box for 29 hours, and the next ``inject compact``
+  typed ``/compact`` onto its end, so no compaction ran;
 - **skip** if a new prompt started after the compaction (a mail clock, a cron or the
   operator got there first): the agent is already awake, and a second prompt would collide;
 - **give up** after ``TIMEOUT_SECONDS`` with no compaction (the ``/compact`` never ran).
@@ -110,10 +113,17 @@ def follow(target: str, since: float, text: str = DEFAULT_TEXT, *,
         send = send or (lambda t, keys: send_keys(t, keys, enter=False, kind="compact-followup"))  # noqa: E731
         capture = capture or (lambda: capture_pane(target))  # noqa: E731
         enter = enter or (lambda: press_enter(target))  # noqa: E731
+    from .pd.wake import IDLE_EMPTY, classify
     deadline = clock() + timeout
+    box_seen = None
     while clock() < deadline:
         verdict = decide(read(since), since, clock())
         if verdict == "send":
+            screen = capture()
+            box_seen = classify(screen) if screen is not None else "unreadable"
+            if box_seen != IDLE_EMPTY:
+                sleep(poll)                    # typed after a draft, both would go as one
+                continue
             typed_at = clock()
             if send(target, [text]) != 0:
                 return "send failed"
@@ -122,6 +132,8 @@ def follow(target: str, since: float, text: str = DEFAULT_TEXT, *,
         if verdict == "skip":
             return "skipped: a prompt started after the compaction"
         sleep(poll)
+    if box_seen is not None:
+        return f"gave up: the input box was never idle and empty (last seen: {box_seen})"
     return "gave up: no compaction within the timeout"
 
 
