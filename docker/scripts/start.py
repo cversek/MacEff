@@ -118,11 +118,45 @@ def group_exists(groupname: str) -> bool:
         return False
 
 
-def ensure_group(groupname: str) -> None:
-    """Create group if it doesn't exist."""
-    if not group_exists(groupname):
-        run_command(['groupadd', groupname])
-        log(f"Group created: {groupname}")
+class DeclaredIdMismatch(Exception):
+    """An account, group or home holds a number other than the one agents.yaml declares.
+
+    Start-up stops rather than repair it: moving an existing deployment onto its declared
+    numbers re-owns files, which is the renumber step's job, done once and on purpose
+    (container_operations policy)."""
+
+
+def ensure_group(groupname: str, gid: int) -> None:
+    """Create the group at its declared gid, or confirm an existing one already has it."""
+    try:
+        have = grp.getgrnam(groupname).gr_gid
+    except KeyError:
+        run_command(['groupadd', '-g', str(gid), groupname])
+        log(f"Group created: {groupname} (gid {gid})")
+        return
+    if have != gid:
+        raise DeclaredIdMismatch(
+            f"group {groupname} has gid {have}, but agents.yaml declares {gid}; run the renumber "
+            f"step for this deployment (container_operations policy)")
+
+
+def check_image_ids(ids) -> None:
+    """The accounts the image creates at build time (admin, the amail services) hold the block's
+    numbers, so the image and agents.yaml agree on one block."""
+    for name in ('admin', 'amail_broker', 'amail_ingest'):
+        want = ids.slot(name)
+        try:
+            entry = pwd.getpwnam(name)
+        except KeyError:
+            continue
+        if (entry.pw_uid, entry.pw_gid) != (want, want):
+            raise DeclaredIdMismatch(
+                f"the image built {name} as uid {entry.pw_uid} gid {entry.pw_gid}, but ids.base "
+                f"{ids.base} puts it at {want}; rebuild the image with MACEFF_ID_BASE={ids.base}")
+    if user_exists('ubuntu'):
+        raise DeclaredIdMismatch(
+            "the image still has the base image's ubuntu account (uid 1000, a host login's number); "
+            "rebuild from a MacEff base image that removes it")
 
 
 def provision_agent_identity(username: str, home_dir: str, display_name: Optional[str], agent_key: str) -> str:
@@ -390,11 +424,29 @@ def vanilla_home_violations(home: Path) -> List[str]:
 def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Optional[Dict] = None) -> None:
     """Create Primary Agent Linux user."""
     username = agent_spec.username
+    uid = agent_spec.uid
 
-    if not user_exists(username):
-        run_command(['useradd', '-m', '-s', '/bin/bash', username])
+    try:
+        existing = pwd.getpwnam(username)
+    except KeyError:
+        existing = None
+    if existing is not None and (existing.pw_uid, existing.pw_gid) != (uid, uid):
+        raise DeclaredIdMismatch(
+            f"account {username} is uid {existing.pw_uid} gid {existing.pw_gid}, but agents.yaml "
+            f"declares {uid}; run the renumber step for this deployment (container_operations policy)")
+    if existing is None:
+        # /etc/passwd is the image's and starts fresh at every recreate, while /home persists:
+        # a home still owned by another number belongs to the account's old uid, and creating
+        # the account at the new one would lock the agent out of its own files.
+        home = HOME_ROOT / username
+        if home.exists() and home.stat().st_uid != uid:
+            raise DeclaredIdMismatch(
+                f"{home} is owned by uid {home.stat().st_uid}, but agents.yaml declares "
+                f"{uid} for {username}; run the renumber step before this start (container_operations policy)")
+        ensure_group(username, uid)
+        run_command(['useradd', '-m', '-s', '/bin/bash', '-u', str(uid), '-g', str(uid), username])
         run_command(['usermod', '-aG', 'agents_all', username])
-        log(f"PA user created: {username}")
+        log(f"PA user created: {username} (uid {uid})")
 
     # Ensure home directory exists with correct permissions
     # 710 + group=agents_all: owner full access, other PAs can traverse (for agent/public/ access)
@@ -1539,9 +1591,9 @@ def install_macf_tools() -> None:
     log(f"MACF install complete; sentinel written to {sentinel}")
 
 
-def setup_shared_workspace_permissions() -> None:
+def setup_shared_workspace_permissions(ids) -> None:
     """Configure collaborative permissions on shared workspace."""
-    ensure_group('agents_all')
+    ensure_group('agents_all', ids.slot('agents_all'))
 
     SHARED_WORKSPACE.mkdir(mode=0o1777, exist_ok=True)
 
@@ -1555,9 +1607,9 @@ def setup_shared_workspace_permissions() -> None:
     log(f"shared_workspace perms: {result}")
 
 
-def setup_policy_editors() -> None:
+def setup_policy_editors(ids) -> None:
     """Setup policy editors group and permissions."""
-    ensure_group('policyeditors')
+    ensure_group('policyeditors', ids.slot('policyeditors'))
 
     policies_dir = FRAMEWORK_ROOT / 'policies'
 
@@ -2586,16 +2638,9 @@ def main() -> int:
         # Generate SSH host keys
         run_command(['ssh-keygen', '-A'], check=False)
 
-        # Create base groups
-        ensure_group('agents_all')
-        ensure_group('sa_all')
-
         # Clean admin home if requested
         if os.getenv('CLEAN_ADMIN_HOME') == '1':
             run_command(['rm', '-rf', '/home/admin'], check=False)
-
-        # Setup shared workspace
-        setup_shared_workspace_permissions()
 
         # Load and validate agents configuration
         log("Loading agents.yaml...")
@@ -2614,6 +2659,14 @@ def main() -> int:
             return 1
 
         log(f"Validated {len(agents_config.agents)} agents, {len(agents_config.subagents)} subagent types")
+
+        # Every account and group takes its number from the deployment's id block, so groups
+        # are created only once agents.yaml has said which block that is.
+        ids = agents_config.ids
+        check_image_ids(ids)
+        ensure_group('agents_all', ids.slot('agents_all'))
+        ensure_group('sa_all', ids.slot('sa_all'))
+        setup_shared_workspace_permissions(ids)
 
         # Load and validate projects configuration
         log("Loading projects.yaml...")
@@ -2743,7 +2796,7 @@ def main() -> int:
             ("MACF tools", lambda: install_macf_tools(), ()),
             ("agent initialization", lambda: initialize_agents(agents_config), ("MACF tools",)),
             ("policies", lambda: setup_policies(), ()),
-            ("policy editors", lambda: setup_policy_editors(), ("policies",)),
+            ("policy editors", lambda: setup_policy_editors(agents_config.ids), ("policies",)),
             # The broker refuses to start on a configured-and-absent credential,
             # so placement precedes it, or a correct deployment looks broken.
             ("secrets", lambda: place_secrets(agents_config), ()),
@@ -2767,6 +2820,9 @@ def main() -> int:
         # Wait on sshd (keeps container alive)
         sshd_proc.wait()
 
+    except DeclaredIdMismatch as e:
+        log(f"REFUSED: {e}")
+        return 1
     except Exception as e:
         log(f"FATAL ERROR during startup: {e}")
         import traceback
