@@ -319,7 +319,10 @@ def test_inject_without_a_supervisor_types_into_the_session_units_pane(monkeypat
         returncode = 0
 
     monkeypatch.setattr(sv.subprocess, "run", lambda argv, **k: calls.append(argv) or _Done())
+    read = []                                      # the box is read before typing, in this pane
+    monkeypatch.setattr(sv, "_draft_in_box", lambda target: read.append(target) or "")
     assert sv.send_slash_to_self("compact", then="resume") == 0
+    assert read == ["pane:%3"]
     assert calls[0] == ["tmux", "send-keys", "-t", "%3", "-l", "--", "/compact"]
     assert calls[1] == ["tmux", "send-keys", "-t", "%3", "Enter"]
     # the follow-up types into the same pane
