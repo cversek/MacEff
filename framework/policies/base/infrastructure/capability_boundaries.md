@@ -404,8 +404,9 @@ prompt into the same pane once the compaction is in the agent's event log
 (`autonomous_operation` §5.4). The follower runs only on the self-resolved path,
 never with `--target`, because it reads this agent's log and must type into this
 agent's pane. It types the framework's fixed text or the agent's own `--then`
-text, never text from a message or a file, and nothing at all if a prompt already
-started after the compaction. `--no-then` turns it off.
+text, never text from a message or a file, only into an idle, empty input box, and
+nothing at all if a prompt already started after the compaction. `inject` itself
+refuses to type after text already in the box, since the two would go as one prompt. `--no-then` turns it off.
 
 **Sent mid-turn, it QUEUES and fires when the turn yields.** So an agent invoking
 it is scheduling its own discontinuity, not triggering one mid-thought. Anything
