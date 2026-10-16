@@ -55,6 +55,7 @@ from macf.pd.interface import (
     declaration_path,
     render,
 )
+from macf.pd.liveness import ENV_HOME, ENV_INTERVAL, ENV_UNIT
 from macf.pd.schedule import CronExpr, check_window
 
 #: A unit is overdue once its last liveness is older than this many of its intervals.
@@ -544,6 +545,17 @@ class Core:
             if r.spec.kind == "session" and r.proc is not None and r.pid and r.proc_start:
                 return r.pid, r.proc_start
         return None
+
+    def session_active_since(self) -> Optional[float]:
+        """When the running session started, in epoch seconds; ``-inf`` when no session unit
+        is declared, so a wait counts from its start; None while the declared one isn't
+        running. What the unread-mail notice counts a wait from (MIS-0002-R55)."""
+        session = next((r for r in self._units.values() if r.spec.kind == "session"), None)
+        if session is None:
+            return float("-inf")
+        if session.proc is None or not session.pid:
+            return None
+        return (start_epoch(session.proc_start) if session.proc_start else None) or session.since
 
     def failures(self, unit: str) -> int:
         """Consecutive failures since the unit last ran stably; the restart backoff grows with them."""
@@ -1048,6 +1060,13 @@ class Core:
         try:
             command = [render(a, self._placeholders) for a in r.spec.command]
             env = {k: render(v, self._placeholders) for k, v in r.spec.environment.items()}
+            # Which unit it is and how often it beats come from the unit itself, never typed
+            # again in its environment, where a missing or mistyped value silently stopped
+            # its liveness (persistent_layer 11.2; two of three cutover trial runs).
+            env.setdefault(ENV_UNIT, r.spec.name)
+            env.setdefault(ENV_INTERVAL, f"{r.spec.liveness_interval_s:g}")
+            if "agent_home" in self._placeholders:
+                env.setdefault(ENV_HOME, self._placeholders["agent_home"])
         except KeyError as e:
             r.proc, r.pid, r.proc_start = None, None, None
             r.want_up = False
