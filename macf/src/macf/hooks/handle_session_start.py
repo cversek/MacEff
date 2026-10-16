@@ -477,6 +477,8 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             pre_compaction_active_tasks = get_active_tasks_from_filesystem()
 
             # Append compaction_detected event
+            import time as _time
+            detected_from = _time.time()
             append_event(
                 event="compaction_detected",
                 data={
@@ -575,6 +577,17 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 environment=environment,
                 cycle_stats=cycle_stats
             )
+
+            # A compaction opens no turn, and nothing returned here can open one. In
+            # AUTO_MODE the agent is meant to carry on, so a follower types the resume
+            # prompt once this hook has finished, unless something else wakes it first
+            # (autonomous_operation 5.4). Whatever asked for the compaction.
+            if auto_mode:
+                try:
+                    from macf.supervisor import start_compaction_resume
+                    start_compaction_resume(detected_from)
+                except (OSError, ImportError, ValueError, RuntimeError) as e:  # recovery goes on
+                    print(f"⚠️ MACF: could not start the resume follower: {e}", file=sys.stderr)
 
             # Log recovery triggered
             log_hook_event({
