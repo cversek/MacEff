@@ -73,8 +73,9 @@ def _run(rows_by_call, timeout=10.0, takes_on=1, box=None):
         return rows
 
     def capture():
-        if box is not None:
-            return screen(box)
+        shown = box() if callable(box) else box
+        if shown is not None:
+            return screen(shown)
         done = takes_on and len(enters) >= takes_on
         return screen("" if done else typed.get("text", ""))
 
@@ -123,11 +124,20 @@ def test_without_a_turn_it_says_so_instead_of_sent():
     assert r.outcome.startswith("typed, but no turn started") and len(r.enters) == cf.MAX_ENTERS
 
 
-def test_enter_is_never_pressed_on_text_that_is_not_ours():
-    """Someone else's draft in the box is never submitted."""
+def test_nothing_is_typed_after_a_draft():
+    """Typed after a draft, the prompt is sent with it as one. A follower's unsent text sat in
+    a box for 29 hours, and the next inject typed /compact onto its end (Oct 16)."""
     rows = [ev("compaction_detected", T0 + 1)]
     r = _run([[], rows, rows], takes_on=0, box="the operator was typing this")
-    assert r.enters == [] and r.outcome.startswith("typed, but no turn started")
+    assert r.sent == [] and r.enters == []
+    assert r.outcome == "gave up: the input box was never idle and empty (last seen: draft)"
+
+
+def test_it_types_once_the_box_empties():
+    rows = [ev("compaction_detected", T0 + 1)]
+    boxes = iter(["a draft", "a draft"])
+    r = _run([[], rows], timeout=30.0, box=lambda: next(boxes, None))
+    assert r.outcome == "sent" and r.sent == [("seat", ["recover"])]
 
 
 def test_inject_compact_starts_the_follower_only_after_delivery():
@@ -219,3 +229,28 @@ def test_a_targeted_inject_starts_no_follower_and_says_so(capsys):
     follower.assert_not_called()
     send.assert_called_once()
     assert "no recovery prompt follows" in capsys.readouterr().err
+
+
+def test_inject_refuses_to_type_a_command_after_a_draft(capsys):
+    """The client runs a slash command only when it is the whole prompt."""
+    from macf import supervisor
+    with patch.object(supervisor, "_find_own_supervisor", return_value={"name": "me"}), \
+         patch.object(supervisor, "_draft_in_box", return_value="left over from a follower"), \
+         patch.object(supervisor, "send_keys", return_value=0) as send, \
+         patch.object(supervisor, "_start_compact_followup") as start, \
+         patch("macf.stop_bypass.arm") as arm:
+        assert supervisor.send_slash_to_self("compact", then="recover") == 1
+    assert not send.called and not start.called and not arm.called
+    assert "already holds text" in capsys.readouterr().err
+
+
+def test_inject_types_when_the_box_is_empty_or_unreadable():
+    from macf import supervisor
+    for draft in ("", None):
+        with patch.object(supervisor, "_find_own_supervisor", return_value={"name": "me"}), \
+             patch.object(supervisor, "_draft_in_box", return_value=draft), \
+             patch.object(supervisor, "send_keys", return_value=0) as send, \
+             patch.object(supervisor, "_start_compact_followup"), \
+             patch("macf.stop_bypass.arm"):
+            assert supervisor.send_slash_to_self("compact", then="recover") == 0
+        send.assert_called_once_with("me", ["/compact"], enter=True, kind="inject")
