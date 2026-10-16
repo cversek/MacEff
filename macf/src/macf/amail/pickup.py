@@ -8,11 +8,10 @@ creates, and detected no mail on any host or seat.
 
 So everything that watches for mail resolves the box here, by the rule ``amail list`` uses:
 
-1. the agent's ``.maceff/amail.json``, when it names both ``handoff`` and ``agent``;
-2. else ``MACF_AMAIL_HANDOFF`` (default ``/var/lib/amail/handoff``) and ``MACEFF_AGENT_NAME``
-   from the environment;
-3. else ``<home>/amail/pickup``, the old guess, so a watcher still has a path; ``how`` says
-   so, and the caller should say it too.
+each of ``handoff`` and ``agent`` from the agent's ``.maceff/amail.json`` when the file has
+it, else from the environment (``MACF_AMAIL_HANDOFF``, default ``/var/lib/amail/handoff``;
+``MACEFF_AGENT_NAME``). With no agent name anywhere it falls back to ``<home>/amail/pickup``,
+the old guess, so a watcher still has a path; ``how`` says so, and the caller should too.
 """
 from __future__ import annotations
 
@@ -36,15 +35,28 @@ def _settings(agent_home: Path) -> dict:
 
 def resolve_pickup_box(agent_home: Path,
                        env: Optional[Mapping[str, str]] = None) -> Tuple[Path, str]:
-    """``(box, how)``: the agent's pickup box and which rule named it."""
+    """``(box, how)``: the agent's pickup box and where each part of its name came from.
+
+    Each key on its own, exactly as ``amail list`` resolves them (``cli._amail_config``):
+    a key present in ``amail.json`` wins, else the environment, else the default handoff.
+    A host's settings often name only the handoff, and the agent comes from the shell; taking
+    the two as a pair would watch the container default there and call it right. It is a
+    guess only when no agent name is found anywhere.
+    """
     env = os.environ if env is None else env
     cfg = _settings(agent_home)
-    if cfg.get("handoff") and cfg.get("agent"):
-        return Path(cfg["handoff"]) / str(cfg["agent"]), FROM_SETTINGS
-    agent = env.get("MACEFF_AGENT_NAME", "")
-    if agent:
-        return Path(env.get("MACF_AMAIL_HANDOFF") or DEFAULT_HANDOFF) / agent, FROM_ENVIRONMENT
-    return Path(agent_home) / "amail" / "pickup", GUESSED
+    if "handoff" in cfg:
+        handoff, h_from = str(cfg["handoff"]), FROM_SETTINGS
+    else:
+        handoff, h_from = env.get("MACF_AMAIL_HANDOFF", DEFAULT_HANDOFF), FROM_ENVIRONMENT
+    if "agent" in cfg:
+        agent, a_from = str(cfg["agent"] or ""), FROM_SETTINGS
+    else:
+        agent, a_from = env.get("MACEFF_AGENT_NAME", ""), FROM_ENVIRONMENT
+    if not agent:
+        return Path(agent_home) / "amail" / "pickup", GUESSED
+    how = h_from if h_from == a_from else f"handoff from {h_from}, agent from {a_from}"
+    return Path(handoff) / agent, how
 
 
 def pickup_box(agent_home: Path, env: Optional[Mapping[str, str]] = None) -> Path:
