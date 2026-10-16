@@ -204,7 +204,10 @@ def test_clean_parent(make_core, script, tmp_path, monkeypatch):
     # macOS's CoreFoundation adds __CF_USER_TEXT_ENCODING to a process's own environment as
     # it starts (seen on CI's macOS image): the child's doing, like LC_CTYPE above.
     own = {"__CF_USER_TEXT_ENCODING"} if sys.platform == "darwin" else set()
-    assert set(seen["env"]) - own == set(unit.environment)
+    # Beside the declaration, only what the daemon itself says about the unit (11.2): its
+    # name and interval. This core has no agent_home placeholder, so no home is added.
+    from_daemon = {"MACF_PD_UNIT", "MACF_PD_LIVENESS_S"}
+    assert set(seen["env"]) - own == set(unit.environment) | from_daemon
 
 
 def test_env_rendered_at_start(make_core, script, tmp_path):
