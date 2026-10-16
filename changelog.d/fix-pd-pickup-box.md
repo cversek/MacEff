@@ -1,0 +1,3 @@
+### Fixed
+
+- **The primal daemon watches mail where the broker delivers it** (`amail/pickup.py`, `pd/notifier.py`, `pd/unread_mail.py`, `transcript_monitor/sources.py`, policy `persistent_layer`): it watched `<home>/amail/pickup`, a path no deployment creates, so a daemon detected no mail on any host or seat and said nothing. The box now comes from the rule `amail list` uses: `amail.json`, then `MACF_AMAIL_HANDOFF` and `MACEFF_AGENT_NAME`, then the old path as a declared guess. The daemon says at start which box it watches, and warns when the box is guessed or missing. A seat that runs a daemon needs an `amail.json` written at provisioning, since the outer tier passes no agent-configured variables.
