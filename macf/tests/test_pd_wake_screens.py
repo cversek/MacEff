@@ -89,3 +89,42 @@ def test_a_long_screen_under_the_last_rule_is_not_an_input_box():
 def test_a_screen_with_no_input_box_is_busy():
     assert wake.classify("") == wake.DIALOG
     assert wake.classify("some output\nmore output\n") == wake.DIALOG
+
+
+LABELED = "labeled_border_draft_2.1.300"
+FOLLOWER_TEXT = "The compaction you queued with inject compact has finished."
+
+
+def _emptied(screen: str) -> str:
+    """*screen* with its input box emptied: the prompt line bare, its wrapped lines gone."""
+    lines = screen.splitlines()
+    plain = [re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", line) for line in lines]
+    start = next(i for i, line in enumerate(plain) if line.startswith(chr(0x276F)))
+    end = next(i for i in range(start + 1, len(plain)) if plain[i].count(chr(0x2500)) >= 20)
+    return "\n".join(lines[:start] + [EMPTY_PROMPT] + lines[end:]) + "\n"
+
+
+def test_a_border_carrying_the_session_name_is_still_the_input_box():
+    """2.1.300 prints the session's name in the box's top border. Read as no box at all, every
+    screen was a dialog: no wake was typed, and a follower's typed text was never submitted."""
+    screen = fixture(LABELED)
+    assert "my-session" in screen
+    assert wake.classify(screen) == wake.DRAFT
+    assert FOLLOWER_TEXT in wake.box_text(screen)
+    assert wake.classify(_emptied(screen)) == wake.IDLE_EMPTY
+
+
+def test_a_draft_is_read_while_a_turn_runs():
+    """Text typed during a turn lands after whatever the box already holds."""
+    spinner = "✳ Working… (12s · ↓ 1.2k tokens)\n"
+    running = spinner + fixture(LABELED)
+    assert wake.classify(running) == wake.RUNNING
+    assert wake.box_text(running) is None                 # nothing is typed into a running turn
+    assert FOLLOWER_TEXT in wake.draft_text(running)
+    assert wake.draft_text(spinner + _emptied(fixture(LABELED))) == ""
+    assert wake.draft_text(fixture("permission_dialog_2.1.281")) is None
+
+
+def test_a_short_labeled_rule_in_the_conversation_is_not_a_border():
+    short = chr(0x2500) * 8 + " notes " + chr(0x2500) * 4
+    assert wake.classify("\n".join([short, EMPTY_PROMPT, RULE, "  a status line"])) == wake.DIALOG
