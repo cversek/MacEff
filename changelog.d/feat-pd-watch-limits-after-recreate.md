@@ -1,0 +1,3 @@
+### Added
+
+- **The outside watch compares each named container's limits after every recreate** (`pd/watch.py`, policy `persistent_layer` 7.1; MIS-0002-R61). The comparison of declared and in-force limits existed but ran only by hand. Now the watch config's `containers` lists compose-created containers, and on each pass the watch reads every container's id. A new id means a recreate, however it was done, so the watch compares the limits then and keeps the result with the id. It reports DRIFTED, naming each limit with both values, until a later recreate brings them back in line: one alert per stretch, one recovery line. A comparison that couldn't be made is CHECK-FAILED and is tried again on the next pass. Five tests; four planted defects each caught.
