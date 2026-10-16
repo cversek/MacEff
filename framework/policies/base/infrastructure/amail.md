@@ -3,6 +3,7 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.4.2 — §2.3 says how a recipient learns where its pickup box is: provisioning names `handoff` and `agent` in its own `amail.json`, which its daemon needs, since an outer tier passes it no agent-configured variables. Patch.
 **Version**: 1.4.1 — §5.1 and §6b.1 say who mints the message id (the broker, on
 acceptance) and what that means for the sender's copy: it keeps the id the sender
 generated, so a sent message has two ids, joined by the record beside the copy. Patch:
@@ -379,6 +380,17 @@ write, and the final write is still made by the only broker that holds the
 recipient's book. The intake is provisioned like a pickup box — by its owner, in
 advance — and the writer verifies its declared ownership before writing rather
 than creating or correcting it.
+
+**The recipient is told where its box is, by provisioning, in its own settings.** Each
+agent's `.maceff/amail.json` names `handoff` (the root the broker hands off into) and
+`agent` (its box's name under it). `amail list` and the agent's primal daemon find the box
+from these two keys, and fall back to `MACF_AMAIL_HANDOFF` and `MACEFF_AGENT_NAME` only
+when the file doesn't name it. A session has those variables from its shell, but a daemon
+started by a container's outer tier has identity variables only, so a seat without the file
+would watch a guessed path and see no mail. A container's start script writes the two keys
+from the same addressing entry that provisions the box, keeps any other keys in the file,
+and leaves the file the agent's own (0600). This is provisioning by the deployment, as the
+box itself is, never a write by the broker.
 
 ---
 
