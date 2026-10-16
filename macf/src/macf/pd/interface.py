@@ -267,6 +267,8 @@ class WindDown(_Closed):
 
 
 NoticeRoute = Literal["agent", "operator", "both", "held_until_present"]
+#: The notice source of mail left unread past the declared threshold (MIS-0002-R55).
+UNREAD_MAIL_SOURCE = "pd_unread_mail"
 
 
 class Declaration(_Closed):
@@ -297,6 +299,9 @@ class Declaration(_Closed):
     #: How long a new session incarnation may run before its MacEff channel attaches; past it,
     #: the channel is dark (MIS-0002-R115). None: no channel is expected, and none is watched.
     channel_connect_s: Optional[float] = Field(default=None, gt=0)
+    #: How long mail may sit in the agent's pickup box, while its session runs, before the
+    #: daemon raises the ``pd_unread_mail`` notice (MIS-0002-R55). None: no notice.
+    unread_mail_threshold_s: Optional[float] = Field(default=None, gt=0)
     quiet_windows: List[Window] = Field(default_factory=list)
     keep_harness_idle_compaction: bool = False
     wind_down: Optional[WindDown] = None
@@ -310,6 +315,15 @@ class Declaration(_Closed):
             raise ValueError(f"names declared more than once: {', '.join(dupes)}")
         if sum(u.kind == "session" for u in self.units) > 1:
             raise ValueError("at most one unit may be the session")
+        return self
+
+    @model_validator(mode="after")
+    def _unread_mail_notice_is_routed(self) -> "Declaration":
+        # A threshold with nowhere to send its notice would be enforcement nobody hears
+        # (MIS-0002-R42 (notice_source_MUST_be_routed)).
+        if self.unread_mail_threshold_s is not None and UNREAD_MAIL_SOURCE not in self.notice_routes:
+            raise ValueError(f"unread_mail_threshold_s is declared, so notice_routes must route "
+                             f"{UNREAD_MAIL_SOURCE!r}: to 'agent', 'operator' or 'both'")
         return self
 
     @model_validator(mode="after")
@@ -342,6 +356,10 @@ EVENT_UNDER_LIMIT = "pd_unit_back_under_limit"
 #: The session's MacEff channel went dark, and came back (MIS-0002-R115).
 EVENT_CHANNEL_DARK = "pd_channel_dark"
 EVENT_CHANNEL_BACK = "pd_channel_back"
+#: Mail sat in the agent's pickup box past its declared threshold, and the box was then
+#: emptied (MIS-0002-R55). One of each per unread spell.
+EVENT_UNREAD_MAIL = "pd_unread_mail"
+EVENT_UNREAD_MAIL_CLEARED = "pd_unread_mail_cleared"
 EVENT_DAEMON_START = "pd_daemon_start"
 
 
