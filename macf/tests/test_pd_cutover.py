@@ -78,7 +78,6 @@ def test_each_unmet_check_says_not_ready(tmp_path):
         "no session unit": (lambda: _stage(tmp_path, session=False), _probes(), "no session unit"),
         "grace too short": (lambda: _stage(tmp_path, grace=5.0), _probes(), "must exceed"),
         "no runtime dir": (lambda: _stage(tmp_path, runtime=None), _probes(), "must declare XDG_RUNTIME_DIR"),
-        "no liveness variables": (lambda: _stage(tmp_path, liveness=False), _probes(), "never reads running"),
         "another runtime dir": (lambda: _stage(tmp_path, runtime="/run/user/1"), _probes(),
                                 "declares /run/user/1"),
         "daemon silent": (lambda: _stage(tmp_path), _probes(daemon_answers=lambda: "no record"), "no record"),
@@ -90,6 +89,12 @@ def test_each_unmet_check_says_not_ready(tmp_path):
         assert not plan.ready, name
         assert any(not c.ok and words in c.detail for c in plan.checks), (name, plan.checks)
         assert "NOT READY" in format_plan(plan), name
+
+
+def test_a_session_unit_needs_no_liveness_variables_of_its_own(tmp_path):
+    """The daemon sets them from the unit (#686), so the plan no longer asks for them."""
+    _stage(tmp_path, liveness=False)
+    assert build_plan(tmp_path, CARD, AGENT, _probes(), runtime=RUNTIME).ready
 
 
 def test_no_systemd_is_said_not_guessed(tmp_path):
