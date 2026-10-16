@@ -8984,6 +8984,11 @@ def _gh_issue_closeout(task_id: int, mtmd, args, breadcrumb: str) -> None:
     # the fix has actually landed (at least one --commit hash is in a merged
     # PR). Otherwise leave it open and let the natural PR-merge auto-close
     # path take over once the user reviews+merges the PR.
+    # --no-closeout means the issue is left as it is, not only uncommented: a task can end
+    # here (handed off, say) while its issue stays open for its owner.
+    if choice is False:
+        print(f"   ℹ️  Issue {repo_slug}#{gh_issue_number} left as it is (--no-closeout)")
+        return
     fix_landed = _commit_landed_in_merged_pr(repo_slug, list(args.commit or []))
     if not fix_landed:
         print(
@@ -12971,7 +12976,7 @@ def _build_parser() -> argparse.ArgumentParser:
     closeout_choice.add_argument("--closeout", dest="closeout", action="store_const", const=True, default=None,
                                  help="GH_ISSUE/GH_PR: post the close-out even when someone else closed or merged the item")
     closeout_choice.add_argument("--no-closeout", dest="closeout", action="store_const", const=False,
-                                 help="GH_ISSUE/GH_PR: complete without posting a close-out")
+                                 help="GH_ISSUE/GH_PR: complete without posting a close-out; a GH_ISSUE's issue is also left open")
     task_complete_parser.set_defaults(func=cmd_task_complete)
 
     # task block - add blocking relationship

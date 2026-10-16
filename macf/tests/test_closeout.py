@@ -195,6 +195,25 @@ def test_the_issue_is_closed_under_the_agents_identity_too(monkeypatch):
     assert len(closes) == 1 and closes[0][1]["env"]["GH_TOKEN"] == "app-token"
 
 
+def test_no_closeout_leaves_the_issue_open_even_when_the_fix_landed(monkeypatch):
+    """--no-closeout ends the task and leaves the issue alone: no comment and no close,
+    though a commit given is on main (a handed-off task closed two open issues this way)."""
+    from macf import cli
+    from macf.task.models import MacfTaskMetaData
+    mtmd = MacfTaskMetaData(task_type='GH_ISSUE', custom={
+        'gh_owner': 'o', 'gh_repo': 'r', 'gh_issue_number': 42})
+    args = SimpleNamespace(report="Handed off.", commit=["abc1234567890"], verified="n/a", closeout=False)
+    monkeypatch.setattr(closeout, "item_state", lambda repo, n, run=None: (True, None))
+    monkeypatch.setattr(closeout, "check_body", lambda body, signed, run=None: None)
+    monkeypatch.setattr(closeout, "agent_env", lambda repo, run=None: ({"GH_TOKEN": "app-token"}, "the agent's GitHub App"))
+    monkeypatch.setattr(cli, "_commit_landed_in_merged_pr", lambda repo, commits: True)
+    with patch('macf.cli._public_attribution_enabled', return_value=False):
+        with patch('subprocess.run', return_value=_done()) as mock_run:
+            cli._gh_issue_closeout(42, mtmd, args, 's/c/g/p/t')
+    sent = [c[0][0][:3] for c in mock_run.call_args_list]
+    assert ['gh', 'issue', 'close'] not in sent and ['gh', 'issue', 'comment'] not in sent
+
+
 def test_a_pr_closed_unmerged_takes_its_closer_from_the_issue_record(monkeypatch):
     from macf.cli import _gh_pr_closeout
     from macf.task.models import MacfTaskMetaData
