@@ -138,6 +138,14 @@ def load_declaration(agent_home: Path, card: str) -> Declaration:
             check_window(window)
         except ValueError as e:
             raise DeclarationRefused(f"{path}: quiet window: {e}") from e
+    # The daemon gives each unit this home (persistent_layer 11.2); a declared one may say so,
+    # but a different home would have the unit write its events where the daemon never reads.
+    home = Path(agent_home).resolve()
+    for unit in declaration.units:
+        declared = unit.environment.get(ENV_HOME)
+        if declared is not None and Path(declared.replace("{agent_home}", str(agent_home))).resolve() != home:
+            raise DeclarationRefused(f"{path}: unit {unit.name}: {ENV_HOME} is {declared!r}, not this "
+                                     f"agent's home {home}; the daemon sets it, so leave it out")
     me = pwd.getpwuid(os.getuid()).pw_name
     foreign = [u.name for u in declaration.units if u.account != me]
     if foreign:

@@ -120,22 +120,10 @@ def _staged_check(path: Path, card: str, runtime: Optional[str]) -> Check:
         return Check("staged declaration", False,
                      f"the session unit's stop_grace_s {session.stop_grace_s:g} must exceed the "
                      f"wrapper's {PANE_GRACE_S:g} s pane grace (persistent_layer 6.2)")
-    # A unit gets only its declared environment. Without these, the session never beats, so
-    # it never reads running and the move rolls back after its wait: found in the first trial.
-    from macf.pd.liveness import ENV_INTERVAL, ENV_UNIT
-    env = session.environment
-    try:
-        interval_matches = float(env.get(ENV_INTERVAL, "")) == session.liveness_interval_s
-    except ValueError:
-        interval_matches = False
-    if env.get(ENV_UNIT) != session.name or not interval_matches:
-        return Check("staged declaration", False,
-                     f"the session unit's environment must declare {ENV_UNIT}={session.name} and "
-                     f"{ENV_INTERVAL}={session.liveness_interval_s:g} (it declares "
-                     f"{env.get(ENV_UNIT)!r} and {env.get(ENV_INTERVAL)!r}), or the session never "
-                     "reads running")
-    # Without this, its tmux server sits under /tmp, where attach, harness status and the
-    # rollback look for it in vain.
+    # The unit's liveness variables need no check here: the daemon sets them from the unit
+    # (persistent_layer 11.2), and a declared value that disagrees is refused at load.
+    # A unit gets only its declared environment, so without this its tmux server sits under
+    # /tmp, where attach, harness status and the rollback look for it in vain.
     declared = session.environment.get("XDG_RUNTIME_DIR")
     if not declared or (runtime and declared != runtime):
         return Check("staged declaration", False,
