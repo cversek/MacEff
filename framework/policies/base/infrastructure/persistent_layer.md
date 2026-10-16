@@ -58,6 +58,7 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - Who turns on linger, and what happens without it?
 - How does my Claude Code session itself run as a unit of my primal daemon, and how do I attach to it?
 - What reports a session's liveness, given that an idle session has no work loop?
+- How is a session moved from the legacy harness onto its daemon, and what shows the plan before anything changes?
 
 **7 The Outside Watch**
 - What checks a primal daemon from outside the agents, and what does it read?
@@ -394,6 +395,22 @@ The operator may attach to any session without an invitation [MIS-0002-R81 (oper
 - **The declaration states the session's whole environment** (R12, R13). The wrapper adds only the context window, the terminal type, and the proxy attachment, which it probes as the legacy start script does. A declared project directory that is missing starts nothing, because `claude -c` would resume a different conversation anywhere else.
 
 **A session's liveness comes from its transcript monitor** [MIS-0002-R14 (unit_MUST_emit_liveness_events)], as the operator decided on 2026-10-12. An idle session has no work loop. The monitor's loop reads the transcript and confirms the client process on every pass, so its beat means both are running. The wrapper hands the session `MACF_PD_SESSION_UNIT`, `MACF_PD_SESSION_LIVENESS_S` and `MACF_PD_SESSION_PID`, the last naming the wrapper, the process the daemon started. The monitor beats once per pass for that pid (11.2), and stops beating when its client ends. The wrapper removes its own `MACF_PD_UNIT` and `MACF_PD_LIVENESS_S` from the session's environment: under names of their own, the variables can't be taken by any other process the session starts as its own unit's.
+
+### 6.3 Moving a session onto its daemon
+
+**`macf_tools harness cutover` prints the plan for moving your session from the legacy harness onto your daemon's session unit, and changes nothing.** It reads this host and names only what is installed here:
+- **the checks the move depends on:** a staged declaration (`<your declaration>.cutover`, or `--staged`) that validates, names you, declares a session unit, and gives it a `stop_grace_s` longer than the wrapper's 10 s pane grace (6.2); your daemon answering; your legacy harness unit and session; and any mail clock running beside the daemon's own;
+- **the steps, in order:** stop the duplicate clocks, stop the legacy session, keep the current declaration as `<declaration>.pre-cutover`, install the staged one, restart the daemon, and watch the session unit come up;
+- **each step's undo, and the rule for using them:** a failed move undoes only the steps it reached, last first. The install's undo puts the saved declaration back, restarts the daemon, ends the unit's tmux server, and removes the saved copy. Only then are the legacy harness and clocks started again, since the legacy start refuses a session name already held. A step that was never reached is never undone: its undo could restore what it never saved.
+- **a saved declaration from an earlier attempt stops the plan.** `<declaration>.pre-cutover` may hold what the live one has since lost, or the reverse, so the move won't start until a person has compared the two and removed it.
+- **this agent's transcript monitors whose session has ended are ended** with the legacy session. A monitor the old session's hooks started isn't a unit, so stopping the session doesn't always end it. Left running, it holds the transcript, the new session's monitor stands down, and the unit never beats.
+- **notes for the person watching:** a new session that asks how to resume gets "continue", never "summarize"; scheduled jobs the old session made for itself lived in its process and need recreating once the move holds.
+
+It exits 0 when every check holds and 1 otherwise. A session already running as its unit has nothing to move, and a host without systemd is told so rather than given systemd steps: a macOS move goes through launchd.
+
+**Run the steps from a terminal outside the session they stop.** Stopping the legacy session ends the session you may be typing in, and the host's first move was finished only because a second copy of the remote session survived. Nothing else is stopped: the API proxy and the host's watches stay as they are, so the move changes one thing at a time.
+
+**`--run` carries the plan out, from outside the session.** It refuses unless every check holds. Then it starts the move as a transient user unit, `maceff-cutover-<agent>`, which is no part of the session it stops, and prints the `tail -f` line for its log under `~/.maceff/logs/`, to follow from any terminal or a phone. The unit runs the printed steps exactly, in order, then waits up to 300 s for the daemon to report the session unit running. **The first failing command, or a session unit that isn't running in time, rolls the move back:** the undo of every step it reached runs, last step first, each command tried whatever came before. Ending a session that was already gone isn't a failure. What `--run` changes is your session, so on a seat it runs in an operator's window, with the operator's word for that move.
 
 ---
 
