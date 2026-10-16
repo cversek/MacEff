@@ -1838,6 +1838,67 @@ def cmd_harness_unit(args: argparse.Namespace) -> int:
     return session_unit_main(argv)
 
 
+def cmd_harness_cutover(args: argparse.Namespace) -> int:
+    """Print the plan for moving the agent's session onto its primal daemon (persistent_layer
+    6.3). Read-only: exit 0 when every check holds, 1 when one doesn't or there is nothing
+    to move, 2 when the agent can't be resolved."""
+    import dataclasses
+    from pathlib import Path
+    from .pd.cutover import build_plan, format_plan, host_probes
+    from .utils.harness import resolve_agent
+    from .utils.identity import calling_card_from_identifier
+
+    agent, source = resolve_agent(getattr(args, "agent", None))
+    if source in ("ambiguous", "default"):
+        print("⚠️ MACF: harness cutover: name the agent with --agent; "
+              f"it couldn't be resolved here ({source})", file=sys.stderr)
+        return 2
+    card = calling_card_from_identifier(agent)
+    home = Path(args.home) if getattr(args, "home", None) else Path.home()
+    plan = build_plan(home, card, agent, host_probes(home, card),
+                      staged=Path(args.staged) if getattr(args, "staged", None) else None)
+    if getattr(args, "execute", False):
+        from datetime import datetime
+        from .pd.cutover import came_up_by_status, execute, run_command
+        log_path = Path(args.log) if getattr(args, "log", None) else None
+
+        def log(line: str) -> None:
+            stamped = f"{datetime.now().isoformat(timespec='seconds')} {line}"
+            print(stamped, flush=True)
+            if log_path is not None:
+                with log_path.open("a") as fh:
+                    fh.write(stamped + "\n")
+        came_up = came_up_by_status(home, card, plan.session_unit or "session")
+        return 0 if execute(plan, run_command, came_up, log) else 1
+    if getattr(args, "run", False):
+        from datetime import datetime
+        from .pd.cutover import COME_UP_S, arm_argv, staged_path
+        if not plan.ready:
+            print(format_plan(plan))
+            print("\n⚠️ MACF: harness cutover --run: not ready, so nothing was started", file=sys.stderr)
+            return 1
+        log_path = home / ".maceff" / "logs" / f"cutover-{datetime.now():%Y%m%d-%H%M%S}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        staged = Path(args.staged) if getattr(args, "staged", None) else staged_path(home)
+        argv = arm_argv(agent, home, staged, log_path, sys.executable)
+        started = subprocess.run(argv, capture_output=True, text=True)
+        if started.returncode != 0:
+            print(f"⚠️ MACF: harness cutover --run: the transient unit didn't start: "
+                  f"{started.stderr.strip()}", file=sys.stderr)
+            return 1
+        print(format_plan(plan))
+        print(f"\nStarted, outside this session. Follow it from any terminal:\n"
+              f"     tail -f {log_path}\n"
+              f"It rolls back by itself on any failure, or if the session unit isn't running "
+              f"within {COME_UP_S:g} s.")
+        return 0
+    if getattr(args, "json", False):
+        print(json.dumps(dataclasses.asdict(plan), indent=2))
+    else:
+        print(format_plan(plan))
+    return 0 if plan.ready else 1
+
+
 def cmd_harness_status(args: argparse.Namespace) -> int:
     """Report unit state, session presence and proxy attachment.
 
@@ -12157,6 +12218,22 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_status = harness_sub.add_parser("status", help="show harness unit and session state")
     harness_status.add_argument("--agent", help="agent slug")
     harness_status.set_defaults(func=cmd_harness_status)
+
+    harness_cutover = harness_sub.add_parser(
+        "cutover", help="print the plan for moving this agent's session onto its primal daemon "
+                        "(read-only: checks, steps and rollback for this host; changes nothing)")
+    harness_cutover.add_argument("--agent", help="agent slug (default: resolved from identity)")
+    harness_cutover.add_argument("--home", help="agent home directory")
+    harness_cutover.add_argument("--staged", help="the declaration with the session unit "
+                                                  "(default: <declaration>.cutover)")
+    harness_cutover.add_argument("--json", action="store_true", help="the plan as JSON")
+    harness_cutover.add_argument("--run", action="store_true",
+                                 help="carry the plan out: start it as a transient unit outside this "
+                                      "session, which rolls back on any failure, and print where it logs")
+    harness_cutover.add_argument("--execute", action="store_true",
+                                 help="what the transient unit runs: carry the plan out here and now")
+    harness_cutover.add_argument("--log", help="where --execute writes its progress")
+    harness_cutover.set_defaults(func=cmd_harness_cutover)
 
     harness_unit = harness_sub.add_parser(
         "unit", help="run the agent's session as its primal daemon's session unit (the command a "
