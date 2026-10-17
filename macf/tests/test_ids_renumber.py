@@ -236,3 +236,14 @@ def test_setuid_and_setgid_files_to_re_own_are_named(tmp_path):
     p = rn.plan(mine_to(), [str(root)], has_acl=lambda _: False, block=BLOCK)
     assert p.setid_files == [str(tool)]
     assert "setuid or setgid" in rn.render(mine_to(), p, [])
+
+
+def test_setgid_on_a_file_nobody_can_execute_is_not_named(tmp_path):
+    """Mode 2664, common on files under a shared group directory: the bit changes nothing, so
+    the plan doesn't list thousands of them (measured on a seat container: 7,685, every one 2664)."""
+    root, _ = tree(tmp_path)
+    notes = root / "pa_a" / "notes.csv"
+    notes.write_text("a,b\n")
+    notes.chmod(0o2664)
+    p = rn.plan(mine_to(), [str(root)], has_acl=lambda _: False, block=BLOCK)
+    assert str(notes) not in p.setid_files

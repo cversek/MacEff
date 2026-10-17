@@ -111,7 +111,7 @@ class Plan:
     #: the base image's ubuntu account at 1000, say. After the recreate such a file belongs to
     #: whoever holds that number on the host, the overlap the move exists to end.
     unmapped: List[Tuple[str, int, int]] = field(default_factory=list)
-    #: Planned regular files with setuid or setgid set: chown clears both, even as root.
+    #: Planned executables whose setuid or setgid bit takes effect: chown clears both, even as root.
     setid_files: List[str] = field(default_factory=list)
 
 
@@ -160,7 +160,7 @@ def plan(mapping: Mapping, roots: Iterable[str],
             ng = mapping.gid.get(st.st_gid, st.st_gid)
             if (nu, ng) != (st.st_uid, st.st_gid):
                 out.changes.append((str(p), st.st_uid, st.st_gid, nu, ng))
-                if stat.S_ISREG(st.st_mode) and st.st_mode & (stat.S_ISUID | stat.S_ISGID):
+                if stat.S_ISREG(st.st_mode) and _setid_takes_effect(st.st_mode):
                     out.setid_files.append(str(p))
             if block is not None and not stat.S_ISLNK(st.st_mode) and (
                     (nu != 0 and nu not in block) or (ng != 0 and ng not in block)):
@@ -168,6 +168,13 @@ def plan(mapping: Mapping, roots: Iterable[str],
             if not stat.S_ISLNK(st.st_mode) and has_acl(str(p)):
                 out.acl_files.append(str(p))
     return out
+
+
+def _setid_takes_effect(mode: int) -> bool:
+    """A setuid or setgid bit that changes what running the file does: setuid with the owner's
+    execute bit, setgid with the group's. Setgid on a file nobody can execute (mode 2664, which a
+    shared group directory's files often carry) changes nothing, so clearing it loses nothing."""
+    return bool((mode & stat.S_ISUID and mode & stat.S_IXUSR) or (mode & stat.S_ISGID and mode & stat.S_IXGRP))
 
 
 def _has_acl(path: str) -> bool:
