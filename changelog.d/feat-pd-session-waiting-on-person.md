@@ -1,0 +1,3 @@
+### Added
+
+- **The session unit reports a permission dialog as waiting on a person** (`permission_watch.SessionDialogs`, `pd/liveness.py`, `transcript_monitor/daemon.py`, policy `persistent_layer` 6.2; MIS-0002-R21). The session's transcript monitor already beats for the unit. Each beat now carries `waiting_on` when the event log shows that session's newest deciding event is a permission request, by the rule `permissions pending` uses, so the core moves the unit to waiting on a person and back, and never restarts it for the wait. The report names the tool and when the dialog opened, never the command. A log that can't be read keeps the last answer. An adopted session writes no liveness, so it isn't covered yet. One test; five planted defects each caught.
