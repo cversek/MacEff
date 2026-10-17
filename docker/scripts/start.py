@@ -2551,24 +2551,30 @@ def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] 
                     f"its earlier rendering was removed")
             continue
         home = HOME_ROOT / agent_spec.username
-        try:
-            card = pd_names.agent_card(home)
-        except (pd_names.IdentityError, OSError) as e:
-            # One agent's broken identity costs that agent its daemon, never the others' (R58).
-            # Its old rendering goes, so a stale declaration isn't served under it.
-            if target.exists():
-                target.unlink()
-            log(f"primal daemon of {agent_spec.username}: not rendered; its calling card can't be read ({e})")
-            continue
-        declaration = Declaration(version=1, agent=card, **agent_spec.primal_daemon)
-        target_dir.mkdir(mode=0o755, exist_ok=True)
-        chown(target_dir, 0, 0)
-        os.chmod(target_dir, 0o755)
         tmp = target_dir / '.declaration.json.tmp'
-        tmp.write_text(declaration.model_dump_json(indent=2) + '\n')
-        chown(tmp, 0, 0)
-        os.chmod(tmp, 0o644)
-        tmp.replace(target)
+        try:
+            try:
+                card = pd_names.agent_card(home)
+            except pd_names.IdentityError as e:
+                raise OSError(f"its calling card can't be read ({e})") from e
+            declaration = Declaration(version=1, agent=card, **agent_spec.primal_daemon)
+            target_dir.mkdir(mode=0o755, exist_ok=True)
+            chown(target_dir, 0, 0)
+            os.chmod(target_dir, 0o755)
+            tmp.write_text(declaration.model_dump_json(indent=2) + '\n')
+            chown(tmp, 0, 0)
+            os.chmod(tmp, 0o644)
+            tmp.replace(target)
+        except OSError as e:
+            # One agent's failure, its identity or the write, costs that agent its daemon, never
+            # the others' (R58). Its old rendering goes, so a stale declaration isn't served.
+            for leftover in (tmp, target):
+                try:
+                    leftover.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            log(f"primal daemon of {agent_spec.username}: not rendered; {e}")
+            continue
         if (home / PD_DECLARATION).exists():
             log(f"primal daemon of {agent_spec.username}: {home / PD_DECLARATION} is not read; "
                 f"the declaration agents.yaml renders to {target} is")
