@@ -558,7 +558,9 @@ None of these is repaired at start. Moving an existing deployment onto its decla
    - an old number that is already someone's declared number;
    - a service number outside the block.
 
-   Read the listing before going on, above all the lines for bind mounts. In a bind mount an old number may genuinely be a host account's own file: that is the overlap this exists to end. A file with an access list is named too, because re-owning doesn't rewrite access lists.
+   Read the listing before going on, above all the lines for bind mounts. In a bind mount an old number may genuinely be a host account's own file: that is the overlap this exists to end. A file with an access list is named too, because re-owning doesn't rewrite access lists. Two more findings are named, each in full in the listing:
+   - **Files left outside the block** (`UNMAPPED`): files on a number that no declared name maps, such as the base image's `ubuntu` at 1000. The move leaves them, and after the recreate they belong to whoever holds that number on the host. Re-own or remove them by hand before the recreate. Root's own files are not counted.
+   - **Setuid or setgid files to re-own** (`SETID`): `chown` clears both bits, even as root. Set them again after `--apply` if they were meant.
 5. Run the same command with `--apply`. It re-owns every listed file, symlinks themselves and never their targets, stays out of mounts it wasn't given, then re-plans and reports anything left on an old number. A second run finds nothing to do.
 6. Rebuild the image with `MACEFF_ID_BASE`, recreate the container, and let start-up create the accounts at their declared numbers.
 7. Have each seat check its own home. Then run `macf_tools ids audit` on the host.

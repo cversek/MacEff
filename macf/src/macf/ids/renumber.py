@@ -29,6 +29,8 @@ from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 #: The roots the framework itself owns in a deployment container.
 FRAMEWORK_ROOTS = ("/home", "/shared_workspace", "/var/lib/amail_broker", "/var/lib/amail_ingest")
 ACL_XATTR = "system.posix_acl_access"
+#: How many paths the summary names under each finding; the listing holds them all.
+SHOWN = 10
 
 
 class RenumberRefused(Exception):
@@ -105,6 +107,12 @@ class Plan:
     acl_files: List[str] = field(default_factory=list)
     skipped_mounts: List[str] = field(default_factory=list)
     missing_roots: List[str] = field(default_factory=list)
+    #: (path, uid, gid) left after the move on a number outside the block that nothing maps:
+    #: the base image's ubuntu account at 1000, say. After the recreate such a file belongs to
+    #: whoever holds that number on the host, the overlap the move exists to end.
+    unmapped: List[Tuple[str, int, int]] = field(default_factory=list)
+    #: Planned regular files with setuid or setgid set: chown clears both, even as root.
+    setid_files: List[str] = field(default_factory=list)
 
 
 def _walk(root: Path) -> Iterator[Tuple[Path, os.stat_result]]:
@@ -131,7 +139,9 @@ def _walk(root: Path) -> Iterator[Tuple[Path, os.stat_result]]:
 
 
 def plan(mapping: Mapping, roots: Iterable[str],
-         has_acl: Optional[Callable[[str], bool]] = None) -> Plan:
+         has_acl: Optional[Callable[[str], bool]] = None, block: Optional[range] = None) -> Plan:
+    """Every entry the move would re-own, and what it would leave behind. With *block*, an
+    entry whose owner after the move is outside the block, and not root, is named as unmapped."""
     has_acl = has_acl or _has_acl
     out = Plan()
     root_list = [str(Path(r)) for r in roots]
@@ -150,6 +160,11 @@ def plan(mapping: Mapping, roots: Iterable[str],
             ng = mapping.gid.get(st.st_gid, st.st_gid)
             if (nu, ng) != (st.st_uid, st.st_gid):
                 out.changes.append((str(p), st.st_uid, st.st_gid, nu, ng))
+                if stat.S_ISREG(st.st_mode) and st.st_mode & (stat.S_ISUID | stat.S_ISGID):
+                    out.setid_files.append(str(p))
+            if block is not None and not stat.S_ISLNK(st.st_mode) and (
+                    (nu != 0 and nu not in block) or (ng != 0 and ng not in block)):
+                out.unmapped.append((str(p), nu, ng))
             if not stat.S_ISLNK(st.st_mode) and has_acl(str(p)):
                 out.acl_files.append(str(p))
     return out
@@ -191,4 +206,19 @@ def render(mapping: Mapping, p: Plan, bind_roots: List[str]) -> str:
     if p.acl_files:
         lines.append(f"files with an access list ({len(p.acl_files)}): re-owning does not rewrite "
                      f"entries naming old numbers; check them with getfacl")
+    if p.unmapped:
+        numbers = sorted({n for _path, u, g in p.unmapped for n in (u, g)})
+        lines.append(f"files left outside the block ({len(p.unmapped)}), on {', '.join(map(str, numbers))}: "
+                     f"no declared name maps these numbers, so the move leaves them, and after the "
+                     f"recreate they belong to whoever holds those numbers on the host; re-own or "
+                     f"remove them by hand (they are in the listing)")
+        lines += [f"  {path}  {u}:{g}" for path, u, g in p.unmapped[:SHOWN]]
+        if len(p.unmapped) > SHOWN:
+            lines.append(f"  ... {len(p.unmapped) - SHOWN} more")
+    if p.setid_files:
+        lines.append(f"setuid or setgid files to re-own ({len(p.setid_files)}): chown clears those "
+                     f"bits, even as root; set them again after --apply if they were meant")
+        lines += [f"  {path}" for path in p.setid_files[:SHOWN]]
+        if len(p.setid_files) > SHOWN:
+            lines.append(f"  ... {len(p.setid_files) - SHOWN} more")
     return "\n".join(lines)

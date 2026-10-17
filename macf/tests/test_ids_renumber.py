@@ -193,3 +193,46 @@ def test_a_malformed_service_is_refused(tmp_path):
 
 def test_an_unreadable_declaration_is_refused(tmp_path):
     assert renumber_cli.cmd_ids_renumber(args(tmp_path, config=str(tmp_path / "missing.yaml"))) == 2
+
+
+# --- what the move leaves behind (review of #697) ------------------------------------------
+
+BLOCK = range(21000, 22000)
+
+
+def test_files_left_on_a_number_nothing_maps_are_named(tmp_path):
+    """The base image's ubuntu account maps to nothing, so files it owned are neither moved nor
+    planned; after the recreate they belong to the host's holder of that number. Here the
+    group is the unmapped number: the uid moves, the gid stays outside the block."""
+    root, _ = tree(tmp_path)
+    m = rn.Mapping(uid={ME: 21100}, uid_names={ME: "pa_a"})
+    p = rn.plan(m, [str(root)], has_acl=lambda _: False, block=BLOCK)
+    named = {path for path, _u, g in p.unmapped if g == MY_GID}
+    assert str(root / "pa_a" / "f.txt") in named
+    text = rn.render(m, p, [])
+    assert "files left outside the block" in text and str(MY_GID) in text
+
+
+def test_a_full_mapping_leaves_nothing_outside_the_block(tmp_path):
+    root, _ = tree(tmp_path)
+    p = rn.plan(mine_to(), [str(root)], has_acl=lambda _: False, block=BLOCK)
+    assert p.unmapped == []
+    assert "outside the block" not in rn.render(mine_to(), p, [])
+
+
+def test_root_owned_files_are_not_unmapped(tmp_path):
+    """Root's own files are root's in every container and on the host: nothing to name."""
+    root, _ = tree(tmp_path)
+    m = rn.Mapping(uid={ME: 0}, gid={MY_GID: 0})
+    assert rn.plan(m, [str(root)], has_acl=lambda _: False, block=BLOCK).unmapped == []
+
+
+def test_setuid_and_setgid_files_to_re_own_are_named(tmp_path):
+    """chown clears both bits on a regular file, even as root on Linux."""
+    root, _ = tree(tmp_path)
+    tool = root / "pa_a" / "tool"
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o4755)
+    p = rn.plan(mine_to(), [str(root)], has_acl=lambda _: False, block=BLOCK)
+    assert p.setid_files == [str(tool)]
+    assert "setuid or setgid" in rn.render(mine_to(), p, [])
