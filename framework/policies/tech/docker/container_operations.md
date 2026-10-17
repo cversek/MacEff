@@ -544,7 +544,7 @@ None of these is repaired at start. Moving an existing deployment onto its decla
 
 1. Back up the deployment and verify the backup.
 2. Add `ids` and every agent's `uid` to agents.yaml.
-3. Pause the seats and wait until they're quiet. Then stop their sessions, since their processes still run under the old numbers.
+3. Pause the seats and wait until they're quiet. Then stop everything that runs as a number the move changes: the seats' sessions, the amail broker and ingest (their stores are among the framework's roots), and any admin login. A process left running keeps writing as its old number while its files move, and what it writes ends up outside the block. `--apply` refuses while any such process runs, and names each one.
 4. As root in the old container, plan:
 
    ```bash
@@ -561,7 +561,7 @@ None of these is repaired at start. Moving an existing deployment onto its decla
    Read the listing before going on, above all the lines for bind mounts. In a bind mount an old number may genuinely be a host account's own file: that is the overlap this exists to end. A file with an access list is named too, because re-owning doesn't rewrite access lists. Two more findings are named, each in full in the listing:
    - **Files left outside the block** (`UNMAPPED`): files on a number that no declared name maps, such as the base image's `ubuntu` at 1000. The move leaves them, and after the recreate they belong to whoever holds that number on the host. Re-own or remove them by hand before the recreate. Root's own files are not counted.
    - **Setuid or setgid files to re-own** (`SETID`): `chown` clears both bits, even as root. Set them again after `--apply` if they were meant.
-5. Run the same command with `--apply`. It re-owns every listed file, symlinks themselves and never their targets, stays out of mounts it wasn't given, then re-plans and reports anything left on an old number. A second run finds nothing to do.
+5. Run the same command with `--apply`. It re-owns every listed file, symlinks themselves and never their targets, stays out of mounts it wasn't given, then re-plans and reports anything left on an old number. A second run finds nothing to do. A path that can't be re-owned is named and the rest still move; fix the cause and run `--apply` again, and it resumes where it stopped, since the account tables are untouched until the recreate.
 6. Rebuild the image with `MACEFF_ID_BASE`, recreate the container, and let start-up create the accounts at their declared numbers.
 7. Have each seat check its own home. Then run `macf_tools ids audit` on the host.
 

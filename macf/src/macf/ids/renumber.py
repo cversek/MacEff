@@ -128,7 +128,10 @@ def _walk(root: Path) -> Iterator[Tuple[Path, os.stat_result]]:
         except (PermissionError, FileNotFoundError, NotADirectoryError):
             continue
         for e in entries:
-            st = e.stat(follow_symlinks=False)
+            try:
+                st = e.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                continue                                     # gone since the listing: nothing to move
             p = Path(e.path)
             if st.st_dev != top.st_dev:
                 yield p, st      # the mount point itself, flagged by the caller
@@ -184,12 +187,44 @@ def _has_acl(path: str) -> bool:
         return False
 
 
-def apply(p: Plan, chown: Callable[[str, int, int], None] = None) -> int:
-    """Re-own every planned path, symlinks themselves; returns how many were changed."""
+def apply(p: Plan, chown: Callable[[str, int, int], None] = None) -> Tuple[int, List[Tuple[str, str]]]:
+    """Re-own every planned path, symlinks themselves. A path that can't be re-owned (gone,
+    read-only, refused) is recorded and the rest still go, so one failure never leaves the move
+    stopped halfway with a traceback. Returns (changed, [(path, why)]). The live account tables are
+    untouched, so the mapping derives the same again, and a rerun finishes what is left."""
     chown = chown or (lambda path, u, g: os.chown(path, u, g, follow_symlinks=False))
+    done, failed = 0, []
     for path, _ou, _og, nu, ng in p.changes:
-        chown(path, nu, ng)
-    return len(p.changes)
+        try:
+            chown(path, nu, ng)
+            done += 1
+        except OSError as e:
+            failed.append((path, e.strerror or type(e).__name__))
+    return done, failed
+
+
+def processes_on(numbers: Iterable[int], proc: Path = Path("/proc")) -> List[Tuple[int, int, str]]:
+    """(pid, uid, command) for each running process whose real or effective uid is one the move
+    re-numbers. Such a process keeps writing as its old number while its files move, and what it
+    writes then is left outside the block (the amail broker and ingest, an admin login)."""
+    wanted = set(numbers)
+    found = []
+    for d in proc.iterdir():
+        if not d.name.isdigit():
+            continue
+        try:
+            status = (d / "status").read_text()
+            comm = (d / "comm").read_text().strip()
+        except OSError:
+            continue
+        for line in status.splitlines():
+            if line.startswith("Uid:"):
+                real, eff = (int(x) for x in line.split()[1:3])
+                hit = real if real in wanted else eff if eff in wanted else None
+                if hit is not None:
+                    found.append((int(d.name), hit, comm))
+                break
+    return found
 
 
 def render(mapping: Mapping, p: Plan, bind_roots: List[str]) -> str:
