@@ -492,6 +492,18 @@ class AgentSpec(BaseModel):
         return self.flavor == AgentFlavor.VANILLA
 
     @model_validator(mode='after')
+    def no_primal_daemon_for_vanilla(self) -> 'AgentSpec':
+        """A vanilla account gets no MacEff footprint, so nothing starts a primal daemon for it,
+        and a schedule it declared would have no daemon to run it. Refused when agents.yaml loads,
+        which container start does (MIS-0002-R11 (CI_MUST_fail_unhosted_schedule))."""
+        if self.flavor == AgentFlavor.VANILLA and self.primal_daemon is not None:
+            raise ValueError(
+                f"{self.username} is vanilla and declares primal_daemon: a vanilla account gets no "
+                "MacEff footprint, so no daemon would run its units or schedules. Remove primal_daemon, "
+                "or make the account maceff-flavored")
+        return self
+
+    @model_validator(mode='after')
     def require_personality_for_maceff(self) -> 'AgentSpec':
         """A maceff-flavored agent needs an identity layer; a vanilla one must not have one.
 
