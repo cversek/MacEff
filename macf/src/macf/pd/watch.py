@@ -38,6 +38,7 @@ import json
 import subprocess
 import sys
 import time
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Literal, Optional, Sequence, Tuple
@@ -401,30 +402,53 @@ def transitions(findings: Sequence[Finding], open_stretches: Dict[str, dict],
 LIMITS_STATE = "limits.json"
 
 
+def _files_stamp(files: List[str]) -> List[float]:
+    """Each compose file's modification time, or -1 when it can't be read: a changed stamp means
+    the declared limits must be read again."""
+    out = []
+    for f in files:
+        try:
+            out.append(Path(f).stat().st_mtime)
+        except OSError:
+            out.append(-1.0)
+    return out
+
+
 def check_limits(name: str, kept: Dict[str, dict],
                  run: container_limits.Runner = container_limits._run) -> Tuple[Finding, Optional[dict]]:
     """The limits verdict for one container, and what to keep for it.
 
-    A container whose id matches the kept one has not been recreated since its last
-    comparison, so the kept verdict stands and nothing is run. A new id is a recreate, and
-    the comparison runs (MIS-0002-R61 (layer_MUST_check_limits_after_recreate)). A
-    comparison that could not be made keeps nothing, so the next pass tries again."""
+    The limits in force are read on every pass, so a ``docker update`` shows at once
+    (MIS-0002-R61 (layer_MUST_check_limits_after_recreate)). The declared limits are read from
+    the compose files the container was made from, again whenever the container was recreated
+    (a new id) or a file changed, and kept in between, so bringing the files into line closes the
+    stretch without waiting for a recreate. A check that can't be made is its own subject
+    (``limits check``), so a drift found after it is still a new alert; nothing is kept for it."""
     try:
-        cid = run(["docker", "inspect", "--format", "{{.Id}}", name]).strip()
-    except (subprocess.SubprocessError, OSError) as e:
-        return Finding(name, "limits", "CHECK-FAILED", f"the container cannot be inspected: {type(e).__name__}"), None
-    last = kept.get(name)
-    if isinstance(last, dict) and last.get("id") == cid and last.get("verdict") in ("ALIVE", "DRIFTED"):
-        return Finding(name, "limits", last["verdict"], str(last.get("detail", ""))), last
-    try:
-        lines = container_limits.check_container(name, run)
-    except (subprocess.SubprocessError, OSError, ValueError, KeyError, IndexError) as e:
-        return Finding(name, "limits", "CHECK-FAILED", f"the limits cannot be compared: {type(e).__name__}: {e}"), None
+        inspect = json.loads(run(["docker", "inspect", "--type", "container", name]))[0]
+        labels = (inspect.get("Config") or {}).get("Labels") or {}
+        files = [f for f in (labels.get(container_limits.CONFIG_FILES_LABEL) or "").split(",") if f]
+        service = labels.get(container_limits.SERVICE_LABEL)
+        if not files or not service:
+            raise ValueError(f"{name} was not created by docker compose: no config files label")
+        cid, stamp = inspect.get("Id", ""), _files_stamp(files)
+        last = kept.get(name)
+        if isinstance(last, dict) and last.get("id") == cid and last.get("stamp") == stamp \
+                and isinstance(last.get("declared"), dict):
+            want = container_limits.Limits(**last["declared"])
+        else:
+            argv = ["docker", "compose"]
+            for f in files:
+                argv += ["-f", f]
+            config = json.loads(run(argv + ["config", "--format", "json"]))
+            want = container_limits.declared(config["services"][service])
+        lines = container_limits.compare(want, container_limits.in_force(inspect))
+    except (subprocess.SubprocessError, OSError, ValueError, KeyError, IndexError, TypeError) as e:
+        return Finding(name, "limits check", "CHECK-FAILED", f"the limits cannot be compared: {type(e).__name__}: {e}"), None
+    keep = {"id": cid, "stamp": stamp, "declared": dataclasses.asdict(want)}
     if lines:
-        found = Finding(name, "limits", "DRIFTED", "limits in force differ from its compose files: " + "; ".join(lines))
-    else:
-        found = Finding(name, "limits", "ALIVE", "limits in force match its compose files")
-    return found, {"id": cid, "verdict": found.verdict, "detail": found.detail}
+        return Finding(name, "limits", "DRIFTED", "limits in force differ from its compose files: " + "; ".join(lines)), keep
+    return Finding(name, "limits", "ALIVE", "limits in force match its compose files"), keep
 
 
 def _read_kept(path: Path) -> Dict[str, dict]:
