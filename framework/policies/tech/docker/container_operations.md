@@ -536,7 +536,8 @@ configs:
 - an account or group already holds a different number;
 - the image's `admin` or amail accounts aren't at the block's slots, meaning the image was built for another block (rebuild it with the deployment's `MACEFF_ID_BASE`);
 - the image still has `ubuntu`;
-- an agent's home on the persisted `/home` volume is owned by another number. After a recreate `/etc/passwd` is fresh while `/home` is not, and creating the account at a new number would lock the agent out of its own files.
+- an agent's home on the persisted `/home` volume is owned by another number. After a recreate `/etc/passwd` is fresh while `/home` is not, and creating the account at a new number would lock the agent out of its own files;
+- `/home/admin`, `/var/lib/amail_broker` or `/var/lib/amail_ingest` is owned by another number than its account's slot. The image recreates those accounts at the block's numbers, but their directories keep their old owners, and the broker couldn't read its own ledgers.
 
 None of these is repaired at start. Moving an existing deployment onto its declared numbers re-owns files on its volumes and mounts. That's the renumber step's job, run once, on purpose, in a quiet window, after a verified backup.
 
