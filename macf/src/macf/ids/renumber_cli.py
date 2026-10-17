@@ -65,7 +65,21 @@ def cmd_ids_renumber(args: argparse.Namespace) -> int:
     if os.geteuid() != 0:
         print("ids renumber: --apply needs root", file=sys.stderr)
         return 2
-    done = rn.apply(p)
-    left = rn.plan(mapping, roots)
-    print(f"re-owned {done} file(s); left on an old number: {len(left.changes)}")
-    return 0 if not left.changes else 1
+    running = rn.processes_on(mapping.uid)
+    if running:
+        print("ids renumber: REFUSED: processes still run as numbers this moves, and would write as "
+              "their old number while their files move. Stop them first (container_operations 6.2, step 3):",
+              file=sys.stderr)
+        for pid, uid, comm in running:
+            print(f"  pid {pid}  uid {uid}  {comm}", file=sys.stderr)
+        return 1
+    done, failed = rn.apply(p)
+    left = rn.plan(mapping, roots, block=block)
+    print(f"re-owned {done} file(s); left on an old number: {len(left.changes)}; "
+          f"still outside the block: {len(left.unmapped)}")
+    for path, why in failed[:20]:
+        print(f"  could not re-own {path}: {why}", file=sys.stderr)
+    if failed:
+        print(f"  {len(failed)} path(s) failed; fix the cause and run --apply again: it resumes "
+              f"where this stopped", file=sys.stderr)
+    return 0 if not left.changes and not failed else 1

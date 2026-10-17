@@ -146,7 +146,7 @@ def test_apply_re_owns_each_planned_path_to_its_new_numbers(tmp_path):
     root, _ = tree(tmp_path)
     p = rn.plan(mine_to(), [str(root)], has_acl=lambda _: False)
     done = []
-    assert rn.apply(p, chown=lambda path, u, g: done.append((path, u, g))) == len(p.changes)
+    assert rn.apply(p, chown=lambda path, u, g: done.append((path, u, g))) == (len(p.changes), [])
     assert done == [(c[0], c[3], c[4]) for c in p.changes]
 
 
@@ -247,3 +247,33 @@ def test_setgid_on_a_file_nobody_can_execute_is_not_named(tmp_path):
     notes.chmod(0o2664)
     p = rn.plan(mine_to(), [str(root)], has_acl=lambda _: False, block=BLOCK)
     assert str(notes) not in p.setid_files
+
+
+def test_a_path_that_cannot_be_re_owned_is_recorded_and_the_rest_still_move(tmp_path):
+    """One failure mid-move never leaves a traceback and a half-moved tree: the rest go, and the
+    failure is named, so a rerun can finish it."""
+    root, _ = tree(tmp_path)
+    p = rn.plan(mine_to(), [str(root)], has_acl=lambda _: False)
+    bad = p.changes[1][0]
+    done = []
+
+    def chown(path, u, g):
+        if path == bad:
+            raise PermissionError(1, "Operation not permitted")
+        done.append(path)
+    changed, failed = rn.apply(p, chown=chown)
+    assert changed == len(p.changes) - 1 and len(done) == changed
+    assert failed == [(bad, "Operation not permitted")]
+
+
+def test_processes_still_running_as_a_moved_number_are_found(tmp_path):
+    """--apply refuses while the amail services or an admin login still run as an old number."""
+    proc = tmp_path / "proc"
+    for pid, uid, comm in ((10, 998, "broker"), (11, 5000, "other"), (12, 1002, "bash")):
+        (proc / str(pid)).mkdir(parents=True)
+        (proc / str(pid) / "status").write_text(f"Name:\t{comm}\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n")
+        (proc / str(pid) / "comm").write_text(comm + "\n")
+    (proc / "self").mkdir()
+    found = sorted(rn.processes_on({998, 1002}, proc=proc))
+    assert found == [(10, 998, "broker"), (12, 1002, "bash")]
+
