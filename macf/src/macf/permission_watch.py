@@ -128,8 +128,14 @@ class SessionDialogs:
     (MIS-0002-R21 (pd_MUST_report_waiting_on_person)).
 
     Called by the session's transcript monitor, which runs outside the client and so keeps
-    beating while a dialog holds the session. A log that can't be read keeps the last answer:
-    reporting "not waiting" on a read error would end a wait no person has answered."""
+    beating while a dialog holds the session. A denial writes no event of its own, so the
+    session reads as waiting until its next prompt, tool call or end; a denial with a reply
+    arrives as a prompt and ends the wait at once.
+
+    Any failure keeps the last answer and warns once, naming the exception, so a defect here
+    reads differently from a log that can't be read. Reporting "not waiting" would end a wait
+    no person has answered, and an exception escaping this call would end the beat's thread,
+    after which the core fails the live session for stale liveness and restarts it."""
 
     def __init__(self, session_id: str, read: Callable[[], List[Waiting]] = read_waiting):
         self.session_id, self._read = session_id, read
@@ -139,10 +145,10 @@ class SessionDialogs:
     def __call__(self) -> Optional[str]:
         try:
             mine = [w for w in self._read() if w.session_id == self.session_id]
-        except Exception as e:  # noqa: BLE001 - any failure to read keeps the last answer
+        except Exception as e:  # noqa: BLE001 - broad on purpose: see the class docstring
             if not self._warned:
-                print(f"⚠️ MACF: pd: the event log could not be read for waiting_on ({e}); "
-                      f"keeping the last answer", file=sys.stderr)
+                print(f"⚠️ MACF: pd: waiting_on could not be read from the event log "
+                      f"({type(e).__name__}: {e}); keeping the last answer", file=sys.stderr)
                 self._warned = True
             return self._last
         self._warned = False
