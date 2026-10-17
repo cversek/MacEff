@@ -75,6 +75,21 @@ def test_a_unit_missing_a_required_field_is_refused(field):
         pdi.Declaration.model_validate(_declaration(units=[unit]))
 
 
+def test_unit_fields_are_required_and_the_exit_code_contract_defaults():
+    """MIS-0005-R01 (declaration_MUST_state_unit_fields_or_default_contract): the four fields
+    have no default, and a unit that names no exit-code contract means the default one."""
+    for field in ("command", "account", "restart", "liveness_interval_s"):
+        unit = _unit()
+        del unit[field]
+        with pytest.raises(ValidationError, match=field):
+            pdi.Declaration.model_validate(_declaration(units=[unit]))
+    default = pdi.Declaration.model_validate(_declaration()).units[0].exit_codes
+    assert (default.success, default.no_restart) == ([0], [78])
+    stated = pdi.Declaration.model_validate(
+        _declaration(units=[_unit(exit_codes={"success": [0, 2]})])).units[0].exit_codes
+    assert (stated.success, stated.no_restart) == ([0, 2], [78])
+
+
 def test_an_unknown_key_is_refused_not_ignored():
     """A key the daemon ignores is a setting the author believes is in force."""
     with pytest.raises(ValidationError):
