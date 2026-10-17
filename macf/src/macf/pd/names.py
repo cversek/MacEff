@@ -151,7 +151,9 @@ def rendered_declaration_problem(path: Path) -> Optional[str]:
     group and others. Otherwise the agent, or a run as the agent, could change what the
     daemon reads."""
     path = Path(path)
-    for p in [path] + [d for d in path.parents if RENDERED_DECLARATIONS in [d, *d.parents]]:
+    # Up to and including the rendered root's parent: whoever could write that could move the
+    # rendered root aside and put another in its place.
+    for p in [path] + [d for d in path.parents if RENDERED_DECLARATIONS.parent in [d, *d.parents]]:
         try:
             st = os.lstat(p)
         except OSError as e:

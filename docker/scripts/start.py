@@ -2551,7 +2551,15 @@ def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] 
                     f"its earlier rendering was removed")
             continue
         home = HOME_ROOT / agent_spec.username
-        card = pd_names.agent_card(home)
+        try:
+            card = pd_names.agent_card(home)
+        except (pd_names.IdentityError, OSError) as e:
+            # One agent's broken identity costs that agent its daemon, never the others' (R58).
+            # Its old rendering goes, so a stale declaration isn't served under it.
+            if target.exists():
+                target.unlink()
+            log(f"primal daemon of {agent_spec.username}: not rendered; its calling card can't be read ({e})")
+            continue
         declaration = Declaration(version=1, agent=card, **agent_spec.primal_daemon)
         target_dir.mkdir(mode=0o755, exist_ok=True)
         chown(target_dir, 0, 0)
@@ -2565,6 +2573,12 @@ def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] 
             log(f"primal daemon of {agent_spec.username}: {home / PD_DECLARATION} is not read; "
                 f"the declaration agents.yaml renders to {target} is")
         rendered.append(agent_spec.username)
+    # An agent removed from agents.yaml leaves no rendering behind for a reader to find.
+    declared = {a.username for a in agents_config.agents.values()}
+    for d in root.iterdir():
+        if d.is_dir() and not d.is_symlink() and d.name not in declared:
+            shutil.rmtree(d)
+            log(f"primal daemon declarations: removed {d}, which no agent in agents.yaml declares")
     return rendered
 
 
