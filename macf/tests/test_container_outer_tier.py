@@ -165,6 +165,39 @@ def test_an_agent_that_declares_none_has_its_old_rendering_removed(tmp_path, mon
     assert _rendering(tmp_path, monkeypatch, None).done == [] and not stale.exists()
 
 
+
+def test_one_agents_broken_identity_costs_only_that_agents_rendering(tmp_path, monkeypatch):
+    """Review of #702: an agent whose calling card can't be read gets no rendering, and its old one
+    goes, while every other agent still renders, so the daemons step isn't skipped for all (R58)."""
+    start = _start()
+    from macf.pd import names as pd_names
+    monkeypatch.setattr(start, "HOME_ROOT", tmp_path / "home")
+
+    def card(home):
+        if Path(home).name == "pa_bad":
+            raise pd_names.IdentityError("no identity file")
+        return "Good@1a2b3c"
+    monkeypatch.setattr(pd_names, "agent_card", card)
+    for user in ("pa_good", "pa_bad"):
+        (tmp_path / "home" / user).mkdir(parents=True)
+    stale = tmp_path / "etc" / "pa_bad" / "declaration.json"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("{}")
+    cfg = SimpleNamespace(agents={u: SimpleNamespace(username=u, primal_daemon={"units": [UNIT]})
+                                  for u in ("pa_good", "pa_bad")})
+    done = start.render_pd_declarations(cfg, root=tmp_path / "etc", chown=lambda p, u, g: None)
+    assert done == ["pa_good"]
+    assert (tmp_path / "etc" / "pa_good" / "declaration.json").exists() and not stale.exists()
+
+
+def test_an_agent_removed_from_agents_yaml_leaves_no_rendering(tmp_path, monkeypatch):
+    gone = tmp_path / "etc" / "pa_gone" / "declaration.json"
+    gone.parent.mkdir(parents=True)
+    gone.write_text("{}")
+    _rendering(tmp_path, monkeypatch, {"units": [UNIT]})
+    assert not gone.parent.exists()
+    assert (tmp_path / "etc" / "pa_a" / "declaration.json").exists()
+
 def test_the_declarations_render_before_the_daemons_start():
     src = START_PY.read_text()
     assert src.index('("primal daemon declarations",') < src.index('("primal daemons",')
