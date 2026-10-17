@@ -64,3 +64,26 @@ def test_a_rendering_owned_by_someone_else_is_refused(layout, monkeypatch):
     monkeypatch.setattr(names, "SEAL_UID", os.getuid() + 1)     # the files are not the sealer's
     with pytest.raises(core.DeclarationRefused, match="owned by uid"):
         core.load_declaration(home, CARD)
+
+
+def test_a_writable_parent_of_the_rendered_root_is_refused(layout, tmp_path):
+    """Whoever can write the rendered root's parent can move the root aside and put another there."""
+    home, _ = layout
+    tmp_path.chmod(0o777)
+    try:
+        with pytest.raises(core.DeclarationRefused, match="group or others"):
+            core.load_declaration(home, CARD)
+    finally:
+        tmp_path.chmod(0o700)
+
+
+def test_a_body_the_daemon_would_refuse_is_refused_when_agents_yaml_loads():
+    """Review of #702: the load-time check had no test; replacing it with a no-op passed everything."""
+    from macf.models.agent_spec import AgentSpec
+    bad_schedule = {"timezone": "UTC", "schedules": [{"name": "s", "cron": "0 3 * * *", "target": "isolated",
+                    "run": {"command": ["true"], "wake_when": "exit_code"}, "timeout_s": 60}]}  # no missed_run
+    with pytest.raises(ValueError, match="missed_run"):
+        AgentSpec(username="pa_x", personality="p.md", primal_daemon=bad_schedule)
+    with pytest.raises(ValueError, match="must not set agent or version"):
+        AgentSpec(username="pa_x", personality="p.md", primal_daemon={"agent": "Other@000000", "units": []})
+
