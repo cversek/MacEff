@@ -262,3 +262,29 @@ def test_every_unit_declared(tmp_path):
         with pytest.raises(KeyError, match="not a unit of this agent's declaration"):
             act("stray", operator, "a name the declaration lacks")
     assert core.pid("broker") is None and core.pid("watcher") is None
+
+
+def test_schedules_hosted(tmp_path):
+    """MIS-0002-R11 (CI_MUST_fail_unhosted_schedule): every declared schedule has a daemon to run
+    it. A schedule can only be declared inside an agent's declaration, and that agent's daemon
+    builds a scheduler for exactly those schedules. The one way to declare schedules no daemon
+    runs, on an account that gets no MacEff footprint, is refused when agents.yaml loads, which
+    CI does for every deployment."""
+    from macf.models.agent_spec import AgentSpec
+    from macf.pd.daemon import Daemon
+    schedule = {"name": "nightly", "cron": "0 3 * * *", "target": "isolated",
+                "missed_run": {"kind": "skip"},
+                "run": {"command": ["true"], "wake_when": "exit_code"}, "timeout_s": 60}
+    home = tmp_path / "home"
+    (home / ".maceff" / "pd").mkdir(parents=True)
+    (home / ".maceff_primary_agent.id").write_text("abc123def4567890\n")
+    (home / ".maceff" / "config.json").write_text('{"agent_identity": {"moniker": "Tester"}}')
+    interface.declaration_path(home).write_text(interface.Declaration(
+        version=1, agent="Tester@abc123", timezone="UTC", schedules=[schedule]).model_dump_json())
+    daemon = Daemon(home, base=tmp_path / "run")
+    assert daemon.scheduler is not None
+    assert [s.name for s in daemon.scheduler.declaration.schedules] == ["nightly"]
+    with pytest.raises(ValueError, match="vanilla"):
+        AgentSpec(username="pa_plain", flavor="vanilla", primal_daemon={"timezone": "UTC", "schedules": [schedule]})
+    AgentSpec(username="pa_plain", flavor="vanilla")                     # vanilla, no daemon: fine
+
