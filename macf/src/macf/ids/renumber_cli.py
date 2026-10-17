@@ -47,12 +47,17 @@ def cmd_ids_renumber(args: argparse.Namespace) -> int:
         print(f"ids renumber: REFUSED: {e}", file=sys.stderr)
         return 1
     roots = list(rn.FRAMEWORK_ROOTS) + list(args.root)
-    p = rn.plan(mapping, roots)
+    block = range(config.ids.base, config.ids.base + 1000)
+    p = rn.plan(mapping, roots, block=block)
     print(rn.render(mapping, p, [str(Path(r)) for r in args.root]))
     if args.listing:
         with open(args.listing, "w") as f:
             for path, ou, og, nu, ng in p.changes:
                 f.write(f"{ou}:{og} -> {nu}:{ng}\t{path}\n")
+            for path, u, g in p.unmapped:
+                f.write(f"UNMAPPED {u}:{g}\t{path}\n")
+            for path in p.setid_files:
+                f.write(f"SETID\t{path}\n")
         print(f"listing: {args.listing}")
     if not args.apply:
         print("planned only; nothing changed (rerun with --apply)")
