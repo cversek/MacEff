@@ -305,3 +305,144 @@ def test_unread_mail_routed_to_the_agent_alone_is_not_the_watchs(tmp_path):
     _route_unread_mail(home, "agent")
     _unread_event(home, pdi.EVENT_UNREAD_MAIL, 30)
     assert not [f for f in watch.check_home(home, NOW) if f.subject == "mail"]
+
+
+# ----------------------------------------------------------------------------
+# A container's limits after each recreate (MIS-0002-R61)
+# ----------------------------------------------------------------------------
+
+class _Docker:
+    """A stand-in for docker: a container whose id and in-force memory can change, made by
+    compose from two files that declare 64 GiB. Records every command it is given."""
+
+    def __init__(self, cid="c1", memory_gib=64, fail_inspect=False, files="/d/compose.yml,/d/override.yml"):
+        self.cid, self.memory_gib, self.fail_inspect, self.calls = cid, memory_gib, fail_inspect, []
+        self.files = files
+
+    def __call__(self, argv):
+        self.calls.append(argv)
+        if self.fail_inspect:
+            raise watch.subprocess.CalledProcessError(1, argv)
+        if argv[:2] == ["docker", "inspect"]:
+            return json.dumps([{"Id": self.cid, "HostConfig": {"Memory": self.memory_gib * 1024 ** 3},
+                                "Config": {"Labels": {
+                                    "com.docker.compose.project.config_files": self.files,
+                                    "com.docker.compose.service": "seat"}}}])
+        return json.dumps({"services": {"seat": {"mem_limit": "64g"}}})
+
+    def compared(self):
+        return sum(1 for argv in self.calls if argv[:2] == ["docker", "compose"])
+
+
+def _limits_config(tmp_path, sink):
+    command = [sys.executable, "-c", f"import sys; open({str(sink)!r}, 'a').write(sys.stdin.read())"]
+    return watch.render_config([], command, tmp_path / "state", containers=["seat-1"])
+
+
+def test_limits_checked_after_recreate(tmp_path):
+    """MIS-0002-R61 (layer_MUST_check_limits_after_recreate): the comparison runs once per
+    container id, so once after each recreate, however it was done, and not on every pass."""
+    (tmp_path / "state").mkdir()
+    sink, docker = tmp_path / "sink.txt", _Docker()
+    config = _limits_config(tmp_path, sink)
+    assert watch.run_pass(config, now=NOW, run=docker) == watch.EXIT_HEALTHY
+    assert watch.run_pass(config, now=NOW + 120, run=docker) == watch.EXIT_HEALTHY
+    assert docker.compared() == 1                      # the same container: compared once
+    docker.cid = "c2"                                  # recreated
+    watch.run_pass(config, now=NOW + 240, run=docker)
+    assert docker.compared() == 2
+    assert not sink.exists()                           # matched every time: nothing to say
+
+
+def test_limits_that_drifted_in_a_recreate_alert_once_and_recover_after_the_next(tmp_path):
+    (tmp_path / "state").mkdir()
+    sink, docker = tmp_path / "sink.txt", _Docker(memory_gib=32)
+    config = _limits_config(tmp_path, sink)
+    assert watch.run_pass(config, now=NOW, run=docker) == watch.EXIT_UNHEALTHY
+    assert watch.run_pass(config, now=NOW + 120, run=docker) == watch.EXIT_UNHEALTHY
+    text = sink.read_text()
+    assert text.count("ALERT:") == 1                   # one alert for the stretch, not one per pass
+    assert "seat-1 limits: DRIFTED" in text and "declared 64 GiB, in force 32 GiB" in text
+    docker.cid, docker.memory_gib = "c2", 64            # recreated with the declared limit
+    assert watch.run_pass(config, now=NOW + 240, run=docker) == watch.EXIT_HEALTHY
+    assert "recovered: seat-1 limits: ALIVE" in sink.read_text()
+
+
+def test_a_container_that_cannot_be_inspected_is_check_failed_and_tried_again(tmp_path):
+    (tmp_path / "state").mkdir()
+    sink, docker = tmp_path / "sink.txt", _Docker(fail_inspect=True)
+    config = _limits_config(tmp_path, sink)
+    assert watch.run_pass(config, now=NOW, run=docker) == watch.EXIT_CHECK_FAILED
+    assert "seat-1 limits check: CHECK-FAILED" in sink.read_text()
+    docker.fail_inspect = False
+    assert watch.run_pass(config, now=NOW + 120, run=docker) == watch.EXIT_HEALTHY
+    assert docker.compared() == 1                      # nothing was kept for the failed pass
+
+
+def test_a_config_without_containers_runs_no_docker(tmp_path):
+    (tmp_path / "state").mkdir()
+    docker = _Docker()
+    command = [sys.executable, "-c", "pass"]
+    config = watch.render_config([], command, tmp_path / "state")
+    assert config.containers == []
+    watch.run_pass(config, now=NOW, run=docker)
+    assert docker.calls == []
+
+
+def test_a_comparison_that_failed_is_made_again_for_the_same_container(tmp_path):
+    """A failed comparison keeps nothing, so a container that was not recreated is still
+    compared on the next pass, rather than carrying a verdict nobody measured."""
+    (tmp_path / "state").mkdir()
+    sink, docker = tmp_path / "sink.txt", _Docker()
+    config = _limits_config(tmp_path, sink)
+    broken = {"on": True}
+
+    def run(argv):
+        if broken["on"] and argv[:2] == ["docker", "compose"]:
+            docker.calls.append(argv)
+            raise watch.subprocess.CalledProcessError(1, argv)
+        return docker(argv)
+    assert watch.run_pass(config, now=NOW, run=run) == watch.EXIT_CHECK_FAILED
+    broken["on"] = False
+    assert watch.run_pass(config, now=NOW + 120, run=run) == watch.EXIT_HEALTHY
+    assert docker.compared() == 2                      # same id, compared again
+
+
+def test_a_docker_update_drift_is_caught_without_a_recreate(tmp_path):
+    """Review of #700: the limits in force are read every pass, so a docker update that keeps the
+    container id still shows, and the compose files aren't read again for it."""
+    (tmp_path / "state").mkdir()
+    sink, docker = tmp_path / "sink.txt", _Docker()
+    config = _limits_config(tmp_path, sink)
+    assert watch.run_pass(config, now=NOW, run=docker) == watch.EXIT_HEALTHY
+    docker.memory_gib = 32                                 # docker update: same id
+    assert watch.run_pass(config, now=NOW + 120, run=docker) == watch.EXIT_UNHEALTHY
+    assert "seat-1 limits: DRIFTED" in sink.read_text()
+    assert docker.compared() == 1
+
+
+def test_files_edited_to_match_close_the_stretch_without_a_recreate(tmp_path):
+    (tmp_path / "state").mkdir()
+    compose = tmp_path / "compose.yml"
+    compose.write_text("services: {}\n")
+    sink, docker = tmp_path / "sink.txt", _Docker(memory_gib=32, files=str(compose))
+    config = _limits_config(tmp_path, sink)
+    assert watch.run_pass(config, now=NOW, run=docker) == watch.EXIT_UNHEALTHY
+    import os
+    os.utime(compose, (NOW + 60, NOW + 60))                # the files changed: read them again
+    docker.memory_gib = 64                                 # and the change was applied
+    assert watch.run_pass(config, now=NOW + 120, run=docker) == watch.EXIT_HEALTHY
+    assert docker.compared() == 2 and "recovered: seat-1 limits: ALIVE" in sink.read_text()
+
+
+def test_a_drift_found_after_a_failed_check_is_still_an_alert(tmp_path):
+    """A failed check is its own subject, so the DRIFTED that follows opens its own stretch."""
+    (tmp_path / "state").mkdir()
+    sink, docker = tmp_path / "sink.txt", _Docker(memory_gib=32, fail_inspect=True)
+    config = _limits_config(tmp_path, sink)
+    watch.run_pass(config, now=NOW, run=docker)
+    docker.fail_inspect = False
+    watch.run_pass(config, now=NOW + 120, run=docker)
+    text = sink.read_text()
+    assert "ALERT: seat-1 limits check: CHECK-FAILED" in text and "ALERT: seat-1 limits: DRIFTED" in text
+

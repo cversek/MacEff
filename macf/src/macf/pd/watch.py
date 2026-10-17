@@ -21,6 +21,12 @@ push failed is sent again on the next pass, never lost; and there is no second f
 that could disagree with the log. That log is the notifier's memory, not a record of
 liveness (R16).
 
+Containers named in the config get one more check: after each recreate, the limits in
+force against the limits their compose files declare (MIS-0002-R61
+(layer_MUST_check_limits_after_recreate), through ``macf.platform.container_limits``).
+The comparison runs once per container id, so once after each recreate however it was
+done, and its result is kept with the id and reported on every pass until the next one.
+
 Verdicts per subject (``service_supervision`` section 2.1): ALIVE, STALE (stamped, then
 stopped), GONE (the stamping process no longer exists), ABSENT (never stamped within
 the lookback), UNREADABLE (present but unparseable). Per home, the external check's
@@ -32,6 +38,7 @@ import json
 import subprocess
 import sys
 import time
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Literal, Optional, Sequence, Tuple
@@ -41,6 +48,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from macf.notify.session import verify_incarnation
 from macf.pd import interface
 from macf.pd.health import read_liveness
+from macf.platform import container_limits
 from macf.utils.streaming import iter_lines_reverse
 
 #: How far back a unit's last stamp is looked for. Older than this reads ABSENT: the
@@ -49,7 +57,8 @@ LOOKBACK_S = 7 * 86400
 #: How long an alert command may take before it counts as failed.
 SEND_TIMEOUT_S = 30
 
-Verdict = Literal["ALIVE", "STALE", "GONE", "ABSENT", "UNREADABLE", "UNREACHABLE", "CHECK-FAILED", "DARK", "HELD", "UNREAD"]
+Verdict = Literal["ALIVE", "STALE", "GONE", "ABSENT", "UNREADABLE", "UNREACHABLE", "CHECK-FAILED", "DARK", "HELD", "UNREAD",
+                  "DRIFTED"]
 
 #: Exit codes, worst wins (``service_supervision`` section 4.2): each state its own code.
 EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_UNREACHABLE, EXIT_CHECK_FAILED = 0, 1, 2, 3
@@ -57,6 +66,7 @@ EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_UNREACHABLE, EXIT_CHECK_FAILED = 0, 1, 2, 3
 #: alert was sent, on every pass while a channel was dark or a wake held.
 _EXIT_FOR = {"ALIVE": EXIT_HEALTHY, "STALE": EXIT_UNHEALTHY, "GONE": EXIT_UNHEALTHY,
              "ABSENT": EXIT_UNHEALTHY, "DARK": EXIT_UNHEALTHY, "HELD": EXIT_UNHEALTHY, "UNREAD": EXIT_UNHEALTHY,
+             "DRIFTED": EXIT_UNHEALTHY,
              "UNREACHABLE": EXIT_UNREACHABLE,
              "UNREADABLE": EXIT_CHECK_FAILED, "CHECK-FAILED": EXIT_CHECK_FAILED}
 
@@ -385,6 +395,79 @@ def transitions(findings: Sequence[Finding], open_stretches: Dict[str, dict],
 
 
 # ============================================================================
+# A container's limits, after each recreate
+# ============================================================================
+
+#: Each watched container's last limits check, by container id, in the watch's state directory.
+LIMITS_STATE = "limits.json"
+
+
+def _files_stamp(files: List[str]) -> List[float]:
+    """Each compose file's modification time, or -1 when it can't be read: a changed stamp means
+    the declared limits must be read again."""
+    out = []
+    for f in files:
+        try:
+            out.append(Path(f).stat().st_mtime)
+        except OSError:
+            out.append(-1.0)
+    return out
+
+
+def check_limits(name: str, kept: Dict[str, dict],
+                 run: container_limits.Runner = container_limits._run) -> Tuple[Finding, Optional[dict]]:
+    """The limits verdict for one container, and what to keep for it.
+
+    The limits in force are read on every pass, so a ``docker update`` shows at once
+    (MIS-0002-R61 (layer_MUST_check_limits_after_recreate)). The declared limits are read from
+    the compose files the container was made from, again whenever the container was recreated
+    (a new id) or a file changed, and kept in between, so bringing the files into line closes the
+    stretch without waiting for a recreate. A check that can't be made is its own subject
+    (``limits check``), so a drift found after it is still a new alert; nothing is kept for it."""
+    try:
+        inspect = json.loads(run(["docker", "inspect", "--type", "container", name]))[0]
+        labels = (inspect.get("Config") or {}).get("Labels") or {}
+        files = [f for f in (labels.get(container_limits.CONFIG_FILES_LABEL) or "").split(",") if f]
+        service = labels.get(container_limits.SERVICE_LABEL)
+        if not files or not service:
+            raise ValueError(f"{name} was not created by docker compose: no config files label")
+        cid, stamp = inspect.get("Id", ""), _files_stamp(files)
+        last = kept.get(name)
+        if isinstance(last, dict) and last.get("id") == cid and last.get("stamp") == stamp \
+                and isinstance(last.get("declared"), dict):
+            want = container_limits.Limits(**last["declared"])
+        else:
+            argv = ["docker", "compose"]
+            for f in files:
+                argv += ["-f", f]
+            config = json.loads(run(argv + ["config", "--format", "json"]))
+            want = container_limits.declared(config["services"][service])
+        lines = container_limits.compare(want, container_limits.in_force(inspect))
+    except (subprocess.SubprocessError, OSError, ValueError, KeyError, IndexError, TypeError) as e:
+        return Finding(name, "limits check", "CHECK-FAILED", f"the limits cannot be compared: {type(e).__name__}: {e}"), None
+    keep = {"id": cid, "stamp": stamp, "declared": dataclasses.asdict(want)}
+    if lines:
+        return Finding(name, "limits", "DRIFTED", "limits in force differ from its compose files: " + "; ".join(lines)), keep
+    return Finding(name, "limits", "ALIVE", "limits in force match its compose files"), keep
+
+
+def _read_kept(path: Path) -> Dict[str, dict]:
+    try:
+        kept = json.loads(path.read_text())
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        return {}                                      # unreadable: every container is compared again
+    return kept if isinstance(kept, dict) else {}
+
+
+def _write_kept(path: Path, kept: Dict[str, dict]) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(kept, sort_keys=True))
+    tmp.replace(path)
+
+
+# ============================================================================
 # The config the outer tier renders, and the alert path
 # ============================================================================
 
@@ -400,7 +483,8 @@ class WatchConfig(BaseModel):
     ``alert_command`` receives each pass's lines on stdin and holds its own credential,
     one no agent environment carries (MIS-0002-R75). Which command, and whether its
     destination is independent of every agent, is the operator's review of the
-    deployment's path.
+    deployment's path. ``containers`` names the compose-created containers whose limits
+    are compared after each recreate (MIS-0002-R61); empty, none are.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -408,16 +492,18 @@ class WatchConfig(BaseModel):
     homes: List[WatchedHome]
     alert_command: List[str] = Field(min_length=1)
     state_dir: str = Field(min_length=1)
+    containers: List[str] = Field(default_factory=list)
 
 
 def render_config(candidate_homes: Sequence[Path], alert_command: Sequence[str], state_dir: Path,
-                  unprobed: Sequence[Path] = ()) -> WatchConfig:
+                  unprobed: Sequence[Path] = (), containers: Sequence[str] = ()) -> WatchConfig:
     """A watch over every candidate home that has a declaration: a declared daemon is
     watched by construction, an undeclared home is not expected to run one."""
     unprobed_set = {str(Path(p)) for p in unprobed}
     homes = [WatchedHome(path=str(Path(h)), probe=str(Path(h)) not in unprobed_set)
              for h in candidate_homes if interface.declaration_path(Path(h)).is_file()]
-    return WatchConfig(homes=homes, alert_command=list(alert_command), state_dir=str(state_dir))
+    return WatchConfig(homes=homes, alert_command=list(alert_command), state_dir=str(state_dir),
+                       containers=list(containers))
 
 
 def unwatched(config: WatchConfig, candidate_homes: Sequence[Path]) -> List[str]:
@@ -503,13 +589,23 @@ def open_stretches(durable_log: Path) -> Dict[str, dict]:
 
 
 def run_pass(config: WatchConfig, now: Optional[float] = None,
-             base: Optional[Path] = None, probe: Probe = verify_incarnation) -> int:
+             base: Optional[Path] = None, probe: Probe = verify_incarnation,
+             run: container_limits.Runner = container_limits._run) -> int:
     """One pass: check every home, and send what changed since the last delivered alert."""
     now = time.time() if now is None else now
     durable_log = Path(config.state_dir) / "alerts.jsonl"
     findings: List[Finding] = []
     for home in config.homes:
         findings += check_home(Path(home.path), now, base, probe if home.probe else None)
+    if config.containers:
+        kept_path = Path(config.state_dir) / LIMITS_STATE
+        kept, now_kept = _read_kept(kept_path), {}
+        for name in config.containers:
+            found, keep = check_limits(name, kept, run)
+            findings.append(found)
+            if keep is not None:
+                now_kept[name] = keep
+        _write_kept(kept_path, now_kept)
     lines, after = transitions(findings, open_stretches(durable_log), now)
     if lines:
         send(config.alert_command, "MacEff outside watch\n" + "\n".join(lines) + "\n",
