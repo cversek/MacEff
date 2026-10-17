@@ -386,3 +386,52 @@ def test_a_client_not_on_the_declared_path_is_named_and_nothing_is_touched(tmp_p
         assert "claude is not on the session unit's declared PATH" in reason and str(empty) in reason
     finally:
         client.close()
+
+
+def test_waiting_reported(tmp_path):
+    """MIS-0002-R21 (pd_MUST_report_waiting_on_person) for Claude Code's session unit: the
+    session's transcript monitor beats for the unit, and each beat says when the event log
+    shows that session's newest deciding event is a permission request."""
+    import time as _time
+    from pathlib import Path
+    from macf import permission_watch as pw
+    from macf.pd import liveness as lv
+    from macf.transcript_monitor import daemon
+
+    log = []
+
+    def ev(name, t, sid, **data):
+        return {"event": name, "timestamp": t, "data": data, "hook_input": {"session_id": sid,
+                "tool_input": {"command": "gh pr merge 1 --token s3cret"}}}
+
+    read = lambda: pw.waiting(sorted(log, key=lambda e: e["timestamp"], reverse=True))
+    dialogs = pw.SessionDialogs("s1", read=read)
+    assert dialogs() is None                                         # nothing asked yet
+    log.append(ev("permission_requested", 100.0, "s2", tool_name="Bash", timestamp=100.0))
+    assert dialogs() is None                                         # another session's dialog
+    log.append(ev("permission_requested", 200.0, "s1", tool_name="Bash", timestamp=200.0))
+    said = dialogs()
+    assert said.startswith("a permission dialog for Bash, open since ")
+    assert _time.strftime("%H:%M", _time.localtime(200.0)) in said and "s3cret" not in said
+
+    def broken():
+        raise OSError("log unreadable")
+    dialogs._read = broken
+    assert dialogs() == said                                         # a read error keeps the wait
+    dialogs._read = read
+    log.append(ev("tool_call_started", 260.0, "s1"))
+    assert dialogs() is None                                         # answered: the tool ran
+
+    # The beat carries it, and the monitor builds it for its own transcript's session.
+    events = []
+    hb = lv.Heartbeat("C@1a2b3c", "session", 10.0, append=lambda n, d: events.append(d) or True,
+                      waiting_on=lambda: "a permission dialog for Bash, open since 02:05").start()
+    hb.tick()
+    deadline = _time.monotonic() + 1.0
+    while not events and _time.monotonic() < deadline:
+        _time.sleep(0.005)
+    hb.stop()
+    assert events[0]["waiting_on"] == "a permission dialog for Bash, open since 02:05"
+    src = Path(daemon.__file__).read_text()
+    assert "session_heartbeat_from_env(\n        waiting_on=SessionDialogs(transcript.stem))" in src
+
