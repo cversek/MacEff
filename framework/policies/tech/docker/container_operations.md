@@ -100,6 +100,7 @@ Docker container operations policy establishes best practices for building, runn
 - Where does every container account's number come from, and why not creation order?
 - How do I choose a deployment's id block, and what are its fixed slots?
 - What does start-up refuse, and what do I do when it does?
+- How do I move a deployment that already runs on order-assigned numbers, and in what order?
 - How do I check a host and its containers for overlapping ids?
 
 === CEP_NAV_BOUNDARY ===
@@ -535,9 +536,37 @@ configs:
 - an account or group already holds a different number;
 - the image's `admin` or amail accounts aren't at the block's slots, meaning the image was built for another block (rebuild it with the deployment's `MACEFF_ID_BASE`);
 - the image still has `ubuntu`;
-- an agent's home on the persisted `/home` volume is owned by another number. After a recreate `/etc/passwd` is fresh while `/home` is not, and creating the account at a new number would lock the agent out of its own files.
+- an agent's home on the persisted `/home` volume is owned by another number. After a recreate `/etc/passwd` is fresh while `/home` is not, and creating the account at a new number would lock the agent out of its own files;
+- `/home/admin`, `/var/lib/amail_broker` or `/var/lib/amail_ingest` is owned by another number than its account's slot. The image recreates those accounts at the block's numbers, but their directories keep their old owners, and the broker couldn't read its own ledgers.
 
 None of these is repaired at start. Moving an existing deployment onto its declared numbers re-owns files on its volumes and mounts. That's the renumber step's job, run once, on purpose, in a quiet window, after a verified backup.
+
+**The renumber step, for a deployment that predates its declaration.** It runs in the **old** container, before the recreate, because the old numbers exist only in that container's live account tables, and the recreate replaces them.
+
+1. Back up the deployment and verify the backup.
+2. Add `ids` and every agent's `uid` to agents.yaml.
+3. Pause the seats and wait until they're quiet. Then stop everything that runs as a number the move changes: the seats' sessions, the amail broker and ingest (their stores are among the framework's roots), and any admin login. A process left running keeps writing as its old number while its files move, and what it writes ends up outside the block. `--apply` refuses while any such process runs, and names each one.
+4. As root in the old container, plan:
+
+   ```bash
+   macf_tools ids renumber --listing /root/renumber.txt
+   ```
+
+   Add `--root <path>` for each read-write bind mount whose files the seats write, and `--service NAME=NUMBER` for each deployment service account and its slot (900–997).
+
+   The plan maps every framework account and group **by name** from its live number to its declared one, and lists every file it would re-own. It refuses:
+   - two names on one old number;
+   - an old number that is already someone's declared number;
+   - a service number outside the block.
+
+   Read the listing before going on, above all the lines for bind mounts. In a bind mount an old number may genuinely be a host account's own file: that is the overlap this exists to end. A file with an access list is named too, because re-owning doesn't rewrite access lists. Two more findings are named, each in full in the listing:
+   - **Files left outside the block** (`UNMAPPED`): files on a number that no declared name maps, such as the base image's `ubuntu` at 1000. The move leaves them, and after the recreate they belong to whoever holds that number on the host. Re-own or remove them by hand before the recreate. Root's own files are not counted.
+   - **Setuid or setgid files to re-own** (`SETID`): `chown` clears both bits, even as root. Set them again after `--apply` if they were meant.
+5. Run the same command with `--apply`. It re-owns every listed file, symlinks themselves and never their targets, stays out of mounts it wasn't given, then re-plans and reports anything left on an old number. A second run finds nothing to do. A path that can't be re-owned is named and the rest still move; fix the cause and run `--apply` again, and it resumes where it stopped, since the account tables are untouched until the recreate.
+6. Rebuild the image with `MACEFF_ID_BASE`, recreate the container, and let start-up create the accounts at their declared numbers.
+7. Have each seat check its own home. Then run `macf_tools ids audit` on the host.
+
+Files the containers wrote into host paths that no container mounts read-write (an old handoff directory, say) are the host's to re-own, as root on the host. List them from the audit's numbers before changing anything.
 
 **The check is `macf_tools ids audit`,** run on the host. It reads the host and every running container together and names every number at or above 1000 held by more than one identity. It exits 1 on an overlap, and 2 when a place can't be read. Run it after any rebuild, and after adding a deployment to a host. System ids below 1000 held under different names are listed apart and don't count: each side's packages allocate those, so no declaration reaches them.
 
