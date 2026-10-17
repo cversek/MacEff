@@ -116,7 +116,50 @@ def record_path(card: str, base: Optional[Path] = None) -> Path:
     return (base or runtime_dir()) / f"{pd_id(card)}.json"
 
 
+#: Where a container's provisioning renders each agent's declaration from the deployment's
+#: agents.yaml, owned by root in a directory the agent can't write: a run executes as the agent,
+#: so a declaration in the agent's own home is one a run could rewrite before a daemon restart
+#: (MIS-0002-R33 (run_MUST-NOT_change_schedules)). Hosts have none.
+RENDERED_DECLARATIONS = Path("/etc/maceff/pd")
+
+
+def rendered_declaration_path(agent_home: Path) -> Path:
+    """Where the deployment renders this agent's declaration, keyed by the home's name, which
+    in a container is the agent's account."""
+    return RENDERED_DECLARATIONS / Path(agent_home).name / "declaration.json"
+
+
 def declaration_path(agent_home: Path) -> Path:
-    """The agent's declaration, in its own home: the outer tier holds none
+    """The agent's declaration: the one the deployment rendered, when there is one, and
+    otherwise the one in the agent's own home. Every reader goes through here, so the daemon,
+    the readout and the outside watch read the same file. The outer tier holds none
     (MIS-0002-R04 (outer_tier_MUST-NOT_hold_agent_config))."""
+    rendered = rendered_declaration_path(agent_home)
+    if os.path.lexists(rendered):
+        return rendered
     return Path(agent_home) / ".maceff" / "pd" / "declaration.json"
+
+
+#: The owner a rendered declaration and its directories must have. A test that is not root
+#: sets it to its own uid.
+SEAL_UID = 0
+
+
+def rendered_declaration_problem(path: Path) -> Optional[str]:
+    """Why a rendered declaration can't be trusted, or None when it can: the file and every
+    directory up to the rendered root must be real (not symlinks), owned by root, and closed to
+    group and others. Otherwise the agent, or a run as the agent, could change what the
+    daemon reads."""
+    path = Path(path)
+    for p in [path] + [d for d in path.parents if RENDERED_DECLARATIONS in [d, *d.parents]]:
+        try:
+            st = os.lstat(p)
+        except OSError as e:
+            return f"{p} cannot be read: {e.strerror}"
+        if stat.S_ISLNK(st.st_mode):
+            return f"{p} is a symlink"
+        if st.st_uid != SEAL_UID:
+            return f"{p} is owned by uid {st.st_uid}, not root"
+        if st.st_mode & 0o022:
+            return f"{p} can be written by its group or others (mode {stat.S_IMODE(st.st_mode):o})"
+    return None
