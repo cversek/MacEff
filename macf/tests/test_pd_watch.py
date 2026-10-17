@@ -315,19 +315,18 @@ class _Docker:
     """A stand-in for docker: a container whose id and in-force memory can change, made by
     compose from two files that declare 64 GiB. Records every command it is given."""
 
-    def __init__(self, cid="c1", memory_gib=64, fail_inspect=False):
+    def __init__(self, cid="c1", memory_gib=64, fail_inspect=False, files="/d/compose.yml,/d/override.yml"):
         self.cid, self.memory_gib, self.fail_inspect, self.calls = cid, memory_gib, fail_inspect, []
+        self.files = files
 
     def __call__(self, argv):
         self.calls.append(argv)
         if self.fail_inspect:
             raise watch.subprocess.CalledProcessError(1, argv)
-        if argv[:3] == ["docker", "inspect", "--format"]:
-            return self.cid + "\n"
         if argv[:2] == ["docker", "inspect"]:
-            return json.dumps([{"HostConfig": {"Memory": self.memory_gib * 1024 ** 3},
+            return json.dumps([{"Id": self.cid, "HostConfig": {"Memory": self.memory_gib * 1024 ** 3},
                                 "Config": {"Labels": {
-                                    "com.docker.compose.project.config_files": "/d/compose.yml,/d/override.yml",
+                                    "com.docker.compose.project.config_files": self.files,
                                     "com.docker.compose.service": "seat"}}}])
         return json.dumps({"services": {"seat": {"mem_limit": "64g"}}})
 
@@ -374,7 +373,7 @@ def test_a_container_that_cannot_be_inspected_is_check_failed_and_tried_again(tm
     sink, docker = tmp_path / "sink.txt", _Docker(fail_inspect=True)
     config = _limits_config(tmp_path, sink)
     assert watch.run_pass(config, now=NOW, run=docker) == watch.EXIT_CHECK_FAILED
-    assert "seat-1 limits: CHECK-FAILED" in sink.read_text()
+    assert "seat-1 limits check: CHECK-FAILED" in sink.read_text()
     docker.fail_inspect = False
     assert watch.run_pass(config, now=NOW + 120, run=docker) == watch.EXIT_HEALTHY
     assert docker.compared() == 1                      # nothing was kept for the failed pass
@@ -407,3 +406,43 @@ def test_a_comparison_that_failed_is_made_again_for_the_same_container(tmp_path)
     broken["on"] = False
     assert watch.run_pass(config, now=NOW + 120, run=run) == watch.EXIT_HEALTHY
     assert docker.compared() == 2                      # same id, compared again
+
+
+def test_a_docker_update_drift_is_caught_without_a_recreate(tmp_path):
+    """Review of #700: the limits in force are read every pass, so a docker update that keeps the
+    container id still shows, and the compose files aren't read again for it."""
+    (tmp_path / "state").mkdir()
+    sink, docker = tmp_path / "sink.txt", _Docker()
+    config = _limits_config(tmp_path, sink)
+    assert watch.run_pass(config, now=NOW, run=docker) == watch.EXIT_HEALTHY
+    docker.memory_gib = 32                                 # docker update: same id
+    assert watch.run_pass(config, now=NOW + 120, run=docker) == watch.EXIT_UNHEALTHY
+    assert "seat-1 limits: DRIFTED" in sink.read_text()
+    assert docker.compared() == 1
+
+
+def test_files_edited_to_match_close_the_stretch_without_a_recreate(tmp_path):
+    (tmp_path / "state").mkdir()
+    compose = tmp_path / "compose.yml"
+    compose.write_text("services: {}\n")
+    sink, docker = tmp_path / "sink.txt", _Docker(memory_gib=32, files=str(compose))
+    config = _limits_config(tmp_path, sink)
+    assert watch.run_pass(config, now=NOW, run=docker) == watch.EXIT_UNHEALTHY
+    import os
+    os.utime(compose, (NOW + 60, NOW + 60))                # the files changed: read them again
+    docker.memory_gib = 64                                 # and the change was applied
+    assert watch.run_pass(config, now=NOW + 120, run=docker) == watch.EXIT_HEALTHY
+    assert docker.compared() == 2 and "recovered: seat-1 limits: ALIVE" in sink.read_text()
+
+
+def test_a_drift_found_after_a_failed_check_is_still_an_alert(tmp_path):
+    """A failed check is its own subject, so the DRIFTED that follows opens its own stretch."""
+    (tmp_path / "state").mkdir()
+    sink, docker = tmp_path / "sink.txt", _Docker(memory_gib=32, fail_inspect=True)
+    config = _limits_config(tmp_path, sink)
+    watch.run_pass(config, now=NOW, run=docker)
+    docker.fail_inspect = False
+    watch.run_pass(config, now=NOW + 120, run=docker)
+    text = sink.read_text()
+    assert "ALERT: seat-1 limits check: CHECK-FAILED" in text and "ALERT: seat-1 limits: DRIFTED" in text
+
