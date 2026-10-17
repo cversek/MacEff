@@ -2588,13 +2588,14 @@ def start_primal_daemons(agents_config: AgentsConfig) -> List[str]:
     could rewrite it (MIS-0002-R33). Returns the users started for."""
     import threading
     from macf.pd import names as pd_names
-    started = []
+    started, home_only = [], []
     for agent_spec in agents_config.agents.values():
         home = HOME_ROOT / agent_spec.username
         if not pd_names.rendered_declaration_path(home).exists():
             if (home / PD_DECLARATION).exists():
                 log(f"primal daemon of {agent_spec.username}: not started; its declaration is in its "
                     f"home, where a run could rewrite it. Declare it as primal_daemon in agents.yaml")
+                home_only.append(agent_spec.username)
             continue
         threading.Thread(target=supervise_primal_daemon, args=(agent_spec.username, home),
                          name=f"pd-{agent_spec.username}", daemon=True).start()
@@ -2602,6 +2603,11 @@ def start_primal_daemons(agents_config: AgentsConfig) -> List[str]:
         log(f"primal daemon of {agent_spec.username}: started under the container outer tier")
     if not started:
         log("primal daemons: no agent declares one (primal_daemon in agents.yaml); none started")
+    if home_only:
+        # Their units and schedules have no daemon to run them (MIS-0002-R11): a failed step, so the
+        # start log's summary names it, not a line that scrolls past.
+        raise RuntimeError(f"declared only in the agent's home, so no daemon runs them: {', '.join(home_only)}; "
+                           "declare them as primal_daemon in agents.yaml")
     return started
 
 

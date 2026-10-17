@@ -494,8 +494,8 @@ class AgentSpec(BaseModel):
     @model_validator(mode='after')
     def no_primal_daemon_for_vanilla(self) -> 'AgentSpec':
         """A vanilla account gets no MacEff footprint, so nothing starts a primal daemon for it,
-        and a schedule it declared would have no daemon to run it. Refused at load, where CI reads
-        every deployment's agents.yaml (MIS-0002-R11 (CI_MUST_fail_unhosted_schedule))."""
+        and a schedule it declared would have no daemon to run it. Refused when agents.yaml loads,
+        which container start does (MIS-0002-R11 (CI_MUST_fail_unhosted_schedule))."""
         if self.flavor == AgentFlavor.VANILLA and self.primal_daemon is not None:
             raise ValueError(
                 f"{self.username} is vanilla and declares primal_daemon: a vanilla account gets no "
