@@ -194,6 +194,30 @@ def test_one_agents_broken_identity_costs_only_that_agents_rendering(tmp_path, m
     assert (tmp_path / "etc" / "pa_good" / "declaration.json").exists() and not stale.exists()
 
 
+def test_one_agents_failed_write_costs_only_that_agents_rendering(tmp_path, monkeypatch):
+    """Review of #702: a write that fails for one agent (here the chown of its temporary file)
+    leaves no stale or partial rendering for it, and the agents after it still render."""
+    start = _start()
+    from macf.pd import names as pd_names
+    monkeypatch.setattr(start, "HOME_ROOT", tmp_path / "home")
+    monkeypatch.setattr(pd_names, "agent_card", lambda home: "Good@1a2b3c")
+    for user in ("pa_bad", "pa_good"):
+        (tmp_path / "home" / user).mkdir(parents=True)
+    stale = tmp_path / "etc" / "pa_bad" / "declaration.json"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("{}")
+
+    def chown(path, uid, gid):
+        if Path(path).parent.name == "pa_bad" and Path(path).name.endswith(".tmp"):
+            raise PermissionError("chown refused")
+    cfg = SimpleNamespace(agents={u: SimpleNamespace(username=u, primal_daemon={"units": [UNIT]})
+                                  for u in ("pa_bad", "pa_good")})
+    done = start.render_pd_declarations(cfg, root=tmp_path / "etc", chown=chown)
+    assert done == ["pa_good"]
+    assert (tmp_path / "etc" / "pa_good" / "declaration.json").exists()
+    assert not stale.exists() and not (stale.parent / ".declaration.json.tmp").exists()
+
+
 def test_an_agent_removed_from_agents_yaml_leaves_no_rendering(tmp_path, monkeypatch):
     gone = tmp_path / "etc" / "pa_gone" / "declaration.json"
     gone.parent.mkdir(parents=True)
