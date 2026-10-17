@@ -494,6 +494,9 @@ def test_policy_values(kind):
     only ones; any other value is refused, never mapped to the nearest."""
     window = Window(start="01:00", end="03:00") if kind == "run_once_in_window" else None
     assert MissedRunPolicy(kind=kind, window=window).kind == kind
+    import typing
+    kind_field = MissedRunPolicy.model_fields["kind"].annotation
+    assert set(typing.get_args(kind_field)) == {"skip", "run_once", "run_once_in_window", "report_only"}
     for other in ("catch_up_all", "run_all", "", "Skip", "skip "):
         with pytest.raises(ValueError):
             MissedRunPolicy(kind=other)
@@ -506,7 +509,9 @@ def test_run_cannot_schedule(tmp_path):
     scheduler runs. (Across a daemon restart the new daemon reads whatever the file says;
     that path is the declaration's owner's to close, not the scheduler's.)"""
     log, now = Log(), [at("2026-10-14 12:00")]
-    on_disk = tmp_path / "declaration.json"
+    from macf.pd.names import declaration_path
+    on_disk = declaration_path(tmp_path)            # where a daemon over this home reads it
+    on_disk.parent.mkdir(parents=True, exist_ok=True)
     rewritten = Declaration(version=1, agent=CARD, timezone="UTC",
                             schedules=[command_schedule(["/usr/bin/true"], name="planted", cron="* * * * *")])
     original = command_schedule([sys.executable, "-c",
