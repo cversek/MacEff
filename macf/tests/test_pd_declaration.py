@@ -268,8 +268,9 @@ def test_schedules_hosted(tmp_path):
     """MIS-0002-R11 (CI_MUST_fail_unhosted_schedule): every declared schedule has a daemon to run
     it. A schedule can only be declared inside an agent's declaration, and that agent's daemon
     builds a scheduler for exactly those schedules. The one way to declare schedules no daemon
-    runs, on an account that gets no MacEff footprint, is refused when agents.yaml loads, which
-    CI does for every deployment."""
+    runs, on an account that gets no MacEff footprint, is refused when agents.yaml loads: at
+    container start, and in this test. A container agent whose declaration sits only in its home
+    fails the start step (test_container_outer_tier.py)."""
     from macf.models.agent_spec import AgentSpec
     from macf.pd.daemon import Daemon
     schedule = {"name": "nightly", "cron": "0 3 * * *", "target": "isolated",
@@ -281,7 +282,13 @@ def test_schedules_hosted(tmp_path):
     (home / ".maceff" / "config.json").write_text('{"agent_identity": {"moniker": "Tester"}}')
     interface.declaration_path(home).write_text(interface.Declaration(
         version=1, agent="Tester@abc123", timezone="UTC", schedules=[schedule]).model_dump_json())
-    daemon = Daemon(home, base=tmp_path / "run")
+    import shutil
+    import tempfile
+    base = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))     # a socket path short enough on macOS
+    try:
+        daemon = Daemon(home, base=base)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
     assert daemon.scheduler is not None
     assert [s.name for s in daemon.scheduler.declaration.schedules] == ["nightly"]
     with pytest.raises(ValueError, match="vanilla"):
