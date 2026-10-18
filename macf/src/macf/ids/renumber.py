@@ -203,11 +203,13 @@ def apply(p: Plan, chown: Callable[[str, int, int], None] = None) -> Tuple[int, 
     return done, failed
 
 
-def processes_on(numbers: Iterable[int], proc: Path = Path("/proc")) -> List[Tuple[int, int, str]]:
-    """(pid, uid, command) for each running process whose real or effective uid is one the move
-    re-numbers. Such a process keeps writing as its old number while its files move, and what it
-    writes then is left outside the block (the amail broker and ingest, an admin login)."""
-    wanted = set(numbers)
+def processes_on(numbers: Iterable[int], proc: Path = Path("/proc"),
+                 gids: Iterable[int] = ()) -> List[Tuple[int, str, str]]:
+    """(pid, which number, command) for each running process whose real or effective uid is one
+    the move re-numbers, or whose real or effective gid is. Such a process keeps writing as its old
+    number while its files move, and what it writes then is left outside the block (the amail
+    broker and ingest, an admin login). Which number reads ``uid 998`` or ``gid 1007``."""
+    wanted = {"Uid:": set(numbers), "Gid:": set(gids)}
     found = []
     for d in proc.iterdir():
         if not d.name.isdigit():
@@ -217,13 +219,16 @@ def processes_on(numbers: Iterable[int], proc: Path = Path("/proc")) -> List[Tup
             comm = (d / "comm").read_text().strip()
         except OSError:
             continue
+        hits = {}
         for line in status.splitlines():
-            if line.startswith("Uid:"):
+            key = line[:4]
+            if key in wanted and key not in hits:
                 real, eff = (int(x) for x in line.split()[1:3])
-                hit = real if real in wanted else eff if eff in wanted else None
-                if hit is not None:
-                    found.append((int(d.name), hit, comm))
-                break
+                hit = real if real in wanted[key] else eff if eff in wanted[key] else None
+                hits[key] = None if hit is None else f"{key[:3].lower()} {hit}"
+        which = hits.get("Uid:") or hits.get("Gid:")
+        if which:
+            found.append((int(d.name), which, comm))
     return found
 
 

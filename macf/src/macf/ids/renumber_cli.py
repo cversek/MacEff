@@ -65,13 +65,13 @@ def cmd_ids_renumber(args: argparse.Namespace) -> int:
     if os.geteuid() != 0:
         print("ids renumber: --apply needs root", file=sys.stderr)
         return 2
-    running = rn.processes_on(mapping.uid)
+    running = rn.processes_on(mapping.uid, gids=mapping.gid)
     if running:
         print("ids renumber: REFUSED: processes still run as numbers this moves, and would write as "
               "their old number while their files move. Stop them first (container_operations 6.2, step 3):",
               file=sys.stderr)
-        for pid, uid, comm in running:
-            print(f"  pid {pid}  uid {uid}  {comm}", file=sys.stderr)
+        for pid, which, comm in running:
+            print(f"  pid {pid}  {which}  {comm}", file=sys.stderr)
         return 1
     done, failed = rn.apply(p)
     left = rn.plan(mapping, roots, block=block)

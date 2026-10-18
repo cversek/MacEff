@@ -269,11 +269,47 @@ def test_a_path_that_cannot_be_re_owned_is_recorded_and_the_rest_still_move(tmp_
 def test_processes_still_running_as_a_moved_number_are_found(tmp_path):
     """--apply refuses while the amail services or an admin login still run as an old number."""
     proc = tmp_path / "proc"
-    for pid, uid, comm in ((10, 998, "broker"), (11, 5000, "other"), (12, 1002, "bash")):
+    # (pid, real uid, effective uid, real gid, command)
+    for pid, ruid, euid, rgid, comm in ((10, 998, 998, 998, "broker"), (11, 5000, 5000, 5000, "other"),
+                                        (12, 1002, 1002, 1004, "bash"), (13, 0, 999, 0, "ingest"),
+                                        (14, 5000, 5000, 1007, "editor")):
         (proc / str(pid)).mkdir(parents=True)
-        (proc / str(pid) / "status").write_text(f"Name:\t{comm}\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n")
+        (proc / str(pid) / "status").write_text(
+            f"Name:\t{comm}\nUid:\t{ruid}\t{euid}\t{euid}\t{euid}\nGid:\t{rgid}\t{rgid}\t{rgid}\t{rgid}\n")
         (proc / str(pid) / "comm").write_text(comm + "\n")
     (proc / "self").mkdir()
-    found = sorted(rn.processes_on({998, 1002}, proc=proc))
-    assert found == [(10, 998, "broker"), (12, 1002, "bash")]
+    found = sorted(rn.processes_on({998, 999, 1002}, proc=proc, gids={1007}))
+    # 13 runs with real uid 0 and a moved effective uid; 14 keeps its uid and its group moves
+    assert found == [(10, "uid 998", "broker"), (12, "uid 1002", "bash"), (13, "uid 999", "ingest"),
+                     (14, "gid 1007", "editor")]
+
+
+def test_apply_refuses_while_a_process_runs_as_a_moved_number(tmp_path, capsys, monkeypatch):
+    """--apply looks for processes on the numbers it moves before it re-owns anything, and refuses,
+    naming each, so nothing writes as its old number mid-move (container_operations 6.2, step 3)."""
+    monkeypatch.setattr(rn, "FRAMEWORK_ROOTS", ())
+    monkeypatch.setattr(renumber_cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(rn, "derive", lambda *a, **k: rn.Mapping(
+        uid={998: 21998}, gid={1007: 21007}, uid_names={998: "amail_broker"}, gid_names={1007: "policyeditors"}))
+    asked = []
+    monkeypatch.setattr(rn, "processes_on",
+                        lambda uids, gids=(): asked.append((set(uids), set(gids))) or [(4242, "uid 998", "amail-broker")])
+    applied = []
+    monkeypatch.setattr(rn, "apply", lambda *a, **k: applied.append(a) or (0, []))
+    assert renumber_cli.cmd_ids_renumber(args(tmp_path, apply=True)) == 1
+    err = capsys.readouterr().err
+    assert "REFUSED" in err and "pid 4242  uid 998  amail-broker" in err
+    assert asked == [({998}, {1007})]        # both the accounts and the groups the move changes
+    assert applied == []
+
+
+def test_apply_fails_when_a_path_could_not_be_re_owned(tmp_path, capsys, monkeypatch):
+    """A path that failed fails the run, even when nothing is left on an old number afterwards (it
+    vanished, say), so whoever runs the move sees it and reruns."""
+    monkeypatch.setattr(rn, "FRAMEWORK_ROOTS", ())
+    monkeypatch.setattr(renumber_cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(rn, "processes_on", lambda uids, gids=(): [])
+    monkeypatch.setattr(rn, "apply", lambda *a, **k: (2, [("/srv/x", "Operation not permitted")]))
+    assert renumber_cli.cmd_ids_renumber(args(tmp_path, apply=True)) == 1
+    assert "could not re-own /srv/x: Operation not permitted" in capsys.readouterr().err
 
