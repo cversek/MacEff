@@ -176,9 +176,9 @@ stateDiagram-v2
 - **R28** [MUST · decidable: macf/tests/test_pd_schedule.py::test_leases_released] When the scheduler restarts, it MUST release every lease held before the restart. (scheduler_MUST_release_leases_on_restart)
 - **R29** [MUST · decidable: macf/tests/test_pd_schedule.py::test_target_declared] Each schedule MUST declare its target: an isolated session, or the live session of a named agent. (schedule_MUST_declare_target)
 - **R30** [SHOULD · judgment: the Secretary, at review of each declaration] A schedule SHOULD target an isolated session, unless its work needs the live session's context. (schedule_SHOULD_target_isolated)
-- **R31** [MUST · decidable: macf/tests/test_pd_schedule.py::test_permissions_settled (planned)] When a schedule's work needs a permission, its declaration MUST settle that permission when the schedule is created. (schedule_MUST_settle_permission_at_creation)
-- **R32** [MUST · decidable: macf/tests/test_pd_schedule.py::test_prompt_fails_run (planned)] If a run meets a permission prompt, then the run MUST fail and deliver a notice, instead of waiting. (run_MUST_fail_on_prompt)
-- **R33** [MUST NOT · decidable: macf/tests/test_pd_schedule.py::test_run_cannot_schedule (planned)] A run MUST NOT create, change or delete a schedule. (run_MUST-NOT_change_schedules)
+- **R31** [MUST · decidable: macf/tests/test_pd_schedule.py::test_permissions_settled] When a schedule's work needs a permission, its declaration MUST settle that permission when the schedule is created. (schedule_MUST_settle_permission_at_creation)
+- **R32** [MUST · decidable: macf/tests/test_pd_schedule.py::test_prompt_fails_run] If a run meets a permission prompt, then the run MUST fail and deliver a notice, instead of waiting. (run_MUST_fail_on_prompt)
+- **R33** [MUST NOT · decidable: macf/tests/test_pd_schedule.py::test_run_cannot_schedule] A run MUST NOT create, change or delete a schedule. (run_MUST-NOT_change_schedules)
 - **R34** [MUST · decidable: macf/tests/test_pd_schedule.py::test_late_run_says_so] When a run starts late, its notice MUST state how late it is. (late_run_MUST_state_lateness)
 - **R35** [MUST NOT · judgment: the Secretary, at review of each declaration] A schedule MUST NOT fetch its instructions from the network. (schedule_MUST-NOT_fetch_instructions)
 - **R36** [MUST · decidable: macf/tests/test_pd_schedule.py::test_wall_clock_cap] Each run MUST have a wall-clock limit, in addition to any inactivity limit. (run_MUST_have_wall-clock_limit)
@@ -437,9 +437,9 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R28 | decidable | macf/tests/test_pd_schedule.py::test_leases_released | passing |
 | R29 | decidable | macf/tests/test_pd_schedule.py::test_target_declared | passing |
 | R30 | judgment | the Secretary, at review of each declaration | standing |
-| R31 | decidable | macf/tests/test_pd_schedule.py::test_permissions_settled | planned |
-| R32 | decidable | macf/tests/test_pd_schedule.py::test_prompt_fails_run | planned |
-| R33 | decidable | macf/tests/test_pd_schedule.py::test_run_cannot_schedule | planned (the test passes for one daemon's life, and a container holds across restarts; on a host, detecting a changed declaration is to come) |
+| R31 | decidable | macf/tests/test_pd_schedule.py::test_permissions_settled | passing |
+| R32 | decidable | macf/tests/test_pd_schedule.py::test_prompt_fails_run | passing |
+| R33 | decidable | macf/tests/test_pd_schedule.py::test_run_cannot_schedule | passing |
 | R34 | decidable | macf/tests/test_pd_schedule.py::test_late_run_says_so | passing |
 | R35 | judgment | the Secretary, at review of each declaration | standing |
 | R36 | decidable | macf/tests/test_pd_schedule.py::test_wall_clock_cap | passing |
@@ -530,7 +530,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R121 | decidable | macf/tests/test_mode_activity.py::test_source_from_origin_or_opening_tag | passing |
 | R122 | decidable | macf/tests/test_pd_notice.py::test_peer_lineage_checked_by_the_daemon | passing |
 | R123 | decidable | macf/tests/test_pd_channel.py::test_channel_checks_its_pd | passing |
-| R124 | decidable | macf/tests/test_pd_declaration.py::test_allowlist_lists_every_channel | planned |
+| R124 | decidable | macf/tests/test_pd_declaration.py::test_allowlist_lists_every_channel | passing |
 | R125 | judgment | the head maintainer, at review of the Claude Code harness adapter | standing |
 | R126 | decidable | macf/tests/test_pd_harness.py::test_idle_compaction_off | passing |
 | R127 | decidable | macf/tests/test_primal_daemon.py::test_unasked_compaction_recorded | passing |
@@ -661,6 +661,8 @@ Objections recorded:
   - R66, which the Secretary rules passing: adoption landed on 2026-10-12, and the persistent_layer policy describes it in section 3.3. That policy's section 13 had held R66 back by still listing adoption as to come.
   Two rows stay planned, each with its reason in its row. R21's test passes for a session the daemon starts itself (#704), but an adopted session writes no liveness, so a dialog it waits on isn't reported yet, as the persistent_layer policy says in section 3.3. A maintainer found this at review, by the reasoning sweep 3 used to hold R66. R33's test holds within one daemon's life, and a container holds across restarts, while on a host, detecting a changed declaration is still to come. The persistent_layer policy's section 13, which lists what has not landed, is rewritten against the code. Adoption, the dark-channel event, the held-wake alert and command schedules are out, since they landed, and the open rows it never named are in: R19, R21's adopted session, R47, R58, R64, R65, R99 and R124, and the optional feature that R95 and R116 govern. The requirement lines of the 86 passing rows no longer say "(planned)", and R127's line no longer says "(passing)". The mis policy's line form carries no state, and the marker had outlived the tests it waited for, so a reader of a requirement saw it as untested while its row said passing. No requirement changed.
 - 2026-10-18: R17 (readout_MUST_derive_health_from_runs) and R18 (overdue_run_MUST_read_unhealthy) move to passing, with the code and the tests they name. Editorial (mis 8.1).
+- 2026-10-18: R31 (schedule_MUST_settle_permission_at_creation) and R32 (run_MUST_fail_on_prompt) move to passing, with the code and the tests they name. Editorial (mis 8.1).
+- 2026-10-18: R33 (run_MUST-NOT_change_schedules) moves to passing. It's met in containers by the root-rendered declaration, and on hosts by detection: a schedule changed since `pd install` isn't run. The host half is detection, not prevention, since a run could forge the install record; `persistent_layer` 10.4 states the limit. What decides each half: `test_run_cannot_schedule` (the row's test) within one daemon's life and across a restart on a host; `test_pd_schedule.py::test_a_host_runs_only_the_schedules_pd_install_recorded` for the host half; and the outer tier's rendered-declaration test from #702 for the container half. Editorial (mis 8.1).
 - 2026-10-18: R47 (pd_MUST_report_carried_changed_lost) gets its code and the test it names, and stays planned: the notice is delivered where `pd_carried` is routed to the agent, and a declaration that doesn't route it is refused at load once the deployed declarations do. Editorial (mis 8.1).
 
 ## Wiki-Links

@@ -18,6 +18,10 @@ def at(text, tz=UTC):
     return datetime.fromisoformat(text).replace(tzinfo=tz)
 
 
+#: A declaration with an isolated prompt run routes the notice a denied run raises (R32).
+ROUTED = {"pd_run_failed": "agent"}
+
+
 def policy(kind, window=None):
     return MissedRunPolicy(kind=kind, window=Window(start=window[0], end=window[1]) if window else None)
 
@@ -152,7 +156,8 @@ def test_declaration_with_an_unusable_schedule_is_refused(tmp_path, cron, window
                         run=PromptRun(prompt_file="prompts/nightly.md"), timeout_s=600)
     path = declaration_path(tmp_path)
     path.parent.mkdir(parents=True)
-    path.write_text(Declaration(version=1, agent="Tester@abc123", timezone="UTC", schedules=[schedule]).model_dump_json())
+    path.write_text(Declaration(version=1, agent="Tester@abc123", timezone="UTC", schedules=[schedule],
+                               notice_routes=ROUTED).model_dump_json())
     with pytest.raises(DeclarationRefused, match=why):
         load_declaration(tmp_path, "Tester@abc123")
 
@@ -194,10 +199,12 @@ def test_schedules_name_their_timezone():
     schedule = Schedule(name="nightly", cron="0 3 * * *", missed_run=policy("skip", None),
                         target="isolated", run=PromptRun(prompt_file="p.md"), timeout_s=600)
     with pytest.raises(ValidationError, match="names the timezone"):
-        Declaration(version=1, agent="Tester@abc123", schedules=[schedule])
+        Declaration(version=1, agent="Tester@abc123", schedules=[schedule], notice_routes=ROUTED)
     with pytest.raises(ValidationError, match="unknown timezone"):
-        Declaration(version=1, agent="Tester@abc123", timezone="Mars/Olympus", schedules=[schedule])
-    declared = Declaration(version=1, agent="Tester@abc123", timezone="America/New_York", schedules=[schedule])
+        Declaration(version=1, agent="Tester@abc123", timezone="Mars/Olympus", schedules=[schedule],
+                    notice_routes=ROUTED)
+    declared = Declaration(version=1, agent="Tester@abc123", timezone="America/New_York", schedules=[schedule],
+                           notice_routes=ROUTED)
     assert declared.schedules[0].restarts_unit is False
     assert Declaration(version=1, agent="Tester@abc123").timezone is None
 
@@ -220,7 +227,9 @@ def test_target_declared():
     assert Schedule(**base, target="isolated").target == "isolated"
     assert Schedule(**base, target="Tester@abc123").target == "Tester@abc123"
 
+import json  # noqa: E402
 import os  # noqa: E402
+from pathlib import Path  # noqa: E402
 import signal  # noqa: E402
 import subprocess  # noqa: E402
 import sys  # noqa: E402
@@ -255,10 +264,10 @@ def command_schedule(command, name="check", cron="*/5 * * * *", kind="skip", tim
                     run=CommandRun(command=command, wake_when=wake_when), timeout_s=timeout_s)
 
 
-def make_scheduler(tmp_path, schedules, log, now):
-    decl = Declaration(version=1, agent=CARD, timezone="UTC", schedules=schedules)
+def make_scheduler(tmp_path, schedules, log, now, **options):
+    decl = Declaration(version=1, agent=CARD, timezone="UTC", schedules=schedules, notice_routes=ROUTED)
     s = sc.Scheduler(decl, CARD, {"agent_home": str(tmp_path)}, work_dir=tmp_path / "runs",
-                     append=log.append, events=log.read, now=lambda: now[0])
+                     append=log.append, events=log.read, now=lambda: now[0], **options)
     s.boot()
     return s
 
@@ -404,14 +413,21 @@ def test_missed_runs_are_reported_once(tmp_path):
     assert len(log.of(sc.EVENT_STARTED)) == 1, "report_only ran a missed firing"
 
 
-def test_a_prompt_run_is_said_not_run_once(tmp_path):
+def test_a_prompt_run_it_cannot_start_is_said_not_run_once(tmp_path, monkeypatch):
+    """A prompt run into a named live session, and any prompt run where no client is on the
+    daemon's PATH, is said not run once, with why, and never started."""
+    monkeypatch.setattr(sc.shutil, "which", lambda name, path=None: None)
     log, now = Log(), [at("2026-10-14 12:00")]
-    prompt = Schedule(name="digest", cron="0 * * * *", missed_run=policy("skip"), target="isolated",
-                      run=PromptRun(prompt_file="p.md"), timeout_s=60)
-    s = make_scheduler(tmp_path, [prompt], log, now)
+    named = Schedule(name="digest", cron="0 * * * *", missed_run=policy("skip"), target="Other@def456",
+                     run=PromptRun(prompt_file="p.md"), timeout_s=60)
+    isolated = Schedule(name="sweep", cron="0 * * * *", missed_run=policy("skip"), target="isolated",
+                        run=PromptRun(prompt_file="p.md"), timeout_s=60)
+    s = make_scheduler(tmp_path, [named, isolated], log, now)
     now[0] = at("2026-10-14 13:00")
     s.tick()
-    assert len(log.of(sc.EVENT_NOT_RUN)) == 1 and not log.of(sc.EVENT_STARTED)
+    said = {d["schedule"]: d["reason"] for d in log.of(sc.EVENT_NOT_RUN)}
+    assert "named live session" in said["digest"] and "no Claude Code client" in said["sweep"]
+    assert len(log.of(sc.EVENT_NOT_RUN)) == 2 and not log.of(sc.EVENT_STARTED)
 
 
 def _alive(pid):
@@ -546,6 +562,150 @@ def test_run_cannot_schedule(tmp_path):
     started = [d["schedule"] for d in log.of(sc.EVENT_STARTED)]
     assert started == ["check", "check"]                        # 12:05 and 12:10, and nothing planted
 
+    # Across a restart, on a host: the next daemon reads the rewritten file. It runs only
+    # what pd install recorded, and says the rest isn't run until installed again.
+    installed = sc.schedule_digests(Declaration(version=1, agent=CARD, timezone="UTC", schedules=[original],
+                                                notice_routes=ROUTED))
+    owed, after = [], Log()
+    after.append(sc.EVENT_INSTALLED, {"agent": CARD, "digests": installed})
+    restarted = sc.Scheduler(Declaration.model_validate_json(on_disk.read_text()), CARD,
+                             {"agent_home": str(tmp_path)}, work_dir=tmp_path / "runs", append=after.append,
+                             events=after.read, now=lambda: now[0], check_installed=True,
+                             on_notice=lambda source, nid: owed.append(source) or True)
+    restarted.boot()
+    now[0] = at("2026-10-14 12:11")
+    restarted.tick()
+    assert not after.of(sc.EVENT_STARTED) and "planted" not in restarted.runnable
+    assert "added since the last pd install" in after.of(sc.EVENT_NOT_RUN)[0]["reason"]
+    assert owed == ["pd_schedule_changed"]
+
+
+def _fake_client(tmp_path, denials):
+    """A stand-in for the Claude Code client: it records what it was started with and the
+    settings it was handed, reads its prompt, and answers as print mode does in JSON."""
+    client = tmp_path / "claude"
+    client.write_text(f"""#!{sys.executable}
+import json, os, sys
+argv = sys.argv[1:]
+settings = json.load(open(argv[argv.index("--settings") + 1]))
+json.dump({{"argv": argv, "settings": settings, "prompt": sys.stdin.read(), "cwd": os.getcwd(),
+           "found": sorted(os.listdir(".")), "env": sorted(os.environ), "path": os.environ.get("PATH")}}, open({str(tmp_path / "started.json")!r}, "w"))
+os.makedirs(".claude", exist_ok=True)              # a run that leaves project settings behind
+open(".claude/settings.json", "w").write('{{"permissions": {{"allow": ["Bash"]}}}}')
+json.dump([{{"type": "system"}}, {{"type": "assistant"}},
+           {{"type": "result", "is_error": False, "result": "done", "permission_denials": {denials!r}}}],
+          sys.stdout)
+""")
+    client.chmod(0o755)
+    (tmp_path / "p.md").write_text("Sweep the open pull requests.\n")
+    return str(client)
+
+
+def _prompt_schedule(allowed=("Bash(gh pr list:*)",)):
+    return Schedule(name="sweep", cron="0 * * * *", missed_run=policy("skip"), target="isolated",
+                    run=PromptRun(prompt_file="p.md", allowed_tools=list(allowed)), timeout_s=60)
+
+
+def test_permissions_settled(tmp_path):
+    """MIS-0002-R31 (schedule_MUST_settle_permission_at_creation): a prompt run's client loads
+    the schedule's declared tools and nothing else. No user, project or local settings, no MCP
+    server, no prompt answerer, and anything undeclared denied without asking. The settings
+    are written again from the declaration before every run, so a run that widened them on
+    disk, or left project settings in its working directory, has widened nothing for the next."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    s = make_scheduler(tmp_path, [_prompt_schedule()], log, now, client=_fake_client(tmp_path, []))
+    for hour in ("13:00", "14:00"):
+        now[0] = at(f"2026-10-14 {hour}")
+        s.tick()
+        finish(s)
+        started = json.loads((tmp_path / "started.json").read_text())
+        assert started["found"] == []          # a fresh directory each run: nothing a run left loads
+        assert started["settings"] == {"permissions": {"allow": ["Bash(gh pr list:*)"], "defaultMode": "dontAsk"}}
+        settings = Path(started["argv"][started["argv"].index("--settings") + 1])
+        settings.write_text(json.dumps({"permissions": {"allow": ["Bash"], "defaultMode": "bypassPermissions"}}))
+    argv = started["argv"]
+    for flag, value in (("--setting-sources", "project"), ("--permission-mode", "dontAsk"),
+                        ("--permission-prompts", "none")):
+        assert argv[argv.index(flag) + 1] == value
+    assert "--strict-mcp-config" in argv and "--print" in argv
+    assert not any("dangerously" in a or a.startswith("--allowed") for a in argv)
+    assert started["prompt"] == "Sweep the open pull requests.\n"
+    assert Path(started["cwd"]).resolve() == (tmp_path / "runs" / "sweep").resolve()
+    assert [d["outcome"] for d in log.of(sc.EVENT_DONE)] == ["ok: the prompt ran"] * 2
+
+
+def test_prompt_fails_run(tmp_path):
+    """MIS-0002-R32 (run_MUST_fail_on_prompt): a prompt run the client denied anything met a
+    permission prompt. It fails, naming the tools but never the result's text, and the agent
+    is owed the pd_run_failed notice, once per run. A run denied nothing raises no notice."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    owed = []
+    client = _fake_client(tmp_path, [{"tool_name": "Write", "tool_use_id": "t1", "tool_input": {"file_path": "/x"}},
+                                     {"tool_name": "Bash", "tool_use_id": "t2", "tool_input": {"command": "rm -rf ~"}}])
+    s = make_scheduler(tmp_path, [_prompt_schedule()], log, now, client=client,
+                       on_notice=lambda source, nid: owed.append((source, nid)) or True)
+    now[0] = at("2026-10-14 13:00")
+    s.tick()
+    finish(s)
+    done = log.of(sc.EVENT_DONE)[0]
+    assert done["outcome"].startswith("failed: met a permission prompt for Bash, Write")
+    assert "rm -rf" not in json.dumps(log.rows) and "done" not in done["outcome"]
+    assert owed == [("pd_run_failed", "sweep:2026-10-14T13:00:00+00:00")]
+
+    quiet = Log()
+    s = make_scheduler(tmp_path, [_prompt_schedule()], quiet, now, client=_fake_client(tmp_path, []),
+                       on_notice=lambda source, nid: owed.append((source, nid)) or True)
+    now[0] = at("2026-10-14 14:00")
+    s.tick()
+    finish(s)
+    assert quiet.of(sc.EVENT_DONE)[0]["outcome"] == "ok: the prompt ran" and len(owed) == 1
+
+
+def test_an_isolated_prompt_run_routes_its_failure_notice():
+    """R32's notice must reach someone: a declaration with an isolated prompt run is refused at
+    load unless it routes pd_run_failed where the notice is delivered, to the agent."""
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match="pd_run_failed"):
+        Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()])
+    for nobody in ("operator", "held_until_present"):    # routes no daemon notice is delivered on yet
+        with pytest.raises(ValidationError, match="'agent' or 'both'"):
+            Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()],
+                        notice_routes={"pd_run_failed": nobody})
+    for heard in ("agent", "both"):
+        Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()],
+                    notice_routes={"pd_run_failed": heard})
+
+
+def test_the_client_is_found_on_the_session_units_path(tmp_path, monkeypatch):
+    """Review of #712. A daemon under launchd, or one linger starts before any login, has a PATH
+    without the client. The scheduler looks where the core looks for the session's own client:
+    the session unit's declared PATH, filled in from the placeholders, and the run gets that PATH."""
+    from macf.pd.interface import Unit
+    client = _fake_client(tmp_path, [])
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "claude").symlink_to(client)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")                    # the service manager's
+    session = Unit(name="session", kind="session", command=["/usr/bin/true"], account="tester",
+                   restart="always", liveness_interval_s=10, memory_limit_mb=64,
+                   environment={"PATH": "{agent_home}/bin:/usr/bin:/bin"})
+    log, now = Log(), [at("2026-10-14 12:00")]
+    decl = Declaration(version=1, agent=CARD, timezone="UTC", units=[session], schedules=[_prompt_schedule()],
+                       notice_routes=ROUTED)
+    s = sc.Scheduler(decl, CARD, {"agent_home": str(tmp_path)}, work_dir=tmp_path / "runs",
+                     append=log.append, events=log.read, now=lambda: now[0])
+    s.boot()
+    assert s.client == str(bin_dir / "claude") and not log.of(sc.EVENT_NOT_RUN)
+    now[0] = at("2026-10-14 13:00")
+    s.tick()
+    finish(s)
+    assert json.loads((tmp_path / "started.json").read_text())["path"] == f"{tmp_path}/bin:/usr/bin:/bin"
+
+    bare = Log()
+    plain = sc.Scheduler(decl.model_copy(update={"units": []}), CARD, {"agent_home": str(tmp_path)},
+                         work_dir=tmp_path / "runs", append=bare.append, events=bare.read, now=lambda: now[0])
+    plain.boot()
+    assert "the daemon's PATH (/usr/bin:/bin)" in bare.of(sc.EVENT_NOT_RUN)[0]["reason"]
 
 def test_a_deferred_missed_run_is_recorded_once(tmp_path):
     """A missed run its policy puts off to a window is recorded once, with when it will run, so
@@ -563,3 +723,94 @@ def test_a_deferred_missed_run_is_recorded_once(tmp_path):
     deferred = log.of(sc.EVENT_DEFERRED)
     assert len(deferred) == 1 and deferred[0]["run_at"] == "2026-10-14T22:00:00+00:00"
     assert not log.of(sc.EVENT_STARTED)[1:]
+
+
+@pytest.mark.parametrize("record, check, runs", [
+    ("same", True, True),            # installed as it is
+    ("changed", True, False),        # the command changed since install
+    ("none", True, False),           # no install recorded
+    ("changed", False, True),        # a rendered declaration: out of the agent's reach, not checked
+])
+def test_a_host_runs_only_the_schedules_pd_install_recorded(tmp_path, record, check, runs):
+    """MIS-0002-R33 on a host: a daemon runs a schedule only as pd install recorded it. One
+    whose digest differs, or with no record at all, is said not run once, with how to accept
+    it. A daemon over a rendered declaration checks nothing, since no run can change that."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    declared = command_schedule(["/usr/bin/true"])
+    if record != "none":
+        took = command_schedule(["/usr/bin/false"]) if record == "changed" else declared
+        log.append(sc.EVENT_INSTALLED, {"agent": CARD, "digests": sc.schedule_digests(
+            Declaration(version=1, agent=CARD, timezone="UTC", schedules=[took]))})
+    s = make_scheduler(tmp_path, [declared], log, now, check_installed=check)
+    now[0] = at("2026-10-14 12:05")
+    s.tick()
+    finish(s)
+    assert bool(log.of(sc.EVENT_STARTED)) == runs
+    if not runs:
+        assert "pd install" in log.of(sc.EVENT_NOT_RUN)[0]["reason"]
+
+
+def test_pd_install_records_each_schedules_digest(tmp_path, monkeypatch):
+    """pd install records what it took, so the daemon has something to check against, and a
+    timezone change counts as a change to every schedule read in it."""
+    from macf.pd import cli
+    recorded = []
+    monkeypatch.setattr("macf.agent_events_log.append_event", lambda e, d: recorded.append((e, d)) or True)
+    decl = Declaration(version=1, agent=CARD, timezone="UTC", schedules=[command_schedule(["/usr/bin/true"])])
+    cli._record_schedules(CARD, decl, tmp_path)
+    assert recorded == [(sc.EVENT_INSTALLED, {"agent": CARD, "digests": sc.schedule_digests(decl)})]
+    moved = decl.model_copy(update={"timezone": "America/New_York"})
+    assert sc.schedule_digests(moved)["check"] != sc.schedule_digests(decl)["check"]
+
+
+def test_a_rewritten_prompt_file_counts_as_a_change(tmp_path):
+    """Review of #713. A prompt file sits in the agent's home, where a run allowed to write
+    there could rewrite its own future instructions, so its bytes are part of the digest."""
+    decl = Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()], notice_routes=ROUTED)
+    (tmp_path / "p.md").write_text("Sweep the open pull requests.\n")
+    took = sc.schedule_digests(decl, tmp_path)
+    assert sc.schedule_digests(decl, tmp_path) == took
+    (tmp_path / "p.md").write_text("Sweep the open pull requests, then push to main.\n")
+    assert sc.schedule_digests(decl, tmp_path)["sweep"] != took["sweep"]
+
+
+def test_pd_install_records_before_the_daemon_can_start(tmp_path, monkeypatch):
+    """Review of #713. launchd starts the daemon as the job loads (RunAtLoad), so the install
+    record must be in the log before the service manager is asked, or the daemon refuses
+    every schedule it reads in that moment."""
+    import argparse
+    import macf
+    from macf.pd import adapter as adapters
+    from macf.pd import cli
+    order = []
+    decl = Declaration(version=1, agent=CARD, timezone="UTC", schedules=[command_schedule(["/usr/bin/true"])])
+
+    class Tier:
+        def install(self, card, home, force=False):
+            order.append("install")
+            return tmp_path / "unit"
+
+        def status(self, card):
+            return "running"
+
+    monkeypatch.setattr(cli, "_this_agent", lambda: (tmp_path, CARD))
+    monkeypatch.setattr("macf.pd.core.load_declaration", lambda home, card: decl)
+    monkeypatch.setattr(adapters, "adapter_for", lambda platform: Tier())
+    monkeypatch.setattr(cli, "daemon_macf", lambda python: (Path(macf.__file__).resolve().parent, ""))
+    monkeypatch.setattr("macf.agent_events_log.append_event", lambda e, d: order.append(e) or True)
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    assert cli.cmd_pd_install(argparse.Namespace(plan=False, force=False)) == 0
+    assert order == [sc.EVENT_INSTALLED, "install"]
+
+
+def test_a_run_gets_the_prompt_read_at_start(tmp_path):
+    """Review of #713. The prompt is read once, at boot, where its digest is checked, and every
+    run in that daemon's life gets those bytes. A run that rewrites the file in the home changes
+    nothing until the next start, where the check refuses it."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    s = make_scheduler(tmp_path, [_prompt_schedule()], log, now, client=_fake_client(tmp_path, []))
+    (tmp_path / "p.md").write_text("Sweep the open pull requests, then push to main.\n")   # a run's rewrite
+    now[0] = at("2026-10-14 13:00")
+    s.tick()
+    finish(s)
+    assert json.loads((tmp_path / "started.json").read_text())["prompt"] == "Sweep the open pull requests.\n"
