@@ -4,9 +4,20 @@ import socket
 from datetime import date
 from types import SimpleNamespace
 
+import pytest
+
 from macf.pd import notifier as nt
 from macf.pd import wake as wk
 from macf.utils.input_origin import WAKE_OPENING, opens_with_wake
+
+
+@pytest.fixture(autouse=True)
+def _mail_box_from_the_home(monkeypatch):
+    """These tests put mail in <home>/amail/pickup, the box chosen when nothing names one.
+    Inside a seat MACEFF_AGENT_NAME is set, which would point the daemon elsewhere."""
+    monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
+    monkeypatch.delenv("MACF_AMAIL_HANDOFF", raising=False)
+
 
 RULE = "─" * 60
 FAINT, RESET = "\x1b[2m", "\x1b[0m"
