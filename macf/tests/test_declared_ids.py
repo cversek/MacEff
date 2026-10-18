@@ -166,6 +166,22 @@ def test_an_image_that_kept_the_ubuntu_account_stops_start_up(start, monkeypatch
     start.check_image_ids(IdBlock(base=21000))
 
 
+def test_a_service_directory_left_at_its_old_owner_stops_start_up(start, monkeypatch, tmp_path):
+    """Review of #696: the image puts admin and the amail accounts at the block's slots, but their
+    persisted directories keep the owners they had before a rebuild."""
+    import os
+    mine = os.stat(tmp_path).st_uid
+    paths = {name: tmp_path / name for name in ("admin", "amail_broker", "amail_ingest")}
+    paths["amail_broker"].mkdir()
+    monkeypatch.setattr(start, "SERVICE_PATHS", paths)
+    block = IdBlock(base=21000)
+    with pytest.raises(start.DeclaredIdMismatch, match=f"amail_broker is owned by uid {mine}.*21998.*renumber"):
+        start.check_service_paths(block)
+    assert "check_image_ids(ids)\n        check_service_paths(ids)\n" in START_PY.read_text()
+    paths["amail_broker"].rmdir()                     # missing directories are left to the image
+    start.check_service_paths(block)
+
+
 def test_start_up_refuses_with_a_message_not_a_traceback():
     """main catches the mismatch by name and logs it as a refusal."""
     src = START_PY.read_text()

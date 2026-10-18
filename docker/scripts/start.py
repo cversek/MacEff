@@ -159,6 +159,26 @@ def check_image_ids(ids) -> None:
             "rebuild from a MacEff base image that removes it")
 
 
+# The service accounts' persisted directories. The image recreates the accounts at the block's
+# slots, but these keep whatever owner they had, so a rebuild without the renumber step would
+# leave the broker unable to read its own ledgers.
+SERVICE_PATHS = {'admin': Path('/home/admin'),
+                 'amail_broker': Path('/var/lib/amail_broker'),
+                 'amail_ingest': Path('/var/lib/amail_ingest')}
+
+
+def check_service_paths(ids) -> None:
+    """Each service account's persisted directory is owned by the number the block gives it."""
+    for name, path in SERVICE_PATHS.items():
+        if not path.exists():
+            continue
+        want, have = ids.slot(name), path.stat().st_uid
+        if have != want:
+            raise DeclaredIdMismatch(
+                f"{path} is owned by uid {have}, but ids.base {ids.base} puts {name} at {want}; "
+                f"run the renumber step before this start (container_operations policy)")
+
+
 def provision_agent_identity(username: str, home_dir: str, display_name: Optional[str], agent_key: str) -> str:
     """
     Create persistent identity file and set GECOS field.
@@ -2736,6 +2756,7 @@ def main() -> int:
         # are created only once agents.yaml has said which block that is.
         ids = agents_config.ids
         check_image_ids(ids)
+        check_service_paths(ids)
         ensure_group('agents_all', ids.slot('agents_all'))
         ensure_group('sa_all', ids.slot('sa_all'))
         setup_shared_workspace_permissions(ids)
