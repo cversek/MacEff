@@ -529,3 +529,21 @@ def test_run_cannot_schedule(tmp_path):
         finish(s)
     started = [d["schedule"] for d in log.of(sc.EVENT_STARTED)]
     assert started == ["check", "check"]                        # 12:05 and 12:10, and nothing planted
+
+
+def test_a_deferred_missed_run_is_recorded_once(tmp_path):
+    """A missed run its policy puts off to a window is recorded once, with when it will run, so
+    the readout can tell it waits as declared (review of #711)."""
+    log, now = Log(), [at("2026-10-14 08:00")]
+    window = Schedule(name="check", cron="0 9 * * *", target="isolated", timeout_s=30,
+                      missed_run=policy("run_once_in_window", ("22:00", "23:00")),
+                      run=CommandRun(command=["/usr/bin/true"], wake_when="exit_code"))
+    log.append(sc.EVENT_STARTED, {"agent": CARD, "schedule": "check", "scheduled_for": "2026-10-13T09:00:00+00:00"})
+    log.append(sc.EVENT_DONE, {"agent": CARD, "schedule": "check", "scheduled_for": "2026-10-13T09:00:00+00:00"})
+    now[0] = at("2026-10-14 10:30")                             # booted after the 09:00 firing
+    s = make_scheduler(tmp_path, [window], log, now)
+    for _ in range(3):
+        s.tick()
+    deferred = log.of(sc.EVENT_DEFERRED)
+    assert len(deferred) == 1 and deferred[0]["run_at"] == "2026-10-14T22:00:00+00:00"
+    assert not log.of(sc.EVENT_STARTED)[1:]

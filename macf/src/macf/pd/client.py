@@ -30,7 +30,7 @@ from macf.pd.interface import (
     declaration_path,
     record_path,
 )
-from macf.pd.scheduler import EVENT_DONE, EVENT_SEEN, EVENT_STARTED
+from macf.pd.scheduler import EVENT_DONE, EVENT_NOT_RUN, EVENT_SEEN, EVENT_STARTED
 from macf.platform.tray_host import TrayHost, tray_host
 from macf.utils.peercred import peer_credentials
 
@@ -176,7 +176,9 @@ def _schedule_events(declaration: Declaration, card: str) -> List[dict]:
             continue
         found.append(event)
         kinds[name].add(event.get("event"))
-        if all(EVENT_SEEN in k or {EVENT_STARTED, EVENT_DONE} <= k for k in kinds.values()):
+        # A prompt run the daemon can't start never has a start; its not-run record settles it.
+        if all(EVENT_SEEN in k or EVENT_NOT_RUN in k or {EVENT_STARTED, EVENT_DONE} <= k
+               for k in kinds.values()):
             break
     return found
 
