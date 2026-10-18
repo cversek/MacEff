@@ -38,7 +38,7 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **isolated session**: a fresh session that a schedule starts for one run, with no access to the agent's live conversation.
 - **judgment**: a check that a named person or agent makes by review, because no tool can decide it.
 - **landing**: putting an accepted MIS's normative text into policy, with its code and tests, in a pull request.
-- **lease**: a claim that one run holds on a schedule while it runs, so that the run cannot start twice.
+- **lease**: a claim held for a bounded time. On a schedule, the claim one run holds while it runs, so that the run cannot start twice; on an invitation, the declared time at which the invitation ends.
 - **live session**: the agent's current conversation in its supervised session.
 - **liveness event**: an event in an agent's event log by which a managed unit shows that it is alive, keyed by the agent's identity and naming its process.
 - **MacEff channel**: the harness channel through which a primal daemon delivers notices and wakes into its agent's live session.

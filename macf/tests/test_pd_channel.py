@@ -291,3 +291,48 @@ def test_dark_channel_event():
     t.tick((1, "s"), False)
     t.tick((1, "s"), True)
     assert said == [EVENT_CHANNEL_DARK, EVENT_CHANNEL_BACK]
+
+
+class _Stop(Exception):
+    pass
+
+
+def _loop(ch, monkeypatch, delivered, held_s=0.0, rounds=7):
+    """Run listen_forever for *rounds* connections, each accepted, each pump delivering
+    *delivered* records and holding *held_s* seconds; return the waits it chose. The stop
+    comes from the connections, so a loop that never waits fails the assertion instead of
+    spinning the test forever."""
+    waits, now, connects = [], [0.0], [0]
+
+    def connect():
+        connects[0] += 1
+        if connects[0] > rounds:
+            raise _Stop
+        return object()
+    monkeypatch.setattr(ch, "connect_once", connect)
+
+    def pump(conn):
+        now[0] += held_s
+        return delivered
+    monkeypatch.setattr(ch, "pump", pump)
+
+    def sleep(s):
+        waits.append(s)
+        now[0] += s
+    with pytest.raises(_Stop):
+        ch.listen_forever(sleep=sleep, clock=lambda: now[0])
+    return waits
+
+
+def test_a_refused_channel_backs_off_instead_of_spinning(monkeypatch):
+    """A daemon that refuses the channel accepts and closes at once. The channel waits before
+    every reconnect, and the wait grows to the cap, as for a daemon that's down."""
+    ch = Channel("Resident@1a2b3c")
+    assert _loop(ch, monkeypatch, delivered=0) == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0]
+
+
+def test_a_working_connection_reconnects_from_the_first_delay(monkeypatch):
+    ch = Channel("Resident@1a2b3c")
+    assert _loop(ch, monkeypatch, delivered=1, rounds=3) == [1.0, 1.0, 1.0]
+    assert _loop(ch, monkeypatch, delivered=0, held_s=60.0, rounds=3) == [1.0, 1.0, 1.0]
+
