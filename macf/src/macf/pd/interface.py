@@ -269,6 +269,19 @@ class WindDown(_Closed):
 NoticeRoute = Literal["agent", "operator", "both", "held_until_present"]
 #: The notice source of mail left unread past the declared threshold (MIS-0002-R55).
 UNREAD_MAIL_SOURCE = "pd_unread_mail"
+#: The notice source of a prompt run that met a permission prompt (MIS-0002-R32).
+RUN_FAILED_SOURCE = "pd_run_failed"
+
+
+class ChannelPlugin(_Closed):
+    """A channel plugin as Claude Code's organization allowlist names one: the plugin and the
+    marketplace it comes from. The client admits a channel only when both match an entry."""
+
+    plugin: str = Field(min_length=1)
+    marketplace: str = Field(min_length=1)
+
+    def __str__(self) -> str:
+        return f"{self.plugin}@{self.marketplace}"
 
 
 class Declaration(_Closed):
@@ -283,6 +296,12 @@ class Declaration(_Closed):
       (MIS-0002-R42 (notice_source_MUST_be_routed)).
     - ``keep_harness_idle_compaction``: the harness's own idle compaction stays off unless
       this keeps it (MIS-0002-R126 (adapter_MUST_turn_off_harness_idle_compaction)).
+    - ``allowlisted_channels``: every channel plugin the deployment's organization allowlist
+      admits, the operator's channels included
+      (MIS-0002-R124 (allowlist_declaration_MUST_list_every_channel)). The allowlist replaces
+      Claude Code's default list, so a channel it leaves out stops loading at the next restart;
+      listing them here is what lets ``pd install`` and the daemon compare the two.
+      Absent means the deployment sets no allowlist.
     - ``wind_down``: absent means no wind-down, so only the operator may ask to compact.
     - ``timezone``: the IANA name crons and quiet windows are read in, required once any
       schedule or quiet window is declared, because a host reads a bare time of day in its
@@ -295,6 +314,7 @@ class Declaration(_Closed):
     units: List[Unit] = Field(default_factory=list)
     schedules: List[Schedule] = Field(default_factory=list)
     operator_channels: Optional[List[str]] = None
+    allowlisted_channels: Optional[List[ChannelPlugin]] = None
     notice_routes: Dict[str, NoticeRoute] = Field(default_factory=dict)
     #: How long a new session incarnation may run before its MacEff channel attaches; past it,
     #: the channel is dark (MIS-0002-R115). None: no channel is expected, and none is watched.
@@ -324,6 +344,18 @@ class Declaration(_Closed):
         if self.unread_mail_threshold_s is not None and UNREAD_MAIL_SOURCE not in self.notice_routes:
             raise ValueError(f"unread_mail_threshold_s is declared, so notice_routes must route "
                              f"{UNREAD_MAIL_SOURCE!r}: to 'agent', 'operator' or 'both'")
+        return self
+
+    @model_validator(mode="after")
+    def _a_failed_prompt_run_is_routed(self) -> "Declaration":
+        # A prompt run that meets a permission prompt fails with a notice
+        # (MIS-0002-R32 (run_MUST_fail_on_prompt)). Only the agent's routes deliver a daemon
+        # notice today, so any other route would reach nobody.
+        if any(s.target == "isolated" and isinstance(s.run, PromptRun) for s in self.schedules) \
+                and self.notice_routes.get(RUN_FAILED_SOURCE) not in ("agent", "both"):
+            raise ValueError(f"an isolated prompt run is declared, so notice_routes must route "
+                             f"{RUN_FAILED_SOURCE!r} to 'agent' or 'both', the routes its notice is "
+                             f"delivered on")
         return self
 
     @model_validator(mode="after")
@@ -360,6 +392,9 @@ EVENT_CHANNEL_BACK = "pd_channel_back"
 #: emptied (MIS-0002-R55). One of each per unread spell.
 EVENT_UNREAD_MAIL = "pd_unread_mail"
 EVENT_UNREAD_MAIL_CLEARED = "pd_unread_mail_cleared"
+#: At start, the organization allowlist and the declaration's ``allowlisted_channels`` differ
+#: (MIS-0002-R124). ``findings`` names each difference.
+EVENT_ALLOWLIST_MISMATCH = "pd_allowlist_mismatch"
 EVENT_DAEMON_START = "pd_daemon_start"
 
 
