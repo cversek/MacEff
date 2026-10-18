@@ -111,6 +111,11 @@ class Daemon:
             self.scheduler = Scheduler(self.core.declaration, self.card, placeholders,
                                        work_dir=self.base / f"{self.record_path.stem}.runs",
                                        check_installed=not rendered_declaration_path(self.home).exists())
+            if self.scheduler.check_installed and \
+                    self.core.declaration.notice_routes.get("pd_schedule_changed") not in ("agent", "both"):
+                print("⚠️ MACF: pd: notice_routes doesn't route 'pd_schedule_changed' to 'agent' or 'both', so "
+                      "a schedule changed since pd install is said only on this stream and in pd status "
+                      "(MIS-0002-R33)", file=sys.stderr)
         self._listener: Optional[socket.socket] = None
         self._channel_listener: Optional[socket.socket] = None
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound

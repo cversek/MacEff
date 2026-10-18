@@ -91,11 +91,29 @@ EVENT_INSTALLED = "pd_declaration_installed"
 NOTICE_SCHEDULE_CHANGED = "pd_schedule_changed"
 
 
-def schedule_digests(declaration: Declaration) -> Dict[str, str]:
-    """Each schedule's digest: its declared form, with the timezone its cron is read in."""
-    return {s.name: hashlib.sha256(json.dumps([declaration.timezone, s.model_dump(mode="json")],
+def schedule_digests(declaration: Declaration, agent_home: Optional[Path] = None) -> Dict[str, str]:
+    """Each schedule's digest: its declared form, the timezone its cron is read in, and for a
+    prompt run the bytes of its prompt file, which sits in the agent's home where a run can
+    rewrite it. A command's script isn't read: its path is digested, its contents aren't."""
+    return {s.name: hashlib.sha256(json.dumps([declaration.timezone, s.model_dump(mode="json"),
+                                               _prompt_digest(s, agent_home)],
                                               sort_keys=True).encode()).hexdigest()
             for s in declaration.schedules}
+
+
+def _prompt_digest(s: Schedule, agent_home: Optional[Path]) -> Optional[str]:
+    if not isinstance(s.run, PromptRun):
+        return None
+    try:
+        path = Path(render(s.run.prompt_file, {"agent_home": str(agent_home or "")}))
+    except KeyError:
+        path = Path(s.run.prompt_file)
+    if not path.is_absolute() and agent_home is not None:
+        path = Path(agent_home) / path
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return "unreadable"  # noqa: MACEFF003 - digested as such, so a file that appears later counts as a change
 
 
 def installed_digests(card: str, events: Optional[Iterable[dict]] = None) -> Optional[Dict[str, str]]:
@@ -237,7 +255,7 @@ class Scheduler:
             why = "no pd install has recorded this declaration's schedules"
         elif s.name not in self.installed:
             why = "it was added since the last pd install"
-        elif self.installed[s.name] != schedule_digests(self.declaration)[s.name]:
+        elif self.installed[s.name] != schedule_digests(self.declaration, self._home())[s.name]:
             why = "it changed since the last pd install"
         else:
             return ""
@@ -247,6 +265,10 @@ class Scheduler:
         print(f"⚠️ MACF: pd: schedule {s.name} is not run: {why}; run `macf_tools pd install` to accept it",
               file=sys.stderr)
         return why + "; run `macf_tools pd install` to accept it (MIS-0002-R33)"
+
+    def _home(self) -> Optional[Path]:
+        home = self.placeholders.get("agent_home")
+        return Path(home) if home else None
 
     def _not_runnable(self, s: Schedule) -> str:
         if isinstance(s.run, CommandRun):
