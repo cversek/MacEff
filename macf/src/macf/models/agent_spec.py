@@ -462,10 +462,46 @@ class AgentSpec(BaseModel):
         description="Claude Code settings override for this agent"
     )
 
+    primal_daemon: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "This agent's primal daemon declaration, the body of a persistent_layer declaration "
+            "without `agent` and `version`, which the container fills in. Container start-up renders "
+            "it owned by root, in a directory the agent can't write, and the daemon reads it from "
+            "there only, so no run, which executes as the agent, can change its schedules "
+            "(MIS-0002-R33 (run_MUST-NOT_change_schedules)). Absent, the agent gets no daemon from "
+            "the container."
+        ),
+    )
+
+    @field_validator('primal_daemon')
+    @classmethod
+    def _primal_daemon_is_a_declaration(cls, value):
+        """Refused at load, not at start: a body the daemon would refuse is caught here."""
+        if value is None:
+            return value
+        if 'agent' in value or 'version' in value:
+            raise ValueError("primal_daemon must not set agent or version; the container fills them in")
+        from macf.pd.interface import Declaration
+        Declaration(version=1, agent="placeholder@000000", **value)
+        return value
+
     @property
     def is_vanilla(self) -> bool:
         """True when this account must receive no MacEff footprint at all."""
         return self.flavor == AgentFlavor.VANILLA
+
+    @model_validator(mode='after')
+    def no_primal_daemon_for_vanilla(self) -> 'AgentSpec':
+        """A vanilla account gets no MacEff footprint, so nothing starts a primal daemon for it,
+        and a schedule it declared would have no daemon to run it. Refused when agents.yaml loads,
+        which container start does (MIS-0002-R11 (CI_MUST_fail_unhosted_schedule))."""
+        if self.flavor == AgentFlavor.VANILLA and self.primal_daemon is not None:
+            raise ValueError(
+                f"{self.username} is vanilla and declares primal_daemon: a vanilla account gets no "
+                "MacEff footprint, so no daemon would run its units or schedules. Remove primal_daemon, "
+                "or make the account maceff-flavored")
+        return self
 
     @model_validator(mode='after')
     def require_personality_for_maceff(self) -> 'AgentSpec':
