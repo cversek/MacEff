@@ -126,6 +126,12 @@ class Daemon:
         self.core.on_notice = self.notifier.raise_notice    # the core's own notices (R60)
         if self.scheduler is not None:
             self.scheduler.on_notice = self.notifier.raise_notice   # a denied prompt run (R32)
+        if any(u.kind == "session" for u in self.core.declaration.units) \
+                and self.core.declaration.notice_routes.get("pd_carried") not in ("agent", "both"):
+            # Only the agent's routes deliver a daemon notice, so any other route reaches nobody.
+            print("⚠️ MACF: pd: notice_routes doesn't route 'pd_carried' to 'agent' or 'both', so after "
+                  "a restart or a compaction the session isn't told what was carried, changed and lost "
+                  "(MIS-0002-R47)", file=sys.stderr)
         connect_s = self.core.declaration.channel_connect_s
         #: Where a channel is expected, whether it is dark (R115); the outside watch tells the operator.
         self.dark_channel = DarkChannel(self.card, connect_s) if connect_s else None

@@ -453,7 +453,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R44 | judgment | the head maintainer, at review of each harness adapter | standing |
 | R45 | decidable | macf/tests/test_pd_wake.py::test_a_busy_stretch_is_said_once_and_nothing_is_typed | passing |
 | R46 | judgment | the Secretary, at review of each notice source | standing |
-| R47 | decidable | macf/tests/test_pd_notice.py::test_after_restart_notice | planned |
+| R47 | decidable | macf/tests/test_pd_notice.py::test_after_restart_notice | planned (the notice is delivered where `pd_carried` is routed to the agent; a declaration that doesn't route it is refused at load once the deployed declarations do) |
 | R48 | decidable | macf/tests/test_primal_daemon.py::test_outside_stop_beats_gates | passing |
 | R49 | decidable | macf/tests/test_primal_daemon.py::test_work_in_flight_checked | passing |
 | R50 | decidable | macf/tests/test_primal_daemon.py::test_quiet_window | passing |
@@ -664,6 +664,7 @@ Objections recorded:
 - 2026-10-18: R31 (schedule_MUST_settle_permission_at_creation) and R32 (run_MUST_fail_on_prompt) move to passing, with the code and the tests they name. Editorial (mis 8.1).
 - 2026-10-18: R33 (run_MUST-NOT_change_schedules) moves to passing. It's met in containers by the root-rendered declaration, and on hosts by detection: a schedule changed since `pd install` isn't run. The host half is detection, not prevention, since a run could forge the install record; `persistent_layer` 10.4 states the limit. What decides each half: `test_run_cannot_schedule` (the row's test) within one daemon's life and across a restart on a host; `test_pd_schedule.py::test_a_host_runs_only_the_schedules_pd_install_recorded` for the host half; and the outer tier's rendered-declaration test from #702 for the container half. Editorial (mis 8.1).
 - 2026-10-18: R58 (optional_unit_MUST-NOT_delay_others) moves to passing, with the code and the test it names. The search service no longer waits on the policy index, and the index builds in a thread of its own, so neither optional unit delays the other. The row named `test_pd_render.py::test_optional_units_independent`, which doesn't exist under that name, and now names the test that decides it, in `test_container_start_order.py`, by sweep 3's rule. Editorial (mis 8.1).
+- 2026-10-18: R47 (pd_MUST_report_carried_changed_lost) gets its code and the test it names, and stays planned: the notice is delivered where `pd_carried` is routed to the agent, and a declaration that doesn't route it is refused at load once the deployed declarations do. Editorial (mis 8.1).
 
 ## Wiki-Links
 
