@@ -84,7 +84,7 @@ def test_agent_spec_carries_the_declared_session_name():
     deliberately and commented emphatically had no effect whatsoever.
     """
     spec = AgentSpec(
-        username="pa_agent", personality="agents/p.md", harness_session="agent1"
+        username="pa_agent", uid=21100, personality="agents/p.md", harness_session="agent1"
     )
     assert spec.harness_session == "agent1"
 
@@ -96,7 +96,7 @@ def test_session_name_is_absent_rather_than_guessed_when_undeclared():
     distinguish 'declared to equal the agent key' from 'not declared', which is
     the ambiguity that hid the original bug.
     """
-    spec = AgentSpec(username="pa_agent", personality="agents/p.md")
+    spec = AgentSpec(username="pa_agent", uid=21100, personality="agents/p.md")
     assert spec.harness_session is None
 
 
