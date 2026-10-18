@@ -269,6 +269,8 @@ class WindDown(_Closed):
 NoticeRoute = Literal["agent", "operator", "both", "held_until_present"]
 #: The notice source of mail left unread past the declared threshold (MIS-0002-R55).
 UNREAD_MAIL_SOURCE = "pd_unread_mail"
+#: The notice source of a prompt run that met a permission prompt (MIS-0002-R32).
+RUN_FAILED_SOURCE = "pd_run_failed"
 
 
 class ChannelPlugin(_Closed):
@@ -342,6 +344,18 @@ class Declaration(_Closed):
         if self.unread_mail_threshold_s is not None and UNREAD_MAIL_SOURCE not in self.notice_routes:
             raise ValueError(f"unread_mail_threshold_s is declared, so notice_routes must route "
                              f"{UNREAD_MAIL_SOURCE!r}: to 'agent', 'operator' or 'both'")
+        return self
+
+    @model_validator(mode="after")
+    def _a_failed_prompt_run_is_routed(self) -> "Declaration":
+        # A prompt run that meets a permission prompt fails with a notice
+        # (MIS-0002-R32 (run_MUST_fail_on_prompt)). Only the agent's routes deliver a daemon
+        # notice today, so any other route would reach nobody.
+        if any(s.target == "isolated" and isinstance(s.run, PromptRun) for s in self.schedules) \
+                and self.notice_routes.get(RUN_FAILED_SOURCE) not in ("agent", "both"):
+            raise ValueError(f"an isolated prompt run is declared, so notice_routes must route "
+                             f"{RUN_FAILED_SOURCE!r} to 'agent' or 'both', the routes its notice is "
+                             f"delivered on")
         return self
 
     @model_validator(mode="after")

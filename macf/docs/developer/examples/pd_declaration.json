@@ -124,7 +124,8 @@
   "notice_routes": {
     "amail": "agent",
     "fleet_watch": "operator",
-    "login_expired": "both"
+    "login_expired": "both",
+    "pd_run_failed": "both"
   },
   "keep_harness_idle_compaction": false,
   "wind_down": {

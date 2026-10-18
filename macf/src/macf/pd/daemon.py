@@ -107,14 +107,25 @@ class Daemon:
         #: The declared schedules, run by this daemon (MIS-0002 step 2), or None without any.
         self.scheduler = None
         if self.core.declaration.schedules:
+            from macf.pd.names import rendered_declaration_path
             from macf.pd.scheduler import Scheduler
+            # A rendered declaration is out of the agent's reach; a home copy is checked against
+            # what pd install recorded (MIS-0002-R33 (run_MUST-NOT_change_schedules)).
             self.scheduler = Scheduler(self.core.declaration, self.card, placeholders,
-                                       work_dir=self.base / f"{self.record_path.stem}.runs")
+                                       work_dir=self.base / f"{self.record_path.stem}.runs",
+                                       check_installed=not rendered_declaration_path(self.home).exists())
+            if self.scheduler.check_installed and \
+                    self.core.declaration.notice_routes.get("pd_schedule_changed") not in ("agent", "both"):
+                print("⚠️ MACF: pd: notice_routes doesn't route 'pd_schedule_changed' to 'agent' or 'both', so "
+                      "a schedule changed since pd install is said only on this stream and in pd status "
+                      "(MIS-0002-R33)", file=sys.stderr)
         self._listener: Optional[socket.socket] = None
         self._channel_listener: Optional[socket.socket] = None
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound
         self.notifier = Notifier(self.home, self.core.declaration.notice_routes)
         self.core.on_notice = self.notifier.raise_notice    # the core's own notices (R60)
+        if self.scheduler is not None:
+            self.scheduler.on_notice = self.notifier.raise_notice   # a denied prompt run (R32)
         connect_s = self.core.declaration.channel_connect_s
         #: Where a channel is expected, whether it is dark (R115); the outside watch tells the operator.
         self.dark_channel = DarkChannel(self.card, connect_s) if connect_s else None
