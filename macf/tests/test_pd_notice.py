@@ -486,7 +486,8 @@ def test_after_restart_notice(make_core, script):
     now = [time.time()]
     owed = []
     second = make_core([survives, dies, optional], wall=lambda: now[0], hosted=lambda: [])
-    second.on_notice = lambda source, nid: owed.append(source)
+    ids = []
+    second.on_notice = lambda source, nid: owed.append(source) or ids.append(nid)
     second.record_start(os.getpid(), "the second daemon's start")
     second.boot()
     report = carried_events()
@@ -510,6 +511,8 @@ def test_after_restart_notice(make_core, script):
     left["survives"].wait(timeout=5)
     assert drive(second, lambda: carried_events()[-1]["after"] == "the session unit restarted")
     assert carried_events()[-1]["changed"] == ["survives"] and owed.count("pd_carried") == 3
+    # Each id names its occasion, so a daemon restart and a session restart in one second differ.
+    assert [i.split("-")[1] for i in ids] == ["daemon", "compaction", "session"]
 
 
 def test_a_session_restart_is_reported(make_core, script):
@@ -558,3 +561,33 @@ def test_an_unheard_carried_notice_is_warned_at_start(tmp_path, capsys, route, w
     finally:
         shutil.rmtree(base, ignore_errors=True)
     assert ("doesn't route 'pd_carried'" in capsys.readouterr().err) == warned
+
+
+def test_a_compaction_no_daemon_saw_is_reported_at_the_next_start(make_core, script):
+    """Review of #714. The tail starts at the log's end, so a compaction made while no daemon
+    ran, or inside the settle before a restart, is taken up when the next daemon boots, once its
+    settle has passed. One a report already covers isn't reported again."""
+    from macf.agent_events_log import append_event
+    from macf.pd import core as pd_core
+
+    def reports():
+        return [e["data"] for e in read_events(reverse=False, scope="all", only=(pd_core.EVENT_CARRIED,))
+                if e["data"].get("occasion") == "compaction"]
+
+    unit = make_unit("worker", script, {})
+    append_event("compaction_detected", {"source": "test"})       # while no daemon ran
+    now = [time.time()]
+    core = make_core([unit], wall=lambda: now[0])
+    core.boot()
+    core.tick()
+    assert reports() == []                                          # the settle still applies
+    now[0] += pd_core.COMPACTION_SETTLE_S + 1
+    core.tick()
+    assert len(reports()) == 1
+    core.shutdown("the next daemon starts")
+
+    again = make_core([unit], wall=lambda: now[0])
+    again.boot()
+    now[0] += pd_core.COMPACTION_SETTLE_S + 1
+    again.tick()
+    assert len(reports()) == 1                                      # already covered

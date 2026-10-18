@@ -81,8 +81,9 @@ DAEMON_POINTERS: Dict[str, str] = {
     "pd_grant_denied": "A grant your declaration names was denied. Run `macf_tools pd status`; "
                        "the event log names the grant.",
     # MIS-0002-R47 (pd_MUST_report_carried_changed_lost)
-    "pd_carried": "Your primal daemon restarted, or your session did. Run `macf_tools pd status`; "
-                  "the event log's pd_unit_state entries say what was carried, changed and lost.",
+    "pd_carried": "Your primal daemon restarted, your session restarted, or your session was compacted. "
+                  "Run `macf_tools events query --event pd_carried`; the newest entry says which, and what "
+                  "was carried, changed and lost.",
     # MIS-0002-R55 (unread_mail_MUST_raise_notice)
     "pd_unread_mail": "Mail has waited in your pickup box past your declared threshold. Run "
                       "`macf_tools amail list` to read it; the event log's pd_unread_mail entry says how long.",
