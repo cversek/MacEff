@@ -15,6 +15,14 @@ from macf.pd import notifier as nt
 from test_primal_daemon import base, make_home, run_daemon  # noqa: F401 - fixtures
 
 
+@pytest.fixture(autouse=True)
+def _mail_box_from_the_home(monkeypatch):
+    """These tests put mail in <home>/amail/pickup, the box chosen when nothing names one.
+    Inside a seat MACEFF_AGENT_NAME is set, which would point the daemon elsewhere."""
+    monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
+    monkeypatch.delenv("MACF_AMAIL_HANDOFF", raising=False)
+
+
 def _box(home):
     box = home / "amail" / "pickup"
     box.mkdir(parents=True, exist_ok=True)

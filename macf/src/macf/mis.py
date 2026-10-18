@@ -22,7 +22,12 @@ SECTIONS = ["Summary", "Motivation", "Goals and Non-Goals", "Guide-Level Explana
             "Specification", "Rationale and Rejected Alternatives", "Prior Art",
             "Compatibility and Deployment", "Security and Safety", "Conformance", "Landing Plan",
             "Open Questions", "Deliberation Record", "Revision History"]
-TYPES = ("Standards", "Process", "Informational")
+TYPES = ("Standards", "Process", "Informational", "Amendment")
+# An amendment spec is short (MIS-0001-R56 (amendment_spec_MUST_give_change_reason_signoff)):
+# its change is made in the MIS it amends, so it carries only what records the change.
+AMENDMENT_HEADER_FIELDS = ["Number", "Type", "Status", "Authors", "Secretary", "Created", "Amends",
+                           "Resolution"]
+AMENDMENT_SECTIONS = ["Amendment", "Reason", "Sign-off"]
 STATUSES = ("Draft", "Deliberation", "Final-Comment", "Accepted", "Rejected", "Withdrawn",
             "Deferred", "Final", "Superseded")
 DECIDED = ("Accepted", "Rejected", "Deferred", "Final", "Superseded")
@@ -68,7 +73,12 @@ RULE_SLUGS = {
     "R39": "item_slugs_MUST-NOT_repeat",
     "R45": "item_MUST_carry_ID_and_slug",
     "R49": "citation_MUST_match_slug",
+    "R56": "amendment_spec_MUST_give_change_reason_signoff",
 }
+# The note under a changed requirement names its previous slug (MIS-0001-R54
+# (changed_req_MUST_link_previous_text)), so a citation made before the change still resolves.
+PREVIOUS_SLUG_RE = re.compile(
+    r"^- \*\*(R\d{2,})\*\* \[[^\n]*\n[ \t]+- \*[^\n]*?previous slug \(([-_A-Za-z0-9]+)\)", re.M)
 # A citation of a requirement: MIS-0001-R14 (req_MUST_have_30_words_max). Between the ID and
 # the slug it may wrap, as docstrings and comments do: a line break, the next line's
 # indentation, and a comment marker or quote that carries the text on.
@@ -203,13 +213,15 @@ def check_file(path: Path, glossary_terms: Optional[dict] = None) -> list[Findin
     if m and number[0].strip() != m.group(1):
         add(number[1], "R03", f"Number '{number[0].strip()}' does not match the file name's {m.group(1)}")
 
-    if list(header) != HEADER_FIELDS:
-        missing = [f for f in HEADER_FIELDS if f not in header]
-        extra = [f for f in header if f not in HEADER_FIELDS]
-        detail = (f"missing {missing}" if missing else "") + (f" unknown {extra}" if extra else "")
-        add(1, "R06", f"header fields must be {HEADER_FIELDS} in that order; {detail.strip() or 'order differs'}")
-
     mtype, mstatus = header.get("Type", ("", 1)), header.get("Status", ("", 1))
+    amendment = mtype[0].strip() == "Amendment"
+    fields, field_rule = (AMENDMENT_HEADER_FIELDS, "R56") if amendment else (HEADER_FIELDS, "R06")
+    if list(header) != fields:
+        missing = [f for f in fields if f not in header]
+        extra = [f for f in header if f not in fields]
+        detail = (f"missing {missing}" if missing else "") + (f" unknown {extra}" if extra else "")
+        add(1, field_rule, f"header fields must be {fields} in that order; {detail.strip() or 'order differs'}")
+
     if mtype[0].strip() not in TYPES:
         add(mtype[1], "R08", f"Type '{mtype[0].strip()}' is not one of {list(TYPES)}")
     status = mstatus[0].strip()
@@ -219,11 +231,12 @@ def check_file(path: Path, glossary_terms: Optional[dict] = None) -> list[Findin
     secs = read_sections(lines)
     numbered = secs["numbered"]
     got = [(s["number"], s["title"]) for s in numbered]
-    want = list(enumerate(SECTIONS, start=1))
+    want = list(enumerate(AMENDMENT_SECTIONS if amendment else SECTIONS, start=1))
     if got != want:
         missing = [t for _, t in want if t not in [g for _, g in got]]
-        add(numbered[0]["start"] if numbered else 1, "R07",
-            "sections must be numbered 1 to 15 as in MIS-0000"
+        add(numbered[0]["start"] if numbered else 1, "R56" if amendment else "R07",
+            ("an amendment spec's sections must be 1 Amendment, 2 Reason, 3 Sign-off" if amendment
+             else "sections must be numbered 1 to 15 as in MIS-0000")
             + (f"; missing {missing}" if missing else "; order or numbering differs"))
 
     spec_part = _body(lines, numbered, "Specification")
@@ -377,6 +390,7 @@ def check_citations(files: list, glossary: Optional[Path] = None) -> list:
     """
     tree = sorted({s for f in files for s in f.parent.glob("MIS-*.md")} | set(files))
     defined: dict = {}  # number -> {requirement ID: slug}, or None when the file is unreadable
+    former: dict = {}  # number -> {requirement ID: {previous slugs its notes name}}
     named: set = set()
     for f in tree:
         text, unreadable = read_utf8(f)
@@ -386,6 +400,8 @@ def check_citations(files: list, glossary: Optional[Path] = None) -> list:
         else:
             num = read_header(text.splitlines()).get("Number", ("", 1))[0].strip()
             reqs = dict(REQ_SLUG_RE.findall(text))
+            for rid, old in PREVIOUS_SLUG_RE.findall(text):
+                former.setdefault(num, {}).setdefault(rid, set()).add(old)
         if num:
             defined[num] = reqs
             if f in files:
@@ -422,7 +438,7 @@ def check_citations(files: list, glossary: Optional[Path] = None) -> list:
             if want is None:
                 out.append(Finding(path=str(path), line=n, rule="R49",
                                    message=f"cites MIS-{num}-{rid} ({slug}), but MIS-{num} has no {rid}"))
-            elif want != slug:
+            elif want != slug and slug not in former.get(num, {}).get(rid, ()):
                 out.append(Finding(path=str(path), line=n, rule="R49",
                                    message=f"cites MIS-{num}-{rid} ({slug}); MIS-{num} names it ({want})"))
     return out

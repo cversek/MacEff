@@ -386,3 +386,91 @@ def test_a_client_not_on_the_declared_path_is_named_and_nothing_is_touched(tmp_p
         assert "claude is not on the session unit's declared PATH" in reason and str(empty) in reason
     finally:
         client.close()
+
+
+def test_waiting_reported(tmp_path, monkeypatch):
+    """MIS-0002-R21 (pd_MUST_report_waiting_on_person) for Claude Code's session unit, on the
+    path the session takes: from the session's environment the transcript monitor starts the
+    unit's beat, and each beat says when the event log shows that the monitor's own session's
+    newest deciding event is a permission request. Any progress after the request ends the
+    wait: the tool running, or a prompt, which is how a denial with a reply arrives."""
+    import os
+    import time as _time
+    from macf import permission_watch as pw
+    from macf.agent_events_log import append_event
+    from macf.pd import liveness as lv
+    from macf.transcript_monitor import daemon
+
+    # The reading rule.
+    log = []
+
+    def ev(name, t, sid, **data):
+        return {"event": name, "timestamp": t, "data": data, "hook_input": {"session_id": sid,
+                "tool_input": {"command": "gh pr merge 1 --token s3cret"}}}
+
+    read = lambda: pw.waiting(sorted(log, key=lambda e: e["timestamp"], reverse=True))
+    dialogs = pw.SessionDialogs("s1", read=read)
+    assert dialogs() is None                                         # nothing asked yet
+    log.append(ev("permission_requested", 100.0, "s2", tool_name="Bash", timestamp=100.0))
+    assert dialogs() is None                                         # another session's dialog
+    log.append(ev("permission_requested", 200.0, "s1", tool_name="Bash", timestamp=200.0))
+    said = dialogs()
+    assert said.startswith("a permission dialog for Bash, open since ")
+    assert _time.strftime("%H:%M", _time.localtime(200.0)) in said and "s3cret" not in said
+
+    def broken():
+        raise OSError("log unreadable")
+    dialogs._read = broken
+    assert dialogs() == said                                         # a read error keeps the wait
+    dialogs._read = read
+    log.append(ev("tool_call_started", 260.0, "s1"))
+    assert dialogs() is None                                         # answered: the tool ran
+    log.append(ev("permission_requested", 300.0, "s1", tool_name="Edit", timestamp=300.0))
+    assert dialogs().startswith("a permission dialog for Edit")
+    log.append(ev("dev_drv_started", 310.0, "s1"))
+    assert dialogs() is None                                         # a prompt: denied with a reply
+
+    # The beat, as the monitor starts it from the session's environment, reading the log the
+    # hooks write, for its own transcript's session.
+    home = tmp_path / "agent"
+    (home / ".maceff").mkdir(parents=True)
+    (home / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": "Resident"}}))
+    (home / ".maceff_primary_agent.id").write_text("1a2b3c4d-0000\n")
+    for k, v in {lv.ENV_HOME: str(home), lv.ENV_SESSION_UNIT: "session",
+                 lv.ENV_SESSION_INTERVAL: "0.05", lv.ENV_SESSION_PID: str(os.getppid())}.items():
+        monkeypatch.setenv(k, v)
+    beats = []
+    monkeypatch.setattr(lv, "append_event", lambda n, d: beats.append(d) or True)
+    monkeypatch.setattr(daemon, "append_event", lambda *a, **k: True)
+    monkeypatch.setattr(daemon, "find_monitors", list)               # no older monitor
+    monkeypatch.setattr(daemon.signal, "signal", lambda *a: None)    # the suite keeps its handlers
+
+    def dialog(sid, tool):                                           # as the PermissionRequest hook records it
+        append_event("permission_requested", {"session_id": sid, "tool_name": tool, "timestamp": _time.time()},
+                     hook_input={"session_id": sid, "tool_name": tool})
+
+    def waiting_on(n):
+        deadline = _time.monotonic() + 2
+        while len(beats) <= n and _time.monotonic() < deadline:
+            _time.sleep(0.01)
+        return beats[n]["waiting_on"] if len(beats) > n else "no beat"
+
+    beat_said = []
+
+    def fake_run(self, start_from_end=True):
+        dialog("s1", "Bash")                                         # this session's dialog,
+        dialog("s2", "Edit")                                         # and a newer one elsewhere
+        self.on_pass()
+        beat_said.append(waiting_on(0))
+        append_event("tool_call_started", {"session_id": "s1"})      # answered: the tool ran
+        self.on_pass()
+        beat_said.append(waiting_on(1))
+
+    monkeypatch.setattr(daemon.TranscriptMonitor, "run", fake_run)
+    transcript = tmp_path / "s1.jsonl"                               # named for its session
+    transcript.write_text("")
+    daemon.run_monitor(transcript, 0.01, owner=0)
+    assert beat_said[0].startswith("a permission dialog for Bash, open since "), beat_said
+    assert beat_said[1] is None, beat_said
+    assert all(b["pid"] == os.getppid() and b["unit"] == "session" for b in beats)
+
