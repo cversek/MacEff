@@ -243,6 +243,9 @@ class Scheduler:
             return ""
         if self.on_notice is not None:
             self.on_notice(NOTICE_SCHEDULE_CHANGED, f"{s.name}:{_iso(self.boot_at)}")
+        # Only the operator can accept it, so it is said where the operator reads the daemon too.
+        print(f"⚠️ MACF: pd: schedule {s.name} is not run: {why}; run `macf_tools pd install` to accept it",
+              file=sys.stderr)
         return why + "; run `macf_tools pd install` to accept it (MIS-0002-R33)"
 
     def _not_runnable(self, s: Schedule) -> str:
