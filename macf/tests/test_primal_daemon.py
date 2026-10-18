@@ -1667,3 +1667,113 @@ def test_an_untested_newest_probe_speaks_for_the_grants(tmp_path, script, base, 
               {"timestamp": 100, "data": {"agent": CARD, "tested": True, "verdicts": {"local_network": "denied"}}}]
     daemon = run_daemon(home, base, grant_probes=lambda: iter(probes))
     assert not [o for o in daemon.notifier.owed.values() if o.source == "pd_grant_denied"]
+# ---- pacing the keystroke wake (persistent_layer 1.9) ------------------------------------
+
+class _NoPane:
+    """A pane for a waker that never ticks here: with no mail owed, the notifier types nothing."""
+
+    def capture(self):
+        return ""
+
+    def type(self, text):
+        return False
+
+    def enter(self):
+        return False
+
+
+def _attach_waker(daemon, refractory_s=600.0):
+    from macf.pd.wake import Waker
+    daemon.notifier.waker = Waker(_NoPane(), record_keys=lambda text, kind: None,
+                                  append=lambda e, d: True, refractory_s=refractory_s)
+    return daemon.notifier.waker
+
+
+def _declare(home, **fields):
+    path = declaration_path(home)
+    data = json.loads(path.read_text())
+    data.update(fields)
+    path.write_text(Declaration.model_validate(data).model_dump_json())
+
+
+def test_the_agent_paces_its_wake_and_the_pace_is_recorded_like_an_act(tmp_path, script, base, run_daemon):
+    """A pace sets the waker's window and answers with it and where it came from. It is recorded
+    before it is answered: like every act (the asker, the reason and the asking process, with no
+    unit), and in pd_wake_paced with the window it replaced."""
+    daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+    waker = _attach_waker(daemon)
+    agent = {"kind": "agent", "card": CARD}
+
+    reply = ask(daemon, {"op": "pace", "refractory_s": 300, "asked_by": agent, "reason": "a busy hour"})
+    assert reply["ok"], reply
+    assert reply["wake_refractory_s"] == 300 and "a busy hour" in reply["wake_window_from"]
+    assert waker.refractory_s == 300
+    [paced] = events("pd_wake_paced")
+    assert (paced["refractory_s"], paced["previous_s"]) == (300, 600)
+    assert paced["peer"]["pid"] == os.getpid() and paced["asked_by"] == agent
+    [control] = [c for c in events("pd_control") if c["act"] == "pace"]
+    assert control["unit"] == "" and control["peer"]["pid"] == os.getpid() and control["reason"] == "a busy hour"
+    assert ask(daemon, {"op": "status"})["wake_refractory_s"] == 300
+
+    reply = ask(daemon, {"op": "pace", "refractory_s": None, "asked_by": agent, "reason": "the hour is over"})
+    assert reply["ok"] and waker.refractory_s == 600 and reply["wake_window_from"] == "the declaration"
+
+
+def test_no_pace_goes_under_the_declared_floor_and_only_the_agent_or_operator_paces(tmp_path, script, base, run_daemon):
+    """The floor comes only from the declaration. A pace under it is refused naming it, the window
+    stays, and nothing is recorded. A pace may lengthen the window; the daemon's own askers and the
+    wind-down may not pace."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    _declare(home, wake_refractory_s=600.0, wake_refractory_floor_s=120.0)
+    daemon = run_daemon(home, base)
+    waker = _attach_waker(daemon)
+    agent = {"kind": "agent", "card": CARD}
+
+    reply = ask(daemon, {"op": "pace", "refractory_s": 60, "asked_by": agent, "reason": "faster"})
+    assert not reply["ok"] and "120" in reply["error"] and "floor" in reply["error"]
+    assert waker.refractory_s == 600 and events("pd_wake_paced") == []
+    assert ask(daemon, {"op": "pace", "refractory_s": 120, "asked_by": agent, "reason": "the floor"})["ok"]
+    assert ask(daemon, {"op": "pace", "refractory_s": 3600, "asked_by": {"kind": "operator"},
+                        "reason": "slower"})["ok"]
+    assert waker.refractory_s == 3600
+    for kind in ("policy", "harness", "wind_down"):
+        assert not ask(daemon, {"op": "pace", "refractory_s": 300, "asked_by": {"kind": kind}, "reason": "x"})["ok"]
+    assert waker.refractory_s == 3600
+
+
+def test_a_pace_with_no_keystroke_wake_is_refused(tmp_path, script, base, run_daemon):
+    daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+    reply = ask(daemon, {"op": "pace", "refractory_s": 300, "asked_by": {"kind": "agent"}, "reason": "x"})
+    assert not reply["ok"] and "no keystroke wake" in reply["error"]
+    assert "wake_refractory_s" not in ask(daemon, {"op": "status"})
+
+
+def test_the_next_daemon_reasserts_the_newest_pace_and_a_raised_floor_wins(tmp_path, script, base):
+    """A pace outlives its daemon: the next one reads the newest pd_wake_paced of its own agent back
+    at its start. Another agent's pace in a shared log is not its own, and a floor declared above
+    the pace since then wins, saying so."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    _declare(home, wake_refractory_s=900.0)
+    daemon = Daemon(home, base=base)
+    waker = _attach_waker(daemon)
+    daemon._reassert_pace()
+    assert waker.refractory_s == 900.0 and daemon._wake_from == "the declaration"    # no pace yet
+
+    peer = {"uid": os.getuid(), "pid": os.getpid(), "proc_start": "x"}
+
+    def pace(card, seconds, reason):
+        append_event("pd_wake_paced", {"agent": card, "refractory_s": seconds, "previous_s": 600.0,
+                                       "asked_by": {"kind": "agent"}, "peer": peer, "reason": reason})
+    pace(CARD, 240.0, "a long build")
+    pace("Other@ffffff", 30.0, "not mine")
+
+    daemon = Daemon(home, base=base)
+    waker = _attach_waker(daemon)
+    daemon._reassert_pace()
+    assert waker.refractory_s == 240.0 and "a long build" in daemon._wake_from
+
+    _declare(home, wake_refractory_s=600.0, wake_refractory_floor_s=300.0)
+    daemon = Daemon(home, base=base)
+    waker = _attach_waker(daemon)
+    daemon._reassert_pace()
+    assert waker.refractory_s == 300.0 and "floor" in daemon._wake_from and "240" in daemon._wake_from

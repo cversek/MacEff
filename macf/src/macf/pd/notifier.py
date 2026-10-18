@@ -228,6 +228,13 @@ class Notifier:
     def channels(self) -> List[socket.socket]:
         return list(self._channels)
 
+    def pace(self, refractory_s: float) -> None:
+        """Set how long the keystroke wake rests after each wake (persistent_layer 1.9). The daemon
+        has already checked the floor and recorded the pace; a window running now is measured
+        against the new length at the next tick."""
+        if self.waker is not None:
+            self.waker.refractory_s = refractory_s
+
     def wake(self) -> bool:
         """The fallback, MIS-0002-R105 (keystroke_wake_MUST_be_fallback_only): with no channel
         attached, and mail owed for longer than ``CHANNEL_GRACE_S`` (time for a channel to

@@ -503,3 +503,47 @@ def test_the_daemon_keeps_held_screens_beside_the_event_log(tmp_path):
         assert daemon.notifier.waker.screens_dir == home / ".maceff" / "wake_screens"
     finally:
         shutil.rmtree(runtime, ignore_errors=True)
+
+
+# --- the agent paces its wake (persistent_layer 1.9) ---------------------------------------
+
+def test_the_declared_window_and_the_wakes_default_are_one_value():
+    from macf.pd.interface import DEFAULT_WAKE_REFRACTORY_S, Declaration
+    assert wk.REFRACTORY_S == DEFAULT_WAKE_REFRACTORY_S == Declaration(version=1, agent="A@1").wake_refractory_s
+
+
+def test_a_pace_may_shorten_the_window_to_the_floor_and_never_past_it():
+    """Only the declaration sets the floor: a pace may lengthen the window, or shorten it down to
+    the floor, and None goes back to the declared window."""
+    assert wk.pace_refusal(300, None) is None
+    assert wk.pace_refusal(300, 300) is None
+    assert wk.pace_refusal(1200, 300) is None
+    assert wk.pace_refusal(None, 300) is None
+    refused = wk.pace_refusal(299, 300)
+    assert refused and "300" in refused and "floor" in refused
+
+
+def test_the_newest_pace_holds_at_boot_and_a_raised_floor_wins_saying_so():
+    paced = {"timestamp": 1_800_000_000, "data": {"refractory_s": 120.0, "reason": "a busy hour",
+                                                   "asked_by": {"kind": "agent"}}}
+    assert wk.window_at_boot(600.0, None, None) == (600.0, "the declaration")
+    window, source = wk.window_at_boot(600.0, None, paced)
+    assert window == 120.0 and "a busy hour" in source and "by the agent" in source
+    window, source = wk.window_at_boot(600.0, 300.0, paced)
+    assert window == 300.0 and "floor" in source and "120" in source
+    back = {"timestamp": 1_800_000_000, "data": {"refractory_s": None, "reason": "done"}}
+    window, source = wk.window_at_boot(900.0, None, back)
+    assert window == 900.0 and "declaration" in source
+
+
+def test_a_window_paced_shorter_lets_the_next_tick_wake(tmp_path):
+    """The window is measured at every tick, so a pace that shortens it holds from the next one."""
+    events = []
+    h = _sent_then_seen([screen(), RUNNING, screen()], events)
+    h.clock[0] += 59.0                                        # t=60, inside the 600 s window
+    assert h.waker.tick([ID1, ID2]) is None
+    notifier = nt.Notifier(tmp_path, {}, append=lambda e, d: True, events=lambda: [])
+    notifier.waker = h.waker
+    notifier.pace(30.0)
+    assert h.waker.refractory_s == 30.0
+    assert h.waker.tick([ID1, ID2]) == "sent"

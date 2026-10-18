@@ -4,6 +4,8 @@
 manager and take it out. Starting, stopping and restarting a unit over the control socket
 must name who asks (MIS-0002-R52 (control_act_MUST_name_who_asked)), and which asker a
 command line typed in a session claims is still an open question, so no unit act is here.
+``wake`` paces the keystroke wake, which acts on no unit: it is asked by the agent, or by the
+operator with ``--asked-by operator`` (persistent_layer 1.9).
 """
 import argparse
 import json
@@ -69,6 +71,16 @@ def add_pd_parser(sub) -> None:
     agenda = pd_sub.add_parser(
         "agenda", help="what is scheduled: the declared schedules' next runs and your own entries")
     agenda.set_defaults(func=cmd_pd_agenda)
+    wake = pd_sub.add_parser(
+        "wake", help="the keystroke wake's window: show it, or pace it (persistent_layer 1.9)")
+    wake.add_argument("--refractory", default=None, metavar="DURATION",
+                      help="rest this long after each wake: seconds, or 90s, 5m, 1h; never under "
+                           "the declared floor")
+    wake.add_argument("--declared", action="store_true", help="go back to the declared window")
+    wake.add_argument("--reason", default=None, help="why; recorded with the pace, and needed to pace")
+    wake.add_argument("--asked-by", choices=("agent", "operator"), default="agent",
+                      help="who paces: the agent itself (default), or the operator")
+    wake.set_defaults(func=cmd_pd_wake)
 
 
 def cmd_pd_alive(args: argparse.Namespace) -> int:
@@ -82,6 +94,66 @@ def cmd_pd_alive(args: argparse.Namespace) -> int:
         return 1
     pid = args.pid or os.getppid()
     return 0 if liveness.emit(found.card, found.unit, found.interval_s, args.in_flight, pid=pid) else 1
+
+
+def _seconds(text: str) -> float:
+    """A duration from the command line: a plain number of seconds, or one with s, m or h."""
+    units = {"s": 1, "m": 60, "h": 3600}
+    scale = units.get(text[-1:].lower(), 1)
+    number = text[:-1] if text[-1:].lower() in units else text
+    try:
+        value = float(number) * scale
+    except ValueError:
+        raise ValueError(f"not a duration: {text!r} (use seconds, or 90s, 5m, 1h)") from None
+    if not value > 0:
+        raise ValueError(f"a window must be longer than nothing: {text!r}")
+    return value
+
+
+def cmd_pd_wake(args: argparse.Namespace) -> int:
+    """0 when shown or paced; 1 when the daemon refused, could not be reached, or has no wake."""
+    from macf.pd.client import DaemonUnavailable, ask
+    from macf.pd.core import POLICY_POINTER, DeclarationRefused
+    from macf.pd.daemon import card_for_home
+    from macf.utils.paths import find_agent_home
+
+    home = find_agent_home()
+    try:
+        card = card_for_home(home)
+    except DeclarationRefused as e:
+        print(f"maceff_pd: {e}\n{POLICY_POINTER}", file=sys.stderr)
+        return 1
+    if args.refractory is not None and args.declared:
+        print("maceff_pd: --refractory and --declared ask for different windows; give one", file=sys.stderr)
+        return 1
+    pacing = args.refractory is not None or args.declared
+    if pacing and not args.reason:
+        print("maceff_pd: a pace is recorded with its reason; give --reason", file=sys.stderr)
+        return 1
+    if pacing:
+        try:
+            window = None if args.declared else _seconds(args.refractory)
+        except ValueError as e:
+            print(f"maceff_pd: {e}", file=sys.stderr)
+            return 1
+        asker = {"kind": args.asked_by, **({"card": card} if args.asked_by == "agent" else {})}
+        request = {"op": "pace", "refractory_s": window, "asked_by": asker, "reason": args.reason}
+    else:
+        request = {"op": "status"}
+    try:
+        reply = ask(card, request)
+    except DaemonUnavailable as e:
+        print(f"maceff_pd: {card}: {e}", file=sys.stderr)
+        return 1
+    if not reply.ok:
+        print(f"maceff_pd: {card}: refused: {reply.error}", file=sys.stderr)
+        return 1
+    if reply.wake_refractory_s is None:
+        print(f"{card}: no session unit is declared, so there is no keystroke wake")
+        return 1
+    print(f"{card}: the wake rests {reply.wake_refractory_s:g} s after each wake, "
+          f"from {reply.wake_window_from}")
+    return 0
 
 
 def _when(epoch: Optional[float]) -> str:

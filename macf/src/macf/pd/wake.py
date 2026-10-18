@@ -41,7 +41,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional, Protocol
+from typing import Callable, Iterable, List, Optional, Protocol, Tuple
 
 from macf.agent_events_log import append_event
 from macf.utils.input_origin import WAKE_OPENING
@@ -50,7 +50,9 @@ from macf.utils.input_origin import WAKE_OPENING
 MESSAGE_ID = re.compile(r"^msg-\d{10}-[0-9a-f]{12}$")
 #: How many ids a wake names before "+N more".
 MAX_NAMED = 8
-#: Seconds after a wake before another may be typed; arrivals meanwhile wait for the next.
+#: Seconds after a wake before another may be typed; arrivals meanwhile wait for the next. The
+#: declaration's ``wake_refractory_s`` defaults to the same value (pinned equal by a test), and
+#: the agent may pace it (``pace_refusal``, ``window_at_boot``).
 REFRACTORY_S = 600.0
 #: Wakes per day at most; reaching it is recorded once.
 DAILY_CAP = 48
@@ -68,6 +70,10 @@ EVENT_HELD = "pd_wake_held"
 EVENT_RELEASED = "pd_wake_released"
 EVENT_TURN = "pd_wake_turn"
 EVENT_CAP = "pd_wake_cap_reached"
+#: The agent, or the operator, paced the wake over the control socket (persistent_layer 1.9):
+#: the window asked for, the one it replaced, and who asked, why and from which process. The
+#: next daemon reads the newest back at its start.
+EVENT_PACED = "pd_wake_paced"
 
 # The screen states, from the most to the least cautious.
 DIALOG, RUNNING, DRAFT, WAKE_IN_BOX, IDLE_EMPTY = "dialog", "running", "draft", "wake_in_box", "idle_empty"
@@ -92,6 +98,42 @@ _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 _SPINNER = re.compile(r"…\s*\((?:[^()]*?·\s*)?(\d+h )?(\d+m )?\d+s")
 _DIALOG_MARKERS = ("esc to cancel", "enter to select", "do you want to")
 _RUNNING_MARKER = "esc to interrupt"
+
+
+def pace_refusal(wanted_s: Optional[float], floor_s: Optional[float]) -> Optional[str]:
+    """Why a pace is refused, or None. Only the declaration sets the floor: a pace may lengthen
+    the window, or shorten it down to the floor, and never past it. None asks for the declared
+    window, which the declaration already holds at or above its floor."""
+    if wanted_s is not None and floor_s is not None and wanted_s < floor_s:
+        return (f"{wanted_s:g} s is under the declared floor of {floor_s:g} s, and only the "
+                f"declaration sets the floor")
+    return None
+
+
+def window_at_boot(declared_s: float, floor_s: Optional[float],
+                   paced: Optional[dict]) -> Tuple[float, str]:
+    """The window a starting daemon puts in force, and where it came from, from the newest
+    ``pd_wake_paced`` event of this agent, or None. The newest pace holds until another replaces
+    it; a floor declared above it since then wins, and the answer says so."""
+    if paced is None:
+        return declared_s, "the declaration"
+    data = paced.get("data") or {}
+    when = paced.get("timestamp") or 0
+    wanted = data.get("refractory_s")
+    if wanted is None:
+        return declared_s, f"the declaration, which the pace of {_minute(when)} went back to"
+    if floor_s is not None and wanted < floor_s:
+        return floor_s, f"the declared floor, raised since the pace of {_minute(when)} asked for {wanted:g} s"
+    return wanted, pace_source(when, (data.get("asked_by") or {}).get("kind", "agent"), data.get("reason", ""))
+
+
+def pace_source(when: float, asker_kind: str, reason: str) -> str:
+    """Where a paced window came from, said the same way live and after a restart."""
+    return f"the pace of {_minute(when)} by the {asker_kind}: {reason}"
+
+
+def _minute(epoch: float) -> str:
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(epoch))
 
 
 def wake_text(ids: Iterable[str]) -> Optional[str]:
