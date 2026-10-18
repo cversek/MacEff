@@ -251,7 +251,7 @@ class Schedule(_Closed):
     name: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,47}$")
     cron: str = Field(min_length=1)
     missed_run: MissedRunPolicy
-    target: Union[Literal["isolated"], str]
+    target: Union[Literal["isolated"], Annotated[str, Field(min_length=1)]]
     run: Union[PromptRun, CommandRun]
     timeout_s: float = Field(gt=0)
     restarts_unit: bool = False
