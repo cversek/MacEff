@@ -95,6 +95,13 @@ COMPACTION_SETTLE_S = 60.0
 #: What a compaction always loses, in a report's words.
 CONTEXT_LOST = "the session's working context (summarized)"
 
+
+def _float_or_none(value) -> Optional[float]:
+    """An epoch time the log wrote as a number; anything else is no time."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
 #: Where the reasoning behind every refusal lives. A refusal names it, so a reader who
 #: has just been stopped finds the why without the message restating it
 #: (capability_boundaries: a refusal names its policy).
@@ -636,21 +643,39 @@ class Core:
         if self._previous_daemon:
             # A first start carries nothing, so only a restart is reported (R47).
             changed = {n for n in self._previously_live - carried if self._units[n].state in LIVE_STATES}
-            self._report_carried("the primal daemon restarted", carried, changed,
+            self._report_carried("daemon", "the primal daemon restarted", carried, changed,
                                  self._previously_live - carried - changed)
+        self._recover_compaction()
 
-    def _report_carried(self, after: str, carried, changed, lost) -> None:
+    def _recover_compaction(self) -> None:
+        """A compaction this daemon's tail can't see, made while no daemon ran or inside the
+        settle before a restart, is taken up at boot: the newest ``compaction_detected`` that
+        no compaction report covers is reported once the settle has passed (R47)."""
+        newest = None
+        for event in read_events(reverse=True, scope="all", only=(EVENT_COMPACTION, EVENT_CARRIED)):
+            data = event.get("data") or {}
+            if event.get("event") == EVENT_COMPACTION:
+                newest = newest if newest is not None else _float_or_none(event.get("timestamp"))
+                continue
+            if data.get("agent") == self.card and data.get("occasion") == "compaction":
+                covered = _float_or_none(data.get("compaction_at"))
+                if newest is not None and covered is not None and covered >= newest:
+                    newest = None
+                break
+        if newest is not None:
+            self._compacted_at = newest
+
+    def _report_carried(self, occasion: str, after: str, carried, changed, lost, **facts) -> None:
         """Record what a restart, recreate or compaction carried, changed and lost, and owe
         the agent the one notice that points to it (MIS-0002-R47
         (pd_MUST_report_carried_changed_lost)). The facts are the event's; the notice says
         only where they are."""
         at = self._wall()
-        self._emit(EVENT_CARRIED, {"agent": self.card, "after": after, "at": at,
+        self._emit(EVENT_CARRIED, {"agent": self.card, "occasion": occasion, "after": after, "at": at,
                                    "carried": sorted(carried), "changed": sorted(changed),
-                                   "lost": sorted(lost)})
+                                   "lost": sorted(lost), **facts})
         if self.on_notice is not None:
             # The occasion is in the id, so two reports in one second stay two notices.
-            occasion = after.split()[-1]
             self.on_notice(CARRIED_NOTICE_SOURCE, f"carried-{occasion}-{int(at)}")
 
     def _adopt_survivors(self) -> set:
@@ -818,14 +843,15 @@ class Core:
             if event.get("event") == EVENT_HARNESS_COMPACTION:
                 self._on_harness_compaction(event)
             elif event.get("event") == EVENT_COMPACTION:
-                self._compacted_at = self._wall()
+                self._compacted_at = _float_or_none(event.get("timestamp")) or self._wall()
             else:
                 self._on_liveness(event, now)
         if self._compacted_at is not None and self._wall() - self._compacted_at >= COMPACTION_SETTLE_S:
             # This agent's session compacted, whether or not the daemon runs it as a unit.
-            self._compacted_at = None
+            compacted, self._compacted_at = self._compacted_at, None
             live = {r.spec.name for r in self._units.values() if r.state in LIVE_STATES}
-            self._report_carried("the session was compacted", live, set(), {CONTEXT_LOST})
+            self._report_carried("compaction", "the session was compacted", live, set(), {CONTEXT_LOST},
+                                 compaction_at=compacted)
         for r in self._units.values():
             try:
                 self._tick_unit(r, now)
@@ -1160,7 +1186,7 @@ class Core:
         if r.spec.kind == "session" and r.incarnations > 1:
             # The session came back as a new process: its context is gone, the rest ran on.
             others = {o.spec.name for o in self._units.values() if o is not r and o.state in LIVE_STATES}
-            self._report_carried("the session unit restarted", others, {r.spec.name}, {CONTEXT_LOST})
+            self._report_carried("session", "the session unit restarted", others, {r.spec.name}, {CONTEXT_LOST})
 
     def _tick_remnant(self, r: _Runner, now: float) -> None:
         """Members of a stopped unit's group that outlived its leader. A member still the
