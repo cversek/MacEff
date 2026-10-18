@@ -148,7 +148,7 @@ def cmd_pd_install(args: argparse.Namespace) -> int:
 
     try:
         home, card = _this_agent()
-        load_declaration(home, card)
+        declaration = load_declaration(home, card)
         tier = adapters.adapter_for(sys.platform)
     except (DeclarationRefused, LookupError) as e:
         print(f"maceff_pd: nothing installed: {e}\n{POLICY_POINTER}", file=sys.stderr)
@@ -176,6 +176,7 @@ def cmd_pd_install(args: argparse.Namespace) -> int:
         print(f"maceff_pd: install stopped: {e}\n{POLICY_POINTER}", file=sys.stderr)
         return 1
     print(f"{card}: installed at {where}; {runs}; the service manager says: {tier.status(card)}")
+    _record_schedules(card, declaration, home)
     if sys.platform.startswith("linux"):
         import os
         import pwd
@@ -185,6 +186,23 @@ def cmd_pd_install(args: argparse.Namespace) -> int:
             print("note: linger is off, so the daemon stops at your last logout; "
                   "`loginctl enable-linger` keeps it running, and is the host operator's call")
     return 0
+
+
+def _record_schedules(card: str, declaration, home: Path) -> None:
+    """Record each schedule's digest as installed, the record a host's daemon checks its
+    declaration against at start (MIS-0002-R33 (run_MUST-NOT_change_schedules))."""
+    from macf.agent_events_log import append_event
+    from macf.pd.names import rendered_declaration_path
+    from macf.pd.scheduler import EVENT_INSTALLED, schedule_digests
+    if rendered_declaration_path(home).exists():
+        return  # noqa: MACEFF003 - a rendered declaration is out of the agent's reach; nothing to check
+    digests = schedule_digests(declaration)
+    if not append_event(EVENT_INSTALLED, {"agent": card, "digests": digests}):
+        print("⚠️ MACF: pd: the schedules were not recorded as installed, so the daemon won't run "
+              "them; run pd install again", file=sys.stderr)
+    elif digests:
+        print(f"schedules recorded as installed: {', '.join(sorted(digests))}. A change to one "
+              f"isn't run until pd install runs again, and the daemon reads it when it next starts.")
 
 
 def cmd_pd_uninstall(args: argparse.Namespace) -> int:
