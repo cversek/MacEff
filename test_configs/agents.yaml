@@ -1,9 +1,14 @@
 # Test configuration for Named Agents v0.3 empirical validation
 # Tests Pydantic model parsing and startup script logic
 
+# The uid/gid block this deployment owns (base..base+999); agents take uids in base+100..base+899
+ids:
+  base: 21000
+
 agents:
   testpa:
     username: pa_testpa
+    uid: 21100
     personality: ../test_configs/test_personality.md
     subagents: [DevOpsEng, TestEng]
     assigned_projects: [TestProject]

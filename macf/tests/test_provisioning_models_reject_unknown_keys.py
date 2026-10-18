@@ -19,7 +19,7 @@ from macf.models.project_spec import ProjectsConfig
 
 
 def _agent(**over):
-    base = dict(username="pa_demo", personality="agents/demo.md")
+    base = dict(username="pa_demo", uid=21100, personality="agents/demo.md")
     base.update(over)
     return base
 
@@ -44,7 +44,7 @@ def test_unknown_key_is_rejected_at_a_NESTED_level():
     The keys actually found in the wild were nested one level down, inside an
     individual agent's block -- exactly where a top-level check does not look.
     """
-    cfg = {"agents": {"demo": _agent(zzz_nested="anything")}}
+    cfg = {"ids": {"base": 21000}, "agents": {"demo": _agent(zzz_nested="anything")}}
     with pytest.raises(ValidationError) as exc:
         AgentsConfig(**cfg)
     assert "zzz_nested" in str(exc.value)
@@ -72,6 +72,7 @@ def test_a_config_using_the_documented_surface_still_validates():
     test, not in a container that will not come up.
     """
     cfg = {
+        "ids": {"base": 21000},
         "agents": {
             "demo": _agent(
                 display_name="Demo Agent",
@@ -97,6 +98,8 @@ def test_a_config_using_the_documented_surface_still_validates():
     parsed = AgentsConfig(**cfg)
     assert parsed.agents["demo"].harness_session == "demo1"
     assert parsed.agents["demo"].conda_env == "research_env"
+    assert parsed.agents["demo"].uid == 21100
+    assert parsed.ids.base == 21000
 
 
 def test_projects_config_rejects_unknown_and_accepts_documented():

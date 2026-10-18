@@ -3,6 +3,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+      args:
+        # The deployment's id block (container_operations 6.2). No default on purpose: a block
+        # chosen for you could be another deployment's, or land on the host's own accounts.
+        MACEFF_ID_BASE: "${MACEFF_ID_BASE:?set MACEFF_ID_BASE to this deployment's id block, the ids.base in agents.yaml}"
     image: maceff-sandbox:latest
     container_name: maceff-sandbox
     ports:
