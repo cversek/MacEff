@@ -344,7 +344,7 @@ The requirements in force stand in one document, the MIS itself. Version control
 
 **An amendment, the formal path.** Where others relied heavily on the text a change would replace, the repo owner may call for an amendment instead [MIS-0001-R55 (repo_owner_MAY_call_for_amendment)].
 - An amendment spec gives the old and new text of each requirement it changes, the reason, and the sign-off record [MIS-0001-R56 (amendment_spec_MUST_give_change_reason_signoff)]. It is a short MIS of Type Amendment (§2.2), and the amended MIS is edited in place in the same pull request.
-- Before it merges, each maintainer of the amended MIS other than its author signs off on it [MIS-0001-R57 (amendment_MUST_have_maintainer_signoff)]. Signing off makes them aware of the history, so they can update what they understood.
+- Before it merges, each maintainer of the amended MIS, other than the one who drafted it, signs off on it [MIS-0001-R57 (amendment_MUST_have_maintainer_signoff)]. Signing off makes them aware of the history, so they can update what they understood.
 - They may ask for changes. The repo owner has the final word, may veto any change they ask for [MIS-0001-R58 (repo_owner_MAY_veto_requested_change)], and merges the amendment.
 
 **The note at a changed requirement** sits on the line under it, in italics. It says how the requirement changed, links the previous text, and names any previous slug [MIS-0001-R54 (changed_req_MUST_link_previous_text)]:
@@ -355,7 +355,7 @@ Leave out the previous slug when the slug did not change. `mis check` accepts a 
 
 - **Editorial:** a change that alters no requirement's meaning, keyword, check, scope, ID or slug. For example, typos, broken links, clearer wording with the same meaning, or a Conformance state moving from `planned` to `passing`.
 - **Substantive:** anything else.
-- **Who judges:** the Secretary judges which a change is; when anyone disputes it, the operator decides.
+- **Who judges:** the Secretary judges which a change is; when anyone disputes it, the repo owner decides.
 - **How an editorial change goes:** by pull request, reviewed and merged like any other. It needs no new final comment period. When it moves a Conformance state toward Final, the Final rules (§7.2) apply to that pull request.
 - **A later MIS replaces an accepted one only in full,** which makes the old one Superseded. A partial change is a revision or an amendment, never a separate MIS. MIS-0003 updated MIS-0001 the earlier way, by a separate MIS; MIS-0005 brought its change into MIS-0001's text.
 - **An accepted MIS that will not land:** the operator sets it Deferred, with a Resolution that says why (§2.3). It cannot be Withdrawn, because the decision is the operator's, not the author's.

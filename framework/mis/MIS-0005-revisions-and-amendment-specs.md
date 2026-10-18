@@ -58,7 +58,7 @@ MIS-0003 decided this change on 2026-10-10, and its text stood only in MIS-0003 
 >
 > R56: Each amendment spec MUST give the old and new text of each requirement it changes, the reason, and the sign-off record. (amendment_spec_MUST_give_change_reason_signoff)
 >
-> R57: Before an amendment spec merges, each maintainer of the amended MIS other than its author MUST sign off on it. (amendment_MUST_have_maintainer_signoff)
+> R57: Before an amendment spec merges, each maintainer of the amended MIS, other than the one who drafted the spec, MUST sign off on it. (amendment_MUST_have_maintainer_signoff)
 >
 > R58: The repo owner MAY veto any change that a maintainer requests to an amendment spec. (repo_owner_MAY_veto_requested_change)
 

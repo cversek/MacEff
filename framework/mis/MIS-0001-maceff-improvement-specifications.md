@@ -132,10 +132,10 @@ All terms this MIS uses are defined in `framework/glossary.md`, which this MIS c
 - **R36** [MUST · judgment: the reviewers of the change] When an agent departs from a requirement that permits departure, the agent MUST record the requirement ID, its semantic slug and the reason where the departure is made. (departure_MUST_be_recorded)
 - **R52** [MAY · judgment: the repo owner] The repo owner MAY ask the Secretary of an MIS for a revision of it at any point. (repo_owner_MAY_request_revision)
 - **R53** [MUST · judgment: the repo owner, at merge] When the repo owner asks for a revision, the Secretary MUST make it by a pull request that edits the MIS in place, which the repo owner merges. (revision_MUST_edit_MIS_in_place)
-- **R54** [MUST · judgment: the reviewers of each pull request] Each requirement that a revision or an amendment changes MUST carry a note under it that links its previous text and names any previous slug. (changed_req_MUST_link_previous_text)
+- **R54** [MUST · judgment: the repo owner, at merge] Each requirement that a revision or an amendment changes MUST carry a note under it that links its previous text and names any previous slug. (changed_req_MUST_link_previous_text)
 - **R55** [MAY · judgment: the repo owner] Where others relied heavily on the text a change would replace, the repo owner MAY call for an amendment instead of a revision. (repo_owner_MAY_call_for_amendment)
 - **R56** [MUST · decidable: macf_tools mis check, amendment form] Each amendment spec MUST give the old and new text of each requirement it changes, the reason, and the sign-off record. (amendment_spec_MUST_give_change_reason_signoff)
-- **R57** [MUST · judgment: the repo owner, at merge] Before an amendment spec merges, each maintainer of the amended MIS other than its author MUST sign off on it. (amendment_MUST_have_maintainer_signoff)
+- **R57** [MUST · judgment: the repo owner, at merge] Before an amendment spec merges, each maintainer of the amended MIS, other than the one who drafted the spec, MUST sign off on it. (amendment_MUST_have_maintainer_signoff)
 - **R58** [MAY · judgment: the repo owner] The repo owner MAY veto any change that a maintainer requests to an amendment spec. (repo_owner_MAY_veto_requested_change)
 ### 6.9 Semantic slugs
 
@@ -309,7 +309,7 @@ R36 is MISRA's deviation record in its simplest form: a SHOULD may be set aside,
 | R51 | judgment | the operator, on each synthesis | standing |
 | R52 | judgment | the repo owner, at each request | standing |
 | R53 | judgment | the repo owner, at the merge of each revision | standing |
-| R54 | judgment | the reviewers of each revision or amendment | standing |
+| R54 | judgment | the repo owner, at the merge of each revision or amendment | standing |
 | R55 | judgment | the repo owner | standing |
 | R56 | decidable | mis check: an amendment spec has its header and its three sections | passing |
 | R57 | judgment | the repo owner, at the merge of each amendment spec | standing |

@@ -422,13 +422,15 @@ def test_r56_an_amendment_spec_is_short_and_complete(plant):
 
 def test_r49_a_citation_by_a_previous_slug_still_resolves(plant):
     """MIS-0001 R54: the note under a changed requirement names its previous slug, so a citation
-    made before the change still resolves to it. A slug that no note names is still refused."""
-    def cite(slug):
+    made before the change still resolves to it. A slug that no note names is still refused, and
+    so is a previous slug cited under a requirement other than the one whose note names it."""
+    def cite(slug, rid="R35"):
         def extra(d):
             pol = d.parent / "policies"
             pol.mkdir(exist_ok=True)
-            (pol / "cites.md").write_text(f"See MIS-0001-R35 ({slug}).\n", encoding="utf-8")
+            (pol / "cites.md").write_text(f"See MIS-0001-{rid} ({slug}).\n", encoding="utf-8")
         return extra
     assert "R49" not in plant(extra=cite("substantive_change_MUST_be_new_MIS"))
     assert "R49" not in plant(extra=cite("substantive_change_MUST_be_made_in_place"))
     assert "R49" in plant(extra=cite("substantive_change_MUST_be_imagined"))
+    assert "R49" in plant(extra=cite("substantive_change_MUST_be_new_MIS", rid="R34"))
