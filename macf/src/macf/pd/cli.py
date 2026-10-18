@@ -96,6 +96,10 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         if "liveness" in unit:
             line += f"; liveness {unit['liveness']}: {unit['detail']}"
         print(line)
+    for s in report.schedules:
+        print(f"  schedule {s['schedule']}: {s['verdict']}: {s['detail']}")
+    if report.runs:
+        print(f"  runs: {report.runs}")
     _say_tray(report)
     return 0
 

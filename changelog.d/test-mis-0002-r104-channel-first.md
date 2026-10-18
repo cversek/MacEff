@@ -1,0 +1,3 @@
+### Added
+
+- **MIS-0002 R104's named test, `test_channel_first`** (`tests/test_pd_harness.py`). With the MacEff channel attached, two things are owed: mail that arrives, which would otherwise be a wake, and the daemon's own over-limit notice. Both go out on the channel as records naming their sources, and both deliveries are recorded as by channel. The keystroke fallback types nothing into an idle, empty box, however long past its grace the mail has waited. Sweep 3 kept R104 planned because no single test checked both its wakes and its notices; this one does. Four planted defects in the notifier each make it fail.
