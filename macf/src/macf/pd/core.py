@@ -36,6 +36,7 @@ from pydantic import ValidationError
 from macf.agent_events_log import append_event, get_log_path, read_events
 from macf.notify.session import proc_start, proc_start_key, verify_incarnation
 from macf.pd.interface import (
+    AUTH_FAILED_REASON,
     EVENT_CONTROL,
     EVENT_OVER_LIMIT,
     EVENT_UNDER_LIMIT,
@@ -83,6 +84,24 @@ DRAIN_TIMEOUT_S = 300.0
 MEMORY_CHECK_S = 30.0
 #: The notice source for a unit past its memory limit, as the MacEff channel knows it.
 LIMIT_NOTICE_SOURCE = "pd_limit_exceeded"
+#: What a restart, a recreate or a compaction carried, changed and lost: the event, and the
+#: notice that points to it (MIS-0002-R47 (pd_MUST_report_carried_changed_lost)).
+EVENT_CARRIED = "pd_carried"
+CARRIED_NOTICE_SOURCE = "pd_carried"
+#: The hooks' record of a compaction, whoever asked for it.
+EVENT_COMPACTION = "compaction_detected"
+#: How long after a compaction its report waits, so the recovery follower's own prompt, a few
+#: seconds after it, lands before the notice does.
+COMPACTION_SETTLE_S = 60.0
+#: What a compaction always loses, in a report's words.
+CONTEXT_LOST = "the session's working context (summarized)"
+
+
+def _float_or_none(value) -> Optional[float]:
+    """An epoch time the log wrote as a number; anything else is no time."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
 
 #: Where the reasoning behind every refusal lives. A refusal names it, so a reader who
 #: has just been stopped finds the why without the message restating it
@@ -400,6 +419,7 @@ class _Runner:
     alive_at: Optional[float] = None    # monotonic, at the last accepted liveness
     alive_interval_s: Optional[float] = None
     in_flight: Optional[int] = None     # as the unit last reported it; None if it never has
+    auth_failed: Optional[str] = None   # what the harness said while it can't authenticate (R19)
     failures: int = 0
     want_up: bool = False               # whether the unit should be running
     restart_at: Optional[float] = None  # monotonic: a restart under its policy is due
@@ -415,6 +435,7 @@ class _Runner:
     remnant: Optional[tuple] = None     # (pgid, [(pid, start)], kill_at, killed_at): members left after a stop reaped the leader
     start_after_remnant: bool = False   # a start waits for the remnant to end
     stop_pending: Optional[str] = None  # the stopped transition's reason, recorded once the remnant ends
+    incarnations: int = 0               # processes this daemon started or adopted for it (R47)
 
 
 class _LogTail:
@@ -428,7 +449,7 @@ class _LogTail:
     credited: liveness that cannot be read is unknown, and unknown is not alive.
     """
 
-    def __init__(self, path: Path, kinds=(EVENT_LIVENESS, EVENT_HARNESS_COMPACTION)):
+    def __init__(self, path: Path, kinds=(EVENT_LIVENESS, EVENT_HARNESS_COMPACTION, EVENT_COMPACTION)):
         self.path = path
         self.kinds = tuple(kinds)
         self._needles = tuple(k.encode() for k in self.kinds)
@@ -544,6 +565,11 @@ class Core:
         self._tail = _LogTail(get_log_path())
         self._own_start: Optional[tuple] = None  # (pid, proc_start) once record_start has run
         self._boot_id = boot_id()
+        #: Whether a previous daemon ran for this agent, and which units it left live (R47).
+        self._previous_daemon = False
+        self._previously_live: set = set()
+        #: The wall time of a compaction not yet reported, while its settle runs (R47).
+        self._compacted_at: Optional[float] = None
 
     # ------------------------------------------------------------------ queries
 
@@ -616,6 +642,42 @@ class Core:
                 self._control("start", r, POLICY, "declared and not optional")
                 r.want_up = True
                 self._spawn(r)
+        if self._previous_daemon:
+            # A first start carries nothing, so only a restart is reported (R47).
+            changed = {n for n in self._previously_live - carried if self._units[n].state in LIVE_STATES}
+            self._report_carried("daemon", "the primal daemon restarted", carried, changed,
+                                 self._previously_live - carried - changed)
+        self._recover_compaction()
+
+    def _recover_compaction(self) -> None:
+        """A compaction this daemon's tail can't see, made while no daemon ran or inside the
+        settle before a restart, is taken up at boot: the newest ``compaction_detected`` that
+        no compaction report covers is reported once the settle has passed (R47)."""
+        newest = None
+        for event in read_events(reverse=True, scope="all", only=(EVENT_COMPACTION, EVENT_CARRIED)):
+            data = event.get("data") or {}
+            if event.get("event") == EVENT_COMPACTION:
+                newest = newest if newest is not None else _float_or_none(event.get("timestamp"))
+                continue
+            if data.get("agent") == self.card and data.get("occasion") == "compaction":
+                # Read newest first, so a compaction found before this report came after it,
+                # and one after it in the scan is the one it covers.
+                break
+        if newest is not None:
+            self._compacted_at = newest
+
+    def _report_carried(self, occasion: str, after: str, carried, changed, lost, **facts) -> None:
+        """Record what a restart, recreate or compaction carried, changed and lost, and owe
+        the agent the one notice that points to it (MIS-0002-R47
+        (pd_MUST_report_carried_changed_lost)). The facts are the event's; the notice says
+        only where they are."""
+        at = self._wall()
+        self._emit(EVENT_CARRIED, {"agent": self.card, "occasion": occasion, "after": after, "at": at,
+                                   "carried": sorted(carried), "changed": sorted(changed),
+                                   "lost": sorted(lost), **facts})
+        if self.on_notice is not None:
+            # The occasion is in the id, so two reports in one second stay two notices.
+            self.on_notice(CARRIED_NOTICE_SOURCE, f"carried-{occasion}-{int(at)}")
 
     def _adopt_survivors(self) -> set:
         """Adopt each unit whose last recorded state names a process that is still the one
@@ -642,9 +704,15 @@ class Core:
                 if len(last) == len(self._units):
                     break
         carried = set()
+        # A unit's state recorded before this daemon's own acts means a daemon ran before it.
+        self._previous_daemon = bool(last)
+        self._previously_live = {n for n, d in last.items() if d.get("state") in LIVE_STATES}
         for name, data in last.items():
             pid, start = data.get("pid"), data.get("proc_start")
-            if data.get("state") not in LIVE_STATES or not pid or not start:
+            # A session that can't authenticate reads failed but is still running, waiting for
+            # a person to log in (MIS-0002-R19), so it is adopted like a live one.
+            held = data.get("state") == "failed" and str(data.get("reason", "")).startswith(AUTH_FAILED_REASON)
+            if (data.get("state") not in LIVE_STATES and not held) or not pid or not start:
                 continue
             # A record from another boot names no process that runs now, however well its
             # pid and start match: a Linux start counts ticks since boot, so a process of
@@ -668,6 +736,7 @@ class Core:
             # Its state began with the process, not with this adoption, so a carried unit
             # doesn't read as just restarted.
             r.since = start_epoch(start) or r.since
+            r.incarnations += 1
             carried.add(name)
         return carried
 
@@ -777,8 +846,16 @@ class Core:
         for event in self._tail.read():
             if event.get("event") == EVENT_HARNESS_COMPACTION:
                 self._on_harness_compaction(event)
+            elif event.get("event") == EVENT_COMPACTION:
+                self._compacted_at = _float_or_none(event.get("timestamp")) or self._wall()
             else:
                 self._on_liveness(event, now)
+        if self._compacted_at is not None and self._wall() - self._compacted_at >= COMPACTION_SETTLE_S:
+            # This agent's session compacted, whether or not the daemon runs it as a unit.
+            compacted, self._compacted_at = self._compacted_at, None
+            live = {r.spec.name for r in self._units.values() if r.state in LIVE_STATES}
+            self._report_carried("compaction", "the session was compacted", live, set(), {CONTEXT_LOST},
+                                 compaction_at=compacted)
         for r in self._units.values():
             try:
                 self._tick_unit(r, now)
@@ -851,7 +928,9 @@ class Core:
             if now - r.started_at > bound:
                 self._fail(r, f"no liveness from pid {r.pid} within {bound:g} s of its start")
             return
-        if r.state == "running" and r.alive_at is not None:
+        held = r.state == "failed" and r.auth_failed is not None
+        if (r.state == "running" or held) and r.alive_at is not None:
+            # A session failed for its login still beats; if the beat stops too, it has died.
             interval = r.alive_interval_s or r.spec.liveness_interval_s
             bound = LIVENESS_TOLERANCE * interval
             age = now - r.alive_at
@@ -902,6 +981,19 @@ class Core:
         r.alive_at = now
         r.alive_interval_s = live.interval_s
         r.in_flight = live.in_flight
+        if live.auth_failed:
+            # The harness can't authenticate. The session is running but can't work, and that
+            # must never read as idle (MIS-0002-R19 (auth_failure_MUST_read_failed)). It is not
+            # stopped or restarted: a restart can't log in, and a restarted session that is
+            # never prompted makes no request, so it would read healthy again while it can't.
+            if r.auth_failed is None or r.state != "failed":
+                r.auth_failed = live.auth_failed
+                self._transition(r, "failed", f"{AUTH_FAILED_REASON}: {live.auth_failed}")
+            return
+        if r.auth_failed is not None:
+            r.auth_failed = None
+            self._transition(r, "running", "authenticated again")
+            return
         if live.waiting_on:
             if r.state != "waiting_on_a_person":
                 self._transition(r, "waiting_on_a_person", f"waiting on {live.waiting_on}")
@@ -943,7 +1035,7 @@ class Core:
         # core stopped it or it exited while the restart waited on its work in flight.
         asked_restart = r.then_start or r.drain is not None
         r.proc, r.kill_at, r.stopping, r.then_start, r.drain = None, None, None, False, None
-        r.alive_at, r.in_flight = None, None
+        r.alive_at, r.in_flight, r.auth_failed = None, None, None
 
         if stopping is None:
             # It exited on its own: record how. A stopped unit whose leader left members
@@ -1109,6 +1201,11 @@ class Core:
         r.started_at = self._clock()
         r.alive_at, r.alive_interval_s, r.in_flight = None, None, None
         self._transition(r, "starting", f"started as pid {proc.pid}")
+        r.incarnations += 1
+        if r.spec.kind == "session" and r.incarnations > 1:
+            # The session came back as a new process: its context is gone, the rest ran on.
+            others = {o.spec.name for o in self._units.values() if o is not r and o.state in LIVE_STATES}
+            self._report_carried("session", "the session unit restarted", others, {r.spec.name}, {CONTEXT_LOST})
 
     def _tick_remnant(self, r: _Runner, now: float) -> None:
         """Members of a stopped unit's group that outlived its leader. A member still the
@@ -1197,6 +1294,7 @@ class Core:
         """A unit that is running but not working: record it failed, then stop what is
         left of it so the restart policy can act on the exit."""
         r.failures += 1
+        r.auth_failed = None       # from here it is an ordinary failure, for the restart policy
         self._transition(r, "failed", reason)
         self._signal_stop(r, reason)
 

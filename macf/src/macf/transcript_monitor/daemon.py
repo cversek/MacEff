@@ -355,6 +355,60 @@ def detect_api_error(entry: dict) -> Optional[Detection]:
     })
 
 
+#: The model Claude Code names on an assistant entry it wrote itself, with no request made.
+SYNTHETIC_MODEL = "<synthetic>"
+
+
+class AuthWatch:
+    """Whether the session can authenticate, read from its own transcript as each line arrives
+    (MIS-0002-R19 (auth_failure_MUST_read_failed)).
+
+    Claude Code writes a failed login as an assistant entry with ``isApiErrorMessage`` and
+    ``error: "authentication_failed"`` ("Login expired · Please run /login", or the API's 401).
+    The session then sits quiet, and on 2026-10-04 that read as idle for seven hours. Any later
+    assistant entry that isn't an API error shows a request went through, so the login works
+    again; the client writes its failure notices under the model ``<synthetic>``, and its own
+    replies too, and a synthetic reply shows nothing, since no request produced it.
+    A detector, so it sees each line once; ``state`` is asked by the session's heartbeat.
+    It returns a Detection only when the state changes, so the log says when it failed and when
+    it came back, not every line in between."""
+
+    def __init__(self) -> None:
+        self._failed: Optional[str] = None
+
+    def state(self) -> Optional[str]:
+        return self._failed
+
+    def __call__(self, entry: dict) -> Optional[Detection]:
+        if entry.get("type") != "assistant":
+            return None
+        if entry.get("isApiErrorMessage") and entry.get("error") == "authentication_failed":
+            if self._failed is not None:
+                return None
+            self._failed = _assistant_text(entry)[:200] or "authentication failed"
+            return Detection("auth_failure_detected", {"said": self._failed,
+                                                       "timestamp": entry.get("timestamp", ""),
+                                                       "detector": "transcript_monitor"})
+        if entry.get("isApiErrorMessage") or self._failed is None:
+            return None
+        if (entry.get("message") or {}).get("model") == SYNTHETIC_MODEL:
+            # The client writes its own entries under this model: its failure notices, checked
+            # above, and replies such as "No response requested.", which no request produced.
+            # So only a reply from a real model shows the login works again; read as one, a
+            # synthetic reply cleared a failure on hosts' real transcripts while it was broken.
+            return None
+        self._failed = None
+        return Detection("auth_recovered", {"timestamp": entry.get("timestamp", ""),
+                                            "detector": "transcript_monitor"})
+
+
+def _assistant_text(entry: dict) -> str:
+    content = (entry.get("message") or {}).get("content")
+    if isinstance(content, list):
+        return " ".join(c.get("text", "") for c in content if isinstance(c, dict)).strip()
+    return content.strip() if isinstance(content, str) else ""
+
+
 def detect_context_collapse(entry: dict) -> Optional[Detection]:
     """Detect marble-origami context collapse commit."""
     if entry.get("type") != "marble-origami-commit":
@@ -1295,12 +1349,15 @@ def run_monitor(transcript: Path, poll_interval: float = DEFAULT_POLL_INTERVAL, 
     # within one interval once its session, and with it the loop, has ended.
     # It also says when the session waits on a permission dialog (MIS-0002-R21), read from
     # the event log for this transcript's session, since the client can't say so while it waits.
+    # And when it can't authenticate, read from the transcript as it arrives (MIS-0002-R19).
     from ..pd.liveness import session_heartbeat_from_env
     from ..permission_watch import SessionDialogs
+    auth = AuthWatch()
     heartbeat = None if older is not None else session_heartbeat_from_env(
-        waiting_on=SessionDialogs(transcript.stem))
+        waiting_on=SessionDialogs(transcript.stem), auth_failed=auth.state)
     monitor = TranscriptMonitor(transcript, poll_interval=poll_interval, owner=owner,
-                                on_pass=heartbeat.tick if heartbeat else None)
+                                on_pass=heartbeat.tick if heartbeat else None,
+                                detectors=list(DEFAULT_DETECTORS) + [auth])
     if older is not None:
         monitor.stop(f"monitor {older.pid} already serves this transcript")
     else:
