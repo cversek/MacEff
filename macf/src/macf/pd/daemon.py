@@ -112,6 +112,11 @@ class Daemon:
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound
         self.notifier = Notifier(self.home, self.core.declaration.notice_routes)
         self.core.on_notice = self.notifier.raise_notice    # the core's own notices (R60)
+        if any(u.kind == "session" for u in self.core.declaration.units) \
+                and "pd_carried" not in self.core.declaration.notice_routes:
+            print("⚠️ MACF: pd: notice_routes doesn't route 'pd_carried', so after a restart or a "
+                  "compaction the session isn't told what was carried, changed and lost (MIS-0002-R47)",
+                  file=sys.stderr)
         connect_s = self.core.declaration.channel_connect_s
         #: Where a channel is expected, whether it is dark (R115); the outside watch tells the operator.
         self.dark_channel = DarkChannel(self.card, connect_s) if connect_s else None
