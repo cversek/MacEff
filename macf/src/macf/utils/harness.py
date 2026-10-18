@@ -21,6 +21,7 @@ operator does not pay for them again.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import sys
 from dataclasses import dataclass
@@ -534,7 +535,11 @@ def render_child(p: HarnessParams) -> str:
     SessionStart returning the turn to a user who is not there. Both are nudged
     here rather than left to whoever notices the agent has gone quiet.
     """
-    channels = f" --channels {','.join(p.channels)}" if p.channels else ""
+    # One argument per channel: `--channels` takes every value up to the next flag
+    # (measured on 2.1.296, see notify.session._channels_from_flags). Joined with a
+    # comma, two channels would reach the client as one malformed entry, and the
+    # operator's own channel would go down with the new one.
+    channels = f" --channels {' '.join(shlex.quote(c) for c in p.channels)}" if p.channels else ""
     return f"""#!/bin/bash
 # MacEff harness child wrapper — generated, do not hand-edit.
 # Regenerate with: macf_tools harness generate --agent {p.agent}

@@ -120,6 +120,15 @@ class TestTheChildBuildsTheArgvItMeansTo:
         assert consumed == ["plugin:tg@mkt"], \
             f"--channels swallowed more than its value: {consumed}"
 
+    def test_each_channel_is_its_own_argument(self, tmp_path):
+        """Two channels, the operator's and the MacEff channel, reach `--channels` as two
+        values. Joined with a comma they were one malformed entry, and the operator's
+        channel would have gone down with the new one."""
+        p = _params(tmp_path, channels=("plugin:tg@mkt", "plugin:maceff-channel@maceff"))
+        argv = _run_child(tmp_path, p)
+        i = argv.index("--channels")
+        assert argv[i + 1:] == ["plugin:tg@mkt", "plugin:maceff-channel@maceff"]
+
     def test_the_mode_selects_the_prompt(self, tmp_path):
         auto = _run_child(tmp_path, _params(tmp_path), mode_output="AUTO_MODE")
         manual = _run_child(tmp_path, _params(tmp_path), mode_output="MANUAL_MODE")
