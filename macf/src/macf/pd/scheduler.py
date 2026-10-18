@@ -25,14 +25,26 @@ A ``command`` run needs no model turn [MIS-0002-R37 (no-judgment_work_SHOULD_ski
 Its declared condition says whether the agent should be woken: ``exit_code``, the way
 ``grep`` reports, 0 to wake, 1 for nothing to say, anything else a failed run; ``stdout``,
 output to wake, a non-zero exit a failed run. Whether a wake is due is recorded in
-``pd_run_done``; delivering it waits on a channel source for it. A ``prompt`` run, which
-needs an isolated session with its permissions settled, is not run yet and is said so once.
+``pd_run_done``; delivering it waits on a channel source for it.
+
+A ``prompt`` run into an isolated session is a Claude Code client in print mode, the prompt
+on its standard input, in a working directory of its own. Its permissions are the ones its
+schedule declares, settled when the daemon took the declaration and written before every run
+from that, so nothing a run grants itself outlives it
+[MIS-0002-R31 (schedule_MUST_settle_permission_at_creation)]. Nothing loads but that settings
+file: no user, project or local settings, no MCP server. Anything else that would prompt is
+denied at once instead (``dontAsk``, no prompt answerer), so a run never waits on a person. A
+run that was denied fails, and raises the ``pd_run_failed`` notice
+[MIS-0002-R32 (run_MUST_fail_on_prompt)]. A prompt run into a named live session isn't run yet,
+and that is said once.
 The schedules are read when the daemon starts and never from a run, so a run cannot change
 them [MIS-0002-R33 (run_MUST-NOT_change_schedules)].
 """
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -46,7 +58,7 @@ from zoneinfo import ZoneInfo
 from macf.agent_events_log import append_event, read_events
 from macf.notify.session import proc_start, verify_incarnation
 from macf.pd.core import group_members
-from macf.pd.interface import CommandRun, Declaration, Schedule, render
+from macf.pd.interface import CommandRun, Declaration, PromptRun, Schedule, render
 from macf.pd.schedule import CronExpr, plan_runs
 
 EVENT_SEEN = "pd_schedule_seen"
@@ -64,6 +76,10 @@ EVENT_PID = "pd_run_pid"
 KILL_GRACE_S = 5.0
 #: How much of a run's output is kept to decide a ``stdout`` wake; none of it is recorded.
 STDOUT_PEEK = 4096
+#: How much of a prompt run's result is read to find what it was denied.
+RESULT_MAX = 4 * 1024 * 1024
+#: The notice a prompt run that met a permission prompt raises (MIS-0002-R32).
+NOTICE_RUN_FAILED = "pd_run_failed"
 
 
 def _iso(when: datetime) -> str:
@@ -75,6 +91,16 @@ def _when(text) -> Optional[datetime]:
         return datetime.fromisoformat(text) if isinstance(text, str) else None
     except ValueError:
         return None  # noqa: MACEFF003 - a time read back that doesn't parse is no time: the row is skipped
+
+
+@dataclass(frozen=True, kw_only=True)
+class _Launch:
+    """What a run is started with."""
+
+    command: List[str]
+    env: Dict[str, str]
+    cwd: Path
+    stdin: Optional[Path] = None
 
 
 @dataclass
@@ -107,6 +133,12 @@ class Scheduler:
     since: Dict[str, datetime] = field(default_factory=dict)
     running: Dict[str, _Run] = field(default_factory=dict)
     reported: Dict[str, Optional[datetime]] = field(default_factory=dict)
+    #: The Claude Code client a prompt run starts, found on the daemon's PATH at boot.
+    client: Optional[str] = None
+    #: Owes the agent a notice the daemon raised itself (``Notifier.raise_notice``).
+    on_notice: Optional[Callable[[str, str], bool]] = None
+    #: The schedules this daemon runs: every command run, and prompt runs it can start.
+    runnable: set = field(default_factory=set)
     deferred: Dict[str, Optional[datetime]] = field(default_factory=dict)
 
     def _say(self, event: str, data: dict) -> None:
@@ -158,9 +190,39 @@ class Scheduler:
             if s.name not in self.since and s.name not in self.last_due:
                 self.since[s.name] = self.boot_at
                 self._say(EVENT_SEEN, {"schedule": s.name, "at": _iso(self.boot_at)})
-            if not isinstance(s.run, CommandRun):
-                self._say(EVENT_NOT_RUN, {"schedule": s.name, "reason": "a prompt run needs an isolated "
-                                          "session, which this daemon does not start yet"})
+            why = self._not_runnable(s)
+            if why:
+                self._say(EVENT_NOT_RUN, {"schedule": s.name, "reason": why})
+            else:
+                self.runnable.add(s.name)
+
+    def _not_runnable(self, s: Schedule) -> str:
+        if isinstance(s.run, CommandRun):
+            return ""
+        if s.target != "isolated":
+            return "a prompt run into a named live session is not run yet"
+        path, where = self._client_path()
+        if self.client is None:
+            self.client = shutil.which("claude", path=path)
+        if self.client is None:
+            return (f"no Claude Code client (claude) is on {where} ({path}); declare a PATH that holds "
+                    f"it in the session unit's environment")
+        return ""
+
+    def _client_path(self) -> tuple:
+        """The PATH a prompt run's client is found on and runs with: the session unit's declared
+        one, the environment the agent's own session runs in, else the daemon's. An installed
+        daemon gets its service manager's PATH, which on macOS, and on Linux when linger starts
+        it before any login, rarely holds the client, so the core finds the session's client
+        the same way."""
+        for unit in self.declaration.units:
+            declared = unit.environment.get("PATH") if unit.kind == "session" else None
+            if declared:
+                try:
+                    return render(declared, self.placeholders), "the session unit's declared PATH"
+                except KeyError:
+                    break  # noqa: MACEFF003 - a placeholder it can't fill: fall back to the daemon's
+        return os.environ.get("PATH", "/usr/bin:/bin"), "the daemon's PATH"
 
     def _abandon(self, name: str, scheduled_for, data: dict) -> None:
         """A run the previous daemon started and never recorded ending: stop it if it is
@@ -180,7 +242,7 @@ class Scheduler:
             self._check_run(self.running[name])
         now = self.now()
         for s in self.declaration.schedules:
-            if s.name in self.running or not isinstance(s.run, CommandRun):
+            if s.name in self.running or s.name not in self.runnable:
                 continue
             plan = plan_runs(CronExpr.parse(s.cron, self._tz()), s.missed_run,
                              last_due=self.last_due.get(s.name), boot=self.boot_at, now=now,
@@ -201,24 +263,32 @@ class Scheduler:
     def _start(self, s: Schedule, scheduled_for: datetime, late_s: Optional[float]) -> None:
         # The next run time moves on first (R26): this record is what the next plan reads.
         self.last_due[s.name] = scheduled_for
+        self.work_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         try:
-            command = [render(a, self.placeholders) for a in s.run.command]
-            env = {"PATH": "/usr/bin:/bin", "HOME": self.placeholders.get("agent_home", "")}
-            env.update({k: render(v, self.placeholders) for k, v in s.run.environment.items()})
+            if isinstance(s.run, PromptRun):
+                launch = self._prompt_run(s)
+            else:
+                env = {"PATH": "/usr/bin:/bin", "HOME": self.placeholders.get("agent_home", "")}
+                env.update({k: render(v, self.placeholders) for k, v in s.run.environment.items()})
+                launch = _Launch(command=[render(a, self.placeholders) for a in s.run.command],
+                                 env=env, cwd=self.work_dir)
         except KeyError as e:
             self._say(EVENT_DONE, {"schedule": s.name, "scheduled_for": _iso(scheduled_for),
                                    "outcome": f"not started: no value for the placeholder {{{e.args[0]}}}",
                                    "exit_code": None, "wake": False})
             return
+        except OSError as e:
+            self._say(EVENT_DONE, {"schedule": s.name, "scheduled_for": _iso(scheduled_for),
+                                   "outcome": f"not started: {e}", "exit_code": None, "wake": False})
+            return
         out = self.work_dir / f"{s.name}.stdout"
-        self.work_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._say(EVENT_STARTED, {"schedule": s.name, "scheduled_for": _iso(scheduled_for),
                                   "late_s": round(late_s, 1) if late_s is not None else None})
         try:
-            with open(out, "wb") as sink:
-                proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=sink,
-                                        stderr=subprocess.DEVNULL, cwd=str(self.work_dir),
-                                        env=env,
+            with open(out, "wb") as sink, open(launch.stdin or os.devnull, "rb") as source:
+                proc = subprocess.Popen(launch.command, stdin=source, stdout=sink,
+                                        stderr=subprocess.DEVNULL, cwd=str(launch.cwd),
+                                        env=launch.env,
                                         start_new_session=True, close_fds=True)
         except OSError as e:
             self._say(EVENT_DONE, {"schedule": s.name, "scheduled_for": _iso(scheduled_for),
@@ -228,6 +298,31 @@ class Scheduler:
         self._say(EVENT_PID, {"schedule": s.name, "scheduled_for": _iso(scheduled_for),
                                           "pid": proc.pid, "proc_start": proc_start(proc.pid)})
         self.running[s.name] = _Run(s, scheduled_for, proc, self.clock(), out)
+
+    def _prompt_run(self, s: Schedule) -> _Launch:
+        """The client's command, environment, working directory and prompt for one run.
+
+        The permissions are the schedule's, written again before every run from the
+        declaration the daemon took (R31), and the only settings the client loads."""
+        home = self.placeholders.get("agent_home", "")
+        prompt = Path(render(s.run.prompt_file, self.placeholders))
+        if not prompt.is_absolute():
+            prompt = Path(home) / prompt
+        if not prompt.is_file():
+            raise OSError(f"the prompt file {prompt} is not there")
+        settings = self.work_dir / f"{s.name}.settings.json"
+        settings.write_text(json.dumps(settled_permissions(s.run)))
+        settings.chmod(0o600)
+        cwd = self.work_dir / s.name
+        if cwd.exists():
+            shutil.rmtree(cwd)
+        cwd.mkdir(mode=0o700)
+        env = {"PATH": self._client_path()[0], "HOME": home}
+        command = [self.client, "--print", "--output-format", "json", "--no-session-persistence",
+                   # project settings only, from an empty directory: none load but these
+                   "--setting-sources", "project", "--settings", str(settings), "--strict-mcp-config",
+                   "--permission-mode", "dontAsk", "--permission-prompts", "none"]
+        return _Launch(command=command, env=env, cwd=cwd, stdin=prompt)
 
     def _check_run(self, run: _Run) -> None:
         code = run.proc.poll()
@@ -262,6 +357,8 @@ class Scheduler:
             return f"stopped: {run.stopped_by}", False
         if run.killed_at is not None:
             return f"killed: past its {run.schedule.timeout_s:g} s limit", False
+        if isinstance(run.schedule.run, PromptRun):
+            return self._judge_prompt(run, code)
         if run.schedule.run.wake_when == "exit_code":
             if code == 0:
                 return "ok: its condition holds", True
@@ -276,6 +373,29 @@ class Scheduler:
         except OSError:
             said = b""
         return ("ok: it had something to say", True) if said else ("ok: nothing to say", False)
+
+    def _judge_prompt(self, run: _Run, code: int) -> tuple:
+        """A prompt run that was denied anything met a permission prompt: it fails, and the
+        agent is owed a notice naming where the facts are (R32). The result's text is never
+        recorded."""
+        try:
+            with open(run.stdout_path, "rb") as f:
+                result = json.loads(f.read(RESULT_MAX))
+        except (OSError, ValueError) as e:
+            return f"failed: exit {code}, its result unreadable ({type(e).__name__})", False
+        if isinstance(result, list):
+            # The client prints the conversation's messages, the result last.
+            result = next((m for m in reversed(result) if isinstance(m, dict) and m.get("type") == "result"), None)
+        denials = result.get("permission_denials") if isinstance(result, dict) else None
+        if denials:
+            tools = sorted({str(d.get("tool_name", "?")) for d in denials if isinstance(d, dict)}) or ["?"]
+            if self.on_notice is not None:
+                self.on_notice(NOTICE_RUN_FAILED, f"{run.schedule.name}:{_iso(run.scheduled_for)}")
+            return (f"failed: met a permission prompt for {', '.join(tools)}, which its schedule "
+                    f"doesn't settle; denied, not waited on"), False
+        if code != 0 or (isinstance(result, dict) and result.get("is_error")):
+            return f"failed: exit {code}", False
+        return "ok: the prompt ran", False
 
     def _term(self, run: _Run, now: float) -> None:
         run.term_at = now
@@ -330,3 +450,10 @@ def _stop_group(pgid: int, name: str) -> bool:
             return signalled
     print(f"⚠️ MACF: pd: abandoned run {name} (group {pgid}) outlived SIGKILL", file=sys.stderr)
     return signalled
+
+
+def settled_permissions(run: PromptRun) -> dict:
+    """The settings a prompt run's client loads, and the only ones: the schedule's tools
+    allowed, and anything else denied without a prompt
+    (MIS-0002-R31 (schedule_MUST_settle_permission_at_creation))."""
+    return {"permissions": {"allow": list(run.allowed_tools), "defaultMode": "dontAsk"}}
