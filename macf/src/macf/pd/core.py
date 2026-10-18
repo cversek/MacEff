@@ -658,9 +658,8 @@ class Core:
                 newest = newest if newest is not None else _float_or_none(event.get("timestamp"))
                 continue
             if data.get("agent") == self.card and data.get("occasion") == "compaction":
-                covered = _float_or_none(data.get("compaction_at"))
-                if newest is not None and covered is not None and covered >= newest:
-                    newest = None
+                # Read newest first, so a compaction found before this report came after it,
+                # and one after it in the scan is the one it covers.
                 break
         if newest is not None:
             self._compacted_at = newest
