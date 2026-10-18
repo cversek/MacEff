@@ -1706,6 +1706,19 @@ def build_policy_index(agents_config: AgentsConfig) -> None:
         log(f"Policy index build failed (non-fatal): {e}")
 
 
+def start_policy_index(agents_config: AgentsConfig, build=None):
+    """Build the policy index in a thread of its own and return at once, so a slow build
+    never delays another unit (MIS-0002-R58 (optional_unit_MUST-NOT_delay_others)). The
+    search service doesn't wait for it: it opens the index on each query, and a query made
+    before the index exists comes back as an error, not a crash. ``build`` is for tests."""
+    import threading
+    thread = threading.Thread(target=build or build_policy_index, args=(agents_config,),
+                              name="policy-index", daemon=True)
+    thread.start()
+    log("Policy index: building in the background")
+    return thread
+
+
 def start_search_service_daemon(agents_config: AgentsConfig) -> None:
     """Start search service daemon as first PA user (background process).
 
@@ -2903,8 +2916,8 @@ def main() -> int:
             ("primal daemons", lambda: start_primal_daemons(agents_config),
              ("MACF tools", "agent initialization", "primal daemon declarations")),
             # Optional units, last, each under its own timeout (R58).
-            ("policy index", lambda: build_policy_index(agents_config), ("MACF tools",)),
-            ("search service", lambda: start_search_service_daemon(agents_config), ("policy index",)),
+            ("policy index", lambda: start_policy_index(agents_config), ("MACF tools",)),
+            ("search service", lambda: start_search_service_daemon(agents_config), ("MACF tools",)),
         ])
 
         if failed:

@@ -15,7 +15,7 @@ from pathlib import Path
 START_PY = Path(__file__).resolve().parents[2] / "docker" / "scripts" / "start.py"
 AFTER_ACCESS = ("create_workspace_structure", "install_macf_tools", "initialize_agents",
                 "setup_policies", "place_secrets", "start_amail_services",
-                "build_policy_index", "start_search_service_daemon")
+                "start_policy_index", "start_search_service_daemon")
 
 
 def _start_module():
@@ -47,18 +47,40 @@ def test_container_start_order():
     for needed in ("propagate_container_env", "install_ssh_key"):
         assert at[needed] < at["sshd"], f"a login before {needed} gets a half-made account"
     for slow in ("create_workspace_structure", "install_macf_tools", "initialize_agents",
-                 "start_amail_services", "build_policy_index", "start_search_service_daemon"):
+                 "start_amail_services", "start_policy_index", "start_search_service_daemon"):
         assert at["sshd"] < at[slow], f"sshd waits on {slow}"
 
 
+def _steps():
+    """The steps main hands run_after_access: each name with the names it needs."""
+    tree = ast.parse(START_PY.read_text())
+    main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main")
+    guard = next(n for n in ast.walk(main) if isinstance(n, ast.Call)
+                 and getattr(n.func, "id", None) == "run_after_access")
+    return {e.elts[0].value: [x.value for x in e.elts[2].elts] for e in guard.args[0].elts}
+
+
 def test_optional_units_independent():
-    """MIS-0002-R58: the optional units (the policy index and the search service) come
-    after every required one, so a slow or hung optional unit delays nothing else. Each
-    already runs under its own timeout (120 s, 30 s)."""
+    """MIS-0002-R58: an optional unit delays no other unit. The optional units (the policy
+    index and the search service) come after every required one, neither needs the other,
+    and the index, which can take 120 s, builds in a thread of its own, so the search
+    service starts at once whatever the index is doing."""
+    import threading
     at = _first_calls()
-    for optional in ("build_policy_index", "start_search_service_daemon"):
+    for optional in ("start_policy_index", "start_search_service_daemon"):
         for required in ("sshd", "initialize_agents", "place_secrets", "start_amail_services"):
             assert at[required] < at[optional], f"{required} waits on the optional {optional}"
+    steps = _steps()
+    assert "policy index" not in steps["search service"], "the search service waits on the index"
+    assert "search service" not in steps["policy index"], "the index waits on the search service"
+
+    release = threading.Event()
+    thread = _start_module().start_policy_index(None, build=lambda _cfg: release.wait(10))
+    try:
+        assert thread.is_alive(), "start_policy_index returned only after the build finished"
+    finally:
+        release.set()
+        thread.join(10)
 
 
 def test_a_failing_step_skips_only_its_dependents():
