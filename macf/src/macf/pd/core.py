@@ -668,7 +668,6 @@ class Core:
                 continue
             if event.get("event") == EVENT_DAEMON_START:
                 if (data.get("pid"), data.get("proc_start")) != self._own_start:
-                    self._previous_daemon = True
                     break
                 continue
             unit = data.get("unit")
@@ -677,6 +676,8 @@ class Core:
                 if len(last) == len(self._units):
                     break
         carried = set()
+        # A unit's state recorded before this daemon's own acts means a daemon ran before it.
+        self._previous_daemon = bool(last)
         self._previously_live = {n for n, d in last.items() if d.get("state") in LIVE_STATES}
         for name, data in last.items():
             pid, start = data.get("pid"), data.get("proc_start")
@@ -819,11 +820,10 @@ class Core:
             else:
                 self._on_liveness(event, now)
         if self._compacted_at is not None and self._wall() - self._compacted_at >= COMPACTION_SETTLE_S:
+            # This agent's session compacted, whether or not the daemon runs it as a unit.
             self._compacted_at = None
-            sessions = {r.spec.name for r in self._units.values() if r.spec.kind == "session"}
-            if sessions:
-                live = {r.spec.name for r in self._units.values() if r.state in LIVE_STATES}
-                self._report_carried("the session was compacted", live, set(), {CONTEXT_LOST})
+            live = {r.spec.name for r in self._units.values() if r.state in LIVE_STATES}
+            self._report_carried("the session was compacted", live, set(), {CONTEXT_LOST})
         for r in self._units.values():
             try:
                 self._tick_unit(r, now)
