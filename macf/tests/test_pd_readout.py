@@ -284,3 +284,30 @@ def test_overdue_is_unhealthy(monkeypatch):
     source[0] = "event log"
     report = client.status(Path("/nonexistent"), CARD, now=H10 + START_GRACE_S + 1, host=host)
     assert (report.runs, report.schedules[0]["verdict"]) == ("", "OVERDUE")
+
+
+def test_a_run_waiting_as_declared_or_never_started_is_not_overdue():
+    """Review of #711. A missed run its policy defers to a window reads DUE until the window
+    opens, then OVERDUE if it still hasn't started. A run that never started, for a missing
+    placeholder say, ends with a done record for its firing: it reads FAILED, an outcome, not
+    a firing still owed."""
+    from macf.pd.health import START_GRACE_S, schedule_health
+    from macf.pd.interface import CommandRun, MissedRunPolicy, Schedule, Window
+    daily = Declaration(version=1, agent=CARD, timezone="UTC", schedules=[
+        Schedule(name="hourly", cron="0 9 * * *", target="isolated", timeout_s=60,
+                 missed_run=MissedRunPolicy(kind="run_once_in_window", window=Window(start="22:00", end="23:00")),
+                 run=CommandRun(command=["true"], wake_when="exit_code"))])
+    nine, ten30, twenty2 = H10 - 3600, H10 + 1800, H10 + 12 * 3600
+    rows = [_run("pd_schedule_seen", nine - 86400, at="2026-10-16T09:00:00+00:00"),
+            _run("pd_run_started", nine - 86400, scheduled_for="2026-10-16T09:00:00+00:00"),
+            _run("pd_run_done", nine - 86390, scheduled_for="2026-10-16T09:00:00+00:00", outcome="ok: nothing to say"),
+            _run("pd_run_deferred", ten30, scheduled_for="2026-10-17T09:00:00+00:00",
+                 run_at="2026-10-17T22:00:00+00:00", policy="run_once_in_window")]
+    waiting = schedule_health(daily, rows, ten30 + 60)[0]
+    assert waiting.verdict == "DUE" and "waits for its window" in waiting.detail
+    assert schedule_health(daily, rows, twenty2 + START_GRACE_S + 1)[0].verdict == "OVERDUE"
+
+    iso = "2026-10-17T10:00:00+00:00"
+    never = [_run("pd_schedule_seen", H10 - 1800, at="2026-10-17T09:30:00+00:00"),
+             _run("pd_run_done", H10 + 1, scheduled_for=iso, outcome="not started: no value for the placeholder {x}")]
+    assert schedule_health(_scheduled(), never, H10 + 600)[0].verdict == "FAILED"

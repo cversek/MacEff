@@ -34,6 +34,7 @@ from macf.pd.core import LIVENESS_TOLERANCE
 from macf.pd.interface import EVENT_LIVENESS, EVENT_STATE, CommandRun, Declaration, Liveness, Schedule
 from macf.pd.schedule import CronExpr
 from macf.pd.scheduler import (
+    EVENT_DEFERRED,
     EVENT_DONE,
     EVENT_MISSED,
     EVENT_NOT_RUN,
@@ -180,7 +181,7 @@ RunVerdict = Literal["NONE_OWED", "OK", "DUE", "RUNNING", "OVERDUE", "FAILED", "
 #: the readout shows both per schedule without judging the daemon by them.
 UNHEALTHY_RUNS = ("OVERDUE",)
 #: The scheduler's events, which ``schedule_health`` reads.
-SCHEDULE_EVENTS = (EVENT_SEEN, EVENT_STARTED, EVENT_DONE, EVENT_MISSED, EVENT_NOT_RUN)
+SCHEDULE_EVENTS = (EVENT_SEEN, EVENT_STARTED, EVENT_DONE, EVENT_MISSED, EVENT_NOT_RUN, EVENT_DEFERRED)
 #: How long after its firing a run may still be starting. The daemon starts a due run on its
 #: next pass, a fraction of a second later, so this is room for a slow pass, not a policy.
 START_GRACE_S = 60.0
@@ -250,7 +251,10 @@ def _schedule_health(s: Schedule, tz, newest: Dict[tuple, dict], seen: Optional[
 
     started, done, missed = data(EVENT_STARTED), data(EVENT_DONE), data(EVENT_MISSED)
     last_run = _at(started.get("scheduled_for"))
-    accounted = [t for t in (last_run, _at(missed.get("last"))) if t is not None]
+    # A run that never started (a missing placeholder, a command that can't be run) still
+    # ends with a done record for its firing, which accounts for it: it failed, it isn't late.
+    accounted = [t for t in (last_run, _at(done.get("scheduled_for")), _at(missed.get("last")))
+                 if t is not None]
     origin = max(accounted + ([seen] if seen else []), default=None)
     outcome = str(done.get("outcome") or "")
     known = {"schedule": s.name, "last_run": last_run.isoformat() if last_run else None,
@@ -260,7 +264,8 @@ def _schedule_health(s: Schedule, tz, newest: Dict[tuple, dict], seen: Optional[
                               detail=f"the daemon does not run it: {data(EVENT_NOT_RUN).get('reason', '')}")
     if origin is None:
         return ScheduleHealth(**known, verdict="NONE_OWED",
-                              detail="no daemon has run this declaration yet, so nothing is owed")
+                              detail="no daemon has seen this schedule yet, so nothing is owed; a "
+                                     "daemon takes it up when it next starts")
     # A run in flight holds its schedule: the scheduler starts no other until it ends, so a
     # firing that passes meanwhile is not yet owed.
     if last_run is not None and started.get("scheduled_for") not in done_for:
@@ -278,6 +283,14 @@ def _schedule_health(s: Schedule, tz, newest: Dict[tuple, dict], seen: Optional[
         if when > now_at:
             break
         owed, count = owed or when, count + 1
+    deferral = data(EVENT_DEFERRED)
+    put_off, run_at = _at(deferral.get("scheduled_for")), _at(deferral.get("run_at"))
+    if owed is not None and put_off is not None and run_at is not None and owed <= put_off \
+            and (now_at - run_at).total_seconds() <= START_GRACE_S:
+        # Its policy put the missed run off to a window, and that time hasn't passed.
+        return ScheduleHealth(**known, owed=put_off.isoformat(), verdict="DUE",
+                              detail=f"the run owed for {put_off.isoformat()} waits for its window, "
+                                     f"at {run_at.isoformat()}")
     if owed is not None:
         late = (now_at - owed).total_seconds()
         more = f", and {count - 1} more owed since" if count > 1 else ""
