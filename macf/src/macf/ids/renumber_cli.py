@@ -4,11 +4,7 @@ import os
 import sys
 from pathlib import Path
 
-import yaml
-from pydantic import ValidationError
-
 from macf.ids import renumber as rn
-from macf.models.agent_spec import AgentsConfig
 
 
 def add_renumber_parser(ids_sub) -> None:
@@ -28,6 +24,12 @@ def add_renumber_parser(ids_sub) -> None:
 
 
 def cmd_ids_renumber(args: argparse.Namespace) -> int:
+    # Imported here, not at the top: the parser is built on every macf_tools call, and
+    # pydantic and the models are for this command alone (test_cli_import_weight.py).
+    import yaml
+    from pydantic import ValidationError
+
+    from macf.models.agent_spec import AgentsConfig
     try:
         raw = yaml.safe_load(Path(args.config).read_text())
         config = AgentsConfig(**raw)
