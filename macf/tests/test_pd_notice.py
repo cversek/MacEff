@@ -530,3 +530,31 @@ def test_a_session_restart_is_reported(make_core, script):
     first = [e["data"] for e in read_events(reverse=False, scope="all", only=(pd_core.EVENT_CARRIED,))][0]
     assert (first["carried"], first["changed"], first["lost"]) == (["worker"], ["session"], [pd_core.CONTEXT_LOST])
     assert owed[0] == "pd_carried"
+
+
+@pytest.mark.parametrize("route, warned", [(None, True), ("operator", True), ("held_until_present", True),
+                                           ("agent", False), ("both", False)])
+def test_an_unheard_carried_notice_is_warned_at_start(tmp_path, capsys, route, warned):
+    """R47's notice is delivered on the agent's routes only, so a daemon with a session unit warns
+    at start unless pd_carried is routed to 'agent' or 'both'."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+    from macf.pd import interface
+    from macf.pd.daemon import Daemon
+    home = tmp_path / "home"
+    (home / ".maceff" / "pd").mkdir(parents=True)
+    (home / ".maceff_primary_agent.id").write_text("abc123def4567890\n")
+    (home / ".maceff" / "config.json").write_text('{"agent_identity": {"moniker": "Tester"}}')
+    session = interface.Unit(name="session", kind="session", command=["/usr/bin/true"],
+                             account=__import__("pwd").getpwuid(os.getuid()).pw_name,
+                             restart="always", liveness_interval_s=10, memory_limit_mb=64)
+    interface.declaration_path(home).write_text(interface.Declaration(
+        version=1, agent="Tester@abc123", units=[session],
+        notice_routes={"pd_carried": route} if route else {}).model_dump_json())
+    base = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))
+    try:
+        Daemon(home, base=base)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+    assert ("doesn't route 'pd_carried'" in capsys.readouterr().err) == warned

@@ -592,7 +592,7 @@ An event carries states, times and identities. It never carries file content fro
 - **after the session unit restarts:** the session changed, its working context was lost, and the units still running were carried.
 - **after a compaction,** read from the hooks' `compaction_detected` a minute after it lands, so the recovery follower's own prompt comes first: the units running were carried, and the session's working context was lost.
 
-A notice delivered to an idle session opens a turn, so an agent in AUTO_MODE resumes after any compaction; in MANUAL_MODE it reads the report and stops. The notice reaches you only where `notice_routes` routes `pd_carried`, and a daemon whose declaration has a session unit warns at start when it doesn't.
+A notice delivered to an idle session opens a turn, so an agent in AUTO_MODE resumes after any compaction; in MANUAL_MODE it reads the report and stops. The notice reaches you only where `notice_routes` routes `pd_carried` to `agent` or `both`, and a daemon whose declaration has a session unit warns at start when it doesn't. Once the deployed declarations route it, a declaration that doesn't is refused at load.
 
 ### 11.2 Liveness is the unit's own
 
