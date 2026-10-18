@@ -47,7 +47,7 @@ EVENT_DELIVERED = "pd_notice_delivered"
 #: Notices the daemon raises itself, about the agent's own units or its unread mail, not read
 #: from a store. Each is delivered only where the declaration routes it to the agent
 #: (MIS-0002-R42).
-INTERNAL_SOURCES = frozenset({"pd_limit_exceeded", "pd_unread_mail"})
+INTERNAL_SOURCES = frozenset({"pd_limit_exceeded", "pd_unread_mail", "pd_carried"})
 #: Who wrote a detection: the daemon's notifier, as against any other poller of a store.
 NOTIFIER = "pd"
 
