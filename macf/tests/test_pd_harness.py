@@ -9,6 +9,9 @@ set to false stops that alone, leaving compaction at the context limit on.
 MIS-0002-R66 (pd_MUST_adopt_harness_supervisor): a session the client's background
 daemon already hosts is adopted, never supervised a second time, and acted on through
 the client's own verbs.
+
+MIS-0002-R104 (adapter_MUST_deliver_through_channel): where the session has the MacEff
+channel, each wake and each notice goes through it, and nothing is typed.
 """
 import json
 from dataclasses import dataclass
@@ -388,6 +391,64 @@ def test_a_client_not_on_the_declared_path_is_named_and_nothing_is_touched(tmp_p
         client.close()
 
 
+def test_channel_first(tmp_path, isolated_events_log, monkeypatch):
+    """MIS-0002-R104: with the MacEff channel attached, mail that arrives (a wake) and the
+    daemon's own notice both go out on the channel as records naming their sources, each
+    delivery is recorded as by channel, and the keystroke fallback types nothing into an
+    idle, empty box, however long past its grace both have been owed."""
+    import socket
+
+    from macf.agent_events_log import read_events
+    from macf.channels.maceff_channel import parse_record
+    from macf.pd import notifier as nt
+    from macf.pd import wake as wk
+
+    monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)     # the box comes from the home
+    monkeypatch.delenv("MACF_AMAIL_HANDOFF", raising=False)
+    home = tmp_path / "agent"
+    box = home / "amail" / "pickup"
+    box.mkdir(parents=True)
+    clock = [1000.0]
+    n = nt.Notifier(home, {"amail": "agent", "pd_limit_exceeded": "agent"}, clock=lambda: clock[0])
+    n.boot()
+    typed = []
+
+    class IdlePane:
+        def capture(self):
+            return "\n".join(["─" * 60, "❯ ", "─" * 60, "  ? for shortcuts"])
+
+        def type(self, text):
+            typed.append(text)
+            return True
+
+        def enter(self):
+            return True
+
+    n.waker = wk.Waker(IdlePane(), record_keys=lambda text, kind: None, append=lambda e, d: True)
+    ours, theirs = socket.socketpair()
+    theirs.settimeout(2)
+    n.attach(ours)
+    (box / "1791990000-msg-1791990000-aaaaaaaaaaaa.amsg").write_text("never read by the notifier")
+    n.poll()                                                    # the wake
+    assert n.raise_notice("pd_limit_exceeded", "limit-worker-1")   # the notice
+    clock[0] += nt.CHANNEL_GRACE_S + 3600
+    assert not n.wake() and typed == [], "a wake was typed while the channel was attached"
+    assert n.flush() == 2 and not n.owed
+
+    data = b""
+    while data.count(b"\n") < 2:
+        chunk = theirs.recv(65536)
+        assert chunk, "the channel closed before both records arrived"
+        data += chunk
+    records = [parse_record(line) for line in data.decode().splitlines()]
+    assert sorted(r.source for r in records) == ["amail", "pd_limit_exceeded"]
+    delivered = [e["data"] for e in read_events(reverse=False, scope="all") if e.get("event") == nt.EVENT_DELIVERED]
+    assert sorted(d["source"] for d in delivered) == ["amail", "pd_limit_exceeded"]
+    assert {d["via"] for d in delivered} == {"channel"}
+    n.detach(ours)
+    theirs.close()
+
+
 def test_waiting_reported(tmp_path, monkeypatch):
     """MIS-0002-R21 (pd_MUST_report_waiting_on_person) for Claude Code's session unit, on the
     path the session takes: from the session's environment the transcript monitor starts the
@@ -473,4 +534,3 @@ def test_waiting_reported(tmp_path, monkeypatch):
     assert beat_said[0].startswith("a permission dialog for Bash, open since "), beat_said
     assert beat_said[1] is None, beat_said
     assert all(b["pid"] == os.getppid() and b["unit"] == "session" for b in beats)
-
