@@ -344,6 +344,9 @@ def test_allowlist_lists_every_channel(tmp_path):
     plain.write_text(json.dumps({"channelsEnabled": True}))
     assert allowlist.managed_allowlist([plain]) is None
     assert allowlist.findings(decl(None), None) == []
+    (empty,) = allowlist.findings(decl(None), set())                # a list that admits nothing
+    assert "admits no channel plugin" in empty and "()" not in empty
+    assert allowlist.findings(decl([]), set()) == []                 # declared as meant
 
     # A list that can't be read is not the same as no list.
     broken = tmp_path / "broken.json"

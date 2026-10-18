@@ -32,11 +32,16 @@ def _entry(raw) -> Optional[Plugin]:
     return None
 
 
-def managed_allowlist(files: Iterable[Path] = MANAGED_SETTINGS) -> Optional[Set[Plugin]]:
+def managed_allowlist(files: Optional[Iterable[Path]] = None) -> Optional[Set[Plugin]]:
     """The channel plugins the organization allowlist admits, or None when no managed settings
     file sets one. A file that exists and can't be read raises OSError or ValueError, because
-    a list that can't be read is not the same as no list."""
-    for f in files:
+    a list that can't be read is not the same as no list. ``files`` defaults to
+    ``MANAGED_SETTINGS``, read at call time so a test can point it elsewhere.
+
+    Only the files are read. Claude Code also takes managed settings from macOS configuration
+    profiles and from an organization's admin console, and an allowlist set there isn't seen
+    here, so it reads as no allowlist."""
+    for f in (MANAGED_SETTINGS if files is None else files):
         if not f.exists():
             continue
         settings = json.loads(f.read_text(encoding="utf-8"))
@@ -60,6 +65,9 @@ def findings(declaration: Declaration, admitted: Optional[Set[Plugin]]) -> List[
         return []
     why = "(MIS-0002-R124 (allowlist_declaration_MUST_list_every_channel))"
     if declaration.allowlisted_channels is None:
+        if not admitted:
+            return [f"the organization allowlist admits no channel plugin, so no channel loads; "
+                    f"declare allowlisted_channels as [] to say that is meant {why}"]
         return [f"the organization allowlist admits {len(admitted)} channel plugin(s) ({_names(admitted)}), "
                 f"and the declaration lists none: list every one in allowlisted_channels {why}"]
     declared = {(c.plugin, c.marketplace) for c in declaration.allowlisted_channels}

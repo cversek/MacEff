@@ -89,9 +89,8 @@ class Daemon:
     def __init__(self, agent_home: Path, *, base: Optional[Path] = None,
                  record_refresh_s: float = RECORD_REFRESH_S,
                  managed_settings: Optional[List[Path]] = None, **core_options):
-        from macf.pd.allowlist import MANAGED_SETTINGS
-        #: Where the organization allowlist is read, the client's own paths unless a test says.
-        self._managed = list(managed_settings) if managed_settings is not None else list(MANAGED_SETTINGS)
+        #: Where the organization allowlist is read: None, the client's own paths.
+        self._managed = list(managed_settings) if managed_settings is not None else None
         self._record_refresh_s = record_refresh_s
         self._record_kept = time.monotonic()
         self.home = Path(agent_home)
