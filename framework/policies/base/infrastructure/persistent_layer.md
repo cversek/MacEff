@@ -195,7 +195,7 @@ A typed wake delivers the mail notices it covers, so a channel that connects lat
 - If the newest of those is a hold, and its stretch began more than 30 minutes ago, the outside watch alerts the operator once, through its own credential (verdict `HELD`, subject `wake`). A dialog waits on a person, and nothing in your session can say so.
 - If you find your mail was announced late, look for a `pd_wake_held` with a dialog as its reason.
 
-Still to come with step 2: the operator's routes, the dark-channel event and the operator's notice when a wake is held for long (R115), and the sources besides mail (13).
+Still to come with step 2: the operator's routes for sources other than unread mail, and the sources besides mail (13).
 
 ### 1.10 A dark channel
 
@@ -664,11 +664,19 @@ The daemon starts its units as its children, but they don't die with it: the out
 ## 13 Not Yet Landed
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
-- **The rest of the primal daemon:** health derived from runs owed and done; compaction on request, once the operator is established some other way than a claim on the socket (9.3, 12.3); and a command-line act that stops every unit, with the question of which asker a command line claims (12.1) (MIS-0002 §6.1 to §6.4, §6.7).
-- **Schedules, and the rest of the notifier** (1.8): the dark-channel event, the operator's routes (`operator`, `both`, `held_until_present`), and sources besides mail (MIS-0002 §6.5, §6.6, the rest of §6.14).
+- **The rest of the primal daemon:** health derived from runs owed and done [MIS-0002-R17 (readout_MUST_derive_health_from_runs)] [MIS-0002-R18 (overdue_run_MUST_read_unhealthy)]; a dialog that an adopted session waits on, reported as waiting on a person as it already is for a session the daemon starts itself (3.3, 6.2) [MIS-0002-R21 (pd_MUST_report_waiting_on_person)]; an authentication failure read as failed [MIS-0002-R19 (auth_failure_MUST_read_failed)]; compaction on request, once the operator is established some other way than a claim on the socket (9.3, 12.3); and a command-line act that stops every unit, with the question of which asker a command line claims (12.1) (MIS-0002 §6.1 to §6.4, §6.7).
+- **Prompt schedules** (10.4). The daemon runs command schedules. A prompt schedule waits for an isolated session whose permissions are settled when the schedule is created [MIS-0002-R31 (schedule_MUST_settle_permission_at_creation)], and for a run that meets a permission prompt to fail instead of waiting [MIS-0002-R32 (run_MUST_fail_on_prompt)].
+- **Detecting a changed declaration on a host,** the host's half of R33 (10.1) [MIS-0002-R33 (run_MUST-NOT_change_schedules)].
+- **The rest of the notifier** (1.8):
+  - the notice after a restart, recreate or compaction that states what was carried, changed and lost [MIS-0002-R47 (pd_MUST_report_carried_changed_lost)];
+  - the operator's routes for sources other than unread mail, and `held_until_present`, which a declaration may name but nothing serves yet (1.11);
+  - sources besides mail (MIS-0002 §6.6).
 - **The end of R107's transitional rule** [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)] (1.4): until an agent declares `operator_channels`, every channel but the MacEff channel counts as the operator's.
-- **Mail and the rest of containers** (MIS-0002 §6.8, §6.9).
-- **Adopting a session Claude Code's own daemon already hosts** [MIS-0002-R66 (pd_MUST_adopt_harness_supervisor)] (3.3). Until it lands, the core starts a declared session unit itself.
+- **Observation** (5): a test showing that an onlooker never receives an operator surface [MIS-0002-R99 (onlooker_MUST-NOT_get_operator_surface)]. Messages from an onlooker into the observed session are an optional feature that nobody has built. Wherever one is built, its source comes from the transport and the onlooker's card from the invitation [MIS-0002-R95 (onlooker_message_MUST_carry_transport_source)] [MIS-0002-R116 (onlooker_card_MUST_come_from_invitation)].
+- **The allowlist declaration,** which lists every channel a session loads (1.7) [MIS-0002-R124 (allowlist_declaration_MUST_list_every_channel)].
+- **Mail** (MIS-0002 §6.8): the mail broker and its watchers as managed units, and the mail clocks as schedules [MIS-0002-R53 (mail_broker_MUST_be_managed)] [MIS-0002-R54 (periodic_mail_clock_MUST_be_schedule)].
+- **An optional unit that never delays another** [MIS-0002-R58 (optional_unit_MUST-NOT_delay_others)] (MIS-0002 §6.9).
+- **macOS grants at install** (3.2): the install-time probe, and the notice that names a denied grant [MIS-0002-R64 (adapter_MUST_test_grants_at_install)] [MIS-0002-R65 (denied_grant_MUST_raise_notice)].
 
 Until a section lands, the rules in force are the existing policies: `service_supervision`, `notification_delivery` and `amail`.
 

@@ -127,30 +127,30 @@ stateDiagram-v2
 
 ### 6.1 Tiers and identity
 
-- **R01** [MUST · decidable: macf/tests/test_primal_daemon.py::test_one_per_agent (planned)] Each agent MUST have exactly one primal daemon, keyed by the identity in the agent's identity file. (agent_MUST_have_one_primal_daemon)
-- **R02** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_identity_not_from_env (planned)] A primal daemon MUST NOT take its agent's identity from an environment variable. (pd_MUST-NOT_take_identity_from_env)
-- **R03** [MUST · decidable: macf/tests/test_pd_render.py::test_outer_tier_restarts_pd (planned)] The outer tier MUST restart each primal daemon whenever it exits. (outer_tier_MUST_restart_pd)
+- **R01** [MUST · decidable: macf/tests/test_primal_daemon.py::test_one_per_agent] Each agent MUST have exactly one primal daemon, keyed by the identity in the agent's identity file. (agent_MUST_have_one_primal_daemon)
+- **R02** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_identity_not_from_env] A primal daemon MUST NOT take its agent's identity from an environment variable. (pd_MUST-NOT_take_identity_from_env)
+- **R03** [MUST · decidable: macf/tests/test_pd_render.py::test_outer_tier_restarts_pd] The outer tier MUST restart each primal daemon whenever it exits. (outer_tier_MUST_restart_pd)
 - **R04** [MUST NOT · judgment: the head maintainer, at review of each rendering] The outer tier MUST NOT hold any agent's declaration or configuration. (outer_tier_MUST-NOT_hold_agent_config)
-- **R05** [MUST · decidable: macf/tests/test_pd_render.py::test_launchd_is_launchagent (planned)] Where the host runs macOS, the platform adapter MUST render each primal daemon as a per-user LaunchAgent. (macos_MUST_render_LaunchAgent)
-- **R06** [MUST · decidable: macf/tests/test_pd_render.py::test_identifier (planned)] Each process name, unit name, launchd label and socket of a primal daemon MUST use the identifier `maceff_pd`. (pd_identifiers_MUST_use_maceff_pd)
-- **R07** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_cross_agent_control (planned)] A primal daemon MUST NOT start, stop or signal a managed unit of another agent. (pd_MUST-NOT_control_other_agents)
-- **R80** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_network_listener (planned)] A primal daemon MUST NOT listen on a network port. (pd_MUST-NOT_listen_on_network)
-- **R129** [MUST · decidable: macf/tests/test_pd_render.py::test_socket_path_length (planned)] When the platform adapter installs a primal daemon, it MUST check that the daemon's socket path fits the platform's length limit. (adapter_MUST_check_socket_path_length)
+- **R05** [MUST · decidable: macf/tests/test_pd_render.py::test_launchd_is_launchagent] Where the host runs macOS, the platform adapter MUST render each primal daemon as a per-user LaunchAgent. (macos_MUST_render_LaunchAgent)
+- **R06** [MUST · decidable: macf/tests/test_pd_render.py::test_identifier] Each process name, unit name, launchd label and socket of a primal daemon MUST use the identifier `maceff_pd`. (pd_identifiers_MUST_use_maceff_pd)
+- **R07** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_cross_agent_control] A primal daemon MUST NOT start, stop or signal a managed unit of another agent. (pd_MUST-NOT_control_other_agents)
+- **R80** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_network_listener] A primal daemon MUST NOT listen on a network port. (pd_MUST-NOT_listen_on_network)
+- **R129** [MUST · decidable: macf/tests/test_pd_render.py::test_socket_path_length] When the platform adapter installs a primal daemon, it MUST check that the daemon's socket path fits the platform's length limit. (adapter_MUST_check_socket_path_length)
 
 ### 6.2 Declarations
 
-- **R08** [MUST · decidable: macf/tests/test_pd_declaration.py::test_every_unit_declared (planned)] Each managed unit and each schedule MUST appear in its agent's declaration. (unit_MUST_be_declared)
+- **R08** [MUST · decidable: macf/tests/test_pd_declaration.py::test_every_unit_declared] Each managed unit and each schedule MUST appear in its agent's declaration. (unit_MUST_be_declared)
 - **R09** [MUST · decidable: macf/tests/test_pd_interface.py::test_unit_fields_are_required_and_the_exit_code_contract_defaults] Each declared unit MUST state its command, owning account, restart policy and liveness interval, and its exit-code contract unless the default exit-code contract is the one it means. (declaration_MUST_state_unit_fields)
   - *Revised 2026-10-18 at the repo owner's request ([MIS-0005, section 2](MIS-0005-revisions-and-amendment-specs.md#2-reason)); previous text: MacEff g_30d9db60.*
-- **R10** [MUST · decidable: macf/tests/test_pd_declaration.py::test_renderings_exist (planned)] CI MUST fail when a declared unit has no rendering for a supported platform. (CI_MUST_fail_unrendered_unit)
-- **R11** [MUST · decidable: macf/tests/test_pd_declaration.py::test_schedules_hosted (planned)] CI MUST fail when a declared schedule has no primal daemon to run it. (CI_MUST_fail_unhosted_schedule)
-- **R12** [MUST · decidable: macf/tests/test_primal_daemon.py::test_clean_parent (planned)] The primal daemon MUST start each managed unit itself, as the unit's parent, with the declared environment only. (pd_MUST_start_units_itself)
-- **R13** [MUST · decidable: macf/tests/test_primal_daemon.py::test_env_rendered_at_start (planned)] When a primal daemon starts, it MUST render the declared environment, instead of reading environment files a persistent volume carried forward. (pd_MUST_render_env_at_start)
+- **R10** [MUST · decidable: macf/tests/test_pd_declaration.py::test_renderings_exist] CI MUST fail when a declared unit has no rendering for a supported platform. (CI_MUST_fail_unrendered_unit)
+- **R11** [MUST · decidable: macf/tests/test_pd_declaration.py::test_schedules_hosted] CI MUST fail when a declared schedule has no primal daemon to run it. (CI_MUST_fail_unhosted_schedule)
+- **R12** [MUST · decidable: macf/tests/test_primal_daemon.py::test_clean_parent] The primal daemon MUST start each managed unit itself, as the unit's parent, with the declared environment only. (pd_MUST_start_units_itself)
+- **R13** [MUST · decidable: macf/tests/test_primal_daemon.py::test_env_rendered_at_start] When a primal daemon starts, it MUST render the declared environment, instead of reading environment files a persistent volume carried forward. (pd_MUST_render_env_at_start)
 
 ### 6.3 Liveness, runs and health
 
-- **R14** [MUST · decidable: macf/tests/test_pd_liveness.py::test_the_heartbeat_reports_at_once_and_then_at_its_interval (planned)] Each managed unit MUST emit liveness events to its agent's event log at its declared interval. (unit_MUST_emit_liveness_events)
-- **R15** [MUST · decidable: macf/tests/test_pd_readout.py::test_liveness_probed (planned)] When the readout reports a unit alive, it MUST first confirm, by process id and start time, that the process named in the last liveness event is still that unit. (readout_MUST_probe_liveness)
+- **R14** [MUST · decidable: macf/tests/test_pd_liveness.py::test_the_heartbeat_reports_at_once_and_then_at_its_interval] Each managed unit MUST emit liveness events to its agent's event log at its declared interval. (unit_MUST_emit_liveness_events)
+- **R15** [MUST · decidable: macf/tests/test_pd_readout.py::test_liveness_probed] When the readout reports a unit alive, it MUST first confirm, by process id and start time, that the process named in the last liveness event is still that unit. (readout_MUST_probe_liveness)
 - **R16** [MUST NOT · judgment: the head maintainer, at review of each landing pull request] The persistent layer MUST NOT keep a store of liveness, runs owed or runs done apart from the agent's event log. (layer_MUST-NOT_keep_second_ledger)
 - **R17** [MUST · decidable: macf/tests/test_pd_readout.py::test_health_is_runs (planned)] The readout MUST derive health from runs owed and runs done when it is read. (readout_MUST_derive_health_from_runs)
 - **R18** [MUST · decidable: macf/tests/test_pd_readout.py::test_overdue_is_unhealthy (planned)] If a unit is alive and a run it owes is overdue, then the readout MUST report the unit unhealthy. (overdue_run_MUST_read_unhealthy)
@@ -158,144 +158,144 @@ stateDiagram-v2
 
 ### 6.4 Unit states
 
-- **R20** [MUST · decidable: macf/tests/test_primal_daemon.py::test_states (planned)] Each managed unit MUST be in one of these states: declared, starting, running, waiting on a person, failed or stopped. (unit_MUST_have_listed_state)
+- **R20** [MUST · decidable: macf/tests/test_primal_daemon.py::test_states] Each managed unit MUST be in one of these states: declared, starting, running, waiting on a person, failed or stopped. (unit_MUST_have_listed_state)
 - **R21** [MUST · decidable: macf/tests/test_pd_harness.py::test_waiting_reported (planned)] When a managed unit is blocked on a prompt that only a person can answer, the primal daemon MUST report the state waiting on a person. (pd_MUST_report_waiting_on_person)
-- **R22** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_restart_while_waiting (planned)] The persistent layer MUST NOT restart a unit because the unit is waiting on a person. (layer_MUST-NOT_restart_waiting_unit)
+- **R22** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_restart_while_waiting] The persistent layer MUST NOT restart a unit because the unit is waiting on a person. (layer_MUST-NOT_restart_waiting_unit)
 - **R23** [MUST NOT · judgment: the head maintainer, at review of each harness adapter] The persistent layer MUST NOT answer a permission prompt, or approve any act on an agent's behalf. (layer_MUST-NOT_answer_prompts)
 - **R78** [MUST NOT · judgment: the operator, at review of each declaration] The persistent layer MUST NOT widen an agent's permissions. (layer_MUST-NOT_widen_permissions)
 - **R79** [MUST NOT · judgment: the head maintainer, at review of each landing pull request] The persistent layer MUST NOT copy file content from an agent's home into its events or logs. (layer_MUST-NOT_copy_home_content)
 
 ### 6.5 Schedules
 
-- **R24** [MUST · decidable: macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails (planned)] Each schedule MUST declare its missed-run policy. (schedule_MUST_declare_missed-run_policy)
-- **R25** [MUST · decidable: macf/tests/test_pd_schedule.py::test_policy_values (planned)] A missed-run policy MUST be one of: skip, run once, run once inside a declared window, or report only. (missed-run_policy_MUST_be_listed)
-- **R109** [MUST · decidable: macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails (planned)] CI MUST fail when a declared schedule names no missed-run policy. (CI_MUST_fail_schedule_without_policy)
-- **R110** [MUST NOT · decidable: macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails (planned)] The scheduler MUST NOT apply a default missed-run policy. (scheduler_MUST-NOT_default_missed-run_policy)
-- **R26** [MUST · decidable: macf/tests/test_pd_schedule.py::test_advance_before_run (planned)] The scheduler MUST move a schedule's next run time forward before the run starts. (scheduler_MUST_advance_before_run)
-- **R27** [MUST NOT · decidable: macf/tests/test_pd_schedule.py::test_no_replayed_restart (planned)] After the scheduler restarts, it MUST NOT replay a missed run whose act restarts a unit. (scheduler_MUST-NOT_replay_restart_runs)
-- **R28** [MUST · decidable: macf/tests/test_pd_schedule.py::test_leases_released (planned)] When the scheduler restarts, it MUST release every lease held before the restart. (scheduler_MUST_release_leases_on_restart)
-- **R29** [MUST · decidable: macf/tests/test_pd_schedule.py::test_target_declared (planned)] Each schedule MUST declare its target: an isolated session, or the live session of a named agent. (schedule_MUST_declare_target)
+- **R24** [MUST · decidable: macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails] Each schedule MUST declare its missed-run policy. (schedule_MUST_declare_missed-run_policy)
+- **R25** [MUST · decidable: macf/tests/test_pd_schedule.py::test_policy_values] A missed-run policy MUST be one of: skip, run once, run once inside a declared window, or report only. (missed-run_policy_MUST_be_listed)
+- **R109** [MUST · decidable: macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails] CI MUST fail when a declared schedule names no missed-run policy. (CI_MUST_fail_schedule_without_policy)
+- **R110** [MUST NOT · decidable: macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails] The scheduler MUST NOT apply a default missed-run policy. (scheduler_MUST-NOT_default_missed-run_policy)
+- **R26** [MUST · decidable: macf/tests/test_pd_schedule.py::test_advance_before_run] The scheduler MUST move a schedule's next run time forward before the run starts. (scheduler_MUST_advance_before_run)
+- **R27** [MUST NOT · decidable: macf/tests/test_pd_schedule.py::test_no_replayed_restart] After the scheduler restarts, it MUST NOT replay a missed run whose act restarts a unit. (scheduler_MUST-NOT_replay_restart_runs)
+- **R28** [MUST · decidable: macf/tests/test_pd_schedule.py::test_leases_released] When the scheduler restarts, it MUST release every lease held before the restart. (scheduler_MUST_release_leases_on_restart)
+- **R29** [MUST · decidable: macf/tests/test_pd_schedule.py::test_target_declared] Each schedule MUST declare its target: an isolated session, or the live session of a named agent. (schedule_MUST_declare_target)
 - **R30** [SHOULD · judgment: the Secretary, at review of each declaration] A schedule SHOULD target an isolated session, unless its work needs the live session's context. (schedule_SHOULD_target_isolated)
 - **R31** [MUST · decidable: macf/tests/test_pd_schedule.py::test_permissions_settled (planned)] When a schedule's work needs a permission, its declaration MUST settle that permission when the schedule is created. (schedule_MUST_settle_permission_at_creation)
 - **R32** [MUST · decidable: macf/tests/test_pd_schedule.py::test_prompt_fails_run (planned)] If a run meets a permission prompt, then the run MUST fail and deliver a notice, instead of waiting. (run_MUST_fail_on_prompt)
 - **R33** [MUST NOT · decidable: macf/tests/test_pd_schedule.py::test_run_cannot_schedule (planned)] A run MUST NOT create, change or delete a schedule. (run_MUST-NOT_change_schedules)
-- **R34** [MUST · decidable: macf/tests/test_pd_schedule.py::test_late_run_says_so (planned)] When a run starts late, its notice MUST state how late it is. (late_run_MUST_state_lateness)
+- **R34** [MUST · decidable: macf/tests/test_pd_schedule.py::test_late_run_says_so] When a run starts late, its notice MUST state how late it is. (late_run_MUST_state_lateness)
 - **R35** [MUST NOT · judgment: the Secretary, at review of each declaration] A schedule MUST NOT fetch its instructions from the network. (schedule_MUST-NOT_fetch_instructions)
-- **R36** [MUST · decidable: macf/tests/test_pd_schedule.py::test_wall_clock_cap (planned)] Each run MUST have a wall-clock limit, in addition to any inactivity limit. (run_MUST_have_wall-clock_limit)
+- **R36** [MUST · decidable: macf/tests/test_pd_schedule.py::test_wall_clock_cap] Each run MUST have a wall-clock limit, in addition to any inactivity limit. (run_MUST_have_wall-clock_limit)
 - **R37** [SHOULD · judgment: the Secretary, at review of each declaration] Where a schedule's work needs no judgment, the schedule SHOULD run without a model turn and wake its agent only when a declared condition holds. (no-judgment_work_SHOULD_skip_model_turn)
 
 ### 6.6 Notices and wakes
 
-- **R38** [MUST · decidable: macf/tests/test_pd_notice.py::test_source_named (planned)] Each notice MUST name its source. (notice_MUST_name_source)
-- **R39** [MUST · decidable: macf/tests/test_pd_notice.py::test_three_times (planned)] Each notice MUST carry three times: when its content was read, when it was sent, and when it was received. (notice_MUST_carry_three_times)
+- **R38** [MUST · decidable: macf/tests/test_pd_notice.py::test_source_named] Each notice MUST name its source. (notice_MUST_name_source)
+- **R39** [MUST · decidable: macf/tests/test_pd_notice.py::test_three_times] Each notice MUST carry three times: when its content was read, when it was sent, and when it was received. (notice_MUST_carry_three_times)
 - **R40** [MUST NOT · judgment: the head maintainer, at review of the notifier] The persistent layer MUST NOT present a notice as a person's instruction. (layer_MUST-NOT_present_notice_as_instruction)
-- **R41** [MUST · decidable: macf/tests/test_pd_notice.py::test_held_while_down (planned)] When a notice arrives while its agent's session is down, the primal daemon MUST hold the notice until the session starts. (pd_MUST_hold_notices_while_down)
-- **R42** [MUST · decidable: macf/tests/test_pd_notice.py::test_routing_declared (planned)] Each notice source MUST be routed to the agent, the operator, both, or held until the operator is present. (notice_source_MUST_be_routed)
-- **R43** [MUST · decidable: macf/tests/test_pd_wake.py::test_wake_through_notifier (planned)] Each wake MUST go through the notifier. (wake_MUST_use_notifier)
+- **R41** [MUST · decidable: macf/tests/test_pd_notice.py::test_held_while_down] When a notice arrives while its agent's session is down, the primal daemon MUST hold the notice until the session starts. (pd_MUST_hold_notices_while_down)
+- **R42** [MUST · decidable: macf/tests/test_pd_notice.py::test_routing_declared] Each notice source MUST be routed to the agent, the operator, both, or held until the operator is present. (notice_source_MUST_be_routed)
+- **R43** [MUST · decidable: macf/tests/test_pd_wake.py::test_wake_through_notifier] Each wake MUST go through the notifier. (wake_MUST_use_notifier)
 - **R44** [MUST NOT · judgment: the head maintainer, at review of each harness adapter] Where a harness offers a session socket or an API, its harness adapter MUST NOT wake the session by keystrokes. (adapter_MUST-NOT_type_given_api)
-- **R45** [MUST · decidable: macf/tests/test_pd_wake.py::test_a_busy_stretch_is_said_once_and_nothing_is_typed (planned)] If a wake uses keystrokes, then the sender MUST type only into an empty input box of an idle session. (keystroke_wake_MUST_need_empty_idle_box)
-- **R77** [MUST · decidable: macf/tests/test_pd_wake.py::test_a_wake_carries_fixed_words_and_message_ids_oldest_first (planned)] Each wake MUST carry only the persistent layer's own fixed words and message identifiers, never text that a sender chose. (wake_MUST_carry_fixed_words_only)
+- **R45** [MUST · decidable: macf/tests/test_pd_wake.py::test_a_busy_stretch_is_said_once_and_nothing_is_typed] If a wake uses keystrokes, then the sender MUST type only into an empty input box of an idle session. (keystroke_wake_MUST_need_empty_idle_box)
+- **R77** [MUST · decidable: macf/tests/test_pd_wake.py::test_a_wake_carries_fixed_words_and_message_ids_oldest_first] Each wake MUST carry only the persistent layer's own fixed words and message identifiers, never text that a sender chose. (wake_MUST_carry_fixed_words_only)
 - **R104** [MUST · decidable: macf/tests/test_pd_harness.py::test_channel_first (planned)] Where a harness offers a harness channel, its harness adapter MUST deliver each wake and each notice through that channel. (adapter_MUST_deliver_through_channel)
-- **R105** [MUST · decidable: macf/tests/test_pd_wake.py::test_wake_through_notifier (planned)] The harness adapter MUST wake a session by keystrokes only when its harness offers no harness channel, or the session's channel dropped or never connected. (keystroke_wake_MUST_be_fallback_only)
-- **R106** [MUST NOT · decidable: macf/tests/test_mode_activity.py::test_wake_is_not_operator_activity (planned)] The presence state and the operational modes MUST NOT count a wake as the operator's activity. (wake_MUST-NOT_count_as_operator_activity)
+- **R105** [MUST · decidable: macf/tests/test_pd_wake.py::test_wake_through_notifier] The harness adapter MUST wake a session by keystrokes only when its harness offers no harness channel, or the session's channel dropped or never connected. (keystroke_wake_MUST_be_fallback_only)
+- **R106** [MUST NOT · decidable: macf/tests/test_mode_activity.py::test_wake_is_not_operator_activity] The presence state and the operational modes MUST NOT count a wake as the operator's activity. (wake_MUST-NOT_count_as_operator_activity)
 - **R107** [MUST · decidable: macf/tests/test_mode_activity.py::test_channels_told_apart_by_name (planned)] Each producer of the operator's activity MUST count a channel event as the operator's only when its exact channel name is one the declaration lists as the operator's. (hooks_MUST_tell_channels_apart_by_name)
 - **R46** [MUST NOT · judgment: the Secretary, at review of each notice source] The persistent layer MUST NOT spend an agent's context to report that nothing changed. (layer_MUST-NOT_report_no_change)
 - **R47** [MUST · decidable: macf/tests/test_pd_notice.py::test_after_restart_notice (planned)] After each restart, recreate or compaction, the primal daemon MUST deliver one notice that states what was carried, what changed and what was lost. (pd_MUST_report_carried_changed_lost)
 
 ### 6.7 Outside control
 
-- **R48** [MUST · decidable: macf/tests/test_primal_daemon.py::test_outside_stop_beats_gates (planned)] A stop or restart that the operator asks for from outside a session MUST succeed, whatever gate the session enforces. (outside_stop_MUST_override_gates)
-- **R49** [MUST · decidable: macf/tests/test_primal_daemon.py::test_work_in_flight_checked (planned)] Before a primal daemon restarts a unit, it MUST check the unit for work in flight and drain it or wait. (pd_MUST_check_work_in_flight)
-- **R50** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_quiet_window (planned)] The persistent layer MUST NOT restart or compact a session during a quiet window its agent declared. (layer_MUST-NOT_act_in_quiet_window)
-- **R51** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_own_compaction (planned)] The persistent layer MUST NOT compact or clear a session's context on its own initiative. (layer_MUST-NOT_compact_on_own)
-- **R108** [MUST · decidable: macf/tests/test_pd_interface.py::test_a_compaction_may_be_asked_only_by_the_operator_or_the_wind_down (planned)] The primal daemon MUST compact a session only when the operator, or the agent's own declared wind-down, asks for it. (compaction_MUST_be_asked_by_operator_or_wind-down)
-- **R52** [MUST · decidable: macf/tests/test_primal_daemon.py::test_control_events (planned)] Each stop, restart or compaction that the persistent layer performs MUST be an event that names who asked and why. (control_act_MUST_name_who_asked)
-- **R126** [MUST · decidable: macf/tests/test_pd_harness.py::test_idle_compaction_off (planned)] Where the harness can compact an idle session on its own, the harness adapter MUST turn that off unless the declaration keeps it. (adapter_MUST_turn_off_harness_idle_compaction)
-- **R127** [MUST · decidable: macf/tests/test_primal_daemon.py::test_unasked_compaction_recorded (passing)] When the harness compacts a session that nobody asked to compact, the primal daemon MUST record a control event naming the harness as the asker. (harness_compaction_MUST_be_recorded)
+- **R48** [MUST · decidable: macf/tests/test_primal_daemon.py::test_outside_stop_beats_gates] A stop or restart that the operator asks for from outside a session MUST succeed, whatever gate the session enforces. (outside_stop_MUST_override_gates)
+- **R49** [MUST · decidable: macf/tests/test_primal_daemon.py::test_work_in_flight_checked] Before a primal daemon restarts a unit, it MUST check the unit for work in flight and drain it or wait. (pd_MUST_check_work_in_flight)
+- **R50** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_quiet_window] The persistent layer MUST NOT restart or compact a session during a quiet window its agent declared. (layer_MUST-NOT_act_in_quiet_window)
+- **R51** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_own_compaction] The persistent layer MUST NOT compact or clear a session's context on its own initiative. (layer_MUST-NOT_compact_on_own)
+- **R108** [MUST · decidable: macf/tests/test_pd_interface.py::test_a_compaction_may_be_asked_only_by_the_operator_or_the_wind_down] The primal daemon MUST compact a session only when the operator, or the agent's own declared wind-down, asks for it. (compaction_MUST_be_asked_by_operator_or_wind-down)
+- **R52** [MUST · decidable: macf/tests/test_primal_daemon.py::test_control_events] Each stop, restart or compaction that the persistent layer performs MUST be an event that names who asked and why. (control_act_MUST_name_who_asked)
+- **R126** [MUST · decidable: macf/tests/test_pd_harness.py::test_idle_compaction_off] Where the harness can compact an idle session on its own, the harness adapter MUST turn that off unless the declaration keeps it. (adapter_MUST_turn_off_harness_idle_compaction)
+- **R127** [MUST · decidable: macf/tests/test_primal_daemon.py::test_unasked_compaction_recorded] When the harness compacts a session that nobody asked to compact, the primal daemon MUST record a control event naming the harness as the asker. (harness_compaction_MUST_be_recorded)
 
 ### 6.8 Mail
 
 - **R53** [MUST · decidable: macf/tests/test_pd_declaration.py::test_mail_units (planned)] Each mail broker and each mail watcher MUST be a managed unit. (mail_broker_MUST_be_managed)
 - **R54** [MUST · decidable: macf/tests/test_pd_declaration.py::test_periodic_clock_is_schedule (planned)] A mail clock that checks on a period MUST be a schedule. (periodic_mail_clock_MUST_be_schedule)
-- **R55** [MUST · decidable: macf/tests/test_pd_notice.py::test_unread_mail_notice (planned)] When mail sits unread past its agent's declared threshold, the primal daemon MUST deliver a notice to the routes declared for it. (unread_mail_MUST_raise_notice)
+- **R55** [MUST · decidable: macf/tests/test_pd_notice.py::test_unread_mail_notice] When mail sits unread past its agent's declared threshold, the primal daemon MUST deliver a notice to the routes declared for it. (unread_mail_MUST_raise_notice)
 - **R56** [SHOULD · judgment: the head maintainer, at review of the mail landing] The mail system SHOULD report each message to its sender as stored, notified or read. (mail_SHOULD_report_state_to_sender)
 
 ### 6.9 Containers
 
-- **R57** [MUST · decidable: macf/tests/test_container_outer_tier.py::test_primal_daemons_start_after_access_and_before_optional_units (planned)] In a container, the primal daemons and the access path MUST start before any optional unit. (container_MUST_start_access_first)
+- **R57** [MUST · decidable: macf/tests/test_container_outer_tier.py::test_primal_daemons_start_after_access_and_before_optional_units] In a container, the primal daemons and the access path MUST start before any optional unit. (container_MUST_start_access_first)
 - **R58** [MUST NOT · decidable: macf/tests/test_pd_render.py::test_optional_units_independent (planned)] An optional unit MUST NOT delay the start of another unit. (optional_unit_MUST-NOT_delay_others)
-- **R59** [MUST · decidable: macf/tests/test_pd_interface.py::test_a_unit_missing_a_required_field_is_refused (planned)] Each declared unit MUST state a memory limit. (unit_MUST_declare_memory_limit)
-- **R60** [MUST · decidable: macf/tests/test_pd_notice.py::test_a_unit_past_its_limit_is_a_notice_held_and_delivered (planned)] When a unit uses more than its declared limit, the primal daemon MUST deliver a notice. (pd_MUST_notice_limit_exceeded)
-- **R61** [MUST · decidable: macf/tests/test_pd_render.py::test_limits_checked_after_recreate (planned)] After each recreate, the persistent layer MUST compare the container's declared limits with the limits in force. (layer_MUST_check_limits_after_recreate)
+- **R59** [MUST · decidable: macf/tests/test_pd_interface.py::test_a_unit_missing_a_required_field_is_refused] Each declared unit MUST state a memory limit. (unit_MUST_declare_memory_limit)
+- **R60** [MUST · decidable: macf/tests/test_pd_notice.py::test_a_unit_past_its_limit_is_a_notice_held_and_delivered] When a unit uses more than its declared limit, the primal daemon MUST deliver a notice. (pd_MUST_notice_limit_exceeded)
+- **R61** [MUST · decidable: macf/tests/test_pd_watch.py::test_limits_checked_after_recreate] After each recreate, the persistent layer MUST compare the container's declared limits with the limits in force. (layer_MUST_check_limits_after_recreate)
 - **R62** [MUST · judgment: the head maintainer, at review of the container landing] In a container shared by several agents, each agent MUST have a read-only view of every unit in that container and of its shared budget. (agent_MUST_see_shared_container)
-- **R103** [MUST · decidable: macf/tests/test_pd_declaration.py::test_shared_budget_operator_only (planned)] In a container shared by several agents, the shared budget MUST change only by an act of the operator. (shared_budget_MUST_change_only_by_operator)
+- **R103** [MUST · decidable: macf/tests/test_pd_declaration.py::test_shared_budget_operator_only] In a container shared by several agents, the shared budget MUST change only by an act of the operator. (shared_budget_MUST_change_only_by_operator)
 
 ### 6.10 macOS and the harness's own supervisor
 
-- **R63** [MUST · decidable: macf/tests/test_pd_declaration.py::test_grants_declared (planned)] Each declared unit MUST state the privacy grants it needs. (unit_MUST_declare_privacy_grants)
+- **R63** [MUST · decidable: macf/tests/test_pd_declaration.py::test_grants_declared] Each declared unit MUST state the privacy grants it needs. (unit_MUST_declare_privacy_grants)
 - **R64** [MUST · decidable: macf/tests/test_pd_render.py::test_grants_tested_at_install (planned)] When the platform adapter installs a unit, it MUST test the unit's declared grants. (adapter_MUST_test_grants_at_install)
 - **R65** [MUST · decidable: macf/tests/test_primal_daemon.py::test_denied_grant_notice (planned)] If a declared grant is denied, then the primal daemon MUST deliver a notice that names the grant. (denied_grant_MUST_raise_notice)
-- **R66** [MUST · decidable: macf/tests/test_pd_harness.py::test_adopts_harness_supervisor (planned)] Where the harness's own supervisor already runs a session, the primal daemon MUST adopt that session instead of starting a second supervisor. (pd_MUST_adopt_harness_supervisor)
+- **R66** [MUST · decidable: macf/tests/test_pd_harness.py::test_adopts_harness_supervisor] Where the harness's own supervisor already runs a session, the primal daemon MUST adopt that session instead of starting a second supervisor. (pd_MUST_adopt_harness_supervisor)
 
 ### 6.11 The tray
 
 - **R67** [MAY · judgment: the operator] Where a host has a desktop session, the operator MAY run the tray. (operator_MAY_run_tray)
-- **R68** [MUST NOT · decidable: macf/tests/test_pd_render.py::test_runs_without_tray (planned)] The outer tier and each primal daemon MUST NOT depend on the tray. (layer_MUST-NOT_depend_on_tray)
-- **R69** [MUST · decidable: macf/tests/test_pd_tray.py::test_icon_per_card (planned)] The tray MUST show one icon for all the agents installed on the host, with a menu entry per agent keyed by the calling card in the agent's identity file. (tray_MUST_show_icon_per_agent)
-- **R70** [MUST · decidable: macf/tests/test_pd_tray.py::test_acts_through_pd (planned)] The tray MUST send each start, stop or restart through that agent's primal daemon. (tray_MUST_act_through_pd)
+- **R68** [MUST NOT · decidable: macf/tests/test_pd_render.py::test_runs_without_tray] The outer tier and each primal daemon MUST NOT depend on the tray. (layer_MUST-NOT_depend_on_tray)
+- **R69** [MUST · decidable: macf/tests/test_pd_tray.py::test_icon_per_card] The tray MUST show one icon for all the agents installed on the host, with a menu entry per agent keyed by the calling card in the agent's identity file. (tray_MUST_show_icon_per_agent)
+- **R70** [MUST · decidable: macf/tests/test_pd_tray.py::test_acts_through_pd] The tray MUST send each start, stop or restart through that agent's primal daemon. (tray_MUST_act_through_pd)
 - **R71** [MUST NOT · judgment: the head maintainer, at review of the tray] The tray MUST NOT type into a session. (tray_MUST-NOT_type_into_session)
-- **R72** [MUST · decidable: macf/tests/test_pd_tray.py::test_waiting_icon (planned)] When a session waits on a person, the tray MUST change that agent's menu entry and show the most urgent state among the agents on its icon. (tray_MUST_flag_waiting_on_person)
-- **R73** [MUST · decidable: macf/tests/test_pd_readout.py::test_tray_unavailable_said (planned)] Where a host cannot show the tray, the readout MUST say so. (readout_MUST_say_tray_unavailable)
+- **R72** [MUST · decidable: macf/tests/test_pd_tray.py::test_waiting_icon] When a session waits on a person, the tray MUST change that agent's menu entry and show the most urgent state among the agents on its icon. (tray_MUST_flag_waiting_on_person)
+- **R73** [MUST · decidable: macf/tests/test_pd_readout.py::test_tray_unavailable_said] Where a host cannot show the tray, the readout MUST say so. (readout_MUST_say_tray_unavailable)
 
 ### 6.12 Watching the layer, and the old name
 
-- **R74** [MUST · decidable: macf/tests/test_pd_watch.py::test_a_stopped_daemon_alerts_once_then_recovers_once (planned)] Each primal daemon MUST be checked by an outside watch. (pd_MUST_have_outside_watch)
+- **R74** [MUST · decidable: macf/tests/test_pd_watch.py::test_a_stopped_daemon_alerts_once_then_recovers_once] Each primal daemon MUST be checked by an outside watch. (pd_MUST_have_outside_watch)
 - **R75** [MUST · judgment: the operator, at review of each deployment's alert path] The outside watch MUST alert a person through a credential that does not depend on any agent's channel. (outside_watch_MUST_alert_independently)
-- **R76** [MUST · decidable: macf/tests/test_amail_deploy_config.py::test_hypervisor_value_accepted (planned)] The mail system's deploy configuration MUST accept the old value `hypervisor` as the primal daemon's value. (config_MUST_accept_old_hypervisor_value)
+- **R76** [MUST · decidable: macf/tests/test_amail_deploy_config.py::test_hypervisor_value_accepted] The mail system's deploy configuration MUST accept the old value `hypervisor` as the primal daemon's value. (config_MUST_accept_old_hypervisor_value)
 
 ### 6.13 Observation and attach
 
 - **R81** [MAY · judgment: the operator] The operator MAY attach to any agent's session, with a keyboard, without an invitation. (operator_MAY_attach_without_invitation)
-- **R82** [MUST · decidable: macf/tests/test_pd_observe.py::test_onlooker_needs_invitation (planned)] An onlooker MUST receive an observation stream only after the observed agent invites it. (onlooker_MUST_be_invited)
-- **R83** [MUST NOT · decidable: macf/tests/test_pd_observe.py::test_onlooker_has_no_keyboard (planned)] An onlooker MUST NOT type into the observed session. (onlooker_MUST-NOT_type)
-- **R84** [MUST · decidable: macf/tests/test_pd_observe.py::test_stream_starts_at_invitation (planned)] An observation stream MUST contain nothing from before its invitation. (stream_MUST_start_at_invitation)
-- **R85** [MUST · decidable: macf/tests/test_pd_observe.py::test_stream_stops_at_end (planned)] When an observation ends, its stream MUST stop at once. (stream_MUST_stop_at_end)
-- **R86** [MAY · decidable: macf/tests/test_pd_observe.py::test_either_party_ends (planned)] The observed agent or the onlooker MAY end an observation at any time. (either_party_MAY_end_observation)
-- **R87** [MAY · decidable: macf/tests/test_pd_observe.py::test_operator_ends (planned)] The operator MAY end any observation. (operator_MAY_end_observation)
-- **R88** [MAY · decidable: macf/tests/test_pd_observe.py::test_lease_ends_invitation (planned)] An invitation MAY carry a lease that ends it at a declared time. (invitation_MAY_carry_lease)
-- **R89** [MUST · decidable: macf/tests/test_pd_observe.py::test_lease_end_same_event (planned)] When a lease runs out, the persistent layer MUST record the same ending event as an ending by a party. (lease_end_MUST_match_party_end)
-- **R90** [MUST · decidable: macf/tests/test_pd_observe.py::test_observation_events (planned)] Each invitation, pause, resume and ending MUST be an event in the observed agent's own event log. (observation_acts_MUST_be_events)
-- **R91** [MUST · decidable: macf/tests/test_pd_observe.py::test_presence_on_call_line (planned)] The observed agent's per-call hook line MUST show each onlooker that watches and each operator surface that is present. (call_line_MUST_show_presence)
-- **R92** [MAY · decidable: macf/tests/test_pd_observe.py::test_pause_resume (planned)] The observed agent MAY pause and resume an observation stream. (owner_MAY_pause_stream)
-- **R93** [MUST · decidable: macf/tests/test_pd_observe.py::test_pause_shown (planned)] While a stream is paused, the onlooker MUST see that the owner paused it. (onlooker_MUST_see_pause)
-- **R94** [MUST · decidable: macf/tests/test_pd_observe.py::test_onlooker_by_card (planned)] An invitation MUST name its onlooker by calling card, never by login user. (invitation_MUST_name_card)
+- **R82** [MUST · decidable: macf/tests/test_pd_observe.py::test_onlooker_needs_invitation] An onlooker MUST receive an observation stream only after the observed agent invites it. (onlooker_MUST_be_invited)
+- **R83** [MUST NOT · decidable: macf/tests/test_pd_observe.py::test_onlooker_has_no_keyboard] An onlooker MUST NOT type into the observed session. (onlooker_MUST-NOT_type)
+- **R84** [MUST · decidable: macf/tests/test_pd_observe.py::test_stream_starts_at_invitation] An observation stream MUST contain nothing from before its invitation. (stream_MUST_start_at_invitation)
+- **R85** [MUST · decidable: macf/tests/test_pd_observe.py::test_stream_stops_at_end] When an observation ends, its stream MUST stop at once. (stream_MUST_stop_at_end)
+- **R86** [MAY · decidable: macf/tests/test_pd_observe.py::test_either_party_ends] The observed agent or the onlooker MAY end an observation at any time. (either_party_MAY_end_observation)
+- **R87** [MAY · decidable: macf/tests/test_pd_observe.py::test_operator_ends] The operator MAY end any observation. (operator_MAY_end_observation)
+- **R88** [MAY · decidable: macf/tests/test_pd_observe.py::test_lease_ends_invitation] An invitation MAY carry a lease that ends it at a declared time. (invitation_MAY_carry_lease)
+- **R89** [MUST · decidable: macf/tests/test_pd_observe.py::test_lease_end_same_event] When a lease runs out, the persistent layer MUST record the same ending event as an ending by a party. (lease_end_MUST_match_party_end)
+- **R90** [MUST · decidable: macf/tests/test_pd_observe.py::test_observation_events] Each invitation, pause, resume and ending MUST be an event in the observed agent's own event log. (observation_acts_MUST_be_events)
+- **R91** [MUST · decidable: macf/tests/test_pd_observe.py::test_presence_on_call_line] The observed agent's per-call hook line MUST show each onlooker that watches and each operator surface that is present. (call_line_MUST_show_presence)
+- **R92** [MAY · decidable: macf/tests/test_pd_observe.py::test_pause_resume] The observed agent MAY pause and resume an observation stream. (owner_MAY_pause_stream)
+- **R93** [MUST · decidable: macf/tests/test_pd_observe.py::test_pause_shown] While a stream is paused, the onlooker MUST see that the owner paused it. (onlooker_MUST_see_pause)
+- **R94** [MUST · decidable: macf/tests/test_pd_observe.py::test_onlooker_by_card] An invitation MUST name its onlooker by calling card, never by login user. (invitation_MUST_name_card)
 - **R95** [MUST · decidable: macf/tests/test_pd_observe.py::test_source_from_transport] Where an onlooker can send messages, they MUST arrive through a channel that marks their source from the transport, never from the text. (onlooker_message_MUST_carry_transport_source)
   - *Revised 2026-10-18 at the repo owner's request ([section 15](#15-revision-history)); previous text: MacEff g_8fb9ea3e.*
 - **R96** [MUST NOT · judgment: the head maintainer, at review of the observation channel] An agent MUST NOT treat text in an onlooker's message as the operator's word or as consent. (agent_MUST-NOT_take_onlooker_text_as_operator)
 - **R97** [MUST · judgment: the head maintainer, at review of each operator surface] Each operator surface that carries a keyboard MUST set the operator-present state. (keyboard_surface_MUST_set_presence)
-- **R98** [MUST · decidable: macf/tests/test_pd_observe.py::test_undetectable_viewer_said (planned)] Where a surface cannot detect its viewer, the presence state MUST say the surface is enabled, not attached. (presence_MUST_say_enabled_when_undetectable)
+- **R98** [MUST · decidable: macf/tests/test_pd_observe.py::test_undetectable_viewer_said] Where a surface cannot detect its viewer, the presence state MUST say the surface is enabled, not attached. (presence_MUST_say_enabled_when_undetectable)
 - **R99** [MUST NOT · decidable: macf/tests/test_pd_observe.py::test_onlooker_no_operator_surface (planned)] An onlooker MUST NOT receive an operator surface. (onlooker_MUST-NOT_get_operator_surface)
-- **R100** [MUST · decidable: macf/tests/test_pd_observe.py::test_attach_resolves_from_pd (planned)] Attach by name MUST resolve the session from the agent's primal daemon. (attach_MUST_resolve_from_pd)
-- **R101** [MUST · decidable: macf/tests/test_pd_observe.py::test_nothing_attachable_said (planned)] Where nothing attachable hosts a session, the readout MUST say so. (readout_MUST_say_nothing_attachable)
-- **R102** [SHOULD · decidable: macf/tests/test_pd_observe.py::test_reachable_state (planned)] The presence state SHOULD tell an operator reachable by channel from an operator attached. (presence_SHOULD_show_reachable)
-- **R111** [MUST NOT · decidable: macf/tests/test_pd_observe.py::test_no_invitation_across_containers (planned)] An agent in one container MUST NOT invite an onlooker that runs in another container. (invitation_MUST-NOT_cross_containers)
-- **R128** [MUST · decidable: macf/tests/test_mode_activity.py::test_dialog_answer_counts (planned)] The presence state MUST count a person's answer to a dialog as the operator's activity. (presence_MUST_count_dialog_answers)
+- **R100** [MUST · decidable: macf/tests/test_pd_observe.py::test_attach_resolves_from_pd] Attach by name MUST resolve the session from the agent's primal daemon. (attach_MUST_resolve_from_pd)
+- **R101** [MUST · decidable: macf/tests/test_pd_observe.py::test_nothing_attachable_said] Where nothing attachable hosts a session, the readout MUST say so. (readout_MUST_say_nothing_attachable)
+- **R102** [SHOULD · decidable: macf/tests/test_pd_observe.py::test_reachable_state] The presence state SHOULD tell an operator reachable by channel from an operator attached. (presence_SHOULD_show_reachable)
+- **R111** [MUST NOT · decidable: macf/tests/test_pd_observe.py::test_no_invitation_across_containers] An agent in one container MUST NOT invite an onlooker that runs in another container. (invitation_MUST-NOT_cross_containers)
+- **R128** [MUST · decidable: macf/tests/test_mode_activity.py::test_dialog_answer_counts] The presence state MUST count a person's answer to a dialog as the operator's activity. (presence_MUST_count_dialog_answers)
 
 ### 6.14 The Claude Code channel
 
 - **R112** [MUST · judgment: the head maintainer, at review of the Claude Code harness adapter] Where the harness is Claude Code, the harness adapter MUST be a MacEff channel. (claude_code_adapter_MUST_be_maceff_channel)
-- **R113** [MUST · decidable: macf/tests/test_pd_channel.py::test_unix_socket_peer (planned)] The MacEff channel MUST connect to its primal daemon only through a local Unix socket whose peer the kernel identifies. (channel_MUST_connect_by_unix_socket)
-- **R114** [MUST · decidable: macf/tests/test_pd_channel.py::test_notice_metadata (planned)] Each channel event that carries a notice MUST carry the notice's identifier, source, read time and sent time as metadata. (channel_event_MUST_carry_notice_metadata)
-- **R115** [MUST · decidable: macf/tests/test_pd_channel.py::test_dark_channel_event (planned)] If a running session's MacEff channel drops, or misses its declared connect time after a start, then the primal daemon MUST record an event and notify the operator. (dark_channel_MUST_raise_event)
+- **R113** [MUST · decidable: macf/tests/test_pd_channel.py::test_unix_socket_peer] The MacEff channel MUST connect to its primal daemon only through a local Unix socket whose peer the kernel identifies. (channel_MUST_connect_by_unix_socket)
+- **R114** [MUST · decidable: macf/tests/test_pd_channel.py::test_notice_metadata] Each channel event that carries a notice MUST carry the notice's identifier, source, read time and sent time as metadata. (channel_event_MUST_carry_notice_metadata)
+- **R115** [MUST · decidable: macf/tests/test_pd_channel.py::test_dark_channel_event] If a running session's MacEff channel drops, or misses its declared connect time after a start, then the primal daemon MUST record an event and notify the operator. (dark_channel_MUST_raise_event)
 - **R116** [MUST · decidable: macf/tests/test_pd_channel.py::test_onlooker_card_from_invitation] Where the MacEff channel carries an onlooker's message, the primal daemon MUST set the onlooker's calling card in its metadata from the invitation. (onlooker_card_MUST_come_from_invitation)
   - *Revised 2026-10-18 at the repo owner's request ([section 15](#15-revision-history)); previous text: MacEff g_8fb9ea3e.*
-- **R117** [MUST NOT · decidable: macf/tests/test_pd_channel.py::test_no_permission_relay (planned)] The MacEff channel MUST NOT relay permission prompts. (channel_MUST-NOT_relay_permissions)
-- **R118** [MUST NOT · decidable: macf/tests/test_restart_without_prompt.py::test_the_session_command_never_carries_a_development_channel_flag (planned)] A restart that the primal daemon performs MUST NOT wait for a person to confirm the development flag. (restart_MUST-NOT_wait_on_development_flag)
+- **R117** [MUST NOT · decidable: macf/tests/test_pd_channel.py::test_no_permission_relay] The MacEff channel MUST NOT relay permission prompts. (channel_MUST-NOT_relay_permissions)
+- **R118** [MUST NOT · decidable: macf/tests/test_restart_without_prompt.py::test_the_session_command_never_carries_a_development_channel_flag] A restart that the primal daemon performs MUST NOT wait for a person to confirm the development flag. (restart_MUST-NOT_wait_on_development_flag)
 - **R119** [SHOULD · judgment: the operator, at review of each deployment] The MacEff channel SHOULD load through an organization allowlist or an official listing, instead of the development flag. (channel_SHOULD_load_without_development_flag)
-- **R120** [MUST · decidable: macf/tests/test_pd_channel.py::test_receipt_from_prompt_hook (planned)] When the session's prompt hook takes a MacEff channel event, it MUST record an event naming the notice's identifier and the time the hook took it. (prompt_hook_MUST_record_notice_receipt)
-- **R121** [MUST · decidable: macf/tests/test_mode_activity.py::test_source_from_origin_or_opening_tag (planned)] Each producer of the operator's activity MUST read a channel event's source from its origin record, or, only where none exists, from the tag that opens its text. (hooks_MUST_read_source_from_origin_or_opening_tag)
-- **R122** [MUST · decidable: macf/tests/test_pd_notice.py::test_peer_lineage_checked_by_the_daemon (planned)] The primal daemon MUST accept a MacEff channel connection only from a process that descends from its agent's live session, matched by process id and start time. (pd_MUST_check_channel_peer_lineage)
-- **R123** [MUST · decidable: macf/tests/test_pd_channel.py::test_channel_checks_its_pd (planned)] The MacEff channel MUST connect only to a peer that is its agent's own primal daemon, matched by process id and start time. (channel_MUST_check_its_peer_is_its_pd)
+- **R120** [MUST · decidable: macf/tests/test_pd_channel.py::test_receipt_from_prompt_hook] When the session's prompt hook takes a MacEff channel event, it MUST record an event naming the notice's identifier and the time the hook took it. (prompt_hook_MUST_record_notice_receipt)
+- **R121** [MUST · decidable: macf/tests/test_mode_activity.py::test_source_from_origin_or_opening_tag] Each producer of the operator's activity MUST read a channel event's source from its origin record, or, only where none exists, from the tag that opens its text. (hooks_MUST_read_source_from_origin_or_opening_tag)
+- **R122** [MUST · decidable: macf/tests/test_pd_notice.py::test_peer_lineage_checked_by_the_daemon] The primal daemon MUST accept a MacEff channel connection only from a process that descends from its agent's live session, matched by process id and start time. (pd_MUST_check_channel_peer_lineage)
+- **R123** [MUST · decidable: macf/tests/test_pd_channel.py::test_channel_checks_its_pd] The MacEff channel MUST connect only to a peer that is its agent's own primal daemon, matched by process id and start time. (channel_MUST_check_its_peer_is_its_pd)
 - **R124** [MUST · decidable: macf/tests/test_pd_declaration.py::test_allowlist_lists_every_channel (planned)] Where a deployment sets an organization allowlist, its declaration MUST list every channel the list admits, the operator's channels included. (allowlist_declaration_MUST_list_every_channel)
 - **R125** [MUST · judgment: the head maintainer, at review of the Claude Code harness adapter] The MacEff channel MUST ship as a channel plugin from a marketplace. (channel_MUST_ship_as_plugin)
 
@@ -417,7 +417,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R08 | decidable | macf/tests/test_pd_declaration.py::test_every_unit_declared | passing |
 | R09 | decidable | macf/tests/test_pd_interface.py::test_unit_fields_are_required_and_the_exit_code_contract_defaults | passing |
 | R10 | decidable | macf/tests/test_pd_declaration.py::test_renderings_exist | passing |
-| R11 | decidable | macf/tests/test_pd_declaration.py::test_schedules_hosted | planned |
+| R11 | decidable | macf/tests/test_pd_declaration.py::test_schedules_hosted | passing |
 | R12 | decidable | macf/tests/test_primal_daemon.py::test_clean_parent | passing |
 | R13 | decidable | macf/tests/test_primal_daemon.py::test_env_rendered_at_start | passing |
 | R14 | decidable | macf/tests/test_pd_liveness.py::test_the_heartbeat_reports_at_once_and_then_at_its_interval | passing |
@@ -427,19 +427,19 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R18 | decidable | macf/tests/test_pd_readout.py::test_overdue_is_unhealthy | planned |
 | R19 | decidable | macf/tests/test_pd_readout.py::test_auth_failure_is_failed | planned |
 | R20 | decidable | macf/tests/test_primal_daemon.py::test_states | passing |
-| R21 | decidable | macf/tests/test_pd_harness.py::test_waiting_reported | planned |
+| R21 | decidable | macf/tests/test_pd_harness.py::test_waiting_reported | planned (the test passes for a session the daemon starts itself; an adopted session writes no liveness, so a dialog it waits on isn't reported yet) |
 | R22 | decidable | macf/tests/test_primal_daemon.py::test_no_restart_while_waiting | passing |
 | R23 | judgment | the head maintainer, at review of each harness adapter | standing |
 | R24 | decidable | macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails | passing |
-| R25 | decidable | macf/tests/test_pd_schedule.py::test_policy_values | planned |
+| R25 | decidable | macf/tests/test_pd_schedule.py::test_policy_values | passing |
 | R26 | decidable | macf/tests/test_pd_schedule.py::test_advance_before_run | passing |
 | R27 | decidable | macf/tests/test_pd_schedule.py::test_no_replayed_restart | passing |
 | R28 | decidable | macf/tests/test_pd_schedule.py::test_leases_released | passing |
-| R29 | decidable | macf/tests/test_pd_schedule.py::test_target_declared | planned |
+| R29 | decidable | macf/tests/test_pd_schedule.py::test_target_declared | passing |
 | R30 | judgment | the Secretary, at review of each declaration | standing |
 | R31 | decidable | macf/tests/test_pd_schedule.py::test_permissions_settled | planned |
 | R32 | decidable | macf/tests/test_pd_schedule.py::test_prompt_fails_run | planned |
-| R33 | decidable | macf/tests/test_pd_schedule.py::test_run_cannot_schedule | planned |
+| R33 | decidable | macf/tests/test_pd_schedule.py::test_run_cannot_schedule | planned (the test passes for one daemon's life, and a container holds across restarts; on a host, detecting a changed declaration is to come) |
 | R34 | decidable | macf/tests/test_pd_schedule.py::test_late_run_says_so | passing |
 | R35 | judgment | the Secretary, at review of each declaration | standing |
 | R36 | decidable | macf/tests/test_pd_schedule.py::test_wall_clock_cap | passing |
@@ -467,12 +467,12 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R58 | decidable | macf/tests/test_pd_render.py::test_optional_units_independent | planned (optional to optional not met: the search service needs the policy index, so a slow index delays it) |
 | R59 | decidable | macf/tests/test_pd_interface.py::test_a_unit_missing_a_required_field_is_refused | passing |
 | R60 | decidable | macf/tests/test_pd_notice.py::test_a_unit_past_its_limit_is_a_notice_held_and_delivered | passing |
-| R61 | decidable | macf/tests/test_pd_render.py::test_limits_checked_after_recreate | planned |
+| R61 | decidable | macf/tests/test_pd_watch.py::test_limits_checked_after_recreate | passing |
 | R62 | judgment | the head maintainer, at review of the container landing | pending |
 | R63 | decidable | macf/tests/test_pd_declaration.py::test_grants_declared | passing |
 | R64 | decidable | macf/tests/test_pd_render.py::test_grants_tested_at_install | planned |
 | R65 | decidable | macf/tests/test_primal_daemon.py::test_denied_grant_notice | planned |
-| R66 | decidable | macf/tests/test_pd_harness.py::test_adopts_harness_supervisor | planned |
+| R66 | decidable | macf/tests/test_pd_harness.py::test_adopts_harness_supervisor | passing |
 | R67 | judgment | the operator | standing |
 | R68 | decidable | macf/tests/test_pd_render.py::test_runs_without_tray | passing |
 | R69 | decidable | macf/tests/test_pd_tray.py::test_icon_per_card | passing |
@@ -654,6 +654,12 @@ Objections recorded:
 - 2026-10-16: conformance sweep 3, editorial (mis 8.1), by the Secretary. Earlier sweeps left 36 decidable rows naming a test that doesn't exist under that name. Each was read against main's tests to find the test that decides it. The Secretary judges that pointing a row at that test is editorial when the test checks the requirement as written: the row's check stays decidable, and its meaning, keyword, scope, ID and slug don't change. Thirteen rows are re-pointed and move to passing: R14, R24, R43, R45, R57, R59, R60, R74, R77, R105, R108, R110 and R118. R57 names the outer tier's test, which decides its daemons half. R58 stays planned at review: one optional unit, the search service, needs another, the policy index, so a slow index delays it. Two re-pointed tests cover only part of their row, and say so here: R45's test checks a box that holds text, not a session that is idle; R60's checks the notice's delivery, while the crossing itself is detected and tested in test_primal_daemon.py. Each named test passes on main. For five of them a planted defect (a default memory limit, a default missed-run policy, unvalidated message ids, a development-channel flag in the session command, a wake typed into a busy session) made the named test fail. R104 stays planned: no single test checks both its wakes and its notices. The other 22 stay planned: six are checked only in part (R09, R21, R25, R58, R61, R99), and sixteen have no test (R11, R17, R18, R19, R29, R31, R32, R33, R47, R53, R54, R64, R65, R95, R116, R124). The Secretary's rulings on rows held earlier: R106 moves to passing, because both of its reasons are met: the notifier writes the wake words, and the door audit counts no MacEff channel notice as the operator, with no gap left marked. R122 moves to passing, because the primal daemon now applies the lineage check, and its row now names that test (`test_pd_notice.py::test_peer_lineage_checked_by_the_daemon`). R66 stays planned, because the persistent_layer policy still lists adoption as to come. R107 stays planned, because its transitional rule still applies where no `operator_channels` is declared. The Terms entry for **lease**, and the glossary's, now name both senses the requirements already use: a schedule's run claim (R28) and an invitation's declared end (R88, R89). Issue #641 found the gap. A second term would have changed two slugs, which is substantive, and the rationale for 6.13 already uses the word for an invitation. No requirement changed.
 - 2026-10-18: revision, at the repo owner's request (MIS-0001-R52 (repo_owner_MAY_request_revision); his words are quoted in MIS-0005, section 2). R09 (declaration_MUST_state_unit_fields) now lets a unit leave its exit-code contract to the default, as the head maintainer ruled on the deliberation issue (https://github.com/cversek/MacEff/issues/552#issuecomment-6226208335). The declaration model always had that default, and the persistent_layer policy documents it, so R09 could not pass as written. The other four fields stay required. The slug is unchanged, so every citation of R09 still holds. R09's row names the test that decides it, which passes. The previous text: MacEff g_30d9db60.
 - 2026-10-18: revision, at the repo owner's request (MIS-0001-R52 (repo_owner_MAY_request_revision)). His words, quoted on this change's pull request: "Revise it to make it optional and not currently implemented." They refine his first answer the same day, "Ok lets revise this out...if we have a need in the future we can put in the extra design work." R95 (onlooker_message_MUST_carry_transport_source) and R116 (onlooker_card_MUST_come_from_invitation) now govern an optional feature, messages from an onlooker into the observed session, which isn't implemented. Each opens with "Where", the EARS form for an optional feature, so it binds wherever such messages are built. Until then their rows read n/a, because the condition never arose (mis policy, the Conformance states). Nothing carries such a message today. The observation stream only goes out: it reads one handshake line and never again (persistent_layer 5.2). And the MacEff channel carries no text from any sender, so building the feature would need a channel record that carries a sender's text, with a design of its own. Both came from P17's fourth point, "talking back through a channel". Their keywords, checks and slugs are unchanged, so every citation still holds. The previous text: MacEff g_8fb9ea3e.
+- 2026-10-18: conformance sweep 4, editorial (mis 8.1), by the Secretary, with R29's named test. Each row's named test was run on its own on main, and passes. Five rows move to passing:
+  - R11 and R25, whose tests merged on 2026-10-18 (#703, #701);
+  - R61, which landed with its test (#700). Its row named a test that doesn't exist under that name, `test_pd_render.py::test_limits_checked_after_recreate`, and now names the test that decides it, in `test_pd_watch.py`, by sweep 3's rule: the test checks the requirement as written, so re-pointing is editorial. A test of the same name in `test_container_limits.py` checks the comparison alone, not that it runs after each recreate;
+  - R29, whose test this change adds, since the head maintainer handed R29 to the Secretary on the deliberation issue. The test also refuses an empty target, which names neither an isolated session nor an agent, and the declaration model now refuses one. It checks that a target is declared and that both forms load, not that a target other than an isolated session names an agent;
+  - R66, which the Secretary rules passing: adoption landed on 2026-10-12, and the persistent_layer policy describes it in section 3.3. That policy's section 13 had held R66 back by still listing adoption as to come.
+  Two rows stay planned, each with its reason in its row. R21's test passes for a session the daemon starts itself (#704), but an adopted session writes no liveness, so a dialog it waits on isn't reported yet, as the persistent_layer policy says in section 3.3. A maintainer found this at review, by the reasoning sweep 3 used to hold R66. R33's test holds within one daemon's life, and a container holds across restarts, while on a host, detecting a changed declaration is still to come. The persistent_layer policy's section 13, which lists what has not landed, is rewritten against the code. Adoption, the dark-channel event, the held-wake alert and command schedules are out, since they landed, and the open rows it never named are in: R19, R21's adopted session, R47, R58, R64, R65, R99 and R124, and the optional feature that R95 and R116 govern. The requirement lines of the 86 passing rows no longer say "(planned)", and R127's line no longer says "(passing)". The mis policy's line form carries no state, and the marker had outlived the tests it waited for, so a reader of a requirement saw it as untested while its row said passing. No requirement changed.
 
 ## Wiki-Links
 
