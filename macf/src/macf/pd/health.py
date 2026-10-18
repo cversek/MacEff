@@ -14,18 +14,33 @@ A unit's liveness has five verdicts, because unknown is not healthy:
 - ``ABSENT``: none among the events read, which may mean this deployment does not run it;
 - ``UNREADABLE``: its last liveness cannot be read, so its liveness is unknown.
 
-Runs owed against runs done (MIS-0002-R17 (readout_MUST_derive_health_from_runs),
-MIS-0002-R18 (overdue_run_MUST_read_unhealthy)) join this function with the scheduler.
+Each declared schedule's health is derived the same way, from runs owed and runs done when
+read (MIS-0002-R17 (readout_MUST_derive_health_from_runs)): ``schedule_health``. The cron
+says what was owed by now, and the scheduler's events say what started, ended or was missed by
+the declared policy. A run owed and not started, or started and past its limit with no end,
+is overdue, and the daemon that owes it reads unhealthy while it is alive
+(MIS-0002-R18 (overdue_run_MUST_read_unhealthy)).
 """
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Callable, Dict, Iterable, List, Literal, Optional
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from macf.notify.session import verify_incarnation
 # The core's bound, so the daemon and every reader agree on when a unit is stale.
 from macf.pd.core import LIVENESS_TOLERANCE
-from macf.pd.interface import EVENT_LIVENESS, EVENT_STATE, Declaration, Liveness
+from macf.pd.interface import EVENT_LIVENESS, EVENT_STATE, CommandRun, Declaration, Liveness, Schedule
+from macf.pd.schedule import CronExpr
+from macf.pd.scheduler import (
+    EVENT_DONE,
+    EVENT_MISSED,
+    EVENT_NOT_RUN,
+    EVENT_SEEN,
+    EVENT_STARTED,
+    KILL_GRACE_S,
+)
 
 Verdict = Literal["ALIVE", "STALE", "GONE", "ABSENT", "UNREADABLE"]
 ALIVE: Verdict = "ALIVE"
@@ -153,3 +168,119 @@ def _float_or_none(value) -> Optional[float]:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
+
+
+# ============================================================================
+# Runs owed and runs done
+# ============================================================================
+
+RunVerdict = Literal["NONE_OWED", "OK", "DUE", "RUNNING", "OVERDUE", "FAILED", "NOT_RUN"]
+#: The verdicts that make the daemon owing the runs unhealthy.
+UNHEALTHY_RUNS = ("OVERDUE", "FAILED", "NOT_RUN")
+#: The scheduler's events, which ``schedule_health`` reads.
+SCHEDULE_EVENTS = (EVENT_SEEN, EVENT_STARTED, EVENT_DONE, EVENT_MISSED, EVENT_NOT_RUN)
+#: How long after its firing a run may still be starting. The daemon starts a due run on its
+#: next pass, a fraction of a second later, so this is room for a slow pass, not a policy.
+START_GRACE_S = 60.0
+
+
+class ScheduleHealth(BaseModel):
+    """One declared schedule, as runs owed and runs done have it when read."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schedule: str
+    verdict: RunVerdict
+    owed: Optional[str] = None       # the newest firing owed and not started, ISO
+    last_run: Optional[str] = None   # the firing the newest recorded run was for, ISO
+    outcome: str = ""                # how the newest ended run ended
+    detail: str
+
+
+def _at(text) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(text) if isinstance(text, str) else None
+    except ValueError:
+        return None  # noqa: MACEFF003 - a time that doesn't parse is no time: the row is skipped
+
+
+def schedule_health(declaration: Declaration, events: Iterable[dict], now: float) -> List[ScheduleHealth]:
+    """One ``ScheduleHealth`` per declared schedule, in the declaration's order.
+
+    ``events`` are rows of the agent's event log, in any order; the newest of each kind is
+    taken by its timestamp. Nothing is kept between calls, so the verdict moves with ``now``
+    alone: a run that was due a moment ago reads overdue once its grace has passed, with no
+    event written in between (MIS-0002-R17 (readout_MUST_derive_health_from_runs))."""
+    names = {s.name for s in declaration.schedules}
+    newest: Dict[tuple, dict] = {}
+    seen: Dict[str, datetime] = {}
+    done_for: Dict[str, set] = {}
+    for event in events:
+        kind = event.get("event") if isinstance(event, dict) else None
+        if kind not in SCHEDULE_EVENTS:
+            continue
+        data = event.get("data") or {}
+        if not isinstance(data, dict) or data.get("agent") != declaration.agent:
+            continue
+        name = data.get("schedule")
+        if not isinstance(name, str) or name not in names:
+            continue
+        if kind == EVENT_SEEN:
+            at = _at(data.get("at"))
+            if at is not None and (name not in seen or at < seen[name]):
+                seen[name] = at
+            continue
+        if kind == EVENT_DONE:
+            done_for.setdefault(name, set()).add(data.get("scheduled_for"))
+        stamp = _float_or_none(event.get("timestamp")) or 0.0
+        key = (kind, name)
+        if key not in newest or stamp >= (_float_or_none(newest[key].get("timestamp")) or 0.0):
+            newest[key] = event
+    tz = ZoneInfo(declaration.timezone) if declaration.timezone else timezone.utc
+    return [_schedule_health(s, tz, newest, seen.get(s.name), done_for.get(s.name, set()), now)
+            for s in declaration.schedules]
+
+
+def _schedule_health(s: Schedule, tz, newest: Dict[tuple, dict], seen: Optional[datetime],
+                     done_for: set, now: float) -> ScheduleHealth:
+    def data(kind):
+        return (newest.get((kind, s.name)) or {}).get("data") or {}
+
+    started, done, missed = data(EVENT_STARTED), data(EVENT_DONE), data(EVENT_MISSED)
+    last_run = _at(started.get("scheduled_for"))
+    accounted = [t for t in (last_run, _at(missed.get("last"))) if t is not None]
+    origin = max(accounted + ([seen] if seen else []), default=None)
+    outcome = str(done.get("outcome") or "")
+    known = {"schedule": s.name, "last_run": last_run.isoformat() if last_run else None,
+             "outcome": outcome}
+    if not isinstance(s.run, CommandRun) and data(EVENT_NOT_RUN):
+        return ScheduleHealth(**known, verdict="NOT_RUN",
+                              detail=f"the daemon does not run it: {data(EVENT_NOT_RUN).get('reason', '')}")
+    if origin is None:
+        return ScheduleHealth(**known, verdict="NONE_OWED",
+                              detail="no daemon has run this declaration yet, so nothing is owed")
+    # A run in flight holds its schedule: the scheduler starts no other until it ends, so a
+    # firing that passes meanwhile is not yet owed.
+    if last_run is not None and started.get("scheduled_for") not in done_for:
+        ran_for = now - (_float_or_none(newest[(EVENT_STARTED, s.name)].get("timestamp")) or now)
+        if ran_for > s.timeout_s + KILL_GRACE_S + START_GRACE_S:
+            return ScheduleHealth(**known, verdict="OVERDUE",
+                                  detail=f"started {ran_for:.0f} s ago with no end recorded, past "
+                                         f"its {s.timeout_s:g} s limit")
+        return ScheduleHealth(**known, verdict="RUNNING", detail=f"started {ran_for:.0f} s ago")
+    now_at = datetime.fromtimestamp(now, timezone.utc)
+    owed = None
+    for when in CronExpr.parse(s.cron, tz).iter_after(origin):
+        if when > now_at:
+            break
+        owed = when
+    if owed is not None:
+        late = (now_at - owed).total_seconds()
+        return ScheduleHealth(**known, owed=owed.isoformat(),
+                              verdict="OVERDUE" if late > START_GRACE_S else "DUE",
+                              detail=f"the run owed for {owed.isoformat()} has not started, {late:.0f} s after it")
+    if not done:
+        return ScheduleHealth(**known, verdict="NONE_OWED", detail="no run owed since it was first seen")
+    if outcome.startswith("ok"):
+        return ScheduleHealth(**known, verdict="OK", detail=f"the last run: {outcome}")
+    return ScheduleHealth(**known, verdict="FAILED", detail=f"the last run: {outcome}")
