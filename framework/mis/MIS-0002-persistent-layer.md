@@ -274,7 +274,7 @@ stateDiagram-v2
 - **R96** [MUST NOT · judgment: the head maintainer, at review of the observation channel] An agent MUST NOT treat text in an onlooker's message as the operator's word or as consent. (agent_MUST-NOT_take_onlooker_text_as_operator)
 - **R97** [MUST · judgment: the head maintainer, at review of each operator surface] Each operator surface that carries a keyboard MUST set the operator-present state. (keyboard_surface_MUST_set_presence)
 - **R98** [MUST · decidable: macf/tests/test_pd_observe.py::test_undetectable_viewer_said] Where a surface cannot detect its viewer, the presence state MUST say the surface is enabled, not attached. (presence_MUST_say_enabled_when_undetectable)
-- **R99** [MUST NOT · decidable: macf/tests/test_pd_observe.py::test_onlooker_no_operator_surface (planned)] An onlooker MUST NOT receive an operator surface. (onlooker_MUST-NOT_get_operator_surface)
+- **R99** [MUST NOT · decidable: macf/tests/test_pd_observe.py::test_onlooker_no_operator_surface] An onlooker MUST NOT receive an operator surface. (onlooker_MUST-NOT_get_operator_surface)
 - **R100** [MUST · decidable: macf/tests/test_pd_observe.py::test_attach_resolves_from_pd] Attach by name MUST resolve the session from the agent's primal daemon. (attach_MUST_resolve_from_pd)
 - **R101** [MUST · decidable: macf/tests/test_pd_observe.py::test_nothing_attachable_said] Where nothing attachable hosts a session, the readout MUST say so. (readout_MUST_say_nothing_attachable)
 - **R102** [SHOULD · decidable: macf/tests/test_pd_observe.py::test_reachable_state] The presence state SHOULD tell an operator reachable by channel from an operator attached. (presence_SHOULD_show_reachable)
@@ -505,7 +505,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R96 | judgment | the head maintainer, at review of the observation channel | standing |
 | R97 | judgment | the head maintainer, at review of each operator surface | standing |
 | R98 | decidable | macf/tests/test_pd_observe.py::test_undetectable_viewer_said | passing |
-| R99 | decidable | macf/tests/test_pd_observe.py::test_onlooker_no_operator_surface | planned |
+| R99 | decidable | macf/tests/test_pd_observe.py::test_onlooker_no_operator_surface | passing |
 | R100 | decidable | macf/tests/test_pd_observe.py::test_attach_resolves_from_pd | passing |
 | R101 | decidable | macf/tests/test_pd_observe.py::test_nothing_attachable_said | passing |
 | R102 | decidable | macf/tests/test_pd_observe.py::test_reachable_state | passing |

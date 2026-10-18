@@ -346,6 +346,9 @@ The operator may attach to any session without an invitation [MIS-0002-R81 (oper
 
 **An onlooker never types** [MIS-0002-R83 (onlooker_MUST-NOT_type)]. The socket is read for one handshake line and never again, so there is no input path to close. A connection that sends no handshake within five seconds is refused.
 
+**An onlooker never receives an operator surface** [MIS-0002-R99 (onlooker_MUST-NOT_get_operator_surface)], a way to see and type into the session. Besides having no input path, the invitation names no attach target. A Remote Control session link opens the session's view and keyboard to anyone signed in to the account that owns it, so the stream puts a marker in its place, wherever it was written: a prompt, a channel message, the agent's text or a tool's stated purpose.
+- **The limit is the login.** An onlooker that shares the operator's login, on the machine or on claude.ai, already holds the operator's surfaces through it, and nothing in the stream can withhold them. R99 holds between different logins; to such an onlooker, an invitation adds nothing the login hasn't given.
+
 **The stream stops at once when the observation ends** [MIS-0002-R85 (stream_MUST_stop_at_end)]. The state is read before every frame, so an ending or a lapsed lease stops it before the next one. The stream is bound to the invitation it was admitted under. A new invitation for the same onlooker carries another secret, so an end and a re-invitation that both fall between two reads still end it.
 
 **The pause.** Everything a session shows is in scope of an invitation, so the owner protects other people's records and credentials by pausing the stream before work that prints them [MIS-0002-R92 (owner_MAY_pause_stream)].
