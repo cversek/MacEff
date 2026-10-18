@@ -451,3 +451,143 @@ def test_a_daemon_with_a_threshold_notices_unread_mail(tmp_path, base, run_daemo
     [event] = list(read_events(only=(EVENT_UNREAD_MAIL,)))
     assert event["data"]["agent"] == "Tester@abc123" and event["data"]["count"] == 1
     assert any(o.source == "pd_unread_mail" for o in daemon.notifier.owed.values())
+
+
+from test_primal_daemon import _crash, drive, make_core, make_unit, script  # noqa: E402,F401 - fixtures
+
+
+def test_after_restart_notice(make_core, script):
+    """MIS-0002-R47 (pd_MUST_report_carried_changed_lost): after a restart and after a
+    compaction, one pd_carried event says what was carried, what changed and what was lost,
+    and the agent is owed one notice pointing to it. A first start carries nothing and says
+    nothing. Here a unit that survived the daemon is carried, one that died is started anew
+    (changed), and an optional one that died isn't started again (lost)."""
+    from macf.agent_events_log import append_event
+    from macf.pd import core as pd_core
+
+    def carried_events():
+        return [e["data"] for e in read_events(reverse=False, scope="all", only=(pd_core.EVENT_CARRIED,))]
+
+    # The survivor is the session unit, so its restart under the second daemon is checked too.
+    survives = make_unit("survives", script, {}, restart="always").model_copy(update={"kind": "session"})
+    dies = make_unit("dies", script, {})
+    optional = make_unit("optional", script, {}).model_copy(update={"optional": True})
+    first = make_core([survives, dies, optional], hosted=lambda: [])
+    first.record_start(os.getpid(), "the first daemon's start")
+    first.boot()
+    first.start("optional", pd_core.POLICY, "the test wants it")
+    assert drive(first, lambda: all(first.state(u) == "running" for u in ("survives", "dies", "optional")))
+    assert carried_events() == []                                   # a first start is no restart
+    left = _crash(first)
+    for name in ("dies", "optional"):
+        os.killpg(left[name].pid, 9)
+        left[name].wait(timeout=5)
+
+    now = [time.time()]
+    owed = []
+    second = make_core([survives, dies, optional], wall=lambda: now[0], hosted=lambda: [])
+    ids = []
+    second.on_notice = lambda source, nid: owed.append(source) or ids.append(nid)
+    second.record_start(os.getpid(), "the second daemon's start")
+    second.boot()
+    report = carried_events()
+    assert len(report) == 1 and report[0]["after"] == "the primal daemon restarted"
+    assert (report[0]["carried"], report[0]["changed"], report[0]["lost"]) == (["survives"], ["dies"], ["optional"])
+    assert owed == ["pd_carried"]
+
+    append_event("compaction_detected", {"source": "test"})
+    second.tick()
+    assert len(carried_events()) == 1                               # the settle lets the follower go first
+    now[0] += pd_core.COMPACTION_SETTLE_S + 1
+    second.tick()
+    after = carried_events()[-1]
+    assert after["after"] == "the session was compacted" and after["lost"] == [pd_core.CONTEXT_LOST]
+    assert "survives" in after["carried"] and owed == ["pd_carried", "pd_carried"]
+    second.tick()
+    assert len(carried_events()) == 2                               # once per compaction
+
+    # The adopted session dies and comes back as a new process: that is a restart too.
+    os.killpg(left["survives"].pid, 9)
+    left["survives"].wait(timeout=5)
+    assert drive(second, lambda: carried_events()[-1]["after"] == "the session unit restarted")
+    assert carried_events()[-1]["changed"] == ["survives"] and owed.count("pd_carried") == 3
+    # Each id names its occasion, so a daemon restart and a session restart in one second differ.
+    assert [i.split("-")[1] for i in ids] == ["daemon", "compaction", "session"]
+
+
+def test_a_session_restart_is_reported(make_core, script):
+    """R47 for the session unit: when it comes back as a new process, its context is lost and
+    the units beside it ran on, and that is reported once, with the notice. Its first start is
+    no restart."""
+    from macf.pd import core as pd_core
+    session = make_unit("session", script, {"exit_after": 0.3}, restart="always").model_copy(
+        update={"kind": "session"})
+    worker = make_unit("worker", script, {})
+    owed = []
+    core = make_core([session, worker], hosted=lambda: [])
+    core.on_notice = lambda source, nid: owed.append(source)
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    assert drive(core, lambda: any(e["data"]["after"] == "the session unit restarted" for e in
+                                   read_events(reverse=False, scope="all", only=(pd_core.EVENT_CARRIED,))))
+    first = [e["data"] for e in read_events(reverse=False, scope="all", only=(pd_core.EVENT_CARRIED,))][0]
+    assert (first["carried"], first["changed"], first["lost"]) == (["worker"], ["session"], [pd_core.CONTEXT_LOST])
+    assert owed[0] == "pd_carried"
+
+
+@pytest.mark.parametrize("route, warned", [(None, True), ("operator", True), ("held_until_present", True),
+                                           ("agent", False), ("both", False)])
+def test_an_unheard_carried_notice_is_warned_at_start(tmp_path, capsys, route, warned):
+    """R47's notice is delivered on the agent's routes only, so a daemon with a session unit warns
+    at start unless pd_carried is routed to 'agent' or 'both'."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+    from macf.pd import interface
+    from macf.pd.daemon import Daemon
+    home = tmp_path / "home"
+    (home / ".maceff" / "pd").mkdir(parents=True)
+    (home / ".maceff_primary_agent.id").write_text("abc123def4567890\n")
+    (home / ".maceff" / "config.json").write_text('{"agent_identity": {"moniker": "Tester"}}')
+    session = interface.Unit(name="session", kind="session", command=["/usr/bin/true"],
+                             account=__import__("pwd").getpwuid(os.getuid()).pw_name,
+                             restart="always", liveness_interval_s=10, memory_limit_mb=64)
+    interface.declaration_path(home).write_text(interface.Declaration(
+        version=1, agent="Tester@abc123", units=[session],
+        notice_routes={"pd_carried": route} if route else {}).model_dump_json())
+    base = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))
+    try:
+        Daemon(home, base=base)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+    assert ("doesn't route 'pd_carried'" in capsys.readouterr().err) == warned
+
+
+def test_a_compaction_no_daemon_saw_is_reported_at_the_next_start(make_core, script):
+    """Review of #714. The tail starts at the log's end, so a compaction made while no daemon
+    ran, or inside the settle before a restart, is taken up when the next daemon boots, once its
+    settle has passed. One a report already covers isn't reported again."""
+    from macf.agent_events_log import append_event
+    from macf.pd import core as pd_core
+
+    def reports():
+        return [e["data"] for e in read_events(reverse=False, scope="all", only=(pd_core.EVENT_CARRIED,))
+                if e["data"].get("occasion") == "compaction"]
+
+    unit = make_unit("worker", script, {})
+    append_event("compaction_detected", {"source": "test"})       # while no daemon ran
+    now = [time.time()]
+    core = make_core([unit], wall=lambda: now[0])
+    core.boot()
+    core.tick()
+    assert reports() == []                                          # the settle still applies
+    now[0] += pd_core.COMPACTION_SETTLE_S + 1
+    core.tick()
+    assert len(reports()) == 1
+    core.shutdown("the next daemon starts")
+
+    again = make_core([unit], wall=lambda: now[0])
+    again.boot()
+    now[0] += pd_core.COMPACTION_SETTLE_S + 1
+    again.tick()
+    assert len(reports()) == 1                                      # already covered

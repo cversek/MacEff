@@ -124,7 +124,7 @@ A channel event carries **a notice and nothing else**: the source's own fixed wo
 - The daemon's notices about your own units:
   - `pd_limit_exceeded`: a unit is past its declared memory limit [MIS-0002-R60 (pd_MUST_notice_limit_exceeded)].
   - `pd_grant_denied`: a declared grant was denied [MIS-0002-R65 (denied_grant_MUST_raise_notice)].
-  - `pd_carried`: what a restart carried, changed and lost [MIS-0002-R47 (pd_MUST_report_carried_changed_lost)].
+  - `pd_carried`: what a restart or a compaction carried, changed and lost [MIS-0002-R47 (pd_MUST_report_carried_changed_lost)].
 - The daemon's notice about your mail:
   - `pd_unread_mail`: mail has waited in your pickup box past your declared threshold [MIS-0002-R55 (unread_mail_MUST_raise_notice)]. See 1.11.
 
@@ -614,6 +614,13 @@ The six states are declared, starting, running, waiting on a person, failed and 
 An event carries states, times and identities. It never carries file content from the agent's home [MIS-0002-R79 (layer_MUST-NOT_copy_home_content)].
 
 **A unit outlives a daemon that dies, and the next daemon adopts it.** At boot the core reads each unit's last recorded state, back past any compaction or rotation as far as the previous daemon's start, since every unit that daemon left running was recorded after it. A unit recorded live, whose process is still that process by pid and start time, is adopted rather than started a second time, and the state event says it was carried. A unit whose pid now names another process is started fresh. So is one whose last record names another boot of the host: on Linux a start time counts clock ticks since boot, so after a reboot a new process can carry the very pid and ticks an old record names. Each state event carries the kernel's id for the boot it was recorded in (`boot_id`), and only a record of the current boot is adopted. Boots are compared by id, not by the boot time, because the boot time moves when the clock is stepped, as on a host without a battery-backed clock once NTP answers, and would make this boot's records look older than the boot. A record without the id, written before it existed or on macOS, whose start times are UTC, rests on the pid and start time alone. An adopted unit is stopped through its process group, as one the core started is, and its first liveness is judged from its adoption, as a started unit's is from its start, so a unit that went silent while no daemon ran becomes overdue.
+
+**Each restart and compaction is reported once: what it carried, what changed and what was lost** [MIS-0002-R47 (pd_MUST_report_carried_changed_lost)]. The core writes one `pd_carried` event, with `occasion` (`daemon`, `session` or `compaction`), `after` saying it in words, and three lists, and owes you the `pd_carried` notice, which points to it:
+- **after the daemon restarts** (and so after a container is recreated): units adopted are carried; units that were live and came back as new processes changed; units that were live and didn't come back, such as an optional unit nobody started again, were lost. A first start isn't a restart and isn't reported.
+- **after the session unit restarts:** the session changed, its working context was lost, and the units still running were carried.
+- **after a compaction,** read from the hooks' `compaction_detected` a minute after it lands, so the recovery follower's own prompt comes first: the units running were carried, and the session's working context was lost. A compaction the running daemon couldn't see, made while no daemon ran or inside that minute before a restart, is taken up at the next start, unless a compaction report already covers it.
+
+A notice delivered to an idle session opens a turn, so an agent in AUTO_MODE resumes after any compaction; in MANUAL_MODE it reads the report and stops. The notice reaches you only where `notice_routes` routes `pd_carried` to `agent` or `both`, and a daemon whose declaration has a session unit warns at start when it doesn't. Once the deployed declarations route it, a declaration that doesn't is refused at load.
 
 ### 11.2 Liveness is the unit's own
 
