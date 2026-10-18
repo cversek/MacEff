@@ -468,9 +468,11 @@ def test_after_restart_notice(make_core, script):
     def carried_events():
         return [e["data"] for e in read_events(reverse=False, scope="all", only=(pd_core.EVENT_CARRIED,))]
 
-    survives, dies = make_unit("survives", script, {}), make_unit("dies", script, {})
+    # The survivor is the session unit, so its restart under the second daemon is checked too.
+    survives = make_unit("survives", script, {}, restart="always").model_copy(update={"kind": "session"})
+    dies = make_unit("dies", script, {})
     optional = make_unit("optional", script, {}).model_copy(update={"optional": True})
-    first = make_core([survives, dies, optional])
+    first = make_core([survives, dies, optional], hosted=lambda: [])
     first.record_start(os.getpid(), "the first daemon's start")
     first.boot()
     first.start("optional", pd_core.POLICY, "the test wants it")
@@ -483,7 +485,7 @@ def test_after_restart_notice(make_core, script):
 
     now = [time.time()]
     owed = []
-    second = make_core([survives, dies, optional], wall=lambda: now[0])
+    second = make_core([survives, dies, optional], wall=lambda: now[0], hosted=lambda: [])
     second.on_notice = lambda source, nid: owed.append(source)
     second.record_start(os.getpid(), "the second daemon's start")
     second.boot()
@@ -502,7 +504,12 @@ def test_after_restart_notice(make_core, script):
     assert "survives" in after["carried"] and owed == ["pd_carried", "pd_carried"]
     second.tick()
     assert len(carried_events()) == 2                               # once per compaction
-    left["survives"].kill()
+
+    # The adopted session dies and comes back as a new process: that is a restart too.
+    os.killpg(left["survives"].pid, 9)
+    left["survives"].wait(timeout=5)
+    assert drive(second, lambda: carried_events()[-1]["after"] == "the session unit restarted")
+    assert carried_events()[-1]["changed"] == ["survives"] and owed.count("pd_carried") == 3
 
 
 def test_a_session_restart_is_reported(make_core, script):
