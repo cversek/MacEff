@@ -1,0 +1,3 @@
+### Changed
+
+- **MIS-0002-R95 and R116, revised out** (`framework/mis/MIS-0002-persistent-layer.md`). Messages from an onlooker into the observed session are now a non-goal of MIS-0002. Nothing carried them: an observation stream only goes out, and the MacEff channel carries no sender's text. If a need appears, they come back by revision or amendment, with a design. This is the first revision that removes requirements. A line in italics stands where each was, naming its ID and slug and linking its previous text, and neither ID will be reused. R96, that an onlooker's text is never the operator's word, is unchanged. No code changes.
