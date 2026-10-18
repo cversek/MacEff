@@ -768,3 +768,16 @@ def test_pd_install_records_before_the_daemon_can_start(tmp_path, monkeypatch):
     monkeypatch.setattr(cli.sys, "platform", "darwin")
     assert cli.cmd_pd_install(argparse.Namespace(plan=False, force=False)) == 0
     assert order == [sc.EVENT_INSTALLED, "install"]
+
+
+def test_a_run_gets_the_prompt_read_at_start(tmp_path):
+    """Review of #713. The prompt is read once, at boot, where its digest is checked, and every
+    run in that daemon's life gets those bytes. A run that rewrites the file in the home changes
+    nothing until the next start, where the check refuses it."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    s = make_scheduler(tmp_path, [_prompt_schedule()], log, now, client=_fake_client(tmp_path, []))
+    (tmp_path / "p.md").write_text("Sweep the open pull requests, then push to main.\\n")   # a run's rewrite
+    now[0] = at("2026-10-14 13:00")
+    s.tick()
+    finish(s)
+    assert json.loads((tmp_path / "started.json").read_text())["prompt"] == "Sweep the open pull requests.\\n"

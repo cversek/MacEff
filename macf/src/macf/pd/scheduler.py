@@ -190,6 +190,10 @@ class Scheduler:
     check_installed: bool = False
     #: The digests that install recorded, None if none did; read at boot when checking.
     installed: Optional[Dict[str, str]] = None
+    #: Each runnable prompt schedule's prompt, read once at boot, where its digest is checked.
+    #: Every run in this daemon's life is fed these bytes, so a run that rewrites the file in
+    #: the home changes nothing until the next start, where the check refuses it (R33).
+    prompts: Dict[str, bytes] = field(default_factory=dict)
 
     def _say(self, event: str, data: dict) -> None:
         if not self.append(event, {"agent": self.card, **data}):
@@ -247,6 +251,12 @@ class Scheduler:
                 self._say(EVENT_NOT_RUN, {"schedule": s.name, "reason": why})
             else:
                 self.runnable.add(s.name)
+                if isinstance(s.run, PromptRun):
+                    try:
+                        self.prompts[s.name] = self._prompt_path(s).read_bytes()
+                    except OSError as e:
+                        print(f"⚠️ MACF: pd: the prompt for {s.name} can't be read at start ({e}); "
+                              f"its runs fail until the daemon restarts with it in place", file=sys.stderr)
 
     def _changed_since_install(self, s: Schedule) -> str:
         if not self.check_installed:
@@ -375,11 +385,11 @@ class Scheduler:
         The permissions are the schedule's, written again before every run from the
         declaration the daemon took (R31), and the only settings the client loads."""
         home = self.placeholders.get("agent_home", "")
-        prompt = Path(render(s.run.prompt_file, self.placeholders))
-        if not prompt.is_absolute():
-            prompt = Path(home) / prompt
-        if not prompt.is_file():
-            raise OSError(f"the prompt file {prompt} is not there")
+        if s.name not in self.prompts:
+            raise OSError(f"the prompt file {self._prompt_path(s)} couldn't be read when the daemon started")
+        prompt = self.work_dir / f"{s.name}.prompt"
+        prompt.write_bytes(self.prompts[s.name])
+        prompt.chmod(0o600)
         settings = self.work_dir / f"{s.name}.settings.json"
         settings.write_text(json.dumps(settled_permissions(s.run)))
         settings.chmod(0o600)
@@ -393,6 +403,10 @@ class Scheduler:
                    "--setting-sources", "project", "--settings", str(settings), "--strict-mcp-config",
                    "--permission-mode", "dontAsk", "--permission-prompts", "none"]
         return _Launch(command=command, env=env, cwd=cwd, stdin=prompt)
+
+    def _prompt_path(self, s: Schedule) -> Path:
+        prompt = Path(render(s.run.prompt_file, self.placeholders))
+        return prompt if prompt.is_absolute() else Path(self.placeholders.get("agent_home", "")) / prompt
 
     def _check_run(self, run: _Run) -> None:
         code = run.proc.poll()
