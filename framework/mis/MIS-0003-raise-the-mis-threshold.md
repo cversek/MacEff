@@ -107,6 +107,7 @@ Objections recorded: none.
 - 2026-10-04: first version, with the pull request that lands it.
 - 2026-10-10: in answer to P02, the term **new policy** excludes a document split out of, or renamed from, an existing policy. R01 is unchanged. The branch was brought up to date with main.
 - 2026-10-10: the operator named the maintainers and closed the discussion under MIS-0001-R48. The Status moved to Accepted with the Resolution, as the last commit before the merge.
+- 2026-10-18: MIS-0001-R01 now carries this MIS's R01 in its own text, brought in place by MIS-0005, so the requirement in force stands in MIS-0001. This MIS remains the record of why the threshold changed. Editorial.
 
 ## Wiki-Links
 
