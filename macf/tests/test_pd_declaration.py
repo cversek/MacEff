@@ -292,6 +292,7 @@ def test_schedules_hosted(tmp_path):
     assert daemon.scheduler is not None
     assert [s.name for s in daemon.scheduler.declaration.schedules] == ["nightly"]
     with pytest.raises(ValueError, match="vanilla"):
-        AgentSpec(username="pa_plain", flavor="vanilla", primal_daemon={"timezone": "UTC", "schedules": [schedule]})
-    AgentSpec(username="pa_plain", flavor="vanilla")                     # vanilla, no daemon: fine
+        AgentSpec(username="pa_plain", uid=21100, flavor="vanilla",
+                  primal_daemon={"timezone": "UTC", "schedules": [schedule]})
+    AgentSpec(username="pa_plain", uid=21100, flavor="vanilla")          # vanilla, no daemon: fine
 

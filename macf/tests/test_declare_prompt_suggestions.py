@@ -13,7 +13,7 @@ from macf.models.agent_spec import AgentSpec, ClaudeCodeSettingsConfig
 
 
 def _spec(settings):
-    return AgentSpec(username="pa_seat", personality="agents/seat.md",
+    return AgentSpec(username="pa_seat", uid=21100, personality="agents/seat.md",
                      claude_config={"settings": settings})
 
 
