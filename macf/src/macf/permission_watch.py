@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -114,6 +115,45 @@ def read_waiting() -> List[Waiting]:
     """
     from macf.agent_events_log import read_events
     return waiting(read_events(reverse=True, scope="cycle", only=PROGRESS | {REQUEST}))
+
+
+def waiting_on_text(w: Waiting) -> str:
+    """What a session waits on a person for, as its unit reports it: the tool and the time the
+    dialog opened. Never the command, which can carry anything and reaches ``pd status``."""
+    return f"a permission dialog for {w.tool[:60]}, open since {time.strftime('%H:%M', time.localtime(w.since))}"
+
+
+class SessionDialogs:
+    """The session unit's ``waiting_on``, read from the event log on each beat
+    (MIS-0002-R21 (pd_MUST_report_waiting_on_person)).
+
+    Called by the session's transcript monitor, which runs outside the client and so keeps
+    beating while a dialog holds the session. A denial writes no event of its own, so the
+    session reads as waiting until its next prompt, tool call or end; a denial with a reply
+    arrives as a prompt and ends the wait at once.
+
+    Any failure keeps the last answer and warns once, naming the exception, so a defect here
+    reads differently from a log that can't be read. Reporting "not waiting" would end a wait
+    no person has answered, and an exception escaping this call would end the beat's thread,
+    after which the core fails the live session for stale liveness and restarts it."""
+
+    def __init__(self, session_id: str, read: Callable[[], List[Waiting]] = read_waiting):
+        self.session_id, self._read = session_id, read
+        self._last: Optional[str] = None
+        self._warned = False
+
+    def __call__(self) -> Optional[str]:
+        try:
+            mine = [w for w in self._read() if w.session_id == self.session_id]
+        except Exception as e:  # noqa: BLE001 - broad on purpose: see the class docstring
+            if not self._warned:
+                print(f"⚠️ MACF: pd: waiting_on could not be read from the event log "
+                      f"({type(e).__name__}: {e}); keeping the last answer", file=sys.stderr)
+                self._warned = True
+            return self._last
+        self._warned = False
+        self._last = waiting_on_text(mine[-1]) if mine else None
+        return self._last
 
 
 # ---- history: the dialogs this agent met, read from the log alone ---------------------------

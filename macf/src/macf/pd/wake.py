@@ -71,7 +71,10 @@ _RULE = re.compile(r"^\s*─+(?: \S(?:.*\S)? ─+)?\s*$")
 #: Rule characters a border has at least, so a short rule in the conversation is not one.
 _RULE_MIN = 20
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
-_SPINNER = re.compile(r"…\s*\((\d+h )?(\d+m )?\d+s")
+#: The running turn's spinner line, "Verbing… (1m 5s · …". While a hook runs, 2.1.300 puts what
+#: it is doing first, "Verbing… (running PreToolUse hook · 26m 20s · …", about a second at every
+#: tool call; read without that phrase, those seconds looked idle and a wake was typed mid-turn.
+_SPINNER = re.compile(r"…\s*\((?:[^()]*?·\s*)?(\d+h )?(\d+m )?\d+s")
 _DIALOG_MARKERS = ("esc to cancel", "enter to select", "do you want to")
 _RUNNING_MARKER = "esc to interrupt"
 

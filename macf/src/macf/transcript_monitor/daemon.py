@@ -1293,8 +1293,12 @@ def run_monitor(transcript: Path, poll_interval: float = DEFAULT_POLL_INTERVAL, 
     # Under a session unit (pd.session_unit), this monitor is the unit's liveness
     # (MIS-0002-R14): it beats for the unit's own pid on each pass, and stops beating
     # within one interval once its session, and with it the loop, has ended.
+    # It also says when the session waits on a permission dialog (MIS-0002-R21), read from
+    # the event log for this transcript's session, since the client can't say so while it waits.
     from ..pd.liveness import session_heartbeat_from_env
-    heartbeat = None if older is not None else session_heartbeat_from_env()
+    from ..permission_watch import SessionDialogs
+    heartbeat = None if older is not None else session_heartbeat_from_env(
+        waiting_on=SessionDialogs(transcript.stem))
     monitor = TranscriptMonitor(transcript, poll_interval=poll_interval, owner=owner,
                                 on_pass=heartbeat.tick if heartbeat else None)
     if older is not None:
