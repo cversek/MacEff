@@ -62,11 +62,12 @@ JSON, validated closed: an unknown key is refused, because a key the daemon igno
 - **Timezone:** every cron and missed-run window is read in the declaration's `timezone` (below), so a declaration with schedules must name one.
 - **A restarting act:** `restarts_unit` marks a schedule whose act restarts a unit; a downtime never replays such a run [MIS-0002-R27 (scheduler_MUST-NOT_replay_restart_runs)].
 - **The run** is one of two shapes:
-  - `{"prompt_file", "allowed_tools"}`, a model turn whose permissions are settled when the schedule is created, so a run that meets a prompt fails instead of waiting [MIS-0002-R31 (schedule_MUST_settle_permission_at_creation), MIS-0002-R32 (run_MUST_fail_on_prompt)];
+  - `{"prompt_file", "allowed_tools"}`, a model turn whose permissions are settled when the schedule is created, so a run that meets a prompt fails instead of waiting [MIS-0002-R31 (schedule_MUST_settle_permission_at_creation), MIS-0002-R32 (run_MUST_fail_on_prompt)]. A declaration with one into an isolated session routes `pd_run_failed` to `agent` or `both` in `notice_routes`;
   - `{"command", "wake_when": "exit_code" | "stdout"}`, work that needs no judgment, which wakes the agent only when its condition holds [MIS-0002-R37 (no-judgment_work_SHOULD_skip_model_turn)].
 
 **The agent-level fields:**
 - `operator_channels`: the channel names whose events count as the operator's activity; every other name counts as not the operator [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)]. Absent means not yet declared, and an empty list declares that no channel is the operator's, so a declaration written for its units never decides by default whether the operator's phone counts.
+- `allowlisted_channels`: where the deployment sets an organization allowlist, every channel plugin it admits, the operator's included, each as `{"plugin", "marketplace"}` [MIS-0002-R124 (allowlist_declaration_MUST_list_every_channel)]. `pd install` refuses while the list and the declaration differ, and the daemon records `pd_allowlist_mismatch` at start if they have come apart since. Absent means the deployment sets no allowlist.
 - `notice_routes`: per notice source, `agent`, `operator`, `both` or `held_until_present` [MIS-0002-R42 (notice_source_MUST_be_routed)].
 - `quiet_windows`: when the layer neither restarts nor compacts, read in `timezone` [MIS-0002-R50 (layer_MUST-NOT_act_in_quiet_window)].
 - `timezone`: an IANA name, required once any schedule or quiet window is declared. Without it, a host would read a time of day in its local time and a container in UTC. A name that isn't a zone is refused with the reason, including one that names a directory of zones, such as `America`.

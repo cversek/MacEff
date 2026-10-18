@@ -1575,3 +1575,15 @@ def test_a_new_incarnation_over_its_limit_is_recorded_again(tmp_path, script, ma
     over = events("pd_unit_over_limit", "worker")
     assert [d["pid"] for d in over] == [first, core.pid("worker")]
     assert owed == ["pd_limit_exceeded", "pd_limit_exceeded"]
+
+
+def test_a_daemon_says_at_start_where_the_allowlist_and_its_declaration_differ(tmp_path, script, base, run_daemon):
+    """MIS-0002-R124: managed settings can change after ``pd install`` compared them, so a daemon
+    that starts compares again and records one pd_allowlist_mismatch naming the difference."""
+    managed = tmp_path / "managed-settings.json"
+    managed.write_text(json.dumps({"allowedChannelPlugins": [
+        {"plugin": "telegram", "marketplace": "claude-plugins-official"}]}))
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    run_daemon(home, base, managed_settings=[managed])
+    (found,) = events("pd_allowlist_mismatch")
+    assert "telegram@claude-plugins-official" in found["findings"][0]
