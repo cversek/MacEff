@@ -200,7 +200,7 @@ def test_r38_slug_with_forbidden_characters(plant):
 
 
 def test_r39_duplicate_slug(plant):
-    assert "R39" in plant(sub("(author_MAY_write_MIS_for_any_change)", "(PR_MUST_cite_accepted_MIS)"))
+    assert "R39" in plant(sub("(author_MAY_write_MIS_for_any_change)", "(PR_MUST_cite_MIS_for_major_change)"))
 
 
 def test_findings_name_their_slugs(plant, tmp_path):
@@ -233,7 +233,7 @@ def test_r45_position_without_slug(plant):
 
 
 def test_r39_slug_shared_by_a_question_and_a_requirement(plant):
-    assert "R39" in plant(sub("(lint_policies_too)", "(PR_MUST_cite_accepted_MIS)"))
+    assert "R39" in plant(sub("(lint_policies_too)", "(PR_MUST_cite_MIS_for_major_change)"))
 
 
 def test_r20_malformed_glossary_line_is_reported(plant):
@@ -401,3 +401,34 @@ def test_a_policy_that_is_not_utf8_is_reported_by_the_citation_check(tmp_path):
     (pol / "bad.md").write_bytes("café\n".encode("latin-1"))
     findings = mis.check([d], GLOSSARY)
     assert [(f.rule, Path(f.path).name) for f in findings] == [(mis.UNREADABLE, "bad.md")]
+
+
+AMENDMENT = MIS_DIR / "MIS-0005-revisions-and-amendment-specs.md"
+
+
+def test_r56_an_amendment_spec_is_short_and_complete(plant):
+    """MIS-0001 R56: an amendment spec carries its own short header and three sections. One
+    missing its sign-off record is refused, and so is one written with a full MIS's header."""
+    def write(text):
+        def extra(d):
+            (d / AMENDMENT.name).write_text(text, encoding="utf-8")
+        return extra
+    real = AMENDMENT.read_text(encoding="utf-8")
+    assert "R56" not in plant(extra=write(real))
+    no_signoff = real[:real.index("## 3 Sign-off")] + real[real.index("## Wiki-Links"):]
+    assert "R56" in plant(extra=write(no_signoff))
+    assert "R56" in plant(extra=write(real.replace("**Amends**:", "**Updates**:")))
+
+
+def test_r49_a_citation_by_a_previous_slug_still_resolves(plant):
+    """MIS-0001 R54: the note under a changed requirement names its previous slug, so a citation
+    made before the change still resolves to it. A slug that no note names is still refused."""
+    def cite(slug):
+        def extra(d):
+            pol = d.parent / "policies"
+            pol.mkdir(exist_ok=True)
+            (pol / "cites.md").write_text(f"See MIS-0001-R35 ({slug}).\n", encoding="utf-8")
+        return extra
+    assert "R49" not in plant(extra=cite("substantive_change_MUST_be_new_MIS"))
+    assert "R49" not in plant(extra=cite("substantive_change_MUST_be_made_in_place"))
+    assert "R49" in plant(extra=cite("substantive_change_MUST_be_imagined"))
