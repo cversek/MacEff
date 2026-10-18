@@ -1,6 +1,7 @@
 """The keystroke wake, the notifier's fallback for a session with no MacEff channel
 (MIS-0002-R45, R77, R105, R43, R106), kept to the rules of the mail clock it replaces."""
 import socket
+import stat
 from datetime import date
 from types import SimpleNamespace
 
@@ -371,3 +372,134 @@ def test_a_hold_that_a_channel_ends_is_released(tmp_path, isolated_events_log):
     assert watch.check_wake("Tester@abc123", newest, 3600.0).verdict == "ALIVE"
     n.detach(ours)
     theirs.close()
+
+
+# --- a hold that explains itself: the window said, the screen kept --------------------
+
+def _sent_then_seen(pane_screens, events, **kw):
+    """A waker that has sent a wake for ID1 at t=0 and seen its turn start at t=1."""
+    h = _waker(FakePane(pane_screens), events, refractory_s=600.0, **kw)
+    h.waker.tick([ID1])
+    h.clock[0] += 1.0
+    h.waker.tick([ID1])
+    return h
+
+
+RUNNING = screen(above=("✻ Working… (esc to interrupt)",))
+DIALOG_SCREEN = screen(below=("Do you want to proceed?", "❯ 1. Yes", "  2. No"))
+
+
+def test_a_refractory_hold_is_said_once_with_the_time_left():
+    """On Oct 17 a mail inside the window waited 13 minutes with nothing in the log. The
+    window is now said like any other hold: once per stretch, with the seconds left."""
+    events = []
+    h = _sent_then_seen([screen(), RUNNING, screen()], events)
+    h.clock[0] += 59.0                                        # t=60, inside the window
+    for _ in range(3):
+        assert h.waker.tick([ID1, ID2]) is None
+        h.clock[0] += 100.0
+    held = [d for e, d in events if e == wk.EVENT_HELD]
+    assert held == [{"reason": wk.REFRACTORY, "left_s": 540, "waiting": 1}]
+    h.clock[0] += 300.0                                       # t=660, the window over
+    assert h.waker.tick([ID1, ID2]) == "sent"
+    assert [e for e, _ in events][-2:] == [wk.EVENT_HELD, wk.EVENT_SENT]
+
+
+def test_a_refractory_stretch_ends_like_any_other():
+    """Mail read inside the window releases the stretch; a dialog after the window is said
+    again, because the reason changed."""
+    events = []
+    h = _sent_then_seen([screen(), RUNNING, DIALOG_SCREEN], events)
+    h.clock[0] += 59.0
+    h.waker.tick([ID1, ID2])
+    h.clock[0] += 600.0
+    h.waker.tick([ID1, ID2])
+    held = [d["reason"] for e, d in events if e == wk.EVENT_HELD]
+    assert held == [wk.REFRACTORY, wk.DIALOG]
+
+    events = []
+    h = _sent_then_seen([screen(), RUNNING, screen()], events)
+    h.clock[0] += 59.0
+    h.waker.tick([ID1, ID2])
+    h.waker.tick([ID1])                                       # ID2 read on its own
+    assert [e for e, _ in events][-2:] == [wk.EVENT_HELD, wk.EVENT_RELEASED]
+
+
+def test_a_dialog_or_draft_hold_keeps_the_screen_it_read(tmp_path):
+    """The demo's dialog holds at 01:33, 07:41 and 08:06 left nothing to check. A dialog or
+    draft hold now keeps its screen, private to the agent, which the classifier reads the
+    same way again, escape codes and all. A running turn keeps none, and a pane that could
+    not be read says so."""
+    draft = screen(f"half a thought {FAINT}(a suggestion){RESET}")
+    kept = tmp_path / "wake_screens"
+    events = []
+    h = _waker(FakePane([DIALOG_SCREEN, draft, RUNNING]), events, screens_dir=kept,
+               wall=lambda: 1792292400.0)
+    for _ in range(3):
+        h.clock[0] += 1.0
+        h.waker.tick([ID1])
+    held = [d for e, d in events if e == wk.EVENT_HELD]
+    assert [d["reason"] for d in held] == [wk.DIALOG, wk.DRAFT, wk.RUNNING]
+    for d, shown in zip(held[:2], (DIALOG_SCREEN, draft), strict=True):
+        path = Path(d["screen"])
+        assert path.parent == kept and path.read_text() == shown
+        assert wk.classify(path.read_text()) == d["reason"]
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(kept.stat().st_mode) == 0o700
+    assert "screen" not in held[2] and len(list(kept.iterdir())) == 2
+
+    class Unreadable(FakePane):
+        def capture(self):
+            return None
+    events = []
+    _waker(Unreadable([screen()]), events, screens_dir=kept).waker.tick([ID1])
+    assert events == [(wk.EVENT_HELD, {"reason": wk.DIALOG, "waiting": 1, "captured": False})]
+
+
+def test_only_the_newest_twenty_screens_are_kept(tmp_path):
+    (tmp_path / "notes.txt").write_text("not the waker's")
+    for i in range(wk.SCREENS_KEPT + 5):
+        wk.save_screen(tmp_path, f"screen {i}", wk.DIALOG, 1792292400.0 + i)
+    kept = {p.read_text() for p in tmp_path.glob("wake-*.txt")}
+    assert kept == {f"screen {i}" for i in range(5, wk.SCREENS_KEPT + 5)}
+    assert (tmp_path / "notes.txt").exists(), "a file the waker did not write was removed"
+
+
+def test_the_outside_watch_takes_a_refractory_hold_for_pacing(tmp_path):
+    """The window is the agent's pace, not something a person must clear: a dialog after it
+    is measured from the dialog, and a refractory hold that a reached daily cap leaves
+    newest all day never alerts."""
+    import json
+    from macf.pd import watch
+    card, now = "Tester@abc123", 10_000.0
+    log = tmp_path / "log.jsonl"
+    rows = [
+        {"timestamp": now - 4000, "event": "pd_wake_sent", "data": {"agent": card}},
+        {"timestamp": now - 3990, "event": "pd_wake_held",
+         "data": {"agent": card, "reason": "refractory", "left_s": 590}},
+        {"timestamp": now - 1000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}},
+    ]
+    log.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    newest = watch.last_wake_event(log, card, now)
+    assert newest["held_since"] == now - 1000
+    assert watch.check_wake(card, newest, now).verdict == "ALIVE"
+    log.write_text("".join(json.dumps(r) + "\n" for r in rows[:2]))
+    assert watch.check_wake(card, watch.last_wake_event(log, card, now), now).verdict == "ALIVE"
+
+
+def test_the_daemon_keeps_held_screens_beside_the_event_log(tmp_path):
+    """The daemon gives its waker the agent's own screens directory, so a hold on a real
+    session keeps its screen and not only a test's waker."""
+    import pwd
+    from macf.pd.daemon import Daemon
+    from macf.pd.interface import Unit
+    from test_primal_daemon import make_home
+    me = pwd.getpwuid(os.getuid()).pw_name
+    home = make_home(tmp_path, [Unit(name="session", kind="session", command=["true"], account=me,
+                                     restart="always", liveness_interval_s=120, memory_limit_mb=64)])
+    runtime = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))
+    try:
+        daemon = Daemon(home, base=runtime)
+        assert daemon.notifier.waker.screens_dir == home / ".maceff" / "wake_screens"
+    finally:
+        shutil.rmtree(runtime, ignore_errors=True)

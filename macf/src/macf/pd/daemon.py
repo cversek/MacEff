@@ -164,13 +164,13 @@ class Daemon:
         if any(u.kind == "session" for u in self.core.declaration.units):
             # The keystroke fallback types into the session unit's own pane (pd.session_unit),
             # recording each wake first so it never reads as the operator (MIS-0002-R105).
-            from macf.pd.wake import TmuxPane, Waker
+            from macf.pd.wake import TmuxPane, Waker, saved_screens_dir
             from macf.supervisor import record_keys_sent
             from macf.utils.identity import session_identifier
             ident = session_identifier(self.card)
             self.notifier.waker = Waker(TmuxPane(ident, self.base),
                                         record_keys=lambda text, kind: record_keys_sent(text, kind, ident),
-                                        card=self.card)
+                                        card=self.card, screens_dir=saved_screens_dir(self.home))
         self._sel: Optional[selectors.BaseSelector] = None
         self._wake_r, self._wake_w = os.pipe()
         os.set_blocking(self._wake_w, False)

@@ -199,15 +199,16 @@ When no channel has taken the mail notices owed for a minute, the daemon types a
 - **Only into an empty box of an idle session** [MIS-0002-R45 (keystroke_wake_MUST_need_empty_idle_box)], read from the screen and failing closed. The input box must be on screen with nothing but a faint suggestion in it. No dialog, menu or question may be below it, because the wake carries digits and a digit or an Enter selects an option. No turn may be running, read from its phrase or from the spinner alone. Only the box's own text counts as a wake in the prompt, never the echo of one already sent.
 - **Recorded before it is typed**, through the framework's keystroke record, so neither producer of the operator's activity counts it [MIS-0002-R106 (wake_MUST-NOT_count_as_operator_activity)].
 - **Enter only while the wake is still in the box**, at most three times, since an Enter that lands on a dialog the new turn raised would approve it. A wake counts as sent when it is typed, so a misread status never sends it twice; the turn's start is then looked for, and the log says whether it came (`pd_wake_turn`).
-- **A refractory window, ten minutes**, in which arrivals wait for the next wake, and a daily cap. A held wake (`pd_wake_held`) and a reached cap (`pd_wake_cap_reached`) are each recorded once, not on every poll.
+- **A refractory window, ten minutes**, in which arrivals wait for the next wake, and a daily cap. Mail that arrives inside the window is recorded as a hold, with the reason `refractory` and the seconds left (`left_s`), so a late wake always has its reason in the log. A held wake (`pd_wake_held`) and a reached cap (`pd_wake_cap_reached`) are each recorded once, not on every poll.
 
 A typed wake delivers the mail notices it covers, so a channel that connects later doesn't deliver them again.
 
 **A wake held too long reaches the operator.**
-- While a dialog, a draft or a running turn holds a wake, the fallback records a `pd_wake_held`, naming the agent and the reason, once per stretch and again only if the reason changes.
+- While a dialog, a draft, a running turn or the refractory window holds a wake, the fallback records a `pd_wake_held`, naming the agent and the reason, once per stretch and again only if the reason changes.
 - The stretch ends with a sent wake (`pd_wake_sent`), or with `pd_wake_released` when you read your mail on your own meanwhile, or when a channel attaches and takes over the notices.
-- If the newest of those is a hold, and its stretch began more than 30 minutes ago, the outside watch alerts the operator once, through its own credential (verdict `HELD`, subject `wake`). A dialog waits on a person, and nothing in your session can say so.
-- If you find your mail was announced late, look for a `pd_wake_held` with a dialog as its reason.
+- If the newest of those is a hold, and its stretch began more than 30 minutes ago, the outside watch alerts the operator once, through its own credential (verdict `HELD`, subject `wake`). A dialog waits on a person, and nothing in your session can say so. The refractory window is your own pace, not something in your pane, so it never counts toward the 30 minutes and never alerts: a dialog after the window is measured from the dialog.
+- **A dialog or draft hold keeps the screen it read.** The fallback saves the captured pane, escape codes and all, to `~/.maceff/wake_screens/`, private to you (the directory mode 0700, each file 0600), keeping the newest 20, and the hold names the file in `screen`. A saved screen never leaves this host, because it can show anything your session showed. A pane that could not be read at all still holds the wake as a dialog, failing closed, and the hold says `captured: false` instead.
+- If you find your mail was announced late, look for a `pd_wake_held`: its reason says what held the wake, and a dialog's or a draft's `screen` shows what the fallback saw. If that screen doesn't show a dialog or a draft, the fallback misread it. Keep the file and tell the operator.
 
 Still to come with step 2: the operator's routes for sources other than unread mail, and the sources besides mail (13).
 
