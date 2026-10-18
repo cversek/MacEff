@@ -37,20 +37,24 @@ ENV_SESSION_PID = "MACF_PD_SESSION_PID"
 
 def liveness_event(card: str, unit: str, interval_s: float,
                    in_flight: Optional[int] = None, pid: Optional[int] = None,
-                   waiting_on: Optional[str] = None) -> Liveness:
+                   waiting_on: Optional[str] = None, auth_failed: Optional[str] = None) -> Liveness:
     """The liveness of process *pid* (this process by default) as the named unit of *card*."""
     pid = pid or os.getpid()
     return Liveness(agent=card, unit=unit, pid=pid, proc_start=proc_start(pid) or "unknown",
                     interval_s=interval_s, in_flight=in_flight,
-                    waiting_on=waiting_on[:200] if waiting_on else None)
+                    waiting_on=waiting_on[:200] if waiting_on else None,
+                    auth_failed=auth_failed[:200] if auth_failed else None)
 
 
 def emit(card: str, unit: str, interval_s: float, in_flight: Optional[int] = None,
          append: Optional[Callable[[str, dict], bool]] = None, pid: Optional[int] = None,
-         waiting_on: Optional[str] = None) -> bool:
+         waiting_on: Optional[str] = None, auth_failed: Optional[str] = None) -> bool:
     """Write one liveness event for *pid* (this process by default); True when the log took it."""
     append = append or append_event
-    return append(EVENT_LIVENESS, liveness_event(card, unit, interval_s, in_flight, pid, waiting_on).model_dump())
+    # Fields left unset are left out, so a beat stays readable by a daemon that predates a
+    # field: Liveness refuses unknown keys, and an older daemon would refuse "auth_failed": null.
+    return append(EVENT_LIVENESS, liveness_event(card, unit, interval_s, in_flight, pid, waiting_on,
+                                                 auth_failed).model_dump(exclude_none=True))
 
 
 class Heartbeat:
@@ -68,7 +72,8 @@ class Heartbeat:
                  in_flight: Optional[Callable[[], Optional[int]]] = None,
                  append: Optional[Callable[[str, dict], bool]] = None,
                  pid: Optional[int] = None,
-                 waiting_on: Optional[Callable[[], Optional[str]]] = None):
+                 waiting_on: Optional[Callable[[], Optional[str]]] = None,
+                 auth_failed: Optional[Callable[[], Optional[str]]] = None):
         # pid: the unit's process when the beat speaks for another one (the session
         # unit's wrapper, from its transcript monitor); this process by default.
         # waiting_on: what the unit waits on a person for, asked on each beat
@@ -76,6 +81,9 @@ class Heartbeat:
         self.card, self.unit, self.interval_s, self.pid = card, unit, interval_s, pid
         self._in_flight = in_flight or (lambda: None)
         self._waiting_on = waiting_on or (lambda: None)
+        # auth_failed: what the harness said when it could not authenticate, asked on each beat
+        # (MIS-0002-R19 (auth_failure_MUST_read_failed)).
+        self._auth_failed = auth_failed or (lambda: None)
         self._append = append
         self._stop = threading.Event()
         self._ticked = threading.Event()
@@ -111,7 +119,7 @@ class Heartbeat:
             self._ticked.clear()
             stalled = False
             if not emit(self.card, self.unit, self.interval_s, self._in_flight(), self._append, self.pid,
-                        self._waiting_on()):
+                        self._waiting_on(), self._auth_failed()):
                 print(f"⚠️ MACF: pd: liveness for {self.unit} was not recorded (the unit will read "
                       f"overdue if this persists)", file=sys.stderr)
             if self._stop.wait(self.interval_s):
@@ -181,7 +189,8 @@ def session_unit_from_env(environ=os.environ) -> Optional[DeclaredUnit]:
 
 def session_heartbeat_from_env(environ=os.environ,
                                append: Optional[Callable[[str, dict], bool]] = None,
-                               waiting_on: Optional[Callable[[], Optional[str]]] = None) -> Optional[Heartbeat]:
+                               waiting_on: Optional[Callable[[], Optional[str]]] = None,
+                               auth_failed: Optional[Callable[[], Optional[str]]] = None) -> Optional[Heartbeat]:
     """Start the session unit's heartbeat in its transcript monitor, else return None.
     The beat names the wrapper's pid, so the daemon credits it to the process it started,
     and carries what the session waits on a person for, when *waiting_on* says."""
@@ -189,4 +198,4 @@ def session_heartbeat_from_env(environ=os.environ,
     if found is None:
         return None
     return Heartbeat(found.card, found.unit, found.interval_s, append=append, pid=found.pid,
-                     waiting_on=waiting_on).start()
+                     waiting_on=waiting_on, auth_failed=auth_failed).start()

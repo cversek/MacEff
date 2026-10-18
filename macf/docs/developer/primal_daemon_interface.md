@@ -62,11 +62,12 @@ JSON, validated closed: an unknown key is refused, because a key the daemon igno
 - **Timezone:** every cron and missed-run window is read in the declaration's `timezone` (below), so a declaration with schedules must name one.
 - **A restarting act:** `restarts_unit` marks a schedule whose act restarts a unit; a downtime never replays such a run [MIS-0002-R27 (scheduler_MUST-NOT_replay_restart_runs)].
 - **The run** is one of two shapes:
-  - `{"prompt_file", "allowed_tools"}`, a model turn whose permissions are settled when the schedule is created, so a run that meets a prompt fails instead of waiting [MIS-0002-R31 (schedule_MUST_settle_permission_at_creation), MIS-0002-R32 (run_MUST_fail_on_prompt)];
+  - `{"prompt_file", "allowed_tools"}`, a model turn whose permissions are settled when the schedule is created, so a run that meets a prompt fails instead of waiting [MIS-0002-R31 (schedule_MUST_settle_permission_at_creation), MIS-0002-R32 (run_MUST_fail_on_prompt)]. A declaration with one into an isolated session routes `pd_run_failed` to `agent` or `both` in `notice_routes`;
   - `{"command", "wake_when": "exit_code" | "stdout"}`, work that needs no judgment, which wakes the agent only when its condition holds [MIS-0002-R37 (no-judgment_work_SHOULD_skip_model_turn)].
 
 **The agent-level fields:**
 - `operator_channels`: the channel names whose events count as the operator's activity; every other name counts as not the operator [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)]. Absent means not yet declared, and an empty list declares that no channel is the operator's, so a declaration written for its units never decides by default whether the operator's phone counts.
+- `allowlisted_channels`: where the deployment sets an organization allowlist, every channel plugin it admits, the operator's included, each as `{"plugin", "marketplace"}` [MIS-0002-R124 (allowlist_declaration_MUST_list_every_channel)]. `pd install` refuses while the list and the declaration differ, and the daemon records `pd_allowlist_mismatch` at start if they have come apart since. Absent means the deployment sets no allowlist.
 - `notice_routes`: per notice source, `agent`, `operator`, `both` or `held_until_present` [MIS-0002-R42 (notice_source_MUST_be_routed)].
 - `quiet_windows`: when the layer neither restarts nor compacts, read in `timezone` [MIS-0002-R50 (layer_MUST-NOT_act_in_quiet_window)].
 - `timezone`: an IANA name, required once any schedule or quiet window is declared. Without it, a host would read a time of day in its local time and a container in UTC. A name that isn't a zone is refused with the reason, including one that names a directory of zones, such as `America`.
@@ -80,7 +81,7 @@ All go to the agent's own event log; there is no second store [MIS-0002-R16 (lay
 | Event | Written by | Data |
 |---|---|---|
 | `pd_daemon_start` | the daemon, once at boot | `agent`, `pid`, `proc_start`, `version`: the fields of its record |
-| `pd_unit_alive` | the unit, at its interval | `agent`, `unit`, `pid`, `proc_start`, `interval_s`, `in_flight`, `waiting_on` |
+| `pd_unit_alive` | the unit, at its interval | `agent`, `unit`, `pid`, `proc_start`, `interval_s`, `in_flight`, `waiting_on`, `auth_failed` |
 | `pd_unit_state` | the daemon | `agent`, `unit`, `state` (one of the six of R20), `pid`, `proc_start`, `reason` |
 | `pd_control` | the daemon | `agent`, `act`, `unit`, `asked_by` (`kind`, `card`), `peer` (`uid`, `pid`, `proc_start`), `reason` |
 
@@ -88,6 +89,7 @@ All go to the agent's own event log; there is no second store [MIS-0002-R16 (lay
 - **The unit writes its own liveness,** because a process that merely exists shows nothing about whether its loop runs [MIS-0002-R14 (unit_MUST_emit_liveness_events)]. The readout confirms the writer by `pid` and `proc_start` [MIS-0002-R15 (readout_MUST_probe_liveness)].
 - **`in_flight`** counts work the unit has started and not finished, checked before any restart [MIS-0002-R49 (pd_MUST_check_work_in_flight)]. A unit that reports none is taken as idle, and the daemon records that it assumed so.
 - **`waiting_on`** says what the unit waits on a person for [MIS-0002-R21 (pd_MUST_report_waiting_on_person)]. The daemon never restarts a unit for it [MIS-0002-R22 (layer_MUST-NOT_restart_waiting_unit)].
+- **`auth_failed`** carries what the harness said while it can't authenticate. The daemon reads the session failed until the field is gone, and doesn't restart it for this [MIS-0002-R19 (auth_failure_MUST_read_failed)].
 - **`asked_by` and `peer`.** `asked_by` is what the asker claimed. `peer` is what the kernel proved about the asking process [MIS-0002-R52 (control_act_MUST_name_who_asked)].
   - An act asked over the control socket (operator or wind-down) records both.
   - The daemon's own `policy`, and a `harness` compaction, record no peer.

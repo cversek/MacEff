@@ -1,0 +1,3 @@
+### Fixed
+
+- **The search service no longer waits on the policy index** (`docker/scripts/start.py`, policy `persistent_layer`; MIS-0002-R58). The two optional units ran one after the other, and the search service named the index as a step it needs, so a slow index build, up to its 120 s timeout, held the search service back. The index now builds in a thread of its own, and the search service starts at once. It already opened the index on each query, so a search made before the index exists returns an error instead of a result. R58's row moves to passing on `test_container_start_order.py::test_optional_units_independent`.

@@ -105,7 +105,7 @@ while True:
             data["pid"], data["proc_start"] = os.getppid(), proc_start(os.getppid())
         if spec.get("wrong_start"):
             data["proc_start"] = "not this process's start"
-        for key in ("waiting_on", "in_flight"):
+        for key in ("waiting_on", "in_flight", "auth_failed"):
             if key in spec and t < spec.get(key + "_for", 1e9):
                 data[key] = spec[key]
         write(json.dumps({"timestamp": time.time(), "event": "pd_unit_alive", "data": data}))
@@ -1575,3 +1575,56 @@ def test_a_new_incarnation_over_its_limit_is_recorded_again(tmp_path, script, ma
     over = events("pd_unit_over_limit", "worker")
     assert [d["pid"] for d in over] == [first, core.pid("worker")]
     assert owed == ["pd_limit_exceeded", "pd_limit_exceeded"]
+
+
+def test_a_daemon_says_at_start_where_the_allowlist_and_its_declaration_differ(tmp_path, script, base, run_daemon):
+    """MIS-0002-R124: managed settings can change after ``pd install`` compared them, so a daemon
+    that starts compares again and records one pd_allowlist_mismatch naming the difference."""
+    managed = tmp_path / "managed-settings.json"
+    managed.write_text(json.dumps({"allowedChannelPlugins": [
+        {"plugin": "telegram", "marketplace": "claude-plugins-official"}]}))
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    run_daemon(home, base, managed_settings=[managed])
+    (found,) = events("pd_allowlist_mismatch")
+    assert "telegram@claude-plugins-official" in found["findings"][0]
+
+
+LOGIN_EXPIRED = "Login expired · Please run /login"
+
+
+def test_a_failed_login_holds_the_session_failed(make_core, script):
+    """A session that can't authenticate reads failed, with what the harness said, and is not
+    stopped or restarted, because a restart can't log in; once a request goes through again it
+    reads running, as the same process (MIS-0002-R19 (auth_failure_MUST_read_failed))."""
+    core = make_core([make_unit("session", script, {"auth_failed": LOGIN_EXPIRED, "auth_failed_for": 1.5})])
+    core.boot()
+
+    assert drive(core, lambda: core.state("session") == "failed")
+    pid = core.pid("session")
+    failed = events("pd_unit_state", "session")[-1]
+    assert failed["reason"] == f"authentication failed: {LOGIN_EXPIRED}" and failed["pid"] == pid
+    # Failed for its login, it keeps its process: still failed, the same pid, nothing restarted.
+    assert not drive(core, lambda: core.state("session") != "failed", timeout=1.0)
+    assert core.pid("session") == pid
+
+    assert drive(core, lambda: core.state("session") == "running")
+    assert core.pid("session") == pid
+    assert events("pd_unit_state", "session")[-1]["reason"] == "authenticated again"
+    assert states("session").count("starting") == 1
+
+
+def test_a_daemon_restart_adopts_a_session_failed_for_its_login(make_core, script):
+    """The session is still running while it can't authenticate, so a daemon that starts then
+    adopts it rather than starting a second session beside it."""
+    unit = make_unit("session", script, {"auth_failed": LOGIN_EXPIRED})
+    first = make_core([unit])
+    first.boot()
+    assert drive(first, lambda: first.state("session") == "failed")
+    pid = first.pid("session")
+    _crash(first)
+
+    second = make_core([unit])
+    second.boot()
+    assert second.pid("session") == pid
+    assert states("session").count("starting") == 1
+    assert drive(second, lambda: second.state("session") == "failed")
