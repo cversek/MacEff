@@ -223,7 +223,7 @@ stateDiagram-v2
 ### 6.9 Containers
 
 - **R57** [MUST · decidable: macf/tests/test_container_outer_tier.py::test_primal_daemons_start_after_access_and_before_optional_units] In a container, the primal daemons and the access path MUST start before any optional unit. (container_MUST_start_access_first)
-- **R58** [MUST NOT · decidable: macf/tests/test_pd_render.py::test_optional_units_independent (planned)] An optional unit MUST NOT delay the start of another unit. (optional_unit_MUST-NOT_delay_others)
+- **R58** [MUST NOT · decidable: macf/tests/test_container_start_order.py::test_optional_units_independent] An optional unit MUST NOT delay the start of another unit. (optional_unit_MUST-NOT_delay_others)
 - **R59** [MUST · decidable: macf/tests/test_pd_interface.py::test_a_unit_missing_a_required_field_is_refused] Each declared unit MUST state a memory limit. (unit_MUST_declare_memory_limit)
 - **R60** [MUST · decidable: macf/tests/test_pd_notice.py::test_a_unit_past_its_limit_is_a_notice_held_and_delivered] When a unit uses more than its declared limit, the primal daemon MUST deliver a notice. (pd_MUST_notice_limit_exceeded)
 - **R61** [MUST · decidable: macf/tests/test_pd_watch.py::test_limits_checked_after_recreate] After each recreate, the persistent layer MUST compare the container's declared limits with the limits in force. (layer_MUST_check_limits_after_recreate)
@@ -464,7 +464,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R55 | decidable | macf/tests/test_pd_notice.py::test_unread_mail_notice | passing |
 | R56 | judgment | the head maintainer, at review of the mail landing | pending |
 | R57 | decidable | macf/tests/test_container_outer_tier.py::test_primal_daemons_start_after_access_and_before_optional_units | passing |
-| R58 | decidable | macf/tests/test_pd_render.py::test_optional_units_independent | planned (optional to optional not met: the search service needs the policy index, so a slow index delays it) |
+| R58 | decidable | macf/tests/test_container_start_order.py::test_optional_units_independent | passing |
 | R59 | decidable | macf/tests/test_pd_interface.py::test_a_unit_missing_a_required_field_is_refused | passing |
 | R60 | decidable | macf/tests/test_pd_notice.py::test_a_unit_past_its_limit_is_a_notice_held_and_delivered | passing |
 | R61 | decidable | macf/tests/test_pd_watch.py::test_limits_checked_after_recreate | passing |
@@ -660,6 +660,7 @@ Objections recorded:
   - R29, whose test this change adds, since the head maintainer handed R29 to the Secretary on the deliberation issue. The test also refuses an empty target, which names neither an isolated session nor an agent, and the declaration model now refuses one. It checks that a target is declared and that both forms load, not that a target other than an isolated session names an agent;
   - R66, which the Secretary rules passing: adoption landed on 2026-10-12, and the persistent_layer policy describes it in section 3.3. That policy's section 13 had held R66 back by still listing adoption as to come.
   Two rows stay planned, each with its reason in its row. R21's test passes for a session the daemon starts itself (#704), but an adopted session writes no liveness, so a dialog it waits on isn't reported yet, as the persistent_layer policy says in section 3.3. A maintainer found this at review, by the reasoning sweep 3 used to hold R66. R33's test holds within one daemon's life, and a container holds across restarts, while on a host, detecting a changed declaration is still to come. The persistent_layer policy's section 13, which lists what has not landed, is rewritten against the code. Adoption, the dark-channel event, the held-wake alert and command schedules are out, since they landed, and the open rows it never named are in: R19, R21's adopted session, R47, R58, R64, R65, R99 and R124, and the optional feature that R95 and R116 govern. The requirement lines of the 86 passing rows no longer say "(planned)", and R127's line no longer says "(passing)". The mis policy's line form carries no state, and the marker had outlived the tests it waited for, so a reader of a requirement saw it as untested while its row said passing. No requirement changed.
+- 2026-10-18: R58 (optional_unit_MUST-NOT_delay_others) moves to passing, with the code and the test it names. The search service no longer waits on the policy index, and the index builds in a thread of its own, so neither optional unit delays the other. The row named `test_pd_render.py::test_optional_units_independent`, which doesn't exist under that name, and now names the test that decides it, in `test_container_start_order.py`, by sweep 3's rule. Editorial (mis 8.1).
 
 ## Wiki-Links
 
