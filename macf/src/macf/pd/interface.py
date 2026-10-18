@@ -267,6 +267,9 @@ class WindDown(_Closed):
 
 
 NoticeRoute = Literal["agent", "operator", "both", "held_until_present"]
+#: How a state change for an authentication failure begins its reason (MIS-0002-R19). The
+#: session is still running, so a daemon that starts while it reads failed adopts it by this.
+AUTH_FAILED_REASON = "authentication failed"
 #: The notice source of mail left unread past the declared threshold (MIS-0002-R55).
 UNREAD_MAIL_SOURCE = "pd_unread_mail"
 #: The notice source of a prompt run that met a permission prompt (MIS-0002-R32).
@@ -410,6 +413,9 @@ class Liveness(_Closed):
     - ``waiting_on``: what the unit waits on a person for, if anything
       (MIS-0002-R21 (pd_MUST_report_waiting_on_person)); the daemon never restarts it for
       that (MIS-0002-R22 (layer_MUST-NOT_restart_waiting_unit)).
+    - ``auth_failed``: what the harness said when it could not authenticate, while it can't;
+      the daemon reads the session failed until it can again
+      (MIS-0002-R19 (auth_failure_MUST_read_failed)).
     """
 
     agent: str
@@ -419,6 +425,7 @@ class Liveness(_Closed):
     interval_s: float = Field(gt=0)
     in_flight: Optional[int] = Field(default=None, ge=0)
     waiting_on: Optional[str] = Field(default=None, max_length=200)
+    auth_failed: Optional[str] = Field(default=None, max_length=200)
 
 
 class UnitState(_Closed):

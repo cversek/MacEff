@@ -81,7 +81,7 @@ All go to the agent's own event log; there is no second store [MIS-0002-R16 (lay
 | Event | Written by | Data |
 |---|---|---|
 | `pd_daemon_start` | the daemon, once at boot | `agent`, `pid`, `proc_start`, `version`: the fields of its record |
-| `pd_unit_alive` | the unit, at its interval | `agent`, `unit`, `pid`, `proc_start`, `interval_s`, `in_flight`, `waiting_on` |
+| `pd_unit_alive` | the unit, at its interval | `agent`, `unit`, `pid`, `proc_start`, `interval_s`, `in_flight`, `waiting_on`, `auth_failed` |
 | `pd_unit_state` | the daemon | `agent`, `unit`, `state` (one of the six of R20), `pid`, `proc_start`, `reason` |
 | `pd_control` | the daemon | `agent`, `act`, `unit`, `asked_by` (`kind`, `card`), `peer` (`uid`, `pid`, `proc_start`), `reason` |
 
@@ -89,6 +89,7 @@ All go to the agent's own event log; there is no second store [MIS-0002-R16 (lay
 - **The unit writes its own liveness,** because a process that merely exists shows nothing about whether its loop runs [MIS-0002-R14 (unit_MUST_emit_liveness_events)]. The readout confirms the writer by `pid` and `proc_start` [MIS-0002-R15 (readout_MUST_probe_liveness)].
 - **`in_flight`** counts work the unit has started and not finished, checked before any restart [MIS-0002-R49 (pd_MUST_check_work_in_flight)]. A unit that reports none is taken as idle, and the daemon records that it assumed so.
 - **`waiting_on`** says what the unit waits on a person for [MIS-0002-R21 (pd_MUST_report_waiting_on_person)]. The daemon never restarts a unit for it [MIS-0002-R22 (layer_MUST-NOT_restart_waiting_unit)].
+- **`auth_failed`** carries what the harness said while it can't authenticate. The daemon reads the session failed until the field is gone, and doesn't restart it for this [MIS-0002-R19 (auth_failure_MUST_read_failed)].
 - **`asked_by` and `peer`.** `asked_by` is what the asker claimed. `peer` is what the kernel proved about the asking process [MIS-0002-R52 (control_act_MUST_name_who_asked)].
   - An act asked over the control socket (operator or wind-down) records both.
   - The daemon's own `policy`, and a `harness` compaction, record no peer.
