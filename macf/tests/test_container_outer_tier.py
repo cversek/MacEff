@@ -122,7 +122,11 @@ def test_only_agents_with_a_rendered_declaration_get_a_daemon(tmp_path, monkeypa
     supervised = []
     monkeypatch.setattr(start, "supervise_primal_daemon", lambda user, home: supervised.append(user))
     cfg = SimpleNamespace(agents={u: SimpleNamespace(username=u) for u in ("pa_a", "pa_b", "pa_c")})
-    assert start.start_primal_daemons(cfg) == ["pa_b"]
+    # pa_c's schedules would have no daemon (MIS-0002-R11): the step fails, naming it, after
+    # pa_b's daemon has started
+    import pytest
+    with pytest.raises(RuntimeError, match="pa_c"):
+        start.start_primal_daemons(cfg)
     _wait_for(supervised)
     assert supervised == ["pa_b"]
 
