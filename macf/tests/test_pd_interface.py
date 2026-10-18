@@ -68,7 +68,8 @@ def test_the_documented_example_is_a_valid_declaration():
 
 @pytest.mark.parametrize("field", ["command", "account", "restart", "liveness_interval_s", "memory_limit_mb"])
 def test_a_unit_missing_a_required_field_is_refused(field):
-    """R09 (command, account, restart policy, liveness interval) and R59 (memory limit)."""
+    """MIS-0005-R01 (command, account, restart policy, liveness interval) and MIS-0002-R59
+    (memory limit)."""
     unit = _unit()
     del unit[field]
     with pytest.raises(ValidationError):

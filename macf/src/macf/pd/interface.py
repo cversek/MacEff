@@ -10,8 +10,9 @@ rendering build on, in parallel with the daemon itself:
      one function names every surface from it through ``session_identifier``
      (MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd)).
   2. **The declaration.** What an agent declares about its managed units, schedules,
-     notices and wind-down (MIS-0002-R08 (unit_MUST_be_declared), MIS-0002-R09
-     (declaration_MUST_state_unit_fields)), validated closed: an unknown key is refused.
+     notices and wind-down (MIS-0002-R08 (unit_MUST_be_declared), MIS-0005-R01
+     (declaration_MUST_state_unit_fields_or_default_contract)), validated closed: an
+     unknown key is refused.
   3. **The events.** Liveness, unit state and control acts, all in the agent's own event
      log, with no second store (MIS-0002-R16 (layer_MUST-NOT_keep_second_ledger)).
   4. **The sockets.** A control socket, request and response; a channel socket, a stream
@@ -111,16 +112,18 @@ def _known_placeholders(values: List[str]) -> List[str]:
 
 
 class ExitCodes(_Closed):
-    """A unit's exit-code contract (R09): which codes mean done and which mean
-    "do not restart me", the field's convention for a unit that knows it cannot recover."""
+    """A unit's exit-code contract: which codes mean done and which mean "do not restart
+    me", the field's convention for a unit that knows it cannot recover. A unit that names
+    none means these defaults (MIS-0005-R01
+    (declaration_MUST_state_unit_fields_or_default_contract))."""
 
     success: List[int] = Field(default_factory=lambda: [0])
     no_restart: List[int] = Field(default_factory=lambda: [78])
 
 
 class Unit(_Closed):
-    """One managed unit (MIS-0002-R09, MIS-0002-R59 (unit_MUST_declare_memory_limit),
-    MIS-0002-R63).
+    """One managed unit (MIS-0005-R01 (declaration_MUST_state_unit_fields_or_default_contract),
+    MIS-0002-R59 (unit_MUST_declare_memory_limit), MIS-0002-R63).
 
     ``account`` must be the daemon's own user in step 1. Running a unit as another account
     widens what the layer may do (MIS-0002-R78 (layer_MUST-NOT_widen_permissions)), and

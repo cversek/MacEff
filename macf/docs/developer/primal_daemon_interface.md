@@ -36,7 +36,7 @@
 
 JSON, validated closed: an unknown key is refused, because a key the daemon ignores is a setting its author believes is in force.
 
-**A unit** [MIS-0002-R09 (declaration_MUST_state_unit_fields), MIS-0002-R59 (unit_MUST_declare_memory_limit), MIS-0002-R63 (unit_MUST_declare_privacy_grants)]:
+**A unit** [MIS-0005-R01 (declaration_MUST_state_unit_fields_or_default_contract), MIS-0002-R59 (unit_MUST_declare_memory_limit), MIS-0002-R63 (unit_MUST_declare_privacy_grants)]:
 
 | Field | Required | Meaning |
 |---|---|---|

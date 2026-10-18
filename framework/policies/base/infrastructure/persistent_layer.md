@@ -489,7 +489,7 @@ An agent's declaration is one JSON file in its own home, `<agent home>/.maceff/p
 
 ### 10.2 What a unit states
 
-A unit names its command, the account it runs as, its restart policy, its liveness interval, and its exit-code contract unless the default is the one it means [MIS-0005-R01 (declaration_MUST_state_unit_fields_or_default_contract)], and its memory limit [MIS-0002-R59 (unit_MUST_declare_memory_limit)]. The default exit-code contract is that exit 0 is success and exit 78 asks not to be restarted. Its privacy grants, its stop grace and its environment take defaults too when it names none, and the grants are none. The fields, their values and their defaults are defined once, in `macf.pd.interface`, and described in `macf/docs/developer/primal_daemon_interface.md`. This policy does not restate them, so the two cannot disagree.
+A unit names its command, the account it runs as, its restart policy, its liveness interval [MIS-0005-R01 (declaration_MUST_state_unit_fields_or_default_contract)] and its memory limit [MIS-0002-R59 (unit_MUST_declare_memory_limit)]. It names its exit-code contract only when the default isn't the one it means [MIS-0005-R01 (declaration_MUST_state_unit_fields_or_default_contract)]: by default, exit 0 is success and exit 78 asks not to be restarted. Its privacy grants, its stop grace and its environment take defaults too when it names none, and the grants are none. The fields, their values and their defaults are defined once, in `macf.pd.interface`, and described in `macf/docs/developer/primal_daemon_interface.md`. This policy does not restate them, so the two cannot disagree.
 
 A declaration with one unit:
 

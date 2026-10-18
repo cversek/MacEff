@@ -9,7 +9,7 @@
 **Created**: 2026-10-17
 **Updates**: MIS-0002: R09 (declaration_MUST_state_unit_fields)
 **Supersedes**: none
-**Lands-in**: framework/policies/base/infrastructure/persistent_layer.md, macf/tests/test_pd_interface.py, framework/mis/MIS-0002-persistent-layer.md (an editorial line in its Revision History)
+**Lands-in**: framework/policies/base/infrastructure/persistent_layer.md, macf/tests/test_pd_interface.py, macf/docs/developer/primal_daemon_interface.md, macf/src/macf/pd/interface.py (docstrings), framework/mis/MIS-0002-persistent-layer.md (an editorial line in its Revision History)
 **Resolution**: none
 
 ---
@@ -82,7 +82,9 @@ An agent writing a unit declaration names the command, the account the unit runs
 
 One pull request carries this MIS and its landing:
 - `persistent_layer` policy, the declaration section: the citation of MIS-0002-R09 (declaration_MUST_state_unit_fields) becomes MIS-0005-R01 (declaration_MUST_state_unit_fields_or_default_contract), and the sentence says the contract may be left to the default;
-- `macf/tests/test_pd_interface.py`: the test R01 names;
+- `macf/tests/test_pd_interface.py`: the test R01 names, and the older required-field test's docstring, which cited R09;
+- `macf/docs/developer/primal_daemon_interface.md`, the unit's fields, which the policy points readers to: its citation of R09 becomes R01;
+- `macf/src/macf/pd/interface.py`: the module, `ExitCodes` and `Unit` docstrings cite R01 for what R09 covered;
 - MIS-0002: an editorial line in its Revision History naming this MIS and R09 (MIS-0001 §8.1).
 
 ## 13 Open Questions
