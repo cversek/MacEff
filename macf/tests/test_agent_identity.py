@@ -28,6 +28,7 @@ def test_agent_spec_display_name_optional():
     """AgentSpec accepts optional display_name field."""
     agent = AgentSpec(
         username="pa_manny",
+        uid=21100,
         personality="../agents/manny.md",
         display_name="Manny MacEff"
     )
@@ -39,6 +40,7 @@ def test_agent_spec_display_name_defaults_to_none():
     """AgentSpec display_name defaults to None when not provided."""
     agent = AgentSpec(
         username="pa_manny",
+        uid=21100,
         personality="../agents/manny.md"
     )
 

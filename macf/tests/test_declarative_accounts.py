@@ -64,23 +64,23 @@ class TestFlavorSchema:
     def test_flavor_defaults_to_maceff(self):
         """Omitting flavor must keep the pre-existing behaviour, or every
         deployment written before this field silently changes meaning."""
-        spec = AgentSpec(username="pa_x", personality="agents/x.md")
+        spec = AgentSpec(username="pa_x", uid=21100, personality="agents/x.md")
         assert spec.flavor == AgentFlavor.MACEFF
         assert spec.is_vanilla is False
 
     def test_maceff_requires_personality(self):
-        spec_kwargs = {"username": "pa_y"}
+        spec_kwargs = {"username": "pa_y", "uid": 21100}
         with pytest.raises(ValidationError, match="personality is required"):
             AgentSpec(**spec_kwargs)
 
     def test_maceff_with_personality_is_valid(self):
         """Negative control for the rule above: the same call succeeds once the
         only missing piece is supplied."""
-        spec = AgentSpec(username="pa_y", personality="agents/y.md")
+        spec = AgentSpec(username="pa_y", uid=21100, personality="agents/y.md")
         assert spec.personality == "agents/y.md"
 
     def test_vanilla_without_personality_is_valid(self):
-        spec = AgentSpec(username="owner_b_vanilla_01", flavor="vanilla")
+        spec = AgentSpec(username="owner_b_vanilla_01", uid=21100, flavor="vanilla")
         assert spec.is_vanilla is True
         assert spec.personality is None
 
@@ -90,13 +90,14 @@ class TestFlavorSchema:
         with pytest.raises(ValidationError, match="meaningless for"):
             AgentSpec(
                 username="owner_b_vanilla_01",
+                uid=21100,
                 flavor="vanilla",
                 personality="agents/n.md",
             )
 
     def test_unknown_flavor_rejected(self):
         with pytest.raises(ValidationError):
-            AgentSpec(username="pa_z", personality="p.md", flavor="semi-maceff")
+            AgentSpec(username="pa_z", uid=21100, personality="p.md", flavor="semi-maceff")
 
 
 # ---------------------------------------------------------------------------
@@ -108,22 +109,23 @@ class TestSshKeysSchema:
     def test_omitted_ssh_keys_is_none(self):
         """None is the signal for the legacy single-file fallback, and must be
         distinguishable from an empty list."""
-        spec = AgentSpec(username="pa_x", personality="p.md")
+        spec = AgentSpec(username="pa_x", uid=21100, personality="p.md")
         assert spec.ssh_keys is None
 
     def test_empty_list_rejected(self):
         """An empty list almost certainly means templating produced nothing, which
         would lock the account out silently."""
         with pytest.raises(ValidationError, match="must not be an empty list"):
-            AgentSpec(username="pa_x", personality="p.md", ssh_keys=[])
+            AgentSpec(username="pa_x", uid=21100, personality="p.md", ssh_keys=[])
 
     def test_blank_entry_rejected(self):
         with pytest.raises(ValidationError, match="non-empty"):
-            AgentSpec(username="pa_x", personality="p.md", ssh_keys=["key_a", "  "])
+            AgentSpec(username="pa_x", uid=21100, personality="p.md", ssh_keys=["key_a", "  "])
 
     def test_multiple_keys_preserved_in_order(self):
         spec = AgentSpec(
             username="owner_a_maceff_01",
+            uid=21100,
             personality="p.md",
             ssh_keys=["key_a", "key_b"],
         )
@@ -296,11 +298,14 @@ class TestBackwardCompatibility:
     def test_legacy_shaped_config_still_validates(self):
         """A config written before flavor/ssh_keys existed must validate unchanged
         and behave identically — this is the regression that would break the
-        sibling production deployment."""
+        sibling production deployment. The one exception is the declared id
+        block (ids and each agent's uid), which every config now carries."""
         legacy = {
+            "ids": {"base": 21000},
             "agents": {
                 "manny": {
                     "username": "pa_manny",
+                    "uid": 21100,
                     "display_name": "Manny MacEff",
                     "personality": "agents/manny_personality.md",
                     "subagents": ["DevOpsEng"],
@@ -326,14 +331,17 @@ class TestBackwardCompatibility:
         """The target shape for the new deployment: owner-prefixed accounts of
         both flavors side by side."""
         config = AgentsConfig(
+            ids={"base": 21000},
             agents={
                 "owner_a_maceff": {
                     "username": "owner_a_maceff_01",
+                    "uid": 21100,
                     "personality": "agents/researcher.md",
                     "ssh_keys": ["key_a"],
                 },
                 "owner_b_vanilla": {
                     "username": "owner_b_vanilla_01",
+                    "uid": 21101,
                     "flavor": "vanilla",
                     "ssh_keys": ["key_b", "key_a"],
                 },
