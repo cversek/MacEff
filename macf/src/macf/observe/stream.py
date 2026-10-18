@@ -22,6 +22,13 @@ channel message's text with its source (never the chat's identifiers), the agent
 text, and each tool call by name with its stated purpose. A tool's result is a marker
 saying whether it failed, never its body; the agent's thinking, hook output, skill text,
 peer messages and the client's housekeeping rows are not sent at all.
+
+MIS-0002-R99 (onlooker_MUST-NOT_get_operator_surface): nothing here hands the onlooker a way
+to see and type into the session. The stream has no input path (R83), and the invitation
+names no attach target. A Remote Control session link opens the session's view and keyboard
+to anyone signed in to the account that owns it, so a frame carries a marker in its place,
+wherever the link was written: a prompt, a channel message, the agent's text or a tool's
+stated purpose.
 """
 from __future__ import annotations
 
@@ -39,13 +46,22 @@ MAX_HANDSHAKE = 4096
 HANDSHAKE_TIMEOUT = 5.0
 
 _CHANNEL_TAG = re.compile(r'^<channel\s+source="([^"]+)"[^>]*>(.*)</channel>\s*$', re.S)
+#: A Remote Control session link. It opens the session's view and keyboard to anyone signed
+#: in to the account that owns it, so no frame carries one (MIS-0002-R99).
+_SURFACE_LINK = re.compile(r"(?:https?://)?claude\.ai/code/session_[A-Za-z0-9_-]+(?:\?[^\s<>\"'()\[\]]*)?")
+SURFACE_MARKER = "[a Remote Control link]"
+
+
+def _no_surface(text: str) -> str:
+    """``text`` with each Remote Control session link replaced by a marker."""
+    return _SURFACE_LINK.sub(SURFACE_MARKER, text)
 
 
 def _tool_purpose(block: dict) -> str:
     """The one line a tool call shows: its stated description, else nothing."""
     args = block.get("input") or {}
     if isinstance(args, dict) and isinstance(args.get("description"), str):
-        return args["description"][:200]
+        return _no_surface(args["description"])[:200]
     return ""
 
 
@@ -67,11 +83,11 @@ def visible(entry: dict) -> list:
         if not isinstance(content, str):
             return []
         if origin.get("kind") == "human" and not entry.get("isMeta"):
-            return [{"t": ts, "kind": "prompt", "text": content}]
+            return [{"t": ts, "kind": "prompt", "text": _no_surface(content)}]
         if origin.get("kind") == "channel":
             m = _CHANNEL_TAG.match(content.strip())
             if m:
-                return [{"t": ts, "kind": "channel", "source": m.group(1), "text": m.group(2).strip()}]
+                return [{"t": ts, "kind": "channel", "source": m.group(1), "text": _no_surface(m.group(2).strip())}]
             return []
         if content.startswith("This session is being continued from a previous conversation"):
             return [{"t": ts, "kind": "compacted"}]
@@ -82,7 +98,7 @@ def visible(entry: dict) -> list:
             if not isinstance(b, dict):
                 continue
             if b.get("type") == "text" and b.get("text"):
-                frames.append({"t": ts, "kind": "agent", "text": b["text"]})
+                frames.append({"t": ts, "kind": "agent", "text": _no_surface(b["text"])})
             elif b.get("type") == "tool_use":
                 frames.append({"t": ts, "kind": "tool", "name": b.get("name", ""), "purpose": _tool_purpose(b)})
         return frames

@@ -352,6 +352,9 @@ The operator may attach to any session without an invitation [MIS-0002-R81 (oper
 
 **An onlooker never types** [MIS-0002-R83 (onlooker_MUST-NOT_type)]. The socket is read for one handshake line and never again, so there is no input path to close. A connection that sends no handshake within five seconds is refused.
 
+**An onlooker never receives an operator surface** [MIS-0002-R99 (onlooker_MUST-NOT_get_operator_surface)], a way to see and type into the session. Besides having no input path, the invitation names no attach target. A Remote Control session link opens the session's view and keyboard to anyone signed in to the account that owns it, so the stream puts a marker in its place, wherever it was written: a prompt, a channel message, the agent's text or a tool's stated purpose.
+- **The limit is the login.** An onlooker that shares the operator's login, on the machine or on claude.ai, already holds the operator's surfaces through it, and nothing in the stream can withhold them. R99 holds between different logins; to such an onlooker, an invitation adds nothing the login hasn't given.
+
 **The stream stops at once when the observation ends** [MIS-0002-R85 (stream_MUST_stop_at_end)]. The state is read before every frame, so an ending or a lapsed lease stops it before the next one. The stream is bound to the invitation it was admitted under. A new invitation for the same onlooker carries another secret, so an end and a re-invitation that both fall between two reads still end it.
 
 **The pause.** Everything a session shows is in scope of an invitation, so the owner protects other people's records and credentials by pausing the stream before work that prints them [MIS-0002-R92 (owner_MAY_pause_stream)].
@@ -711,7 +714,7 @@ Specified in MIS-0002 and arriving with their landing steps, each in the pull re
   - the operator's routes for sources other than unread mail, and `held_until_present`, which a declaration may name but nothing serves yet (1.11);
   - sources besides mail (MIS-0002 §6.6).
 - **The end of R107's transitional rule** [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)] (1.4): until an agent declares `operator_channels`, every channel but the MacEff channel counts as the operator's.
-- **Observation** (5): a test showing that an onlooker never receives an operator surface [MIS-0002-R99 (onlooker_MUST-NOT_get_operator_surface)]. Messages from an onlooker into the observed session are an optional feature that nobody has built. Wherever one is built, its source comes from the transport and the onlooker's card from the invitation [MIS-0002-R95 (onlooker_message_MUST_carry_transport_source)] [MIS-0002-R116 (onlooker_card_MUST_come_from_invitation)].
+- **Observation** (5): messages from an onlooker into the observed session, an optional feature that nobody has built. Wherever one is built, its source comes from the transport and the onlooker's card from the invitation [MIS-0002-R95 (onlooker_message_MUST_carry_transport_source)] [MIS-0002-R116 (onlooker_card_MUST_come_from_invitation)].
 - **The allowlist declaration,** which lists every channel a session loads (1.7) [MIS-0002-R124 (allowlist_declaration_MUST_list_every_channel)].
 - **Mail** (MIS-0002 §6.8): the mail broker and its watchers as managed units, and the mail clocks as schedules [MIS-0002-R53 (mail_broker_MUST_be_managed)] [MIS-0002-R54 (periodic_mail_clock_MUST_be_schedule)].
 - **macOS grants at install** (3.2): the install-time probe, and the notice that names a denied grant [MIS-0002-R64 (adapter_MUST_test_grants_at_install)] [MIS-0002-R65 (denied_grant_MUST_raise_notice)].
