@@ -235,6 +235,9 @@ def test_health_is_runs():
     assert verdict(seen, H10 - 60) == "NONE_OWED"
     assert verdict(seen, H10 + 5) == "DUE"
     assert verdict(seen, H10 + START_GRACE_S + 1) == "OVERDUE"
+    # Two firings owed: the 10:00 run is the late one, however fresh the 11:00 firing is.
+    two = schedule_health(_scheduled(), seen, H10 + 3600 + 30)[0]
+    assert two.verdict == "OVERDUE" and two.owed == iso and "1 more owed" in two.detail
     assert verdict(seen + [_run("pd_run_started", H10 + 1, scheduled_for=iso, card="Other@000000")],
                    H10 + 120) == "OVERDUE"
     started = seen + [_run("pd_run_started", H10 + 1, scheduled_for=iso)]
@@ -270,6 +273,12 @@ def test_overdue_is_unhealthy(monkeypatch):
 
     report = client.status(Path("/nonexistent"), CARD, now=H10 + START_GRACE_S + 1, host=host)
     assert report.runs == "unhealthy: hourly OVERDUE"
+    failed = events + [_run("pd_run_started", H10 + 1, scheduled_for="2026-10-17T10:00:00+00:00"),
+                       _run("pd_run_done", H10 + 2, scheduled_for="2026-10-17T10:00:00+00:00", outcome="failed: exit 2")]
+    events[:] = failed
+    outcome = client.status(Path("/nonexistent"), CARD, now=H10 + 600, host=host)
+    assert (outcome.schedules[0]["verdict"], outcome.runs) == ("FAILED", "healthy")   # an outcome, not overdue
+    events[:] = failed[:1]
     assert report.schedules[0]["owed"] == "2026-10-17T10:00:00+00:00"
     assert client.status(Path("/nonexistent"), CARD, now=H10 + 5, host=host).runs == "healthy"
     source[0] = "event log"
