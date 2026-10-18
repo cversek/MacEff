@@ -435,6 +435,41 @@ def test_files_edited_to_match_close_the_stretch_without_a_recreate(tmp_path):
     assert docker.compared() == 2 and "recovered: seat-1 limits: ALIVE" in sink.read_text()
 
 
+def test_a_failed_check_in_a_drift_is_its_own_stretch_and_the_drift_stays_one(tmp_path):
+    """Review of #700: DRIFTED, then a check that fails (docker briefly unreachable), then DRIFTED
+    again. The failure opens and recovers a stretch of its own; the drift is one stretch, alerted
+    once, and nothing reads as no longer checked."""
+    (tmp_path / "state").mkdir()
+    sink, docker = tmp_path / "sink.txt", _Docker(memory_gib=32)
+    config = _limits_config(tmp_path, sink)
+    watch.run_pass(config, now=NOW, run=docker)
+    docker.fail_inspect = True
+    watch.run_pass(config, now=NOW + 60, run=docker)
+    docker.fail_inspect = False
+    watch.run_pass(config, now=NOW + 120, run=docker)
+    lines = [line for line in sink.read_text().splitlines() if "seat-1" in line]
+    assert [line.split(",")[0] for line in lines] == [
+        "ALERT: seat-1 limits: DRIFTED", "ALERT: seat-1 limits check: CHECK-FAILED",
+        "recovered: seat-1 limits check: ALIVE"], lines
+    assert docker.compared() == 1                      # the kept comparison survived the failure
+
+
+def test_a_changed_env_beside_the_compose_files_is_read_again(tmp_path):
+    """Review of #700: compose reads the .env in its project directory, so a limit taken from it
+    and changed there is read again without a recreate."""
+    (tmp_path / "state").mkdir()
+    compose = tmp_path / "compose.yml"
+    compose.write_text("services: {}\n")
+    sink, docker = tmp_path / "sink.txt", _Docker(files=str(compose))
+    config = _limits_config(tmp_path, sink)
+    watch.run_pass(config, now=NOW, run=docker)
+    watch.run_pass(config, now=NOW + 60, run=docker)
+    assert docker.compared() == 1
+    (tmp_path / ".env").write_text("SEAT_MEM=64g\n")
+    watch.run_pass(config, now=NOW + 120, run=docker)
+    assert docker.compared() == 2
+
+
 def test_a_drift_found_after_a_failed_check_is_still_an_alert(tmp_path):
     """A failed check is its own subject, so the DRIFTED that follows opens its own stretch."""
     (tmp_path / "state").mkdir()
