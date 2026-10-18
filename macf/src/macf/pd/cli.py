@@ -170,13 +170,15 @@ def cmd_pd_install(args: argparse.Namespace) -> int:
         print(f"# {card}: the outer tier for {home} on {sys.platform}, not installed (--plan); {runs}")
         print(tier.render(card, home))
         return 0
+    # Recorded before the service manager can start the daemon: launchd starts it at load
+    # (RunAtLoad), and a daemon that read no record would refuse every schedule.
+    _record_schedules(card, declaration, home)
     try:
         where = tier.install(card, home, force=args.force)
     except (OSError, RuntimeError) as e:
         print(f"maceff_pd: install stopped: {e}\n{POLICY_POINTER}", file=sys.stderr)
         return 1
     print(f"{card}: installed at {where}; {runs}; the service manager says: {tier.status(card)}")
-    _record_schedules(card, declaration, home)
     if sys.platform.startswith("linux"):
         import os
         import pwd
@@ -196,7 +198,7 @@ def _record_schedules(card: str, declaration, home: Path) -> None:
     from macf.pd.scheduler import EVENT_INSTALLED, schedule_digests
     if rendered_declaration_path(home).exists():
         return  # noqa: MACEFF003 - a rendered declaration is out of the agent's reach; nothing to check
-    digests = schedule_digests(declaration)
+    digests = schedule_digests(declaration, home)
     if not append_event(EVENT_INSTALLED, {"agent": card, "digests": digests}):
         print("⚠️ MACF: pd: the schedules were not recorded as installed, so the daemon won't run "
               "them; run pd install again", file=sys.stderr)

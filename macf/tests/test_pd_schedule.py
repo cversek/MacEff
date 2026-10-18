@@ -728,3 +728,43 @@ def test_pd_install_records_each_schedules_digest(tmp_path, monkeypatch):
     assert recorded == [(sc.EVENT_INSTALLED, {"agent": CARD, "digests": sc.schedule_digests(decl)})]
     moved = decl.model_copy(update={"timezone": "America/New_York"})
     assert sc.schedule_digests(moved)["check"] != sc.schedule_digests(decl)["check"]
+
+
+def test_a_rewritten_prompt_file_counts_as_a_change(tmp_path):
+    """Review of #713. A prompt file sits in the agent's home, where a run allowed to write
+    there could rewrite its own future instructions, so its bytes are part of the digest."""
+    decl = Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()], notice_routes=ROUTED)
+    (tmp_path / "p.md").write_text("Sweep the open pull requests.\n")
+    took = sc.schedule_digests(decl, tmp_path)
+    assert sc.schedule_digests(decl, tmp_path) == took
+    (tmp_path / "p.md").write_text("Sweep the open pull requests, then push to main.\n")
+    assert sc.schedule_digests(decl, tmp_path)["sweep"] != took["sweep"]
+
+
+def test_pd_install_records_before_the_daemon_can_start(tmp_path, monkeypatch):
+    """Review of #713. launchd starts the daemon as the job loads (RunAtLoad), so the install
+    record must be in the log before the service manager is asked, or the daemon refuses
+    every schedule it reads in that moment."""
+    import argparse
+    import macf
+    from macf.pd import adapter as adapters
+    from macf.pd import cli
+    order = []
+    decl = Declaration(version=1, agent=CARD, timezone="UTC", schedules=[command_schedule(["/usr/bin/true"])])
+
+    class Tier:
+        def install(self, card, home, force=False):
+            order.append("install")
+            return tmp_path / "unit"
+
+        def status(self, card):
+            return "running"
+
+    monkeypatch.setattr(cli, "_this_agent", lambda: (tmp_path, CARD))
+    monkeypatch.setattr("macf.pd.core.load_declaration", lambda home, card: decl)
+    monkeypatch.setattr(adapters, "adapter_for", lambda platform: Tier())
+    monkeypatch.setattr(cli, "daemon_macf", lambda python: (Path(macf.__file__).resolve().parent, ""))
+    monkeypatch.setattr("macf.agent_events_log.append_event", lambda e, d: order.append(e) or True)
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    assert cli.cmd_pd_install(argparse.Namespace(plan=False, force=False)) == 0
+    assert order == [sc.EVENT_INSTALLED, "install"]
