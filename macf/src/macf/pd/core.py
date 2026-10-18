@@ -56,6 +56,7 @@ from macf.pd.interface import (
     render,
 )
 from macf.pd.liveness import ENV_HOME, ENV_INTERVAL, ENV_UNIT
+from macf.pd.names import rendered_declaration_problem
 from macf.pd.schedule import CronExpr, check_window
 
 #: A unit is overdue once its last liveness is older than this many of its intervals.
@@ -111,6 +112,13 @@ def load_declaration(agent_home: Path, card: str) -> Declaration:
     start them (MIS-0002-R07 (pd_MUST-NOT_control_other_agents)).
     """
     path = declaration_path(agent_home)
+    if path != Path(agent_home) / ".maceff" / "pd" / "declaration.json":
+        problem = rendered_declaration_problem(path)
+        if problem is not None:
+            raise DeclarationRefused(
+                f"the rendered declaration can't be trusted: {problem}. The deployment renders it "
+                "owned by root, so that no run, which executes as the agent, can change it "
+                "(MIS-0002-R33 (run_MUST-NOT_change_schedules))")
     try:
         text = path.read_text()
     except OSError as e:
