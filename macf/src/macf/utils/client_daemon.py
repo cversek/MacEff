@@ -121,7 +121,9 @@ def unit_state(hosted_status: str) -> tuple:
     """The unit state (MIS-0002-R20) of an adopted, live session, with its reason.
 
     The sidecar's status is turn state, stamped at transitions, so it never says a
-    session waits on a person; that inference belongs to the readout (MIS-0002-R21).
+    session waits on a person. That report is the unit's own beat, ``Liveness.waiting_on``
+    (MIS-0002-R21), which a session the daemon starts gets from its transcript monitor. An
+    adopted session writes no liveness, so a wait of its own isn't reported yet.
     A live hosted process is running, and the raw status goes into the reason.
     """
     return "running", f"hosted by the client's daemon, turn state {hosted_status or 'unknown'}"

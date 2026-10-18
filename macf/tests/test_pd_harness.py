@@ -9,6 +9,9 @@ set to false stops that alone, leaving compaction at the context limit on.
 MIS-0002-R66 (pd_MUST_adopt_harness_supervisor): a session the client's background
 daemon already hosts is adopted, never supervised a second time, and acted on through
 the client's own verbs.
+
+MIS-0002-R104 (adapter_MUST_deliver_through_channel): where the session has the MacEff
+channel, each wake and each notice goes through it, and nothing is typed.
 """
 import json
 from dataclasses import dataclass
@@ -386,3 +389,148 @@ def test_a_client_not_on_the_declared_path_is_named_and_nothing_is_touched(tmp_p
         assert "claude is not on the session unit's declared PATH" in reason and str(empty) in reason
     finally:
         client.close()
+
+
+def test_channel_first(tmp_path, isolated_events_log, monkeypatch):
+    """MIS-0002-R104: with the MacEff channel attached, mail that arrives (a wake) and the
+    daemon's own notice both go out on the channel as records naming their sources, each
+    delivery is recorded as by channel, and the keystroke fallback types nothing into an
+    idle, empty box, however long past its grace both have been owed."""
+    import socket
+
+    from macf.agent_events_log import read_events
+    from macf.channels.maceff_channel import parse_record
+    from macf.pd import notifier as nt
+    from macf.pd import wake as wk
+
+    monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)     # the box comes from the home
+    monkeypatch.delenv("MACF_AMAIL_HANDOFF", raising=False)
+    home = tmp_path / "agent"
+    box = home / "amail" / "pickup"
+    box.mkdir(parents=True)
+    clock = [1000.0]
+    n = nt.Notifier(home, {"amail": "agent", "pd_limit_exceeded": "agent"}, clock=lambda: clock[0])
+    n.boot()
+    typed = []
+
+    class IdlePane:
+        def capture(self):
+            return "\n".join(["─" * 60, "❯ ", "─" * 60, "  ? for shortcuts"])
+
+        def type(self, text):
+            typed.append(text)
+            return True
+
+        def enter(self):
+            return True
+
+    n.waker = wk.Waker(IdlePane(), record_keys=lambda text, kind: None, append=lambda e, d: True)
+    ours, theirs = socket.socketpair()
+    theirs.settimeout(2)
+    n.attach(ours)
+    (box / "1791990000-msg-1791990000-aaaaaaaaaaaa.amsg").write_text("never read by the notifier")
+    n.poll()                                                    # the wake
+    assert n.raise_notice("pd_limit_exceeded", "limit-worker-1")   # the notice
+    clock[0] += nt.CHANNEL_GRACE_S + 3600
+    assert not n.wake() and typed == [], "a wake was typed while the channel was attached"
+    assert n.flush() == 2 and not n.owed
+
+    data = b""
+    while data.count(b"\n") < 2:
+        chunk = theirs.recv(65536)
+        assert chunk, "the channel closed before both records arrived"
+        data += chunk
+    records = [parse_record(line) for line in data.decode().splitlines()]
+    assert sorted(r.source for r in records) == ["amail", "pd_limit_exceeded"]
+    delivered = [e["data"] for e in read_events(reverse=False, scope="all") if e.get("event") == nt.EVENT_DELIVERED]
+    assert sorted(d["source"] for d in delivered) == ["amail", "pd_limit_exceeded"]
+    assert {d["via"] for d in delivered} == {"channel"}
+    n.detach(ours)
+    theirs.close()
+
+
+def test_waiting_reported(tmp_path, monkeypatch):
+    """MIS-0002-R21 (pd_MUST_report_waiting_on_person) for Claude Code's session unit, on the
+    path the session takes: from the session's environment the transcript monitor starts the
+    unit's beat, and each beat says when the event log shows that the monitor's own session's
+    newest deciding event is a permission request. Any progress after the request ends the
+    wait: the tool running, or a prompt, which is how a denial with a reply arrives."""
+    import os
+    import time as _time
+    from macf import permission_watch as pw
+    from macf.agent_events_log import append_event
+    from macf.pd import liveness as lv
+    from macf.transcript_monitor import daemon
+
+    # The reading rule.
+    log = []
+
+    def ev(name, t, sid, **data):
+        return {"event": name, "timestamp": t, "data": data, "hook_input": {"session_id": sid,
+                "tool_input": {"command": "gh pr merge 1 --token s3cret"}}}
+
+    read = lambda: pw.waiting(sorted(log, key=lambda e: e["timestamp"], reverse=True))
+    dialogs = pw.SessionDialogs("s1", read=read)
+    assert dialogs() is None                                         # nothing asked yet
+    log.append(ev("permission_requested", 100.0, "s2", tool_name="Bash", timestamp=100.0))
+    assert dialogs() is None                                         # another session's dialog
+    log.append(ev("permission_requested", 200.0, "s1", tool_name="Bash", timestamp=200.0))
+    said = dialogs()
+    assert said.startswith("a permission dialog for Bash, open since ")
+    assert _time.strftime("%H:%M", _time.localtime(200.0)) in said and "s3cret" not in said
+
+    def broken():
+        raise OSError("log unreadable")
+    dialogs._read = broken
+    assert dialogs() == said                                         # a read error keeps the wait
+    dialogs._read = read
+    log.append(ev("tool_call_started", 260.0, "s1"))
+    assert dialogs() is None                                         # answered: the tool ran
+    log.append(ev("permission_requested", 300.0, "s1", tool_name="Edit", timestamp=300.0))
+    assert dialogs().startswith("a permission dialog for Edit")
+    log.append(ev("dev_drv_started", 310.0, "s1"))
+    assert dialogs() is None                                         # a prompt: denied with a reply
+
+    # The beat, as the monitor starts it from the session's environment, reading the log the
+    # hooks write, for its own transcript's session.
+    home = tmp_path / "agent"
+    (home / ".maceff").mkdir(parents=True)
+    (home / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": "Resident"}}))
+    (home / ".maceff_primary_agent.id").write_text("1a2b3c4d-0000\n")
+    for k, v in {lv.ENV_HOME: str(home), lv.ENV_SESSION_UNIT: "session",
+                 lv.ENV_SESSION_INTERVAL: "0.05", lv.ENV_SESSION_PID: str(os.getppid())}.items():
+        monkeypatch.setenv(k, v)
+    beats = []
+    monkeypatch.setattr(lv, "append_event", lambda n, d: beats.append(d) or True)
+    monkeypatch.setattr(daemon, "append_event", lambda *a, **k: True)
+    monkeypatch.setattr(daemon, "find_monitors", list)               # no older monitor
+    monkeypatch.setattr(daemon.signal, "signal", lambda *a: None)    # the suite keeps its handlers
+
+    def dialog(sid, tool):                                           # as the PermissionRequest hook records it
+        append_event("permission_requested", {"session_id": sid, "tool_name": tool, "timestamp": _time.time()},
+                     hook_input={"session_id": sid, "tool_name": tool})
+
+    def waiting_on(n):
+        deadline = _time.monotonic() + 2
+        while len(beats) <= n and _time.monotonic() < deadline:
+            _time.sleep(0.01)
+        return beats[n]["waiting_on"] if len(beats) > n else "no beat"
+
+    beat_said = []
+
+    def fake_run(self, start_from_end=True):
+        dialog("s1", "Bash")                                         # this session's dialog,
+        dialog("s2", "Edit")                                         # and a newer one elsewhere
+        self.on_pass()
+        beat_said.append(waiting_on(0))
+        append_event("tool_call_started", {"session_id": "s1"})      # answered: the tool ran
+        self.on_pass()
+        beat_said.append(waiting_on(1))
+
+    monkeypatch.setattr(daemon.TranscriptMonitor, "run", fake_run)
+    transcript = tmp_path / "s1.jsonl"                               # named for its session
+    transcript.write_text("")
+    daemon.run_monitor(transcript, 0.01, owner=0)
+    assert beat_said[0].startswith("a permission dialog for Bash, open since "), beat_said
+    assert beat_said[1] is None, beat_said
+    assert all(b["pid"] == os.getppid() and b["unit"] == "session" for b in beats)

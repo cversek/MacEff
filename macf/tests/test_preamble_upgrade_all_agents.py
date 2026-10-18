@@ -157,8 +157,9 @@ def test_the_enumeration_runs_under_python_as_bash_hands_it_over(tmp_path, scrip
     code = _assigned(script, "ENUM_PY")
     assert "AgentsConfig" in code
     decl = tmp_path / "agents.yaml"
-    decl.write_text("agents:\n  manny:\n    username: pa_manny\n    personality: p.md\n"
-                    "  visitor:\n    username: visitor\n    flavor: vanilla\nsubagents: {}\n")
+    decl.write_text("ids:\n  base: 21000\n"
+                    "agents:\n  manny:\n    username: pa_manny\n    uid: 21100\n    personality: p.md\n"
+                    "  visitor:\n    username: visitor\n    uid: 21101\n    flavor: vanilla\nsubagents: {}\n")
     code = code.replace("/etc/maceff/agents.yaml", str(decl))
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr

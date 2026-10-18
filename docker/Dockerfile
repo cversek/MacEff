@@ -89,10 +89,24 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/b
 COPY docker/skel/.bashrc /etc/skel/.bashrc
 RUN chmod 644 /etc/skel/.bashrc
 
-# admin (sudoer)
-RUN useradd -m -s /bin/bash admin \
- && echo "admin ALL=(ALL) NOPASSWD:ALL" >/etc/sudoers.d/90-admin \
- && chmod 0440 /etc/sudoers.d/90-admin
+# THE DEPLOYMENT'S ID BLOCK. A container without user-namespace remapping shares the
+# host's uid and gid space, so a number in here and the same number on the host are one
+# identity. Every account the image or start.py creates takes its number from the block
+# MACEFF_ID_BASE .. +999, which the deployment declares again as ids.base in agents.yaml
+# (start.py refuses to start when the two disagree). No default: a deployment chooses its
+# block, clear of the host's accounts and of every other deployment's (container_operations).
+# The base image's ubuntu account goes: its uid 1000 is the first human login on most hosts.
+ARG MACEFF_ID_BASE
+RUN set -eux; \
+    b="${MACEFF_ID_BASE:?build with --build-arg MACEFF_ID_BASE=<the deployment block, e.g. 21000>}"; \
+    [ "$b" -ge 20000 ] && [ $((b % 1000)) -eq 0 ] || { echo "MACEFF_ID_BASE must be a multiple of 1000, at least 20000 (got $b)" >&2; exit 1; }; \
+    if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi; \
+    groupadd -g "$b" admin; \
+    useradd -m -s /bin/bash -u "$b" -g "$b" admin; \
+    echo "admin ALL=(ALL) NOPASSWD:ALL" >/etc/sudoers.d/90-admin; \
+    chmod 0440 /etc/sudoers.d/90-admin; \
+    if getent passwd 1000; then echo "uid 1000 is still taken in the image" >&2; exit 1; fi; \
+    id admin
 
 # SSH hardening
 RUN mkdir -p /var/run/sshd /etc/ssh/sshd_config.d \
@@ -149,15 +163,18 @@ RUN chmod 0755 /opt/maceff-ghapp /opt/maceff-ghapp/ghapp.py /opt/maceff-ghapp/gi
 # owner-scoped guarantee this subsystem makes -- a credential that "only the
 # broker can read" is an unstatable rule without an owner to match. Fixed ids
 # so ownership survives a rebuild: state on a volume outlives the image that
-# created it, and uid drift would silently orphan every stored file.
+# created it, and uid drift would silently orphan every stored file. Fixed, and
+# inside the deployment's block (slots 998 and 999), not at 998/999 themselves:
+# those are system ids the host has usually given to its own services.
 #   amail_broker  authorizes, holds the submission credential, owns the ledgers
 #   amail_ingest  accepts inbound and writes the spool; may NOT read the above
 RUN set -eux; \
-    groupadd -g 998 amail_broker; \
-    useradd  -u 998 -g 998 -M -N -s /usr/sbin/nologin \
+    b="${MACEFF_ID_BASE:?}"; \
+    groupadd -g $((b + 998)) amail_broker; \
+    useradd  -u $((b + 998)) -g $((b + 998)) -M -N -s /usr/sbin/nologin \
              -d /var/lib/amail_broker amail_broker; \
-    groupadd -g 999 amail_ingest; \
-    useradd  -u 999 -g 999 -M -N -s /usr/sbin/nologin \
+    groupadd -g $((b + 999)) amail_ingest; \
+    useradd  -u $((b + 999)) -g $((b + 999)) -M -N -s /usr/sbin/nologin \
              -d /var/lib/amail_ingest amail_ingest; \
     id amail_broker; id amail_ingest
 

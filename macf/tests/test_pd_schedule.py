@@ -204,6 +204,22 @@ def test_schedules_name_their_timezone():
 
 # --- the scheduler: the daemon runs what the schedules owe ----------------------
 
+
+def test_target_declared():
+    """MIS-0002-R29 (schedule_MUST_declare_target): each schedule names its target, an
+    isolated session or the live session of a named agent. A schedule without one, or with
+    an empty one, is refused when the declaration is read."""
+    from pydantic import ValidationError
+    from macf.pd.interface import CommandRun, Schedule
+    base = dict(name="check", cron="*/5 * * * *", missed_run=policy("skip"), timeout_s=30.0,
+                run=CommandRun(command=["/usr/bin/true"], wake_when="exit_code"))
+    with pytest.raises(ValidationError, match="target"):
+        Schedule(**base)
+    with pytest.raises(ValidationError, match="target"):
+        Schedule(**base, target="")
+    assert Schedule(**base, target="isolated").target == "isolated"
+    assert Schedule(**base, target="Tester@abc123").target == "Tester@abc123"
+
 import os  # noqa: E402
 import signal  # noqa: E402
 import subprocess  # noqa: E402
