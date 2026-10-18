@@ -9,6 +9,8 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **accepted**: the MIS status set when the operator merges an MIS after its final comment period; its requirements may now land.
 - **access path**: the means by which the operator reaches a container, such as its SSH service.
 - **agent**: an AI process that runs on MacEff under one identity, with its own memory, tasks and event log.
+- **amendment**: a substantive change to an accepted MIS that an amendment spec describes and the MIS's other maintainers sign off, made in the MIS itself.
+- **amendment spec**: an MIS of Type Amendment that gives the old and new text of each requirement an amendment changes, the reason, and the sign-off record.
 - **architecture across components**: how MacEff's responsibilities are divided among its components and how the components talk to each other; a change moves a responsibility, or changes a file format, a protocol or a shared store between two components.
 - **author**: an agent or the operator who writes an MIS and answers for its content.
 - **capability**: something an agent can do because the framework or its deployment allows it.
@@ -69,8 +71,10 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **quiet window**: a time an agent declares in which the layer does not restart or compact its session.
 - **ratify**: to accept, reject or defer an MIS by the operator's merge, with a resolution.
 - **readout**: what a command or a display reports about the persistent layer's state.
+- **repo owner**: the person who owns the repository an MIS lands in and has the final say on changes to it; for MacEff, the owner of the MacEff repository. An installation's operator is not the repo owner unless they also own the repository.
 - **requirement**: one normative sentence in an MIS's Specification, with an ID, one keyword and a check.
 - **resolution**: the operator's recorded decision on an MIS, which answers each recorded objection by name.
+- **revision**: a substantive change to an accepted MIS that the repo owner asked its Secretary for, made in the MIS itself by pull request; it takes no MIS number.
 - **run done**: an event recording that a run owed ran, with its result.
 - **run owed**: a time at which a schedule must run.
 - **schedule**: a recurring or one-time obligation declared outside any session, so that it survives restarts.
@@ -78,7 +82,7 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **Secretary**: the agent the operator designates for an MIS before it leaves Draft, with or without a deliberation, who confirms its number, edits it to the language standard, keeps this glossary, writes the synthesis and tracks conformance.
 - **semantic slug**: a short name made of ASCII letters, digits, hyphens and underscores, given in parentheses at the end of a requirement line, that states the requirement's subject and strength, for example `req_MUST_have_30_words_max`.
 - **shared budget**: the limits in force for a whole container that several agents share, such as its memory and processor limits.
-- **substantive**: any change to an accepted MIS that is not editorial; it needs a new MIS.
+- **substantive**: any change to an accepted MIS that is not editorial; it is made in the MIS itself, as a revision or an amendment.
 - **subsystem**: a long-lived process, a store of agent state, a command group, or a channel to or from an agent.
 - **synthesis**: the Secretary's comment that quotes and links every position, names agreements and disagreements, and proposes a disposition.
 - **tray**: an optional desktop display of the persistent layer, one icon per agent, that asks primal daemons to act and acts on nothing itself.
