@@ -36,6 +36,7 @@ from pydantic import ValidationError
 from macf.agent_events_log import append_event, get_log_path, read_events
 from macf.notify.session import proc_start, proc_start_key, verify_incarnation
 from macf.pd.interface import (
+    AUTH_FAILED_REASON,
     EVENT_CONTROL,
     EVENT_OVER_LIMIT,
     EVENT_UNDER_LIMIT,
@@ -418,6 +419,7 @@ class _Runner:
     alive_at: Optional[float] = None    # monotonic, at the last accepted liveness
     alive_interval_s: Optional[float] = None
     in_flight: Optional[int] = None     # as the unit last reported it; None if it never has
+    auth_failed: Optional[str] = None   # what the harness said while it can't authenticate (R19)
     failures: int = 0
     want_up: bool = False               # whether the unit should be running
     restart_at: Optional[float] = None  # monotonic: a restart under its policy is due
@@ -707,7 +709,10 @@ class Core:
         self._previously_live = {n for n, d in last.items() if d.get("state") in LIVE_STATES}
         for name, data in last.items():
             pid, start = data.get("pid"), data.get("proc_start")
-            if data.get("state") not in LIVE_STATES or not pid or not start:
+            # A session that can't authenticate reads failed but is still running, waiting for
+            # a person to log in (MIS-0002-R19), so it is adopted like a live one.
+            held = data.get("state") == "failed" and str(data.get("reason", "")).startswith(AUTH_FAILED_REASON)
+            if (data.get("state") not in LIVE_STATES and not held) or not pid or not start:
                 continue
             # A record from another boot names no process that runs now, however well its
             # pid and start match: a Linux start counts ticks since boot, so a process of
@@ -923,7 +928,9 @@ class Core:
             if now - r.started_at > bound:
                 self._fail(r, f"no liveness from pid {r.pid} within {bound:g} s of its start")
             return
-        if r.state == "running" and r.alive_at is not None:
+        held = r.state == "failed" and r.auth_failed is not None
+        if (r.state == "running" or held) and r.alive_at is not None:
+            # A session failed for its login still beats; if the beat stops too, it has died.
             interval = r.alive_interval_s or r.spec.liveness_interval_s
             bound = LIVENESS_TOLERANCE * interval
             age = now - r.alive_at
@@ -974,6 +981,19 @@ class Core:
         r.alive_at = now
         r.alive_interval_s = live.interval_s
         r.in_flight = live.in_flight
+        if live.auth_failed:
+            # The harness can't authenticate. The session is running but can't work, and that
+            # must never read as idle (MIS-0002-R19 (auth_failure_MUST_read_failed)). It is not
+            # stopped or restarted: a restart can't log in, and a restarted session that is
+            # never prompted makes no request, so it would read healthy again while it can't.
+            if r.auth_failed is None or r.state != "failed":
+                r.auth_failed = live.auth_failed
+                self._transition(r, "failed", f"{AUTH_FAILED_REASON}: {live.auth_failed}")
+            return
+        if r.auth_failed is not None:
+            r.auth_failed = None
+            self._transition(r, "running", "authenticated again")
+            return
         if live.waiting_on:
             if r.state != "waiting_on_a_person":
                 self._transition(r, "waiting_on_a_person", f"waiting on {live.waiting_on}")
@@ -1015,7 +1035,7 @@ class Core:
         # core stopped it or it exited while the restart waited on its work in flight.
         asked_restart = r.then_start or r.drain is not None
         r.proc, r.kill_at, r.stopping, r.then_start, r.drain = None, None, None, False, None
-        r.alive_at, r.in_flight = None, None
+        r.alive_at, r.in_flight, r.auth_failed = None, None, None
 
         if stopping is None:
             # It exited on its own: record how. A stopped unit whose leader left members
@@ -1274,6 +1294,7 @@ class Core:
         """A unit that is running but not working: record it failed, then stop what is
         left of it so the restart policy can act on the exit."""
         r.failures += 1
+        r.auth_failed = None       # from here it is an ordinary failure, for the restart policy
         self._transition(r, "failed", reason)
         self._signal_stop(r, reason)
 

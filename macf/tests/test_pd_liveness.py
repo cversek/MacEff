@@ -198,3 +198,35 @@ def test_the_broker_server_calls_its_pass_hook_while_idle():
         assert len(passes) == n, "the hook ran after the loop stopped"
     finally:
         shutil.rmtree(sockdir, ignore_errors=True)
+
+
+def test_the_beat_carries_a_failed_login_while_it_lasts():
+    """MIS-0002-R19 (auth_failure_MUST_read_failed): each beat asks whether the harness can
+    authenticate, so the daemon hears a failed login on the next beat and its end the same way."""
+    events, append = recorder()
+    said = ["Login expired"]
+    hb = lv.Heartbeat("Resident@1a2b3c", "session", 0.05, append=append,
+                      auth_failed=lambda: said[0]).start()
+    halt = _ticking(hb)
+    deadline = time.monotonic() + 1.0
+    while len(events) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    said[0] = None
+    n = len(events)
+    while len(events) < n + 2 and time.monotonic() < deadline + 1.0:
+        time.sleep(0.01)
+    hb.stop()
+    halt.set()
+    data = [d for _, d in events]
+    assert data[0]["auth_failed"] == "Login expired"
+    assert data[-1].get("auth_failed") is None                       # left out once it ends
+
+
+def test_a_beat_leaves_out_what_is_unset():
+    """A beat with nothing to say about a wait or a login carries neither key, so a daemon that
+    predates either field, and refuses unknown keys, still credits it."""
+    events, append = recorder()
+    lv.emit("Resident@1a2b3c", "session", 10.0, append=append, pid=os.getpid())
+    (_, data), = events
+    assert "auth_failed" not in data and "waiting_on" not in data and "in_flight" not in data
+    assert lv.Liveness.model_validate(data).auth_failed is None
