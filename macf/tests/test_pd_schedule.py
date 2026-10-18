@@ -546,6 +546,23 @@ def test_run_cannot_schedule(tmp_path):
     started = [d["schedule"] for d in log.of(sc.EVENT_STARTED)]
     assert started == ["check", "check"]                        # 12:05 and 12:10, and nothing planted
 
+    # Across a restart, on a host: the next daemon reads the rewritten file. It runs only
+    # what pd install recorded, and says the rest isn't run until installed again.
+    installed = sc.schedule_digests(Declaration(version=1, agent=CARD, timezone="UTC", schedules=[original],
+                                                notice_routes=ROUTED))
+    owed, after = [], Log()
+    after.append(sc.EVENT_INSTALLED, {"agent": CARD, "digests": installed})
+    restarted = sc.Scheduler(Declaration.model_validate_json(on_disk.read_text()), CARD,
+                             {"agent_home": str(tmp_path)}, work_dir=tmp_path / "runs", append=after.append,
+                             events=after.read, now=lambda: now[0], check_installed=True,
+                             on_notice=lambda source, nid: owed.append(source) or True)
+    restarted.boot()
+    now[0] = at("2026-10-14 12:11")
+    restarted.tick()
+    assert not after.of(sc.EVENT_STARTED) and "planted" not in restarted.runnable
+    assert "added since the last pd install" in after.of(sc.EVENT_NOT_RUN)[0]["reason"]
+    assert owed == ["pd_schedule_changed"]
+
 
 def _fake_client(tmp_path, denials):
     """A stand-in for the Claude Code client: it records what it was started with and the
@@ -673,3 +690,41 @@ def test_the_client_is_found_on_the_session_units_path(tmp_path, monkeypatch):
                          work_dir=tmp_path / "runs", append=bare.append, events=bare.read, now=lambda: now[0])
     plain.boot()
     assert "the daemon's PATH (/usr/bin:/bin)" in bare.of(sc.EVENT_NOT_RUN)[0]["reason"]
+
+
+@pytest.mark.parametrize("record, check, runs", [
+    ("same", True, True),            # installed as it is
+    ("changed", True, False),        # the command changed since install
+    ("none", True, False),           # no install recorded
+    ("changed", False, True),        # a rendered declaration: out of the agent's reach, not checked
+])
+def test_a_host_runs_only_the_schedules_pd_install_recorded(tmp_path, record, check, runs):
+    """MIS-0002-R33 on a host: a daemon runs a schedule only as pd install recorded it. One
+    whose digest differs, or with no record at all, is said not run once, with how to accept
+    it. A daemon over a rendered declaration checks nothing, since no run can change that."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    declared = command_schedule(["/usr/bin/true"])
+    if record != "none":
+        took = command_schedule(["/usr/bin/false"]) if record == "changed" else declared
+        log.append(sc.EVENT_INSTALLED, {"agent": CARD, "digests": sc.schedule_digests(
+            Declaration(version=1, agent=CARD, timezone="UTC", schedules=[took]))})
+    s = make_scheduler(tmp_path, [declared], log, now, check_installed=check)
+    now[0] = at("2026-10-14 12:05")
+    s.tick()
+    finish(s)
+    assert bool(log.of(sc.EVENT_STARTED)) == runs
+    if not runs:
+        assert "pd install" in log.of(sc.EVENT_NOT_RUN)[0]["reason"]
+
+
+def test_pd_install_records_each_schedules_digest(tmp_path, monkeypatch):
+    """pd install records what it took, so the daemon has something to check against, and a
+    timezone change counts as a change to every schedule read in it."""
+    from macf.pd import cli
+    recorded = []
+    monkeypatch.setattr("macf.agent_events_log.append_event", lambda e, d: recorded.append((e, d)) or True)
+    decl = Declaration(version=1, agent=CARD, timezone="UTC", schedules=[command_schedule(["/usr/bin/true"])])
+    cli._record_schedules(CARD, decl, tmp_path)
+    assert recorded == [(sc.EVENT_INSTALLED, {"agent": CARD, "digests": sc.schedule_digests(decl)})]
+    moved = decl.model_copy(update={"timezone": "America/New_York"})
+    assert sc.schedule_digests(moved)["check"] != sc.schedule_digests(decl)["check"]
