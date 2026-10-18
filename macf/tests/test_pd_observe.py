@@ -385,6 +385,39 @@ def test_onlooker_has_no_keyboard(tmp_path):
     assert b"typed into the session" not in sock.out
 
 
+RC_LINK = "https://claude.ai/code/session_01AbCdEfGhIjKlMnOpQrStUv?from=cli"
+
+
+def test_onlooker_no_operator_surface(tmp_path):
+    """R99: observation hands an onlooker no way to see and type into the session. It has no
+    input path (R83), the invitation names no attach target, and no Remote Control link
+    reaches it, whichever row the link was written in. These are the rows that carried one
+    in a real transcript, plus a prompt and a channel message."""
+    inv = acts.invite(ME, THEM, 0, {}, container_of=_host, lease_until=2000.0, now=1000.0)
+    assert set(inv.event["data"]) == {"onlooker", "observed", "stream_from", "secret_sha256", "lease_until"}
+    path = _transcript(tmp_path, [
+        _row(type="user", origin={"kind": "human"}, message={"content": f"open {RC_LINK} on the phone"}),
+        _row(type="user", origin={"kind": "channel"},
+             message={"content": f'<channel source="plugin:telegram:telegram" chat_id="1">here: {RC_LINK}</channel>'}),
+        _said(f"Committed.\n\nClaude-Session: {RC_LINK}"),
+        _row(type="assistant", message={"content": [{"type": "tool_use", "name": "Bash", "input": {
+            "command": f"git commit -m 'x\n\nClaude-Session: {RC_LINK}'", "description": f"Commit; see {RC_LINK}"}}]}),
+        _row(type="user", message={"content": [{"type": "tool_result", "content": f"done {RC_LINK}", "is_error": False}]}),
+        _row(type="attachment", attachment={"type": "pr", "url": RC_LINK, "commit": RC_LINK, "pr": RC_LINK}),
+        _row(type="api-request-blob", message={"role": "user", "content": [{"type": "text", "text": RC_LINK}]}),
+    ])
+    sock = _Sock(_json.dumps({"onlooker": THEM, "secret": inv.secret}).encode() + b"\n")
+    stream.serve_connection(sock, lambda: acts.fold([inv.event]), lambda off: stream.rows_from(path, off),
+                            _Clock(), lambda: None, poll_rounds=3)
+    frames = [_json.loads(line) for line in sock.out.splitlines()]
+    kinds = [f["kind"] for f in frames]
+    assert kinds == ["prompt", "channel", "agent", "tool", "result"], kinds
+    assert b"claude.ai/code/session_" not in sock.out
+    assert all(stream.SURFACE_MARKER in f["text"] for f in frames if "text" in f)
+    assert frames[1]["source"] == "plugin:telegram:telegram" and frames[2]["text"].startswith("Committed.")
+    assert frames[3]["purpose"] == f"Commit; see {stream.SURFACE_MARKER}" and sock.recv_calls == 1
+
+
 def test_a_wrong_secret_is_refused_and_told(tmp_path):
     path = _transcript(tmp_path, AFTER)
     inv = acts.invite(ME, THEM, 0, {}, container_of=_host)
