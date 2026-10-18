@@ -451,3 +451,75 @@ def test_a_daemon_with_a_threshold_notices_unread_mail(tmp_path, base, run_daemo
     [event] = list(read_events(only=(EVENT_UNREAD_MAIL,)))
     assert event["data"]["agent"] == "Tester@abc123" and event["data"]["count"] == 1
     assert any(o.source == "pd_unread_mail" for o in daemon.notifier.owed.values())
+
+
+from test_primal_daemon import _crash, drive, make_core, make_unit, script  # noqa: E402,F401 - fixtures
+
+
+def test_after_restart_notice(make_core, script):
+    """MIS-0002-R47 (pd_MUST_report_carried_changed_lost): after a restart and after a
+    compaction, one pd_carried event says what was carried, what changed and what was lost,
+    and the agent is owed one notice pointing to it. A first start carries nothing and says
+    nothing. Here a unit that survived the daemon is carried, one that died is started anew
+    (changed), and an optional one that died isn't started again (lost)."""
+    from macf.agent_events_log import append_event
+    from macf.pd import core as pd_core
+
+    def carried_events():
+        return [e["data"] for e in read_events(reverse=False, scope="all", only=(pd_core.EVENT_CARRIED,))]
+
+    survives, dies = make_unit("survives", script, {}), make_unit("dies", script, {})
+    optional = make_unit("optional", script, {}).model_copy(update={"optional": True})
+    first = make_core([survives, dies, optional])
+    first.record_start(os.getpid(), "the first daemon's start")
+    first.boot()
+    first.start("optional", pd_core.POLICY, "the test wants it")
+    assert drive(first, lambda: all(first.state(u) == "running" for u in ("survives", "dies", "optional")))
+    assert carried_events() == []                                   # a first start is no restart
+    left = _crash(first)
+    for name in ("dies", "optional"):
+        os.killpg(left[name].pid, 9)
+        left[name].wait(timeout=5)
+
+    now = [time.time()]
+    owed = []
+    second = make_core([survives, dies, optional], wall=lambda: now[0])
+    second.on_notice = lambda source, nid: owed.append(source)
+    second.record_start(os.getpid(), "the second daemon's start")
+    second.boot()
+    report = carried_events()
+    assert len(report) == 1 and report[0]["after"] == "the primal daemon restarted"
+    assert (report[0]["carried"], report[0]["changed"], report[0]["lost"]) == (["survives"], ["dies"], ["optional"])
+    assert owed == ["pd_carried"]
+
+    append_event("compaction_detected", {"source": "test"})
+    second.tick()
+    assert len(carried_events()) == 1                               # the settle lets the follower go first
+    now[0] += pd_core.COMPACTION_SETTLE_S + 1
+    second.tick()
+    after = carried_events()[-1]
+    assert after["after"] == "the session was compacted" and after["lost"] == [pd_core.CONTEXT_LOST]
+    assert "survives" in after["carried"] and owed == ["pd_carried", "pd_carried"]
+    second.tick()
+    assert len(carried_events()) == 2                               # once per compaction
+    left["survives"].kill()
+
+
+def test_a_session_restart_is_reported(make_core, script):
+    """R47 for the session unit: when it comes back as a new process, its context is lost and
+    the units beside it ran on, and that is reported once, with the notice. Its first start is
+    no restart."""
+    from macf.pd import core as pd_core
+    session = make_unit("session", script, {"exit_after": 0.3}, restart="always").model_copy(
+        update={"kind": "session"})
+    worker = make_unit("worker", script, {})
+    owed = []
+    core = make_core([session, worker], hosted=lambda: [])
+    core.on_notice = lambda source, nid: owed.append(source)
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    assert drive(core, lambda: any(e["data"]["after"] == "the session unit restarted" for e in
+                                   read_events(reverse=False, scope="all", only=(pd_core.EVENT_CARRIED,))))
+    first = [e["data"] for e in read_events(reverse=False, scope="all", only=(pd_core.EVENT_CARRIED,))][0]
+    assert (first["carried"], first["changed"], first["lost"]) == (["worker"], ["session"], [pd_core.CONTEXT_LOST])
+    assert owed[0] == "pd_carried"
