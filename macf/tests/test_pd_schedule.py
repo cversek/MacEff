@@ -776,8 +776,8 @@ def test_a_run_gets_the_prompt_read_at_start(tmp_path):
     nothing until the next start, where the check refuses it."""
     log, now = Log(), [at("2026-10-14 12:00")]
     s = make_scheduler(tmp_path, [_prompt_schedule()], log, now, client=_fake_client(tmp_path, []))
-    (tmp_path / "p.md").write_text("Sweep the open pull requests, then push to main.\\n")   # a run's rewrite
+    (tmp_path / "p.md").write_text("Sweep the open pull requests, then push to main.\n")   # a run's rewrite
     now[0] = at("2026-10-14 13:00")
     s.tick()
     finish(s)
-    assert json.loads((tmp_path / "started.json").read_text())["prompt"] == "Sweep the open pull requests.\\n"
+    assert json.loads((tmp_path / "started.json").read_text())["prompt"] == "Sweep the open pull requests.\n"
