@@ -689,7 +689,7 @@ A request may claim only the operator or the agent's wind-down. Which of the two
 - **`start`, `stop` and `restart`** act on one declared unit. A stop sends SIGTERM to the unit's process group and SIGKILL after its grace period, and it succeeds whatever gate the session enforces [MIS-0002-R48 (outside_stop_MUST_override_gates)]. It is how the operator takes back a session that a loop holds. An asked restart first lets the unit's work in flight drain, up to a timeout it names when it gives up [MIS-0002-R49 (pd_MUST_check_work_in_flight)].
 - **A unit the declaration doesn't name is refused.** The daemon never starts, stops or signals another agent's units [MIS-0002-R07 (pd_MUST-NOT_control_other_agents)].
 - **A malformed request, an unknown operation or an unknown field refuses the whole request**, and nothing is done.
-- **A compaction is refused** in step 1. The layer never compacts a session on its own initiative [MIS-0002-R51 (layer_MUST-NOT_compact_on_own)], and compaction on request arrives with the session unit, accepted only from the operator or the agent's declared wind-down [MIS-0002-R108 (compaction_MUST_be_asked_by_operator_or_wind-down)], and only once the operator is established some other way than a claim (9.3).
+- **A compaction is refused.** The layer never compacts a session on its own initiative [MIS-0002-R51 (layer_MUST-NOT_compact_on_own)]. Compaction on request is still to come (13): it will be accepted only from the operator or the agent's declared wind-down [MIS-0002-R108 (compaction_MUST_be_asked_by_operator_or_wind-down)], and only once the operator is established some other way than a claim (9.3).
 
 Each connection carries one request. A refusal says what was refused and why, and names this policy, `macf_tools policy navigate persistent_layer`, as `capability_boundaries` requires of every refusal.
 
@@ -708,14 +708,13 @@ The daemon starts its units as its children, but they don't die with it: the out
 ## 13 Not Yet Landed
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
-- **The rest of the primal daemon:** a dialog that an adopted session waits on, reported as waiting on a person as it already is for a session the daemon starts itself (3.3, 6.2) [MIS-0002-R21 (pd_MUST_report_waiting_on_person)]; an authentication failure read as failed [MIS-0002-R19 (auth_failure_MUST_read_failed)]; compaction on request, once the operator is established some other way than a claim on the socket (9.3, 12.3); and a command-line act that stops every unit, with the question of which asker a command line claims (12.1) (MIS-0002 §6.1 to §6.4, §6.7).
+- **The rest of the primal daemon:** a dialog that an adopted session waits on, reported as waiting on a person as it already is for a session the daemon starts itself (3.3, 6.2) [MIS-0002-R21 (pd_MUST_report_waiting_on_person)]; compaction on request, once the operator is established some other way than a claim on the socket (9.3, 12.3); and a command-line act that stops every unit, with the question of which asker a command line claims (12.1) (MIS-0002 §6.1 to §6.4, §6.7).
 - **The rest of the notifier** (1.8):
-  - the notice after a restart, recreate or compaction that states what was carried, changed and lost [MIS-0002-R47 (pd_MUST_report_carried_changed_lost)];
+  - the refusal at load of a declaration that doesn't route `pd_carried` to the agent, once the deployed declarations route it, so that the notice of what a restart, recreate or compaction carried, changed and lost always reaches the agent (11.1) [MIS-0002-R47 (pd_MUST_report_carried_changed_lost)];
   - the operator's routes for sources other than unread mail, and `held_until_present`, which a declaration may name but nothing serves yet (1.11);
   - sources besides mail (MIS-0002 §6.6).
 - **The end of R107's transitional rule** [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)] (1.4): until an agent declares `operator_channels`, every channel but the MacEff channel counts as the operator's.
 - **Observation** (5): messages from an onlooker into the observed session, an optional feature that nobody has built. Wherever one is built, its source comes from the transport and the onlooker's card from the invitation [MIS-0002-R95 (onlooker_message_MUST_carry_transport_source)] [MIS-0002-R116 (onlooker_card_MUST_come_from_invitation)].
-- **The allowlist declaration,** which lists every channel a session loads (1.7) [MIS-0002-R124 (allowlist_declaration_MUST_list_every_channel)].
 - **Mail** (MIS-0002 §6.8): the mail broker and its watchers as managed units, and the mail clocks as schedules [MIS-0002-R53 (mail_broker_MUST_be_managed)] [MIS-0002-R54 (periodic_mail_clock_MUST_be_schedule)].
 - **macOS grants at install** (3.2): the install-time probe, and the notice that names a denied grant [MIS-0002-R64 (adapter_MUST_test_grants_at_install)] [MIS-0002-R65 (denied_grant_MUST_raise_notice)].
 
