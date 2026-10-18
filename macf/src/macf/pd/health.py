@@ -18,8 +18,8 @@ Each declared schedule's health is derived the same way, from runs owed and runs
 read (MIS-0002-R17 (readout_MUST_derive_health_from_runs)): ``schedule_health``. The cron
 says what was owed by now, and the scheduler's events say what started, ended or was missed by
 the declared policy. A run owed and not started, or started and past its limit with no end,
-is overdue, and the daemon that owes it reads unhealthy while it is alive
-(MIS-0002-R18 (overdue_run_MUST_read_unhealthy)).
+is overdue, measured from the oldest firing owed, and the daemon that owes it reads unhealthy
+while it is alive (MIS-0002-R18 (overdue_run_MUST_read_unhealthy)).
 """
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -175,8 +175,10 @@ def _float_or_none(value) -> Optional[float]:
 # ============================================================================
 
 RunVerdict = Literal["NONE_OWED", "OK", "DUE", "RUNNING", "OVERDUE", "FAILED", "NOT_RUN"]
-#: The verdicts that make the daemon owing the runs unhealthy.
-UNHEALTHY_RUNS = ("OVERDUE", "FAILED", "NOT_RUN")
+#: The verdicts that make the daemon owing the runs unhealthy: an overdue run, as R18 says. A
+#: failed run is its schedule's outcome, and a run the daemon can't start yet is said once;
+#: the readout shows both per schedule without judging the daemon by them.
+UNHEALTHY_RUNS = ("OVERDUE",)
 #: The scheduler's events, which ``schedule_health`` reads.
 SCHEDULE_EVENTS = (EVENT_SEEN, EVENT_STARTED, EVENT_DONE, EVENT_MISSED, EVENT_NOT_RUN)
 #: How long after its firing a run may still be starting. The daemon starts a due run on its
@@ -268,17 +270,20 @@ def _schedule_health(s: Schedule, tz, newest: Dict[tuple, dict], seen: Optional[
                                   detail=f"started {ran_for:.0f} s ago with no end recorded, past "
                                          f"its {s.timeout_s:g} s limit")
         return ScheduleHealth(**known, verdict="RUNNING", detail=f"started {ran_for:.0f} s ago")
+    # Lateness runs from the oldest firing owed: while the daemon runs, nothing accounts later
+    # for a firing it didn't start, so a newer firing doesn't make an old one less late.
     now_at = datetime.fromtimestamp(now, timezone.utc)
-    owed = None
+    owed, count = None, 0
     for when in CronExpr.parse(s.cron, tz).iter_after(origin):
         if when > now_at:
             break
-        owed = when
+        owed, count = owed or when, count + 1
     if owed is not None:
         late = (now_at - owed).total_seconds()
+        more = f", and {count - 1} more owed since" if count > 1 else ""
         return ScheduleHealth(**known, owed=owed.isoformat(),
                               verdict="OVERDUE" if late > START_GRACE_S else "DUE",
-                              detail=f"the run owed for {owed.isoformat()} has not started, {late:.0f} s after it")
+                              detail=f"the run owed for {owed.isoformat()} has not started, {late:.0f} s after it{more}")
     if not done:
         return ScheduleHealth(**known, verdict="NONE_OWED", detail="no run owed since it was first seen")
     if outcome.startswith("ok"):

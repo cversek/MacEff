@@ -606,12 +606,12 @@ An event carries states, times and identities. It never carries file content fro
 **A schedule's health is its runs, owed against done, when the readout is asked** [MIS-0002-R17 (readout_MUST_derive_health_from_runs)]. `macf.pd.health.schedule_health` reads the cron for the newest firing owed by now and the scheduler's events (`pd_schedule_seen`, `pd_run_started`, `pd_run_done`, `pd_run_missed`, `pd_schedule_not_run`) for what became of it. A firing the declared missed-run policy accounted for is not owed. The verdicts:
 - **ok** or **failed:** how the last run ended;
 - **due:** a run owed and not started, inside a minute's grace for a slow pass;
-- **overdue:** a run owed and not started past that grace, or one started and past its limit with no end recorded;
+- **overdue:** a run owed and not started past that grace, measured from the oldest firing owed, or one started and past its limit with no end recorded;
 - **running:** a run in flight, which holds its schedule, as the scheduler starts no other until it ends;
 - **not run:** a prompt run the daemon can't run yet;
 - **none owed:** nothing owed since the schedule was first seen.
 
-Nothing is stored, so the same events read later give the later verdict. **The daemon owes every run it starts, so while it answers `pd status`, which is how it is known alive, one overdue, failed or not-run schedule makes it read unhealthy** [MIS-0002-R18 (overdue_run_MUST_read_unhealthy)]. `pd status` prints each schedule's verdict and a `runs:` line, and its JSON carries `schedules` and `runs`. With no daemon answering, the schedules are still listed, and no daemon is called healthy or unhealthy.
+Nothing is stored, so the same events read later give the later verdict. **The daemon owes every run it starts, so while it answers `pd status`, which is how it is known alive, one overdue schedule makes it read unhealthy** [MIS-0002-R18 (overdue_run_MUST_read_unhealthy)]. A failed run is its schedule's outcome, and a prompt run the daemon can't start yet is said once; both show per schedule, and neither judges the daemon. `pd status` prints each schedule's verdict and a `runs:` line, and its JSON carries `schedules` and `runs`. With no daemon answering, the schedules are still listed, and no daemon is called healthy or unhealthy.
 
 ### 11.3 Who asked
 
