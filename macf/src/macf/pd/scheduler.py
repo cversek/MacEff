@@ -66,6 +66,9 @@ EVENT_STARTED = "pd_run_started"
 EVENT_DONE = "pd_run_done"
 EVENT_MISSED = "pd_run_missed"
 EVENT_NOT_RUN = "pd_schedule_not_run"
+#: A missed firing its policy defers to a later time (``run_once_in_window``), so a reader can
+#: tell a run that waits as declared from one that is late (MIS-0002-R17, R18).
+EVENT_DEFERRED = "pd_run_deferred"
 #: The run's process, written once it exists, so a later daemon can tell it from a stranger.
 EVENT_PID = "pd_run_pid"
 
@@ -136,6 +139,7 @@ class Scheduler:
     on_notice: Optional[Callable[[str, str], bool]] = None
     #: The schedules this daemon runs: every command run, and prompt runs it can start.
     runnable: set = field(default_factory=set)
+    deferred: Dict[str, Optional[datetime]] = field(default_factory=dict)
 
     def _say(self, event: str, data: dict) -> None:
         if not self.append(event, {"agent": self.card, **data}):
@@ -249,6 +253,10 @@ class Scheduler:
                                          "first": _iso(plan.first_missed) if plan.first_missed else None,
                                          "last": _iso(plan.last_missed) if plan.last_missed else None,
                                          "policy": s.missed_run.kind})
+            if plan.run_at is not None and plan.run_at > now and self.deferred.get(s.name) != plan.scheduled_for:
+                self.deferred[s.name] = plan.scheduled_for
+                self._say(EVENT_DEFERRED, {"schedule": s.name, "scheduled_for": _iso(plan.scheduled_for),
+                                           "run_at": _iso(plan.run_at), "policy": s.missed_run.kind})
             if plan.run_at is not None and plan.run_at <= now:
                 self._start(s, plan.scheduled_for, plan.late_s)
 

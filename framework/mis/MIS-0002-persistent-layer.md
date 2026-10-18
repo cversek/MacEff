@@ -152,8 +152,8 @@ stateDiagram-v2
 - **R14** [MUST · decidable: macf/tests/test_pd_liveness.py::test_the_heartbeat_reports_at_once_and_then_at_its_interval] Each managed unit MUST emit liveness events to its agent's event log at its declared interval. (unit_MUST_emit_liveness_events)
 - **R15** [MUST · decidable: macf/tests/test_pd_readout.py::test_liveness_probed] When the readout reports a unit alive, it MUST first confirm, by process id and start time, that the process named in the last liveness event is still that unit. (readout_MUST_probe_liveness)
 - **R16** [MUST NOT · judgment: the head maintainer, at review of each landing pull request] The persistent layer MUST NOT keep a store of liveness, runs owed or runs done apart from the agent's event log. (layer_MUST-NOT_keep_second_ledger)
-- **R17** [MUST · decidable: macf/tests/test_pd_readout.py::test_health_is_runs (planned)] The readout MUST derive health from runs owed and runs done when it is read. (readout_MUST_derive_health_from_runs)
-- **R18** [MUST · decidable: macf/tests/test_pd_readout.py::test_overdue_is_unhealthy (planned)] If a unit is alive and a run it owes is overdue, then the readout MUST report the unit unhealthy. (overdue_run_MUST_read_unhealthy)
+- **R17** [MUST · decidable: macf/tests/test_pd_readout.py::test_health_is_runs] The readout MUST derive health from runs owed and runs done when it is read. (readout_MUST_derive_health_from_runs)
+- **R18** [MUST · decidable: macf/tests/test_pd_readout.py::test_overdue_is_unhealthy] If a unit is alive and a run it owes is overdue, then the readout MUST report the unit unhealthy. (overdue_run_MUST_read_unhealthy)
 - **R19** [MUST · decidable: macf/tests/test_pd_readout.py::test_auth_failure_is_failed (planned)] When a harness adapter reads an authentication failure, the primal daemon MUST set the session's state to failed. (auth_failure_MUST_read_failed)
 
 ### 6.4 Unit states
@@ -423,8 +423,8 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R14 | decidable | macf/tests/test_pd_liveness.py::test_the_heartbeat_reports_at_once_and_then_at_its_interval | passing |
 | R15 | decidable | macf/tests/test_pd_readout.py::test_liveness_probed | passing |
 | R16 | judgment | the head maintainer, at review of each landing pull request | standing |
-| R17 | decidable | macf/tests/test_pd_readout.py::test_health_is_runs | planned |
-| R18 | decidable | macf/tests/test_pd_readout.py::test_overdue_is_unhealthy | planned |
+| R17 | decidable | macf/tests/test_pd_readout.py::test_health_is_runs | passing |
+| R18 | decidable | macf/tests/test_pd_readout.py::test_overdue_is_unhealthy | passing |
 | R19 | decidable | macf/tests/test_pd_readout.py::test_auth_failure_is_failed | planned |
 | R20 | decidable | macf/tests/test_primal_daemon.py::test_states | passing |
 | R21 | decidable | macf/tests/test_pd_harness.py::test_waiting_reported | planned (the test passes for a session the daemon starts itself; an adopted session writes no liveness, so a dialog it waits on isn't reported yet) |
@@ -660,6 +660,7 @@ Objections recorded:
   - R29, whose test this change adds, since the head maintainer handed R29 to the Secretary on the deliberation issue. The test also refuses an empty target, which names neither an isolated session nor an agent, and the declaration model now refuses one. It checks that a target is declared and that both forms load, not that a target other than an isolated session names an agent;
   - R66, which the Secretary rules passing: adoption landed on 2026-10-12, and the persistent_layer policy describes it in section 3.3. That policy's section 13 had held R66 back by still listing adoption as to come.
   Two rows stay planned, each with its reason in its row. R21's test passes for a session the daemon starts itself (#704), but an adopted session writes no liveness, so a dialog it waits on isn't reported yet, as the persistent_layer policy says in section 3.3. A maintainer found this at review, by the reasoning sweep 3 used to hold R66. R33's test holds within one daemon's life, and a container holds across restarts, while on a host, detecting a changed declaration is still to come. The persistent_layer policy's section 13, which lists what has not landed, is rewritten against the code. Adoption, the dark-channel event, the held-wake alert and command schedules are out, since they landed, and the open rows it never named are in: R19, R21's adopted session, R47, R58, R64, R65, R99 and R124, and the optional feature that R95 and R116 govern. The requirement lines of the 86 passing rows no longer say "(planned)", and R127's line no longer says "(passing)". The mis policy's line form carries no state, and the marker had outlived the tests it waited for, so a reader of a requirement saw it as untested while its row said passing. No requirement changed.
+- 2026-10-18: R17 (readout_MUST_derive_health_from_runs) and R18 (overdue_run_MUST_read_unhealthy) move to passing, with the code and the tests they name. Editorial (mis 8.1).
 - 2026-10-18: R31 (schedule_MUST_settle_permission_at_creation) and R32 (run_MUST_fail_on_prompt) move to passing, with the code and the tests they name. Editorial (mis 8.1).
 
 ## Wiki-Links
