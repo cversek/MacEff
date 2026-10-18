@@ -211,6 +211,22 @@ def test_schedules_name_their_timezone():
 
 # --- the scheduler: the daemon runs what the schedules owe ----------------------
 
+
+def test_target_declared():
+    """MIS-0002-R29 (schedule_MUST_declare_target): each schedule names its target, an
+    isolated session or the live session of a named agent. A schedule without one, or with
+    an empty one, is refused when the declaration is read."""
+    from pydantic import ValidationError
+    from macf.pd.interface import CommandRun, Schedule
+    base = dict(name="check", cron="*/5 * * * *", missed_run=policy("skip"), timeout_s=30.0,
+                run=CommandRun(command=["/usr/bin/true"], wake_when="exit_code"))
+    with pytest.raises(ValidationError, match="target"):
+        Schedule(**base)
+    with pytest.raises(ValidationError, match="target"):
+        Schedule(**base, target="")
+    assert Schedule(**base, target="isolated").target == "isolated"
+    assert Schedule(**base, target="Tester@abc123").target == "Tester@abc123"
+
 import json  # noqa: E402
 import os  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -690,6 +706,23 @@ def test_the_client_is_found_on_the_session_units_path(tmp_path, monkeypatch):
                          work_dir=tmp_path / "runs", append=bare.append, events=bare.read, now=lambda: now[0])
     plain.boot()
     assert "the daemon's PATH (/usr/bin:/bin)" in bare.of(sc.EVENT_NOT_RUN)[0]["reason"]
+
+def test_a_deferred_missed_run_is_recorded_once(tmp_path):
+    """A missed run its policy puts off to a window is recorded once, with when it will run, so
+    the readout can tell it waits as declared (review of #711)."""
+    log, now = Log(), [at("2026-10-14 08:00")]
+    window = Schedule(name="check", cron="0 9 * * *", target="isolated", timeout_s=30,
+                      missed_run=policy("run_once_in_window", ("22:00", "23:00")),
+                      run=CommandRun(command=["/usr/bin/true"], wake_when="exit_code"))
+    log.append(sc.EVENT_STARTED, {"agent": CARD, "schedule": "check", "scheduled_for": "2026-10-13T09:00:00+00:00"})
+    log.append(sc.EVENT_DONE, {"agent": CARD, "schedule": "check", "scheduled_for": "2026-10-13T09:00:00+00:00"})
+    now[0] = at("2026-10-14 10:30")                             # booted after the 09:00 firing
+    s = make_scheduler(tmp_path, [window], log, now)
+    for _ in range(3):
+        s.tick()
+    deferred = log.of(sc.EVENT_DEFERRED)
+    assert len(deferred) == 1 and deferred[0]["run_at"] == "2026-10-14T22:00:00+00:00"
+    assert not log.of(sc.EVENT_STARTED)[1:]
 
 
 @pytest.mark.parametrize("record, check, runs", [
