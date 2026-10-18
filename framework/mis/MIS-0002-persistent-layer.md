@@ -154,7 +154,7 @@ stateDiagram-v2
 - **R16** [MUST NOT · judgment: the head maintainer, at review of each landing pull request] The persistent layer MUST NOT keep a store of liveness, runs owed or runs done apart from the agent's event log. (layer_MUST-NOT_keep_second_ledger)
 - **R17** [MUST · decidable: macf/tests/test_pd_readout.py::test_health_is_runs] The readout MUST derive health from runs owed and runs done when it is read. (readout_MUST_derive_health_from_runs)
 - **R18** [MUST · decidable: macf/tests/test_pd_readout.py::test_overdue_is_unhealthy] If a unit is alive and a run it owes is overdue, then the readout MUST report the unit unhealthy. (overdue_run_MUST_read_unhealthy)
-- **R19** [MUST · decidable: macf/tests/test_pd_readout.py::test_auth_failure_is_failed (planned)] When a harness adapter reads an authentication failure, the primal daemon MUST set the session's state to failed. (auth_failure_MUST_read_failed)
+- **R19** [MUST · decidable: macf/tests/test_pd_readout.py::test_auth_failure_is_failed] When a harness adapter reads an authentication failure, the primal daemon MUST set the session's state to failed. (auth_failure_MUST_read_failed)
 
 ### 6.4 Unit states
 
@@ -195,7 +195,7 @@ stateDiagram-v2
 - **R44** [MUST NOT · judgment: the head maintainer, at review of each harness adapter] Where a harness offers a session socket or an API, its harness adapter MUST NOT wake the session by keystrokes. (adapter_MUST-NOT_type_given_api)
 - **R45** [MUST · decidable: macf/tests/test_pd_wake.py::test_a_busy_stretch_is_said_once_and_nothing_is_typed] If a wake uses keystrokes, then the sender MUST type only into an empty input box of an idle session. (keystroke_wake_MUST_need_empty_idle_box)
 - **R77** [MUST · decidable: macf/tests/test_pd_wake.py::test_a_wake_carries_fixed_words_and_message_ids_oldest_first] Each wake MUST carry only the persistent layer's own fixed words and message identifiers, never text that a sender chose. (wake_MUST_carry_fixed_words_only)
-- **R104** [MUST · decidable: macf/tests/test_pd_harness.py::test_channel_first (planned)] Where a harness offers a harness channel, its harness adapter MUST deliver each wake and each notice through that channel. (adapter_MUST_deliver_through_channel)
+- **R104** [MUST · decidable: macf/tests/test_pd_harness.py::test_channel_first] Where a harness offers a harness channel, its harness adapter MUST deliver each wake and each notice through that channel. (adapter_MUST_deliver_through_channel)
 - **R105** [MUST · decidable: macf/tests/test_pd_wake.py::test_wake_through_notifier] The harness adapter MUST wake a session by keystrokes only when its harness offers no harness channel, or the session's channel dropped or never connected. (keystroke_wake_MUST_be_fallback_only)
 - **R106** [MUST NOT · decidable: macf/tests/test_mode_activity.py::test_wake_is_not_operator_activity] The presence state and the operational modes MUST NOT count a wake as the operator's activity. (wake_MUST-NOT_count_as_operator_activity)
 - **R107** [MUST · decidable: macf/tests/test_mode_activity.py::test_channels_told_apart_by_name (planned)] Each producer of the operator's activity MUST count a channel event as the operator's only when its exact channel name is one the declaration lists as the operator's. (hooks_MUST_tell_channels_apart_by_name)
@@ -296,7 +296,7 @@ stateDiagram-v2
 - **R121** [MUST · decidable: macf/tests/test_mode_activity.py::test_source_from_origin_or_opening_tag] Each producer of the operator's activity MUST read a channel event's source from its origin record, or, only where none exists, from the tag that opens its text. (hooks_MUST_read_source_from_origin_or_opening_tag)
 - **R122** [MUST · decidable: macf/tests/test_pd_notice.py::test_peer_lineage_checked_by_the_daemon] The primal daemon MUST accept a MacEff channel connection only from a process that descends from its agent's live session, matched by process id and start time. (pd_MUST_check_channel_peer_lineage)
 - **R123** [MUST · decidable: macf/tests/test_pd_channel.py::test_channel_checks_its_pd] The MacEff channel MUST connect only to a peer that is its agent's own primal daemon, matched by process id and start time. (channel_MUST_check_its_peer_is_its_pd)
-- **R124** [MUST · decidable: macf/tests/test_pd_declaration.py::test_allowlist_lists_every_channel (planned)] Where a deployment sets an organization allowlist, its declaration MUST list every channel the list admits, the operator's channels included. (allowlist_declaration_MUST_list_every_channel)
+- **R124** [MUST · decidable: macf/tests/test_pd_declaration.py::test_allowlist_lists_every_channel] Where a deployment sets an organization allowlist, its declaration MUST list every channel the list admits, the operator's channels included. (allowlist_declaration_MUST_list_every_channel)
 - **R125** [MUST · judgment: the head maintainer, at review of the Claude Code harness adapter] The MacEff channel MUST ship as a channel plugin from a marketplace. (channel_MUST_ship_as_plugin)
 
 ## 7 Rationale and Rejected Alternatives
@@ -462,7 +462,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R53 | decidable | macf/tests/test_pd_declaration.py::test_mail_units | planned |
 | R54 | decidable | macf/tests/test_pd_declaration.py::test_periodic_clock_is_schedule | planned |
 | R55 | decidable | macf/tests/test_pd_notice.py::test_unread_mail_notice | passing |
-| R56 | judgment | the head maintainer, at review of the mail landing | pending |
+| R56 | judgment | the head maintainer, at review of the mail landing | recorded: not met, by the head maintainer on 2026-10-18; it waits on MIS-0004 (#520), and the departure is recorded below |
 | R57 | decidable | macf/tests/test_container_outer_tier.py::test_primal_daemons_start_after_access_and_before_optional_units | passing |
 | R58 | decidable | macf/tests/test_container_start_order.py::test_optional_units_independent | passing |
 | R59 | decidable | macf/tests/test_pd_interface.py::test_a_unit_missing_a_required_field_is_refused | passing |
@@ -510,7 +510,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R101 | decidable | macf/tests/test_pd_observe.py::test_nothing_attachable_said | passing |
 | R102 | decidable | macf/tests/test_pd_observe.py::test_reachable_state | passing |
 | R103 | decidable | macf/tests/test_pd_declaration.py::test_shared_budget_operator_only | passing |
-| R104 | decidable | macf/tests/test_pd_harness.py::test_channel_first | planned |
+| R104 | decidable | macf/tests/test_pd_harness.py::test_channel_first | passing |
 | R105 | decidable | macf/tests/test_pd_wake.py::test_wake_through_notifier | passing |
 | R106 | decidable | macf/tests/test_mode_activity.py::test_wake_is_not_operator_activity | passing |
 | R107 | decidable | macf/tests/test_mode_activity.py::test_channels_told_apart_by_name | planned |
@@ -538,6 +538,8 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R129 | decidable | macf/tests/test_pd_render.py::test_socket_path_length | passing |
 
 The test for **R106** is the head maintainer's (P25): set USER_REMOTE, type a wake through the adapter, and assert that USER_REMOTE and USER_IDLE are unchanged. Its channel form sends a notice through the MacEff channel and asserts the same. Both forms run at idle and again while a turn is running, because the queued path is the one main gets wrong (P30). The tests for R120 and R121 likewise include an event absorbed into a running turn (P31), and the test for R122 a channel whose session has ended.
+
+**R56 (mail_SHOULD_report_state_to_sender) is set aside, and recorded here** (MIS-0001-R36 (departure_MUST_be_recorded)). The head maintainer judged it on 2026-10-18 by reading the broker on main. A sender learns that each message was stored, from the delivery outcome it gets back at submit. Nothing tells it when the message was notified or read. Those two states change the mail protocol, which MIS-0004 (#520) takes up, so R56 waits on it: https://github.com/cversek/MacEff/issues/552#issuecomment-6255926861. The Secretary ruled on the same issue that a SHOULD recorded as not met, with its reason, doesn't hold back Final, because Final needs each judgment recorded, not met (MIS-0001-R37 (final_MUST_record_judgments)): https://github.com/cversek/MacEff/issues/552#issuecomment-6255349982.
 
 **Cold-reader trial**: not yet held.
 
@@ -665,6 +667,11 @@ Objections recorded:
 - 2026-10-18: R33 (run_MUST-NOT_change_schedules) moves to passing. It's met in containers by the root-rendered declaration, and on hosts by detection: a schedule changed since `pd install` isn't run. The host half is detection, not prevention, since a run could forge the install record; `persistent_layer` 10.4 states the limit. What decides each half: `test_run_cannot_schedule` (the row's test) within one daemon's life and across a restart on a host; `test_pd_schedule.py::test_a_host_runs_only_the_schedules_pd_install_recorded` for the host half; and the outer tier's rendered-declaration test from #702 for the container half. Editorial (mis 8.1).
 - 2026-10-18: R58 (optional_unit_MUST-NOT_delay_others) moves to passing, with the code and the test it names. The search service no longer waits on the policy index, and the index builds in a thread of its own, so neither optional unit delays the other. The row named `test_pd_render.py::test_optional_units_independent`, which doesn't exist under that name, and now names the test that decides it, in `test_container_start_order.py`, by sweep 3's rule. Editorial (mis 8.1).
 - 2026-10-18: R47 (pd_MUST_report_carried_changed_lost) gets its code and the test it names, and stays planned: the notice is delivered where `pd_carried` is routed to the agent, and a declaration that doesn't route it is refused at load once the deployed declarations do. Editorial (mis 8.1).
+- 2026-10-18: conformance sweep 5, editorial (mis 8.1), by the Secretary. Each row's named test was run on its own on main at 8fa84a67, and passes.
+  - R104 (adapter_MUST_deliver_through_channel) moves to passing. Sweep 3 held it because no single test checked both its wakes and its notices. The test that #710 added does: a mail and a daemon notice each go out on the channel, and nothing is typed.
+  - R56 (mail_SHOULD_report_state_to_sender) moves to recorded: not met, by the head maintainer on 2026-10-18, waiting on MIS-0004 (#520). The departure from this SHOULD is recorded below the Conformance table, as the Secretary ruled on #552.
+  - R124 (allowlist_declaration_MUST_list_every_channel), R19 (auth_failure_MUST_read_failed) and R99 (onlooker_MUST-NOT_get_operator_surface) moved to passing in #717, #718 and #719 with no line here. This entry records them (MIS-0001-R34 (accepted_MIS_MUST_change_editorially)). The requirement lines of R19 and R124 drop their "(planned)" marker, as sweep 4 did for the passing rows.
+  The persistent_layer policy's section 13 drops R19, R124 and R47's notice, which have landed, and keeps what R47 still lacks, the refusal at load. Section 12.4 no longer says that compaction on request arrives with the session unit, which landed without it. No requirement changed.
 
 ## Wiki-Links
 
