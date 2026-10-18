@@ -35,7 +35,9 @@ ALWAYS_ACTIVE = float("-inf")
 
 
 def pickup_box(agent_home: Path) -> Path:
-    return Path(agent_home) / "amail" / "pickup"
+    """The box the broker delivers this agent's mail into (``macf.amail.pickup``)."""
+    from macf.amail.pickup import pickup_box as _box
+    return _box(agent_home)
 
 
 def unread_arrivals(box: Path) -> Optional[Dict[str, float]]:

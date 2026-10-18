@@ -2579,21 +2579,93 @@ def supervise_primal_daemon(username: str, home: Path, *, run=subprocess.Popen,
         sleep(delay)
 
 
+def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] = None,
+                           chown=os.chown) -> List[str]:
+    """Write each agent's primal daemon declaration from agents.yaml, owned by root, mode 0644, in
+    a directory only root can write, at every start. A run executes as the agent, so a declaration
+    the agent could write is one a run could change before a daemon restart; this one it can't
+    (MIS-0002-R33 (run_MUST-NOT_change_schedules)). An agent that declares none has any earlier
+    rendering removed. Returns the users rendered for."""
+    from macf.pd import names as pd_names
+    from macf.pd.interface import Declaration
+    root = Path(root or pd_names.RENDERED_DECLARATIONS)
+    root.mkdir(mode=0o755, parents=True, exist_ok=True)
+    chown(root, 0, 0)
+    os.chmod(root, 0o755)
+    rendered = []
+    for agent_spec in agents_config.agents.values():
+        target_dir = root / agent_spec.username
+        target = target_dir / 'declaration.json'
+        if agent_spec.primal_daemon is None:
+            if target.exists():
+                target.unlink()
+                log(f"primal daemon of {agent_spec.username}: agents.yaml declares none; "
+                    f"its earlier rendering was removed")
+            continue
+        home = HOME_ROOT / agent_spec.username
+        tmp = target_dir / '.declaration.json.tmp'
+        try:
+            try:
+                card = pd_names.agent_card(home)
+            except pd_names.IdentityError as e:
+                raise OSError(f"its calling card can't be read ({e})") from e
+            declaration = Declaration(version=1, agent=card, **agent_spec.primal_daemon)
+            target_dir.mkdir(mode=0o755, exist_ok=True)
+            chown(target_dir, 0, 0)
+            os.chmod(target_dir, 0o755)
+            tmp.write_text(declaration.model_dump_json(indent=2) + '\n')
+            chown(tmp, 0, 0)
+            os.chmod(tmp, 0o644)
+            tmp.replace(target)
+        except OSError as e:
+            # One agent's failure, its identity or the write, costs that agent its daemon, never
+            # the others' (R58). Its old rendering goes, so a stale declaration isn't served.
+            for leftover in (tmp, target):
+                try:
+                    leftover.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            log(f"primal daemon of {agent_spec.username}: not rendered; {e}")
+            continue
+        if (home / PD_DECLARATION).exists():
+            log(f"primal daemon of {agent_spec.username}: {home / PD_DECLARATION} is not read; "
+                f"the declaration agents.yaml renders to {target} is")
+        rendered.append(agent_spec.username)
+    # An agent removed from agents.yaml leaves no rendering behind for a reader to find.
+    declared = {a.username for a in agents_config.agents.values()}
+    for d in root.iterdir():
+        if d.is_dir() and not d.is_symlink() and d.name not in declared:
+            shutil.rmtree(d)
+            log(f"primal daemon declarations: removed {d}, which no agent in agents.yaml declares")
+    return rendered
+
+
 def start_primal_daemons(agents_config: AgentsConfig) -> List[str]:
-    """Start the outer tier for every agent whose home declares a primal daemon, each in a
-    thread of its own. Returns the users started for."""
+    """Start the outer tier for every agent whose declaration the deployment rendered, each in
+    a thread of its own. A declaration only in the agent's home starts nothing here: the agent
+    could rewrite it (MIS-0002-R33). Returns the users started for."""
     import threading
-    started = []
+    from macf.pd import names as pd_names
+    started, home_only = [], []
     for agent_spec in agents_config.agents.values():
         home = HOME_ROOT / agent_spec.username
-        if not (home / PD_DECLARATION).exists():
+        if not pd_names.rendered_declaration_path(home).exists():
+            if (home / PD_DECLARATION).exists():
+                log(f"primal daemon of {agent_spec.username}: not started; its declaration is in its "
+                    f"home, where a run could rewrite it. Declare it as primal_daemon in agents.yaml")
+                home_only.append(agent_spec.username)
             continue
         threading.Thread(target=supervise_primal_daemon, args=(agent_spec.username, home),
                          name=f"pd-{agent_spec.username}", daemon=True).start()
         started.append(agent_spec.username)
         log(f"primal daemon of {agent_spec.username}: started under the container outer tier")
     if not started:
-        log("primal daemons: no agent declares one (~/.maceff/pd/declaration.json); none started")
+        log("primal daemons: no agent declares one (primal_daemon in agents.yaml); none started")
+    if home_only:
+        # Their units and schedules have no daemon to run them (MIS-0002-R11): a failed step, so the
+        # start log's summary names it, not a line that scrolls past.
+        raise RuntimeError(f"declared only in the agent's home, so no daemon runs them: {', '.join(home_only)}; "
+                           "declare them as primal_daemon in agents.yaml")
     return started
 
 
@@ -2803,8 +2875,12 @@ def main() -> int:
             ("amail", lambda: start_amail_services(agents_config), ("secrets",)),
             # Each declaring agent's primal daemon, under the container outer tier, before
             # any optional unit (R57). A no-op for an agent with no declaration.
-            ("primal daemons", lambda: start_primal_daemons(agents_config),
+            # Each agent's declaration from agents.yaml, owned by root, before any daemon reads
+            # it (R33).
+            ("primal daemon declarations", lambda: render_pd_declarations(agents_config),
              ("MACF tools", "agent initialization")),
+            ("primal daemons", lambda: start_primal_daemons(agents_config),
+             ("MACF tools", "agent initialization", "primal daemon declarations")),
             # Optional units, last, each under its own timeout (R58).
             ("policy index", lambda: build_policy_index(agents_config), ("MACF tools",)),
             ("search service", lambda: start_search_service_daemon(agents_config), ("policy index",)),

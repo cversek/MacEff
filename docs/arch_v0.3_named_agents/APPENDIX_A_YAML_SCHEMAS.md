@@ -111,6 +111,17 @@ agents:
       public: [roadmaps, reports, observations]
     hooks:
       enabled: [session_start, stop, user_prompt_submit]
+    # Optional: this agent's primal daemon, the body of a declaration without agent or version.
+    # Start-up renders it owned by root to /etc/maceff/pd/pa_manny/declaration.json, which the
+    # daemon reads; the agent can't change it (persistent_layer 10.1, MIS-0002-R33).
+    primal_daemon:
+      units:
+        - name: amail-broker
+          command: ["/opt/maceff-venv/bin/python", "-m", "macf.amail.daemons.broker"]
+          account: pa_manny
+          restart: always
+          liveness_interval_s: 60
+          memory_limit_mb: 256
 
   claudethebuilder:
     username: pa_claudethebuilder

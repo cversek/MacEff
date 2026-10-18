@@ -54,6 +54,9 @@ An MIS records a decision; the policy it lands in binds. There is never a second
 
 **8 Changing an Accepted MIS, and Departures**
 - Can an accepted MIS be edited?
+- What is a revision, and who asks for one?
+- What is an amendment spec, and who signs it off?
+- How does a reader find what a changed requirement said before?
 - What happens when an agent cannot follow a SHOULD?
 
 **9 Knowledge Web Participation**
@@ -73,13 +76,13 @@ This is the shape of Python's PEPs: a proposal becomes a historical record once 
 
 ### 1.2 When an MIS is required
 
-A pull request MUST cite an accepted MIS when it introduces a new policy or makes a major architectural change [MIS-0003-R01 (PR_MUST_cite_MIS_for_major_change)]:
+A pull request MUST cite an accepted MIS when it introduces a new policy or makes a major architectural change [MIS-0001-R01 (PR_MUST_cite_MIS_for_major_change)]:
 - **a new policy:** a policy document added under `framework/policies`. A document split out of, or renamed from, an existing policy is a change to that policy, not a new one;
 - **a major architectural change:** a change that adds a subsystem or changes architecture across components.
 
 An author MAY write an MIS for any other change [MIS-0001-R02 (author_MAY_write_MIS_for_any_change)]. A rule added to an existing policy, or a change to what an agent is allowed to do, needs no MIS unless it is part of one of the two changes above: it ships with its policy text in one reviewed pull request, as `core_principles` requires. Bug fixes and small features stay an issue and a pull request. A pull request that needs an MIS may be opened as a draft while the MIS is decided, but it does not merge until the MIS is Accepted.
 
-The threshold was narrowed by MIS-0003 on 2026-10-04. MIS-0001 had also required an MIS for any change to what an agent may do, counting every MUST added to policy text; the operator found that "going too far if every other policy tweak kicks the MIS process off".
+The threshold was narrowed by MIS-0003 on 2026-10-04. MIS-0001 had also required an MIS for any change to what an agent may do, counting every MUST added to policy text; the operator found that "going too far if every other policy tweak kicks the MIS process off". Since MIS-0005, the narrowed rule stands in MIS-0001's own text, and MIS-0003 keeps the reasoning.
 
 **The tests for a major architectural change:**
 - **A subsystem:** a new long-lived process, a new store of agent state, a new command group, or a new channel to or from an agent.
@@ -94,10 +97,13 @@ The threshold was narrowed by MIS-0003 on 2026-10-04. MIS-0001 had also required
 | **Standards** | a subsystem or a capability |
 | **Process** | how MacEff decides or works |
 | **Informational** | guidance that binds nothing |
+| **Amendment** | an amendment spec: a formal change to an accepted MIS, made in that MIS (§8.1) |
 
-The Type field MUST be one of these three [MIS-0001-R08 (type_MUST_be_listed)].
+The Type field MUST be one of these four [MIS-0001-R08 (type_MUST_be_listed)].
 
 **An Informational MIS ends at Accepted.** It binds nothing, so it lands nothing: its Lands-in field is `none (Informational)`, and Final, landing and the cold-reader trial (§7) do not apply to it. If guidance later needs to bind, that is a new Standards or Process MIS.
+
+**An amendment spec ends at Accepted too.** It lands nothing of its own: its change is made in the MIS it amends, in the same pull request. So no deliberation, final comment period, landing or cold-reader trial applies to it. Its form and path are in §2.2, §2.3 and §8.1.
 
 ---
 
@@ -116,8 +122,12 @@ The Type field MUST be one of these three [MIS-0001-R08 (type_MUST_be_listed)].
 ### 2.2 Header and sections
 
 `MIS-0000-template.md` is the template, and itself a valid MIS. Copy it.
-- Each MIS MUST carry its header fields, in their order [MIS-0001-R06 (MIS_MUST_carry_header_fields)]: Number, Type, Status, Authors, Secretary, Deliberation, Created, Updates, Supersedes, Lands-in, Resolution.
-- Each MIS MUST contain its numbered sections, in their order [MIS-0001-R07 (MIS_MUST_contain_sections)]: Summary, Motivation, Goals and Non-Goals, Guide-Level Explanation, Terms, Specification, Rationale and Rejected Alternatives, Prior Art, Compatibility and Deployment, Security and Safety, Conformance, Landing Plan, Open Questions, Deliberation Record, Revision History; then Wiki-Links.
+- Each MIS other than an amendment spec MUST carry its header fields, in their order [MIS-0001-R06 (MIS_MUST_carry_header_fields)]: Number, Type, Status, Authors, Secretary, Deliberation, Created, Updates, Supersedes, Lands-in, Resolution.
+- Each MIS other than an amendment spec MUST contain its numbered sections, in their order [MIS-0001-R07 (MIS_MUST_contain_sections)]: Summary, Motivation, Goals and Non-Goals, Guide-Level Explanation, Terms, Specification, Rationale and Rejected Alternatives, Prior Art, Compatibility and Deployment, Security and Safety, Conformance, Landing Plan, Open Questions, Deliberation Record, Revision History; then Wiki-Links.
+
+**An amendment spec is short** [MIS-0001-R56 (amendment_spec_MUST_give_change_reason_signoff)]. MIS-0005 is the first one, and a model to copy.
+- **Its header:** Number, Type (`Amendment`), Status, Authors, Secretary, Created, Amends, Resolution. Amends names the MIS it changes and the requirement IDs, with their slugs.
+- **Its sections:** 1 Amendment, giving the old and new text of each requirement it changes; 2 Reason; 3 Sign-off, recording each other maintainer's sign-off, any change they asked for and its answer, and the repo owner's decision. Then Wiki-Links.
 
 Write "None." in a section that has nothing to say, so that empty is not mistaken for forgotten.
 
@@ -169,6 +179,7 @@ A cold reader can tell from this one word whether the MIS binds anything yet: on
 | Accepted, not yet landed | Deferred | operator | the operator merges a Resolution saying why it will not land now |
 | Accepted | Final | Secretary, by a pull request another party reviews | a Standards or Process MIS, landed and proven (§7.2) |
 | Accepted or Final | Superseded | Secretary | a later MIS replaces it in full |
+| Draft (an amendment spec) | Accepted or Rejected | the repo owner's merge | each other maintainer of the amended MIS has signed off (§8.1) |
 
 The operator's decisions in this table, to convene, to skip a deliberation or to designate a Secretary, are made on the MIS's pull request or its deliberation issue, where the record stays.
 
@@ -322,18 +333,31 @@ A **cold reader** is an agent with no memory of the MIS's design or deliberation
 
 ## 8 Changing an Accepted MIS, and Departures
 
-### 8.1 An accepted MIS is a record
+### 8.1 An accepted MIS changes in place
 
-- After an MIS is Accepted, each change to it MUST be editorial and recorded in its Revision History [MIS-0001-R34 (accepted_MIS_MUST_change_editorially)].
-- A substantive change to an accepted MIS MUST be a new MIS that names the old one in Updates or Supersedes [MIS-0001-R35 (substantive_change_MUST_be_new_MIS)]. The old MIS then becomes Superseded, if it is fully replaced.
+The requirements in force stand in one document, the MIS itself. Version control keeps every earlier text, and a note at each changed requirement links it. So anyone can see that a requirement changed, and find what it said before.
 
-Rewriting an accepted MIS would falsify the record of what was decided.
+- After an MIS is Accepted, each change to it that is neither a revision nor an amendment MUST be editorial and recorded in its Revision History [MIS-0001-R34 (accepted_MIS_MUST_change_editorially)].
+- A substantive change to an accepted MIS MUST be a revision or an amendment, made in the MIS itself [MIS-0001-R35 (substantive_change_MUST_be_made_in_place)].
+
+**A revision, the simple path.** The repo owner may ask the Secretary of an MIS for a revision at any point [MIS-0001-R52 (repo_owner_MAY_request_revision)]. The Secretary, as the repo owner's delegate, makes it by a pull request that edits the MIS in place, and the repo owner merges it [MIS-0001-R53 (revision_MUST_edit_MIS_in_place)]. A revision takes no MIS number and needs no maintainer's review. A changed requirement's Conformance row, and the policy text that cites it, change in the same pull request.
+
+**An amendment, the formal path.** Where others relied heavily on the text a change would replace, the repo owner may call for an amendment instead [MIS-0001-R55 (repo_owner_MAY_call_for_amendment)].
+- An amendment spec gives the old and new text of each requirement it changes, the reason, and the sign-off record [MIS-0001-R56 (amendment_spec_MUST_give_change_reason_signoff)]. It is a short MIS of Type Amendment (§2.2), and the amended MIS is edited in place in the same pull request.
+- Before it merges, each maintainer of the amended MIS, other than the one who drafted it, signs off on it [MIS-0001-R57 (amendment_MUST_have_maintainer_signoff)]. Signing off makes them aware of the history, so they can update what they understood.
+- They may ask for changes. The repo owner has the final word, may veto any change they ask for [MIS-0001-R58 (repo_owner_MAY_veto_requested_change)], and merges the amendment.
+
+**The note at a changed requirement** sits on the line under it, in italics. It says how the requirement changed, links the previous text, and names any previous slug [MIS-0001-R54 (changed_req_MUST_link_previous_text)]:
+- after a revision: `*Revised 2026-10-18 at the repo owner's request (<link>); previous text: MacEff g_<hash>; previous slug (<old_slug>).*` Read the old text with `git show <hash>:framework/mis/<file>`.
+- after an amendment: `*Amended 2026-10-18 by MIS-NNNN, which holds the previous text; previous slug (<old_slug>).*`
+
+Leave out the previous slug when the slug did not change. `mis check` accepts a citation by any previous slug a note names, so citations made before a change keep resolving to the requirement.
 
 - **Editorial:** a change that alters no requirement's meaning, keyword, check, scope, ID or slug. For example, typos, broken links, clearer wording with the same meaning, or a Conformance state moving from `planned` to `passing`.
 - **Substantive:** anything else.
-- **Who judges:** the Secretary judges which a change is; when anyone disputes it, the operator decides.
+- **Who judges:** the Secretary judges which a change is; when anyone disputes it, the repo owner decides.
 - **How an editorial change goes:** by pull request, reviewed and merged like any other. It needs no new final comment period. When it moves a Conformance state toward Final, the Final rules (§7.2) apply to that pull request.
-- **A partly replaced MIS:** an MIS that a later MIS only updates stays in force, except where the later one changes it. Only full replacement makes it Superseded. The later MIS names the replaced requirements in its Updates field (`MIS-0007: R03 (cache_MUST_expire_daily), R05 (cache_SHOULD_log_misses)`). The older MIS gets an editorial line in its Revision History naming the later MIS and those IDs, so that a reader of the older MIS alone can tell which of its requirements no longer hold. This applies equally to an MIS accepted but not yet landed.
+- **A later MIS replaces an accepted one only in full,** which makes the old one Superseded. A partial change is a revision or an amendment, never a separate MIS. MIS-0003 updated MIS-0001 the earlier way, by a separate MIS; MIS-0005 brought its change into MIS-0001's text.
 - **An accepted MIS that will not land:** the operator sets it Deferred, with a Resolution that says why (§2.3). It cannot be Withdrawn, because the decision is the operator's, not the author's.
 
 ### 8.2 Departing from a SHOULD

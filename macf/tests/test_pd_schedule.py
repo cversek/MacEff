@@ -484,3 +484,48 @@ def test_an_abandoned_run_whose_leader_exited_is_stopped(tmp_path):
         assert len(done) == 1 and "its process group was stopped" in done[0]["outcome"]
     finally:
         _reap(kid)
+
+
+# --- R25 and R33 -----------------------------------------------------------------
+
+@pytest.mark.parametrize("kind", ["skip", "run_once", "run_once_in_window", "report_only"])
+def test_policy_values(kind):
+    """MIS-0002-R25 (missed-run_policy_MUST_be_listed): the four listed policies are the
+    only ones; any other value is refused, never mapped to the nearest."""
+    window = Window(start="01:00", end="03:00") if kind == "run_once_in_window" else None
+    assert MissedRunPolicy(kind=kind, window=window).kind == kind
+    import typing
+    kind_field = MissedRunPolicy.model_fields["kind"].annotation
+    assert set(typing.get_args(kind_field)) == {"skip", "run_once", "run_once_in_window", "report_only"}
+    for other in ("catch_up_all", "run_all", "", "Skip", "skip "):
+        with pytest.raises(ValueError):
+            MissedRunPolicy(kind=other)
+
+
+def test_run_cannot_schedule(tmp_path):
+    """MIS-0002-R33 (run_MUST-NOT_change_schedules), within one daemon's life: the scheduler
+    holds the declaration it was given and reads no file again, so a run that rewrites the
+    declaration on disk, adding a schedule and removing its own, changes nothing the
+    scheduler runs. (Across a daemon restart the new daemon reads whatever the file says;
+    that path is the declaration's owner's to close, not the scheduler's.)"""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    from macf.pd.names import declaration_path
+    on_disk = declaration_path(tmp_path)            # where a daemon over this home reads it
+    on_disk.parent.mkdir(parents=True, exist_ok=True)
+    rewritten = Declaration(version=1, agent=CARD, timezone="UTC",
+                            schedules=[command_schedule(["/usr/bin/true"], name="planted", cron="* * * * *")])
+    original = command_schedule([sys.executable, "-c",
+                                 f"open({str(on_disk)!r}, 'w').write({rewritten.model_dump_json()!r})"])
+    s = make_scheduler(tmp_path, [original], log, now)
+    on_disk.write_text(s.declaration.model_dump_json())
+    now[0] = at("2026-10-14 12:05")
+    s.tick()
+    finish(s)
+    assert "planted" in on_disk.read_text()                     # the run did rewrite the file
+    assert [x.name for x in s.declaration.schedules] == ["check"]
+    for minute in ("12:06", "12:07", "12:08", "12:09", "12:10"):
+        now[0] = at(f"2026-10-14 {minute}")
+        s.tick()
+        finish(s)
+    started = [d["schedule"] for d in log.of(sc.EVENT_STARTED)]
+    assert started == ["check", "check"]                        # 12:05 and 12:10, and nothing planted
