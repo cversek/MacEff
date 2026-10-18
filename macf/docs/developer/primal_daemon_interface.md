@@ -67,6 +67,7 @@ JSON, validated closed: an unknown key is refused, because a key the daemon igno
 
 **The agent-level fields:**
 - `operator_channels`: the channel names whose events count as the operator's activity; every other name counts as not the operator [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)]. Absent means not yet declared, and an empty list declares that no channel is the operator's, so a declaration written for its units never decides by default whether the operator's phone counts.
+- `allowlisted_channels`: where the deployment sets an organization allowlist, every channel plugin it admits, the operator's included, each as `{"plugin", "marketplace"}` [MIS-0002-R124 (allowlist_declaration_MUST_list_every_channel)]. `pd install` refuses while the list and the declaration differ, and the daemon records `pd_allowlist_mismatch` at start if they have come apart since. Absent means the deployment sets no allowlist.
 - `notice_routes`: per notice source, `agent`, `operator`, `both` or `held_until_present` [MIS-0002-R42 (notice_source_MUST_be_routed)].
 - `quiet_windows`: when the layer neither restarts nor compacts, read in `timezone` [MIS-0002-R50 (layer_MUST-NOT_act_in_quiet_window)].
 - `timezone`: an IANA name, required once any schedule or quiet window is declared. Without it, a host would read a time of day in its local time and a container in UTC. A name that isn't a zone is refused with the reason, including one that names a directory of zones, such as `America`.

@@ -299,3 +299,98 @@ def test_schedules_hosted(tmp_path):
                   primal_daemon={"timezone": "UTC", "schedules": [schedule]})
     AgentSpec(username="pa_plain", uid=21100, flavor="vanilla")          # vanilla, no daemon: fine
 
+
+
+# ---- the organization allowlist (MIS-0002-R124) -----------------------------------------------
+
+def _managed(tmp_path, entries):
+    f = tmp_path / "managed-settings.json"
+    f.write_text(json.dumps({"channelsEnabled": True, "allowedChannelPlugins": entries}))
+    return f
+
+
+TELEGRAM = {"plugin": "telegram", "marketplace": "claude-plugins-official"}
+MACEFF = {"plugin": "maceff-channel", "marketplace": "maceff"}
+
+
+def test_allowlist_lists_every_channel(tmp_path):
+    """MIS-0002-R124 (allowlist_declaration_MUST_list_every_channel): where managed settings set
+    an allowlist, every channel it admits is in the declaration, and every channel the
+    declaration lists is admitted. Each side's difference is named; agreement says nothing."""
+    from macf.pd import allowlist
+
+    def decl(channels):
+        body = {"version": 1, "agent": "Ira@ee9a78"}
+        if channels is not None:
+            body["allowlisted_channels"] = channels
+        return interface.Declaration.model_validate(body)
+
+    admitted = allowlist.managed_allowlist([_managed(tmp_path, [TELEGRAM, "maceff-channel@maceff"])])
+    assert admitted == {("telegram", "claude-plugins-official"), ("maceff-channel", "maceff")}
+
+    assert allowlist.findings(decl([TELEGRAM, MACEFF]), admitted) == []
+    assert allowlist.findings(decl([MACEFF, TELEGRAM]), admitted) == []         # order is not a difference
+
+    (none,) = allowlist.findings(decl(None), admitted)
+    assert "lists none" in none and "telegram@claude-plugins-official" in none
+
+    (left_out,) = allowlist.findings(decl([MACEFF]), admitted)                # the operator's channel
+    assert "telegram@claude-plugins-official" in left_out and "leaves out" in left_out
+
+    other = {"plugin": "slack", "marketplace": "claude-plugins-official"}
+    out = allowlist.findings(decl([TELEGRAM, MACEFF, other]), admitted)
+    assert len(out) == 1 and "slack@claude-plugins-official" in out[0] and "won't load" in out[0]
+
+    # No managed settings, or managed settings that set no allowlist: nothing to compare.
+    assert allowlist.managed_allowlist([tmp_path / "absent.json"]) is None
+    plain = tmp_path / "plain.json"
+    plain.write_text(json.dumps({"channelsEnabled": True}))
+    assert allowlist.managed_allowlist([plain]) is None
+    assert allowlist.findings(decl(None), None) == []
+    (empty,) = allowlist.findings(decl(None), set())                # a list that admits nothing
+    assert "admits no channel plugin" in empty and "()" not in empty
+    assert allowlist.findings(decl([]), set()) == []                 # declared as meant
+
+    # A list that can't be read is not the same as no list.
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json")
+    with pytest.raises(ValueError):
+        allowlist.managed_allowlist([broken])
+
+
+def test_an_allowlisted_channel_names_plugin_and_marketplace():
+    """The client admits a channel only when the plugin and its marketplace both match, so a
+    declared entry with either missing would compare as nothing; it is refused at load."""
+    body = {"version": 1, "agent": "Ira@ee9a78"}
+    for bad in ({"plugin": "telegram"}, {"marketplace": "maceff"}, {"plugin": "", "marketplace": "x"},
+                "telegram@claude-plugins-official"):
+        with pytest.raises(ValidationError):
+            interface.Declaration.model_validate({**body, "allowlisted_channels": [bad]})
+
+
+def test_the_daemon_says_at_start_where_the_allowlist_and_declaration_differ(tmp_path, monkeypatch, capsys):
+    """Managed settings can change after ``pd install`` compared them, so the daemon compares
+    again at start: each difference goes to stderr and into one pd_allowlist_mismatch event,
+    and agreement records nothing."""
+    from types import SimpleNamespace
+
+    import macf.agent_events_log as log
+    from macf.pd.daemon import Daemon
+
+    written = []
+    monkeypatch.setattr(log, "append_event", lambda event, data: written.append((event, data)) or True)
+    declaration = interface.Declaration.model_validate(
+        {"version": 1, "agent": "Ira@ee9a78", "allowlisted_channels": [MACEFF]})
+    stub = SimpleNamespace(core=SimpleNamespace(declaration=declaration), card="Ira@ee9a78",
+                           _managed=[_managed(tmp_path, [TELEGRAM, MACEFF])])
+
+    Daemon._compare_allowlist(stub)
+    assert [e for e, _ in written] == [interface.EVENT_ALLOWLIST_MISMATCH]
+    assert "telegram@claude-plugins-official" in written[0][1]["findings"][0]
+    assert "telegram@claude-plugins-official" in capsys.readouterr().err
+
+    written.clear()
+    stub.core.declaration = interface.Declaration.model_validate(
+        {"version": 1, "agent": "Ira@ee9a78", "allowlisted_channels": [TELEGRAM, MACEFF]})
+    Daemon._compare_allowlist(stub)
+    assert written == []
