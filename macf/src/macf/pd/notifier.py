@@ -64,6 +64,22 @@ CHANNEL_GRACE_S = 60.0
 #: The routes whose notices go to the agent's session.
 AGENT_ROUTES = ("agent", "both")
 
+def _say_mail_box(agent_home: Path) -> None:
+    """Say which box mail is watched in, and how it was found, on the error stream. A guessed
+    box, or one that doesn't exist, is said as a warning: watching it would deliver nothing,
+    and nothing else would show that."""
+    from macf.amail.pickup import GUESSED, resolve_pickup_box
+    box, how = resolve_pickup_box(agent_home)
+    if how == GUESSED:
+        print(f"⚠️ MACF: pd: no amail settings or MACEFF_AGENT_NAME name this agent's pickup box; "
+              f"watching {box}, which the broker may not deliver to", file=sys.stderr)
+    elif not box.is_dir():
+        print(f"⚠️ MACF: pd: mail is watched in {box} (from {how}), which doesn't exist yet; "
+              f"no mail is seen until the broker creates it", file=sys.stderr)
+    else:
+        print(f"MACF: pd: mail is watched in {box} (from {how})", file=sys.stderr)
+
+
 #: Each source this notifier can poll, by the name the channel's records use.
 SOURCES: Dict[str, Callable[[Path], StoreSource]] = {
     "amail": lambda home: agent_store_source(home, "amail"),
@@ -110,6 +126,8 @@ class Notifier:
                       f"poller for it; its notices are not delivered", file=sys.stderr)
                 continue
             self.sources.append(make(Path(agent_home)))
+            if name == "amail":
+                _say_mail_box(Path(agent_home))
 
     # ------------------------------------------------------------------ intake
 
