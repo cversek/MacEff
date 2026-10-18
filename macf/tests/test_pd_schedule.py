@@ -629,8 +629,15 @@ def test_prompt_fails_run(tmp_path):
 
 
 def test_an_isolated_prompt_run_routes_its_failure_notice():
-    """R32's notice must reach someone: a declaration with an isolated prompt run and no route
-    for pd_run_failed is refused when it is loaded."""
+    """R32's notice must reach someone: a declaration with an isolated prompt run is refused at
+    load unless it routes pd_run_failed where the notice is delivered, to the agent."""
     from pydantic import ValidationError
     with pytest.raises(ValidationError, match="pd_run_failed"):
         Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()])
+    for nobody in ("operator", "held_until_present"):    # routes no daemon notice is delivered on yet
+        with pytest.raises(ValidationError, match="'agent' or 'both'"):
+            Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()],
+                        notice_routes={"pd_run_failed": nobody})
+    for heard in ("agent", "both"):
+        Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()],
+                    notice_routes={"pd_run_failed": heard})

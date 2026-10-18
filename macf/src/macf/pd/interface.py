@@ -331,11 +331,13 @@ class Declaration(_Closed):
     @model_validator(mode="after")
     def _a_failed_prompt_run_is_routed(self) -> "Declaration":
         # A prompt run that meets a permission prompt fails with a notice
-        # (MIS-0002-R32 (run_MUST_fail_on_prompt)); with no route, nobody would hear it.
+        # (MIS-0002-R32 (run_MUST_fail_on_prompt)). Only the agent's routes deliver a daemon
+        # notice today, so any other route would reach nobody.
         if any(s.target == "isolated" and isinstance(s.run, PromptRun) for s in self.schedules) \
-                and RUN_FAILED_SOURCE not in self.notice_routes:
+                and self.notice_routes.get(RUN_FAILED_SOURCE) not in ("agent", "both"):
             raise ValueError(f"an isolated prompt run is declared, so notice_routes must route "
-                             f"{RUN_FAILED_SOURCE!r}: to 'agent', 'operator' or 'both'")
+                             f"{RUN_FAILED_SOURCE!r} to 'agent' or 'both', the routes its notice is "
+                             f"delivered on")
         return self
 
     @model_validator(mode="after")
