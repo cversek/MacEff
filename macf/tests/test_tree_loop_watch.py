@@ -14,6 +14,8 @@ an explicit act rather than an automatic one.
 """
 import time
 
+import pytest
+
 from macf.cli import touched_within_watch
 
 
@@ -114,25 +116,35 @@ class TestLoopWatchIsActuallyWired:
 
     @staticmethod
     def _fake_clock(monkeypatch, T0, loop):
-        """Freeze the clock at T0, and in loop mode turn sleep into Ctrl+C, for the
-        test's own thread only.
+        """Freeze the clock at T0, and in loop mode turn the loop's own sleep into
+        Ctrl+C, for the test's own thread only.
 
         The loop imports time inside the function, so the fakes must sit on the
         module. They pass every other thread through to the real calls: an
         unconditional fake raised KeyboardInterrupt in every thread of the process
         for the test's duration, and a pytest-xdist worker whose own thread slept
-        then reported itself interrupted."""
+        then reported itself interrupted.
+
+        In this thread too, only the loop's sleep is Ctrl+C. Any other sleep stays a
+        sleep: subprocess's timed wait polls with one when a child closes its output
+        a moment before it exits. ``id -F``, run for the window title before the
+        loop's try, did that on a loaded macOS runner. The fake Ctrl+C escaped the
+        loop and took the xdist worker down, about once in thirty runs."""
+        import sys
         import threading
         import time
 
+        from macf.cli import cmd_task_tree
+
         me = threading.current_thread()
         real_time, real_sleep = time.time, time.sleep
+        loop_code = cmd_task_tree.__code__
 
         def fake_time():
             return T0 if threading.current_thread() is me else real_time()
 
         def fake_sleep(secs):
-            if loop and threading.current_thread() is me:
+            if loop and threading.current_thread() is me and sys._getframe(1).f_code is loop_code:
                 raise KeyboardInterrupt
             real_sleep(secs)
 
@@ -205,7 +217,7 @@ class TestLoopWatchIsActuallyWired:
 
     def test_the_fake_clock_reaches_no_other_thread(self, monkeypatch):
         """Another thread still sleeps and still tells the time while the loop's
-        clock is faked."""
+        clock is faked, and in this thread a sleep outside the loop is a sleep."""
         import threading
         import time
 
@@ -226,11 +238,29 @@ class TestLoopWatchIsActuallyWired:
         assert seen == [True]
         assert time.time() == T0
         try:
-            time.sleep(1)
+            time.sleep(0)
         except KeyboardInterrupt:
-            pass
-        else:
-            raise AssertionError("the test's own sleep should be Ctrl+C")
+            pytest.fail("a sleep outside the loop was taken for the loop's Ctrl+C")
+
+    def test_a_timed_subprocess_wait_before_the_loop_stays_a_wait(self, monkeypatch, capsys):
+        """The macOS flake, made to happen every time. A child that closes its output
+        and lingers makes subprocess's timed wait sleep, as ``id -F`` sometimes did for
+        the window title, before the loop's try. That sleep must stay a sleep, and the
+        loop must still end on its own Ctrl+C."""
+        import subprocess
+
+        import macf.utils.identity as identity
+
+        def slow_identity():
+            subprocess.run(["sh", "-c", "exec >&- 2>&-; sleep 0.3"], capture_output=True, timeout=5)
+            return "Tester@abc123"
+
+        monkeypatch.setattr(identity, "get_agent_identity", slow_identity)
+        try:
+            out = self._render(monkeypatch, capsys, loop=True)
+        except KeyboardInterrupt:
+            pytest.fail("the fake Ctrl+C fired in subprocess's own wait, before the loop's try")
+        assert "FRESH-DONE" in out
 
 
 class TestArchivedDescendantDoesNotPinTheChain(TestLoopWatchIsActuallyWired):

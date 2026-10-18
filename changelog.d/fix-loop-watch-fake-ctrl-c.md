@@ -1,0 +1,3 @@
+### Fixed
+
+- **The `task tree --loop` tests no longer take down an xdist worker about once in thirty macOS runs** (`tests/test_tree_loop_watch.py`). The tests end the loop by turning `time.sleep` into Ctrl+C, and that fake fired on every sleep in the test's thread. Before the loop's `try`, the window title reads the agent's name, which on macOS runs `id -F` with a timeout. When `id -F` closed its output a moment before it exited, subprocess's timed wait slept. The fake Ctrl+C then escaped the loop, and pytest stopped the worker ("node down: keyboard-interrupt"). Now only the loop's own sleep is Ctrl+C. A new test makes the wait happen every time, with a child that lingers after closing its output.
