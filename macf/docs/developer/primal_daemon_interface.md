@@ -62,7 +62,7 @@ JSON, validated closed: an unknown key is refused, because a key the daemon igno
 - **Timezone:** every cron and missed-run window is read in the declaration's `timezone` (below), so a declaration with schedules must name one.
 - **A restarting act:** `restarts_unit` marks a schedule whose act restarts a unit; a downtime never replays such a run [MIS-0002-R27 (scheduler_MUST-NOT_replay_restart_runs)].
 - **The run** is one of two shapes:
-  - `{"prompt_file", "allowed_tools"}`, a model turn whose permissions are settled when the schedule is created, so a run that meets a prompt fails instead of waiting [MIS-0002-R31 (schedule_MUST_settle_permission_at_creation), MIS-0002-R32 (run_MUST_fail_on_prompt)];
+  - `{"prompt_file", "allowed_tools"}`, a model turn whose permissions are settled when the schedule is created, so a run that meets a prompt fails instead of waiting [MIS-0002-R31 (schedule_MUST_settle_permission_at_creation), MIS-0002-R32 (run_MUST_fail_on_prompt)]. A declaration with one into an isolated session routes `pd_run_failed` in `notice_routes`;
   - `{"command", "wake_when": "exit_code" | "stdout"}`, work that needs no judgment, which wakes the agent only when its condition holds [MIS-0002-R37 (no-judgment_work_SHOULD_skip_model_turn)].
 
 **The agent-level fields:**
