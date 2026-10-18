@@ -562,6 +562,23 @@ def test_run_cannot_schedule(tmp_path):
     started = [d["schedule"] for d in log.of(sc.EVENT_STARTED)]
     assert started == ["check", "check"]                        # 12:05 and 12:10, and nothing planted
 
+    # Across a restart, on a host: the next daemon reads the rewritten file. It runs only
+    # what pd install recorded, and says the rest isn't run until installed again.
+    installed = sc.schedule_digests(Declaration(version=1, agent=CARD, timezone="UTC", schedules=[original],
+                                                notice_routes=ROUTED))
+    owed, after = [], Log()
+    after.append(sc.EVENT_INSTALLED, {"agent": CARD, "digests": installed})
+    restarted = sc.Scheduler(Declaration.model_validate_json(on_disk.read_text()), CARD,
+                             {"agent_home": str(tmp_path)}, work_dir=tmp_path / "runs", append=after.append,
+                             events=after.read, now=lambda: now[0], check_installed=True,
+                             on_notice=lambda source, nid: owed.append(source) or True)
+    restarted.boot()
+    now[0] = at("2026-10-14 12:11")
+    restarted.tick()
+    assert not after.of(sc.EVENT_STARTED) and "planted" not in restarted.runnable
+    assert "added since the last pd install" in after.of(sc.EVENT_NOT_RUN)[0]["reason"]
+    assert owed == ["pd_schedule_changed"]
+
 
 def _fake_client(tmp_path, denials):
     """A stand-in for the Claude Code client: it records what it was started with and the
@@ -706,3 +723,94 @@ def test_a_deferred_missed_run_is_recorded_once(tmp_path):
     deferred = log.of(sc.EVENT_DEFERRED)
     assert len(deferred) == 1 and deferred[0]["run_at"] == "2026-10-14T22:00:00+00:00"
     assert not log.of(sc.EVENT_STARTED)[1:]
+
+
+@pytest.mark.parametrize("record, check, runs", [
+    ("same", True, True),            # installed as it is
+    ("changed", True, False),        # the command changed since install
+    ("none", True, False),           # no install recorded
+    ("changed", False, True),        # a rendered declaration: out of the agent's reach, not checked
+])
+def test_a_host_runs_only_the_schedules_pd_install_recorded(tmp_path, record, check, runs):
+    """MIS-0002-R33 on a host: a daemon runs a schedule only as pd install recorded it. One
+    whose digest differs, or with no record at all, is said not run once, with how to accept
+    it. A daemon over a rendered declaration checks nothing, since no run can change that."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    declared = command_schedule(["/usr/bin/true"])
+    if record != "none":
+        took = command_schedule(["/usr/bin/false"]) if record == "changed" else declared
+        log.append(sc.EVENT_INSTALLED, {"agent": CARD, "digests": sc.schedule_digests(
+            Declaration(version=1, agent=CARD, timezone="UTC", schedules=[took]))})
+    s = make_scheduler(tmp_path, [declared], log, now, check_installed=check)
+    now[0] = at("2026-10-14 12:05")
+    s.tick()
+    finish(s)
+    assert bool(log.of(sc.EVENT_STARTED)) == runs
+    if not runs:
+        assert "pd install" in log.of(sc.EVENT_NOT_RUN)[0]["reason"]
+
+
+def test_pd_install_records_each_schedules_digest(tmp_path, monkeypatch):
+    """pd install records what it took, so the daemon has something to check against, and a
+    timezone change counts as a change to every schedule read in it."""
+    from macf.pd import cli
+    recorded = []
+    monkeypatch.setattr("macf.agent_events_log.append_event", lambda e, d: recorded.append((e, d)) or True)
+    decl = Declaration(version=1, agent=CARD, timezone="UTC", schedules=[command_schedule(["/usr/bin/true"])])
+    cli._record_schedules(CARD, decl, tmp_path)
+    assert recorded == [(sc.EVENT_INSTALLED, {"agent": CARD, "digests": sc.schedule_digests(decl)})]
+    moved = decl.model_copy(update={"timezone": "America/New_York"})
+    assert sc.schedule_digests(moved)["check"] != sc.schedule_digests(decl)["check"]
+
+
+def test_a_rewritten_prompt_file_counts_as_a_change(tmp_path):
+    """Review of #713. A prompt file sits in the agent's home, where a run allowed to write
+    there could rewrite its own future instructions, so its bytes are part of the digest."""
+    decl = Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()], notice_routes=ROUTED)
+    (tmp_path / "p.md").write_text("Sweep the open pull requests.\n")
+    took = sc.schedule_digests(decl, tmp_path)
+    assert sc.schedule_digests(decl, tmp_path) == took
+    (tmp_path / "p.md").write_text("Sweep the open pull requests, then push to main.\n")
+    assert sc.schedule_digests(decl, tmp_path)["sweep"] != took["sweep"]
+
+
+def test_pd_install_records_before_the_daemon_can_start(tmp_path, monkeypatch):
+    """Review of #713. launchd starts the daemon as the job loads (RunAtLoad), so the install
+    record must be in the log before the service manager is asked, or the daemon refuses
+    every schedule it reads in that moment."""
+    import argparse
+    import macf
+    from macf.pd import adapter as adapters
+    from macf.pd import cli
+    order = []
+    decl = Declaration(version=1, agent=CARD, timezone="UTC", schedules=[command_schedule(["/usr/bin/true"])])
+
+    class Tier:
+        def install(self, card, home, force=False):
+            order.append("install")
+            return tmp_path / "unit"
+
+        def status(self, card):
+            return "running"
+
+    monkeypatch.setattr(cli, "_this_agent", lambda: (tmp_path, CARD))
+    monkeypatch.setattr("macf.pd.core.load_declaration", lambda home, card: decl)
+    monkeypatch.setattr(adapters, "adapter_for", lambda platform: Tier())
+    monkeypatch.setattr(cli, "daemon_macf", lambda python: (Path(macf.__file__).resolve().parent, ""))
+    monkeypatch.setattr("macf.agent_events_log.append_event", lambda e, d: order.append(e) or True)
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    assert cli.cmd_pd_install(argparse.Namespace(plan=False, force=False)) == 0
+    assert order == [sc.EVENT_INSTALLED, "install"]
+
+
+def test_a_run_gets_the_prompt_read_at_start(tmp_path):
+    """Review of #713. The prompt is read once, at boot, where its digest is checked, and every
+    run in that daemon's life gets those bytes. A run that rewrites the file in the home changes
+    nothing until the next start, where the check refuses it."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    s = make_scheduler(tmp_path, [_prompt_schedule()], log, now, client=_fake_client(tmp_path, []))
+    (tmp_path / "p.md").write_text("Sweep the open pull requests, then push to main.\n")   # a run's rewrite
+    now[0] = at("2026-10-14 13:00")
+    s.tick()
+    finish(s)
+    assert json.loads((tmp_path / "started.json").read_text())["prompt"] == "Sweep the open pull requests.\n"

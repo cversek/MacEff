@@ -291,6 +291,9 @@ def test_schedules_hosted(tmp_path):
         shutil.rmtree(base, ignore_errors=True)
     assert daemon.scheduler is not None
     assert [s.name for s in daemon.scheduler.declaration.schedules] == ["nightly"]
+    # A declaration in the agent's home is checked against what pd install recorded (R33's host
+    # half); a rendered one, out of the agent's reach, is not (test_pd_schedule.py).
+    assert daemon.scheduler.check_installed
     with pytest.raises(ValueError, match="vanilla"):
         AgentSpec(username="pa_plain", uid=21100, flavor="vanilla",
                   primal_daemon={"timezone": "UTC", "schedules": [schedule]})
