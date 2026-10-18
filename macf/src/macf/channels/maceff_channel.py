@@ -56,6 +56,11 @@ from macf.utils.peercred import peer_credentials
 #: of the session: the channel lives and dies with its session, and the daemon holds
 #: notices while it cannot deliver (MIS-0002-R41 (pd_MUST_hold_notices_while_down)).
 _BACKOFF_FIRST, _BACKOFF_MAX = 1.0, 30.0
+#: A connection that delivered a notice, or held this long, worked: the next reconnect
+#: starts again from the first delay. One the daemon closes at once is a refusal, not a
+#: connection, so the delay keeps growing (MIS-0002-R122 (pd_MUST_check_channel_peer_lineage)
+#: refuses a channel outside the live session's lineage by closing the socket).
+_HEALTHY_S = 10.0
 
 _INSTRUCTIONS = (
     "MacEff notices from this agent's primal daemon. Each one is a doorbell: it licenses "
@@ -204,8 +209,10 @@ class Channel:
             return None
         return conn
 
-    def pump(self, conn: socket.socket) -> None:
-        """Deliver every record on one connection until the daemon closes it."""
+    def pump(self, conn: socket.socket) -> int:
+        """Deliver every record on one connection until the daemon closes it; return how
+        many were delivered."""
+        delivered = 0
         with conn, conn.makefile("r", encoding="utf-8") as lines:
             for line in lines:
                 if not line.strip():
@@ -213,18 +220,24 @@ class Channel:
                 record = parse_record(line)
                 if record is not None:
                     self.send(build_event(record))
+                    delivered += 1
         print("⚠️ MACF: channel lost its daemon connection (reconnecting)", file=sys.stderr)
+        return delivered
 
-    def listen_forever(self) -> None:
+    def listen_forever(self, sleep=time.sleep, clock=time.monotonic) -> None:
+        """Reconnect for the life of the session, always waiting first. A daemon that refuses
+        this channel accepts the connection and closes it at once; reconnecting at once after
+        that ran a refused channel at about 600 connections a second, measured on a host
+        where a second session's channel met the lineage check."""
         backoff = _BACKOFF_FIRST
         while True:
             conn = self.connect_once()
-            if conn is None:
-                time.sleep(backoff)
-                backoff = min(backoff * 2, _BACKOFF_MAX)
-                continue
-            backoff = _BACKOFF_FIRST
-            self.pump(conn)
+            if conn is not None:
+                started = clock()
+                if self.pump(conn) or clock() - started >= _HEALTHY_S:
+                    backoff = _BACKOFF_FIRST
+            sleep(backoff)
+            backoff = min(backoff * 2, _BACKOFF_MAX)
 
     # ---- the MCP side --------------------------------------------------------
 

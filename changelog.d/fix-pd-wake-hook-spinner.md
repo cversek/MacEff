@@ -1,0 +1,3 @@
+### Fixed
+
+- **The daemon's mail wake no longer types into a running turn while a hook runs** (`pd/wake.py`). While a hook runs, client 2.1.300 writes what it is doing before the elapsed time in the spinner line ("Verbing… (running PreToolUse hook · 26m 20s · …"), for about a second at every tool call. The running-turn pattern expected the time straight after the parenthesis, so those seconds read as an idle, empty box and a waiting wake was typed mid-turn; the client queued it, so it did no harm, but the reader was wrong. Sampling a live pane every 0.1 s through tool-call transitions found the window at every one; with the fix, all 150 samples read as running. A capture from that window is the new fixture `hook_running_2.1.300.txt`.
