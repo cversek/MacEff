@@ -18,6 +18,10 @@ def at(text, tz=UTC):
     return datetime.fromisoformat(text).replace(tzinfo=tz)
 
 
+#: A declaration with an isolated prompt run routes the notice a denied run raises (R32).
+ROUTED = {"pd_run_failed": "agent"}
+
+
 def policy(kind, window=None):
     return MissedRunPolicy(kind=kind, window=Window(start=window[0], end=window[1]) if window else None)
 
@@ -152,7 +156,8 @@ def test_declaration_with_an_unusable_schedule_is_refused(tmp_path, cron, window
                         run=PromptRun(prompt_file="prompts/nightly.md"), timeout_s=600)
     path = declaration_path(tmp_path)
     path.parent.mkdir(parents=True)
-    path.write_text(Declaration(version=1, agent="Tester@abc123", timezone="UTC", schedules=[schedule]).model_dump_json())
+    path.write_text(Declaration(version=1, agent="Tester@abc123", timezone="UTC", schedules=[schedule],
+                               notice_routes=ROUTED).model_dump_json())
     with pytest.raises(DeclarationRefused, match=why):
         load_declaration(tmp_path, "Tester@abc123")
 
@@ -194,17 +199,21 @@ def test_schedules_name_their_timezone():
     schedule = Schedule(name="nightly", cron="0 3 * * *", missed_run=policy("skip", None),
                         target="isolated", run=PromptRun(prompt_file="p.md"), timeout_s=600)
     with pytest.raises(ValidationError, match="names the timezone"):
-        Declaration(version=1, agent="Tester@abc123", schedules=[schedule])
+        Declaration(version=1, agent="Tester@abc123", schedules=[schedule], notice_routes=ROUTED)
     with pytest.raises(ValidationError, match="unknown timezone"):
-        Declaration(version=1, agent="Tester@abc123", timezone="Mars/Olympus", schedules=[schedule])
-    declared = Declaration(version=1, agent="Tester@abc123", timezone="America/New_York", schedules=[schedule])
+        Declaration(version=1, agent="Tester@abc123", timezone="Mars/Olympus", schedules=[schedule],
+                    notice_routes=ROUTED)
+    declared = Declaration(version=1, agent="Tester@abc123", timezone="America/New_York", schedules=[schedule],
+                           notice_routes=ROUTED)
     assert declared.schedules[0].restarts_unit is False
     assert Declaration(version=1, agent="Tester@abc123").timezone is None
 
 
 # --- the scheduler: the daemon runs what the schedules owe ----------------------
 
+import json  # noqa: E402
 import os  # noqa: E402
+from pathlib import Path  # noqa: E402
 import signal  # noqa: E402
 import subprocess  # noqa: E402
 import sys  # noqa: E402
@@ -239,10 +248,10 @@ def command_schedule(command, name="check", cron="*/5 * * * *", kind="skip", tim
                     run=CommandRun(command=command, wake_when=wake_when), timeout_s=timeout_s)
 
 
-def make_scheduler(tmp_path, schedules, log, now):
-    decl = Declaration(version=1, agent=CARD, timezone="UTC", schedules=schedules)
+def make_scheduler(tmp_path, schedules, log, now, **options):
+    decl = Declaration(version=1, agent=CARD, timezone="UTC", schedules=schedules, notice_routes=ROUTED)
     s = sc.Scheduler(decl, CARD, {"agent_home": str(tmp_path)}, work_dir=tmp_path / "runs",
-                     append=log.append, events=log.read, now=lambda: now[0])
+                     append=log.append, events=log.read, now=lambda: now[0], **options)
     s.boot()
     return s
 
@@ -388,14 +397,21 @@ def test_missed_runs_are_reported_once(tmp_path):
     assert len(log.of(sc.EVENT_STARTED)) == 1, "report_only ran a missed firing"
 
 
-def test_a_prompt_run_is_said_not_run_once(tmp_path):
+def test_a_prompt_run_it_cannot_start_is_said_not_run_once(tmp_path, monkeypatch):
+    """A prompt run into a named live session, and any prompt run where no client is on the
+    daemon's PATH, is said not run once, with why, and never started."""
+    monkeypatch.setattr(sc.shutil, "which", lambda name: None)
     log, now = Log(), [at("2026-10-14 12:00")]
-    prompt = Schedule(name="digest", cron="0 * * * *", missed_run=policy("skip"), target="isolated",
-                      run=PromptRun(prompt_file="p.md"), timeout_s=60)
-    s = make_scheduler(tmp_path, [prompt], log, now)
+    named = Schedule(name="digest", cron="0 * * * *", missed_run=policy("skip"), target="Other@def456",
+                     run=PromptRun(prompt_file="p.md"), timeout_s=60)
+    isolated = Schedule(name="sweep", cron="0 * * * *", missed_run=policy("skip"), target="isolated",
+                        run=PromptRun(prompt_file="p.md"), timeout_s=60)
+    s = make_scheduler(tmp_path, [named, isolated], log, now)
     now[0] = at("2026-10-14 13:00")
     s.tick()
-    assert len(log.of(sc.EVENT_NOT_RUN)) == 1 and not log.of(sc.EVENT_STARTED)
+    said = {d["schedule"]: d["reason"] for d in log.of(sc.EVENT_NOT_RUN)}
+    assert "named live session" in said["digest"] and "no Claude Code client" in said["sweep"]
+    assert len(log.of(sc.EVENT_NOT_RUN)) == 2 and not log.of(sc.EVENT_STARTED)
 
 
 def _alive(pid):
@@ -529,3 +545,90 @@ def test_run_cannot_schedule(tmp_path):
         finish(s)
     started = [d["schedule"] for d in log.of(sc.EVENT_STARTED)]
     assert started == ["check", "check"]                        # 12:05 and 12:10, and nothing planted
+
+
+def _fake_client(tmp_path, denials):
+    """A stand-in for the Claude Code client: it records what it was started with and the
+    settings it was handed, reads its prompt, and answers as print mode does in JSON."""
+    client = tmp_path / "claude"
+    client.write_text(f"""#!{sys.executable}
+import json, os, sys
+argv = sys.argv[1:]
+settings = json.load(open(argv[argv.index("--settings") + 1]))
+json.dump({{"argv": argv, "settings": settings, "prompt": sys.stdin.read(), "cwd": os.getcwd(),
+           "env": sorted(os.environ)}}, open({str(tmp_path / "started.json")!r}, "w"))
+json.dump([{{"type": "system"}}, {{"type": "assistant"}},
+           {{"type": "result", "is_error": False, "result": "done", "permission_denials": {denials!r}}}],
+          sys.stdout)
+""")
+    client.chmod(0o755)
+    (tmp_path / "p.md").write_text("Sweep the open pull requests.\n")
+    return str(client)
+
+
+def _prompt_schedule(allowed=("Bash(gh pr list:*)",)):
+    return Schedule(name="sweep", cron="0 * * * *", missed_run=policy("skip"), target="isolated",
+                    run=PromptRun(prompt_file="p.md", allowed_tools=list(allowed)), timeout_s=60)
+
+
+def test_permissions_settled(tmp_path):
+    """MIS-0002-R31 (schedule_MUST_settle_permission_at_creation): a prompt run's client loads
+    the schedule's declared tools and nothing else. No user, project or local settings, no MCP
+    server, no prompt answerer, and anything undeclared denied without asking. The settings
+    are written again from the declaration before every run, so a run that widened them on
+    disk has widened nothing for the next one."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    s = make_scheduler(tmp_path, [_prompt_schedule()], log, now, client=_fake_client(tmp_path, []))
+    for hour in ("13:00", "14:00"):
+        now[0] = at(f"2026-10-14 {hour}")
+        s.tick()
+        finish(s)
+        started = json.loads((tmp_path / "started.json").read_text())
+        assert started["settings"] == {"permissions": {"allow": ["Bash(gh pr list:*)"], "defaultMode": "dontAsk"}}
+        settings = Path(started["argv"][started["argv"].index("--settings") + 1])
+        settings.write_text(json.dumps({"permissions": {"allow": ["Bash"], "defaultMode": "bypassPermissions"}}))
+    argv = started["argv"]
+    for flag, value in (("--setting-sources", "project"), ("--permission-mode", "dontAsk"),
+                        ("--permission-prompts", "none")):
+        assert argv[argv.index(flag) + 1] == value
+    assert "--strict-mcp-config" in argv and "--print" in argv
+    assert not any("dangerously" in a or a.startswith("--allowed") for a in argv)
+    assert started["prompt"] == "Sweep the open pull requests.\n"
+    assert Path(started["cwd"]).resolve() == (tmp_path / "runs" / "sweep").resolve()
+    assert os.listdir(started["cwd"]) == []                        # a fresh directory, no project settings
+    assert [d["outcome"] for d in log.of(sc.EVENT_DONE)] == ["ok: the prompt ran"] * 2
+
+
+def test_prompt_fails_run(tmp_path):
+    """MIS-0002-R32 (run_MUST_fail_on_prompt): a prompt run the client denied anything met a
+    permission prompt. It fails, naming the tools but never the result's text, and the agent
+    is owed the pd_run_failed notice, once per run. A run denied nothing raises no notice."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    owed = []
+    client = _fake_client(tmp_path, [{"tool_name": "Write", "tool_use_id": "t1", "tool_input": {"file_path": "/x"}},
+                                     {"tool_name": "Bash", "tool_use_id": "t2", "tool_input": {"command": "rm -rf ~"}}])
+    s = make_scheduler(tmp_path, [_prompt_schedule()], log, now, client=client,
+                       on_notice=lambda source, nid: owed.append((source, nid)) or True)
+    now[0] = at("2026-10-14 13:00")
+    s.tick()
+    finish(s)
+    done = log.of(sc.EVENT_DONE)[0]
+    assert done["outcome"].startswith("failed: met a permission prompt for Bash, Write")
+    assert "rm -rf" not in json.dumps(log.rows) and "done" not in done["outcome"]
+    assert owed == [("pd_run_failed", "sweep:2026-10-14T13:00:00+00:00")]
+
+    quiet = Log()
+    s = make_scheduler(tmp_path, [_prompt_schedule()], quiet, now, client=_fake_client(tmp_path, []),
+                       on_notice=lambda source, nid: owed.append((source, nid)) or True)
+    now[0] = at("2026-10-14 14:00")
+    s.tick()
+    finish(s)
+    assert quiet.of(sc.EVENT_DONE)[0]["outcome"] == "ok: the prompt ran" and len(owed) == 1
+
+
+def test_an_isolated_prompt_run_routes_its_failure_notice():
+    """R32's notice must reach someone: a declaration with an isolated prompt run and no route
+    for pd_run_failed is refused when it is loaded."""
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match="pd_run_failed"):
+        Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()])
