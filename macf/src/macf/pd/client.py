@@ -19,7 +19,7 @@ from pydantic import ValidationError
 from macf.agent_events_log import read_events
 from macf.notify.session import verify_incarnation
 from macf.pd.core import DeclarationRefused, load_declaration
-from macf.pd.health import health
+from macf.pd.health import SCHEDULE_EVENTS, UNHEALTHY_RUNS, health, schedule_health
 from macf.pd.interface import (
     EVENT_LIVENESS,
     EVENT_STATE,
@@ -30,6 +30,7 @@ from macf.pd.interface import (
     declaration_path,
     record_path,
 )
+from macf.pd.scheduler import EVENT_DONE, EVENT_NOT_RUN, EVENT_SEEN, EVENT_STARTED
 from macf.platform.tray_host import TrayHost, tray_host
 from macf.utils.peercred import peer_credentials
 
@@ -93,13 +94,21 @@ class StatusReport:
     ``none`` when the agent declares no daemon. ``why`` says how that source was chosen.
     ``tray`` is the readout's line on whether this host can show the tray, and why not
     (MIS-0002-R73 (readout_MUST_say_tray_unavailable)); it is the host's answer, so it is
-    given whatever the source."""
+    given whatever the source.
+
+    ``schedules`` is each declared schedule's runs owed and done, derived from the event log
+    whatever the source (MIS-0002-R17 (readout_MUST_derive_health_from_runs)). ``runs`` is the
+    daemon's health by those runs: ``unhealthy`` when a run it owes is overdue or failed while
+    it answers, which is how it is known alive (MIS-0002-R18 (overdue_run_MUST_read_unhealthy)),
+    ``healthy`` when none is, and empty when no daemon answered."""
 
     card: str
     source: str
     why: str
     units: List[dict] = field(default_factory=list)
     tray: str = ""
+    schedules: List[dict] = field(default_factory=list)
+    runs: str = ""
 
 
 def status(home: Path, card: str, *, base: Optional[Path] = None,
@@ -107,8 +116,26 @@ def status(home: Path, card: str, *, base: Optional[Path] = None,
            host: Optional[Callable[[], TrayHost]] = None) -> StatusReport:
     """Each declared unit as the daemon reports it, or as the event log shows it when no
     daemon can be believed, with whether this host can show the tray."""
-    report = _units(home, card, base=base, now=now)
+    when = time.time() if now is None else now
+    report = _units(home, card, base=base, now=when)
+    if report.source != "none":
+        report = _with_runs(report, home, card, when)
     return replace(report, tray=(host or tray_host)().said())
+
+
+def _with_runs(report: StatusReport, home: Path, card: str, now: float) -> StatusReport:
+    try:
+        declaration = load_declaration(home, card)
+    except DeclarationRefused:
+        return report  # noqa: MACEFF003 - the units' readout already says why it can't be used
+    if not declaration.schedules:
+        return report
+    found = schedule_health(declaration, _schedule_events(declaration, card), now)
+    bad = [f"{h.schedule} {h.verdict}" for h in found if h.verdict in UNHEALTHY_RUNS]
+    runs = ""
+    if report.source == "daemon":
+        runs = ("unhealthy: " + ", ".join(bad)) if bad else "healthy"
+    return replace(report, schedules=[h.model_dump() for h in found], runs=runs)
 
 
 def _units(home: Path, card: str, *, base: Optional[Path] = None,
@@ -133,6 +160,27 @@ def _units(home: Path, card: str, *, base: Optional[Path] = None,
         return StatusReport(card=card, source="daemon", why=f"the daemon refused: {reply.error}")
     return StatusReport(card=card, source="daemon", why="its record and its socket agree",
                         units=[u.model_dump() for u in reply.units or []])
+
+
+def _schedule_events(declaration: Declaration, card: str) -> List[dict]:
+    """The scheduler's events for this agent, newest first, reading back until each declared
+    schedule has its newest start and end, or the sighting before its first run; whatever is
+    older can't change what is owed now."""
+    wanted = {s.name for s in declaration.schedules}
+    found: List[dict] = []
+    kinds: Dict[str, set] = {name: set() for name in wanted}
+    for event in read_events(reverse=True, scope="all", only=SCHEDULE_EVENTS):
+        data = event.get("data") or {}
+        name = data.get("schedule")
+        if data.get("agent") != card or name not in wanted:
+            continue
+        found.append(event)
+        kinds[name].add(event.get("event"))
+        # A prompt run the daemon can't start never has a start; its not-run record settles it.
+        if all(EVENT_SEEN in k or EVENT_NOT_RUN in k or {EVENT_STARTED, EVENT_DONE} <= k
+               for k in kinds.values()):
+            break
+    return found
 
 
 def _last_unit_events(declaration: Declaration, card: str) -> List[dict]:
