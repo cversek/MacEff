@@ -162,6 +162,11 @@ The channel ships as a Claude Code plugin, `maceff-channel`, from the marketplac
 
 A channel not on Claude Code's allowlist loads only under the development flag, which asks a person to confirm at every start. So a deployment loads it through an organization allowlist or an official listing where it can [MIS-0002-R119 (channel_SHOULD_load_without_development_flag)]. A restart the primal daemon performs never waits on that confirmation; such a restart comes up on the keystroke fallback until a person starts the session with the channel. Where a deployment sets an organization allowlist, the list replaces Claude Code's default list, so it must also name the operator's own channels, or they stop loading after the next unattended restart.
 
+**List every admitted channel in the declaration.** Where a deployment sets an organization allowlist (`allowedChannelPlugins` in Claude Code's managed settings), the agent's declaration lists every channel plugin the list admits, the operator's channels included, in `allowlisted_channels`, each as its plugin and marketplace [MIS-0002-R124 (allowlist_declaration_MUST_list_every_channel)]. The two are then compared:
+- **`pd install` refuses** while they differ, and names each difference: a channel the list admits that the declaration leaves out, and a channel the declaration lists that the list leaves out, which won't load. Managed settings it can't read stop the install too, because a list that can't be read is not the same as no list.
+- **The daemon compares again at start,** since managed settings can change after the install. Each difference goes to its stderr and into one `pd_allowlist_mismatch` event. It runs on: its units don't depend on the channels.
+- **Where no managed settings set an allowlist,** there is nothing to compare, and `allowlisted_channels` may be left out.
+
 **Test it the safe way.** A second Claude session under the same login inherits every plugin enabled for that login, and a second copy of the operator's messaging plugin takes the bot's connection from the first. Turn such plugins off in the test folder's project settings before starting a test session.
 
 ---

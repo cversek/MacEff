@@ -146,12 +146,25 @@ def cmd_pd_install(args: argparse.Namespace) -> int:
     from macf.pd import adapter as adapters
     from macf.pd.core import POLICY_POINTER, DeclarationRefused, load_declaration
 
+    from macf.pd import allowlist
+
     try:
         home, card = _this_agent()
-        load_declaration(home, card)
+        declaration = load_declaration(home, card)
         tier = adapters.adapter_for(sys.platform)
     except (DeclarationRefused, LookupError) as e:
         print(f"maceff_pd: nothing installed: {e}\n{POLICY_POINTER}", file=sys.stderr)
+        return 1
+    try:
+        mismatch = allowlist.findings(declaration, allowlist.managed_allowlist())
+    except (OSError, ValueError) as e:
+        mismatch = [f"the managed settings can't be read, so the organization allowlist can't be "
+                    f"compared with the declaration: {e}"]
+    if mismatch:
+        # A channel the allowlist leaves out stops loading at the daemon's first unattended
+        # restart, so the install stops here, where a person reads the reason.
+        print("maceff_pd: nothing installed:\n" + "\n".join(f"- {m}" for m in mismatch)
+              + f"\n{POLICY_POINTER}", file=sys.stderr)
         return 1
     import macf
     planned = Path(macf.__file__).resolve().parent

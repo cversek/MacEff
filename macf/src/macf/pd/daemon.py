@@ -87,7 +87,11 @@ class Daemon:
     """One agent's primal daemon: ``start``, then ``serve`` until ``stop``."""
 
     def __init__(self, agent_home: Path, *, base: Optional[Path] = None,
-                 record_refresh_s: float = RECORD_REFRESH_S, **core_options):
+                 record_refresh_s: float = RECORD_REFRESH_S,
+                 managed_settings: Optional[List[Path]] = None, **core_options):
+        from macf.pd.allowlist import MANAGED_SETTINGS
+        #: Where the organization allowlist is read, the client's own paths unless a test says.
+        self._managed = list(managed_settings) if managed_settings is not None else list(MANAGED_SETTINGS)
         self._record_refresh_s = record_refresh_s
         self._record_kept = time.monotonic()
         self.home = Path(agent_home)
@@ -163,12 +167,33 @@ class Daemon:
         self._channel_listener = channel
         record = self._record = self._write_record()
         self.core.record_start(record.pid, record.proc_start)
+        self._compare_allowlist()
         self.core.boot()
         self.notifier.boot()
         if self.unread_mail is not None:
             self.unread_mail.boot()
         if self.scheduler is not None:
             self.scheduler.boot()
+
+    def _compare_allowlist(self) -> None:
+        """Say at start where the organization allowlist and the declaration disagree
+        (MIS-0002-R124 (allowlist_declaration_MUST_list_every_channel)). Managed settings can
+        change after ``pd install`` compared them, and a channel the list leaves out stops
+        loading at the session's next start. The daemon runs on: its units don't depend on it."""
+        from macf.agent_events_log import append_event
+        from macf.pd import allowlist
+        from macf.pd.interface import EVENT_ALLOWLIST_MISMATCH
+
+        try:
+            found = allowlist.findings(self.core.declaration, allowlist.managed_allowlist(self._managed))
+        except (OSError, ValueError) as e:
+            found = [f"the managed settings can't be read, so the organization allowlist can't be "
+                     f"compared with the declaration: {e}"]
+        if not found:
+            return
+        for line in found:
+            print(f"⚠️ MACF: pd: {line}", file=sys.stderr)
+        append_event(EVENT_ALLOWLIST_MISMATCH, {"agent": self.card, "findings": found})
 
     def serve(self) -> None:
         """Run until ``stop``, then remove the socket and record. The units keep running for
