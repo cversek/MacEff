@@ -2,12 +2,12 @@
 
 **Number**: 0005
 **Type**: Amendment
-**Status**: Draft
+**Status**: Accepted
 **Authors**: the repo owner; drafted by the container-management maintainer, the Secretary of MIS-0001
 **Secretary**: the Secretary of deliberation #493
 **Created**: 2026-10-18
 **Amends**: MIS-0001: R01 (PR_MUST_cite_MIS_for_major_change), R06 (MIS_MUST_carry_header_fields), R07 (MIS_MUST_contain_sections), R08 (type_MUST_be_listed), R34 (accepted_MIS_MUST_change_editorially), R35 (substantive_change_MUST_be_made_in_place); adds R52 to R58
-**Resolution**: none
+**Resolution**: Accepted by the repo owner's merge of pull request #708. The repo owner's decision, given to the Secretary in a message on 2026-10-18 and relayed verbatim on that pull request, quoted in full: "Ok i approve the amendment with these revisions" https://github.com/cversek/MacEff/pull/708#issuecomment-6250854591. "These revisions" are the five changes that MIS-0001's other two maintainers asked for when they signed off, each made before the merge (section 3). Both signed off, the head maintainer and the host-side maintainer, as MIS-0001-R57 (amendment_MUST_have_maintainer_signoff) requires. No objection was recorded.
 
 ---
 
@@ -99,9 +99,16 @@ The draft that first held this number, a one-requirement MIS changing R09, was n
 ## 3 Sign-off
 
 - **Asked of** MIS-0001's other maintainers: the head maintainer and the host-side maintainer.
-- **Sign-offs:** pending.
-- **Changes requested:** none yet.
-- **The repo owner's decision:** pending.
+- **Sign-offs,** both on 2026-10-18, at 8242faa:
+  - the head maintainer: https://github.com/cversek/MacEff/pull/708#pullrequestreview-5563242749
+  - the host-side maintainer: https://github.com/cversek/MacEff/pull/708#pullrequestreview-5563246348
+- **Changes requested,** none of them blocking, each with its answer. The requirement IDs are MIS-0001's.
+  1. **The head maintainer:** the tests did not catch a checker that accepts a previous slug under any requirement of its MIS, rather than only under the one whose note names it. A test now cites R34 by R35's previous slug and expects R49 (9906e77).
+  2. **Both:** R57's "other than its author" collided with the Authors field, which names the repo owner, while the Secretary drafted this spec. R57 now asks each maintainer other than the one who drafted the spec, and policy section 8.1 says the same (9906e77).
+  3. **The head maintainer:** the Status moves to Accepted with this section filled in, as the last commit before the merge. Done in that commit.
+  4. **The host-side maintainer:** R54 named the reviewers of each pull request as its judge, but a revision needs no maintainer's review (R53). R54 is now judged by the repo owner, at merge (9906e77).
+  5. **The host-side maintainer:** policy section 8.1 still gave two calls to the operator, a term the new Terms keep apart from the repo owner. A dispute over whether a change is editorial now goes to the repo owner, since the answer chooses between his procedures. "The operator sets it Deferred" stays: R26 gives every status decision to the operator's merge, and this amendment does not change R26 (9906e77).
+- **The repo owner's decision:** all five changes taken, and the amendment approved. Quoted in full: "Ok i approve the amendment with these revisions". Given to the Secretary in a message on 2026-10-18, and relayed verbatim on the pull request: https://github.com/cversek/MacEff/pull/708#issuecomment-6250854591
 
 ## Wiki-Links
 
