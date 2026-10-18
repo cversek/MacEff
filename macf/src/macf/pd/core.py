@@ -649,7 +649,9 @@ class Core:
                                    "carried": sorted(carried), "changed": sorted(changed),
                                    "lost": sorted(lost)})
         if self.on_notice is not None:
-            self.on_notice(CARRIED_NOTICE_SOURCE, f"carried-{int(at)}")
+            # The occasion is in the id, so two reports in one second stay two notices.
+            occasion = after.split()[-1]
+            self.on_notice(CARRIED_NOTICE_SOURCE, f"carried-{occasion}-{int(at)}")
 
     def _adopt_survivors(self) -> set:
         """Adopt each unit whose last recorded state names a process that is still the one
