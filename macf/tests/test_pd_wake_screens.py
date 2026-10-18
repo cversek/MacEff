@@ -57,6 +57,26 @@ def test_a_spinner_without_esc_to_interrupt_is_a_running_turn():
     assert wake.classify(screen) == wake.RUNNING
 
 
+def test_a_spinner_naming_a_running_hook_is_a_running_turn():
+    """2.1.300, captured during a PreToolUse hook: the spinner names the hook before the
+    elapsed time. Every tool call shows it for about a second, and with the box empty below it
+    that second read idle, so a wake was typed into a running turn."""
+    screen = fixture("hook_running_2.1.300")
+    assert "running PreToolUse hook" in screen
+    assert wake.classify(screen) == wake.RUNNING
+
+
+def test_a_spinner_with_or_without_a_phrase_before_the_time():
+    for line in ("Accomplishing… (26m 20s · ↓ 72.1k tokens)",
+                 "Accomplishing… (running PreToolUse hook · 26m 20s · ↓ 72.1k tokens)",
+                 "Pondering… (running Stop hooks · 1h 2m 3s)",
+                 "Pondering… (thinking · 45s)"):
+        assert wake._SPINNER.search(line), line
+    # an ellipsis and a parenthesis with no elapsed time is not a spinner
+    for line in ("Waiting… (no output yet)", "see the notes… (part 2)"):
+        assert not wake._SPINNER.search(line), line
+
+
 def test_esc_to_interrupt_in_the_mode_line_is_a_running_turn():
     screen = fixture("idle_faint_suggestion_wake_echo_2.1.281")
     running = screen.replace("for agents", "esc to interrupt · ← for agents", 1)
