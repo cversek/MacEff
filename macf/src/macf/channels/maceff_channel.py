@@ -87,6 +87,10 @@ DAEMON_POINTERS: Dict[str, str] = {
     "pd_run_failed": "A scheduled prompt run of yours failed: it met a permission its schedule doesn't "
                      "settle. Run `macf_tools pd status`; the event log's pd_run_done entry names the "
                      "schedule and the tools it was denied.",
+    # MIS-0002-R33 (run_MUST-NOT_change_schedules), on a host
+    "pd_schedule_changed": "A schedule of yours changed since the operator last ran `pd install`, so your "
+                           "primal daemon isn't running it. Run `macf_tools pd status`; the event log's "
+                           "pd_schedule_not_run entry names it. Installing again accepts the change.",
     # MIS-0002-R55 (unread_mail_MUST_raise_notice)
     "pd_unread_mail": "Mail has waited in your pickup box past your declared threshold. Run "
                       "`macf_tools amail list` to read it; the event log's pd_unread_mail entry says how long.",
@@ -108,7 +112,7 @@ class NoticeRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: Literal["amail", "pd_limit_exceeded", "pd_grant_denied", "pd_carried", "pd_unread_mail",
-                    "pd_run_failed"]
+                    "pd_run_failed", "pd_schedule_changed"]
     arrival_id: str = Field(pattern=r"^[A-Za-z0-9._:-]{1,128}$")
     count: Optional[int] = Field(default=None, ge=0)
     read_at: float
