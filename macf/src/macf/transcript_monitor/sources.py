@@ -146,8 +146,10 @@ class StoreSource:
 
 
 def agent_store_source(agent_home: Path, name: str = "amail") -> StoreSource:
-    """A StoreSource over an agent's own pickup box."""
-    return StoreSource(Path(agent_home) / "amail" / "pickup", name=name)
+    """A StoreSource over an agent's own pickup box, where the broker delivers its mail
+    (``macf.amail.pickup``), never a guessed path."""
+    from macf.amail.pickup import pickup_box
+    return StoreSource(pickup_box(Path(agent_home)), name=name)
 
 
 def notify_sink(deliver: Callable, session_id_of: Callable) -> Callable:
