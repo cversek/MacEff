@@ -614,6 +614,16 @@ A notice delivered to an idle session opens a turn, so an agent in AUTO_MODE res
 
 **The health verdict says alive only after a probe.** `macf.pd.health` confirms by pid and process start time that the process named in a unit's last liveness event is still that process before it calls the unit alive [MIS-0002-R15 (readout_MUST_probe_liveness)], because a pid can be reused. The start time has one stored form, `macf.notify.session.proc_start`, compared through `verify_incarnation`. It derives everything when asked and stores nothing. Its five verdicts are alive, stale, gone, absent and unreadable, and a liveness it cannot read is unreadable, never alive. It is the verdict the readout will print, and the outside watch (7.1) applies the same rule now, through `read_liveness`, so the two cannot disagree about a unit.
 
+**A schedule's health is its runs, owed against done, when the readout is asked** [MIS-0002-R17 (readout_MUST_derive_health_from_runs)]. `macf.pd.health.schedule_health` reads the cron for the newest firing owed by now and the scheduler's events (`pd_schedule_seen`, `pd_run_started`, `pd_run_done`, `pd_run_missed`, `pd_schedule_not_run`) for what became of it. A firing the declared missed-run policy accounted for is not owed, and nor is one whose run ended without starting, which reads failed. The verdicts:
+- **ok** or **failed:** how the last run ended;
+- **due:** a run owed and not started, inside a minute's grace for a slow pass, or a missed run its policy put off to a window that hasn't opened yet (`pd_run_deferred`);
+- **overdue:** a run owed and not started past that grace, measured from the oldest firing owed, or one started and past its limit with no end recorded;
+- **running:** a run in flight, which holds its schedule, as the scheduler starts no other until it ends;
+- **not run:** a prompt run the daemon can't run yet;
+- **none owed:** nothing owed since the schedule was first seen.
+
+Nothing is stored, so the same events read later give the later verdict. **The daemon owes every run it starts, so while it answers `pd status`, which is how it is known alive, one overdue schedule makes it read unhealthy** [MIS-0002-R18 (overdue_run_MUST_read_unhealthy)]. A failed run is its schedule's outcome, and a prompt run the daemon can't start yet is said once; both show per schedule, and neither judges the daemon. `pd status` prints each schedule's verdict and a `runs:` line, and its JSON carries `schedules` and `runs`. With no daemon answering, the schedules are still listed, and no daemon is called healthy or unhealthy.
+
 ### 11.3 Who asked
 
 Every start, stop and restart the core performs is a `pd_control` event naming who asked and why [MIS-0002-R52 (control_act_MUST_name_who_asked)]: the operator, the agent's declared wind-down, or the unit's own restart policy. An operator's act needs the process that asked, its user, pid and start time, and the core records it beside the asker, because the asker is a claim and the process is observed. The process is observed from the kernel's report on the control socket's connection (12.3).
@@ -671,7 +681,7 @@ The daemon starts its units as its children, but they don't die with it: the out
 ## 13 Not Yet Landed
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
-- **The rest of the primal daemon:** health derived from runs owed and done [MIS-0002-R17 (readout_MUST_derive_health_from_runs)] [MIS-0002-R18 (overdue_run_MUST_read_unhealthy)]; a dialog that an adopted session waits on, reported as waiting on a person as it already is for a session the daemon starts itself (3.3, 6.2) [MIS-0002-R21 (pd_MUST_report_waiting_on_person)]; an authentication failure read as failed [MIS-0002-R19 (auth_failure_MUST_read_failed)]; compaction on request, once the operator is established some other way than a claim on the socket (9.3, 12.3); and a command-line act that stops every unit, with the question of which asker a command line claims (12.1) (MIS-0002 §6.1 to §6.4, §6.7).
+- **The rest of the primal daemon:** a dialog that an adopted session waits on, reported as waiting on a person as it already is for a session the daemon starts itself (3.3, 6.2) [MIS-0002-R21 (pd_MUST_report_waiting_on_person)]; an authentication failure read as failed [MIS-0002-R19 (auth_failure_MUST_read_failed)]; compaction on request, once the operator is established some other way than a claim on the socket (9.3, 12.3); and a command-line act that stops every unit, with the question of which asker a command line claims (12.1) (MIS-0002 §6.1 to §6.4, §6.7).
 - **Prompt schedules** (10.4). The daemon runs command schedules. A prompt schedule waits for an isolated session whose permissions are settled when the schedule is created [MIS-0002-R31 (schedule_MUST_settle_permission_at_creation)], and for a run that meets a permission prompt to fail instead of waiting [MIS-0002-R32 (run_MUST_fail_on_prompt)].
 - **Detecting a changed declaration on a host,** the host's half of R33 (10.1) [MIS-0002-R33 (run_MUST-NOT_change_schedules)].
 - **The rest of the notifier** (1.8):
