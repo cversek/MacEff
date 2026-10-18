@@ -36,18 +36,21 @@ ENV_SESSION_PID = "MACF_PD_SESSION_PID"
 
 
 def liveness_event(card: str, unit: str, interval_s: float,
-                   in_flight: Optional[int] = None, pid: Optional[int] = None) -> Liveness:
+                   in_flight: Optional[int] = None, pid: Optional[int] = None,
+                   waiting_on: Optional[str] = None) -> Liveness:
     """The liveness of process *pid* (this process by default) as the named unit of *card*."""
     pid = pid or os.getpid()
     return Liveness(agent=card, unit=unit, pid=pid, proc_start=proc_start(pid) or "unknown",
-                    interval_s=interval_s, in_flight=in_flight)
+                    interval_s=interval_s, in_flight=in_flight,
+                    waiting_on=waiting_on[:200] if waiting_on else None)
 
 
 def emit(card: str, unit: str, interval_s: float, in_flight: Optional[int] = None,
-         append: Optional[Callable[[str, dict], bool]] = None, pid: Optional[int] = None) -> bool:
+         append: Optional[Callable[[str, dict], bool]] = None, pid: Optional[int] = None,
+         waiting_on: Optional[str] = None) -> bool:
     """Write one liveness event for *pid* (this process by default); True when the log took it."""
     append = append or append_event
-    return append(EVENT_LIVENESS, liveness_event(card, unit, interval_s, in_flight, pid).model_dump())
+    return append(EVENT_LIVENESS, liveness_event(card, unit, interval_s, in_flight, pid, waiting_on).model_dump())
 
 
 class Heartbeat:
@@ -64,11 +67,15 @@ class Heartbeat:
     def __init__(self, card: str, unit: str, interval_s: float,
                  in_flight: Optional[Callable[[], Optional[int]]] = None,
                  append: Optional[Callable[[str, dict], bool]] = None,
-                 pid: Optional[int] = None):
+                 pid: Optional[int] = None,
+                 waiting_on: Optional[Callable[[], Optional[str]]] = None):
         # pid: the unit's process when the beat speaks for another one (the session
         # unit's wrapper, from its transcript monitor); this process by default.
+        # waiting_on: what the unit waits on a person for, asked on each beat
+        # (MIS-0002-R21 (pd_MUST_report_waiting_on_person)).
         self.card, self.unit, self.interval_s, self.pid = card, unit, interval_s, pid
         self._in_flight = in_flight or (lambda: None)
+        self._waiting_on = waiting_on or (lambda: None)
         self._append = append
         self._stop = threading.Event()
         self._ticked = threading.Event()
@@ -103,7 +110,8 @@ class Heartbeat:
                 return
             self._ticked.clear()
             stalled = False
-            if not emit(self.card, self.unit, self.interval_s, self._in_flight(), self._append, self.pid):
+            if not emit(self.card, self.unit, self.interval_s, self._in_flight(), self._append, self.pid,
+                        self._waiting_on()):
                 print(f"⚠️ MACF: pd: liveness for {self.unit} was not recorded (the unit will read "
                       f"overdue if this persists)", file=sys.stderr)
             if self._stop.wait(self.interval_s):
@@ -172,10 +180,13 @@ def session_unit_from_env(environ=os.environ) -> Optional[DeclaredUnit]:
 
 
 def session_heartbeat_from_env(environ=os.environ,
-                               append: Optional[Callable[[str, dict], bool]] = None) -> Optional[Heartbeat]:
+                               append: Optional[Callable[[str, dict], bool]] = None,
+                               waiting_on: Optional[Callable[[], Optional[str]]] = None) -> Optional[Heartbeat]:
     """Start the session unit's heartbeat in its transcript monitor, else return None.
-    The beat names the wrapper's pid, so the daemon credits it to the process it started."""
+    The beat names the wrapper's pid, so the daemon credits it to the process it started,
+    and carries what the session waits on a person for, when *waiting_on* says."""
     found = session_unit_from_env(environ)
     if found is None:
         return None
-    return Heartbeat(found.card, found.unit, found.interval_s, append=append, pid=found.pid).start()
+    return Heartbeat(found.card, found.unit, found.interval_s, append=append, pid=found.pid,
+                     waiting_on=waiting_on).start()
