@@ -530,7 +530,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R121 | decidable | macf/tests/test_mode_activity.py::test_source_from_origin_or_opening_tag | passing |
 | R122 | decidable | macf/tests/test_pd_notice.py::test_peer_lineage_checked_by_the_daemon | passing |
 | R123 | decidable | macf/tests/test_pd_channel.py::test_channel_checks_its_pd | passing |
-| R124 | decidable | macf/tests/test_pd_declaration.py::test_allowlist_lists_every_channel | planned |
+| R124 | decidable | macf/tests/test_pd_declaration.py::test_allowlist_lists_every_channel | passing |
 | R125 | judgment | the head maintainer, at review of the Claude Code harness adapter | standing |
 | R126 | decidable | macf/tests/test_pd_harness.py::test_idle_compaction_off | passing |
 | R127 | decidable | macf/tests/test_primal_daemon.py::test_unasked_compaction_recorded | passing |

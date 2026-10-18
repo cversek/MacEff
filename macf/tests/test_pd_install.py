@@ -225,3 +225,19 @@ def test_the_check_asks_the_interpreter_from_root_without_the_shell_python_path(
     monkeypatch.chdir(decoy)
     found, _ = daemon_macf(sys.executable)
     assert found != (decoy / "macf").resolve()
+
+
+def test_an_allowlist_the_declaration_does_not_match_installs_nothing(tmp_path, monkeypatch, tier, capsys):
+    """MIS-0002-R124 (allowlist_declaration_MUST_list_every_channel): where managed settings set
+    an organization allowlist and the declaration doesn't list its channels, the install stops
+    and names each one, before the service manager is touched."""
+    import json
+    from macf.pd import allowlist
+    managed = tmp_path / "managed-settings.json"
+    managed.write_text(json.dumps({"allowedChannelPlugins": [
+        {"plugin": "telegram", "marketplace": "claude-plugins-official"}]}))
+    monkeypatch.setattr(allowlist, "MANAGED_SETTINGS", (managed,))
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(make_home(tmp_path)))
+    assert run("install") == 1
+    err = capsys.readouterr().err
+    assert tier.installed == [] and "telegram@claude-plugins-official" in err and "nothing installed" in err

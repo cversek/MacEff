@@ -1335,3 +1335,13 @@ def sock_dir():
         yield d
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def no_managed_settings(tmp_path, monkeypatch):
+    """Keep every test off the host's real Claude Code managed settings. A host whose
+    ``allowedChannelPlugins`` is set would otherwise make ``pd install`` refuse, and every daemon
+    start warn, in tests that declare no channels (MIS-0002-R124). A test that wants an
+    allowlist plants one and passes its path."""
+    from macf.pd import allowlist
+    monkeypatch.setattr(allowlist, "MANAGED_SETTINGS", (tmp_path / "no-managed-settings.json",))
