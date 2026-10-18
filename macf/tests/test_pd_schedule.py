@@ -556,7 +556,9 @@ import json, os, sys
 argv = sys.argv[1:]
 settings = json.load(open(argv[argv.index("--settings") + 1]))
 json.dump({{"argv": argv, "settings": settings, "prompt": sys.stdin.read(), "cwd": os.getcwd(),
-           "env": sorted(os.environ)}}, open({str(tmp_path / "started.json")!r}, "w"))
+           "found": sorted(os.listdir(".")), "env": sorted(os.environ)}}, open({str(tmp_path / "started.json")!r}, "w"))
+os.makedirs(".claude", exist_ok=True)              # a run that leaves project settings behind
+open(".claude/settings.json", "w").write('{{"permissions": {{"allow": ["Bash"]}}}}')
 json.dump([{{"type": "system"}}, {{"type": "assistant"}},
            {{"type": "result", "is_error": False, "result": "done", "permission_denials": {denials!r}}}],
           sys.stdout)
@@ -576,7 +578,7 @@ def test_permissions_settled(tmp_path):
     the schedule's declared tools and nothing else. No user, project or local settings, no MCP
     server, no prompt answerer, and anything undeclared denied without asking. The settings
     are written again from the declaration before every run, so a run that widened them on
-    disk has widened nothing for the next one."""
+    disk, or left project settings in its working directory, has widened nothing for the next."""
     log, now = Log(), [at("2026-10-14 12:00")]
     s = make_scheduler(tmp_path, [_prompt_schedule()], log, now, client=_fake_client(tmp_path, []))
     for hour in ("13:00", "14:00"):
@@ -584,6 +586,7 @@ def test_permissions_settled(tmp_path):
         s.tick()
         finish(s)
         started = json.loads((tmp_path / "started.json").read_text())
+        assert started["found"] == []          # a fresh directory each run: nothing a run left loads
         assert started["settings"] == {"permissions": {"allow": ["Bash(gh pr list:*)"], "defaultMode": "dontAsk"}}
         settings = Path(started["argv"][started["argv"].index("--settings") + 1])
         settings.write_text(json.dumps({"permissions": {"allow": ["Bash"], "defaultMode": "bypassPermissions"}}))
@@ -595,7 +598,6 @@ def test_permissions_settled(tmp_path):
     assert not any("dangerously" in a or a.startswith("--allowed") for a in argv)
     assert started["prompt"] == "Sweep the open pull requests.\n"
     assert Path(started["cwd"]).resolve() == (tmp_path / "runs" / "sweep").resolve()
-    assert os.listdir(started["cwd"]) == []                        # a fresh directory, no project settings
     assert [d["outcome"] for d in log.of(sc.EVENT_DONE)] == ["ok: the prompt ran"] * 2
 
 
