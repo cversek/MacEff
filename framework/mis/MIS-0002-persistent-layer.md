@@ -425,7 +425,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R16 | judgment | the head maintainer, at review of each landing pull request | standing |
 | R17 | decidable | macf/tests/test_pd_readout.py::test_health_is_runs | passing |
 | R18 | decidable | macf/tests/test_pd_readout.py::test_overdue_is_unhealthy | passing |
-| R19 | decidable | macf/tests/test_pd_readout.py::test_auth_failure_is_failed | planned |
+| R19 | decidable | macf/tests/test_pd_readout.py::test_auth_failure_is_failed | passing |
 | R20 | decidable | macf/tests/test_primal_daemon.py::test_states | passing |
 | R21 | decidable | macf/tests/test_pd_harness.py::test_waiting_reported | planned (the test passes for a session the daemon starts itself; an adopted session writes no liveness, so a dialog it waits on isn't reported yet) |
 | R22 | decidable | macf/tests/test_primal_daemon.py::test_no_restart_while_waiting | passing |

@@ -311,3 +311,56 @@ def test_a_run_waiting_as_declared_or_never_started_is_not_overdue():
     never = [_run("pd_schedule_seen", H10 - 1800, at="2026-10-17T09:30:00+00:00"),
              _run("pd_run_done", H10 + 1, scheduled_for=iso, outcome="not started: no value for the placeholder {x}")]
     assert schedule_health(_scheduled(), never, H10 + 600)[0].verdict == "FAILED"
+
+
+def test_auth_failure_is_failed(tmp_path):
+    """MIS-0002-R19 (auth_failure_MUST_read_failed): the session's harness adapter reads a failed
+    login from the transcript, in the shapes Claude Code writes it, and says so in the session's
+    beat until a request goes through again; the daemon, hearing that beat, sets the session's
+    state to failed with what the client said, and the readout reads it so."""
+    from macf.pd.liveness import liveness_event
+    from macf.transcript_monitor.daemon import AuthWatch
+    import test_primal_daemon as tpd
+
+    def said(text, error="authentication_failed"):
+        return {"type": "assistant", "isApiErrorMessage": True, "error": error, "timestamp": "t",
+                "message": {"role": "assistant", "model": "<synthetic>",       # as the client writes it
+                            "content": [{"type": "text", "text": text}]}}
+
+    reply = {"type": "assistant", "message": {"role": "assistant", "model": "claude-opus-5",
+                                              "content": [{"type": "text", "text": "ok"}]}}
+    synthetic = {"type": "assistant", "message": {"role": "assistant", "model": "<synthetic>",
+                                                  "content": [{"type": "text", "text": "No response requested."}]}}
+    expired = "Login expired \u00b7 Please run /login"
+    token = ('API Error: 401 {"type":"error","error":{"type":"authentication_error",'
+             '"message":"OAuth token has expired."}}')
+
+    # The adapter: the transcript's shapes, one record per failure, recovery only by a real reply.
+    watch = AuthWatch()
+    assert watch(reply) is None and watch.state() is None
+    assert watch(said(expired)).event_name == "auth_failure_detected"
+    assert watch.state() == expired
+    assert watch(said(token)) is None and watch.state() == expired
+    assert watch({"type": "user", "message": {"content": "hello"}}) is None
+    assert watch(said("Overloaded", error="overloaded")) is None and watch.state() == expired
+    assert watch(synthetic) is None and watch.state() == expired         # the client wrote it: no request
+    assert watch(reply).event_name == "auth_recovered" and watch.state() is None
+    watch(said(token))
+    beat = liveness_event(CARD, "session", 10.0, pid=os.getpid(), auth_failed=watch.state())
+    assert beat.auth_failed.startswith("API Error: 401")
+
+    # The daemon: a session whose beat carries the failure reads failed, and the readout says so.
+    script = tmp_path / "fake_unit.py"
+    script.write_text(tpd.FAKE_UNIT)
+    unit = tpd.make_unit("session", script, {"auth_failed": expired})
+    core = tpd.Core(Declaration(version=1, agent=tpd.CARD, units=[unit]), tpd.CARD,
+                    backoff_base_s=0.05, backoff_cap_s=0.2)
+    try:
+        core.boot()
+        assert tpd.drive(core, lambda: core.state("session") == "failed")
+        rows = [json.loads(line) for line in tpd.get_log_path().read_text().splitlines()]
+        found = health(Declaration(version=1, agent=tpd.CARD, units=[unit]), rows, time.time(),
+                       lambda pid, start: True)[0]
+        assert found.state == "failed" and found.reason == f"authentication failed: {expired}"
+    finally:
+        core.shutdown("the test is over")
