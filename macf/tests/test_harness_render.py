@@ -341,7 +341,8 @@ class TestChildEntrypoint:
         (line,) = [l for l in render_child(p).splitlines() if l.startswith("exec claude")]
         # "$PROMPT" trails deliberately — a resume with no prompt can be refused
         # outright; see TestAResumeCarriesAPrompt.
-        assert line == 'exec claude -c "$PROMPT" "$@" --channels plugin:a@x,plugin:b@y'
+        # each channel its own argument: the client reads one comma-joined value as one channel
+        assert line == 'exec claude -c "$PROMPT" "$@" --channels plugin:a@x plugin:b@y'
 
 
 needs_tmux = pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux not available")
