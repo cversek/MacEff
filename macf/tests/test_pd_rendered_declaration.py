@@ -83,7 +83,8 @@ def test_a_body_the_daemon_would_refuse_is_refused_when_agents_yaml_loads():
     bad_schedule = {"timezone": "UTC", "schedules": [{"name": "s", "cron": "0 3 * * *", "target": "isolated",
                     "run": {"command": ["true"], "wake_when": "exit_code"}, "timeout_s": 60}]}  # no missed_run
     with pytest.raises(ValueError, match="missed_run"):
-        AgentSpec(username="pa_x", personality="p.md", primal_daemon=bad_schedule)
+        AgentSpec(username="pa_x", uid=21100, personality="p.md", primal_daemon=bad_schedule)
     with pytest.raises(ValueError, match="must not set agent or version"):
-        AgentSpec(username="pa_x", personality="p.md", primal_daemon={"agent": "Other@000000", "units": []})
+        AgentSpec(username="pa_x", uid=21100, personality="p.md",
+                  primal_daemon={"agent": "Other@000000", "units": []})
 

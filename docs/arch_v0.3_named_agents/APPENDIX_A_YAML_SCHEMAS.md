@@ -25,6 +25,9 @@ This appendix provides complete YAML schema specifications for Named Agents v0.3
 ### Root Structure
 
 ```yaml
+ids:
+  base: 21000  # the deployment's uid/gid block, base..base+999 (container_operations 6.2)
+
 agents:
   <agent_name>:
     # AgentSpec fields
@@ -44,6 +47,7 @@ defaults:  # Optional
 | Field | Type | Description |
 |-------|------|-------------|
 | `username` | string | Linux username for the agent (e.g., `pa_manny`) |
+| `uid` | int | The agent's uid (its own group takes the same gid), in the agent slots `ids.base + 100` to `+ 899`; unique per deployment |
 | `personality` | string | Path to personality file (Identity layer CLAUDE.md source) |
 
 **Optional Fields**:
@@ -92,9 +96,13 @@ defaults:  # Optional
 ### Complete agents.yaml Example
 
 ```yaml
+ids:
+  base: 21000
+
 agents:
   manny:
     username: pa_manny
+    uid: 21100
     personality: ../custom/agents/manny_personality.md
     subagents: [devops_eng, test_eng]
     assigned_projects: [NeuroVEP, DataPipeline]
@@ -117,6 +125,7 @@ agents:
 
   claudethebuilder:
     username: pa_claudethebuilder
+    uid: 21101
     personality: ../custom/agents/builder_personality.md
     subagents: [devops_eng, test_eng]
     assigned_projects: [MacEff, ClaudeTheBuilder]
@@ -234,11 +243,13 @@ projects:
 ### agents.yaml Validation
 
 **Root Level**:
-- ✅ Both `agents` and `subagents` sections are **required**
+- ✅ `ids`, `agents` and `subagents` sections are **required**
+- ✅ `ids.base` is a multiple of 1000 and at least 20000
+- ✅ Every agent's `uid` lies in `ids.base + 100` to `+ 899`, and no two agents share one
 - ✅ `defaults` section is optional
 
 **AgentSpec Validation**:
-- ✅ `username` and `personality` are **required**
+- ✅ `username`, `uid` and `personality` are **required**
 - ✅ `subagents` and `assigned_projects` default to empty lists if omitted
 - ✅ `consciousness_artifacts` and `hooks` are optional
 

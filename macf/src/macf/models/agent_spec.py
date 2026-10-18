@@ -6,7 +6,7 @@ docs/arch_v0.3_named_agents/05_implementation_guide.md (lines 48-125)
 """
 
 from enum import Enum
-from typing import List, Optional, Dict, Any
+from typing import Any, ClassVar, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
@@ -358,6 +358,17 @@ class AgentSpec(BaseModel):
     username: str = Field(
         ...,
         description="Linux username for the agent (e.g., pa_manny)"
+    )
+
+    uid: int = Field(
+        ...,
+        description=(
+            "The agent's uid, which its own group also takes as its gid. Declared, never "
+            "assigned by creation order, and inside the deployment's id block, in the agent "
+            "slots (IdBlock): a container without user-namespace remapping shares the "
+            "host's id space, so a number that is also a host account's would make the two "
+            "one identity (container_operations policy)."
+        )
     )
 
     display_name: Optional[str] = Field(
@@ -755,6 +766,60 @@ class ServiceSpec(BaseModel):
     )
 
 
+#: Container ids start here, clear of every host's human accounts (useradd hands those out
+#: from 1000 up) and of its system ids (below 1000).
+ID_BLOCK_FLOOR = 20000
+ID_BLOCK_SIZE = 1000
+
+
+class IdBlock(BaseModel):
+    """The uid and gid numbers a deployment's container owns: ``base`` to ``base + 999``.
+
+    A container without user-namespace remapping shares the host's id space, so every
+    account and group the framework creates takes its number from here, never from
+    creation order. Each deployment on a host gets its own block, so two deployments'
+    agents are never one identity either.
+
+    Fixed slots, the same in every block (offsets from ``base``): ``admin`` at 0 (uid and
+    gid); the groups ``agents_all`` 1, ``sa_all`` 2, ``policyeditors`` 3; the agents at
+    100-899, each its own declared uid; 900-997 for the deployment's own service
+    accounts; ``amail_broker`` 998 and ``amail_ingest`` 999.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    base: int = Field(
+        ...,
+        description=f"First number of the block: a multiple of {ID_BLOCK_SIZE}, at least {ID_BLOCK_FLOOR}"
+    )
+
+    @field_validator('base')
+    @classmethod
+    def _base_is_a_block(cls, v: int) -> int:
+        if v < ID_BLOCK_FLOOR or v % ID_BLOCK_SIZE:
+            raise ValueError(
+                f"ids.base must be a multiple of {ID_BLOCK_SIZE} and at least {ID_BLOCK_FLOOR}, "
+                f"clear of the host's own accounts (got {v}); see the container_operations policy")
+        if v + ID_BLOCK_SIZE - 1 > 65533:
+            raise ValueError(f"ids.base {v} runs the block past 65533")
+        return v
+
+    #: Offsets of the fixed slots.
+    SLOTS: ClassVar[Dict[str, int]] = {
+        "admin": 0, "agents_all": 1, "sa_all": 2, "policyeditors": 3,
+        "amail_broker": 998, "amail_ingest": 999,
+    }
+    AGENT_FIRST: ClassVar[int] = 100
+    AGENT_LAST: ClassVar[int] = 899
+
+    def slot(self, name: str) -> int:
+        """The number of a fixed slot, by its account or group name."""
+        return self.base + self.SLOTS[name]
+
+    def agent_range(self) -> range:
+        return range(self.base + self.AGENT_FIRST, self.base + self.AGENT_LAST + 1)
+
+
 class AgentsConfig(BaseModel):
     """
     Root configuration model for agents.yaml.
@@ -797,6 +862,11 @@ class AgentsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+    ids: IdBlock = Field(
+        ...,
+        description="The uid and gid block this deployment's container owns (IdBlock)"
+    )
+
     agents: Dict[str, AgentSpec] = Field(
         ...,
         description="Dictionary of agent name to AgentSpec"
@@ -816,3 +886,20 @@ class AgentsConfig(BaseModel):
         default_factory=dict,
         description="Non-agent service accounts and the secrets they hold"
     )
+
+    @model_validator(mode='after')
+    def _agent_uids_in_their_slots(self) -> 'AgentsConfig':
+        """Every agent's uid sits in the block's agent slots, and no two agents share one."""
+        slots = self.ids.agent_range()
+        seen: Dict[int, str] = {}
+        for name, spec in self.agents.items():
+            if spec.uid not in slots:
+                raise ValueError(
+                    f"agent {name!r} declares uid {spec.uid}, outside the agent slots "
+                    f"{slots.start}-{slots.stop - 1} of ids.base {self.ids.base}")
+            if spec.uid in seen:
+                raise ValueError(
+                    f"agents {seen[spec.uid]!r} and {name!r} both declare uid {spec.uid}; "
+                    f"one uid names one agent")
+            seen[spec.uid] = name
+        return self
