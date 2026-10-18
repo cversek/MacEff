@@ -219,6 +219,8 @@ def processes_on(numbers: Iterable[int], proc: Path = Path("/proc"),
             comm = (d / "comm").read_text().strip()
         except OSError:
             continue
+        if any(line.split()[1:2] == ["Z"] for line in status.splitlines() if line.startswith("State:")):
+            continue  # a zombie runs nothing and holds no files; only its parent can reap it
         hits = {}
         for line in status.splitlines():
             key = line[:4]
