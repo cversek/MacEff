@@ -1,0 +1,3 @@
+### Changed
+
+- **No observation frame carries a Remote Control link** (`macf/src/macf/observe/stream.py`, policy `persistent_layer` §5.2; MIS-0002-R99). An onlooker must not receive an operator surface, a way to see and type into the session. The stream had no input path and the invitation names no attach target, but a Remote Control session link written in a prompt, a channel message, the agent's text or a tool's stated purpose went out verbatim, and it opens the session's view and keyboard to anyone signed in to the account that owns it. The stream now puts a marker in its place. The policy states the limit: an onlooker that shares the operator's login already holds those surfaces through it. Seven planted defects each failed the test.
