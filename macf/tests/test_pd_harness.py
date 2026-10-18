@@ -514,7 +514,7 @@ def test_waiting_reported(tmp_path, monkeypatch):
         deadline = _time.monotonic() + 2
         while len(beats) <= n and _time.monotonic() < deadline:
             _time.sleep(0.01)
-        return beats[n]["waiting_on"] if len(beats) > n else "no beat"
+        return beats[n].get("waiting_on") if len(beats) > n else "no beat"
 
     beat_said = []
 
@@ -534,3 +534,53 @@ def test_waiting_reported(tmp_path, monkeypatch):
     assert beat_said[0].startswith("a permission dialog for Bash, open since "), beat_said
     assert beat_said[1] is None, beat_said
     assert all(b["pid"] == os.getppid() and b["unit"] == "session" for b in beats)
+
+
+
+def test_a_failed_login_reaches_the_beat(tmp_path, monkeypatch):
+    """MIS-0002-R19 (auth_failure_MUST_read_failed) on the session's own path: the monitor run_monitor
+    starts reads each transcript line through its detectors, and the beat it starts from the
+    session's environment says the login failed until a reply shows a request went through."""
+    import os
+    import time as _time
+    from macf.pd import liveness as lv
+    from macf.transcript_monitor import daemon
+
+    home = tmp_path / "agent"
+    (home / ".maceff").mkdir(parents=True)
+    (home / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": "Resident"}}))
+    (home / ".maceff_primary_agent.id").write_text("1a2b3c4d-0000\n")
+    for k, v in {lv.ENV_HOME: str(home), lv.ENV_SESSION_UNIT: "session",
+                 lv.ENV_SESSION_INTERVAL: "0.05", lv.ENV_SESSION_PID: str(os.getppid())}.items():
+        monkeypatch.setenv(k, v)
+    beats = []
+    monkeypatch.setattr(lv, "append_event", lambda n, d: beats.append(d) or True)
+    monkeypatch.setattr(daemon, "append_event", lambda *a, **k: True)
+    monkeypatch.setattr(daemon, "find_monitors", list)
+    monkeypatch.setattr(daemon.signal, "signal", lambda *a: None)
+
+    def beat(n):
+        deadline = _time.monotonic() + 2
+        while len(beats) <= n and _time.monotonic() < deadline:
+            _time.sleep(0.01)
+        return beats[n].get("auth_failed") if len(beats) > n else "no beat"
+
+    expired = {"type": "assistant", "isApiErrorMessage": True, "error": "authentication_failed",
+               "message": {"role": "assistant", "model": "<synthetic>",
+                           "content": [{"type": "text", "text": "Login expired"}]}}
+    reply = {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "done"}]}}
+    said = []
+
+    def fake_run(self, start_from_end=True):
+        self._process_line(json.dumps(expired))
+        self.on_pass()
+        said.append(beat(0))
+        self._process_line(json.dumps(reply))
+        self.on_pass()
+        said.append(beat(1))
+
+    monkeypatch.setattr(daemon.TranscriptMonitor, "run", fake_run)
+    transcript = tmp_path / "s1.jsonl"
+    transcript.write_text("")
+    daemon.run_monitor(transcript, 0.01, owner=0)
+    assert said == ["Login expired", None], said
