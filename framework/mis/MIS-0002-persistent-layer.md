@@ -223,7 +223,7 @@ stateDiagram-v2
 ### 6.9 Containers
 
 - **R57** [MUST · decidable: macf/tests/test_container_outer_tier.py::test_primal_daemons_start_after_access_and_before_optional_units] In a container, the primal daemons and the access path MUST start before any optional unit. (container_MUST_start_access_first)
-- **R58** [MUST NOT · decidable: macf/tests/test_pd_render.py::test_optional_units_independent (planned)] An optional unit MUST NOT delay the start of another unit. (optional_unit_MUST-NOT_delay_others)
+- **R58** [MUST NOT · decidable: macf/tests/test_container_start_order.py::test_optional_units_independent] An optional unit MUST NOT delay the start of another unit. (optional_unit_MUST-NOT_delay_others)
 - **R59** [MUST · decidable: macf/tests/test_pd_interface.py::test_a_unit_missing_a_required_field_is_refused] Each declared unit MUST state a memory limit. (unit_MUST_declare_memory_limit)
 - **R60** [MUST · decidable: macf/tests/test_pd_notice.py::test_a_unit_past_its_limit_is_a_notice_held_and_delivered] When a unit uses more than its declared limit, the primal daemon MUST deliver a notice. (pd_MUST_notice_limit_exceeded)
 - **R61** [MUST · decidable: macf/tests/test_pd_watch.py::test_limits_checked_after_recreate] After each recreate, the persistent layer MUST compare the container's declared limits with the limits in force. (layer_MUST_check_limits_after_recreate)
@@ -464,7 +464,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R55 | decidable | macf/tests/test_pd_notice.py::test_unread_mail_notice | passing |
 | R56 | judgment | the head maintainer, at review of the mail landing | pending |
 | R57 | decidable | macf/tests/test_container_outer_tier.py::test_primal_daemons_start_after_access_and_before_optional_units | passing |
-| R58 | decidable | macf/tests/test_pd_render.py::test_optional_units_independent | planned (optional to optional not met: the search service needs the policy index, so a slow index delays it) |
+| R58 | decidable | macf/tests/test_container_start_order.py::test_optional_units_independent | passing |
 | R59 | decidable | macf/tests/test_pd_interface.py::test_a_unit_missing_a_required_field_is_refused | passing |
 | R60 | decidable | macf/tests/test_pd_notice.py::test_a_unit_past_its_limit_is_a_notice_held_and_delivered | passing |
 | R61 | decidable | macf/tests/test_pd_watch.py::test_limits_checked_after_recreate | passing |
@@ -663,6 +663,7 @@ Objections recorded:
 - 2026-10-18: R17 (readout_MUST_derive_health_from_runs) and R18 (overdue_run_MUST_read_unhealthy) move to passing, with the code and the tests they name. Editorial (mis 8.1).
 - 2026-10-18: R31 (schedule_MUST_settle_permission_at_creation) and R32 (run_MUST_fail_on_prompt) move to passing, with the code and the tests they name. Editorial (mis 8.1).
 - 2026-10-18: R33 (run_MUST-NOT_change_schedules) moves to passing. It's met in containers by the root-rendered declaration, and on hosts by detection: a schedule changed since `pd install` isn't run. The host half is detection, not prevention, since a run could forge the install record; `persistent_layer` 10.4 states the limit. What decides each half: `test_run_cannot_schedule` (the row's test) within one daemon's life and across a restart on a host; `test_pd_schedule.py::test_a_host_runs_only_the_schedules_pd_install_recorded` for the host half; and the outer tier's rendered-declaration test from #702 for the container half. Editorial (mis 8.1).
+- 2026-10-18: R58 (optional_unit_MUST-NOT_delay_others) moves to passing, with the code and the test it names. The search service no longer waits on the policy index, and the index builds in a thread of its own, so neither optional unit delays the other. The row named `test_pd_render.py::test_optional_units_independent`, which doesn't exist under that name, and now names the test that decides it, in `test_container_start_order.py`, by sweep 3's rule. Editorial (mis 8.1).
 
 ## Wiki-Links
 
