@@ -264,7 +264,9 @@ def test_overdue_is_unhealthy(monkeypatch):
     source = ["daemon"]
     monkeypatch.setattr(client, "_units", lambda home, card, base=None, now=None:
                         client.StatusReport(card=card, source=source[0], why="test"))
-    host = lambda: client.TrayHost(True, "")   # noqa: E731
+
+    def host():
+        return client.TrayHost(True, "")
 
     report = client.status(Path("/nonexistent"), CARD, now=H10 + START_GRACE_S + 1, host=host)
     assert report.runs == "unhealthy: hourly OVERDUE"
