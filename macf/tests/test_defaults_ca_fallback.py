@@ -40,13 +40,14 @@ def start_module():
 @pytest.fixture
 def agent_without_ca():
     """An agent that relies on the defaults — the shape that triggered the bug."""
-    return AgentSpec(username="pa_defaults", personality="agents/p.md")
+    return AgentSpec(username="pa_defaults", uid=21100, personality="agents/p.md")
 
 
 @pytest.fixture
 def agent_with_ca():
     return AgentSpec(
         username="pa_explicit",
+        uid=21101,
         personality="agents/p.md",
         consciousness_artifacts=ConsciousnessArtifactsConfig(
             private=["checkpoints"], public=["roadmaps"], immutable_structure=True
