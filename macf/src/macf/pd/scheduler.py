@@ -197,11 +197,28 @@ class Scheduler:
             return ""
         if s.target != "isolated":
             return "a prompt run into a named live session is not run yet"
+        path, where = self._client_path()
         if self.client is None:
-            self.client = shutil.which("claude")
+            self.client = shutil.which("claude", path=path)
         if self.client is None:
-            return "no Claude Code client (claude) is on the daemon's PATH"
+            return (f"no Claude Code client (claude) is on {where} ({path}); declare a PATH that holds "
+                    f"it in the session unit's environment")
         return ""
+
+    def _client_path(self) -> tuple:
+        """The PATH a prompt run's client is found on and runs with: the session unit's declared
+        one, the environment the agent's own session runs in, else the daemon's. An installed
+        daemon gets its service manager's PATH, which on macOS, and on Linux when linger starts
+        it before any login, rarely holds the client, so the core finds the session's client
+        the same way."""
+        for unit in self.declaration.units:
+            declared = unit.environment.get("PATH") if unit.kind == "session" else None
+            if declared:
+                try:
+                    return render(declared, self.placeholders), "the session unit's declared PATH"
+                except KeyError:
+                    break  # noqa: MACEFF003 - a placeholder it can't fill: fall back to the daemon's
+        return os.environ.get("PATH", "/usr/bin:/bin"), "the daemon's PATH"
 
     def _abandon(self, name: str, scheduled_for, data: dict) -> None:
         """A run the previous daemon started and never recorded ending: stop it if it is
@@ -292,8 +309,9 @@ class Scheduler:
         if cwd.exists():
             shutil.rmtree(cwd)
         cwd.mkdir(mode=0o700)
-        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": home}
+        env = {"PATH": self._client_path()[0], "HOME": home}
         command = [self.client, "--print", "--output-format", "json", "--no-session-persistence",
+                   # project settings only, from an empty directory: none load but these
                    "--setting-sources", "project", "--settings", str(settings), "--strict-mcp-config",
                    "--permission-mode", "dontAsk", "--permission-prompts", "none"]
         return _Launch(command=command, env=env, cwd=cwd, stdin=prompt)

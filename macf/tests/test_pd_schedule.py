@@ -400,7 +400,7 @@ def test_missed_runs_are_reported_once(tmp_path):
 def test_a_prompt_run_it_cannot_start_is_said_not_run_once(tmp_path, monkeypatch):
     """A prompt run into a named live session, and any prompt run where no client is on the
     daemon's PATH, is said not run once, with why, and never started."""
-    monkeypatch.setattr(sc.shutil, "which", lambda name: None)
+    monkeypatch.setattr(sc.shutil, "which", lambda name, path=None: None)
     log, now = Log(), [at("2026-10-14 12:00")]
     named = Schedule(name="digest", cron="0 * * * *", missed_run=policy("skip"), target="Other@def456",
                      run=PromptRun(prompt_file="p.md"), timeout_s=60)
@@ -556,7 +556,7 @@ import json, os, sys
 argv = sys.argv[1:]
 settings = json.load(open(argv[argv.index("--settings") + 1]))
 json.dump({{"argv": argv, "settings": settings, "prompt": sys.stdin.read(), "cwd": os.getcwd(),
-           "found": sorted(os.listdir(".")), "env": sorted(os.environ)}}, open({str(tmp_path / "started.json")!r}, "w"))
+           "found": sorted(os.listdir(".")), "env": sorted(os.environ), "path": os.environ.get("PATH")}}, open({str(tmp_path / "started.json")!r}, "w"))
 os.makedirs(".claude", exist_ok=True)              # a run that leaves project settings behind
 open(".claude/settings.json", "w").write('{{"permissions": {{"allow": ["Bash"]}}}}')
 json.dump([{{"type": "system"}}, {{"type": "assistant"}},
@@ -641,3 +641,35 @@ def test_an_isolated_prompt_run_routes_its_failure_notice():
     for heard in ("agent", "both"):
         Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()],
                     notice_routes={"pd_run_failed": heard})
+
+
+def test_the_client_is_found_on_the_session_units_path(tmp_path, monkeypatch):
+    """Review of #712. A daemon under launchd, or one linger starts before any login, has a PATH
+    without the client. The scheduler looks where the core looks for the session's own client:
+    the session unit's declared PATH, filled in from the placeholders, and the run gets that PATH."""
+    from macf.pd.interface import Unit
+    client = _fake_client(tmp_path, [])
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "claude").symlink_to(client)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")                    # the service manager's
+    session = Unit(name="session", kind="session", command=["/usr/bin/true"], account="tester",
+                   restart="always", liveness_interval_s=10, memory_limit_mb=64,
+                   environment={"PATH": "{agent_home}/bin:/usr/bin:/bin"})
+    log, now = Log(), [at("2026-10-14 12:00")]
+    decl = Declaration(version=1, agent=CARD, timezone="UTC", units=[session], schedules=[_prompt_schedule()],
+                       notice_routes=ROUTED)
+    s = sc.Scheduler(decl, CARD, {"agent_home": str(tmp_path)}, work_dir=tmp_path / "runs",
+                     append=log.append, events=log.read, now=lambda: now[0])
+    s.boot()
+    assert s.client == str(bin_dir / "claude") and not log.of(sc.EVENT_NOT_RUN)
+    now[0] = at("2026-10-14 13:00")
+    s.tick()
+    finish(s)
+    assert json.loads((tmp_path / "started.json").read_text())["path"] == f"{tmp_path}/bin:/usr/bin:/bin"
+
+    bare = Log()
+    plain = sc.Scheduler(decl.model_copy(update={"units": []}), CARD, {"agent_home": str(tmp_path)},
+                         work_dir=tmp_path / "runs", append=bare.append, events=bare.read, now=lambda: now[0])
+    plain.boot()
+    assert "the daemon's PATH (/usr/bin:/bin)" in bare.of(sc.EVENT_NOT_RUN)[0]["reason"]
