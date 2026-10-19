@@ -413,10 +413,8 @@ class Daemon:
             print(f"⚠️ MACF: pd: cannot read a channel's peer (refusing it): {e}", file=sys.stderr)
             conn.close()
             return
-        session = self.core.session_incarnation()
-        if peer.uid != os.getuid() or session is None or not descends_from(peer.pid, *session):
-            why = ("no session unit runs" if session is None
-                   else f"pid {peer.pid} (uid {peer.uid}) is not below the session unit's pid {session[0]}")
+        why = self._outside_session(peer)
+        if why:
             print(f"⚠️ MACF: pd: refused a channel: {why}", file=sys.stderr)
             conn.close()
             return
@@ -426,6 +424,18 @@ class Daemon:
             self._sel.register(conn, selectors.EVENT_READ, "attached")
         print(f"📡 MACF: pd: channel attached (pid {peer.pid}); "
               f"{len(self.notifier.owed)} notice(s) owed", file=sys.stderr)
+
+    def _outside_session(self, peer) -> str:
+        """Why ``peer`` isn't the agent's live session, or "" when it is: the same uid, and a
+        process that descends from the session unit's live process. Every command the agent
+        runs shares the uid, so lineage is what tells the session from a cron job, a run or
+        another shell (MIS-0002-R122 (pd_MUST_check_channel_peer_lineage)). The channel is
+        checked this way, and so are an agent's requests about its own entries."""
+        session = self.core.session_incarnation()
+        if peer.uid == os.getuid() and session is not None and descends_from(peer.pid, *session):
+            return ""
+        return ("no session unit runs" if session is None
+                else f"pid {peer.pid} (uid {peer.uid}) is not below the session unit's pid {session[0]}")
 
     def _channel_readable(self, conn: socket.socket) -> None:
         """A channel never writes, so a readable channel has closed (or broke the protocol)."""
