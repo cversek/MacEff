@@ -98,6 +98,8 @@ NOTICE_SCHEDULE_CHANGED = "pd_schedule_changed"
 NOTICE_ENTRY_DUE = "pd_entry_due"
 #: An entry fired for an instant, written before its notice, so a restart never fires it again.
 EVENT_ENTRY_FIRED = "pd_entry_fired"
+#: How late a firing may be and still count as on time: room for a slow pass, as for schedules.
+ENTRY_GRACE_S = 60.0
 
 
 def schedule_digests(declaration: Declaration, agent_home: Optional[Path] = None) -> Dict[str, str]:
@@ -398,9 +400,13 @@ class Scheduler:
         missed = 0
         while (later := when.next_after(due)) is not None and later <= now and missed < 10000:
             due, missed = later, missed + 1
+        # A firing a minute past its time was missed. Its entry's policy says whether the agent
+        # hears of it: "skip" records it and says nothing (the scheduler design, 3.5).
+        late = (now - due).total_seconds() > ENTRY_GRACE_S
+        quiet = late and entry.get("missed") == "skip"
         self.entry_fired[entry_id] = due
-        self._say(EVENT_ENTRY_FIRED, {"id": entry_id, "for": _iso(due), "missed": missed})
-        if self.on_notice is not None:
+        self._say(EVENT_ENTRY_FIRED, {"id": entry_id, "for": _iso(due), "missed": missed, "notified": not quiet})
+        if self.on_notice is not None and not quiet:
             self.on_notice(NOTICE_ENTRY_DUE, entry_id)
 
     def _guarded(self, name: str, step: Callable[[], None]) -> None:

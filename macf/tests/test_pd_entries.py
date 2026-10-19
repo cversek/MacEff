@@ -118,3 +118,23 @@ def test_a_due_entry_fires_once_through_the_channel_even_across_a_restart(tmp_pa
     restarted = make_scheduler(tmp_path, [], log, now, on_notice=channel)
     restarted.tick()
     assert len(channel.received) == 2                          # nothing fires again
+
+
+def test_a_skip_entry_records_a_missed_firing_and_says_nothing(tmp_path):
+    """An entry whose missed policy is skip, due while the daemon was down, is recorded and not
+    notified; on time, it notifies (the scheduler design, 3.5)."""
+    from channel_receiver import ChannelReceiver
+    from macf.pd import scheduler as sc
+    from macf.pd.entries import EVENT_ENTRY_ADDED
+    from test_pd_schedule import CARD, Log, at, make_scheduler
+    log, now = Log(), [at("2026-10-19 11:20")]
+    entry_id = new_entry_id()
+    log.append(EVENT_ENTRY_ADDED, {"agent": CARD, "id": entry_id, "when": "cron:0 * * * *", "zone": "UTC",
+                                   "start": "2026-10-19T09:30:00+00:00", "action": "wake", "missed": "skip"})
+    channel = ChannelReceiver(tmp_path / "agent")
+    s = make_scheduler(tmp_path, [], log, now, on_notice=channel)
+    s.tick()                                                   # 10:00 and 11:00 passed while down
+    assert channel.received == [] and log.of(sc.EVENT_ENTRY_FIRED)[0]["notified"] is False
+    now[0] = at("2026-10-19 12:00")
+    s.tick()                                                   # 12:00, on time
+    assert channel.received == [("pd_entry_due", entry_id)]
