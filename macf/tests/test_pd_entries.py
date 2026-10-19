@@ -138,3 +138,26 @@ def test_a_skip_entry_records_a_missed_firing_and_says_nothing(tmp_path):
     now[0] = at("2026-10-19 12:00")
     s.tick()                                                   # 12:00, on time
     assert channel.received == [("pd_entry_due", entry_id)]
+
+
+def test_a_wake_owed_longer_than_a_day_is_owed_again_at_a_restart(tmp_path):
+    """The notifier holds an owed notice for a day. An entry fired two days ago and never
+    delivered is owed again when the daemon restarts; one delivered since, or fired within the
+    day (the notifier's own read-back holds it), is not (the scheduler design, 4.1)."""
+    from channel_receiver import ChannelReceiver
+    from macf.pd import scheduler as sc
+    from macf.pd.entries import EVENT_ENTRY_ADDED
+    from macf.pd.notifier import EVENT_DELIVERED
+    from test_pd_schedule import CARD, Log, at, make_scheduler
+    log, now = Log(), [at("2026-10-19 12:00")]
+    owed, delivered, recent = new_entry_id(), new_entry_id(), new_entry_id()
+    for entry_id, when, fired in ((owed, "2026-10-17T09:00:00+00:00", "2026-10-17T09:00:00+00:00"),
+                                  (delivered, "2026-10-17T09:30:00+00:00", "2026-10-17T09:30:00+00:00"),
+                                  (recent, "2026-10-19T08:00:00+00:00", "2026-10-19T08:00:00+00:00")):
+        log.append(EVENT_ENTRY_ADDED, {"agent": CARD, "id": entry_id, "when": when, "zone": "UTC",
+                                       "start": "2026-10-16T08:00:00+00:00", "action": "wake", "missed": "once"})
+        log.append(sc.EVENT_ENTRY_FIRED, {"agent": CARD, "id": entry_id, "for": fired, "missed": 0, "notified": True})
+    log.append(EVENT_DELIVERED, {"source": "pd_entry_due", "arrival_id": delivered, "via": "channel", "notifier": "pd"})
+    channel = ChannelReceiver(tmp_path / "agent")
+    make_scheduler(tmp_path, [], log, now, on_notice=channel)
+    assert channel.received == [("pd_entry_due", owed)]

@@ -372,16 +372,31 @@ class Scheduler:
     def _load_entries(self) -> None:
         """The entries the log folds to, and the instant each last fired for (R16)."""
         from macf.pd.entries import EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED, fold
+        from macf.pd.notifier import EVENT_DELIVERED, HOLD_MAX_S
         read = self.events or (lambda: read_events(reverse=True, scope="all",
-                                                   only=(EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED, EVENT_ENTRY_FIRED)))
+                                                   only=(EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED, EVENT_ENTRY_FIRED,
+                                                         EVENT_DELIVERED)))
         rows = list(read())                      # newest first
         self.entries = fold(reversed(rows), self.card)
+        newest: Dict[str, str] = {}              # each entry's newest firing or delivery
         for event in rows:
             data = event.get("data") or {}
-            if event.get("event") == EVENT_ENTRY_FIRED and data.get("agent") == self.card:
+            kind = event.get("event")
+            if kind == EVENT_ENTRY_FIRED and data.get("agent") == self.card:
                 fired = _when(data.get("for"))
                 if fired is not None:
                     self.entry_fired.setdefault(data.get("id"), fired)
+                newest.setdefault(data.get("id"), "fired" if data.get("notified", True) else "quiet")
+            elif kind == EVENT_DELIVERED and data.get("source") == NOTICE_ENTRY_DUE:
+                newest.setdefault(data.get("arrival_id"), "delivered")
+        # A notice still owed is held by the notifier for a day (its own read-back); one owed
+        # longer would be dropped there, so it is owed again here: a wake owed over a weekend
+        # must not vanish at a Monday restart (the scheduler design, 4.1).
+        for entry_id, last in sorted(newest.items()):
+            fired = self.entry_fired.get(entry_id)
+            if (last == "fired" and entry_id in self.entries and fired is not None
+                    and (self.boot_at - fired).total_seconds() > HOLD_MAX_S and self.on_notice is not None):
+                self.on_notice(NOTICE_ENTRY_DUE, entry_id)
 
     def _fire_entry(self, entry_id: str, now: datetime) -> None:
         """Fire an entry that is due: once, for the newest instant owed, however many passed while
