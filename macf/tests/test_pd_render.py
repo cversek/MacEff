@@ -188,3 +188,65 @@ def test_runs_without_tray():
     for it, and both outer-tier units render without naming it."""
     run = subprocess.run([sys.executable, "-c", _WITHOUT_TRAY], capture_output=True, text=True)
     assert run.returncode == 0, run.stderr
+
+
+def test_grants_tested_at_install(tmp_path):
+    """MIS-0002-R64 (adapter_MUST_test_grants_at_install): the probe runs as a one-shot
+    LaunchAgent with the daemon's own interpreter, so it tests what a launchd job holds, not
+    what the terminal holds. It is loaded from the work directory, never ~/Library/LaunchAgents,
+    and booted out after, with its files gone, so nothing of it starts at the next login."""
+    import json
+    from types import SimpleNamespace
+    from macf.platform.launchd import grant_probe_label, run_grant_probe
+
+    work, logs, calls = tmp_path / "work", tmp_path / "logs", []
+    work.mkdir()
+    logs.mkdir()
+
+    def run(argv):
+        calls.append(argv)
+        if argv[1] == "bootstrap":
+            plist = plistlib.loads(open(argv[3], "rb").read())
+            calls.append(("plist", plist))
+            prog = plist["ProgramArguments"]
+            out, grants = prog[4], prog[5:]
+            # launchd starts the job: the stand-in writes what the probe would
+            with open(out, "w") as f:
+                json.dump({g: "denied" if g == "local_network" else "held" for g in grants}, f)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    got = run_grant_probe(CARD, "/opt/venv/bin/python3", ["local_network", "accessibility"],
+                          str(work), str(logs), 501, run)
+    assert got == {"local_network": "denied", "accessibility": "held"}
+    verbs = [c[1] for c in calls if isinstance(c, list)]
+    assert verbs == ["bootout", "bootstrap", "bootout"]
+    loaded = next(c for c in calls if isinstance(c, list) and c[1] == "bootstrap")
+    assert loaded[2] == "gui/501" and loaded[3].startswith(str(work))
+    plist = next(c[1] for c in calls if isinstance(c, tuple))
+    assert plist["Label"] == grant_probe_label(CARD) == "maceff_pd.IraMacEff_ee9a78.grant_probe"
+    assert plist["ProgramArguments"][:4] == ["/opt/venv/bin/python3", "-I", "-m", "macf.platform.grants"]
+    assert plist["KeepAlive"] is False and plist["LimitLoadToSessionType"] == "Aqua"
+    assert list(work.iterdir()) == []
+
+
+def test_a_probe_that_never_answers_is_still_booted_out(tmp_path):
+    from types import SimpleNamespace
+    from macf.platform.launchd import run_grant_probe
+    calls = []
+
+    def run(argv):
+        calls.append(argv[1])
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(RuntimeError, match="didn't answer"):
+        run_grant_probe(CARD, "/opt/venv/bin/python3", ["accessibility"], str(tmp_path), str(tmp_path),
+                        501, run, timeout=0.05, sleep=lambda s: None)
+    assert calls[-1] == "bootout" and not list(tmp_path.glob("*.plist"))
+
+
+def test_a_denial_is_never_guessed_from_a_failed_probe(monkeypatch):
+    """A probe that breaks, and a grant with no dialog-free probe, read as untested, never held."""
+    from macf.platform import grants
+    monkeypatch.setitem(grants.PROBES, "accessibility", lambda: 1 / 0)
+    got = grants.probe(["accessibility", "keychain", "automation:com.apple.Terminal"])
+    assert all(v.startswith("untested:") for v in got.values())
