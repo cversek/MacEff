@@ -42,6 +42,19 @@ def add_pd_parser(sub) -> None:
     alive.add_argument("--in-flight", type=int, default=None, metavar="N",
                        help="work started and not finished, which the daemon checks before a restart")
     alive.set_defaults(func=cmd_pd_alive)
+    entry = pd_sub.add_parser(
+        "entry", help="your own timed entries, made from your live session (policy: persistent_layer)")
+    entry_sub = entry.add_subparsers(dest="entry_cmd", required=True)
+    add = entry_sub.add_parser("add", help="make an entry that wakes this session when it falls due")
+    add.add_argument("when", help="an instant, 'in 20m', 'tomorrow 06:30', 'cron:<five fields>' or 'rrule:<rule>'")
+    add.add_argument("purpose", help="what the entry is for, written so a later self can act on it cold")
+    add.add_argument("--missed", choices=("once", "skip", "report"), required=True,
+                     help="a firing missed while the daemon was down: once, late and said so; skip, "
+                          "recorded only; report, recorded and told")
+    add.set_defaults(func=cmd_pd_entry_add)
+    lst = entry_sub.add_parser("list", help="the entries you hold")
+    lst.add_argument("--json", action="store_true", help="print them as JSON")
+    lst.set_defaults(func=cmd_pd_entry_list)
 
 
 def cmd_pd_alive(args: argparse.Namespace) -> int:
@@ -109,6 +122,47 @@ def _say_tray(report) -> None:
     # (readout_MUST_say_tray_unavailable)). A report built without it says nothing.
     if report.tray:
         print(report.tray)
+
+
+def _ask_entries(request: dict):
+    """The daemon's reply to an entry request, or None, having said why on the error stream."""
+    from macf.pd import client
+    _, card = _this_agent()
+    try:
+        reply = client.ask(card, request)
+    except client.DaemonUnavailable as e:
+        print(f"⚠️ MACF: pd: no daemon answered ({e}); your entries are held by your primal daemon",
+              file=sys.stderr)
+        return None
+    if not reply.ok:
+        print(f"⚠️ MACF: pd: {reply.error}", file=sys.stderr)
+        return None
+    return reply
+
+
+def cmd_pd_entry_add(args: argparse.Namespace) -> int:
+    reply = _ask_entries({"op": "entry_add", "when": args.when, "purpose": args.purpose,
+                          "action": "wake", "missed": args.missed})
+    if reply is None:
+        return 1
+    made = reply.entries[-1] if reply.entries else None
+    print(f"entry made; you hold {len(reply.entries or [])}" + (f", the newest {made['id']}" if made else ""))
+    return 0
+
+
+def cmd_pd_entry_list(args: argparse.Namespace) -> int:
+    reply = _ask_entries({"op": "entry_list"})
+    if reply is None:
+        return 1
+    entries = reply.entries or []
+    if args.json:
+        print(json.dumps(entries, indent=2))
+        return 0
+    for e in entries:
+        print(f"{e['id']}  next {e.get('first') or 'none'}  {e['when']}  ({e['missed']})  {e['purpose']}")
+    if not entries:
+        print("no entries")
+    return 0
 
 
 def _this_agent():

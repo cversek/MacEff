@@ -161,3 +161,34 @@ def test_a_wake_owed_longer_than_a_day_is_owed_again_at_a_restart(tmp_path):
     channel = ChannelReceiver(tmp_path / "agent")
     make_scheduler(tmp_path, [], log, now, on_notice=channel)
     assert channel.received == [("pd_entry_due", owed)]
+
+
+def test_the_cli_asks_the_daemon_and_says_what_it_answered(monkeypatch, capsys):
+    """pd entry add sends the entry as asked, and pd entry list prints what is held; a refusal
+    is printed as the daemon gave it, and exits non-zero."""
+    import argparse
+
+    from macf.pd import cli, client
+    from macf.pd.interface import Response
+    sent, held = [], {"id": "e-0123456789ab", "when": "2026-10-19T18:20:00+00:00", "first": "2026-10-19T18:20:00+00:00",
+                      "missed": "once", "purpose": "check the pace"}
+
+    def ask(card, request, **kw):
+        sent.append(request)
+        if request["op"] == "entry_add" and request["when"] == "never":
+            return Response(ok=False, error="the entry's time was refused")
+        return Response(ok=True, entries=[held])
+    monkeypatch.setattr(client, "ask", ask)
+    monkeypatch.setattr(cli, "_this_agent", lambda: (None, "Tester@abc123"))
+    parser = argparse.ArgumentParser()
+    cli.add_pd_parser(parser.add_subparsers(dest="cmd"))
+
+    def run(*argv):
+        args = parser.parse_args(["pd", "entry", *argv])
+        return args.func(args)
+    assert run("add", "in 20m", "check the pace", "--missed", "once") == 0
+    assert sent[-1] == {"op": "entry_add", "when": "in 20m", "purpose": "check the pace", "action": "wake", "missed": "once"}
+    assert "e-0123456789ab" in capsys.readouterr().out
+    assert run("list") == 0 and "check the pace" in capsys.readouterr().out
+    assert run("add", "never", "x", "--missed", "skip") == 1
+    assert "the entry's time was refused" in capsys.readouterr().err
