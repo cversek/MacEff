@@ -519,7 +519,8 @@ An agent's declaration is one JSON file. On a host it is in the agent's own home
 - **Each unit runs as the service account** (10.3), which `agents.yaml` checks when it loads.
 
 **The mail broker's account is such a service, and in a container it must be** [MIS-0002-R53 (mail_broker_MUST_be_managed)].
-- **Its daemon runs the broker and the inbound watcher as units, and the aged sweep as a schedule** [MIS-0002-R54 (periodic_mail_clock_MUST_be_schedule)]. The schedule runs `inbound sweep --quiet`, with `wake_when: stdout` and `missed_run: skip`. A clean sweep then has nothing to say, a stuck message is a failed run, which health and the outside watch read from the runs, and a missed sweep is covered by the next one.
+- **Its daemon runs the broker and the inbound watcher as units, and the aged sweep as a schedule** [MIS-0002-R54 (periodic_mail_clock_MUST_be_schedule)]. The schedule runs `inbound sweep --quiet`, with `wake_when: stdout` and `missed_run: skip`. A clean sweep then has nothing to say, and a missed sweep is covered by the next one.
+- **A stuck message is a failed run, recorded and shown, and nobody is alerted yet.** The run is in the event log, `pd status` shows the schedule's `FAILED` verdict with how the run ended, and `inbound health`, which runs the sweep itself, exits unhealthy. A failed run doesn't make the daemon unhealthy, though, and the outside watch has no verdict for one, so no alert reaches a person (13).
 - **The watcher beats its liveness from its loop, and doesn't sweep.** Its 15 s drain is that unit's own loop, whose health is the unit's liveness, and a skipped drain owes nothing, since the next one reads the same spool. So it isn't a schedule.
 - **A unit that runs `inbound watchdog` or `inbound sweep` is refused when `agents.yaml` loads.** A periodic check belongs in `schedules`, where its runs are recorded, and the daemon now notices the watcher's death, which was the watchdog's reason to exist.
 - **What a deployment must do:** declare `services.amail_broker.primal_daemon` with those two units and that schedule before it takes this version of MacEff. `docs/arch_v0.3_named_agents/APPENDIX_A_YAML_SCHEMAS.md` shows the block.
@@ -730,6 +731,9 @@ Specified in MIS-0002 and arriving with their landing steps, each in the pull re
 - **The end of R107's transitional rule** [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)] (1.4): until an agent declares `operator_channels`, every channel but the MacEff channel counts as the operator's.
 - **Observation** (5): messages from an onlooker into the observed session, an optional feature that nobody has built. Wherever one is built, its source comes from the transport and the onlooker's card from the invitation [MIS-0002-R95 (onlooker_message_MUST_carry_transport_source)] [MIS-0002-R116 (onlooker_card_MUST_come_from_invitation)].
 - **macOS grants at install** (3.2): the install-time probe, and the notice that names a denied grant [MIS-0002-R64 (adapter_MUST_test_grants_at_install)] [MIS-0002-R65 (denied_grant_MUST_raise_notice)].
+
+Not specified as a requirement, and listed so that nobody assumes it:
+- **An alert on a failed run** (7.1, 10.1). The outside watch reads liveness and runs owed against runs done, and a failed run is neither. So a schedule whose runs fail, such as the broker's sweep finding stuck mail, is recorded and shown, and tells no one.
 
 Until a section lands, the rules in force are the existing policies: `service_supervision`, `notification_delivery` and `amail`.
 

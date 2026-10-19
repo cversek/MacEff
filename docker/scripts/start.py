@@ -2372,8 +2372,9 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
     services.amail_broker.primal_daemon, which start-up renders and starts with every other
     daemon (MIS-0002-R53 (mail_broker_MUST_be_managed), MIS-0002-R54
     (periodic_mail_clock_MUST_be_schedule)). The daemon restarts a unit that exits or goes
-    silent, and records each run of the sweep, so the chain ends at the outside watch that
-    supervises the daemon.
+    silent, and the outside watch supervises the daemon. Each sweep run is recorded, and one
+    that finds stuck mail is a failed run that `pd status` shows. That is detection, and not yet
+    notification: nothing alerts a person on a failed run (persistent_layer 13).
 
     A deployment that configures the broker but declares no such daemon fails this step, by
     name, after everything else in it has run: mail would otherwise have no broker at all.

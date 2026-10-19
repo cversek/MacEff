@@ -515,9 +515,11 @@ def test_periodic_clock_is_schedule(tmp_path, monkeypatch):
     sweeps (test_amail_watch_resilience.py). So a declaration that runs the sweep or the watchdog
     as a unit is refused when agents.yaml loads, the sweep declared as a schedule loads, and
     start-up launches no mail process of its own."""
-    for verb in ("sweep", "watchdog"):
-        looping = {**BROKER_DAEMON, "units": BROKER_DAEMON["units"] + [
-            _mail_unit("inbound-" + verb, "macf.amail.daemons.inbound", verb)]}
+    by_path = {"name": "inbound-sweep", "command": ["/opt/macf_tools/src/macf/amail/daemons/inbound.py", "sweep"],
+               "account": "amail_broker", "restart": "always", "liveness_interval_s": 60, "memory_limit_mb": 64}
+    for unit in [_mail_unit("inbound-" + verb, "macf.amail.daemons.inbound", verb)
+                 for verb in ("sweep", "watchdog")] + [by_path]:
+        looping = {**BROKER_DAEMON, "units": BROKER_DAEMON["units"] + [unit]}
         with pytest.raises(ValidationError, match="R54"):
             _agents_yaml({"amail_broker": {"calling_card": "AmailBroker", "primal_daemon": looping}})
     cfg = _agents_yaml({"amail_broker": {"calling_card": "AmailBroker", "primal_daemon": BROKER_DAEMON}})
