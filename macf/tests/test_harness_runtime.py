@@ -38,6 +38,7 @@ and end -- a probe that outlives its probing is a tmux session nobody owns.
 
 import json
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -247,7 +248,7 @@ class TestTheFixtureIsolatesAndCleansUp:
         # passes whether or not the reap works -- which is exactly what the first
         # version of this test did, in 0.77s, with the reap disabled.
         p.start_pane(
-            f"/usr/bin/env python3 -m macf.supervisor _run_loop "
+            f"{shlex.quote(sys.executable)} -m macf.supervisor _run_loop "
             f"--name {p.session} --delay 1 --tmux-session {p.session} "
             f"-- {p.bin}/claude"
         )
@@ -387,7 +388,7 @@ class TestARestartLoopIsVisibleAsASequence:
     def test_a_healthy_client_is_started_exactly_once(self, probe):
         probe.install_client(mode="stay")
         probe.start_pane(
-            f"/usr/bin/env python3 -m macf.supervisor _run_loop "
+            f"{shlex.quote(sys.executable)} -m macf.supervisor _run_loop "
             f"--name {probe.session} --delay 1 --tmux-session {probe.session} "
             f"-- {probe.bin}/claude"
         )
@@ -403,7 +404,7 @@ class TestARestartLoopIsVisibleAsASequence:
         loop is not a detector."""
         probe.install_client(mode="exit", lifetime=0.3, exit_code=0)
         probe.start_pane(
-            f"/usr/bin/env python3 -m macf.supervisor _run_loop "
+            f"{shlex.quote(sys.executable)} -m macf.supervisor _run_loop "
             f"--name {probe.session} --delay 1 --tmux-session {probe.session} "
             f"-- {probe.bin}/claude"
         )
