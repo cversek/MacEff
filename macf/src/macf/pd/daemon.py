@@ -552,6 +552,8 @@ class Daemon:
                      "asked_by_pid": creds.pid}
             if not append_event(EVENT_ENTRY_ADDED, entry):
                 return Response(ok=False, error="the entry could not be recorded in the event log")
+            if self.scheduler is not None:
+                self.scheduler.add_entry(entry)
         held = fold(read_events(reverse=False, scope="all", only=(EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED)), self.card)
         return Response(ok=True, entries=list(held.values()))
 

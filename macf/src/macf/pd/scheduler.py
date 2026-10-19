@@ -58,7 +58,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 from zoneinfo import ZoneInfo
@@ -94,6 +94,10 @@ NOTICE_RUN_FAILED = "pd_run_failed"
 EVENT_INSTALLED = "pd_declaration_installed"
 #: The notice a schedule changed since that record raises.
 NOTICE_SCHEDULE_CHANGED = "pd_schedule_changed"
+#: An agent's own entry, due: its notice's id is the entry's (the scheduler design, 4.1).
+NOTICE_ENTRY_DUE = "pd_entry_due"
+#: An entry fired for an instant, written before its notice, so a restart never fires it again.
+EVENT_ENTRY_FIRED = "pd_entry_fired"
 
 
 def schedule_digests(declaration: Declaration, agent_home: Optional[Path] = None) -> Dict[str, str]:
@@ -209,6 +213,10 @@ class Scheduler:
     deferred: Dict[str, Optional[datetime]] = field(default_factory=dict)
     #: Each schedule's pass failure last recorded, so the same failure isn't recorded every pass.
     pass_failed: Dict[str, str] = field(default_factory=dict)
+    #: The agent's own entries, folded from the event log at boot and added by the daemon as
+    #: it records them, and the instant each last fired for.
+    entries: Dict[str, dict] = field(default_factory=dict)
+    entry_fired: Dict[str, datetime] = field(default_factory=dict)
 
     def _say(self, event: str, data: dict) -> None:
         if not self.append(event, {"agent": self.card, **data}):
@@ -279,6 +287,7 @@ class Scheduler:
                     except OSError as e:
                         print(f"⚠️ MACF: pd: the prompt for {s.name} can't be read at start ({e}); "
                               f"its runs fail until the daemon restarts with it in place", file=sys.stderr)
+        self._load_entries()
 
     def _changed_since_install(self, s: Schedule) -> str:
         if not self.check_installed:
@@ -351,6 +360,48 @@ class Scheduler:
             if s.name in self.running or s.name not in self.runnable:
                 continue
             self._guarded(s.name, lambda: self._pass(s, now))
+        for entry_id in list(self.entries):
+            self._guarded(entry_id, lambda: self._fire_entry(entry_id, now))
+
+    def add_entry(self, entry: dict) -> None:
+        """An entry the daemon has just recorded, so it fires without waiting for a restart."""
+        self.entries[entry["id"]] = entry
+
+    def _load_entries(self) -> None:
+        """The entries the log folds to, and the instant each last fired for (R16)."""
+        from macf.pd.entries import EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED, fold
+        read = self.events or (lambda: read_events(reverse=True, scope="all",
+                                                   only=(EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED, EVENT_ENTRY_FIRED)))
+        rows = list(read())                      # newest first
+        self.entries = fold(reversed(rows), self.card)
+        for event in rows:
+            data = event.get("data") or {}
+            if event.get("event") == EVENT_ENTRY_FIRED and data.get("agent") == self.card:
+                fired = _when(data.get("for"))
+                if fired is not None:
+                    self.entry_fired.setdefault(data.get("id"), fired)
+
+    def _fire_entry(self, entry_id: str, now: datetime) -> None:
+        """Fire an entry that is due: once, for the newest instant owed, however many passed while
+        the daemon was down. The firing is recorded before the notice is raised (R26)."""
+        from macf.pd.entries import OneShot, parse_when
+        entry = self.entries[entry_id]
+        tz = timezone.utc if entry.get("zone") in (None, "UTC") else ZoneInfo(entry["zone"])
+        start = _when(entry.get("start"))
+        try:
+            when = OneShot(datetime.fromisoformat(entry["when"]))
+        except ValueError:
+            when = parse_when(entry["when"], tz, start, start=start)
+        due = when.next_after(self.entry_fired.get(entry_id) or start - timedelta(seconds=1))
+        if due is None or due > now:
+            return
+        missed = 0
+        while (later := when.next_after(due)) is not None and later <= now and missed < 10000:
+            due, missed = later, missed + 1
+        self.entry_fired[entry_id] = due
+        self._say(EVENT_ENTRY_FIRED, {"id": entry_id, "for": _iso(due), "missed": missed})
+        if self.on_notice is not None:
+            self.on_notice(NOTICE_ENTRY_DUE, entry_id)
 
     def _guarded(self, name: str, step: Callable[[], None]) -> None:
         """Run one schedule's part of a pass. An exception costs that schedule this pass, and

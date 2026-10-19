@@ -91,3 +91,30 @@ def test_only_the_live_session_makes_an_entry(tmp_path, base, run_daemon, isolat
     assert ENTRY_ID.match(entry["id"]) and entry["purpose"] == "check the pace"
     assert entry["when"] == entry["first"]                  # "in 20m" fixed at its instant
     assert ask(daemon, {"op": "entry_list"})["entries"] == [entry]
+
+
+def test_a_due_entry_fires_once_through_the_channel_even_across_a_restart(tmp_path):
+    """A wake entry fires at its time as pd_entry_due, whose id is the entry's, through the
+    channel's own record. Not before its time, and once: a daemon that restarts reads the
+    firing back and doesn't fire it again. A recurring entry down across several firings fires
+    once, for the newest (the scheduler design, 4.1 and 6)."""
+    from channel_receiver import ChannelReceiver
+    from macf.pd import scheduler as sc
+    from macf.pd.entries import EVENT_ENTRY_ADDED
+    from test_pd_schedule import CARD, Log, at, make_scheduler
+    log, now = Log(), [at("2026-10-19 12:00")]
+    once, daily = new_entry_id(), new_entry_id()
+    for entry_id, when in ((once, "2026-10-19T12:20:00+00:00"), (daily, "cron:0 9 * * *")):
+        log.append(EVENT_ENTRY_ADDED, {"agent": CARD, "id": entry_id, "when": when, "zone": "UTC",
+                                       "start": "2026-10-16T08:00:00+00:00", "action": "wake", "missed": "once"})
+    channel = ChannelReceiver(tmp_path / "agent")
+    s = make_scheduler(tmp_path, [], log, now, on_notice=channel)
+    s.tick()
+    assert channel.received == [("pd_entry_due", daily)]       # 09:00 on the 16th to the 19th: once
+    assert log.of(sc.EVENT_ENTRY_FIRED)[0]["missed"] == 3
+    now[0] = at("2026-10-19 12:20")
+    s.tick()
+    assert channel.received[-1] == ("pd_entry_due", once)
+    restarted = make_scheduler(tmp_path, [], log, now, on_notice=channel)
+    restarted.tick()
+    assert len(channel.received) == 2                          # nothing fires again
