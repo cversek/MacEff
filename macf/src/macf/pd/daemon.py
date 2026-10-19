@@ -18,7 +18,7 @@ import socket
 import sys
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, Iterable, List, Optional
 
 from pydantic import ValidationError
 
@@ -59,6 +59,9 @@ TICK_S = 0.25
 #: taken. An hour keeps the record far inside that window at no measurable cost.
 RECORD_REFRESH_S = 3600.0
 
+#: The notice a denied grant raises (MIS-0002-R65); the channel names its pointer.
+GRANT_NOTICE_SOURCE = "pd_grant_denied"
+
 #: How long a connected client has to send its whole request line, and the daemon to send
 #: its reply.
 REQUEST_TIMEOUT_S = 2.0
@@ -88,9 +91,12 @@ class Daemon:
 
     def __init__(self, agent_home: Path, *, base: Optional[Path] = None,
                  record_refresh_s: float = RECORD_REFRESH_S,
-                 managed_settings: Optional[List[Path]] = None, **core_options):
+                 managed_settings: Optional[List[Path]] = None,
+                 grant_probes: Optional[Callable[[], Iterable[dict]]] = None, **core_options):
         #: Where the organization allowlist is read: None, the client's own paths.
         self._managed = list(managed_settings) if managed_settings is not None else None
+        #: The recorded grant probes, newest first: None, the event log.
+        self._grant_probes = grant_probes
         self._record_refresh_s = record_refresh_s
         self._record_kept = time.monotonic()
         self.home = Path(agent_home)
@@ -132,6 +138,11 @@ class Daemon:
             print("⚠️ MACF: pd: notice_routes doesn't route 'pd_carried' to 'agent' or 'both', so after "
                   "a restart or a compaction the session isn't told what was carried, changed and lost "
                   "(MIS-0002-R47)", file=sys.stderr)
+        if any(u.privacy_grants for u in self.core.declaration.units) \
+                and self.core.declaration.notice_routes.get(GRANT_NOTICE_SOURCE) not in ("agent", "both"):
+            print(f"⚠️ MACF: pd: notice_routes doesn't route '{GRANT_NOTICE_SOURCE}' to 'agent' or 'both', "
+                  f"so a declared grant found denied is said only on this stream (MIS-0002-R65)",
+                  file=sys.stderr)
         connect_s = self.core.declaration.channel_connect_s
         #: Where a channel is expected, whether it is dark (R115); the outside watch tells the operator.
         self.dark_channel = DarkChannel(self.card, connect_s) if connect_s else None
@@ -186,10 +197,40 @@ class Daemon:
         self._compare_allowlist()
         self.core.boot()
         self.notifier.boot()
+        self._notice_denied_grants()
         if self.unread_mail is not None:
             self.unread_mail.boot()
         if self.scheduler is not None:
             self.scheduler.boot()
+
+    def _notice_denied_grants(self) -> None:
+        """Owe the agent a notice for each declared grant the last install found denied
+        (MIS-0002-R65 (denied_grant_MUST_raise_notice)). The probe runs only at install,
+        where a person can answer its dialogs, so a start reads its record instead of
+        probing again. The notice's id names the grant; the event log holds the rest."""
+        import re
+        from macf.agent_events_log import read_events
+        from macf.pd.cli import EVENT_GRANT_PROBE
+        probes = self._grant_probes or (lambda: read_events(reverse=True, scope="all",
+                                                            only=(EVENT_GRANT_PROBE,)))
+        declared = {g for u in self.core.declaration.units for g in u.privacy_grants}
+        for event in probes():
+            data = event.get("data") or {}
+            if not isinstance(data, dict) or data.get("agent") != self.card:
+                continue
+            if not data.get("tested"):
+                # The newest install couldn't test them, so nothing older speaks for them now.
+                print(f"⚠️ MACF: pd: the last pd install couldn't test the declared grants "
+                      f"({data.get('why', 'no reason recorded')}); none is noticed as denied", file=sys.stderr)
+                return
+            verdicts = data.get("verdicts") or {}
+            stamp = int(event.get("timestamp") or 0)
+            for grant in sorted(g for g, v in verdicts.items() if v == "denied" and g in declared):
+                print(f"⚠️ MACF: pd: the declared grant {grant} was denied when pd install last "
+                      f"tested it", file=sys.stderr)
+                self.notifier.raise_notice(GRANT_NOTICE_SOURCE,
+                                           f"pd_grant_denied:{re.sub(r'[^A-Za-z0-9._:-]', '-', grant)}:{stamp}")
+            return                     # only the newest probe speaks for the grants now
 
     def _compare_allowlist(self) -> None:
         """Say at start where the organization allowlist and the declaration disagree
