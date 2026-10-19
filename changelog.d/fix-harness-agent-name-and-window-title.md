@@ -1,0 +1,4 @@
+### Fixed
+
+- **Harness commands in a per-project agent's home name that agent** (`utils/harness.py`). `resolve_agent` took `MACEFF_AGENT_NAME` before the calling card, so a shell rc exporting the host's resident agent's name made `harness status` and `harness attach` in another agent's home act on the resident agent. In a home with its own identity file the card now comes first, as it already did for `get_agent_identity()`, and the variable is still used when no card resolves.
+- **The session unit's window names the agent** (`pd/session_unit.py`). The client titled its terminal with its version, so an attached window read "2.1.303 (claude)". The unit's tmux server now names the window after the calling card, sets the terminal title to it, and turns `allow-set-title` off, saying so at start where an older tmux lacks that option. Each new test fails on the old code.
