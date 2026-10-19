@@ -262,3 +262,25 @@ def test_a_change_in_what_the_unit_waits_on_beats_at_once(monkeypatch):
     finally:
         hb.stop()
         halt.set()
+
+
+def test_a_wedged_loop_never_beats_early_on_a_change(monkeypatch):
+    """Only a loop that has passed since the last beat may beat early (R14, R18): a session
+    whose loop has wedged and which then shows a dialog, or loses its login, must stay
+    silent, so its daemon fails it for silence rather than reading it alive."""
+    monkeypatch.setattr(lv, "CHANGE_CHECK_S", 0.02)
+    events, append = recorder()
+    asked = {"now": None}
+    hb = lv.Heartbeat("Resident@1a2b3c", "session", 60.0, append=append,
+                      waiting_on=lambda: asked["now"]).start()
+    try:
+        hb.tick()                                       # the loop passes once, then wedges
+        deadline = time.monotonic() + 1.0
+        while not events and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert len(events) == 1
+        asked["now"] = "a permission dialog for Bash, open since 21:34"
+        time.sleep(0.2)                                 # ten change checks, and no pass
+        assert len(events) == 1
+    finally:
+        hb.stop()
