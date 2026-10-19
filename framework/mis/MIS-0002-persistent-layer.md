@@ -159,7 +159,7 @@ stateDiagram-v2
 ### 6.4 Unit states
 
 - **R20** [MUST · decidable: macf/tests/test_primal_daemon.py::test_states] Each managed unit MUST be in one of these states: declared, starting, running, waiting on a person, failed or stopped. (unit_MUST_have_listed_state)
-- **R21** [MUST · decidable: macf/tests/test_pd_harness.py::test_waiting_reported (planned)] When a managed unit is blocked on a prompt that only a person can answer, the primal daemon MUST report the state waiting on a person. (pd_MUST_report_waiting_on_person)
+- **R21** [MUST · decidable: macf/tests/test_pd_harness.py::test_waiting_reported] When a managed unit is blocked on a prompt that only a person can answer, the primal daemon MUST report the state waiting on a person. (pd_MUST_report_waiting_on_person)
 - **R22** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_restart_while_waiting] The persistent layer MUST NOT restart a unit because the unit is waiting on a person. (layer_MUST-NOT_restart_waiting_unit)
 - **R23** [MUST NOT · judgment: the head maintainer, at review of each harness adapter] The persistent layer MUST NOT answer a permission prompt, or approve any act on an agent's behalf. (layer_MUST-NOT_answer_prompts)
 - **R78** [MUST NOT · judgment: the operator, at review of each declaration] The persistent layer MUST NOT widen an agent's permissions. (layer_MUST-NOT_widen_permissions)
@@ -427,7 +427,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R18 | decidable | macf/tests/test_pd_readout.py::test_overdue_is_unhealthy | passing |
 | R19 | decidable | macf/tests/test_pd_readout.py::test_auth_failure_is_failed | passing |
 | R20 | decidable | macf/tests/test_primal_daemon.py::test_states | passing |
-| R21 | decidable | macf/tests/test_pd_harness.py::test_waiting_reported | planned (the test passes for a session the daemon starts itself; an adopted session writes no liveness, so a dialog it waits on isn't reported yet) |
+| R21 | decidable | macf/tests/test_pd_harness.py::test_waiting_reported | passing |
 | R22 | decidable | macf/tests/test_primal_daemon.py::test_no_restart_while_waiting | passing |
 | R23 | judgment | the head maintainer, at review of each harness adapter | standing |
 | R24 | decidable | macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails | passing |
@@ -674,6 +674,7 @@ Objections recorded:
   The persistent_layer policy's section 13 drops R19, R124 and R47's notice, which have landed, and keeps what R47 still lacks, the refusal at load. Section 12.4 no longer says that compaction on request arrives with the session unit, which landed without it. No requirement changed.
 - 2026-10-18: R64 (adapter_MUST_test_grants_at_install) and R65 (denied_grant_MUST_raise_notice) move to passing, with the code and the tests they name. `pd install` tests each declared grant from a one-shot LaunchAgent that runs the daemon's own interpreter, and a daemon that starts owes a `pd_grant_denied` notice, naming the grant, for each one the newest probe found denied. Run live on macOS 15.5 from launchd: local_network held, full_disk_access and accessibility denied, keychain untested, answered in 0.3 s with no dialog, and the job booted out after. Editorial (mis 8.1).
 - 2026-10-18: R53 (mail_broker_MUST_be_managed) and R54 (periodic_mail_clock_MUST_be_schedule) move to passing, with the code and the tests they name. In a container, the broker account's own primal daemon runs the broker and the inbound watcher as units and the aged sweep as a schedule, and the start script starts none of them. The inbound watcher's 15 s drain is that unit's own loop, not a clock, as the head maintainer ruled on #552. Editorial (mis 8.1).
+- 2026-10-18: R21 (pd_MUST_report_waiting_on_person) moves to passing. Its adopted half lands: the core reads what an adopted session waits on from the event log by that session's id, since such a session writes no liveness, and `test_waiting_reported` now runs that case too. The session unit's beat also stops waiting out its interval when what the session waits on changes, so a wait shows and clears within seconds (#728). Editorial (mis 8.1).
 
 ## Wiki-Links
 
