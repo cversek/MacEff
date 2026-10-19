@@ -47,3 +47,22 @@ def test_each_shape_says_when_it_fires():
 def test_a_time_it_cannot_read_is_refused_by_name(text, says):
     with pytest.raises(ValueError, match=says):
         parse_when(text, NEW_YORK, NOW)
+
+
+def test_the_entries_held_are_what_the_events_fold_to():
+    """The event log is the store (R16): an entry added is held until it's removed, and another
+    agent's events, or a record whose id isn't an entry id, change nothing."""
+    from macf.pd.entries import EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED, fold
+    me, other = "Tester@abc123", "Other@def456"
+    a, b = new_entry_id(), new_entry_id()
+
+    def ev(kind, card, entry_id, **data):
+        return {"event": kind, "data": {"agent": card, "id": entry_id, **data}}
+    events = [ev(EVENT_ENTRY_ADDED, me, a, purpose="check the pace"),
+              ev(EVENT_ENTRY_ADDED, me, b, purpose="the weekly audit"),
+              ev(EVENT_ENTRY_ADDED, other, new_entry_id(), purpose="not mine"),
+              ev(EVENT_ENTRY_ADDED, me, "Tester@abc123-1", purpose="not an entry id"),
+              ev(EVENT_ENTRY_REMOVED, other, b),
+              ev(EVENT_ENTRY_REMOVED, me, a)]
+    held = fold(events, me)
+    assert list(held) == [b] and held[b]["purpose"] == "the weekly audit"

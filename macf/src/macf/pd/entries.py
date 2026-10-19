@@ -14,7 +14,7 @@ times: nothing here reads a clock.
 import re
 import secrets
 from datetime import datetime, time, timedelta, tzinfo
-from typing import Iterable, Optional, Union
+from typing import Dict, Iterable, Optional, Union
 
 from macf.pd.recurrence import Recurrence
 from macf.pd.schedule import CronExpr, _utc
@@ -28,8 +28,33 @@ _TOMORROW = re.compile(r"^tomorrow (\d{1,2}):(\d{2})$")
 _UNITS = {"m": "minutes", "h": "hours", "d": "days"}
 
 
+#: An entry made, with every field it holds, and an entry removed. The event log is the only
+#: store (MIS-0002-R16 (layer_MUST-NOT_keep_second_ledger)): the entries an agent holds are
+#: what these events fold to.
+EVENT_ENTRY_ADDED = "pd_entry_added"
+EVENT_ENTRY_REMOVED = "pd_entry_removed"
+
+
 def new_entry_id() -> str:
     return "e-" + secrets.token_hex(6)
+
+
+def fold(events: Iterable[dict], card: str) -> Dict[str, dict]:
+    """The entries the agent ``card`` holds, from its events read oldest first. Another agent's
+    events, and a record whose id isn't an entry id, change nothing."""
+    held: Dict[str, dict] = {}
+    for event in events:
+        data = event.get("data") if isinstance(event, dict) else None
+        if not isinstance(data, dict) or data.get("agent") != card:
+            continue
+        entry_id = data.get("id")
+        if not isinstance(entry_id, str) or not ENTRY_ID.match(entry_id):
+            continue
+        if event.get("event") == EVENT_ENTRY_ADDED:
+            held[entry_id] = data
+        elif event.get("event") == EVENT_ENTRY_REMOVED:
+            held.pop(entry_id, None)
+    return held
 
 
 class OneShot:
