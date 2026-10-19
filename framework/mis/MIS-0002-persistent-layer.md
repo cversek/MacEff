@@ -159,7 +159,7 @@ stateDiagram-v2
 ### 6.4 Unit states
 
 - **R20** [MUST · decidable: macf/tests/test_primal_daemon.py::test_states] Each managed unit MUST be in one of these states: declared, starting, running, waiting on a person, failed or stopped. (unit_MUST_have_listed_state)
-- **R21** [MUST · decidable: macf/tests/test_pd_harness.py::test_waiting_reported (planned)] When a managed unit is blocked on a prompt that only a person can answer, the primal daemon MUST report the state waiting on a person. (pd_MUST_report_waiting_on_person)
+- **R21** [MUST · decidable: macf/tests/test_pd_harness.py::test_waiting_reported] When a managed unit is blocked on a prompt that only a person can answer, the primal daemon MUST report the state waiting on a person. (pd_MUST_report_waiting_on_person)
 - **R22** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_restart_while_waiting] The persistent layer MUST NOT restart a unit because the unit is waiting on a person. (layer_MUST-NOT_restart_waiting_unit)
 - **R23** [MUST NOT · judgment: the head maintainer, at review of each harness adapter] The persistent layer MUST NOT answer a permission prompt, or approve any act on an agent's behalf. (layer_MUST-NOT_answer_prompts)
 - **R78** [MUST NOT · judgment: the operator, at review of each declaration] The persistent layer MUST NOT widen an agent's permissions. (layer_MUST-NOT_widen_permissions)
@@ -427,7 +427,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R18 | decidable | macf/tests/test_pd_readout.py::test_overdue_is_unhealthy | passing |
 | R19 | decidable | macf/tests/test_pd_readout.py::test_auth_failure_is_failed | passing |
 | R20 | decidable | macf/tests/test_primal_daemon.py::test_states | passing |
-| R21 | decidable | macf/tests/test_pd_harness.py::test_waiting_reported | planned (the test passes for a session the daemon starts itself; an adopted session writes no liveness, so a dialog it waits on isn't reported yet) |
+| R21 | decidable | macf/tests/test_pd_harness.py::test_waiting_reported | passing |
 | R22 | decidable | macf/tests/test_primal_daemon.py::test_no_restart_while_waiting | passing |
 | R23 | judgment | the head maintainer, at review of each harness adapter | standing |
 | R24 | decidable | macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails | passing |
@@ -672,6 +672,7 @@ Objections recorded:
   - R56 (mail_SHOULD_report_state_to_sender) moves to recorded: not met, by the head maintainer on 2026-10-18, waiting on MIS-0004 (#520). The departure from this SHOULD is recorded below the Conformance table, as the Secretary ruled on #552.
   - R124 (allowlist_declaration_MUST_list_every_channel), R19 (auth_failure_MUST_read_failed) and R99 (onlooker_MUST-NOT_get_operator_surface) moved to passing in #717, #718 and #719 with no line here. This entry records them (MIS-0001-R34 (accepted_MIS_MUST_change_editorially)). The requirement lines of R19 and R124 drop their "(planned)" marker, as sweep 4 did for the passing rows.
   The persistent_layer policy's section 13 drops R19, R124 and R47's notice, which have landed, and keeps what R47 still lacks, the refusal at load. Section 12.4 no longer says that compaction on request arrives with the session unit, which landed without it. No requirement changed.
+- 2026-10-18: R21 (pd_MUST_report_waiting_on_person) moves to passing. Its adopted half lands: the core reads what an adopted session waits on from the event log by that session's id, since such a session writes no liveness, and `test_waiting_reported` now runs that case too. The session unit's beat also stops waiting out its interval when what the session waits on changes, so a wait shows and clears within seconds (#728). Editorial (mis 8.1).
 
 ## Wiki-Links
 

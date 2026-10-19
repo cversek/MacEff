@@ -15,6 +15,7 @@ with or without a daemon.
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -55,6 +56,10 @@ def emit(card: str, unit: str, interval_s: float, in_flight: Optional[int] = Non
     # field: Liveness refuses unknown keys, and an older daemon would refuse "auth_failed": null.
     return append(EVENT_LIVENESS, liveness_event(card, unit, interval_s, in_flight, pid, waiting_on,
                                                  auth_failed).model_dump(exclude_none=True))
+
+
+#: How often a heartbeat asks, between beats, whether what the unit waits on has changed.
+CHANGE_CHECK_S = 5.0
 
 
 class Heartbeat:
@@ -107,6 +112,7 @@ class Heartbeat:
 
     def _run(self) -> None:
         stalled = False
+        said = None
         while True:
             if not self._ticked.wait(self.interval_s):
                 if not stalled:
@@ -118,12 +124,29 @@ class Heartbeat:
                 return
             self._ticked.clear()
             stalled = False
+            said = (self._waiting_on(), self._auth_failed())
             if not emit(self.card, self.unit, self.interval_s, self._in_flight(), self._append, self.pid,
-                        self._waiting_on(), self._auth_failed()):
+                        *said):
                 print(f"⚠️ MACF: pd: liveness for {self.unit} was not recorded (the unit will read "
                       f"overdue if this persists)", file=sys.stderr)
-            if self._stop.wait(self.interval_s):
+            if self._wait_or_change(said):
                 return
+
+    def _wait_or_change(self, said) -> bool:
+        """Wait out the interval, but end the wait early when what the unit waits on a person
+        for, or its login failure, differs from what the last beat said: a person is asked, or
+        answers, between two beats, and the daemon should know within seconds, not an interval
+        later (MIS-0002-R21, R19). Only a loop that has passed since may beat early. Returns
+        whether the heartbeat was stopped."""
+        deadline = time.monotonic() + self.interval_s
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return False
+            if self._stop.wait(min(CHANGE_CHECK_S, left)):
+                return True
+            if self._ticked.is_set() and (self._waiting_on(), self._auth_failed()) != said:
+                return False
 
 
 def heartbeat_from_env(in_flight: Optional[Callable[[], Optional[int]]] = None,
