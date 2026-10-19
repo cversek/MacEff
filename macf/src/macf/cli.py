@@ -1441,10 +1441,13 @@ def _claude_launcher() -> tuple:
 
 def cmd_claude_config_idle_compaction(args: argparse.Namespace) -> int:
     """Report or set the client's idle compaction for this agent (MIS-0002-R126)."""
-    from .utils.claude_settings import idle_compaction_status, set_idle_compaction
+    from .utils.claude_settings import idle_compaction_status, session_project_root, set_idle_compaction
+    # The session's project, wherever this runs: the settings the client reads at the
+    # session's start are that project's, not those of the directory a shell is in (#722).
+    root, source = session_project_root()
     if args.action == "status":
-        status = idle_compaction_status()
-        print(f"idle compaction: {status['state']} ({status['settings_path']})")
+        status = idle_compaction_status(root)
+        print(f"idle compaction: {status['state']} ({status['settings_path']}, from {source})")
         try:
             path, version = _claude_launcher()
             print(f"   client the next start runs: {path} ({version or 'version unknown'})")
@@ -1454,11 +1457,11 @@ def cmd_claude_config_idle_compaction(args: argparse.Namespace) -> int:
         return 0
     try:
         path, version = _claude_launcher()
-        result = set_idle_compaction(args.action == "on", client_version=version)
+        result = set_idle_compaction(args.action == "on", client_version=version, project_root=root)
     except (OSError, subprocess.SubprocessError, ValueError) as e:
         print(f"❌ {e}", file=sys.stderr)
         return 1
-    print(f"   client checked: {path} ({version})")
+    print(f"   client checked: {path} ({version}); the session's project, from {source}")
     if result["changed"]:
         from .agent_events_log import append_event
         append_event("harness_setting_changed", {"setting": "idleCompaction",

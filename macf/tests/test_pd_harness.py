@@ -65,6 +65,33 @@ def test_turning_it_back_on_removes_the_key(project):
     assert idle_compaction_status(project)["state"] == "client default"
 
 
+def test_the_sessions_project_is_read_wherever_the_command_runs(tmp_path, monkeypatch):
+    """#722: run from inside another checkout with its own .claude/, the status and the switch
+    use the project the session starts in, from its unit's --project-dir, and say so. Without a
+    session unit naming one, the lookup by working directory is used, and named as such."""
+    from macf.pd.interface import declaration_path
+    from macf.utils.claude_settings import session_project_root
+    home, work, checkout = tmp_path / "home", tmp_path / "work", tmp_path / "checkout"
+    for d in (work / ".claude", checkout / ".claude", checkout / ".git"):
+        d.mkdir(parents=True)
+    path = declaration_path(home)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"version": 1, "agent": "Resident@1a2b3c", "units": [{
+        "name": "session", "kind": "session", "account": "resident",
+        "command": ["python", "-m", "macf.cli", "harness", "unit", "--home", "{agent_home}",
+                    "--project-dir", str(work), "--no-proxy"]}]}))
+    monkeypatch.chdir(checkout)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    root, source = session_project_root(home)
+    assert root == work and "session unit" in source
+    set_idle_compaction(False, client_version="2.1.296", project_root=root)
+    assert idle_compaction_status(root)["state"] == "off"
+    assert idle_compaction_status(checkout)["state"] == "client default"   # the checkout is untouched
+    path.unlink()
+    root, source = session_project_root(home)
+    assert root == checkout and "current directory" in source
+
+
 def test_status_without_settings_file(tmp_path):
     """No settings file is the client default, reported plainly rather than raised."""
     status = idle_compaction_status(tmp_path)

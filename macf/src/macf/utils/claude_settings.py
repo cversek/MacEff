@@ -702,6 +702,34 @@ def _version_tuple(version: str) -> tuple:
         raise ValueError(f"cannot read a Claude Code version from {version!r}")
 
 
+def session_project_root(agent_home: Optional[Path] = None) -> tuple:
+    """The project this agent's session starts in, and where that was read: the settings the
+    client applies to the session are that project's (MIS-0002-R126). The session unit's
+    declared ``--project-dir`` decides it where there is one, then the harness's installed
+    choice. Only then does the lookup by ``CLAUDE_PROJECT_DIR``, git root and working directory
+    apply, and it names the directory a command happens to run in, so the source says so."""
+    from .paths import find_agent_home, find_project_root
+    home = Path(agent_home) if agent_home else find_agent_home()
+    try:
+        from macf.pd.interface import declaration_path
+        units = json.loads(declaration_path(home).read_text()).get("units", [])
+    except (OSError, ValueError, AttributeError):
+        units = []
+    for unit in units:
+        command = [str(word) for word in (unit.get("command") or [])] if isinstance(unit, dict) else []
+        if unit.get("kind") == "session" and "--project-dir" in command[:-1]:
+            value = command[command.index("--project-dir") + 1].replace("{agent_home}", str(home))
+            return Path(value), "the session unit's --project-dir"
+    try:
+        from .harness import default_params, load_settings
+        installed = load_settings(default_params(home=home)).project_dir
+    except Exception:              # an unreadable harness setting falls back, as no setting does
+        installed = None
+    if installed:
+        return Path(installed), "the harness's installed project"
+    return find_project_root(), "the current directory's project, since no session unit names one"
+
+
 def idle_compaction_status(project_root: Optional[Path] = None) -> dict:
     """The agent's idle-compaction setting: off, or the client default."""
     settings, settings_path = _read_settings(project_root)
