@@ -237,6 +237,19 @@ def proxy_environment(port: int, probe: Optional[Callable[[str], bool]] = None) 
             "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL": "1"}
 
 
+def window_title(agent: str) -> str:
+    """The Calling Card the session's window is named after, or the session identifier."""
+    from macf.utils.identity import calling_card_from_identifier, get_agent_identity
+    card = calling_card_from_identifier(agent)
+    if "@" in card:
+        return card
+    try:
+        found = get_agent_identity()
+    except (OSError, ValueError):
+        return agent
+    return found if found.split("@")[0] == agent and not found.endswith("@unknown") else agent
+
+
 def _tmux(tmux: str, env: Mapping[str, str], *args: str) -> subprocess.CompletedProcess:
     return subprocess.run([tmux, *args], env=dict(env), capture_output=True, text=True, timeout=15)
 
@@ -303,7 +316,20 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
     # -P prints the new pane's pid in the reply that creates it, while the server is
     # certainly up. Asked for afterwards (list-panes), it was lost when a stop reached the
     # server in between, and the session was then never reaped: CI saw it twice.
-    new = ["new-session", "-d", "-P", "-F", "#{pane_pid}", "-s", agent] + (["-c", str(project_dir)] if project_dir else []) + [str(child)]
+    # The window and the terminal attached to it are named after the agent. The client
+    # sets its own title (its version), which said nothing about whose session it was,
+    # so on this server, which holds only this session, it may not.
+    card = window_title(agent)
+    for option in (("set-titles", "on"), ("set-titles-string", card), ("allow-set-title", "off"),
+                   ("automatic-rename", "off")):
+        done = _tmux(tmux, env, "set-option", "-g", *option)
+        if done.returncode != 0:
+            # An older tmux has no allow-set-title; the window and the terminal still name
+            # the agent, and only the pane's own title is the client's.
+            print(f"⚠️ MACF: session unit: this tmux refused {option[0]} "
+                  f"({(done.stderr or done.stdout).strip()[:120]}); the window and the terminal "
+                  f"title still name the agent", file=sys.stderr)
+    new = ["new-session", "-d", "-P", "-F", "#{pane_pid}", "-s", agent, "-n", card] + (["-c", str(project_dir)] if project_dir else []) + [str(child)]
     made = _tmux(tmux, env, *new)
     if made.returncode != 0:
         print(f"⚠️ MACF: session unit: could not create session {agent}: "

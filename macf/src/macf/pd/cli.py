@@ -190,6 +190,9 @@ def cmd_pd_install(args: argparse.Namespace) -> int:
     # Recorded before the service manager can start the daemon: launchd starts it at load
     # (RunAtLoad), and a daemon that read no record would refuse every schedule.
     _record_schedules(card, declaration, home)
+    # Before the install too: the daemon reads the newest grant probe when it starts, and
+    # launchd starts it at load, so a probe recorded after would wait for its next start.
+    _probe_grants(tier, card, declaration, home)
     try:
         where = tier.install(card, home, force=args.force)
     except (OSError, RuntimeError) as e:
@@ -205,6 +208,41 @@ def cmd_pd_install(args: argparse.Namespace) -> int:
             print("note: linger is off, so the daemon stops at your last logout; "
                   "`loginctl enable-linger` keeps it running, and is the host operator's call")
     return 0
+
+
+#: The event each grant's verdict at install is recorded as; the daemon reads the newest
+#: at start and raises a notice for each denied one (MIS-0002-R65).
+EVENT_GRANT_PROBE = "pd_grant_probe"
+
+
+def _probe_grants(tier, card: str, declaration, home: Path) -> None:
+    """Test each unit's declared grants from the service manager's context, once, now that a
+    person ran the install (MIS-0002-R64 (adapter_MUST_test_grants_at_install)). A probe can
+    raise a permission dialog, so it runs only here, never at an unattended start."""
+    from macf.agent_events_log import append_event
+    wanted = {u.name: list(u.privacy_grants) for u in declaration.units if u.privacy_grants}
+    probe = getattr(tier, "probe_grants", None)
+    if not wanted or probe is None:
+        return                         # nothing declared, or a platform with no grants to test
+    grants = sorted({g for gs in wanted.values() for g in gs})
+    print(f"testing the declared grants from the service manager's context: {', '.join(grants)}. "
+          f"macOS may ask you to allow one; answer it at this Mac.")
+    try:
+        verdicts = probe(card, home, grants)
+    except (OSError, RuntimeError) as e:
+        print(f"⚠️ MACF: pd: the grants weren't tested: {e}", file=sys.stderr)
+        append_event(EVENT_GRANT_PROBE, {"agent": card, "tested": False, "why": str(e)})
+        return
+    for unit, unit_grants in sorted(wanted.items()):
+        for grant in unit_grants:
+            verdict = verdicts.get(grant, "untested: the probe gave no answer")
+            print(f"  {unit}: {grant}: {verdict}")
+    append_event(EVENT_GRANT_PROBE, {"agent": card, "tested": True, "units": wanted, "verdicts": verdicts})
+    denied = sorted(g for g, v in verdicts.items() if v == "denied")
+    if denied:
+        print(f"⚠️ MACF: pd: denied: {', '.join(denied)}. Grant each in System Settings, Privacy & "
+              f"Security, to {sys.executable}, then run pd install again; until then the daemon "
+              f"notices it at each start.", file=sys.stderr)
 
 
 def _record_schedules(card: str, declaration, home: Path) -> None:
