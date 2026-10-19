@@ -235,6 +235,7 @@ import subprocess  # noqa: E402
 import sys  # noqa: E402
 import time  # noqa: E402
 
+from channel_receiver import ChannelReceiver  # noqa: E402
 from macf.pd import scheduler as sc  # noqa: E402
 from macf.pd.interface import CommandRun, Declaration, PromptRun, Schedule  # noqa: E402
 
@@ -324,6 +325,34 @@ def test_wall_clock_cap(tmp_path):
     finish(s, timeout=15.0)
     done = log.of(sc.EVENT_DONE)[0]
     assert done["outcome"].startswith("killed: past its 0.3 s limit") and done["wake"] is False
+
+
+def test_every_failed_run_owes_a_notice(tmp_path):
+    """A run that fails by its exit code, is killed past its limit, or can't start owes the
+    agent the pd_run_failed notice, which arrives through the MacEff channel (#739). Without it
+    a check that keeps failing looks like one with nothing to say. A run with nothing to say,
+    and one whose condition holds, owe none."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    channel = ChannelReceiver(tmp_path / "agent")
+    s = make_scheduler(tmp_path, [
+        command_schedule(["/bin/sh", "-c", "exit 3"], name="exits"),
+        command_schedule(["/bin/sh", "-c", "trap '' TERM; sleep 60 & wait"], name="hangs", timeout_s=0.3),
+        command_schedule([str(tmp_path / "absent")], name="absent"),
+        command_schedule(["/bin/sh", "-c", "echo {runtime_dir}"], name="unvalued"),
+        Schedule(name="unread", cron="*/5 * * * *", missed_run=policy("skip"), target="isolated",
+                 run=PromptRun(prompt_file="absent.md"), timeout_s=60),
+        command_schedule(["/bin/sh", "-c", "exit 1"], name="quiet"),
+        command_schedule(["/bin/sh", "-c", "exit 0"], name="holds"),
+    ], log, now, client=_fake_client(tmp_path, []), on_notice=channel)
+    now[0] = at("2026-10-14 12:05")
+    s.tick()
+    finish(s, timeout=15.0)
+    outcomes = {d["schedule"]: d["outcome"] for d in log.of(sc.EVENT_DONE)}
+    assert outcomes["hangs"].startswith("killed")
+    assert all(outcomes[name].startswith("not started") for name in ("absent", "unvalued", "unread"))
+    stamp = int(at("2026-10-14 12:05").timestamp())
+    assert sorted(channel.received) == [("pd_run_failed", f"{name}:{stamp}")
+                                        for name in ("absent", "exits", "hangs", "unread", "unvalued")]
 
 
 def test_leases_released(tmp_path):
@@ -566,18 +595,18 @@ def test_run_cannot_schedule(tmp_path):
     # what pd install recorded, and says the rest isn't run until installed again.
     installed = sc.schedule_digests(Declaration(version=1, agent=CARD, timezone="UTC", schedules=[original],
                                                 notice_routes=ROUTED))
-    owed, after = [], Log()
+    channel, after = ChannelReceiver(tmp_path / "agent"), Log()
     after.append(sc.EVENT_INSTALLED, {"agent": CARD, "digests": installed})
     restarted = sc.Scheduler(Declaration.model_validate_json(on_disk.read_text()), CARD,
                              {"agent_home": str(tmp_path)}, work_dir=tmp_path / "runs", append=after.append,
                              events=after.read, now=lambda: now[0], check_installed=True,
-                             on_notice=lambda source, nid: owed.append(source) or True)
+                             on_notice=channel)
     restarted.boot()
     now[0] = at("2026-10-14 12:11")
     restarted.tick()
     assert not after.of(sc.EVENT_STARTED) and "planted" not in restarted.runnable
     assert "added since the last pd install" in after.of(sc.EVENT_NOT_RUN)[0]["reason"]
-    assert owed == ["pd_schedule_changed"]
+    assert [source for source, _ in channel.received] == ["pd_schedule_changed"]   # through the channel (#734)
 
 
 def _fake_client(tmp_path, denials):
@@ -637,28 +666,29 @@ def test_permissions_settled(tmp_path):
 def test_prompt_fails_run(tmp_path):
     """MIS-0002-R32 (run_MUST_fail_on_prompt): a prompt run the client denied anything met a
     permission prompt. It fails, naming the tools but never the result's text, and the agent
-    is owed the pd_run_failed notice, once per run. A run denied nothing raises no notice."""
+    is owed the pd_run_failed notice, once per run. The notice reaches the agent: it goes
+    through a notifier to the MacEff channel's own record (#734). A run denied nothing raises
+    no notice."""
     log, now = Log(), [at("2026-10-14 12:00")]
-    owed = []
+    channel = ChannelReceiver(tmp_path / "agent")
     client = _fake_client(tmp_path, [{"tool_name": "Write", "tool_use_id": "t1", "tool_input": {"file_path": "/x"}},
                                      {"tool_name": "Bash", "tool_use_id": "t2", "tool_input": {"command": "rm -rf ~"}}])
-    s = make_scheduler(tmp_path, [_prompt_schedule()], log, now, client=client,
-                       on_notice=lambda source, nid: owed.append((source, nid)) or True)
+    s = make_scheduler(tmp_path, [_prompt_schedule()], log, now, client=client, on_notice=channel)
     now[0] = at("2026-10-14 13:00")
     s.tick()
     finish(s)
     done = log.of(sc.EVENT_DONE)[0]
     assert done["outcome"].startswith("failed: met a permission prompt for Bash, Write")
     assert "rm -rf" not in json.dumps(log.rows) and "done" not in done["outcome"]
-    assert owed == [("pd_run_failed", "sweep:2026-10-14T13:00:00+00:00")]
+    assert channel.received == [("pd_run_failed", f"sweep:{int(at('2026-10-14 13:00').timestamp())}")]
 
     quiet = Log()
     s = make_scheduler(tmp_path, [_prompt_schedule()], quiet, now, client=_fake_client(tmp_path, []),
-                       on_notice=lambda source, nid: owed.append((source, nid)) or True)
+                       on_notice=channel)
     now[0] = at("2026-10-14 14:00")
     s.tick()
     finish(s)
-    assert quiet.of(sc.EVENT_DONE)[0]["outcome"] == "ok: the prompt ran" and len(owed) == 1
+    assert quiet.of(sc.EVENT_DONE)[0]["outcome"] == "ok: the prompt ran" and len(channel.received) == 1
 
 
 def test_an_isolated_prompt_run_routes_its_failure_notice():

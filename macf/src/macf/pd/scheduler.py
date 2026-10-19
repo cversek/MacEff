@@ -135,6 +135,13 @@ def _iso(when: datetime) -> str:
     return when.astimezone(timezone.utc).isoformat()
 
 
+def _notice_id(name: str, when: datetime) -> str:
+    """A notice's id: the schedule's name and an epoch second. It fits the MacEff channel's id
+    pattern, ``[A-Za-z0-9._:-]``, as the daemon's other notice ids do. An ISO time carries its
+    offset's ``+``, and the channel refuses a record holding one (#734)."""
+    return f"{name}:{int(when.timestamp())}"
+
+
 def _when(text) -> Optional[datetime]:
     try:
         return datetime.fromisoformat(text) if isinstance(text, str) else None
@@ -274,7 +281,7 @@ class Scheduler:
         else:
             return ""
         if self.on_notice is not None:
-            self.on_notice(NOTICE_SCHEDULE_CHANGED, f"{s.name}:{_iso(self.boot_at)}")
+            self.on_notice(NOTICE_SCHEDULE_CHANGED, _notice_id(s.name, self.boot_at))
         # Only the operator can accept it, so it is said where the operator reads the daemon too.
         print(f"⚠️ MACF: pd: schedule {s.name} is not run: {why}; run `macf_tools pd install` to accept it",
               file=sys.stderr)
@@ -364,10 +371,12 @@ class Scheduler:
             self._say(EVENT_DONE, {"schedule": s.name, "scheduled_for": _iso(scheduled_for),
                                    "outcome": f"not started: no value for the placeholder {{{e.args[0]}}}",
                                    "exit_code": None, "wake": False})
+            self._notice_failed(s, scheduled_for)
             return
         except OSError as e:
             self._say(EVENT_DONE, {"schedule": s.name, "scheduled_for": _iso(scheduled_for),
                                    "outcome": f"not started: {e}", "exit_code": None, "wake": False})
+            self._notice_failed(s, scheduled_for)
             return
         out = self.work_dir / f"{s.name}.stdout"
         self._say(EVENT_STARTED, {"schedule": s.name, "scheduled_for": _iso(scheduled_for),
@@ -381,6 +390,7 @@ class Scheduler:
         except OSError as e:
             self._say(EVENT_DONE, {"schedule": s.name, "scheduled_for": _iso(scheduled_for),
                                    "outcome": f"not started: {e}", "exit_code": None, "wake": False})
+            self._notice_failed(s, scheduled_for)
             return
         # Its identity, so a later daemon can tell the run from a stranger (R28).
         self._say(EVENT_PID, {"schedule": s.name, "scheduled_for": _iso(scheduled_for),
@@ -443,6 +453,17 @@ class Scheduler:
             pass  # noqa: MACEFF003 - the run removed it or never wrote it; nothing is lost
         self._say(EVENT_DONE, {"schedule": run.schedule.name, "scheduled_for": _iso(run.scheduled_for),
                                "outcome": outcome, "exit_code": code, "wake": wake})
+        # Failed as `pd status` reads it, less a run stopped on purpose.
+        if not outcome.startswith(("ok", "stopped")):
+            self._notice_failed(run.schedule, run.scheduled_for)
+
+    def _notice_failed(self, s: Schedule, scheduled_for: datetime) -> None:
+        """Owe the agent the failure notice for a run that failed, was killed at its limit, or
+        couldn't start (R32, #739). It's raised after the run's done record, which holds what
+        the notice points to. Without it, a run that keeps failing looks like one with nothing
+        to say: MIS-0002's "an expired login reads as quiet"."""
+        if self.on_notice is not None:
+            self.on_notice(NOTICE_RUN_FAILED, _notice_id(s.name, scheduled_for))
 
     def _judge(self, run: _Run, code: int) -> tuple:
         if run.stopped_by is not None:
@@ -467,7 +488,7 @@ class Scheduler:
         return ("ok: it had something to say", True) if said else ("ok: nothing to say", False)
 
     def _judge_prompt(self, run: _Run, code: int) -> tuple:
-        """A prompt run that was denied anything met a permission prompt: it fails, and the
+        """A prompt run that was denied anything met a permission prompt: it fails, and so the
         agent is owed a notice naming where the facts are (R32). The result's text is never
         recorded."""
         try:
@@ -481,8 +502,6 @@ class Scheduler:
         denials = result.get("permission_denials") if isinstance(result, dict) else None
         if denials:
             tools = sorted({str(d.get("tool_name", "?")) for d in denials if isinstance(d, dict)}) or ["?"]
-            if self.on_notice is not None:
-                self.on_notice(NOTICE_RUN_FAILED, f"{run.schedule.name}:{_iso(run.scheduled_for)}")
             return (f"failed: met a permission prompt for {', '.join(tools)}, which its schedule "
                     f"doesn't settle; denied, not waited on"), False
         if code != 0 or (isinstance(result, dict) and result.get("is_error")):
