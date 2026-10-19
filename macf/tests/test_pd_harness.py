@@ -535,6 +535,37 @@ def test_waiting_reported(tmp_path, monkeypatch):
     assert beat_said[1] is None, beat_said
     assert all(b["pid"] == os.getppid() and b["unit"] == "session" for b in beats)
 
+    # And for a session the daemon adopted from the client's own daemon (R66), which writes no
+    # liveness: the core reads its dialogs from the event log by its session id itself.
+    _adopted_session_waiting_is_reported(tmp_path, monkeypatch)
+
+
+def _adopted_session_waiting_is_reported(tmp_path, monkeypatch):
+    from macf.pd import core as core_module
+    monkeypatch.setattr(core_module, "DIALOG_POLL_S", 0.0)
+    home, marker = tmp_path / "adopted_home", tmp_path / "adopted_started_by_pd"
+    home.mkdir()
+    client = _Client(home)
+    asked, open_dialog = [], {"now": None}
+
+    def dialogs(session_id):
+        asked.append(session_id)
+        return lambda: open_dialog["now"]
+    try:
+        client.host("7a1c22d0-cccc")
+        core = _core(home, client, marker)
+        core._dialogs = dialogs
+        core.boot()
+        assert core.state("session") == "running"
+        open_dialog["now"] = "a permission dialog for Bash, open since 21:07"
+        assert _settle(core, lambda: core.state("session") == "waiting_on_a_person")
+        assert asked == ["7a1c22d0-cccc"]                   # read by the adopted session's own id
+        open_dialog["now"] = None
+        assert _settle(core, lambda: core.state("session") == "running")
+        assert not marker.exists()                          # still the adopted session, never a second
+    finally:
+        client.close()
+
 
 
 def test_a_failed_login_reaches_the_beat(tmp_path, monkeypatch):

@@ -230,3 +230,57 @@ def test_a_beat_leaves_out_what_is_unset():
     (_, data), = events
     assert "auth_failed" not in data and "waiting_on" not in data and "in_flight" not in data
     assert lv.Liveness.model_validate(data).auth_failed is None
+
+
+def test_a_change_in_what_the_unit_waits_on_beats_at_once(monkeypatch):
+    """MIS-0002-R21 between beats: a dialog that opens, and one that closes, reach the daemon
+    within seconds, not a whole interval later. A 60 s interval stood two minutes late in both
+    directions on a host before this (#728)."""
+    monkeypatch.setattr(lv, "CHANGE_CHECK_S", 0.02)
+    events, append = recorder()
+    asked = {"now": None}
+    hb = lv.Heartbeat("Resident@1a2b3c", "session", 60.0, append=append,
+                      waiting_on=lambda: asked["now"]).start()
+    halt = _ticking(hb)
+
+    def beats_saying(value, n, within=1.0):
+        deadline = time.monotonic() + within
+        while time.monotonic() < deadline:
+            said = [d.get("waiting_on") for _, d in events]
+            if len(said) >= n and said[n - 1] == value:
+                return True
+            time.sleep(0.01)
+        return False
+    try:
+        assert beats_saying(None, 1)                    # the first beat, at once
+        asked["now"] = "a permission dialog for Bash, open since 21:08"
+        assert beats_saying(asked["now"], 2)            # opened: beat now, not in 60 s
+        asked["now"] = None
+        assert beats_saying(None, 3)                    # answered: beat now too
+        time.sleep(0.1)
+        assert len(events) == 3                         # and nothing more while nothing changes
+    finally:
+        hb.stop()
+        halt.set()
+
+
+def test_a_wedged_loop_never_beats_early_on_a_change(monkeypatch):
+    """Only a loop that has passed since the last beat may beat early (R14, R18): a session
+    whose loop has wedged and which then shows a dialog, or loses its login, must stay
+    silent, so its daemon fails it for silence rather than reading it alive."""
+    monkeypatch.setattr(lv, "CHANGE_CHECK_S", 0.02)
+    events, append = recorder()
+    asked = {"now": None}
+    hb = lv.Heartbeat("Resident@1a2b3c", "session", 60.0, append=append,
+                      waiting_on=lambda: asked["now"]).start()
+    try:
+        hb.tick()                                       # the loop passes once, then wedges
+        deadline = time.monotonic() + 1.0
+        while not events and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert len(events) == 1
+        asked["now"] = "a permission dialog for Bash, open since 21:34"
+        time.sleep(0.2)                                 # ten change checks, and no pass
+        assert len(events) == 1
+    finally:
+        hb.stop()
