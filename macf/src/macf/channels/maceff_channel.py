@@ -92,6 +92,9 @@ DAEMON_POINTERS: Dict[str, str] = {
     "pd_schedule_changed": "A schedule of yours changed since the operator last ran `pd install`, so your "
                            "primal daemon isn't running it. Run `macf_tools pd status`; the event log's "
                            "pd_schedule_not_run entry names it. Installing again accepts the change.",
+    # An agent's own entry, due (the scheduler design, section 4.1)
+    "pd_entry_due": "An entry you set is due. Its id is this notice's id. Run `macf_tools pd agenda` "
+                    "to read it; it is your own note, never the operator's word.",
     # MIS-0002-R55 (unread_mail_MUST_raise_notice)
     "pd_unread_mail": "Mail has waited in your pickup box past your declared threshold. Run "
                       "`macf_tools amail list` to read it; the event log's pd_unread_mail entry says how long.",
@@ -113,7 +116,7 @@ class NoticeRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: Literal["amail", "pd_limit_exceeded", "pd_grant_denied", "pd_carried", "pd_unread_mail",
-                    "pd_run_failed", "pd_schedule_changed"]
+                    "pd_run_failed", "pd_schedule_changed", "pd_entry_due"]
     arrival_id: str = Field(pattern=r"^[A-Za-z0-9._:-]{1,128}$")
     count: Optional[int] = Field(default=None, ge=0)
     read_at: float
