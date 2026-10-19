@@ -334,8 +334,10 @@ class EgressPolicy(BaseModel):
 
 
 #: MacEff's own periodic mail checks: each runs as a schedule, where its runs, owed and done,
-#: are recorded, never as a unit that loops on its own (MIS-0002-R54).
+#: are recorded, never as a unit that loops on its own (MIS-0002-R54). The daemon runs as a
+#: module (`-m`), or as its script, which carries its own interpreter line.
 INBOUND_MODULE = 'macf.amail.daemons.inbound'
+INBOUND_SCRIPT = 'amail/daemons/inbound.py'
 PERIODIC_INBOUND_VERBS = ('watchdog', 'sweep')
 
 
@@ -350,9 +352,11 @@ def declaration_body(value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]
     if 'agent' in value or 'version' in value:
         raise ValueError("primal_daemon must not set agent or version; the container fills them in")
     for unit in value.get('units', []):
-        command = list(unit.get('command', []))
-        if INBOUND_MODULE in command[:-1]:
-            verb = command[command.index(INBOUND_MODULE) + 1]
+        command = [str(word) for word in unit.get('command', [])]
+        at = next((i for i, word in enumerate(command[:-1])
+                   if word == INBOUND_MODULE or word.endswith(INBOUND_SCRIPT)), None)
+        if at is not None:
+            verb = command[at + 1]
             if verb in PERIODIC_INBOUND_VERBS:
                 raise ValueError(
                     f"unit {unit.get('name')!r} runs `{INBOUND_MODULE} {verb}`, a periodic mail check: "
