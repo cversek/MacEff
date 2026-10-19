@@ -200,3 +200,78 @@ def parse_print(output: str) -> AgentStatus:
     pid = int(fields["pid"]) if fields.get("pid", "").isdigit() else None
     return AgentStatus(loaded=True, running=fields.get("state") == "running", pid=pid,
                        last_exit=fields.get("last exit code"))
+
+
+# ---------------------------------------------------------------------------
+# The grant probe: one run from the launchd context (MIS-0002-R64)
+# ---------------------------------------------------------------------------
+
+#: How long the probe may take, a permission dialog it raises included.
+GRANT_PROBE_TIMEOUT_S = 120.0
+
+
+def grant_probe_label(card: str) -> str:
+    return pd_label(card) + ".grant_probe"
+
+
+def render_grant_probe_agent(card: str, python: str, out: str, grants: List[str],
+                             log_dir: str) -> bytes:
+    """A one-shot LaunchAgent that runs the grant probe with the daemon's own interpreter.
+
+    A grant attaches to the responsible process, which for a launchd job is the job's own
+    program, so the probe runs as the daemon would: the same interpreter, started by launchd
+    in the user's GUI session. A probe run from the terminal would test the terminal's grant.
+    """
+    label = grant_probe_label(card)
+    plist = {
+        "Label": label,
+        # Run exactly as the daemon runs (no -I), so the probe imports the macf it imports.
+        "ProgramArguments": [python, "-m", "macf.platform.grants", out, *grants],
+        "RunAtLoad": True,
+        "KeepAlive": False,
+        "LimitLoadToSessionType": "Aqua",
+        "ProcessType": "Interactive",
+        "StandardOutPath": f"{log_dir}/{label}.out.log",
+        "StandardErrorPath": f"{log_dir}/{label}.err.log",
+    }
+    return plistlib.dumps(plist, fmt=plistlib.FMT_XML, sort_keys=True)
+
+
+def run_grant_probe(card: str, python: str, grants: List[str], work_dir: str, log_dir: str,
+                    uid: int, run, timeout: float = GRANT_PROBE_TIMEOUT_S, sleep=None) -> dict:
+    """Run the probe once under launchd and return each grant's verdict.
+
+    The job is loaded from *work_dir*, never ~/Library/LaunchAgents, and booted out whatever
+    happens, so nothing of it is left to start at the next login. Raises ``RuntimeError``
+    with launchctl's words when it can't be loaded or doesn't answer in time.
+    """
+    import json
+    import os
+    import time
+    sleep = sleep or time.sleep
+    label = grant_probe_label(card)
+    plist_path = os.path.join(work_dir, f"{label}.plist")
+    out = os.path.join(work_dir, f"{label}.json")
+    for stale in (out, plist_path):
+        if os.path.exists(stale):
+            os.unlink(stale)
+    run(launchctl_argv("bootout", label, uid))          # a probe left from an interrupted run
+    write_text_atomic(plist_path, render_grant_probe_agent(card, python, out, grants, log_dir).decode())
+    try:
+        loaded = run(launchctl_argv("bootstrap", label, uid, plist_path))
+        if loaded.returncode != 0:
+            raise RuntimeError(f"the grant probe wasn't loaded: "
+                               f"{(loaded.stderr or '').strip() or f'launchctl exit {loaded.returncode}'}")
+        deadline = time.monotonic() + timeout
+        while not os.path.exists(out):
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"the grant probe didn't answer within {timeout:g} s; see "
+                                   f"{log_dir}/{label}.err.log")
+            sleep(0.2)
+        with open(out) as f:
+            return json.load(f)
+    finally:
+        run(launchctl_argv("bootout", label, uid))
+        for done in (plist_path, out):
+            if os.path.exists(done):
+                os.unlink(done)
