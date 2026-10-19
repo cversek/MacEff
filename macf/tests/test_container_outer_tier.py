@@ -121,7 +121,7 @@ def test_only_agents_with_a_rendered_declaration_get_a_daemon(tmp_path, monkeypa
     home_only.write_text(json.dumps({"units": []}))
     supervised = []
     monkeypatch.setattr(start, "supervise_primal_daemon", lambda user, home: supervised.append(user))
-    cfg = SimpleNamespace(agents={u: SimpleNamespace(username=u) for u in ("pa_a", "pa_b", "pa_c")})
+    cfg = SimpleNamespace(services={}, agents={u: SimpleNamespace(username=u, primal_daemon=None) for u in ("pa_a", "pa_b", "pa_c")})
     # pa_c's schedules would have no daemon (MIS-0002-R11): the step fails, naming it, after
     # pa_b's daemon has started
     import pytest
@@ -138,7 +138,7 @@ def _rendering(tmp_path, monkeypatch, primal_daemon):
     monkeypatch.setattr(pd_names, "agent_card", lambda home: "Resident@1a2b3c")
     (tmp_path / "home" / "pa_a").mkdir(parents=True)
     chowned = []
-    cfg = SimpleNamespace(agents={"a": SimpleNamespace(username="pa_a", primal_daemon=primal_daemon)})
+    cfg = SimpleNamespace(services={}, agents={"a": SimpleNamespace(username="pa_a", primal_daemon=primal_daemon)})
     done = start.render_pd_declarations(cfg, root=tmp_path / "etc",
                                         chown=lambda p, u, g: chowned.append((str(p), u, g)))
     return SimpleNamespace(start=start, done=done, chowned=chowned)
@@ -187,7 +187,7 @@ def test_one_agents_broken_identity_costs_only_that_agents_rendering(tmp_path, m
     stale = tmp_path / "etc" / "pa_bad" / "declaration.json"
     stale.parent.mkdir(parents=True)
     stale.write_text("{}")
-    cfg = SimpleNamespace(agents={u: SimpleNamespace(username=u, primal_daemon={"units": [UNIT]})
+    cfg = SimpleNamespace(services={}, agents={u: SimpleNamespace(username=u, primal_daemon={"units": [UNIT]})
                                   for u in ("pa_good", "pa_bad")})
     done = start.render_pd_declarations(cfg, root=tmp_path / "etc", chown=lambda p, u, g: None)
     assert done == ["pa_good"]
@@ -210,7 +210,7 @@ def test_one_agents_failed_write_costs_only_that_agents_rendering(tmp_path, monk
     def chown(path, uid, gid):
         if Path(path).parent.name == "pa_bad" and Path(path).name.endswith(".tmp"):
             raise PermissionError("chown refused")
-    cfg = SimpleNamespace(agents={u: SimpleNamespace(username=u, primal_daemon={"units": [UNIT]})
+    cfg = SimpleNamespace(services={}, agents={u: SimpleNamespace(username=u, primal_daemon={"units": [UNIT]})
                                   for u in ("pa_bad", "pa_good")})
     done = start.render_pd_declarations(cfg, root=tmp_path / "etc", chown=chown)
     assert done == ["pa_good"]

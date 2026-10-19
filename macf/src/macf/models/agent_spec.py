@@ -333,6 +333,36 @@ class EgressPolicy(BaseModel):
         return v
 
 
+#: MacEff's own periodic mail checks: each runs as a schedule, where its runs, owed and done,
+#: are recorded, never as a unit that loops on its own (MIS-0002-R54).
+INBOUND_MODULE = 'macf.amail.daemons.inbound'
+PERIODIC_INBOUND_VERBS = ('watchdog', 'sweep')
+
+
+def declaration_body(value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """A ``primal_daemon`` body in agents.yaml: a persistent_layer declaration without ``agent``
+    and ``version``, which container start-up fills in. Checked against the closed model when the
+    file loads, so a body the daemon would refuse never reaches a start. A unit that runs one of
+    MacEff's periodic mail checks is refused here too: it belongs in ``schedules``
+    (MIS-0002-R54 (periodic_mail_clock_MUST_be_schedule))."""
+    if value is None:
+        return value
+    if 'agent' in value or 'version' in value:
+        raise ValueError("primal_daemon must not set agent or version; the container fills them in")
+    for unit in value.get('units', []):
+        command = list(unit.get('command', []))
+        if INBOUND_MODULE in command[:-1]:
+            verb = command[command.index(INBOUND_MODULE) + 1]
+            if verb in PERIODIC_INBOUND_VERBS:
+                raise ValueError(
+                    f"unit {unit.get('name')!r} runs `{INBOUND_MODULE} {verb}`, a periodic mail check: "
+                    f"declare it in schedules, with its missed-run policy, so each run is recorded "
+                    f"(MIS-0002-R54 (periodic_mail_clock_MUST_be_schedule))")
+    from macf.pd.interface import Declaration
+    Declaration(version=1, agent="placeholder@000000", **value)
+    return value
+
+
 class AgentSpec(BaseModel):
     """Specification for a Primary Agent (PA)."""
 
@@ -489,13 +519,7 @@ class AgentSpec(BaseModel):
     @classmethod
     def _primal_daemon_is_a_declaration(cls, value):
         """Refused at load, not at start: a body the daemon would refuse is caught here."""
-        if value is None:
-            return value
-        if 'agent' in value or 'version' in value:
-            raise ValueError("primal_daemon must not set agent or version; the container fills them in")
-        from macf.pd.interface import Declaration
-        Declaration(version=1, agent="placeholder@000000", **value)
-        return value
+        return declaration_body(value)
 
     @property
     def is_vanilla(self) -> bool:
@@ -765,6 +789,40 @@ class ServiceSpec(BaseModel):
         description="Credentials this service holds"
     )
 
+    primal_daemon: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "The service account's own primal daemon declaration, the same body as an agent's. "
+            "Container start-up renders it owned by root and gives the account an identity, and the "
+            "daemon runs the service's long-lived processes as units and its periodic work as "
+            "schedules, under the account's own uid. The mail broker's account declares one for the "
+            "broker, its inbound watcher and the aged sweep (MIS-0002-R53 (mail_broker_MUST_be_managed), "
+            "MIS-0002-R54 (periodic_mail_clock_MUST_be_schedule)). Every unit runs as the service account."
+        ),
+    )
+
+    calling_card: Optional[str] = Field(
+        default=None,
+        pattern=r"^[A-Za-z][A-Za-z0-9]{0,47}$",
+        description=(
+            "The name the service's primal daemon goes by, its calling card's first half. Start-up "
+            "derives the second half from the account and the deployment's id block, so the card "
+            "holds across recreates and differs between deployments. Required with primal_daemon."
+        ),
+    )
+
+    @field_validator('primal_daemon')
+    @classmethod
+    def _primal_daemon_is_a_declaration(cls, value):
+        return declaration_body(value)
+
+    @model_validator(mode='after')
+    def _a_daemon_has_a_name(self) -> 'ServiceSpec':
+        """A daemon needs a card to run under, and a card names nothing without a daemon."""
+        if (self.primal_daemon is None) != (self.calling_card is None):
+            raise ValueError("a service declares primal_daemon and calling_card together")
+        return self
+
 
 #: Container ids start here, clear of every host's human accounts (useradd hands those out
 #: from 1000 up) and of its system ids (below 1000).
@@ -902,4 +960,17 @@ class AgentsConfig(BaseModel):
                     f"agents {seen[spec.uid]!r} and {name!r} both declare uid {spec.uid}; "
                     f"one uid names one agent")
             seen[spec.uid] = name
+        return self
+
+    @model_validator(mode='after')
+    def _service_units_run_as_the_service(self) -> 'AgentsConfig':
+        """A daemon starts its units only as its own user, so each unit of a service's daemon runs
+        as that service's account. Refused at load, rather than as a failed unit at start."""
+        for name, spec in self.services.items():
+            for unit in (spec.primal_daemon or {}).get('units', []):
+                if unit.get('account') != name:
+                    raise ValueError(
+                        f"services.{name}.primal_daemon: unit {unit.get('name')!r} names account "
+                        f"{unit.get('account')!r}, but a service's daemon starts units only as the "
+                        f"service account, {name}")
         return self
