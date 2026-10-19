@@ -28,6 +28,7 @@ from macf.pd.interface import (
     ActRequest,
     DaemonRecord,
     EntryAddRequest,
+    EntryDecideRequest,
     EntryListRequest,
     IdentityError,
     Peer,
@@ -112,16 +113,16 @@ class Daemon:
         placeholders = {"agent_home": str(self.home), "card": self.card, "runtime_dir": str(self.base)}
         self.core = Core(load_declaration(self.home, self.card), self.card,
                          placeholders=placeholders, **core_options)
-        #: The declared schedules, run by this daemon (MIS-0002 step 2), or None without any.
-        self.scheduler = None
+        #: The declared schedules and the agent's own entries, run by this daemon (MIS-0002 step
+        #: 2). It runs with no schedule declared, since an agent's entries need it all the same.
+        from macf.pd.names import rendered_declaration_path
+        from macf.pd.scheduler import Scheduler
+        # A rendered declaration is out of the agent's reach; a home copy is checked against
+        # what pd install recorded (MIS-0002-R33 (run_MUST-NOT_change_schedules)).
+        self.scheduler = Scheduler(self.core.declaration, self.card, placeholders,
+                                   work_dir=self.base / f"{self.record_path.stem}.runs",
+                                   check_installed=not rendered_declaration_path(self.home).exists())
         if self.core.declaration.schedules:
-            from macf.pd.names import rendered_declaration_path
-            from macf.pd.scheduler import Scheduler
-            # A rendered declaration is out of the agent's reach; a home copy is checked against
-            # what pd install recorded (MIS-0002-R33 (run_MUST-NOT_change_schedules)).
-            self.scheduler = Scheduler(self.core.declaration, self.card, placeholders,
-                                       work_dir=self.base / f"{self.record_path.stem}.runs",
-                                       check_installed=not rendered_declaration_path(self.home).exists())
             if self.scheduler.check_installed and \
                     self.core.declaration.notice_routes.get("pd_schedule_changed") not in ("agent", "both"):
                 print("⚠️ MACF: pd: notice_routes doesn't route 'pd_schedule_changed' to 'agent' or 'both', so "
@@ -132,8 +133,7 @@ class Daemon:
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound
         self.notifier = Notifier(self.home, self.core.declaration.notice_routes)
         self.core.on_notice = self.notifier.raise_notice    # the core's own notices (R60)
-        if self.scheduler is not None:
-            self.scheduler.on_notice = self.notifier.raise_notice   # a denied prompt run (R32)
+        self.scheduler.on_notice = self.notifier.raise_notice   # a denied prompt run (R32)
         if any(u.kind == "session" for u in self.core.declaration.units) \
                 and self.core.declaration.notice_routes.get("pd_carried") not in ("agent", "both"):
             # Only the agent's routes deliver a daemon notice, so any other route reaches nobody.
@@ -202,8 +202,7 @@ class Daemon:
         self._notice_denied_grants()
         if self.unread_mail is not None:
             self.unread_mail.boot()
-        if self.scheduler is not None:
-            self.scheduler.boot()
+        self.scheduler.boot()
 
     def _notice_denied_grants(self) -> None:
         """Owe the agent a notice for each declared grant the last install found denied
@@ -275,8 +274,7 @@ class Daemon:
                     else:
                         os.read(self._wake_r, 512)
                 self.core.tick()
-                if self.scheduler is not None:
-                    self.scheduler.tick()
+                self.scheduler.tick()
                 self.notifier.poll()
                 self.notifier.flush()
                 self.notifier.wake()
@@ -289,8 +287,7 @@ class Daemon:
             for conn in self.notifier.channels:
                 self.notifier.detach(conn)
             self.notifier.on_detach = None
-            if self.scheduler is not None:
-                self.scheduler.shutdown()
+            self.scheduler.shutdown()
             sel.close()
             self._sel = None
             if self._stop_units:
@@ -499,7 +496,7 @@ class Daemon:
             request = parse_request(line)
         except ValidationError as e:
             return Response(ok=False, error=f"request refused: {e.errors()[0]['msg']}")
-        if isinstance(request, (EntryAddRequest, EntryListRequest)):
+        if isinstance(request, (EntryAddRequest, EntryListRequest, EntryDecideRequest)):
             return self._entry_request(request, creds)
         if isinstance(request, StatusRequest):
             return Response(ok=True, units=self.core.statuses())
@@ -535,6 +532,8 @@ class Daemon:
         from macf.pd.entries import ENTRY_EVENTS, EVENT_ENTRY_ADDED, OneShot, fold, new_entry_id, parse_when
         from macf.pd.taint import taint
         why = self._outside_session(creds)
+        if isinstance(request, EntryDecideRequest):
+            return self._decide(request, creds, from_session=not why)
         if why:
             return Response(ok=False, error=f"an entry is made only from the agent's live session, and {why}")
         if isinstance(request, EntryAddRequest):
@@ -558,8 +557,34 @@ class Daemon:
                      "state": "waiting" if marked and not isinstance(when, OneShot) else "active"}
             if not append_event(EVENT_ENTRY_ADDED, entry):
                 return Response(ok=False, error="the entry could not be recorded in the event log")
-            if self.scheduler is not None:
-                self.scheduler.add_entry(entry)
+            self.scheduler.add_entry(entry)
+        held = fold(read_events(reverse=False, scope="all", only=ENTRY_EVENTS), self.card)
+        return Response(ok=True, entries=list(held.values()))
+
+    def _decide(self, request, creds, from_session: bool) -> Response:
+        """The operator's answer to an entry that waits. Refused from the agent's own session;
+        anywhere else on this login it's taken, which is advisory where the agent and the
+        operator share a login (the scheduler design, 5.4)."""
+        from datetime import datetime, timezone
+
+        from macf.agent_events_log import append_event, read_events
+        from macf.pd.entries import ENTRY_EVENTS, EVENT_ENTRY_ACCEPTED, EVENT_ENTRY_DECLINED, fold
+        if from_session:
+            return Response(ok=False, error=(
+                "accepting or declining an entry is the operator's act, and this came from the agent's "
+                "own session"))
+        held = fold(read_events(reverse=False, scope="all", only=ENTRY_EVENTS), self.card)
+        entry = held.get(request.id)
+        if entry is None or entry.get("state") != "waiting":
+            return Response(ok=False, error=f"no entry {request.id} waits for an answer")
+        at = datetime.now(timezone.utc).isoformat()
+        kind = EVENT_ENTRY_ACCEPTED if request.accept else EVENT_ENTRY_DECLINED
+        if not append_event(kind, {"agent": self.card, "id": request.id, "at": at, "by_pid": creds.pid}):
+            return Response(ok=False, error="the answer could not be recorded in the event log")
+        if request.accept:
+            self.scheduler.add_entry({**entry, "state": "active", "accepted_at": at})
+        else:
+            self.scheduler.entries.pop(request.id, None)
         held = fold(read_events(reverse=False, scope="all", only=ENTRY_EVENTS), self.card)
         return Response(ok=True, entries=list(held.values()))
 

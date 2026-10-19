@@ -266,3 +266,68 @@ def test_a_waiting_entry_fires_only_once_accepted_and_only_from_then(tmp_path):
     s.tick()
     assert channel.received == [("pd_entry_due", hourly)]
     assert log.of(sc.EVENT_ENTRY_FIRED)[0]["missed"] == 0
+
+
+def test_only_the_operator_answers_an_entry_that_waits(tmp_path, base, run_daemon, isolated_events_log, monkeypatch):
+    """An answer from the agent's own session is refused. From elsewhere, accepting makes the
+    entry active in the log and in the scheduler, declining removes it, and an entry that
+    doesn't wait can't be answered (the scheduler design, 5.3 and 5.4)."""
+    import os
+
+    from macf.agent_events_log import append_event
+    from macf.notify.session import proc_start
+    from test_primal_daemon import ask, make_home
+    daemon = run_daemon(make_home(tmp_path, []), base)
+    me = (os.getpid(), proc_start(os.getpid()))
+    session = [me]
+    monkeypatch.setattr(daemon.core, "session_incarnation", lambda: session[0])
+    append_event("session_started", {"session_id": "s"})
+    append_event("tool_call_started", {"tool": "WebFetch", "session_id": "s"})
+    add = {"op": "entry_add", "when": "cron:0 9 * * *", "purpose": "p", "action": "wake", "missed": "once"}
+    first = ask(daemon, add)["entries"][-1]
+    second = ask(daemon, add)["entries"][-1]
+    assert first["state"] == second["state"] == "waiting"
+
+    def decide(entry, accept):
+        return ask(daemon, {"op": "entry_decide", "id": entry["id"], "accept": accept})
+    refused = decide(first, True)
+    assert not refused["ok"] and "operator's act" in refused["error"]
+    session[0] = None                                        # asked from outside the session
+    accepted = decide(first, True)
+    assert accepted["ok"] and {e["id"]: e["state"] for e in accepted["entries"]} == {
+        first["id"]: "active", second["id"]: "waiting"}
+    assert daemon.scheduler.entries[first["id"]]["state"] == "active"
+    assert not decide(first, True)["ok"]                     # it no longer waits
+    declined = decide(second, False)
+    assert declined["ok"] and [e["id"] for e in declined["entries"]] == [first["id"]]
+    assert second["id"] not in daemon.scheduler.entries
+
+
+def test_the_cli_answers_an_entry_and_shows_what_waits(monkeypatch, capsys):
+    """pd entry accept and decline send the operator's answer; list shows an entry that waits,
+    and one made from a marked context, as such."""
+    import argparse
+
+    from macf.pd import cli, client
+    from macf.pd.interface import Response
+    sent, held = [], {"id": "e-0123456789ab", "when": "cron:0 9 * * *", "first": "2026-10-20T09:00:00+00:00",
+                      "missed": "once", "purpose": "check the pace", "state": "waiting", "marked": ["a web fetch"]}
+
+    def ask(card, request, **kw):
+        sent.append(request)
+        return Response(ok=True, entries=[held])
+    monkeypatch.setattr(client, "ask", ask)
+    monkeypatch.setattr(cli, "_this_agent", lambda: (None, "Tester@abc123"))
+    parser = argparse.ArgumentParser()
+    cli.add_pd_parser(parser.add_subparsers(dest="cmd"))
+
+    def run(*argv):
+        args = parser.parse_args(["pd", "entry", *argv])
+        return args.func(args)
+    assert run("list") == 0 and "[waiting] [marked] check the pace" in capsys.readouterr().out
+    assert run("add", "cron:0 9 * * *", "check the pace", "--missed", "once") == 0
+    assert "waits for the operator's acceptance" in capsys.readouterr().out
+    assert run("accept", "e-0123456789ab") == 0
+    assert run("decline", "e-0123456789ab") == 0
+    assert sent[-2:] == [{"op": "entry_decide", "id": "e-0123456789ab", "accept": True},
+                         {"op": "entry_decide", "id": "e-0123456789ab", "accept": False}]

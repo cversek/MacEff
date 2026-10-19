@@ -52,6 +52,11 @@ def add_pd_parser(sub) -> None:
                      help="a firing missed while the daemon was down: once, late and said so; skip, "
                           "recorded only; report, recorded and told")
     add.set_defaults(func=cmd_pd_entry_add)
+    for verb, accept in (("accept", True), ("decline", False)):
+        decide = entry_sub.add_parser(
+            verb, help=f"{verb} an entry that waits for the operator; refused from the agent's own session")
+        decide.add_argument("id", help="the entry's id, e- and 12 hex digits")
+        decide.set_defaults(func=cmd_pd_entry_decide, accept=accept)
     lst = entry_sub.add_parser("list", help="the entries you hold")
     lst.add_argument("--json", action="store_true", help="print them as JSON")
     lst.set_defaults(func=cmd_pd_entry_list)
@@ -150,6 +155,17 @@ def cmd_pd_entry_add(args: argparse.Namespace) -> int:
         return 1
     made = reply.entries[-1] if reply.entries else None
     print(f"entry made; you hold {len(reply.entries or [])}" + (f", the newest {made['id']}" if made else ""))
+    if made and made.get("state") == "waiting":
+        print(f"it waits for the operator's acceptance: this context read untrusted input "
+              f"({'; '.join(made.get('marked') or [])})")
+    return 0
+
+
+def cmd_pd_entry_decide(args: argparse.Namespace) -> int:
+    reply = _ask_entries({"op": "entry_decide", "id": args.id, "accept": args.accept})
+    if reply is None:
+        return 1
+    print(f"entry {args.id} {'accepted' if args.accept else 'declined'}")
     return 0
 
 
@@ -162,10 +178,16 @@ def cmd_pd_entry_list(args: argparse.Namespace) -> int:
         print(json.dumps(entries, indent=2))
         return 0
     for e in entries:
-        print(f"{e['id']}  next {e.get('first') or 'none'}  {e['when']}  ({e['missed']})  {e['purpose']}")
+        print(f"{e['id']}  next {e.get('first') or 'none'}  {e['when']}  ({e['missed']})  {_state(e)}{e['purpose']}")
     if not entries:
         print("no entries")
     return 0
+
+
+def _state(entry: dict) -> str:
+    """What an entry's line says before its purpose: waiting for the operator, and marked as made
+    from a context that read untrusted input (the scheduler design, 5.3)."""
+    return ("[waiting] " if entry.get("state") == "waiting" else "") + ("[marked] " if entry.get("marked") else "")
 
 
 def agenda_lines(declaration, entries, now) -> list:
@@ -179,7 +201,7 @@ def agenda_lines(declaration, entries, now) -> list:
         nxt = CronExpr.parse(s.cron, tz).next_after(now) if tz else None
         rows.append((nxt.isoformat() if nxt else "none", f"declared  {s.name}  {s.cron}"))
     for e in entries:
-        rows.append((e.get("first") or "none", f"entry     {e['id']}  {e['purpose']}"))
+        rows.append((e.get("first") or "none", f"entry     {e['id']}  {_state(e)}{e['purpose']}"))
     return [f"{when}  {what}" for when, what in sorted(rows)]
 
 
