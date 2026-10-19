@@ -1628,3 +1628,26 @@ def test_a_daemon_restart_adopts_a_session_failed_for_its_login(make_core, scrip
     assert second.pid("session") == pid
     assert states("session").count("starting") == 1
     assert drive(second, lambda: second.state("session") == "failed")
+
+
+def test_denied_grant_notice(tmp_path, script, base, run_daemon):
+    """MIS-0002-R65 (denied_grant_MUST_raise_notice): a daemon that starts reads the newest
+    grant probe pd install recorded and owes the agent one notice per declared grant it found
+    denied, its id naming the grant. A held grant, an older probe and another agent's probe
+    raise nothing."""
+    unit = make_unit("worker", script, {}).model_copy(update={"privacy_grants": ["local_network", "accessibility"]})
+    home = make_home(tmp_path, [unit])
+    path = declaration_path(home)
+    declared = Declaration.model_validate_json(path.read_text())
+    path.write_text(declared.model_copy(update={"notice_routes": {"pd_grant_denied": "agent"}}).model_dump_json())
+    probes = [
+        {"timestamp": 300, "data": {"agent": "Other@def456", "tested": True,
+                                    "verdicts": {"accessibility": "denied"}}},
+        {"timestamp": 200, "data": {"agent": CARD, "tested": True,
+                                    "verdicts": {"local_network": "denied", "accessibility": "held"}}},
+        {"timestamp": 100, "data": {"agent": CARD, "tested": True,
+                                    "verdicts": {"local_network": "denied", "accessibility": "denied"}}},
+    ]
+    daemon = run_daemon(home, base, grant_probes=lambda: iter(probes))
+    owed = [o for o in daemon.notifier.owed.values() if o.source == "pd_grant_denied"]
+    assert [o.arrival_id for o in owed] == ["pd_grant_denied:local_network:200"]

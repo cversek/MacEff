@@ -233,8 +233,8 @@ stateDiagram-v2
 ### 6.10 macOS and the harness's own supervisor
 
 - **R63** [MUST · decidable: macf/tests/test_pd_declaration.py::test_grants_declared] Each declared unit MUST state the privacy grants it needs. (unit_MUST_declare_privacy_grants)
-- **R64** [MUST · decidable: macf/tests/test_pd_render.py::test_grants_tested_at_install (planned)] When the platform adapter installs a unit, it MUST test the unit's declared grants. (adapter_MUST_test_grants_at_install)
-- **R65** [MUST · decidable: macf/tests/test_primal_daemon.py::test_denied_grant_notice (planned)] If a declared grant is denied, then the primal daemon MUST deliver a notice that names the grant. (denied_grant_MUST_raise_notice)
+- **R64** [MUST · decidable: macf/tests/test_pd_render.py::test_grants_tested_at_install] When the platform adapter installs a unit, it MUST test the unit's declared grants. (adapter_MUST_test_grants_at_install)
+- **R65** [MUST · decidable: macf/tests/test_primal_daemon.py::test_denied_grant_notice] If a declared grant is denied, then the primal daemon MUST deliver a notice that names the grant. (denied_grant_MUST_raise_notice)
 - **R66** [MUST · decidable: macf/tests/test_pd_harness.py::test_adopts_harness_supervisor] Where the harness's own supervisor already runs a session, the primal daemon MUST adopt that session instead of starting a second supervisor. (pd_MUST_adopt_harness_supervisor)
 
 ### 6.11 The tray
@@ -470,8 +470,8 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R61 | decidable | macf/tests/test_pd_watch.py::test_limits_checked_after_recreate | passing |
 | R62 | judgment | the head maintainer, at review of the container landing | pending |
 | R63 | decidable | macf/tests/test_pd_declaration.py::test_grants_declared | passing |
-| R64 | decidable | macf/tests/test_pd_render.py::test_grants_tested_at_install | planned |
-| R65 | decidable | macf/tests/test_primal_daemon.py::test_denied_grant_notice | planned |
+| R64 | decidable | macf/tests/test_pd_render.py::test_grants_tested_at_install | passing |
+| R65 | decidable | macf/tests/test_primal_daemon.py::test_denied_grant_notice | passing |
 | R66 | decidable | macf/tests/test_pd_harness.py::test_adopts_harness_supervisor | passing |
 | R67 | judgment | the operator | standing |
 | R68 | decidable | macf/tests/test_pd_render.py::test_runs_without_tray | passing |
@@ -672,6 +672,7 @@ Objections recorded:
   - R56 (mail_SHOULD_report_state_to_sender) moves to recorded: not met, by the head maintainer on 2026-10-18, waiting on MIS-0004 (#520). The departure from this SHOULD is recorded below the Conformance table, as the Secretary ruled on #552.
   - R124 (allowlist_declaration_MUST_list_every_channel), R19 (auth_failure_MUST_read_failed) and R99 (onlooker_MUST-NOT_get_operator_surface) moved to passing in #717, #718 and #719 with no line here. This entry records them (MIS-0001-R34 (accepted_MIS_MUST_change_editorially)). The requirement lines of R19 and R124 drop their "(planned)" marker, as sweep 4 did for the passing rows.
   The persistent_layer policy's section 13 drops R19, R124 and R47's notice, which have landed, and keeps what R47 still lacks, the refusal at load. Section 12.4 no longer says that compaction on request arrives with the session unit, which landed without it. No requirement changed.
+- 2026-10-18: R64 (adapter_MUST_test_grants_at_install) and R65 (denied_grant_MUST_raise_notice) move to passing, with the code and the tests they name. `pd install` tests each declared grant from a one-shot LaunchAgent that runs the daemon's own interpreter, and a daemon that starts owes a `pd_grant_denied` notice, naming the grant, for each one the newest probe found denied. Run live on macOS 15.5 from launchd: local_network held, full_disk_access and accessibility denied, keychain untested, answered in 0.3 s with no dialog, and the job booted out after. Editorial (mis 8.1).
 
 ## Wiki-Links
 
