@@ -224,6 +224,9 @@ EXIT_NOT_SEEN = -1000
 #: Unit states with a process behind them, which a restarted daemon may adopt.
 LIVE_STATES = ("starting", "running", "waiting_on_a_person")
 
+#: How often the core reads what an adopted session waits on, which no beat carries (R21).
+DIALOG_POLL_S = 5.0
+
 
 def boot_id() -> Optional[str]:
     """This Linux host's boot, as the random id the kernel draws at each boot, or None
@@ -429,6 +432,7 @@ class _Runner:
     drain: Optional[tuple] = None       # (asker, reason, deadline) of a restart waiting on R49
     held_restart: Optional[tuple] = None  # (asker, reason, peer) of an asked restart a quiet window holds (R50)
     client_session: Optional[str] = None  # session id, when the client's own daemon hosts this session (R66)
+    dialogs_at: float = float("-inf")   # monotonic time an adopted session's dialogs were last read (R21)
     awaiting_respawn: Optional[float] = None  # monotonic deadline for a respawned worker to be listed
     client_escalated: bool = False      # a stop the client accepted outlived its grace, so signals followed
     client_binary: Optional[str] = None  # the claude found on the session unit's declared PATH
@@ -496,6 +500,11 @@ class _LogTail:
         return events
 
 
+def _session_dialogs(session_id: str) -> Callable[[], Optional[str]]:
+    from macf.permission_watch import SessionDialogs
+    return SessionDialogs(session_id)
+
+
 def _harness_hosted_sessions() -> list:
     from macf.notify.session import harness_hosted_sessions
     return harness_hosted_sessions()
@@ -542,6 +551,7 @@ class Core:
         probe: Callable[[int, str], bool] = verify_incarnation,
         hosted: Optional[Callable[[], list]] = None,
         client: Optional[Callable[[List[str]], "subprocess.CompletedProcess"]] = None,
+        dialogs: Optional[Callable[[str], Callable[[], Optional[str]]]] = None,
     ):
         self.declaration = declaration
         self.card = card
@@ -559,6 +569,10 @@ class Core:
         # hosts, and how to give it the client's own verbs. Both are seams for tests.
         self._hosted = hosted or _harness_hosted_sessions
         self._client = client or _run_client
+        # What an adopted session waits on a person for, read by session id from the event
+        # log, since such a session writes no liveness to carry it (MIS-0002-R21). A seam too.
+        self._dialogs = dialogs or _session_dialogs
+        self._dialog_readers: Dict[str, Callable[[], Optional[str]]] = {}
         self._units: Dict[str, _Runner] = {
             u.name: _Runner(spec=u, since=wall()) for u in declaration.units
         }
@@ -860,6 +874,7 @@ class Core:
             try:
                 self._tick_unit(r, now)
                 self._check_memory(r, now)
+                self._check_dialogs(r, now)
             except Exception as e:  # noqa: BLE001 - GUARD, not handler: one unit must not stop the rest
                 # Deliberately broad: a GUARD, not a handler. One unit's fault must not
                 # stop the others from being supervised; it is announced, never absorbed.
@@ -994,13 +1009,32 @@ class Core:
             r.auth_failed = None
             self._transition(r, "running", "authenticated again")
             return
-        if live.waiting_on:
-            if r.state != "waiting_on_a_person":
-                self._transition(r, "waiting_on_a_person", f"waiting on {live.waiting_on}")
-        elif r.state == "waiting_on_a_person":
-            self._transition(r, "running", "no longer waiting on a person")
+        if live.waiting_on or r.state == "waiting_on_a_person":
+            self._apply_waiting(r, live.waiting_on)
         elif r.state == "starting":
             self._transition(r, "running", "first liveness from this incarnation")
+
+    def _apply_waiting(self, r: _Runner, waiting_on: Optional[str]) -> None:
+        """Enter or leave waiting on a person (MIS-0002-R21 (pd_MUST_report_waiting_on_person))."""
+        if waiting_on:
+            if r.state != "waiting_on_a_person":
+                self._transition(r, "waiting_on_a_person", f"waiting on {waiting_on}")
+        elif r.state == "waiting_on_a_person":
+            self._transition(r, "running", "no longer waiting on a person")
+
+    def _check_dialogs(self, r: _Runner, now: float) -> None:
+        """Read what an adopted session waits on. The client's own daemon hosts it, and it
+        writes no liveness, so no beat carries a dialog it shows; its hooks still write to the
+        agent's event log, which is where its dialogs are read (MIS-0002-R21)."""
+        if r.client_session is None or r.state not in ("running", "waiting_on_a_person"):
+            return
+        if now - r.dialogs_at < DIALOG_POLL_S:
+            return
+        r.dialogs_at = now
+        reader = self._dialog_readers.get(r.client_session)
+        if reader is None:
+            reader = self._dialog_readers[r.client_session] = self._dialogs(r.client_session)
+        self._apply_waiting(r, reader())
 
     def _on_exit(self, r: _Runner, code: int, now: float) -> None:
         why = _describe_exit(code)
