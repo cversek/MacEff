@@ -17,7 +17,7 @@ import pytest
 
 from macf.channels import channel_tag
 from macf.channels.maceff_channel import (
-    Channel, DaemonRecord, NoticeRecord, build_event, parse_record, verify_peer,
+    DAEMON_POINTERS, SOURCES, Channel, DaemonRecord, NoticeRecord, build_event, parse_record, verify_peer,
 )
 from macf.pd import interface
 from macf.pd.interface import channel_socket, record_path
@@ -258,11 +258,10 @@ def test_a_stale_session_incarnation_is_refused():
 
 # ---- the daemon's notices about the agent's own units (R60, R65, R47) ----------------
 
-@pytest.mark.parametrize("source", ["pd_limit_exceeded", "pd_grant_denied", "pd_carried"])
+@pytest.mark.parametrize("source", sorted(DAEMON_POINTERS))
 def test_a_daemon_source_is_a_notice_about_the_agent_itself(source):
     """Each daemon source is delivered as a never-masked notice with its fixed pointer and
     nothing from the wire: an agent may decline news of the world, not news of itself."""
-    from macf.channels.maceff_channel import DAEMON_POINTERS
     from macf.notify.masking import is_unmaskable
     from macf.notify.notice import daemon_notice
     record = NoticeRecord.model_validate_json(_record(source=source, count=None))
@@ -274,9 +273,30 @@ def test_a_daemon_source_is_a_notice_about_the_agent_itself(source):
     assert "msg-1-abc" not in event["params"]["content"]
 
 
-@pytest.mark.parametrize("source", ["pd_limit_exceeded", "pd_grant_denied", "pd_carried"])
+@pytest.mark.parametrize("source", sorted(DAEMON_POINTERS))
 def test_a_daemon_notice_with_a_count_is_refused(source):
     assert parse_record(_record(source=source, count=1)) is None
+
+
+def test_every_daemon_source_is_known_in_every_place():
+    """A daemon notice source lives in several places, and they must agree (#736): the
+    notifier's sources, the channel's pointers and factories, the record's source list, and the
+    policy's list (persistent_layer 1.2). A source the record doesn't list is refused by the
+    channel after the daemon has logged it delivered, and one the policy leaves out is a
+    notice no agent can look up."""
+    import re
+    import typing
+    from pathlib import Path
+
+    from macf.pd import notifier
+    daemon = set(notifier.INTERNAL_SOURCES)
+    assert set(DAEMON_POINTERS) == daemon
+    assert set(SOURCES) == daemon | {"amail"}
+    assert set(typing.get_args(NoticeRecord.model_fields["source"].annotation)) == daemon | {"amail"}
+    policy = (Path(__file__).resolve().parents[2] / "framework" / "policies" / "base" / "infrastructure"
+              / "persistent_layer.md").read_text()
+    section = policy.split("\n### 1.2 ")[1].split("\n### 1.3 ")[0]
+    assert set(re.findall(r"^ *- `([a-z_]+)`:", section, re.M)) == daemon | {"amail"}
 
 
 def test_dark_channel_event():

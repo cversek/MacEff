@@ -235,6 +235,7 @@ import subprocess  # noqa: E402
 import sys  # noqa: E402
 import time  # noqa: E402
 
+from channel_receiver import ChannelReceiver  # noqa: E402
 from macf.pd import scheduler as sc  # noqa: E402
 from macf.pd.interface import CommandRun, Declaration, PromptRun, Schedule  # noqa: E402
 
@@ -326,6 +327,75 @@ def test_wall_clock_cap(tmp_path):
     assert done["outcome"].startswith("killed: past its 0.3 s limit") and done["wake"] is False
 
 
+def test_every_failed_run_owes_a_notice(tmp_path):
+    """A run that fails by its exit code, is killed past its limit, or can't start owes the
+    agent the pd_run_failed notice, which arrives through the MacEff channel (#739). Without it
+    a check that keeps failing looks like one with nothing to say. A run with nothing to say,
+    and one whose condition holds, owe none."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    channel = ChannelReceiver(tmp_path / "agent")
+    s = make_scheduler(tmp_path, [
+        command_schedule(["/bin/sh", "-c", "exit 3"], name="exits"),
+        command_schedule(["/bin/sh", "-c", "trap '' TERM; sleep 60 & wait"], name="hangs", timeout_s=0.3),
+        command_schedule([str(tmp_path / "absent")], name="absent"),
+        command_schedule(["/bin/sh", "-c", "echo {runtime_dir}"], name="unvalued"),
+        Schedule(name="unread", cron="*/5 * * * *", missed_run=policy("skip"), target="isolated",
+                 run=PromptRun(prompt_file="absent.md"), timeout_s=60),
+        command_schedule(["/bin/sh", "-c", "exit 1"], name="quiet"),
+        command_schedule(["/bin/sh", "-c", "exit 0"], name="holds"),
+    ], log, now, client=_fake_client(tmp_path, []), on_notice=channel)
+    now[0] = at("2026-10-14 12:05")
+    s.tick()
+    finish(s, timeout=15.0)
+    outcomes = {d["schedule"]: d["outcome"] for d in log.of(sc.EVENT_DONE)}
+    assert outcomes["hangs"].startswith("killed")
+    assert all(outcomes[name].startswith("not started") for name in ("absent", "unvalued", "unread"))
+    stamp = int(at("2026-10-14 12:05").timestamp())
+    assert sorted(channel.received) == [("pd_run_failed", f"{name}:{stamp}")
+                                        for name in ("absent", "exits", "hangs", "unread", "unvalued")]
+
+
+def test_a_pass_that_raises_costs_only_its_schedule(tmp_path, monkeypatch, capsys):
+    """A schedule whose pass raises, in planning or in checking its run, is recorded and
+    skipped for that pass, and the scheduler goes on: the other schedules run, and the daemon's
+    loop never sees the exception (#737). The same failure on every pass is recorded once, not
+    once a second."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    s = make_scheduler(tmp_path, [command_schedule(["/bin/sh", "-c", "exit 1"], name="bad"),
+                                  command_schedule(["/bin/sh", "-c", "exit 1"], name="good")], log, now)
+    real_start, real_check = s._start, s._check_run
+
+    def start(schedule, scheduled_for, late_s):
+        if schedule.name == "bad":
+            raise RuntimeError("its output can't be written")
+        return real_start(schedule, scheduled_for, late_s)
+
+    def check(run):
+        raise RuntimeError("its record can't be read")
+    monkeypatch.setattr(s, "_start", start)
+    now[0] = at("2026-10-14 12:05")
+    s.tick()                                                    # bad fails its plan; good starts
+    monkeypatch.setattr(s, "_check_run", check)
+    s.tick()
+    s.tick()                                                    # good's check fails, twice
+    monkeypatch.setattr(s, "_check_run", real_check)
+    finish(s)
+    assert [d["schedule"] for d in log.of(sc.EVENT_STARTED)] == ["good"]
+    failed = log.of(sc.EVENT_PASS_FAILED)
+    assert [(d["schedule"], d["error"]) for d in failed] == [("bad", "RuntimeError: its output can't be written"),
+                                                             ("good", "RuntimeError: its record can't be read")]
+    assert "bad" in capsys.readouterr().err
+
+    # A failure that comes back after a pass that went through is new, so it's said again.
+    now[0] = at("2026-10-14 12:10")
+    s.tick()                                                    # good runs again
+    monkeypatch.setattr(s, "_check_run", check)
+    s.tick()
+    monkeypatch.setattr(s, "_check_run", real_check)
+    finish(s)
+    assert [d["schedule"] for d in log.of(sc.EVENT_PASS_FAILED)] == ["bad", "good", "good"]
+
+
 def test_leases_released(tmp_path):
     """A run still in flight when the daemon restarted is ended by the next daemon: stopped
     if it is still that process, and recorded, so nothing it held outlives its daemon (R28)."""
@@ -399,7 +469,8 @@ def test_an_environment_name_a_process_cant_carry_is_refused_at_load(name):
 
 
 def test_missed_runs_are_reported_once(tmp_path):
-    """A downtime's missed firings are recorded once by policy, not on every pass (R25)."""
+    """A downtime's missed firings are recorded once by policy, not on every pass, and not
+    again by a daemon that restarts before the next firing (R25, #738)."""
     log, now = Log(), [at("2026-10-14 12:00")]
     make_scheduler(tmp_path, [command_schedule(["/usr/bin/true"], kind="report_only")], log, now)
     log.append(sc.EVENT_STARTED, {"agent": CARD, "schedule": "check", "scheduled_for": "2026-10-14T12:00:00+00:00"})
@@ -411,6 +482,30 @@ def test_missed_runs_are_reported_once(tmp_path):
     missed = log.of(sc.EVENT_MISSED)
     assert len(missed) == 1 and missed[0]["policy"] == "report_only" and missed[0]["count"] == 12
     assert len(log.of(sc.EVENT_STARTED)) == 1, "report_only ran a missed firing"
+    now[0] = at("2026-10-14 13:03")                             # restarted before 13:05's firing
+    again = make_scheduler(tmp_path, [command_schedule(["/usr/bin/true"], kind="report_only")], log, now)
+    again.tick()
+    assert len(log.of(sc.EVENT_MISSED)) == 1, "the restart recorded the same missed firings again"
+
+
+def test_missed_firings_are_read_back_from_the_event_log(tmp_path, isolated_events_log):
+    """#738 through the daemon's own reader of the event log, not a list handed to it: a
+    daemon and the same daemon restarted before the next firing record the downtime once.
+    An earlier downtime's record is in the log too, and the newest record is the one read."""
+    from macf.agent_events_log import append_event, read_events
+    append_event(sc.EVENT_MISSED, {"agent": CARD, "schedule": "check", "count": 2, "policy": "report_only",
+                                   "first": "2026-10-14T10:55:00+00:00", "last": "2026-10-14T11:00:00+00:00"})
+    for kind in (sc.EVENT_STARTED, sc.EVENT_DONE):
+        append_event(kind, {"agent": CARD, "schedule": "check", "scheduled_for": "2026-10-14T12:00:00+00:00"})
+    decl = Declaration(version=1, agent=CARD, timezone="UTC", notice_routes=ROUTED,
+                       schedules=[command_schedule(["/usr/bin/true"], kind="report_only")])
+    for minute in ("13:02", "13:03"):
+        s = sc.Scheduler(decl, CARD, {"agent_home": str(tmp_path)}, work_dir=tmp_path / "runs",
+                         now=lambda m=minute: at(f"2026-10-14 {m}"))
+        s.boot()
+        s.tick()
+    missed = [e["data"]["last"] for e in read_events(reverse=False, scope="all") if e.get("event") == sc.EVENT_MISSED]
+    assert missed == ["2026-10-14T11:00:00+00:00", "2026-10-14T13:00:00+00:00"]
 
 
 def test_a_prompt_run_it_cannot_start_is_said_not_run_once(tmp_path, monkeypatch):
@@ -566,18 +661,18 @@ def test_run_cannot_schedule(tmp_path):
     # what pd install recorded, and says the rest isn't run until installed again.
     installed = sc.schedule_digests(Declaration(version=1, agent=CARD, timezone="UTC", schedules=[original],
                                                 notice_routes=ROUTED))
-    owed, after = [], Log()
+    channel, after = ChannelReceiver(tmp_path / "agent"), Log()
     after.append(sc.EVENT_INSTALLED, {"agent": CARD, "digests": installed})
     restarted = sc.Scheduler(Declaration.model_validate_json(on_disk.read_text()), CARD,
                              {"agent_home": str(tmp_path)}, work_dir=tmp_path / "runs", append=after.append,
                              events=after.read, now=lambda: now[0], check_installed=True,
-                             on_notice=lambda source, nid: owed.append(source) or True)
+                             on_notice=channel)
     restarted.boot()
     now[0] = at("2026-10-14 12:11")
     restarted.tick()
     assert not after.of(sc.EVENT_STARTED) and "planted" not in restarted.runnable
     assert "added since the last pd install" in after.of(sc.EVENT_NOT_RUN)[0]["reason"]
-    assert owed == ["pd_schedule_changed"]
+    assert [source for source, _ in channel.received] == ["pd_schedule_changed"]   # through the channel (#734)
 
 
 def _fake_client(tmp_path, denials):
@@ -637,28 +732,29 @@ def test_permissions_settled(tmp_path):
 def test_prompt_fails_run(tmp_path):
     """MIS-0002-R32 (run_MUST_fail_on_prompt): a prompt run the client denied anything met a
     permission prompt. It fails, naming the tools but never the result's text, and the agent
-    is owed the pd_run_failed notice, once per run. A run denied nothing raises no notice."""
+    is owed the pd_run_failed notice, once per run. The notice reaches the agent: it goes
+    through a notifier to the MacEff channel's own record (#734). A run denied nothing raises
+    no notice."""
     log, now = Log(), [at("2026-10-14 12:00")]
-    owed = []
+    channel = ChannelReceiver(tmp_path / "agent")
     client = _fake_client(tmp_path, [{"tool_name": "Write", "tool_use_id": "t1", "tool_input": {"file_path": "/x"}},
                                      {"tool_name": "Bash", "tool_use_id": "t2", "tool_input": {"command": "rm -rf ~"}}])
-    s = make_scheduler(tmp_path, [_prompt_schedule()], log, now, client=client,
-                       on_notice=lambda source, nid: owed.append((source, nid)) or True)
+    s = make_scheduler(tmp_path, [_prompt_schedule()], log, now, client=client, on_notice=channel)
     now[0] = at("2026-10-14 13:00")
     s.tick()
     finish(s)
     done = log.of(sc.EVENT_DONE)[0]
     assert done["outcome"].startswith("failed: met a permission prompt for Bash, Write")
     assert "rm -rf" not in json.dumps(log.rows) and "done" not in done["outcome"]
-    assert owed == [("pd_run_failed", "sweep:2026-10-14T13:00:00+00:00")]
+    assert channel.received == [("pd_run_failed", f"sweep:{int(at('2026-10-14 13:00').timestamp())}")]
 
     quiet = Log()
     s = make_scheduler(tmp_path, [_prompt_schedule()], quiet, now, client=_fake_client(tmp_path, []),
-                       on_notice=lambda source, nid: owed.append((source, nid)) or True)
+                       on_notice=channel)
     now[0] = at("2026-10-14 14:00")
     s.tick()
     finish(s)
-    assert quiet.of(sc.EVENT_DONE)[0]["outcome"] == "ok: the prompt ran" and len(owed) == 1
+    assert quiet.of(sc.EVENT_DONE)[0]["outcome"] == "ok: the prompt ran" and len(channel.received) == 1
 
 
 def test_an_isolated_prompt_run_routes_its_failure_notice():
