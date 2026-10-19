@@ -27,6 +27,8 @@ from macf.pd.core import POLICY_POINTER, Core, DeclarationRefused, load_declarat
 from macf.pd.interface import (
     ActRequest,
     DaemonRecord,
+    EntryAddRequest,
+    EntryListRequest,
     IdentityError,
     Peer,
     Response,
@@ -497,6 +499,8 @@ class Daemon:
             request = parse_request(line)
         except ValidationError as e:
             return Response(ok=False, error=f"request refused: {e.errors()[0]['msg']}")
+        if isinstance(request, (EntryAddRequest, EntryListRequest)):
+            return self._entry_request(request, creds)
         if isinstance(request, StatusRequest):
             return Response(ok=True, units=self.core.statuses())
         if isinstance(request, ActRequest):
@@ -519,6 +523,37 @@ class Daemon:
                 return Response(ok=False, error=str(e.args[0]))
             return Response(ok=True, units=self.core.statuses())
         return Response(ok=False, error="compaction is not available in step 1")
+
+    def _entry_request(self, request, creds) -> Response:
+        """An agent's request about its own entries, taken only from its live session. A
+        relative time is fixed now, so "in 20m" means the same moment after a restart. The
+        event log is the store: what is held is what its events fold to."""
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+
+        from macf.agent_events_log import append_event, read_events
+        from macf.pd.entries import EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED, OneShot, fold, new_entry_id, parse_when
+        why = self._outside_session(creds)
+        if why:
+            return Response(ok=False, error=f"an entry is made only from the agent's live session, and {why}")
+        if isinstance(request, EntryAddRequest):
+            zone = self.core.declaration.timezone
+            tz = ZoneInfo(zone) if zone else timezone.utc
+            now = datetime.now(timezone.utc)
+            try:
+                when = parse_when(request.when, tz, now)
+            except ValueError as e:
+                return Response(ok=False, error=f"the entry's time was refused: {e}")
+            first = when.next_after(now)
+            entry = {"agent": self.card, "id": new_entry_id(),
+                     "when": first.isoformat() if isinstance(when, OneShot) else request.when,
+                     "start": now.isoformat(), "zone": zone or "UTC", "first": first.isoformat() if first else None,
+                     "purpose": request.purpose, "action": request.action, "missed": request.missed,
+                     "asked_by_pid": creds.pid}
+            if not append_event(EVENT_ENTRY_ADDED, entry):
+                return Response(ok=False, error="the entry could not be recorded in the event log")
+        held = fold(read_events(reverse=False, scope="all", only=(EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED)), self.card)
+        return Response(ok=True, entries=list(held.values()))
 
     @staticmethod
     def _read_line(conn: socket.socket) -> Optional[str]:

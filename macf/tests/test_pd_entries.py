@@ -6,6 +6,7 @@ import pytest
 
 from macf.channels.maceff_channel import NoticeRecord
 from macf.pd.entries import ENTRY_ID, new_entry_id, parse_when
+from test_primal_daemon import base, run_daemon  # noqa: F401 - fixtures
 
 UTC = timezone.utc
 NEW_YORK = ZoneInfo("America/New_York")
@@ -66,3 +67,27 @@ def test_the_entries_held_are_what_the_events_fold_to():
               ev(EVENT_ENTRY_REMOVED, me, a)]
     held = fold(events, me)
     assert list(held) == [b] and held[b]["purpose"] == "the weekly audit"
+
+
+def test_only_the_live_session_makes_an_entry(tmp_path, base, run_daemon, isolated_events_log, monkeypatch):
+    """The daemon takes an entry request only from a process below the session unit: with
+    no session, or from outside it, the request is refused and nothing is recorded. From the
+    session, the entry is recorded with its time fixed, and listed (the scheduler design, 1)."""
+    import os
+
+    from macf.notify.session import proc_start
+    from test_primal_daemon import ask, make_home
+    daemon = run_daemon(make_home(tmp_path, []), base)
+    add = {"op": "entry_add", "when": "in 20m", "purpose": "check the pace", "action": "wake", "missed": "once"}
+    refused = ask(daemon, add)
+    assert not refused["ok"] and "live session" in refused["error"]
+    assert ask(daemon, {"op": "entry_list"})["ok"] is False
+
+    me = (os.getpid(), proc_start(os.getpid()))            # this test stands in for the session
+    monkeypatch.setattr(daemon.core, "session_incarnation", lambda: me)
+    made = ask(daemon, add)
+    assert made["ok"] and len(made["entries"]) == 1
+    entry = made["entries"][0]
+    assert ENTRY_ID.match(entry["id"]) and entry["purpose"] == "check the pace"
+    assert entry["when"] == entry["first"]                  # "in 20m" fixed at its instant
+    assert ask(daemon, {"op": "entry_list"})["entries"] == [entry]

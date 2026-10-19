@@ -562,7 +562,24 @@ class CompactRequest(_Closed):
         return self
 
 
-Request = Union[StatusRequest, ActRequest, CompactRequest]
+class EntryAddRequest(_Closed):
+    """An agent's own entry, asked from its live session: the daemon takes it only from a
+    process below the session unit (the scheduler design, sections 1 and 4.1)."""
+
+    op: Literal["entry_add"]
+    when: str = Field(min_length=1, max_length=200)
+    purpose: str = Field(min_length=1, max_length=500)
+    action: Literal["wake"]
+    missed: Literal["once", "skip", "report"]
+
+
+class EntryListRequest(_Closed):
+    """The entries the agent holds, asked from its live session."""
+
+    op: Literal["entry_list"]
+
+
+Request = Union[StatusRequest, ActRequest, CompactRequest, EntryAddRequest, EntryListRequest]
 
 
 class UnitStatus(_Closed):
@@ -583,6 +600,7 @@ class Response(_Closed):
     ok: bool
     error: Optional[str] = None
     units: Optional[List[UnitStatus]] = None
+    entries: Optional[List[dict]] = None
 
 
 _REQUEST = TypeAdapter(Annotated[Request, Field(discriminator="op")])
