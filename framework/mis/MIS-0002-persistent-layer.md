@@ -233,7 +233,7 @@ stateDiagram-v2
 ### 6.10 macOS and the harness's own supervisor
 
 - **R63** [MUST · decidable: macf/tests/test_pd_declaration.py::test_grants_declared] Each declared unit MUST state the privacy grants it needs. (unit_MUST_declare_privacy_grants)
-- **R64** [MUST · decidable: macf/tests/test_pd_render.py::test_grants_tested_at_install] When the platform adapter installs a unit, it MUST test the unit's declared grants. (adapter_MUST_test_grants_at_install)
+- **R64** [MUST · decidable: macf/tests/test_pd_install.py::test_grants_tested_at_install] When the platform adapter installs a unit, it MUST test the unit's declared grants. (adapter_MUST_test_grants_at_install)
 - **R65** [MUST · decidable: macf/tests/test_primal_daemon.py::test_denied_grant_notice] If a declared grant is denied, then the primal daemon MUST deliver a notice that names the grant. (denied_grant_MUST_raise_notice)
 - **R66** [MUST · decidable: macf/tests/test_pd_harness.py::test_adopts_harness_supervisor] Where the harness's own supervisor already runs a session, the primal daemon MUST adopt that session instead of starting a second supervisor. (pd_MUST_adopt_harness_supervisor)
 
@@ -470,7 +470,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R61 | decidable | macf/tests/test_pd_watch.py::test_limits_checked_after_recreate | passing |
 | R62 | judgment | the head maintainer, at review of the container landing | pending |
 | R63 | decidable | macf/tests/test_pd_declaration.py::test_grants_declared | passing |
-| R64 | decidable | macf/tests/test_pd_render.py::test_grants_tested_at_install | passing |
+| R64 | decidable | macf/tests/test_pd_install.py::test_grants_tested_at_install | passing |
 | R65 | decidable | macf/tests/test_primal_daemon.py::test_denied_grant_notice | passing |
 | R66 | decidable | macf/tests/test_pd_harness.py::test_adopts_harness_supervisor | passing |
 | R67 | judgment | the operator | standing |

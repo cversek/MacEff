@@ -1651,3 +1651,17 @@ def test_denied_grant_notice(tmp_path, script, base, run_daemon):
     daemon = run_daemon(home, base, grant_probes=lambda: iter(probes))
     owed = [o for o in daemon.notifier.owed.values() if o.source == "pd_grant_denied"]
     assert [o.arrival_id for o in owed] == ["pd_grant_denied:local_network:200"]
+
+
+def test_an_untested_newest_probe_speaks_for_the_grants(tmp_path, script, base, run_daemon):
+    """The newest probe speaks even when it couldn't test: an older probe's denial raises no
+    notice once a later install failed to test, because it may no longer be true."""
+    unit = make_unit("worker", script, {}).model_copy(update={"privacy_grants": ["local_network"]})
+    home = make_home(tmp_path, [unit])
+    path = declaration_path(home)
+    declared = Declaration.model_validate_json(path.read_text())
+    path.write_text(declared.model_copy(update={"notice_routes": {"pd_grant_denied": "agent"}}).model_dump_json())
+    probes = [{"timestamp": 200, "data": {"agent": CARD, "tested": False, "why": "no answer"}},
+              {"timestamp": 100, "data": {"agent": CARD, "tested": True, "verdicts": {"local_network": "denied"}}}]
+    daemon = run_daemon(home, base, grant_probes=lambda: iter(probes))
+    assert not [o for o in daemon.notifier.owed.values() if o.source == "pd_grant_denied"]
