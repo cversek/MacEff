@@ -231,7 +231,8 @@ class Scheduler:
         done: set = set()
         pids: Dict[tuple, dict] = {}
         read = self.events or (lambda: read_events(reverse=True, scope="all",
-                                                   only=(EVENT_SEEN, EVENT_STARTED, EVENT_DONE, EVENT_PID)))
+                                                   only=(EVENT_SEEN, EVENT_STARTED, EVENT_DONE, EVENT_PID,
+                                                         EVENT_MISSED)))
         for event in read():
             data = event.get("data") or {}
             if not isinstance(data, dict) or data.get("agent") != self.card:
@@ -246,6 +247,12 @@ class Scheduler:
                     self.since[name] = at                  # reading newest first: the oldest wins
             elif kind == EVENT_DONE:
                 done.add((name, data.get("scheduled_for")))
+            elif kind == EVENT_MISSED:
+                # Missed firings already recorded, so a restart before the next run doesn't
+                # record them again (#738). Reading newest first: the newest record wins.
+                last = _when(data.get("last"))
+                if last is not None:
+                    self.reported.setdefault(name, last)
             elif kind == EVENT_PID:
                 pids.setdefault((name, data.get("scheduled_for")), data)
             elif kind == EVENT_STARTED:

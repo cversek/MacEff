@@ -469,7 +469,8 @@ def test_an_environment_name_a_process_cant_carry_is_refused_at_load(name):
 
 
 def test_missed_runs_are_reported_once(tmp_path):
-    """A downtime's missed firings are recorded once by policy, not on every pass (R25)."""
+    """A downtime's missed firings are recorded once by policy, not on every pass, and not
+    again by a daemon that restarts before the next firing (R25, #738)."""
     log, now = Log(), [at("2026-10-14 12:00")]
     make_scheduler(tmp_path, [command_schedule(["/usr/bin/true"], kind="report_only")], log, now)
     log.append(sc.EVENT_STARTED, {"agent": CARD, "schedule": "check", "scheduled_for": "2026-10-14T12:00:00+00:00"})
@@ -481,6 +482,30 @@ def test_missed_runs_are_reported_once(tmp_path):
     missed = log.of(sc.EVENT_MISSED)
     assert len(missed) == 1 and missed[0]["policy"] == "report_only" and missed[0]["count"] == 12
     assert len(log.of(sc.EVENT_STARTED)) == 1, "report_only ran a missed firing"
+    now[0] = at("2026-10-14 13:03")                             # restarted before 13:05's firing
+    again = make_scheduler(tmp_path, [command_schedule(["/usr/bin/true"], kind="report_only")], log, now)
+    again.tick()
+    assert len(log.of(sc.EVENT_MISSED)) == 1, "the restart recorded the same missed firings again"
+
+
+def test_missed_firings_are_read_back_from_the_event_log(tmp_path, isolated_events_log):
+    """#738 through the daemon's own reader of the event log, not a list handed to it: a
+    daemon and the same daemon restarted before the next firing record the downtime once.
+    An earlier downtime's record is in the log too, and the newest record is the one read."""
+    from macf.agent_events_log import append_event, read_events
+    append_event(sc.EVENT_MISSED, {"agent": CARD, "schedule": "check", "count": 2, "policy": "report_only",
+                                   "first": "2026-10-14T10:55:00+00:00", "last": "2026-10-14T11:00:00+00:00"})
+    for kind in (sc.EVENT_STARTED, sc.EVENT_DONE):
+        append_event(kind, {"agent": CARD, "schedule": "check", "scheduled_for": "2026-10-14T12:00:00+00:00"})
+    decl = Declaration(version=1, agent=CARD, timezone="UTC", notice_routes=ROUTED,
+                       schedules=[command_schedule(["/usr/bin/true"], kind="report_only")])
+    for minute in ("13:02", "13:03"):
+        s = sc.Scheduler(decl, CARD, {"agent_home": str(tmp_path)}, work_dir=tmp_path / "runs",
+                         now=lambda m=minute: at(f"2026-10-14 {m}"))
+        s.boot()
+        s.tick()
+    missed = [e["data"]["last"] for e in read_events(reverse=False, scope="all") if e.get("event") == sc.EVENT_MISSED]
+    assert missed == ["2026-10-14T11:00:00+00:00", "2026-10-14T13:00:00+00:00"]
 
 
 def test_a_prompt_run_it_cannot_start_is_said_not_run_once(tmp_path, monkeypatch):
