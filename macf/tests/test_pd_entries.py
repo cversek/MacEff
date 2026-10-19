@@ -186,8 +186,8 @@ def test_the_cli_asks_the_daemon_and_says_what_it_answered(monkeypatch, capsys):
     def run(*argv):
         args = parser.parse_args(["pd", "entry", *argv])
         return args.func(args)
-    assert run("add", "in 20m", "check the pace", "--missed", "once") == 0
-    assert sent[-1] == {"op": "entry_add", "when": "in 20m", "purpose": "check the pace", "action": "wake", "missed": "once"}
+    assert run("add", "in 20m", "check the pace", "--missed", "report") == 0
+    assert sent[-1] == {"op": "entry_add", "when": "in 20m", "purpose": "check the pace", "action": "wake", "missed": "report"}
     assert "e-0123456789ab" in capsys.readouterr().out
     assert run("list") == 0 and "check the pace" in capsys.readouterr().out
     assert run("add", "never", "x", "--missed", "skip") == 1
