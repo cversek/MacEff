@@ -125,6 +125,8 @@ A channel event carries **a notice and nothing else**: the source's own fixed wo
   - `pd_limit_exceeded`: a unit is past its declared memory limit [MIS-0002-R60 (pd_MUST_notice_limit_exceeded)].
   - `pd_grant_denied`: a declared grant was denied [MIS-0002-R65 (denied_grant_MUST_raise_notice)].
   - `pd_carried`: what a restart or a compaction carried, changed and lost [MIS-0002-R47 (pd_MUST_report_carried_changed_lost)].
+  - `pd_run_failed`: a scheduled run of yours failed, was killed at its limit, or couldn't start [MIS-0002-R32 (run_MUST_fail_on_prompt)]. See 10.4.
+  - `pd_schedule_changed`: a schedule of yours changed since the operator last ran `pd install`, so your daemon isn't running it [MIS-0002-R33 (run_MUST-NOT_change_schedules)]. See 10.4.
 - The daemon's notice about your mail:
   - `pd_unread_mail`: mail has waited in your pickup box past your declared threshold [MIS-0002-R55 (unread_mail_MUST_raise_notice)]. See 1.11.
 
