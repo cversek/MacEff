@@ -6,7 +6,9 @@ of process memory and 1 GB of kernel memory held, 13.7 GB of page cache besides.
 """
 import json
 import os
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -394,3 +396,141 @@ def test_the_daemon_says_at_start_where_the_allowlist_and_declaration_differ(tmp
         {"version": 1, "agent": "Ira@ee9a78", "allowlisted_channels": [TELEGRAM, MACEFF]})
     Daemon._compare_allowlist(stub)
     assert written == []
+
+
+# ---- the mail processes, under the broker account's own daemon (MIS-0002-R53, R54) ------------
+
+START_PY = Path(__file__).resolve().parents[2] / "docker" / "scripts" / "start.py"
+VENV_PY = "/opt/maceff-venv/bin/python"
+
+
+def _mail_unit(name, *module_and_verb, account="amail_broker"):
+    return {"name": name, "command": [VENV_PY, "-m", *module_and_verb], "account": account,
+            "restart": "always", "liveness_interval_s": 60, "memory_limit_mb": 256}
+
+
+#: The broker account's daemon, as a deployment declares it (persistent_layer section 8).
+BROKER_DAEMON = {
+    "units": [_mail_unit("broker", "macf.amail.daemons.broker"),
+              _mail_unit("inbound-watcher", "macf.amail.daemons.inbound", "watch")],
+    "schedules": [{"name": "inbound-sweep", "cron": "*/5 * * * *", "target": "isolated",
+                   "missed_run": {"kind": "skip"}, "timeout_s": 120,
+                   "run": {"command": [VENV_PY, "-m", "macf.amail.daemons.inbound", "sweep", "--quiet"],
+                           "wake_when": "stdout"}}],
+    "timezone": "UTC",
+}
+
+
+def _start():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("maceff_start_mail_units", START_PY)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _agents_yaml(services):
+    from macf.models.agent_spec import AgentsConfig
+    return AgentsConfig.model_validate({"ids": {"base": 21000}, "agents": {}, "subagents": {},
+                                        "services": services})
+
+
+def _amail_step(start, tmp_path, monkeypatch):
+    """Run the amail step against temporary paths, recording every process it launches itself
+    and every start of the receiver. Provisioning that needs root fails and is logged, as on a
+    host; that half is not what these tests are about."""
+    launched = {"popen": [], "receiver": 0}
+    for name, attr in (("broker_config.yaml", "AMAIL_BROKER_CONFIG"),
+                       ("inbound_config.yaml", "AMAIL_INBOUND_CONFIG")):
+        (tmp_path / name).write_text("{}")
+        monkeypatch.setattr(start, attr, tmp_path / name)
+    monkeypatch.setattr(start, "broker_cfg_handoff_root", lambda config: str(tmp_path / "handoff"))
+    monkeypatch.setattr(start, "provision_pickup_boxes", lambda *a: None)
+    monkeypatch.setattr(start.shutil, "chown", lambda *a, **k: None)
+    monkeypatch.setattr(start, "_start_inbound_transport",
+                        lambda interp: launched.__setitem__("receiver", launched["receiver"] + 1))
+    monkeypatch.setattr(start.subprocess, "Popen", lambda *a, **k: launched["popen"].append(a))
+    return launched
+
+
+def test_mail_units(tmp_path, monkeypatch):
+    """MIS-0002-R53 (mail_broker_MUST_be_managed): in a container, the mail broker and its inbound
+    watcher are units of the broker account's own primal daemon. Start-up gives the account its
+    identity, renders the declaration with both units, owned by root, and starts the daemon under
+    the outer tier, and the amail step starts neither itself. A deployment that runs amail and
+    declares no such daemon fails the step, by name, after starting the receiver."""
+    from macf.pd import names as pd_names
+    start = _start()
+    home = tmp_path / "var" / "lib" / "amail_broker"
+    monkeypatch.setattr(start, "SERVICE_PATHS", {"amail_broker": home})
+    monkeypatch.setattr(start, "account_ids", lambda name: (os.getuid(), os.getgid()))
+    monkeypatch.setattr(pd_names, "RENDERED_DECLARATIONS", tmp_path / "etc")
+    cfg = _agents_yaml({"amail_broker": {"calling_card": "AmailBroker", "primal_daemon": BROKER_DAEMON},
+                        "amail_ingest": {}})
+    owned = []
+    rendered = start.render_pd_declarations(cfg, root=tmp_path / "etc",
+                                            chown=lambda p, u, g: owned.append((Path(p).name, u, g)))
+    assert rendered == ["amail_broker"]
+    card = pd_names.agent_card(home)
+    assert card == "AmailBroker@" + start.service_agent_id("amail_broker", cfg.ids)[:6]
+    assert start.service_agent_id("amail_broker", cfg.ids) == start.service_agent_id("amail_broker", cfg.ids)
+    declaration = json.loads((tmp_path / "etc" / "amail_broker" / "declaration.json").read_text())
+    assert declaration["agent"] == card
+    assert [u["name"] for u in declaration["units"]] == ["broker", "inbound-watcher"]
+    who = {name: (u, g) for name, u, g in owned}
+    assert who["config.json.tmp"] == who[".maceff_primary_agent.id.tmp"] == (0, 0)  # root's identity
+    assert who[".maceff"] == (os.getuid(), os.getgid())         # the daemon writes its log there
+
+    supervised = []
+    monkeypatch.setattr(start, "supervise_primal_daemon", lambda user, where: supervised.append((user, where)))
+    assert start.start_primal_daemons(cfg) == ["amail_broker"]
+    for _ in range(50):
+        if supervised:
+            break
+        time.sleep(0.01)
+    assert supervised == [("amail_broker", home)]
+
+    launched = _amail_step(start, tmp_path, monkeypatch)
+    start.start_amail_services(cfg)
+    assert launched == {"popen": [], "receiver": 1}
+
+    bare = _agents_yaml({"amail_broker": {}, "amail_ingest": {}})
+    launched = _amail_step(start, tmp_path, monkeypatch)
+    with pytest.raises(RuntimeError, match="R53"):
+        start.start_amail_services(bare)
+    assert launched == {"popen": [], "receiver": 1}
+
+    with pytest.raises(ValidationError, match="only as the service account"):
+        _agents_yaml({"amail_broker": {"calling_card": "AmailBroker", "primal_daemon": {
+            "units": [_mail_unit("broker", "macf.amail.daemons.broker", account="pa_manny")]}}})
+    with pytest.raises(ValidationError, match="together"):
+        _agents_yaml({"amail_broker": {"calling_card": "AmailBroker"}})
+
+
+def test_periodic_clock_is_schedule(tmp_path, monkeypatch):
+    """MIS-0002-R54 (periodic_mail_clock_MUST_be_schedule): a mail check that runs on a period is
+    a schedule, with its missed-run policy declared, so each run, owed and done, is recorded. In a
+    container that check is the aged sweep, a schedule of the broker account's daemon. The inbound
+    watcher's 15 s drain is that unit's own loop, its health the unit's liveness, and it never
+    sweeps (test_amail_watch_resilience.py). So a declaration that runs the sweep or the watchdog
+    as a unit is refused when agents.yaml loads, the sweep declared as a schedule loads, and
+    start-up launches no mail process of its own."""
+    by_path = {"name": "inbound-sweep", "command": ["/opt/macf_tools/src/macf/amail/daemons/inbound.py", "sweep"],
+               "account": "amail_broker", "restart": "always", "liveness_interval_s": 60, "memory_limit_mb": 64}
+    for unit in [_mail_unit("inbound-" + verb, "macf.amail.daemons.inbound", verb)
+                 for verb in ("sweep", "watchdog")] + [by_path]:
+        looping = {**BROKER_DAEMON, "units": BROKER_DAEMON["units"] + [unit]}
+        with pytest.raises(ValidationError, match="R54"):
+            _agents_yaml({"amail_broker": {"calling_card": "AmailBroker", "primal_daemon": looping}})
+    cfg = _agents_yaml({"amail_broker": {"calling_card": "AmailBroker", "primal_daemon": BROKER_DAEMON}})
+    declaration = interface.Declaration(version=1, agent="AmailBroker@abc123",
+                                        **cfg.services["amail_broker"].primal_daemon)
+    (sweep,) = [s for s in declaration.schedules if "sweep" in s.run.command]
+    assert sweep.missed_run.kind == "skip"
+    assert sweep.run.wake_when == "stdout" and "--quiet" in sweep.run.command
+
+    start = _start()
+    launched = _amail_step(start, tmp_path, monkeypatch)
+    start.start_amail_services(cfg)
+    assert launched["popen"] == []
+
