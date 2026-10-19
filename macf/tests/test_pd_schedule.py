@@ -355,6 +355,47 @@ def test_every_failed_run_owes_a_notice(tmp_path):
                                         for name in ("absent", "exits", "hangs", "unread", "unvalued")]
 
 
+def test_a_pass_that_raises_costs_only_its_schedule(tmp_path, monkeypatch, capsys):
+    """A schedule whose pass raises, in planning or in checking its run, is recorded and
+    skipped for that pass, and the scheduler goes on: the other schedules run, and the daemon's
+    loop never sees the exception (#737). The same failure on every pass is recorded once, not
+    once a second."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    s = make_scheduler(tmp_path, [command_schedule(["/bin/sh", "-c", "exit 1"], name="bad"),
+                                  command_schedule(["/bin/sh", "-c", "exit 1"], name="good")], log, now)
+    real_start, real_check = s._start, s._check_run
+
+    def start(schedule, scheduled_for, late_s):
+        if schedule.name == "bad":
+            raise RuntimeError("its output can't be written")
+        return real_start(schedule, scheduled_for, late_s)
+
+    def check(run):
+        raise RuntimeError("its record can't be read")
+    monkeypatch.setattr(s, "_start", start)
+    now[0] = at("2026-10-14 12:05")
+    s.tick()                                                    # bad fails its plan; good starts
+    monkeypatch.setattr(s, "_check_run", check)
+    s.tick()
+    s.tick()                                                    # good's check fails, twice
+    monkeypatch.setattr(s, "_check_run", real_check)
+    finish(s)
+    assert [d["schedule"] for d in log.of(sc.EVENT_STARTED)] == ["good"]
+    failed = log.of(sc.EVENT_PASS_FAILED)
+    assert [(d["schedule"], d["error"]) for d in failed] == [("bad", "RuntimeError: its output can't be written"),
+                                                             ("good", "RuntimeError: its record can't be read")]
+    assert "bad" in capsys.readouterr().err
+
+    # A failure that comes back after a pass that went through is new, so it's said again.
+    now[0] = at("2026-10-14 12:10")
+    s.tick()                                                    # good runs again
+    monkeypatch.setattr(s, "_check_run", check)
+    s.tick()
+    monkeypatch.setattr(s, "_check_run", real_check)
+    finish(s)
+    assert [d["schedule"] for d in log.of(sc.EVENT_PASS_FAILED)] == ["bad", "good", "good"]
+
+
 def test_leases_released(tmp_path):
     """A run still in flight when the daemon restarted is ended by the next daemon: stopped
     if it is still that process, and recorded, so nothing it held outlives its daemon (R28)."""

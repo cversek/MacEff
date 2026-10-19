@@ -79,6 +79,8 @@ EVENT_NOT_RUN = "pd_schedule_not_run"
 EVENT_DEFERRED = "pd_run_deferred"
 #: The run's process, written once it exists, so a later daemon can tell it from a stranger.
 EVENT_PID = "pd_run_pid"
+#: A schedule's pass that raised, so the daemon skipped that schedule for the pass (#737).
+EVENT_PASS_FAILED = "pd_schedule_pass_failed"
 
 #: How long a run past its limit has after SIGTERM before SIGKILL.
 KILL_GRACE_S = 5.0
@@ -205,6 +207,8 @@ class Scheduler:
     #: the home changes nothing until the next start, where the check refuses it (R33).
     prompts: Dict[str, bytes] = field(default_factory=dict)
     deferred: Dict[str, Optional[datetime]] = field(default_factory=dict)
+    #: Each schedule's pass failure last recorded, so the same failure isn't recorded every pass.
+    pass_failed: Dict[str, str] = field(default_factory=dict)
 
     def _say(self, event: str, data: dict) -> None:
         if not self.append(event, {"agent": self.card, **data}):
@@ -334,26 +338,46 @@ class Scheduler:
 
     def tick(self) -> None:
         for name in list(self.running):
-            self._check_run(self.running[name])
+            self._guarded(name, lambda: self._check_run(self.running[name]))
         now = self.now()
         for s in self.declaration.schedules:
             if s.name in self.running or s.name not in self.runnable:
                 continue
-            plan = plan_runs(CronExpr.parse(s.cron, self._tz()), s.missed_run,
-                             last_due=self.last_due.get(s.name), boot=self.boot_at, now=now,
-                             since=self.since.get(s.name), restarts_unit=s.restarts_unit)
-            if plan.missed and self.reported.get(s.name) != plan.last_missed:
-                self.reported[s.name] = plan.last_missed
-                self._say(EVENT_MISSED, {"schedule": s.name, "count": plan.missed,
-                                         "first": _iso(plan.first_missed) if plan.first_missed else None,
-                                         "last": _iso(plan.last_missed) if plan.last_missed else None,
-                                         "policy": s.missed_run.kind})
-            if plan.run_at is not None and plan.run_at > now and self.deferred.get(s.name) != plan.scheduled_for:
-                self.deferred[s.name] = plan.scheduled_for
-                self._say(EVENT_DEFERRED, {"schedule": s.name, "scheduled_for": _iso(plan.scheduled_for),
-                                           "run_at": _iso(plan.run_at), "policy": s.missed_run.kind})
-            if plan.run_at is not None and plan.run_at <= now:
-                self._start(s, plan.scheduled_for, plan.late_s)
+            self._guarded(s.name, lambda: self._pass(s, now))
+
+    def _guarded(self, name: str, step: Callable[[], None]) -> None:
+        """Run one schedule's part of a pass. An exception costs that schedule this pass, and
+        it's recorded and said once for as long as it repeats. The daemon's loop never sees it,
+        so one bad schedule can't stop the units the daemon supervises (#737)."""
+        try:
+            step()
+        except Exception as e:  # one schedule's failure must not end the daemon's loop
+            said = f"{type(e).__name__}: {e}"
+            if self.pass_failed.get(name) != said:
+                self.pass_failed[name] = said
+                self._say(EVENT_PASS_FAILED, {"schedule": name, "error": said})
+                print(f"⚠️ MACF: pd: schedule {name} failed its pass and was skipped ({said}); "
+                      f"the other schedules go on", file=sys.stderr)
+        else:
+            self.pass_failed.pop(name, None)
+
+    def _pass(self, s: Schedule, now: datetime) -> None:
+        """Plan one schedule against the clock, and start its run if one is due."""
+        plan = plan_runs(CronExpr.parse(s.cron, self._tz()), s.missed_run,
+                         last_due=self.last_due.get(s.name), boot=self.boot_at, now=now,
+                         since=self.since.get(s.name), restarts_unit=s.restarts_unit)
+        if plan.missed and self.reported.get(s.name) != plan.last_missed:
+            self.reported[s.name] = plan.last_missed
+            self._say(EVENT_MISSED, {"schedule": s.name, "count": plan.missed,
+                                     "first": _iso(plan.first_missed) if plan.first_missed else None,
+                                     "last": _iso(plan.last_missed) if plan.last_missed else None,
+                                     "policy": s.missed_run.kind})
+        if plan.run_at is not None and plan.run_at > now and self.deferred.get(s.name) != plan.scheduled_for:
+            self.deferred[s.name] = plan.scheduled_for
+            self._say(EVENT_DEFERRED, {"schedule": s.name, "scheduled_for": _iso(plan.scheduled_for),
+                                       "run_at": _iso(plan.run_at), "policy": s.missed_run.kind})
+        if plan.run_at is not None and plan.run_at <= now:
+            self._start(s, plan.scheduled_for, plan.late_s)
 
     def _start(self, s: Schedule, scheduled_for: datetime, late_s: Optional[float]) -> None:
         # The next run time moves on first (R26): this record is what the next plan reads.
