@@ -241,3 +241,36 @@ def test_an_allowlist_the_declaration_does_not_match_installs_nothing(tmp_path, 
     assert run("install") == 1
     err = capsys.readouterr().err
     assert tier.installed == [] and "telegram@claude-plugins-official" in err and "nothing installed" in err
+
+
+def test_grants_tested_at_install(tmp_path, monkeypatch, tier, capsys):
+    """MIS-0002-R64 (adapter_MUST_test_grants_at_install): installing tests each unit's declared
+    grants through the adapter, records the verdicts as one pd_grant_probe event, and does so
+    before the install starts the daemon, which reads the newest probe when it starts (R65).
+    A plan tests nothing."""
+    import macf.agent_events_log as log
+    calls, appended = [], []
+    tier.install_ = tier.install
+    tier.install = lambda card, home, force=False: (calls.append("install"), tier.install_(card, home, force))[1]
+    tier.probe_grants = lambda card, home, grants: (calls.append(("probe", list(grants))),
+                                                    {"local_network": "denied"})[1]
+    monkeypatch.setattr(log, "append_event", lambda event, data: appended.append((event, data)) or True)
+    home = make_home(tmp_path, declared=False)
+    unit = Unit(name="session", command=["/bin/sleep", "60"], account=ME, restart="always",
+                liveness_interval_s=60, memory_limit_mb=64, privacy_grants=["local_network"])
+    path = declaration_path(home)
+    path.parent.mkdir(parents=True)
+    path.write_text(Declaration(version=1, agent=CARD, units=[unit],
+                                notice_routes={"pd_grant_denied": "agent"}).model_dump_json())
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(home))
+
+    assert run("install", "--plan") == 0
+    assert calls == []
+
+    assert run("install") == 0
+    assert calls == [("probe", ["local_network"]), "install"]
+    probes = [d for e, d in appended if e == "pd_grant_probe"]
+    assert probes == [{"agent": CARD, "tested": True, "units": {"session": ["local_network"]},
+                       "verdicts": {"local_network": "denied"}}]
+    out = capsys.readouterr()
+    assert "session: local_network: denied" in out.out and "denied: local_network" in out.err

@@ -110,6 +110,18 @@ class LaunchdAdapter:
         from macf.platform import launchd
         launchd.apply_plan(launchd.uninstall_plan(card, self._home, self._uid), run=self._run)
 
+    def probe_grants(self, card: str, agent_home: Path, grants: List[str]) -> Dict[str, str]:
+        """Each grant's verdict from the launchd context (MIS-0002-R64
+        (adapter_MUST_test_grants_at_install)): a one-shot job run with the daemon's own
+        interpreter, loaded from the daemon's state directory and booted out after."""
+        import tempfile
+        from macf.platform import launchd
+        log_dir = self._log_dir(agent_home)
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=str(Path(agent_home) / ".maceff" / "pd")) as work:
+            return launchd.run_grant_probe(card, _program(agent_home)[0], list(grants), work, log_dir,
+                                           self._uid, self._run)
+
     def status(self, card: str) -> str:
         from macf.platform import launchd
         out = self._run(launchd.launchctl_argv("print", launchd.pd_label(card), self._uid))
