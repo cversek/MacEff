@@ -322,7 +322,13 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
     card = window_title(agent)
     for option in (("set-titles", "on"), ("set-titles-string", card), ("allow-set-title", "off"),
                    ("automatic-rename", "off")):
-        _tmux(tmux, env, "set-option", "-g", *option)
+        done = _tmux(tmux, env, "set-option", "-g", *option)
+        if done.returncode != 0:
+            # An older tmux has no allow-set-title; the window and the terminal still name
+            # the agent, and only the pane's own title is the client's.
+            print(f"⚠️ MACF: session unit: this tmux refused {option[0]} "
+                  f"({(done.stderr or done.stdout).strip()[:120]}); the window and the terminal "
+                  f"title still name the agent", file=sys.stderr)
     new = ["new-session", "-d", "-P", "-F", "#{pane_pid}", "-s", agent, "-n", card] + (["-c", str(project_dir)] if project_dir else []) + [str(child)]
     made = _tmux(tmux, env, *new)
     if made.returncode != 0:
