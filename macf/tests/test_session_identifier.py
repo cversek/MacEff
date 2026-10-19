@@ -115,7 +115,22 @@ class TestResolverNeverPassesAGuessOffAsAFinding:
 
     def test_the_environment_override_is_named_as_the_source(self, monkeypatch):
         monkeypatch.setenv("MACEFF_AGENT_NAME", "fromenv")
+        monkeypatch.setattr("macf.utils.identity._resolve_uuid_prefix", lambda: ("abc123", "host"))
         assert resolve_agent() == ("fromenv", "MACEFF_AGENT_NAME")
+
+    def test_a_host_global_name_does_not_rename_a_per_project_agent(self, monkeypatch):
+        """A shell rc exporting the host's resident agent's name made every harness
+        command in another agent's home act on the resident agent."""
+        monkeypatch.setenv("MACEFF_AGENT_NAME", "Resident")
+        monkeypatch.setattr("macf.utils.identity._resolve_uuid_prefix", lambda: ("abc123", "project"))
+        monkeypatch.setattr("macf.utils.identity.get_agent_identity", lambda: CARD)
+        assert resolve_agent() == (IDENT, "calling card")
+
+    def test_a_per_project_agent_with_no_card_still_takes_the_name(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MACEFF_AGENT_NAME", "fromenv")
+        monkeypatch.setattr("macf.utils.identity._resolve_uuid_prefix", lambda: ("unknown", "project"))
+        monkeypatch.setattr("macf.utils.identity.get_agent_identity", lambda: "x@unknown")
+        assert resolve_agent(unit_dir=tmp_path) == ("fromenv", "MACEFF_AGENT_NAME")
 
     def test_falls_back_to_the_calling_card(self, monkeypatch):
         monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
