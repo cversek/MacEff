@@ -19,20 +19,25 @@ driven step by step by the OPERATOR rather than fired as a side effect:
                quarantine, audit. THE OPERATOR CALLS WHEN THIS RUNS during
                an acceptance battery, and it stays exactly as it was so
                that cadence remains available.
-    watch      unattended mode: `process` on an interval, plus the aged
-               sweep on its own cadence, publishing a heartbeat an outside
-               observer can age out. Running it is a deliberate deployment
-               act, never a default.
+    watch      unattended mode: `process` on an interval, publishing a
+               heartbeat an outside observer can age out, and, run as a unit
+               of the broker account's primal daemon, its liveness
+               (MIS-0002-R53). It does not sweep: the aged sweep is periodic
+               work of its own, scheduled (MIS-0002-R54). Running it is a
+               deliberate deployment act, never a default.
     sweep      the orphan sweep alone: quarantine aged spool entries, alert
                on pickup entries nobody drained. Exits NON-ZERO on any alert, so
-               a scheduler treats a stuck message as a failure rather than
-               as output nobody read. Schedule this even when a watcher
-               runs -- it is what notices the watcher died.
+               a scheduler treats a stuck message as a failed run rather than
+               as output nobody read. `--quiet` prints the report only when it
+               alerts, so a clean sweep scheduled with `wake_when: stdout` has
+               nothing to say. In a container it is a schedule of the broker
+               account's primal daemon (MIS-0002-R54).
     watchdog   `sweep` plus watcher liveness, on a cadence, IN ITS OWN
-               PROCESS. The sweep that runs inside `watch` cannot report the
-               watcher's death because it dies with it; this is the one that
-               can. Alarms are appended to a durable file and never end the
-               loop.
+               PROCESS, for a watcher no daemon supervises. Where the broker's
+               primal daemon runs the watcher as a unit, the daemon notices its
+               death and the sweep is its schedule, so a container no longer
+               starts this. Alarms are appended to a durable file and never end
+               the loop.
     health     one-shot verdict over both heartbeats and the aged sweep,
                NON-ZERO when unhealthy. The surface a scheduler or an operator
                outside the container calls -- the point where the supervision
@@ -74,6 +79,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from macf.amail import alerting
+from macf.pd.liveness import heartbeat_from_env
 from macf.utils.json_io import write_json_safely
 
 #: Overridable for the same reason the broker's is: a startup refusal that can
@@ -144,7 +150,7 @@ HEARTBEAT = Path(os.environ.get("AMAIL_WATCH_HEARTBEAT",
 
 
 def watch(cfg, inbound) -> int:
-    """Drain the spool as mail arrives, and sweep aged entries periodically.
+    """Drain the spool as mail arrives.
 
     AUTOSTART, WITH MANUAL PRESERVED. `process` remains exactly as it was: the
     operator-fired verb the acceptance battery depended on, and the one an
@@ -162,18 +168,26 @@ def watch(cfg, inbound) -> int:
       - it does not swallow errors from process_spool. An unexpected exception
         propagates and the watcher EXITS, because a watcher that keeps looping
         while every drain fails is indistinguishable from a healthy one.
-      - it does not shrink the conservation window silently: auto-draining
-        makes in-flight rarer, which makes the aged-entry sweep MORE
-        load-bearing, not less. The sweep therefore runs on its own cadence
-        inside this loop.
+      - it does not run the aged sweep. Auto-draining makes in-flight rarer,
+        which makes the aged-entry sweep MORE load-bearing, not less, and that
+        is why it no longer lives here: a periodic check inside this loop ran
+        only while the loop did, and its runs were visible to nobody. It is a
+        schedule of the broker account's primal daemon (MIS-0002-R54
+        (periodic_mail_clock_MUST_be_schedule)), where each run, owed and
+        done, is recorded, and a stuck message is a failed run.
       - it does not assume it is alive. Every cycle stamps the heartbeat, and
         an outside observer (the sweep, a cron check, an operator) ages that
         file out. Self-reported liveness from a hung process is worthless.
+        Run as a unit of the broker account's primal daemon, it also beats
+        liveness to the daemon after each cycle whose drain did not raise
+        (MIS-0002-R14), so a wedged or failing watcher reads overdue and is
+        restarted, and the restart is an event naming who acted.
     """
     interval = int(os.environ.get("AMAIL_WATCH_INTERVAL", "15"))
-    sweep_every = int(os.environ.get("AMAIL_WATCH_SWEEP_INTERVAL", "300"))
-    print(f"amail inbound watcher: interval {interval}s, sweep every "
-          f"{sweep_every}s, heartbeat {HEARTBEAT}", flush=True)
+    print(f"amail inbound watcher: interval {interval}s, heartbeat {HEARTBEAT}; "
+          f"the aged sweep is a schedule of its own", flush=True)
+    # None unless this process runs as a declared unit (MIS-0002-R53).
+    beat = heartbeat_from_env()
 
     stop = {"now": False}
 
@@ -184,7 +198,17 @@ def watch(cfg, inbound) -> int:
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
 
-    last_sweep = 0.0
+    try:
+        _drain_until_stopped(cfg, inbound, interval, stop, beat)
+    finally:
+        if beat is not None:
+            beat.stop()
+    return 0
+
+
+def _drain_until_stopped(cfg, inbound, interval: int, stop: dict, beat) -> None:
+    """The watcher's loop: drain the spool, stamp the heartbeat, and beat to the
+    primal daemon after each cycle whose drain passed. Returns once ``stop`` is set."""
     failures = 0
     # CUMULATIVE, because the consecutive count is a LEVEL and an observer only
     # samples it. A watcher that fails twice and recovers between every
@@ -213,6 +237,8 @@ def watch(cfg, inbound) -> int:
                 print(f"✅ MACF: spool processing RECOVERED after {failures} "
                       f"consecutive failure(s)", file=sys.stderr, flush=True)
             failures, last_error = 0, ""
+            if beat is not None:
+                beat.tick()
         except Exception as e:
             # Broad ON PURPOSE, and this is the one place in the subsystem
             # where that is right: any exception reaching here kills a service
@@ -229,19 +255,6 @@ def watch(cfg, inbound) -> int:
                   file=sys.stderr, flush=True)
         for r in results:
             print(json.dumps(r, default=str), flush=True)
-        if cycle_started - last_sweep >= sweep_every:
-            # Same rule one level down: the sweep is the thing that reports
-            # stuck mail, so losing it to an unreadable spool entry would
-            # remove the alarm exactly when it applies.
-            try:
-                report = inbound.sweep_aged(cfg)
-                if report["alerts"]:
-                    print(json.dumps({"sweep": report}, default=str), flush=True)
-            except Exception as e:
-                print(f"⚠️ MACF: in-loop sweep failed ({type(e).__name__}: {e}); "
-                      f"the watchdog's sweep is unaffected", file=sys.stderr,
-                      flush=True)
-            last_sweep = cycle_started
         # ATOMIC, because the whole point of this file is that ANOTHER process
         # reads it while this one writes. A plain write publishes a truncated
         # heartbeat for the width of the write, and a torn read is reported as
@@ -275,7 +288,6 @@ def watch(cfg, inbound) -> int:
         while slept < interval and not stop["now"]:
             time.sleep(0.5)
             slept += 0.5
-    return 0
 
 
 #: Where the watchdog records what it found. Durable because an alarm printed
@@ -493,10 +505,13 @@ def watchdog(cfg, inbound) -> int:
 def health(cfg, inbound) -> int:
     """One-shot verdict for a scheduler or a human. NON-ZERO when unhealthy.
 
-    The watchdog reports continuously into a file; this is the surface that
-    turns that into an exit code something outside the container can act on.
-    Both watcher and watchdog liveness are reported, because a green watcher
-    checked by a dead watchdog is a reading nobody should trust.
+    This is the surface that turns the watcher's state into an exit code
+    something outside the container can act on. It reads the watcher's own
+    heartbeat and runs the aged sweep itself, so its verdict needs no
+    watchdog's word on either. The watchdog is reported where one runs, and not
+    required: in a container the broker account's primal daemon supervises the
+    watcher as a unit and runs the sweep as a schedule (MIS-0002-R53, R54), and
+    no watchdog is started there.
     """
     now = time.time()
     hb = heartbeat_verdict(now)
@@ -527,8 +542,7 @@ def health(cfg, inbound) -> int:
     else:
         report["aged"] = {"error": "config did not load"}
 
-    healthy = (hb["state"] == "alive" and wd.get("state") == "alive"
-               and report["aged"].get("alerts") == 0)
+    healthy = hb["state"] == "alive" and report["aged"].get("alerts") == 0
     report["healthy"] = healthy
     print(json.dumps(report, indent=1, default=str))
     return 0 if healthy else 1
@@ -664,7 +678,11 @@ def main() -> int:
         # independently of processing -- the sweep must run even when (especially
         # when) the consumer is not.
         report = inbound.sweep_aged(cfg)
-        print(json.dumps(report, indent=1))
+        # --quiet: the report only when it alerts. Scheduled with
+        # `wake_when: stdout`, a clean sweep then has nothing to say, and a
+        # sweep that alerts is a failed run by its exit, not a wake.
+        if report["alerts"] or "--quiet" not in sys.argv[2:]:
+            print(json.dumps(report, indent=1))
         # Non-zero on ANY alert: a sweep that found a stuck message and exited 0
         # is the silent-alarm failure this sweep exists to prevent.
         return 1 if report["alerts"] else 0
