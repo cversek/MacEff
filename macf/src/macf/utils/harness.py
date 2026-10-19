@@ -176,6 +176,15 @@ def installed_agents(unit_dir: Optional[Path] = None) -> list:
     )
 
 
+def _per_project_agent() -> bool:
+    """Whether this agent's identity comes from its own home's identity file."""
+    try:
+        from .identity import _resolve_uuid_prefix
+        return _resolve_uuid_prefix()[1] == "project"
+    except (ImportError, OSError, ValueError):
+        return False
+
+
 def resolve_agent(explicit: Optional[str] = None,
                   unit_dir: Optional[Path] = None) -> "tuple":
     """Resolve which agent this harness command is about, and say how.
@@ -196,8 +205,11 @@ def resolve_agent(explicit: Optional[str] = None,
     if explicit:
         return explicit, "flag"
     env = os.environ.get("MACEFF_AGENT_NAME")
-    if env:
+    if env and not _per_project_agent():
         return env, "MACEFF_AGENT_NAME"
+    # In a per-project agent's home, a host-global MACEFF_AGENT_NAME (a shell rc
+    # naming the host's resident agent) names a different agent; the card wins,
+    # as it does for get_agent_identity().
     try:
         from .identity import get_agent_identity, session_identifier
         card = get_agent_identity()
@@ -218,6 +230,8 @@ def resolve_agent(explicit: Optional[str] = None,
         # actually chose. The whole point of returning a source alongside the
         # name is to say where the name came from.
         print(f"⚠️ MACF: harness could not resolve the calling card: {e}", file=sys.stderr)
+    if env:
+        return env, "MACEFF_AGENT_NAME"
     units = installed_agents(unit_dir)
     if len(units) == 1:
         return units[0], "the only installed unit"
