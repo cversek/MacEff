@@ -207,3 +207,62 @@ def test_the_agenda_shows_both_tiers_soonest_first():
     lines = agenda_lines(decl, entries, datetime(2026, 10, 19, 12, 0, tzinfo=UTC))
     assert [line.split()[1] for line in lines] == ["entry", "declared"]
     assert lines[1].startswith("2026-10-19T13:00:00+00:00")
+
+
+def test_from_a_tainted_context_a_recurring_entry_waits_and_a_one_shot_is_marked(
+        tmp_path, base, run_daemon, isolated_events_log, monkeypatch):
+    """After the session read untrusted input, a one-shot wake is made and marked, and a
+    recurring one waits for the operator. From a clean context both are active and unmarked.
+    The reading comes from the session's own tool events (the scheduler design, 5.3)."""
+    import os
+
+    from macf.agent_events_log import append_event
+    from macf.notify.session import proc_start
+    from test_primal_daemon import ask, make_home
+    daemon = run_daemon(make_home(tmp_path, []), base)
+    me = (os.getpid(), proc_start(os.getpid()))
+    monkeypatch.setattr(daemon.core, "session_incarnation", lambda: me)
+
+    def add(when):
+        made = ask(daemon, {"op": "entry_add", "when": when, "purpose": "p", "action": "wake", "missed": "once"})
+        return next(e for e in made["entries"] if e["id"] not in seen)
+    seen = set()
+    append_event("session_started", {"session_id": "s"})
+    clean = add("cron:0 9 * * *")
+    seen.add(clean["id"])
+    assert (clean["state"], clean["marked"]) == ("active", [])
+    append_event("tool_call_started", {"tool": "WebFetch", "session_id": "s"})
+    recurring = add("cron:0 9 * * *")
+    seen.add(recurring["id"])
+    once = add("in 20m")
+    assert (recurring["state"], recurring["marked"]) == ("waiting", ["a web fetch"])
+    assert (once["state"], once["marked"]) == ("active", ["a web fetch"])
+
+
+def test_a_waiting_entry_fires_only_once_accepted_and_only_from_then(tmp_path):
+    """A waiting entry never fires. Accepted, it fires from its acceptance on, and the firings
+    it waited through aren't owed. Declined, it's gone (the scheduler design, 5.3)."""
+    from channel_receiver import ChannelReceiver
+    from macf.pd import scheduler as sc
+    from macf.pd.entries import EVENT_ENTRY_ACCEPTED, EVENT_ENTRY_ADDED, EVENT_ENTRY_DECLINED
+    from test_pd_schedule import CARD, Log, at, make_scheduler
+    log, now = Log(), [at("2026-10-19 12:30")]
+    hourly, declined = new_entry_id(), new_entry_id()
+    for entry_id in (hourly, declined):
+        log.append(EVENT_ENTRY_ADDED, {"agent": CARD, "id": entry_id, "when": "cron:0 * * * *", "zone": "UTC",
+                                       "start": "2026-10-19T08:30:00+00:00", "action": "wake", "missed": "once",
+                                       "state": "waiting", "marked": ["a web fetch"]})
+    channel = ChannelReceiver(tmp_path / "agent")
+    s = make_scheduler(tmp_path, [], log, now, on_notice=channel)
+    s.tick()
+    assert channel.received == [] and log.of(sc.EVENT_ENTRY_FIRED) == []
+    log.append(EVENT_ENTRY_ACCEPTED, {"agent": CARD, "id": hourly, "at": "2026-10-19T12:30:00+00:00"})
+    log.append(EVENT_ENTRY_DECLINED, {"agent": CARD, "id": declined, "at": "2026-10-19T12:30:00+00:00"})
+    s = make_scheduler(tmp_path, [], log, now, on_notice=channel)
+    assert list(s.entries) == [hourly]
+    s.tick()
+    assert channel.received == []                              # 09:00 to 12:00 waited, not owed
+    now[0] = at("2026-10-19 13:00")
+    s.tick()
+    assert channel.received == [("pd_entry_due", hourly)]
+    assert log.of(sc.EVENT_ENTRY_FIRED)[0]["missed"] == 0

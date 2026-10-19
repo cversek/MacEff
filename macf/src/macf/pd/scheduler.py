@@ -371,10 +371,10 @@ class Scheduler:
 
     def _load_entries(self) -> None:
         """The entries the log folds to, and the instant each last fired for (R16)."""
-        from macf.pd.entries import EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED, fold
+        from macf.pd.entries import ENTRY_EVENTS, fold
         from macf.pd.notifier import EVENT_DELIVERED, HOLD_MAX_S
         read = self.events or (lambda: read_events(reverse=True, scope="all",
-                                                   only=(EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED, EVENT_ENTRY_FIRED,
+                                                   only=(*ENTRY_EVENTS, EVENT_ENTRY_FIRED,
                                                          EVENT_DELIVERED)))
         rows = list(read())                      # newest first
         self.entries = fold(reversed(rows), self.card)
@@ -403,13 +403,17 @@ class Scheduler:
         the daemon was down. The firing is recorded before the notice is raised (R26)."""
         from macf.pd.entries import OneShot, parse_when
         entry = self.entries[entry_id]
+        if entry.get("state") == "waiting":
+            return                               # until the operator accepts it (the design, 5.3)
         tz = timezone.utc if entry.get("zone") in (None, "UTC") else ZoneInfo(entry["zone"])
         start = _when(entry.get("start"))
         try:
             when = OneShot(datetime.fromisoformat(entry["when"]))
         except ValueError:
             when = parse_when(entry["when"], tz, start, start=start)
-        due = when.next_after(self.entry_fired.get(entry_id) or start - timedelta(seconds=1))
+        # An accepted entry is owed from its acceptance, never for the firings it waited through.
+        since = _when(entry.get("accepted_at")) or start
+        due = when.next_after(self.entry_fired.get(entry_id) or since - timedelta(seconds=1))
         if due is None or due > now:
             return
         missed = 0

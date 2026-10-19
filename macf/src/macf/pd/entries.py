@@ -33,6 +33,11 @@ _UNITS = {"m": "minutes", "h": "hours", "d": "days"}
 #: what these events fold to.
 EVENT_ENTRY_ADDED = "pd_entry_added"
 EVENT_ENTRY_REMOVED = "pd_entry_removed"
+#: The operator's answer to an entry that waits (the scheduler design, 5.3): accepted, it fires
+#: from then on; declined, it's gone.
+EVENT_ENTRY_ACCEPTED = "pd_entry_accepted"
+EVENT_ENTRY_DECLINED = "pd_entry_declined"
+ENTRY_EVENTS = (EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED, EVENT_ENTRY_ACCEPTED, EVENT_ENTRY_DECLINED)
 
 
 def new_entry_id() -> str:
@@ -50,10 +55,13 @@ def fold(events: Iterable[dict], card: str) -> Dict[str, dict]:
         entry_id = data.get("id")
         if not isinstance(entry_id, str) or not ENTRY_ID.match(entry_id):
             continue
-        if event.get("event") == EVENT_ENTRY_ADDED:
+        kind = event.get("event")
+        if kind == EVENT_ENTRY_ADDED:
             held[entry_id] = data
-        elif event.get("event") == EVENT_ENTRY_REMOVED:
+        elif kind in (EVENT_ENTRY_REMOVED, EVENT_ENTRY_DECLINED):
             held.pop(entry_id, None)
+        elif kind == EVENT_ENTRY_ACCEPTED and held.get(entry_id, {}).get("state") == "waiting":
+            held[entry_id] = {**held[entry_id], "state": "active", "accepted_at": data.get("at")}
     return held
 
 
