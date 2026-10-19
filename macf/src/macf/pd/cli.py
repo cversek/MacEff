@@ -55,6 +55,9 @@ def add_pd_parser(sub) -> None:
     lst = entry_sub.add_parser("list", help="the entries you hold")
     lst.add_argument("--json", action="store_true", help="print them as JSON")
     lst.set_defaults(func=cmd_pd_entry_list)
+    agenda = pd_sub.add_parser(
+        "agenda", help="what is scheduled: the declared schedules' next runs and your own entries")
+    agenda.set_defaults(func=cmd_pd_agenda)
 
 
 def cmd_pd_alive(args: argparse.Namespace) -> int:
@@ -163,6 +166,37 @@ def cmd_pd_entry_list(args: argparse.Namespace) -> int:
     if not entries:
         print("no entries")
     return 0
+
+
+def agenda_lines(declaration, entries, now) -> list:
+    """One line per declared schedule and per entry, soonest first, each marked with its tier."""
+    from zoneinfo import ZoneInfo
+
+    from macf.pd.schedule import CronExpr
+    tz = ZoneInfo(declaration.timezone) if declaration and declaration.timezone else None
+    rows = []
+    for s in (declaration.schedules if declaration else []):
+        nxt = CronExpr.parse(s.cron, tz).next_after(now) if tz else None
+        rows.append((nxt.isoformat() if nxt else "none", f"declared  {s.name}  {s.cron}"))
+    for e in entries:
+        rows.append((e.get("first") or "none", f"entry     {e['id']}  {e['purpose']}"))
+    return [f"{when}  {what}" for when, what in sorted(rows)]
+
+
+def cmd_pd_agenda(args: argparse.Namespace) -> int:
+    from datetime import datetime, timezone
+
+    from macf.pd.core import load_declaration
+    home, card = _this_agent()
+    try:
+        declaration = load_declaration(home, card)
+    except Exception as e:  # a missing or refused declaration still leaves the entries to show
+        print(f"⚠️ MACF: pd: the declaration couldn't be read ({e}); showing entries only", file=sys.stderr)
+        declaration = None
+    reply = _ask_entries({"op": "entry_list"})
+    lines = agenda_lines(declaration, (reply.entries or []) if reply else [], datetime.now(timezone.utc))
+    print("\n".join(lines) if lines else "nothing scheduled")
+    return 0 if reply is not None else 1
 
 
 def _this_agent():

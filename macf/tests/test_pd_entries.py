@@ -192,3 +192,18 @@ def test_the_cli_asks_the_daemon_and_says_what_it_answered(monkeypatch, capsys):
     assert run("list") == 0 and "check the pace" in capsys.readouterr().out
     assert run("add", "never", "x", "--missed", "skip") == 1
     assert "the entry's time was refused" in capsys.readouterr().err
+
+
+def test_the_agenda_shows_both_tiers_soonest_first():
+    """Declared schedules' next runs and the agent's own entries, in one list, each marked with
+    its tier and soonest first (story 15)."""
+    from macf.pd.cli import agenda_lines
+    from macf.pd.interface import CommandRun, Declaration, MissedRunPolicy, Schedule
+    decl = Declaration(version=1, agent="Tester@abc123", timezone="UTC", notice_routes={"pd_run_failed": "agent"},
+                       schedules=[Schedule(name="sweep", cron="0 13 * * *", missed_run=MissedRunPolicy(kind="skip"),
+                                           target="isolated", run=CommandRun(command=["true"], wake_when="exit_code"),
+                                           timeout_s=60)])
+    entries = [{"id": "e-0123456789ab", "first": "2026-10-19T12:20:00+00:00", "purpose": "check the pace"}]
+    lines = agenda_lines(decl, entries, datetime(2026, 10, 19, 12, 0, tzinfo=UTC))
+    assert [line.split()[1] for line in lines] == ["entry", "declared"]
+    assert lines[1].startswith("2026-10-19T13:00:00+00:00")
