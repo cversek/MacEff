@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from macf.notify.session import verify_incarnation
 # The core's bound, so the daemon and every reader agree on when a unit is stale.
 from macf.pd.core import LIVENESS_TOLERANCE
-from macf.pd.interface import EVENT_LIVENESS, EVENT_STATE, CommandRun, Declaration, Liveness, Schedule
+from macf.pd.interface import EVENT_DAEMON_START, EVENT_LIVENESS, EVENT_STATE, Declaration, Liveness, Schedule
 from macf.pd.schedule import CronExpr
 from macf.pd.scheduler import (
     EVENT_DEFERRED,
@@ -180,8 +180,10 @@ RunVerdict = Literal["NONE_OWED", "OK", "DUE", "RUNNING", "OVERDUE", "FAILED", "
 #: failed run is its schedule's outcome, and a run the daemon can't start yet is said once;
 #: the readout shows both per schedule without judging the daemon by them.
 UNHEALTHY_RUNS = ("OVERDUE",)
-#: The scheduler's events, which ``schedule_health`` reads.
-SCHEDULE_EVENTS = (EVENT_SEEN, EVENT_STARTED, EVENT_DONE, EVENT_MISSED, EVENT_NOT_RUN, EVENT_DEFERRED)
+#: The scheduler's events, which ``schedule_health`` reads, and the daemon's start, which says
+#: which not-run records are the current daemon's.
+SCHEDULE_EVENTS = (EVENT_SEEN, EVENT_STARTED, EVENT_DONE, EVENT_MISSED, EVENT_NOT_RUN, EVENT_DEFERRED,
+                   EVENT_DAEMON_START)
 #: How long after its firing a run may still be starting. The daemon starts a due run on its
 #: next pass, a fraction of a second later, so this is room for a slow pass, not a policy.
 START_GRACE_S = 60.0
@@ -218,12 +220,17 @@ def schedule_health(declaration: Declaration, events: Iterable[dict], now: float
     newest: Dict[tuple, dict] = {}
     seen: Dict[str, datetime] = {}
     done_for: Dict[str, set] = {}
+    booted: Optional[float] = None
     for event in events:
         kind = event.get("event") if isinstance(event, dict) else None
         if kind not in SCHEDULE_EVENTS:
             continue
         data = event.get("data") or {}
         if not isinstance(data, dict) or data.get("agent") != declaration.agent:
+            continue
+        if kind == EVENT_DAEMON_START:
+            stamp = _float_or_none(event.get("timestamp")) or 0.0
+            booted = stamp if booted is None else max(booted, stamp)
             continue
         name = data.get("schedule")
         if not isinstance(name, str) or name not in names:
@@ -240,12 +247,12 @@ def schedule_health(declaration: Declaration, events: Iterable[dict], now: float
         if key not in newest or stamp >= (_float_or_none(newest[key].get("timestamp")) or 0.0):
             newest[key] = event
     tz = ZoneInfo(declaration.timezone) if declaration.timezone else timezone.utc
-    return [_schedule_health(s, tz, newest, seen.get(s.name), done_for.get(s.name, set()), now)
+    return [_schedule_health(s, tz, newest, seen.get(s.name), done_for.get(s.name, set()), now, booted)
             for s in declaration.schedules]
 
 
 def _schedule_health(s: Schedule, tz, newest: Dict[tuple, dict], seen: Optional[datetime],
-                     done_for: set, now: float) -> ScheduleHealth:
+                     done_for: set, now: float, booted: Optional[float] = None) -> ScheduleHealth:
     def data(kind):
         return (newest.get((kind, s.name)) or {}).get("data") or {}
 
@@ -259,7 +266,10 @@ def _schedule_health(s: Schedule, tz, newest: Dict[tuple, dict], seen: Optional[
     outcome = str(done.get("outcome") or "")
     known = {"schedule": s.name, "last_run": last_run.isoformat() if last_run else None,
              "outcome": outcome}
-    if not isinstance(s.run, CommandRun) and data(EVENT_NOT_RUN):
+    # A refusal is said at each start that refuses, and nothing is said when a later start takes
+    # the schedule, so only a not-run record since the daemon's newest start counts (#735).
+    refusal = newest.get((EVENT_NOT_RUN, s.name))
+    if refusal is not None and (booted is None or (_float_or_none(refusal.get("timestamp")) or 0.0) >= booted):
         return ScheduleHealth(**known, verdict="NOT_RUN",
                               detail=f"the daemon does not run it: {data(EVENT_NOT_RUN).get('reason', '')}")
     if origin is None:

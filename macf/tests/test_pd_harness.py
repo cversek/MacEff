@@ -391,11 +391,12 @@ def test_a_client_not_on_the_declared_path_is_named_and_nothing_is_touched(tmp_p
         client.close()
 
 
-def test_channel_first(tmp_path, isolated_events_log, monkeypatch):
+def test_channel_first(tmp_path, isolated_events_log, monkeypatch, capsys):
     """MIS-0002-R104: with the MacEff channel attached, mail that arrives (a wake) and the
     daemon's own notice both go out on the channel as records naming their sources, each
     delivery is recorded as by channel, and the keystroke fallback types nothing into an
-    idle, empty box, however long past its grace both have been owed."""
+    idle, empty box, however long past its grace both have been owed. A notice the channel's
+    record would refuse is never recorded as delivered."""
     import socket
 
     from macf.agent_events_log import read_events
@@ -445,6 +446,16 @@ def test_channel_first(tmp_path, isolated_events_log, monkeypatch):
     delivered = [e["data"] for e in read_events(reverse=False, scope="all") if e.get("event") == nt.EVENT_DELIVERED]
     assert sorted(d["source"] for d in delivered) == ["amail", "pd_limit_exceeded"]
     assert {d["via"] for d in delivered} == {"channel"}
+
+    # A notice the channel would refuse, such as one whose id holds a "+", is refused where
+    # it's raised, and said. Owed, it would be written, logged delivered, and dropped by the
+    # channel, so the log would hold a delivery that never happened (#734).
+    assert not n.raise_notice("pd_limit_exceeded", "worker:2026-10-14T13:00:00+00:00")
+    assert not n.owed and n.flush() == 0
+    assert "pd_limit_exceeded" in capsys.readouterr().err
+    refused = [e for e in read_events(reverse=False, scope="all")
+               if (e.get("data") or {}).get("arrival_id") == "worker:2026-10-14T13:00:00+00:00"]
+    assert refused == []
     n.detach(ours)
     theirs.close()
 

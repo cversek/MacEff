@@ -1514,13 +1514,15 @@ def test_an_optional_unit_that_hangs_at_start_delays_no_other(tmp_path, script, 
 def test_a_unit_past_its_memory_limit_is_recorded_once_per_crossing(tmp_path, script, make_core, monkeypatch):
     """MIS-0002-R60: a running unit read above its declared limit is recorded once, with a
     notice owed, and recorded once more when it is read back below; readings that don't
-    cross record nothing. The limit is not enforced: the unit keeps running."""
+    cross record nothing. The notice arrives through the MacEff channel's own record (#734).
+    The limit is not enforced: the unit keeps running."""
+    from channel_receiver import ChannelReceiver
     import macf.pd.core as core_module
     readings = iter([10.0, 80.0, 90.0, 20.0, 30.0])           # limit is 64 MB
     monkeypatch.setattr(core_module, "tree_rss_mb", lambda pid: next(readings, 30.0))
     core = make_core([make_unit("worker", script, {})], memory_check_s=0.0)
-    owed = []
-    core.on_notice = lambda source, nid: owed.append((source, nid))
+    channel = ChannelReceiver(tmp_path)
+    core.on_notice = channel
     core.boot()
     assert drive(core, lambda: core.state("worker") == "running")
     for _ in range(6):
@@ -1529,7 +1531,7 @@ def test_a_unit_past_its_memory_limit_is_recorded_once_per_crossing(tmp_path, sc
     under = events("pd_unit_back_under_limit", "worker")
     assert [(d["used_mb"], d["limit_mb"]) for d in over] == [(80.0, 64)]
     assert [d["used_mb"] for d in under] == [20.0]
-    assert [s for s, _ in owed] == ["pd_limit_exceeded"]
+    assert [s for s, _ in channel.received] == ["pd_limit_exceeded"]
     assert core.state("worker") == "running"
 
 

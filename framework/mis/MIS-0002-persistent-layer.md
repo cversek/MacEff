@@ -177,7 +177,7 @@ stateDiagram-v2
 - **R29** [MUST · decidable: macf/tests/test_pd_schedule.py::test_target_declared] Each schedule MUST declare its target: an isolated session, or the live session of a named agent. (schedule_MUST_declare_target)
 - **R30** [SHOULD · judgment: the Secretary, at review of each declaration] A schedule SHOULD target an isolated session, unless its work needs the live session's context. (schedule_SHOULD_target_isolated)
 - **R31** [MUST · decidable: macf/tests/test_pd_schedule.py::test_permissions_settled] When a schedule's work needs a permission, its declaration MUST settle that permission when the schedule is created. (schedule_MUST_settle_permission_at_creation)
-- **R32** [MUST · decidable: macf/tests/test_pd_schedule.py::test_prompt_fails_run (planned)] If a run meets a permission prompt, then the run MUST fail and deliver a notice, instead of waiting. (run_MUST_fail_on_prompt)
+- **R32** [MUST · decidable: macf/tests/test_pd_schedule.py::test_prompt_fails_run] If a run meets a permission prompt, then the run MUST fail and deliver a notice, instead of waiting. (run_MUST_fail_on_prompt)
 - **R33** [MUST NOT · decidable: macf/tests/test_pd_schedule.py::test_run_cannot_schedule] A run MUST NOT create, change or delete a schedule. (run_MUST-NOT_change_schedules)
 - **R34** [MUST · decidable: macf/tests/test_pd_schedule.py::test_late_run_says_so] When a run starts late, its notice MUST state how late it is. (late_run_MUST_state_lateness)
 - **R35** [MUST NOT · judgment: the Secretary, at review of each declaration] A schedule MUST NOT fetch its instructions from the network. (schedule_MUST-NOT_fetch_instructions)
@@ -195,7 +195,7 @@ stateDiagram-v2
 - **R44** [MUST NOT · judgment: the head maintainer, at review of each harness adapter] Where a harness offers a session socket or an API, its harness adapter MUST NOT wake the session by keystrokes. (adapter_MUST-NOT_type_given_api)
 - **R45** [MUST · decidable: macf/tests/test_pd_wake.py::test_a_busy_stretch_is_said_once_and_nothing_is_typed] If a wake uses keystrokes, then the sender MUST type only into an empty input box of an idle session. (keystroke_wake_MUST_need_empty_idle_box)
 - **R77** [MUST · decidable: macf/tests/test_pd_wake.py::test_a_wake_carries_fixed_words_and_message_ids_oldest_first] Each wake MUST carry only the persistent layer's own fixed words and message identifiers, never text that a sender chose. (wake_MUST_carry_fixed_words_only)
-- **R104** [MUST · decidable: macf/tests/test_pd_harness.py::test_channel_first (planned)] Where a harness offers a harness channel, its harness adapter MUST deliver each wake and each notice through that channel. (adapter_MUST_deliver_through_channel)
+- **R104** [MUST · decidable: macf/tests/test_pd_harness.py::test_channel_first] Where a harness offers a harness channel, its harness adapter MUST deliver each wake and each notice through that channel. (adapter_MUST_deliver_through_channel)
 - **R105** [MUST · decidable: macf/tests/test_pd_wake.py::test_wake_through_notifier] The harness adapter MUST wake a session by keystrokes only when its harness offers no harness channel, or the session's channel dropped or never connected. (keystroke_wake_MUST_be_fallback_only)
 - **R106** [MUST NOT · decidable: macf/tests/test_mode_activity.py::test_wake_is_not_operator_activity] The presence state and the operational modes MUST NOT count a wake as the operator's activity. (wake_MUST-NOT_count_as_operator_activity)
 - **R107** [MUST · decidable: macf/tests/test_mode_activity.py::test_channels_told_apart_by_name (planned)] Each producer of the operator's activity MUST count a channel event as the operator's only when its exact channel name is one the declaration lists as the operator's. (hooks_MUST_tell_channels_apart_by_name)
@@ -438,7 +438,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R29 | decidable | macf/tests/test_pd_schedule.py::test_target_declared | passing |
 | R30 | judgment | the Secretary, at review of each declaration | standing |
 | R31 | decidable | macf/tests/test_pd_schedule.py::test_permissions_settled | passing |
-| R32 | decidable | macf/tests/test_pd_schedule.py::test_prompt_fails_run | planned (the run fails and raises its notice, but the test hands the notice to a stand-in receiver; the MacEff channel refuses the notice's id, so the notice never arrives) |
+| R32 | decidable | macf/tests/test_pd_schedule.py::test_prompt_fails_run | passing |
 | R33 | decidable | macf/tests/test_pd_schedule.py::test_run_cannot_schedule | passing |
 | R34 | decidable | macf/tests/test_pd_schedule.py::test_late_run_says_so | passing |
 | R35 | judgment | the Secretary, at review of each declaration | standing |
@@ -510,7 +510,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R101 | decidable | macf/tests/test_pd_observe.py::test_nothing_attachable_said | passing |
 | R102 | decidable | macf/tests/test_pd_observe.py::test_reachable_state | passing |
 | R103 | decidable | macf/tests/test_pd_declaration.py::test_shared_budget_operator_only | passing |
-| R104 | decidable | macf/tests/test_pd_harness.py::test_channel_first | planned (a wake and a `pd_limit_exceeded` notice go out on the channel; `pd_run_failed` and `pd_schedule_changed` carry ids the channel refuses, so they never arrive) |
+| R104 | decidable | macf/tests/test_pd_harness.py::test_channel_first | passing |
 | R105 | decidable | macf/tests/test_pd_wake.py::test_wake_through_notifier | passing |
 | R106 | decidable | macf/tests/test_mode_activity.py::test_wake_is_not_operator_activity | passing |
 | R107 | decidable | macf/tests/test_mode_activity.py::test_channels_told_apart_by_name | planned |
@@ -679,6 +679,7 @@ Objections recorded:
   - R32 (run_MUST_fail_on_prompt) and R104 (adapter_MUST_deliver_through_channel) move back to planned. Neither named test sends the scheduler's own notices through the MacEff channel. R32's hands its notice to a stand-in receiver that accepts anything, and R104's sends a wake and `pd_limit_exceeded`. The scheduler's two notices, `pd_run_failed` and `pd_schedule_changed`, carry ids that hold a UTC offset's `+`, which the channel's record refuses. So the channel drops them while the notifier records them delivered (#734): a failed run's notice reaches no agent, and R104's "each notice" isn't met. Both return to passing with #734's fix, on tests that send every daemon notice through the channel's record.
   - R64's named test has been `macf/tests/test_pd_install.py::test_grants_tested_at_install` since #724, where MIS-0002 had `test_pd_render.py`. It is the same test, in the file of the command it drives, and #724's line didn't say so. The head maintainer noted it on #552.
   The persistent_layer policy's section 13 lists the scheduler's notices as not yet delivered, until #734's fix.
+- 2026-10-19: R32 (run_MUST_fail_on_prompt) and R104 (adapter_MUST_deliver_through_channel) move back to passing, with the fix for #734 and the tests they name. The scheduler's notice ids now take an epoch second, which the MacEff channel's record accepts. R32's test receives its notice through a notifier, a socket and the channel's own `parse_record`, as each notice producer's test now does. R104's test now also shows that a notice the channel's record would refuse is refused where it's raised, and never recorded as delivered. The same pull request fixes #735 to #739, and none of those changes a row's state. Editorial (mis 8.1).
 
 ## Wiki-Links
 

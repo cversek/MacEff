@@ -286,6 +286,37 @@ def test_overdue_is_unhealthy(monkeypatch):
     assert (report.runs, report.schedules[0]["verdict"]) == ("", "OVERDUE")
 
 
+def test_a_command_schedule_the_daemon_refused_reads_not_run(monkeypatch):
+    """A command schedule the daemon refused at its start, as a host refuses one changed since
+    the last pd install (R33), reads NOT_RUN, and the daemon stays healthy: it declined the run
+    on purpose, so the run isn't overdue (#735). A refusal at an earlier daemon's start counts
+    for nothing once a later start took the schedule."""
+    from macf.pd import client
+    from macf.pd.health import START_GRACE_S
+    from macf.pd.interface import EVENT_DAEMON_START
+
+    def daemon_start(stamp):
+        return {"timestamp": stamp, "event": EVENT_DAEMON_START,
+                "data": {"agent": CARD, "pid": 4242, "proc_start": "t0"}}
+
+    events = [_run("pd_schedule_seen", H10 - 1800, at="2026-10-17T09:30:00+00:00"), daemon_start(H10 - 600),
+              _run("pd_schedule_not_run", H10 - 599, reason="it changed since the last pd install")]
+    monkeypatch.setattr(client, "load_declaration", lambda home, card: _scheduled())
+    monkeypatch.setattr(client, "read_events", lambda **k: iter(sorted(events, key=lambda e: -e["timestamp"])))
+    monkeypatch.setattr(client, "_units", lambda home, card, base=None, now=None:
+                        client.StatusReport(card=card, source="daemon", why="test"))
+
+    def report():
+        return client.status(Path("/nonexistent"), CARD, now=H10 + START_GRACE_S + 1,
+                             host=lambda: client.TrayHost(True, ""))
+
+    refused = report()
+    assert (refused.schedules[0]["verdict"], refused.runs) == ("NOT_RUN", "healthy")
+    events.append(daemon_start(H10 - 300))                          # a later daemon took it
+    taken = report()
+    assert (taken.schedules[0]["verdict"], taken.runs) == ("OVERDUE", "unhealthy: hourly OVERDUE")
+
+
 def test_a_run_waiting_as_declared_or_never_started_is_not_overdue():
     """Review of #711. A missed run its policy defers to a window reads DUE until the window
     opens, then OVERDUE if it still hasn't started. A run that never started, for a missing

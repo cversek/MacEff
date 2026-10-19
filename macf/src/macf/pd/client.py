@@ -21,6 +21,7 @@ from macf.notify.session import verify_incarnation
 from macf.pd.core import DeclarationRefused, load_declaration
 from macf.pd.health import SCHEDULE_EVENTS, UNHEALTHY_RUNS, health, schedule_health
 from macf.pd.interface import (
+    EVENT_DAEMON_START,
     EVENT_LIVENESS,
     EVENT_STATE,
     DaemonRecord,
@@ -165,16 +166,28 @@ def _units(home: Path, card: str, *, base: Optional[Path] = None,
 def _schedule_events(declaration: Declaration, card: str) -> List[dict]:
     """The scheduler's events for this agent, newest first, reading back until each declared
     schedule has its newest start and end, or the sighting before its first run; whatever is
-    older can't change what is owed now."""
+    older can't change what is owed now. The daemon's newest start comes with them, since it
+    says which not-run records are the current daemon's (#735)."""
     wanted = {s.name for s in declaration.schedules}
     found: List[dict] = []
     kinds: Dict[str, set] = {name: set() for name in wanted}
+    booted: Optional[float] = None
     for event in read_events(reverse=True, scope="all", only=SCHEDULE_EVENTS):
         data = event.get("data") or {}
+        if data.get("agent") != card:
+            continue
+        if event.get("event") == EVENT_DAEMON_START:
+            if booted is None:                       # newest first: the current daemon's
+                booted = float(event.get("timestamp") or 0.0)
+                found.append(event)
+            continue
         name = data.get("schedule")
-        if data.get("agent") != card or name not in wanted:
+        if name not in wanted:
             continue
         found.append(event)
+        if event.get("event") == EVENT_NOT_RUN and booted is not None \
+                and float(event.get("timestamp") or 0.0) < booted:
+            continue                                 # an earlier daemon's refusal settles nothing
         kinds[name].add(event.get("event"))
         # A prompt run the daemon can't start never has a start; its not-run record settles it.
         if all(EVENT_SEEN in k or EVENT_NOT_RUN in k or {EVENT_STARTED, EVENT_DONE} <= k

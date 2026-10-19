@@ -12,6 +12,7 @@ from macf.agent_events_log import read_events
 from macf.channels.maceff_channel import build_event, parse_record
 from macf.notify.session import proc_start
 from macf.pd import notifier as nt
+from channel_receiver import ChannelReceiver
 from test_primal_daemon import base, make_home, run_daemon  # noqa: F401 - fixtures
 
 
@@ -456,11 +457,11 @@ def test_a_daemon_with_a_threshold_notices_unread_mail(tmp_path, base, run_daemo
 from test_primal_daemon import _crash, drive, make_core, make_unit, script  # noqa: E402,F401 - fixtures
 
 
-def test_after_restart_notice(make_core, script):
+def test_after_restart_notice(make_core, script, tmp_path):
     """MIS-0002-R47 (pd_MUST_report_carried_changed_lost): after a restart and after a
     compaction, one pd_carried event says what was carried, what changed and what was lost,
-    and the agent is owed one notice pointing to it. A first start carries nothing and says
-    nothing. Here a unit that survived the daemon is carried, one that died is started anew
+    and the agent is owed one notice pointing to it, which arrives through the MacEff
+    channel's own record (#734). A first start carries nothing and says nothing. Here a unit that survived the daemon is carried, one that died is started anew
     (changed), and an optional one that died isn't started again (lost)."""
     from macf.agent_events_log import append_event
     from macf.pd import core as pd_core
@@ -484,16 +485,18 @@ def test_after_restart_notice(make_core, script):
         left[name].wait(timeout=5)
 
     now = [time.time()]
-    owed = []
+    channel = ChannelReceiver(tmp_path)
     second = make_core([survives, dies, optional], wall=lambda: now[0], hosted=lambda: [])
-    ids = []
-    second.on_notice = lambda source, nid: owed.append(source) or ids.append(nid)
+    second.on_notice = channel
+
+    def owed():
+        return [source for source, _ in channel.received]
     second.record_start(os.getpid(), "the second daemon's start")
     second.boot()
     report = carried_events()
     assert len(report) == 1 and report[0]["after"] == "the primal daemon restarted"
     assert (report[0]["carried"], report[0]["changed"], report[0]["lost"]) == (["survives"], ["dies"], ["optional"])
-    assert owed == ["pd_carried"]
+    assert owed() == ["pd_carried"]
 
     append_event("compaction_detected", {"source": "test"})
     second.tick()
@@ -502,7 +505,7 @@ def test_after_restart_notice(make_core, script):
     second.tick()
     after = carried_events()[-1]
     assert after["after"] == "the session was compacted" and after["lost"] == [pd_core.CONTEXT_LOST]
-    assert "survives" in after["carried"] and owed == ["pd_carried", "pd_carried"]
+    assert "survives" in after["carried"] and owed() == ["pd_carried", "pd_carried"]
     second.tick()
     assert len(carried_events()) == 2                               # once per compaction
 
@@ -510,9 +513,9 @@ def test_after_restart_notice(make_core, script):
     os.killpg(left["survives"].pid, 9)
     left["survives"].wait(timeout=5)
     assert drive(second, lambda: carried_events()[-1]["after"] == "the session unit restarted")
-    assert carried_events()[-1]["changed"] == ["survives"] and owed.count("pd_carried") == 3
+    assert carried_events()[-1]["changed"] == ["survives"] and owed().count("pd_carried") == 3
     # Each id names its occasion, so a daemon restart and a session restart in one second differ.
-    assert [i.split("-")[1] for i in ids] == ["daemon", "compaction", "session"]
+    assert [i.split("-")[1] for _, i in channel.received] == ["daemon", "compaction", "session"]
 
 
 def test_a_session_restart_is_reported(make_core, script):

@@ -84,10 +84,10 @@ DAEMON_POINTERS: Dict[str, str] = {
     "pd_carried": "Your primal daemon restarted, your session restarted, or your session was compacted. "
                   "Run `macf_tools events query --event pd_carried`; the newest entry says which, and what "
                   "was carried, changed and lost.",
-    # MIS-0002-R32 (run_MUST_fail_on_prompt)
-    "pd_run_failed": "A scheduled prompt run of yours failed: it met a permission its schedule doesn't "
-                     "settle. Run `macf_tools pd status`; the event log's pd_run_done entry names the "
-                     "schedule and the tools it was denied.",
+    # MIS-0002-R32 (run_MUST_fail_on_prompt), and every other run that fails (#739)
+    "pd_run_failed": "A scheduled run of yours failed, was killed at its limit, or couldn't start. Run "
+                     "`macf_tools pd status`; the event log's pd_run_done entry names the schedule and "
+                     "how the run ended.",
     # MIS-0002-R33 (run_MUST-NOT_change_schedules), on a host
     "pd_schedule_changed": "A schedule of yours changed since the operator last ran `pd install`, so your "
                            "primal daemon isn't running it. Run `macf_tools pd status`; the event log's "

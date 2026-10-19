@@ -95,6 +95,20 @@ class Owed:
     read_at: float
 
 
+def channel_takes(source: str, arrival_id: str) -> bool:
+    """Whether the MacEff channel's record can carry this notice. The channel drops a record it
+    refuses after this end has written it, so a notice owed here would read delivered and never
+    arrive (#734). The record's shape is the channel's own (``pd.interface``, section 4)."""
+    from pydantic import ValidationError
+
+    from macf.channels.maceff_channel import NoticeRecord
+    try:
+        NoticeRecord(source=source, arrival_id=arrival_id, read_at=0.0, sent_at=0.0)
+    except ValidationError:
+        return False
+    return True
+
+
 def burst_id(source: str, names: Iterable[str]) -> str:
     """The arrival id ``StoreSource`` gives a burst of new names, for a set read at start."""
     return f"{source}-" + hashlib.sha256("\0".join(sorted(names)).encode()).hexdigest()[:16]
@@ -172,11 +186,15 @@ class Notifier:
     def raise_notice(self, source: str, notice_id: str) -> bool:
         """Owe the agent a notice the daemon raised itself, such as a unit past its memory
         limit. Owed, and so held and delivered like mail's, only where the declaration routes
-        the source to the agent; otherwise refused here, and the event log keeps the facts.
-        Returns whether it is owed."""
+        the source to the agent and the channel's record can carry it; otherwise refused here,
+        and the event log keeps the facts. Returns whether it is owed."""
         if source not in INTERNAL_SOURCES:
             raise ValueError(f"{source!r} is not a notice this daemon raises")
         if self._routes.get(source) not in AGENT_ROUTES:
+            return False
+        if not channel_takes(source, notice_id):
+            print(f"⚠️ MACF: pd: a {source} notice is not owed: the MacEff channel would refuse its "
+                  f"record (id {notice_id!r}); the event log keeps the facts", file=sys.stderr)
             return False
         self._detect(source, notice_id, None, None)
         return True
