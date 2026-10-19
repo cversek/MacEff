@@ -215,8 +215,8 @@ stateDiagram-v2
 
 ### 6.8 Mail
 
-- **R53** [MUST · decidable: macf/tests/test_pd_declaration.py::test_mail_units (planned)] Each mail broker and each mail watcher MUST be a managed unit. (mail_broker_MUST_be_managed)
-- **R54** [MUST · decidable: macf/tests/test_pd_declaration.py::test_periodic_clock_is_schedule (planned)] A mail clock that checks on a period MUST be a schedule. (periodic_mail_clock_MUST_be_schedule)
+- **R53** [MUST · decidable: macf/tests/test_pd_declaration.py::test_mail_units] Each mail broker and each mail watcher MUST be a managed unit. (mail_broker_MUST_be_managed)
+- **R54** [MUST · decidable: macf/tests/test_pd_declaration.py::test_periodic_clock_is_schedule] A mail clock that checks on a period MUST be a schedule. (periodic_mail_clock_MUST_be_schedule)
 - **R55** [MUST · decidable: macf/tests/test_pd_notice.py::test_unread_mail_notice] When mail sits unread past its agent's declared threshold, the primal daemon MUST deliver a notice to the routes declared for it. (unread_mail_MUST_raise_notice)
 - **R56** [SHOULD · judgment: the head maintainer, at review of the mail landing] The mail system SHOULD report each message to its sender as stored, notified or read. (mail_SHOULD_report_state_to_sender)
 
@@ -459,8 +459,8 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R50 | decidable | macf/tests/test_primal_daemon.py::test_quiet_window | passing |
 | R51 | decidable | macf/tests/test_primal_daemon.py::test_no_own_compaction | passing |
 | R52 | decidable | macf/tests/test_primal_daemon.py::test_control_events | passing |
-| R53 | decidable | macf/tests/test_pd_declaration.py::test_mail_units | planned |
-| R54 | decidable | macf/tests/test_pd_declaration.py::test_periodic_clock_is_schedule | planned |
+| R53 | decidable | macf/tests/test_pd_declaration.py::test_mail_units | passing |
+| R54 | decidable | macf/tests/test_pd_declaration.py::test_periodic_clock_is_schedule | passing |
 | R55 | decidable | macf/tests/test_pd_notice.py::test_unread_mail_notice | passing |
 | R56 | judgment | the head maintainer, at review of the mail landing | recorded: not met, by the head maintainer on 2026-10-18; it waits on MIS-0004 (#520), and the departure is recorded below |
 | R57 | decidable | macf/tests/test_container_outer_tier.py::test_primal_daemons_start_after_access_and_before_optional_units | passing |
@@ -672,6 +672,7 @@ Objections recorded:
   - R56 (mail_SHOULD_report_state_to_sender) moves to recorded: not met, by the head maintainer on 2026-10-18, waiting on MIS-0004 (#520). The departure from this SHOULD is recorded below the Conformance table, as the Secretary ruled on #552.
   - R124 (allowlist_declaration_MUST_list_every_channel), R19 (auth_failure_MUST_read_failed) and R99 (onlooker_MUST-NOT_get_operator_surface) moved to passing in #717, #718 and #719 with no line here. This entry records them (MIS-0001-R34 (accepted_MIS_MUST_change_editorially)). The requirement lines of R19 and R124 drop their "(planned)" marker, as sweep 4 did for the passing rows.
   The persistent_layer policy's section 13 drops R19, R124 and R47's notice, which have landed, and keeps what R47 still lacks, the refusal at load. Section 12.4 no longer says that compaction on request arrives with the session unit, which landed without it. No requirement changed.
+- 2026-10-19: R53 (mail_broker_MUST_be_managed) and R54 (periodic_mail_clock_MUST_be_schedule) move to passing, with the code and the tests they name. In a container, the broker account's own primal daemon runs the broker and the inbound watcher as units and the aged sweep as a schedule, and the start script starts none of them. The inbound watcher's 15 s drain is that unit's own loop, not a clock, as the head maintainer ruled on #552. Editorial (mis 8.1).
 
 ## Wiki-Links
 

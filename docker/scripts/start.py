@@ -22,6 +22,7 @@ import pwd
 import grp
 import secrets
 import time
+import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
@@ -165,6 +166,58 @@ def check_image_ids(ids) -> None:
 SERVICE_PATHS = {'admin': Path('/home/admin'),
                  'amail_broker': Path('/var/lib/amail_broker'),
                  'amail_ingest': Path('/var/lib/amail_ingest')}
+
+
+def service_home(name: str) -> Path:
+    """A service account's home for its primal daemon: its persisted directory. The rendered
+    declaration is keyed by the home's name (``pd.names.rendered_declaration_path``), so a
+    service's home is always named after its account."""
+    return SERVICE_PATHS.get(name, Path('/var/lib') / name)
+
+
+def service_agent_id(name: str, ids) -> str:
+    """The id half of a service daemon's calling card: the same across recreates, and different
+    for each deployment's block on a host."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"maceff-service:{name}:{ids.base}"))
+
+
+def account_ids(name: str) -> tuple:
+    entry = pwd.getpwnam(name)
+    return entry.pw_uid, entry.pw_gid
+
+
+def write_service_identity(name: str, card_name: str, ids, home: Path, *, chown=os.chown) -> None:
+    """Give a service account the identity its primal daemon reads from its home
+    (``pd.names.agent_card``): the card's name in ``.maceff/config.json``, and its id in
+    ``.maceff_primary_agent.id``. Both are written by root, from agents.yaml, at every start.
+    ``.maceff`` belongs to the account, since its daemon writes its event log there."""
+    uid, gid = account_ids(name)
+    dot = home / '.maceff'
+    dot.mkdir(mode=0o755, parents=True, exist_ok=True)
+    chown(dot, uid, gid)
+    for path, text in ((dot / 'config.json',
+                        json.dumps({"agent_identity": {"calling_card": card_name}}, indent=2) + '\n'),
+                       (home / '.maceff_primary_agent.id', service_agent_id(name, ids) + '\n')):
+        tmp = path.with_name(f'{path.name}.tmp')
+        tmp.write_text(text)
+        chown(tmp, 0, 0)
+        os.chmod(tmp, 0o644)
+        tmp.replace(path)
+
+
+def daemon_accounts(agents_config: AgentsConfig) -> List[tuple]:
+    """Every account the container may start a primal daemon for, as (account, declaration body,
+    home, card name): each agent, then each service. A service's daemon runs the service's own
+    processes under its uid, as the mail broker's account does for the broker, its inbound
+    watcher and the aged sweep (MIS-0002-R53 (mail_broker_MUST_be_managed)). A service that
+    declares none has no home here, since it has no daemon to read one."""
+    accounts = [(a.username, a.primal_daemon, HOME_ROOT / a.username, None)
+                for a in agents_config.agents.values()]
+    for name, spec in agents_config.services.items():
+        declared = spec.primal_daemon is not None
+        accounts.append((name, spec.primal_daemon, service_home(name) if declared else None,
+                         spec.calling_card))
+    return accounts
 
 
 def check_service_paths(ids) -> None:
@@ -2186,13 +2239,6 @@ def place_secrets(agents_config: AgentsConfig) -> None:
             f"({actual_owner}:{actual_mode}) placed and VERIFIED")
 
 
-#: How long provisioning waits before asking whether a service it launched is
-#: still there. The failure this guards against -- a daemon refusing on a
-#: missing directory -- resolved in well under a second, so a short grace
-#: catches it; anything that dies later is the watchdog's job, not this one's.
-START_GRACE_S = 1.5
-
-
 def broker_cfg_handoff_root(broker_config: Path) -> str:
     """Where the broker will put pickup boxes, read from ITS config.
 
@@ -2308,32 +2354,35 @@ def write_amail_settings(home: Path, handoff_root: Path, agent: str, uid: int, g
             f"its pickup box")
 
 
+#: The mail path's two configurations: the broker's, whose presence means this deployment runs
+#: amail, and the inbound path's, whose presence means it receives mail from outside.
+AMAIL_BROKER_CONFIG = Path('/etc/amail/broker_config.yaml')
+AMAIL_INBOUND_CONFIG = Path('/etc/amail/inbound_config.yaml')
+
+
 def start_amail_services(agents_config: AgentsConfig) -> None:
-    """Start the broker and the inbound watcher, and schedule the sweep.
+    """Provision the mail path, and start the receiver; the broker account's own primal daemon
+    runs the rest.
 
-    THE SWEEP IS THE LOAD-BEARING HALF. A watcher that supervises itself cannot
-    report its own absence, and this deployment proved it: inbound was down for
-    over a day while the receiver kept spooling and the broker kept serving. The
-    watcher's own docstring already prescribed the remedy -- "schedule this even
-    when a watcher runs, it is what notices the watcher died" -- and what was
-    missing was never the mechanism, only its provisioning.
+    THE BROKER, ITS INBOUND WATCHER AND THE AGED SWEEP ARE NOT STARTED HERE. They were, once
+    each and unsupervised, and inbound was down for over a day while the receiver kept spooling
+    and the broker kept serving: a process started once is a process nobody restarts, and the
+    watchdog started beside it to notice was one more of the same. They are now units and a
+    schedule of the broker account's own primal daemon, declared in agents.yaml as
+    services.amail_broker.primal_daemon, which start-up renders and starts with every other
+    daemon (MIS-0002-R53 (mail_broker_MUST_be_managed), MIS-0002-R54
+    (periodic_mail_clock_MUST_be_schedule)). The daemon restarts a unit that exits or goes
+    silent, and records each run of the sweep, so the chain ends at the outside watch that
+    supervises the daemon.
 
-    So the watchdog is started HERE, as its own process. The sweep the watcher
-    runs internally covers stuck mail only while the watcher is alive, which is
-    the one condition under which nothing needs reporting.
+    A deployment that configures the broker but declares no such daemon fails this step, by
+    name, after everything else in it has run: mail would otherwise have no broker at all.
 
-    THE CHAIN DOES NOT TERMINATE IN THIS CONTAINER. The watchdog publishes its
-    own heartbeat and `inbound health` returns non-zero over both, so something
-    outside can age the whole stack out. Until that outside caller is
-    provisioned, this buys detection and not yet notification -- stated plainly
-    because a partial control described as a whole one is the thing this
-    function got wrong before.
-    THE INTERPRETER IS NAMED EXPLICITLY rather than relying on the execute bit.
-    The bit is provisioned in the image now, but the outage was a `setsid
-    <script>` failing on a missing +x and reporting it to a log nobody reads, so
-    the invocation is made not to depend on the thing that broke.
+    THE INTERPRETER IS NAMED EXPLICITLY for the receiver, rather than relying on the execute
+    bit: the outage was a `setsid <script>` failing on a missing +x and reporting it to a log
+    nobody reads, so the invocation is made not to depend on the thing that broke.
     """
-    broker_config = Path('/etc/amail/broker_config.yaml')
+    broker_config = AMAIL_BROKER_CONFIG
     if not broker_config.exists():
         # NAME THE PATH. The previous form checked for a `.json` the framework
         # no longer emits and reported "deployment does not run amail" -- a
@@ -2414,65 +2463,34 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
     # Found by bringing amail up on a SECOND deployment, which is the entire
     # argument for doing that: the first deployment cannot reveal an assumption
     # that was true of it.
-    inbound_config = Path('/etc/amail/inbound_config.yaml')
+    inbound_config = AMAIL_INBOUND_CONFIG
     runs_inbound = inbound_config.exists()
     if not runs_inbound:
         log(f"amail: no {inbound_config} -- this deployment runs the broker "
-            f"but NOT the inbound path; the spool consumer and its watchdog "
-            f"are not started. This is a STATED configuration, not a failure.")
+            f"but NOT the inbound path; no receiver is started, and the broker's "
+            f"daemon needs no inbound watcher. This is a STATED configuration, not a failure.")
 
-    services = [
-        ('broker', 'macf.amail.daemons.broker', '',
-         '/var/lib/amail_broker/broker.out'),
-    ]
-    if runs_inbound:
-        services += [
-        ('inbound watcher', 'macf.amail.daemons.inbound', 'watch',
-         '/var/lib/amail_broker/watch.out'),
-        # THE SUPERVISOR, AND IT IS A SEPARATE PROCESS ON PURPOSE. The watcher
-        # already sweeps on its own cadence, which covers stuck mail while the
-        # watcher lives and covers nothing at all once it does not -- the sweep
-        # meant to report the watcher's death shared the process that died. A
-        # supervisor has to sit at a higher scope than the thing it watches.
-        ('watchdog', 'macf.amail.daemons.inbound', 'watchdog',
-         '/var/lib/amail_broker/watchdog.out'),
-        ]
-
-    for svc, module, verb, logfile in services:
-        args = [interp, '-m', module] + ([verb] if verb else [])
-        try:
-            proc = subprocess.Popen(
-                ['setpriv', '--reuid=amail_broker', '--regid=amail_broker',
-                 '--clear-groups', '--'] + args,
-                stdout=open(logfile, 'a'), stderr=subprocess.STDOUT,
-                start_new_session=True)
-        except (OSError, subprocess.SubprocessError) as e:
-            # Loud, and to the startup log the operator actually reads -- the
-            # previous failure went to a file nobody opened for a day.
-            log(f"⚠️ MACF: amail {svc} failed to start ({e}); inbound mail will "
-                f"spool unprocessed until this is repaired.\n{SECRETS_POLICY_POINTER}")
-            continue
-
-        # A LAUNCH IS NOT A LIFE. The Popen succeeding means the fork
-        # succeeded; it says nothing about whether the process is still there.
-        # This log line read "amail broker started" while the broker had
-        # already refused on a missing socket directory and exited -- true
-        # about the act, silent about the outcome, and a success line closes a
-        # question that silence would have left open.
-        time.sleep(START_GRACE_S)
-        rc = proc.poll()
-        if rc is None:
-            log(f"amail {svc} started and STILL RUNNING after "
-                f"{START_GRACE_S}s (pid {proc.pid}: {' '.join(args)})")
-        else:
-            # Reported here, not raised: one service failing to stay up must
-            # not stop the others from being started.
-            log(f"⚠️ MACF: amail {svc} started and EXITED IMMEDIATELY "
-                f"(rc {rc}); it is NOT running. See {logfile} for why.\n"
-                f"{SECRETS_POLICY_POINTER}")
+    broker = agents_config.services.get('amail_broker')
+    declared = broker is not None and broker.primal_daemon is not None
+    if declared:
+        commands = [' '.join(u.get('command', [])) for u in broker.primal_daemon.get('units', [])]
+        log("amail: the broker, its inbound watcher and the aged sweep run under the broker "
+            "account's own primal daemon (services.amail_broker.primal_daemon; MIS-0002-R53, R54); "
+            "this step starts none of them")
+        if runs_inbound and not any('macf.amail.daemons.inbound watch' in c for c in commands):
+            log(f"⚠️ MACF: amail: {inbound_config} is present, but no unit of the broker's daemon "
+                f"runs `macf.amail.daemons.inbound watch`, so inbound mail will spool undrained")
 
     if runs_inbound:
         _start_inbound_transport(interp)
+
+    if not declared:
+        raise RuntimeError(
+            "amail: the broker is configured, but agents.yaml declares no "
+            "services.amail_broker.primal_daemon, so nothing runs the broker or its inbound "
+            "watcher (MIS-0002-R53 (mail_broker_MUST_be_managed)). Declare it, with the broker "
+            "and the inbound watcher as units and the aged sweep as a schedule: persistent_layer "
+            "section 8")
 
 
 def _start_inbound_transport(interp: str) -> None:
@@ -2618,7 +2636,8 @@ def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] 
     a directory only root can write, at every start. A run executes as the agent, so a declaration
     the agent could write is one a run could change before a daemon restart; this one it can't
     (MIS-0002-R33 (run_MUST-NOT_change_schedules)). An agent that declares none has any earlier
-    rendering removed. Returns the users rendered for."""
+    rendering removed. A service that declares one gets its identity written into its home
+    first (``write_service_identity``). Returns the accounts rendered for."""
     from macf.pd import names as pd_names
     from macf.pd.interface import Declaration
     root = Path(root or pd_names.RENDERED_DECLARATIONS)
@@ -2626,23 +2645,24 @@ def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] 
     chown(root, 0, 0)
     os.chmod(root, 0o755)
     rendered = []
-    for agent_spec in agents_config.agents.values():
-        target_dir = root / agent_spec.username
+    for account, body, home, card_name in daemon_accounts(agents_config):
+        target_dir = root / account
         target = target_dir / 'declaration.json'
-        if agent_spec.primal_daemon is None:
+        if body is None:
             if target.exists():
                 target.unlink()
-                log(f"primal daemon of {agent_spec.username}: agents.yaml declares none; "
+                log(f"primal daemon of {account}: agents.yaml declares none; "
                     f"its earlier rendering was removed")
             continue
-        home = HOME_ROOT / agent_spec.username
         tmp = target_dir / '.declaration.json.tmp'
         try:
             try:
+                if card_name is not None:
+                    write_service_identity(account, card_name, agents_config.ids, home, chown=chown)
                 card = pd_names.agent_card(home)
-            except pd_names.IdentityError as e:
+            except (pd_names.IdentityError, KeyError) as e:
                 raise OSError(f"its calling card can't be read ({e})") from e
-            declaration = Declaration(version=1, agent=card, **agent_spec.primal_daemon)
+            declaration = Declaration(version=1, agent=card, **body)
             target_dir.mkdir(mode=0o755, exist_ok=True)
             chown(target_dir, 0, 0)
             os.chmod(target_dir, 0o755)
@@ -2658,14 +2678,14 @@ def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] 
                     leftover.unlink(missing_ok=True)
                 except OSError:
                     pass
-            log(f"primal daemon of {agent_spec.username}: not rendered; {e}")
+            log(f"primal daemon of {account}: not rendered; {e}")
             continue
         if (home / PD_DECLARATION).exists():
-            log(f"primal daemon of {agent_spec.username}: {home / PD_DECLARATION} is not read; "
+            log(f"primal daemon of {account}: {home / PD_DECLARATION} is not read; "
                 f"the declaration agents.yaml renders to {target} is")
-        rendered.append(agent_spec.username)
+        rendered.append(account)
     # An agent removed from agents.yaml leaves no rendering behind for a reader to find.
-    declared = {a.username for a in agents_config.agents.values()}
+    declared = {account for account, *_ in daemon_accounts(agents_config)}
     for d in root.iterdir():
         if d.is_dir() and not d.is_symlink() and d.name not in declared:
             shutil.rmtree(d)
@@ -2676,22 +2696,24 @@ def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] 
 def start_primal_daemons(agents_config: AgentsConfig) -> List[str]:
     """Start the outer tier for every agent whose declaration the deployment rendered, each in
     a thread of its own. A declaration only in the agent's home starts nothing here: the agent
-    could rewrite it (MIS-0002-R33). Returns the users started for."""
+    could rewrite it (MIS-0002-R33). A service that declares a daemon gets one the same way.
+    Returns the accounts started for."""
     import threading
     from macf.pd import names as pd_names
     started, home_only = [], []
-    for agent_spec in agents_config.agents.values():
-        home = HOME_ROOT / agent_spec.username
+    for account, _body, home, _card in daemon_accounts(agents_config):
+        if home is None:
+            continue
         if not pd_names.rendered_declaration_path(home).exists():
             if (home / PD_DECLARATION).exists():
-                log(f"primal daemon of {agent_spec.username}: not started; its declaration is in its "
+                log(f"primal daemon of {account}: not started; its declaration is in its "
                     f"home, where a run could rewrite it. Declare it as primal_daemon in agents.yaml")
-                home_only.append(agent_spec.username)
+                home_only.append(account)
             continue
-        threading.Thread(target=supervise_primal_daemon, args=(agent_spec.username, home),
-                         name=f"pd-{agent_spec.username}", daemon=True).start()
-        started.append(agent_spec.username)
-        log(f"primal daemon of {agent_spec.username}: started under the container outer tier")
+        threading.Thread(target=supervise_primal_daemon, args=(account, home),
+                         name=f"pd-{account}", daemon=True).start()
+        started.append(account)
+        log(f"primal daemon of {account}: started under the container outer tier")
     if not started:
         log("primal daemons: no agent declares one (primal_daemon in agents.yaml); none started")
     if home_only:
