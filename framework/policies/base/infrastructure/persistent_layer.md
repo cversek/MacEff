@@ -517,6 +517,21 @@ An agent's declaration is one JSON file. On a host it is in the agent's own home
 - **A declaration only in the agent's home starts nothing in a container.** Start-up logs that it was not started and why. To give an agent a daemon, declare it in `agents.yaml`.
 - **On a host the agent runs as the operator's own login,** so file permissions can't keep a run from the declaration. Detection of a changed declaration is the host's half of R33.
 
+**A service account can have a daemon of its own, declared the same way.** A service under `services` in `agents.yaml` declares `primal_daemon`, and a `calling_card` to go with it, which `agents.yaml` requires together.
+- **Start-up treats it as it treats an agent's:** it renders the declaration to `/etc/maceff/pd/<account>/`, owned by root, and starts the daemon as the account, with the account's persisted directory (`/var/lib/<account>`) as its home.
+- **It writes the account's identity there first:** the card's name from `calling_card`, and an id derived from the account and the deployment's id block, so the card holds across recreates and differs between deployments on one host. The identity files are root's. `.maceff` is the account's, since the daemon writes its event log there.
+- **Each unit runs as the service account** (10.3), which `agents.yaml` checks when it loads.
+
+**The mail broker's account is such a service, and in a container it must be** [MIS-0002-R53 (mail_broker_MUST_be_managed)].
+- **Its daemon runs the broker and the inbound watcher as units, and the aged sweep as a schedule** [MIS-0002-R54 (periodic_mail_clock_MUST_be_schedule)]. The schedule runs `inbound sweep --quiet`, with `wake_when: stdout` and `missed_run: skip`. A clean sweep then has nothing to say, and a missed sweep is covered by the next one.
+- **A stuck message is a failed run, recorded and shown, and nobody is alerted yet.** The run is in the event log, `pd status` shows the schedule's `FAILED` verdict with how the run ended, and `inbound health`, which runs the sweep itself, exits unhealthy. A failed run doesn't make the daemon unhealthy, though, and the outside watch has no verdict for one, so no alert reaches a person (13).
+- **The watcher beats its liveness from its loop, and doesn't sweep.** Its 15 s drain is that unit's own loop, whose health is the unit's liveness, and a skipped drain owes nothing, since the next one reads the same spool. So it isn't a schedule.
+- **A unit that runs `inbound watchdog` or `inbound sweep` is refused when `agents.yaml` loads.** A periodic check belongs in `schedules`, where its runs are recorded, and the daemon now notices the watcher's death, which was the watchdog's reason to exist.
+- **What a deployment must do:** declare `services.amail_broker.primal_daemon` with those two units and that schedule before it takes this version of MacEff. `docs/arch_v0.3_named_agents/APPENDIX_A_YAML_SCHEMAS.md` shows the block.
+  - The amail step no longer starts the broker, the watcher or a watchdog.
+  - A deployment that configures the broker without the daemon fails that step by name, after the receiver has started, since otherwise mail would have no broker at all.
+  - The receiver and any inbound tunnel are started by the amail step as before, since neither is a broker or a watcher.
+
 **A declaration that names another agent is refused whole** [MIS-0002-R07 (pd_MUST-NOT_control_other_agents)]. The core is given its agent's calling card and compares it with the declaration's `agent`, so a declaration copied from another agent's home never starts that agent's units under this agent's name. Where the card comes from, the identity file in the agent's home and never an environment variable [MIS-0002-R02 (pd_MUST-NOT_take_identity_from_env)], is the daemon process's to read (12.1).
 
 ### 10.2 What a unit states
@@ -558,7 +573,7 @@ A declaration with one unit:
 
 **The declaration is validated closed.** An unknown key is refused, because a key the core ignores is a setting its author believes is in force. Loading has no side effects. A declaration that fails is refused whole and no unit starts from it, rather than the units that could be read: a partial start supervises a set nobody declared. A schedule that can never fire, by its cron or its window, is refused at load too, rather than found out when it falls due.
 
-**Step 1 runs units only as the daemon's own account.** A unit naming another account refuses the whole declaration. Acting as another account takes a privilege, and a file the agent can write must not be where that privilege comes from [MIS-0002-R78 (layer_MUST-NOT_widen_permissions)]. Granting it is the operator's decision, made in a file the agent cannot write.
+**Step 1 runs units only as the daemon's own account.** For a service's daemon, that's the service account (10.1). A unit naming another account refuses the whole declaration. Acting as another account takes a privilege, and a file the agent can write must not be where that privilege comes from [MIS-0002-R78 (layer_MUST-NOT_widen_permissions)]. Granting it is the operator's decision, made in a file the agent cannot write.
 
 ### 10.4 Schedules and quiet windows
 
@@ -719,7 +734,9 @@ Specified in MIS-0002 and arriving with their landing steps, each in the pull re
   - sources besides mail (MIS-0002 §6.6).
 - **The end of R107's transitional rule** [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)] (1.4): until an agent declares `operator_channels`, every channel but the MacEff channel counts as the operator's.
 - **Observation** (5): messages from an onlooker into the observed session, an optional feature that nobody has built. Wherever one is built, its source comes from the transport and the onlooker's card from the invitation [MIS-0002-R95 (onlooker_message_MUST_carry_transport_source)] [MIS-0002-R116 (onlooker_card_MUST_come_from_invitation)].
-- **Mail** (MIS-0002 §6.8): the mail broker and its watchers as managed units, and the mail clocks as schedules [MIS-0002-R53 (mail_broker_MUST_be_managed)] [MIS-0002-R54 (periodic_mail_clock_MUST_be_schedule)].
+
+Not specified as a requirement, and listed so that nobody assumes it:
+- **An alert on a failed run** (7.1, 10.1). The outside watch reads liveness and runs owed against runs done, and a failed run is neither. So a schedule whose runs fail, such as the broker's sweep finding stuck mail, is recorded and shown, and tells no one.
 
 Until a section lands, the rules in force are the existing policies: `service_supervision`, `notification_delivery` and `amail`.
 

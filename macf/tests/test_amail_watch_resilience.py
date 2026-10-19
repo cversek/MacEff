@@ -55,7 +55,6 @@ def loop(tmp_path, monkeypatch):
     """
     monkeypatch.setattr(daemon, "HEARTBEAT", tmp_path / "watch.heartbeat")
     monkeypatch.setenv("AMAIL_WATCH_INTERVAL", "0")
-    monkeypatch.setenv("AMAIL_WATCH_SWEEP_INTERVAL", "99999")
 
     def run(inbound):
         try:
@@ -167,3 +166,45 @@ class TestFailingIsNotAlive:
         self._stamp(daemon.HEARTBEAT, consecutive_failures=2, last_error="x")
         kinds = [a["kind"] for a in daemon._check_once(object(), _Inbound())]
         assert kinds == ["watcher_failing"]
+
+
+class _CountingSweeps(_Inbound):
+    """Counts the sweeps the loop asks for, which must be none."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.sweeps = 0
+
+    def sweep_aged(self, cfg, now=None):
+        self.sweeps += 1
+        return super().sweep_aged(cfg, now)
+
+
+class TestTheWatcherIsAUnitThatDoesNotSweep:
+    """MIS-0002-R54 (periodic_mail_clock_MUST_be_schedule): the aged sweep is a schedule
+    of the broker account's primal daemon, where its runs are recorded, never a periodic
+    check hidden in the watcher's loop. MIS-0002-R53 (mail_broker_MUST_be_managed): run as
+    that daemon's unit, the watcher beats its liveness."""
+
+    def test_the_loop_never_sweeps(self, loop):
+        inbound = _CountingSweeps(stop_after=5)
+        loop(inbound)
+        assert inbound.calls == 6, "five cycles drained, the sixth stopped the loop"
+        assert inbound.sweeps == 0
+
+    def test_as_a_unit_it_beats_after_each_cycle_that_drained_and_stops_at_exit(
+            self, loop, monkeypatch):
+        beats = []
+
+        class _Beat:
+            def tick(self):
+                beats.append("tick")
+
+            def stop(self):
+                beats.append("stop")
+
+        monkeypatch.setattr(daemon, "heartbeat_from_env", lambda: _Beat())
+        loop(_Inbound(raises=ValueError("contacts mid-edit"), fail_times=2, stop_after=5))
+        # Cycles 1 and 2 raised and 3 to 5 drained: a cycle that failed is no beat, so a
+        # watcher failing every cycle reads overdue to its daemon.
+        assert beats == ["tick", "tick", "tick", "stop"]

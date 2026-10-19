@@ -36,6 +36,10 @@ subagents:
   <subagent_name>:
     # SubagentSpec fields
 
+services:  # Optional
+  <account>:
+    # ServiceSpec fields: secrets, and optionally primal_daemon with calling_card
+
 defaults:  # Optional
   # DefaultsConfig fields
 ```
@@ -116,12 +120,18 @@ agents:
     # daemon reads; the agent can't change it (persistent_layer 10.1, MIS-0002-R33).
     primal_daemon:
       units:
-        - name: amail-broker
-          command: ["/opt/maceff-venv/bin/python", "-m", "macf.amail.daemons.broker"]
+        - name: session
+          kind: session
+          command: ["/opt/maceff-venv/bin/python", "-m", "macf.cli", "harness", "unit",
+                    "--agent", "manny1", "--home", "{agent_home}", "--project-dir", "{agent_home}",
+                    "--no-proxy"]
           account: pa_manny
           restart: always
-          liveness_interval_s: 60
-          memory_limit_mb: 256
+          liveness_interval_s: 120
+          memory_limit_mb: 16384
+          stop_grace_s: 30
+      operator_channels: ["plugin:telegram:telegram"]
+      notice_routes: {amail: agent, pd_carried: agent}
 
   claudethebuilder:
     username: pa_claudethebuilder
@@ -145,6 +155,39 @@ subagents:
     tool_access: Read, Write, Edit, Bash
     consciousness_artifacts:
       public: [delegation_trails]
+
+# Service accounts, which are not agents. The mail broker's account runs its own primal daemon:
+# the broker and the inbound watcher are its units, and the aged sweep its schedule. Start-up
+# renders it owned by root, like an agent's, and writes the account's identity from calling_card
+# (persistent_layer 10.1, MIS-0002-R53, MIS-0002-R54).
+services:
+  amail_broker:
+    calling_card: AmailBroker
+    primal_daemon:
+      units:
+        - name: broker
+          command: ["/opt/maceff-venv/bin/python", "-m", "macf.amail.daemons.broker"]
+          account: amail_broker
+          restart: always
+          liveness_interval_s: 60
+          memory_limit_mb: 256
+        - name: inbound-watcher
+          command: ["/opt/maceff-venv/bin/python", "-m", "macf.amail.daemons.inbound", "watch"]
+          account: amail_broker
+          restart: always
+          liveness_interval_s: 60
+          memory_limit_mb: 256
+      schedules:
+        - name: inbound-sweep
+          cron: "*/5 * * * *"
+          target: isolated
+          missed_run: {kind: skip}
+          run:
+            command: ["/opt/maceff-venv/bin/python", "-m", "macf.amail.daemons.inbound", "sweep", "--quiet"]
+            wake_when: stdout
+          timeout_s: 120
+      timezone: UTC
+  amail_ingest: {}
 
 defaults:
   consciousness_artifacts:
