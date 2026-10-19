@@ -216,8 +216,13 @@ class Daemon:
         declared = {g for u in self.core.declaration.units for g in u.privacy_grants}
         for event in probes():
             data = event.get("data") or {}
-            if not isinstance(data, dict) or data.get("agent") != self.card or not data.get("tested"):
+            if not isinstance(data, dict) or data.get("agent") != self.card:
                 continue
+            if not data.get("tested"):
+                # The newest install couldn't test them, so nothing older speaks for them now.
+                print(f"⚠️ MACF: pd: the last pd install couldn't test the declared grants "
+                      f"({data.get('why', 'no reason recorded')}); none is noticed as denied", file=sys.stderr)
+                return
             verdicts = data.get("verdicts") or {}
             stamp = int(event.get("timestamp") or 0)
             for grant in sorted(g for g, v in verdicts.items() if v == "denied" and g in declared):

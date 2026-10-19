@@ -190,13 +190,15 @@ def cmd_pd_install(args: argparse.Namespace) -> int:
     # Recorded before the service manager can start the daemon: launchd starts it at load
     # (RunAtLoad), and a daemon that read no record would refuse every schedule.
     _record_schedules(card, declaration, home)
+    # Before the install too: the daemon reads the newest grant probe when it starts, and
+    # launchd starts it at load, so a probe recorded after would wait for its next start.
+    _probe_grants(tier, card, declaration, home)
     try:
         where = tier.install(card, home, force=args.force)
     except (OSError, RuntimeError) as e:
         print(f"maceff_pd: install stopped: {e}\n{POLICY_POINTER}", file=sys.stderr)
         return 1
     print(f"{card}: installed at {where}; {runs}; the service manager says: {tier.status(card)}")
-    _probe_grants(tier, card, declaration, home)
     if sys.platform.startswith("linux"):
         import os
         import pwd

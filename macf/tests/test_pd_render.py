@@ -190,8 +190,8 @@ def test_runs_without_tray():
     assert run.returncode == 0, run.stderr
 
 
-def test_grants_tested_at_install(tmp_path):
-    """MIS-0002-R64 (adapter_MUST_test_grants_at_install): the probe runs as a one-shot
+def test_the_grant_probe_runs_as_a_one_shot_launch_agent(tmp_path):
+    """The mechanism under MIS-0002-R64 (adapter_MUST_test_grants_at_install): the probe runs as a one-shot
     LaunchAgent with the daemon's own interpreter, so it tests what a launchd job holds, not
     what the terminal holds. It is loaded from the work directory, never ~/Library/LaunchAgents,
     and booted out after, with its files gone, so nothing of it starts at the next login."""
@@ -209,7 +209,7 @@ def test_grants_tested_at_install(tmp_path):
             plist = plistlib.loads(open(argv[3], "rb").read())
             calls.append(("plist", plist))
             prog = plist["ProgramArguments"]
-            out, grants = prog[4], prog[5:]
+            out, grants = prog[3], prog[4:]
             # launchd starts the job: the stand-in writes what the probe would
             with open(out, "w") as f:
                 json.dump({g: "denied" if g == "local_network" else "held" for g in grants}, f)
@@ -224,7 +224,7 @@ def test_grants_tested_at_install(tmp_path):
     assert loaded[2] == "gui/501" and loaded[3].startswith(str(work))
     plist = next(c[1] for c in calls if isinstance(c, tuple))
     assert plist["Label"] == grant_probe_label(CARD) == "maceff_pd.IraMacEff_ee9a78.grant_probe"
-    assert plist["ProgramArguments"][:4] == ["/opt/venv/bin/python3", "-I", "-m", "macf.platform.grants"]
+    assert plist["ProgramArguments"][:3] == ["/opt/venv/bin/python3", "-m", "macf.platform.grants"]
     assert plist["KeepAlive"] is False and plist["LimitLoadToSessionType"] == "Aqua"
     assert list(work.iterdir()) == []
 

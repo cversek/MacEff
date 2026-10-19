@@ -225,7 +225,8 @@ def render_grant_probe_agent(card: str, python: str, out: str, grants: List[str]
     label = grant_probe_label(card)
     plist = {
         "Label": label,
-        "ProgramArguments": [python, "-I", "-m", "macf.platform.grants", out, *grants],
+        # Run exactly as the daemon runs (no -I), so the probe imports the macf it imports.
+        "ProgramArguments": [python, "-m", "macf.platform.grants", out, *grants],
         "RunAtLoad": True,
         "KeepAlive": False,
         "LimitLoadToSessionType": "Aqua",
