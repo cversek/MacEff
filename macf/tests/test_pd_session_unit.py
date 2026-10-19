@@ -215,6 +215,25 @@ exit 0
 
 
 @needs_tmux
+def test_the_window_is_named_after_the_card_and_the_client_cannot_retitle_it(
+        tmp_path, short_base, restore_signals):
+    """The client titles its terminal with its version, which named nobody: an
+    operator attached to the session saw "2.1.303 (claude)", not whose it was."""
+    out = tmp_path / "title.txt"
+    child = _child(tmp_path, f"""
+printf '\\033]0;2.1.303 (claude)\\007'; sleep 0.5
+tmux display -p '#{{window_name}}|#{{pane_title}}|#{{set-titles}}|#{{set-titles-string}}' > {out}
+exit 0
+""")
+    rc = su.run("Resident_1a2b3c", child, environ=_unit_env(tmp_path), base=short_base, ready_timeout=10)
+    assert rc == 0
+    window, pane, titles, string = out.read_text().strip().split("|")
+    assert window == "Resident@1a2b3c"
+    assert string == "Resident@1a2b3c" and titles == "1"
+    assert "claude" not in pane
+
+
+@needs_tmux
 def test_a_server_already_serving_the_agent_is_not_doubled(tmp_path, short_base, restore_signals):
     import subprocess
     base = short_base
