@@ -254,7 +254,7 @@ Naked numbers shut out every reader who does not hold the table. Slugs are a cou
 ## 4 Rationale, Conformance and Links
 
 - The Rationale section MUST name every requirement ID [MIS-0001-R17 (rationale_MUST_name_every_req)]. Naming the ID is what the checker sees; what a reader needs is the reason for that requirement, beside its ID. The section also lists the rejected alternatives with their reasons, so that a later reader does not propose them again without new evidence.
-- The Conformance section MUST list every requirement ID with its check [MIS-0001-R18 (conformance_MUST_list_every_req)], in a table: requirement, check type, how, state. The states are, for a decidable requirement, `planned`, `passing` or `failing`; for a one-time judgment, `pending` or `recorded` (with who and when); for a standing judgment, a duty that recurs on every pull request or deliberation, `standing`, with the reviewer named in the How column; and `n/a` only when the requirement's condition never arose for this MIS, with the reason. It also records the cold-reader trial (§7.3), or "not yet held".
+- The Conformance section MUST list every requirement ID with its check [MIS-0001-R18 (conformance_MUST_list_every_req)], in a table: requirement, check type, how, state. The states are, for a decidable requirement, `planned`, `passing` or `failing`; for a one-time judgment, `pending` or `recorded` (with who and when); for a standing judgment, a duty that recurs on every pull request or deliberation, `standing`, with the reviewer named in the How column; and `n/a` only when the requirement's condition never arose for this MIS, with the reason. It also records the cold-reader trial (§7.3) and the use trial (§7.2), each or "not yet held".
 - Each MIS MUST end with a Wiki-Links section that names at least two concepts [MIS-0001-R19 (MIS_MUST_end_with_wiki-links)].
 
 **Motivation cites evidence with its tier** (`empiricism`). A proposal with no lived failure behind it may still be written: say so ("reasoning only"), and the operator weighs it accordingly.
@@ -320,6 +320,10 @@ An Accepted Standards or Process MIS becomes Final only when it is proven:
 - Before an MIS becomes Final, every decidable requirement MUST pass its check [MIS-0001-R32 (final_MUST_pass_decidable_checks)].
 - Before an MIS becomes Final, a cold-reader trial of its landed policy MUST succeed and be recorded in its Conformance section [MIS-0001-R33 (final_MUST_pass_cold-reader_trial)].
 - Before an MIS becomes Final, its Conformance section MUST record each one-time judgment review and name the reviewer of each standing one [MIS-0001-R37 (final_MUST_record_judgments)] (the Conformance states, §4).
+- Before an MIS becomes Final, each capability its Motivation names MUST be shown in use, in a use trial recorded in its Conformance section [MIS-0001-R59 (final_MUST_show_capabilities_in_use)].
+- Before an MIS becomes Final, its use trial MUST record each operational criterion in its Landing Plan as met, with the evidence [MIS-0001-R60 (final_MUST_meet_landing_criteria)].
+
+**A use trial is judged by the operator or a maintainer other than the Secretary,** usually the people the capability is for. They use the capability for real work, and the record says, for each capability and each landing criterion, shown or not, with the evidence. No tool refuses Final on it. Passing rows prove the mechanisms, and a cold reader proves the policy can be followed; only use proves that the capability exists.
 
 (MIS-0001-R37 (final_MUST_record_judgments) was added after MIS-0001-R33 (final_MUST_pass_cold-reader_trial) and MIS-0001-R34 (accepted_MIS_MUST_change_editorially) to MIS-0001-R36 (departure_MUST_be_recorded), from the first cold-reader trial. IDs are never reused or renumbered, so they follow the order in which they were written.)
 
@@ -327,7 +331,7 @@ An Accepted Standards or Process MIS becomes Final only when it is proven:
 
 ### 7.3 The cold-reader trial
 
-A **cold reader** is an agent with no memory of the MIS's design or deliberation, given only the landed policy and the glossary. It is the reader a compaction produces, and it plays the part of W3C's "implementations created by people other than the authors". In the trial, the cold reader does a task the landed policy governs, and the result is compared with the policy's intent. The trial **succeeds** when the cold reader completes the main path correctly, and every gap it finds is fixed in the policy or recorded as an open question with an owner. Any agent may serve as a cold reader if it took no part in the design or the deliberation, which rules out the Secretary and the authors; a different model is better still. Record who read, what task, the result, and every gap found, with how it was fixed. This is `policy_writing`'s model-user validation, made a gate.
+A **cold reader** is an agent with no memory of the MIS's design or deliberation, given only the landed policy and the glossary. It is the reader a compaction produces, and it plays the part of W3C's "implementations created by people other than the authors". In the trial, the cold reader does a task the landed policy governs, and the result is compared with the policy's intent. The task SHOULD be one of the capabilities that the MIS's Motivation names [MIS-0001-R61 (cold-reader_task_SHOULD_come_from_motivation)], so the trial tests what the MIS is for. The trial **succeeds** when the cold reader completes the main path correctly, and every gap it finds is fixed in the policy or recorded as an open question with an owner. Any agent may serve as a cold reader if it took no part in the design or the deliberation, which rules out the Secretary and the authors; a different model is better still. Record who read, what task, the result, and every gap found, with how it was fixed. This is `policy_writing`'s model-user validation, made a gate.
 
 ---
 
@@ -394,7 +398,7 @@ An MIS participates in the knowledge web as a whole document.
 
 - **A second normative ledger.** An MIS kept as the binding text beside a policy that says the same thing. The two drift, and an agent does not know which to obey. Land the text in policy; let the MIS explain.
 - **Ceremony for its own sake.** An MIS for a bug fix. The threshold (§1.2) exists so that the process stays worth its cost.
-- **The silent rewrite.** Changing an accepted MIS's requirements in place. Write a new MIS.
+- **The silent rewrite.** Changing an accepted MIS's requirements without a revision or an amendment, or without the note at each changed requirement. Make it a revision or an amendment (§8.1).
 - **The judgment that pretends to be decidable.** Marking a requirement decidable without a test that can fail. A conformance table then claims what nobody checked.
 - **Rationale compressed into STE.** Removing the "because" to meet a length rule. The length rule applies to requirements only.
 - **The Secretary's synthesis that summarizes instead of quoting.** A relay that changes words is no longer verbatim, and the operator cannot see what was actually argued.
@@ -403,7 +407,7 @@ An MIS participates in the knowledge web as a whole document.
 
 ## Evolution & Feedback
 
-This policy is the landed form of MIS-0001. A substantive change to it needs a new MIS that names MIS-0001 in Updates (§8.1); an editorial fix goes by pull request with a line in MIS-0001's Revision History. Report friction with the process, especially the cost of writing an MIS against its value, to the operator, with the MIS where it happened.
+This policy is the landed form of MIS-0001. A substantive change to it is a revision or an amendment of MIS-0001, made in MIS-0001 itself (§8.1); an editorial fix goes by pull request with a line in MIS-0001's Revision History. Report friction with the process, especially the cost of writing an MIS against its value, to the operator, with the MIS where it happened.
 
 ---
 

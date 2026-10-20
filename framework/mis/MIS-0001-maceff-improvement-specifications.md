@@ -68,6 +68,7 @@ All terms this MIS uses are defined in `framework/glossary.md`, which this MIS c
 
 - **semantic slug**: a short name made of ASCII letters, digits, hyphens and underscores, given in parentheses at the end of a requirement line, that states the requirement's subject and strength, for example `req_MUST_have_30_words_max`.
 - **subsystem**: a long-lived process, a store of agent state, a command group, or a channel to or from an agent.
+- **use trial**: a trial in which the people or agents an MIS's capabilities are for use them for real work, recorded with the evidence, and judged shown or not shown by the operator or a maintainer other than the Secretary.
 
 ## 6 Specification
 
@@ -123,6 +124,9 @@ All terms this MIS uses are defined in `framework/glossary.md`, which this MIS c
 - **R32** [MUST · judgment: the Secretary, from the test results] Before an MIS becomes Final, every decidable requirement MUST pass its check. (final_MUST_pass_decidable_checks)
 - **R33** [MUST · judgment: the Secretary] Before an MIS becomes Final, a cold-reader trial of its landed policy MUST succeed and be recorded in its Conformance section. (final_MUST_pass_cold-reader_trial)
 - **R37** [MUST · judgment: the Secretary] Before an MIS becomes Final, its Conformance section MUST record each one-time judgment review and name the reviewer of each standing one. (final_MUST_record_judgments)
+- **R59** [MUST · judgment: the operator, or a maintainer other than the Secretary] Before an MIS becomes Final, each capability its Motivation names MUST be shown in use, in a use trial recorded in its Conformance section. (final_MUST_show_capabilities_in_use)
+- **R60** [MUST · judgment: the operator, or a maintainer other than the Secretary] Before an MIS becomes Final, its use trial MUST record each operational criterion in its Landing Plan as met, with the evidence. (final_MUST_meet_landing_criteria)
+- **R61** [SHOULD · judgment: the Secretary] The task that a cold-reader trial sets SHOULD be one of the capabilities that the MIS's Motivation names. (cold-reader_task_SHOULD_come_from_motivation)
 ### 6.8 Change after acceptance, and departures
 
 - **R34** [MUST · judgment: the reviewers of each pull request] After an MIS is Accepted, each change to it that is neither a revision nor an amendment MUST be editorial and recorded in its Revision History. (accepted_MIS_MUST_change_editorially)
@@ -182,6 +186,8 @@ All terms this MIS uses are defined in `framework/glossary.md`, which this MIS c
 MacEff has one ratifier, the operator, as it has one owner. The IETF's real safeguard is kept: the operator answers each recorded objection by name (R28). A disposition (R24) tells participants what they are commenting on. An Informational MIS, or one the operator decides without a deliberation, has no synthesis, so the final comment period is the one point every path passes through. Its length was first a fixed 72 hours; the operator's ruling of 2026-10-03 replaced it (R25, R48, below). R22 lets the operator skip a deliberation, but only with a recorded reason; this MIS uses that exception. R26 holds acceptance to the operator's merge, so no agent can accept its own proposal.
 
 **Why proof before Final (R31 to R33, R37).** R32 holds Final to passing tests, so a decidable requirement is never only declared. R37 does the same for judgment requirements: a review that nobody recorded did not happen, as far as the record shows. The first cold-reader trial found that without R37, Final checked only half of the requirements. R31 ensures a Final MIS says where its text landed. TC39 requires two implementations that pass its test suite, and W3C asks for implementations "created by people other than the authors". In MacEff, the reader that matters is an agent with no memory of the design. That is exactly what compaction produces. So a cold-reader trial is the independent implementation, and passing tests are the conformance suite. `policy_writing` already asks for this as model-user validation; R33 makes it a gate.
+
+**Why use before Final (R59 to R61).** Tests prove mechanisms, and a cold reader proves the policy can be followed. Neither proves that the capability an MIS was written for exists. MIS-0002's scheduler showed the gap. Every decidable schedule row passed its named test, while no schedule had run on any host. Its Motivation promised that recurring work would outlive its session, and its landing plan required a duty moved off session cron and measured for a week. Nothing checked either. R59 makes Final wait until the capabilities the Motivation names are shown in use, and R60 makes the Landing Plan's operational criteria part of Final. Both are judgments by someone other than the Secretary, usually the people the capability is for, because whether a thing serves its users isn't decided by counting records. A tool that refused Final on a missing row would rebuild the row-counting that failed. R61 points the cold reader at the same capabilities, so the trial tests what the MIS is for, not only what its policy says.
 
 **Why change in place (R34, R35, R52 to R58), and why departures are recorded (R36).** An accepted MIS is a record of a decision. This MIS first kept that record by forbidding substantive change: a change became a new MIS, linked by Updates or Supersedes. In practice that spread the requirements in force over several documents, which made them harder to comply with, and turned a one-sentence fix into a new decision process. The repo owner ruled on 2026-10-18 that a change is made in the MIS itself, with a back-link to the text it replaced, because version control already keeps every earlier text (MIS-0005 quotes the ruling). So the requirements in force always stand in one document.
 - **A revision is the simple path (R52, R53).** The Secretary, as the repo owner's delegate, edits the MIS at the repo owner's request. It takes no MIS number.
@@ -314,6 +320,9 @@ R36 is MISRA's deviation record in its simplest form: a SHOULD may be set aside,
 | R56 | decidable | mis check: an amendment spec has its header and its three sections | passing |
 | R57 | judgment | the repo owner, at the merge of each amendment spec | standing |
 | R58 | judgment | the repo owner | standing |
+| R59 | judgment | the operator, or a maintainer other than the Secretary, before each Final | pending: this MIS's own use, in MIS-0002's deliberation, the MIS-0005 amendment and the revisions in #709 and #716, waits on its reviewer |
+| R60 | judgment | the operator, or a maintainer other than the Secretary, before each Final | pending: this MIS's Landing Plan, one pull request carrying it all, merged as #500, waits on its reviewer |
+| R61 | judgment | the Secretary, at each cold-reader trial | standing |
 
 **Tests.** `macf/tests/test_mis_check.py` runs the checker over every file in `framework/mis/` and the glossary, and plants one defect for each decidable check to show that the check catches it.
 
@@ -430,6 +439,11 @@ Objections recorded:
   - Each changed requirement carries a note linking its previous text and naming any previous slug (R54).
   - Terms gain amendment, amendment spec, major architectural change, new policy, repo owner and revision. Q05 is answered.
   - The Status stays Final: the new requirements are judgments, except R56, which the checker decides and which passes.
+- 2026-10-19: revised in place at the repo owner's request (R52, R53).
+  - R59 to R61 are new. Before an MIS becomes Final, the capabilities its Motivation names are shown in use (R59), and its Landing Plan's operational criteria are met (R60). Each is judged by the operator or a maintainer other than the Secretary. A cold-reader trial's task should be one of those capabilities (R61).
+  - Terms and the glossary gain "use trial". The policy's sections 4, 7.2 and 7.3 carry the new requirements.
+  - Two passages of the policy still said a substantive change needs a new MIS. They now say it's a revision or an amendment, as section 8.1 has said since MIS-0005.
+  - The Status stays Final. This MIS's own record for R59 and R60 is pending, because its reviewer can't be the Secretary.
 
 ## Wiki-Links
 
