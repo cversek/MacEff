@@ -77,6 +77,8 @@ def test_a_rule_it_cannot_read_is_refused_by_name(text, start, says):
     "FREQ=MONTHLY;BYMONTHDAY=-1,15;COUNT=9",
     "FREQ=DAILY;INTERVAL=3;BYDAY=SA,SU;COUNT=9",
     "FREQ=MONTHLY;INTERVAL=2;BYMONTHDAY=13;BYDAY=FR;COUNT=4",
+    "FREQ=MINUTELY;INTERVAL=50;COUNT=9",
+    "FREQ=HOURLY;INTERVAL=7;COUNT=9",
 ])
 def test_the_subset_agrees_with_dateutil(text):
     """Where dateutil is installed (it's optional, so CI may skip this), each rule's
@@ -86,3 +88,34 @@ def test_the_subset_agrees_with_dateutil(text):
     ours = [w.isoformat() for w in Recurrence.parse(text, start).iter_after(at("2026-10-18T00:00"))]
     theirs = [w.isoformat() for w in rrule.rrulestr(text, dtstart=start)]
     assert ours == theirs
+
+
+def test_a_minutely_rule_steps_by_elapsed_time_across_daylight_saving():
+    """Every fifty minutes, the check-in a warm prompt cache needs. The clocks go back at 02:00
+    on 1 November 2026 in New York, and the steps stay fifty minutes apart in elapsed time."""
+    rule = Recurrence.parse("FREQ=MINUTELY;INTERVAL=50", at("2026-11-01T00:29", NEW_YORK))
+    got = list(islice(rule.iter_after(at("2026-11-01T00:00", NEW_YORK)), 4))
+    assert [w.astimezone(UTC).isoformat() for w in got] == [
+        "2026-11-01T04:29:00+00:00", "2026-11-01T05:19:00+00:00",
+        "2026-11-01T06:09:00+00:00", "2026-11-01T06:59:00+00:00"]
+
+
+def test_a_sub_daily_rule_jumps_to_the_next_step_and_keeps_its_count():
+    """Asked months after its start, a minutely rule answers the next step directly, strictly
+    after the time asked, and COUNT still counts from the start."""
+    rule = Recurrence.parse("FREQ=MINUTELY;INTERVAL=50", at("2026-01-01T00:00"))
+    assert rule.next_after(at("2026-10-20T14:10")).isoformat() == "2026-10-20T14:30:00+00:00"
+    assert rule.next_after(at("2026-10-20T14:30")).isoformat() == "2026-10-20T15:20:00+00:00"
+    hourly = Recurrence.parse("FREQ=HOURLY;INTERVAL=2;COUNT=3", at("2026-10-20T09:00"))
+    assert firings(hourly) == ["2026-10-20T09:00:00+00:00", "2026-10-20T11:00:00+00:00",
+                               "2026-10-20T13:00:00+00:00"]
+    assert hourly.next_after(at("2026-10-20T13:00")) is None
+    until = Recurrence.parse("FREQ=HOURLY;UNTIL=20261020T113000Z", at("2026-10-20T09:00"),
+                             exceptions=[at("2026-10-20T10:00")])
+    assert firings(until) == ["2026-10-20T09:00:00+00:00", "2026-10-20T11:00:00+00:00"]
+
+
+@pytest.mark.parametrize("text", ["FREQ=MINUTELY;INTERVAL=50;BYDAY=MO", "FREQ=HOURLY;BYMONTHDAY=1"])
+def test_a_sub_daily_rule_refuses_day_parts_by_name(text):
+    with pytest.raises(ValueError, match=r"is not read in a (minutely|hourly) rule"):
+        Recurrence.parse(text, at("2026-10-20T09:00"))

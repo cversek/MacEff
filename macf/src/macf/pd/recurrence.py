@@ -5,6 +5,9 @@ Nothing here reads a clock.
 
 The subset:
 - ``FREQ`` of ``DAILY``, ``WEEKLY`` or ``MONTHLY``, with ``INTERVAL``;
+- ``FREQ`` of ``HOURLY`` or ``MINUTELY``, with ``INTERVAL``, ``COUNT`` and ``UNTIL`` only, so a
+  wake can be paced in minutes, as ``FREQ=MINUTELY;INTERVAL=50`` keeps it inside an hour's
+  prompt cache;
 - ``BYDAY``, with an ordinal in a monthly rule (``1MO``, ``-1FR``) and ``BYSETPOS`` to pick
   from a month's matches, so "the last weekday of the month" is
   ``FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1``;
@@ -19,8 +22,9 @@ default), and no other start is accepted.
 A rule is read in one timezone, at the start's wall-clock time of day, so "09:00 every
 weekday" stays at 09:00 across a daylight-saving change. As with cron, a wall-clock time
 that doesn't exist that day is skipped, and one that happens twice fires once, at its
-first occurrence. ``COUNT`` counts the rule's occurrences before exceptions are removed,
-as RFC 5545 does.
+first occurrence. An hourly or minutely rule steps by elapsed time from its start instead,
+as RFC 5545 does, so fifty minutes is fifty minutes across a daylight-saving change.
+``COUNT`` counts the rule's occurrences before exceptions are removed, as RFC 5545 does.
 """
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
@@ -28,7 +32,8 @@ from typing import FrozenSet, Iterable, Iterator, Optional, Tuple
 
 from macf.pd.schedule import SEARCH_YEARS, _utc
 
-_FREQS = ("DAILY", "WEEKLY", "MONTHLY")
+_FREQS = ("MINUTELY", "HOURLY", "DAILY", "WEEKLY", "MONTHLY")
+_SUBDAILY = {"MINUTELY": 60, "HOURLY": 3600}   # seconds per step
 _WEEKDAYS = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")   # date.weekday() order
 _PARTS = ("FREQ", "INTERVAL", "BYDAY", "BYMONTHDAY", "BYSETPOS", "COUNT", "UNTIL", "WKST")
 
@@ -109,6 +114,11 @@ class Recurrence:
             raise ValueError(f"FREQ={freq} is not supported; a recurrence is {', '.join(_FREQS)}")
         if parts.get("WKST", "MO") != "MO":
             raise ValueError("WKST other than MO is not supported: weeks start on Monday")
+        if freq in _SUBDAILY:
+            extra = sorted(set(parts) & {"BYDAY", "BYMONTHDAY", "BYSETPOS"})
+            if extra:
+                raise ValueError(f"{', '.join(extra)} is not read in a {freq.lower()} rule, which takes "
+                                 f"only INTERVAL, COUNT and UNTIL")
         if "COUNT" in parts and "UNTIL" in parts:
             raise ValueError("COUNT and UNTIL can't both be given (RFC 5545)")
         interval = _int(parts.get("INTERVAL", "1"), "INTERVAL")
@@ -211,9 +221,31 @@ class Recurrence:
             if self.count is not None and made >= self.count:
                 return
 
+    def _steps_after(self, after_utc: datetime) -> Iterator[datetime]:
+        """An hourly or minutely rule's occurrences after ``after_utc``, by elapsed time from
+        the start. It jumps to the first step past ``after_utc``, so an entry made months ago
+        doesn't walk every step since; the step's index is its place in ``COUNT``."""
+        start_utc = _utc(self.start)
+        step = timedelta(seconds=_SUBDAILY[self.freq] * self.interval)
+        k = 0 if after_utc < start_utc else (after_utc - start_utc) // step + 1
+        horizon = start_utc + timedelta(days=366 * SEARCH_YEARS)
+        while True:
+            when = start_utc + k * step
+            if self.count is not None and k >= self.count:
+                return
+            if (self.until is not None and when > self.until) or when > horizon:
+                return
+            yield when.astimezone(self.tz)
+            k += 1
+
     def iter_after(self, after: datetime) -> Iterator[datetime]:
         """Every occurrence strictly after ``after``, exceptions removed, in order."""
         after_utc = _utc(after)
+        if self.freq in _SUBDAILY:
+            for when in self._steps_after(after_utc):
+                if _utc(when) not in self.exceptions:
+                    yield when
+            return
         for when in self._occurrences():
             if _utc(when) > after_utc and _utc(when) not in self.exceptions:
                 yield when
