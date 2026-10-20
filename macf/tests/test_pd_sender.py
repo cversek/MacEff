@@ -164,12 +164,13 @@ def test_the_runner_holds_a_reminder_through_quiet_hours(tmp_path):
     assert "Late, due 2026-10-20T02:00:00+00:00" in phone.read_text()
 
 
-def test_the_brief_goes_at_its_time_or_the_plain_agenda_after_its_grace(tmp_path):
-    """At its time the agent's brief goes under a header naming the agent. With none written,
-    nothing goes until the grace ends, then the plain agenda, which shows an accepted entry's
-    purpose and only the id of one that waits. One a day: never both (the design, 5.5)."""
+def test_the_brief_goes_at_each_time_or_the_plain_agenda_after_its_grace(tmp_path):
+    """At each brief time the newest brief written since the time before goes, under a header
+    naming the agent. With none written, nothing goes until the grace ends, then the plain agenda,
+    which shows an accepted entry's purpose and only the id of one that waits. One per brief time:
+    never both, and a brief written before the time before isn't sent (the design, 5.5)."""
     from macf.pd.entries import EVENT_ENTRY_ADDED
-    from macf.pd.sender import SenderConfig, brief_path, run_pass
+    from macf.pd.sender import SenderConfig, brief_dir, brief_name, run_pass
     from test_primal_daemon import CARD
     code = tmp_path / "code"
     code.write_text("0")
@@ -182,33 +183,38 @@ def test_the_brief_goes_at_its_time_or_the_plain_agenda_after_its_grace(tmp_path
         (EVENT_ENTRY_ADDED, {**remind("e-000000000003", "cron:0 8 * * *", action="wake",
                                       purpose="a note to myself"), "agent": CARD}))
     config = SenderConfig(homes=[str(home)], alert_command=command, state_dir=str(tmp_path / "state"),
-                          brief_at="07:00", daily_bound=100)
-    assert run_pass(config, at("2026-10-19 06:59")) == 1          # only the acceptance push
+                          briefs=["07:00", "21:00"], daily_bound=100)
+    spool = brief_dir(home)
+    spool.mkdir(parents=True)
+
+    def write(text, when):
+        (spool / brief_name(at(when))).write_text(text)
+    write("Written long ago.", "2026-10-18 06:00")              # before the time before: stale
+    assert run_pass(config, at("2026-10-19 06:59")) == 2          # the acceptance push; the 18th's 21:00, late
     assert run_pass(config, at("2026-10-19 07:10")) == 0          # no brief, still within its grace
     assert run_pass(config, at("2026-10-19 07:30")) == 1          # the plain agenda
     text = phone.read_text()
-    assert f"MacEff daily brief from {CARD}\nNo brief arrived" in text
+    assert f"MacEff daily brief from {CARD}\nNo brief arrived" in text and "Written long ago." not in text
     assert "e-000000000001  the weekly audit is due" in text and "unaccepted words" not in text
     assert "wake  e-000000000003\n" in text and "a note to myself" not in text
     assert "waiting for your acceptance: e-000000000002" in text
 
-    brief_path(home, "2026-10-19").parent.mkdir(parents=True)
-    brief_path(home, "2026-10-19").write_text("A good day.")    # too late: the day's one went
+    write("A late morning brief.", "2026-10-19 07:40")         # too late: that time's one went
     assert run_pass(config, at("2026-10-19 08:00")) == 0
-    brief_path(home, "2026-10-20").write_text("Focused on the sender; worried about the pace.")
-    assert run_pass(config, at("2026-10-20 07:00")) == 2          # the brief, and the 19th's 09:00 late
-    assert f"MacEff daily brief from {CARD}\nFocused on the sender; worried about the pace.\n" in phone.read_text()
-    brief_path(home, "2026-10-21").write_text("Written early.")  # waits for its time
-    assert "Written early." not in phone.read_text() and run_pass(config, at("2026-10-21 06:00")) == 1
-    assert "Written early." not in phone.read_text()              # only the 20th's 09:00 went
+    write("An evening draft.", "2026-10-19 20:00")
+    write("Evening: the sender is in; worried about the pace.", "2026-10-19 20:30")
+    assert run_pass(config, at("2026-10-19 20:59")) == 1          # the 09:00 reminder; no brief before its time
+    assert run_pass(config, at("2026-10-19 21:00")) == 1
+    assert f"MacEff daily brief from {CARD}\nEvening: the sender is in; worried about the pace.\n" in phone.read_text()
+    assert "An evening draft." not in phone.read_text()          # only the newest goes
 
 
-def test_pd_brief_write_puts_todays_brief_in_the_spool(tmp_path, monkeypatch, capsys):
+def test_pd_brief_write_puts_a_brief_in_the_spool_named_by_when_it_was_written(tmp_path, monkeypatch, capsys):
     import argparse
-    from datetime import date
+    from datetime import datetime, timezone
 
     from macf.pd import cli
-    from macf.pd.sender import brief_path
+    from macf.pd.sender import _written, brief_dir
     from test_primal_daemon import CARD, make_home
     home = make_home(tmp_path, [])
     monkeypatch.setattr(cli, "_this_agent", lambda: (home, CARD))
@@ -218,10 +224,9 @@ def test_pd_brief_write_puts_todays_brief_in_the_spool(tmp_path, monkeypatch, ca
     cli.add_pd_parser(parser.add_subparsers(dest="cmd"))
     args = parser.parse_args(["pd", "brief", "write", str(source)])
     assert args.func(args) == 0
-    written = list((home / ".maceff" / "brief").glob("*.md"))
+    written = list(brief_dir(home).glob("*.md"))
     assert [p.read_text() for p in written] == ["Today: the sender."]
-    assert abs((date.fromisoformat(written[0].stem) - date.today()).days) <= 1
-    assert brief_path(home, written[0].stem) == written[0]
+    assert abs((datetime.now(timezone.utc) - _written(written[0])).total_seconds()) < 60
     source.write_text("  \n")
     assert args.func(args) == 1
 
@@ -233,7 +238,7 @@ def test_quiet_hours_hold_the_brief_too(tmp_path):
     command, phone = _alert(tmp_path, code)
     home = _home_with(tmp_path)
     config = SenderConfig(homes=[str(home)], alert_command=command, state_dir=str(tmp_path / "state"),
-                          brief_at="06:00", brief_grace_min=0, quiet=[QuietWindow(start="22:00", end="07:00")])
+                          briefs=["06:00"], brief_grace_min=0, quiet=[QuietWindow(start="22:00", end="07:00")])
     assert run_pass(config, at("2026-10-19 06:30")) == 0
     assert run_pass(config, at("2026-10-19 07:00")) == 1
 

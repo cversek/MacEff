@@ -73,7 +73,8 @@ def add_pd_parser(sub) -> None:
     lst.set_defaults(func=cmd_pd_entry_list)
     brief = pd_sub.add_parser("brief", help="the daily brief the operator asked for, sent by the sender at its time")
     brief_sub = brief.add_subparsers(dest="brief_cmd")
-    write = brief_sub.add_parser("write", help="write today's brief to your brief spool, from a file or - for stdin")
+    write = brief_sub.add_parser("write", help="write your brief to the spool, from a file or - for stdin; the "
+                                               "sender sends the newest at the next brief time")
     write.add_argument("source", help="the brief's text: a file, or - to read stdin")
     write.set_defaults(func=cmd_pd_brief_write)
     agenda = pd_sub.add_parser(
@@ -187,29 +188,22 @@ def cmd_pd_entry_add(args: argparse.Namespace) -> int:
 
 
 def cmd_pd_brief_write(args: argparse.Namespace) -> int:
-    """Today's brief, in the declaration's timezone, into the spool the sender reads. Written
-    whole then renamed, so the sender never sends half of one."""
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
+    """A brief into the spool the sender reads, named by when it was written. Written whole then
+    renamed, so the sender never sends half of one."""
+    from datetime import datetime, timezone
 
-    from macf.pd.core import load_declaration
-    from macf.pd.sender import brief_path
-    home, card = _this_agent()
+    from macf.pd.sender import brief_dir, brief_name
+    home, _ = _this_agent()
     text = sys.stdin.read() if args.source == "-" else Path(args.source).read_text()
     if not text.strip():
         print("⚠️ MACF: pd: the brief is empty; nothing was written", file=sys.stderr)
         return 1
-    try:
-        zone = load_declaration(home, card).timezone
-    except Exception:  # noqa: BLE001 - no declaration still leaves the host's own day
-        zone = None
-    day = (datetime.now(ZoneInfo(zone)) if zone else datetime.now().astimezone()).date().isoformat()
-    path = brief_path(Path(home), day)
+    path = brief_dir(Path(home)) / brief_name(datetime.now(timezone.utc))
     path.parent.mkdir(parents=True, exist_ok=True)
     partial = path.with_suffix(".part")
     partial.write_text(text)
     partial.replace(path)
-    print(f"brief for {day} written; the sender sends it at its time")
+    print("brief written; the sender sends the newest at the next brief time")
     return 0
 
 

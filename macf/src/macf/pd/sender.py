@@ -21,12 +21,13 @@ is urgent.
 **Rate.** Each owner may cause a bounded number of sends a day. Past the bound, the sender sends
 one fixed line saying so, once that day, and holds the rest.
 
-**The brief** (5.5) is the operator's, declared once in the sender's config with its time. Its
-text is the agent's by design: the agent writes it to its brief spool, ``.maceff/brief/<date>.md``
-in its home, and the sender sends it at its time under a fixed header naming the agent. If none
-has arrived ``brief_grace_min`` after its time, the sender sends a plain agenda instead, built
-from the entries alone, with no text the operator hasn't accepted. Brief and agenda share one id
-a day, so the operator gets one or the other, late once if need be, never both.
+**The brief** (5.5) is the operator's, declared once in the sender's config with its times, such as
+morning and evening. Its text is the agent's by design: the agent writes it to its brief spool,
+``.maceff/brief/`` in its home, and at each brief time the sender sends the newest brief written
+since the previous one, under a fixed header naming the agent. The agent needn't know the times. If
+none has arrived ``brief_grace_min`` after its time, the sender sends a plain agenda instead, built
+from the entries alone, with no text the operator hasn't accepted. Brief and agenda share one id per
+brief time, so the operator gets one or the other, late once if need be, never both.
 
 **The runner** (``python -m macf.pd.sender --config <path>``) is one pass, run by its own timer
 outside every session, as the outside watch is, with the watch's kind of ``alert_command``: it
@@ -38,6 +39,7 @@ phone is worse than one reminder lost, and the lost one is in the ledger to be f
 """
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -47,7 +49,7 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Literal, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from macf.pd import interface
 from macf.pd.entries import ENTRY_EVENTS, OneShot, fold, parse_when
@@ -177,12 +179,31 @@ class SenderConfig(BaseModel):
     timezone: str = "UTC"
     quiet: List[QuietWindow] = Field(default_factory=list)
     quiet_dates: List[str] = Field(default_factory=list)   # YYYY-MM-DD, quiet all day
-    brief_at: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    briefs: List[str] = Field(default_factory=list)       # HH:MM, each a brief time
     brief_grace_min: int = Field(default=30, ge=0)
 
+    @model_validator(mode="after")
+    def _brief_times(self) -> "SenderConfig":
+        bad = [t for t in self.briefs if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", t)]
+        if bad:
+            raise ValueError(f"brief times are HH:MM: {', '.join(bad)}")
+        return self
 
-def brief_path(home: Path, day: str) -> Path:
-    return home / ".maceff" / "brief" / f"{day}.md"
+
+def brief_dir(home: Path) -> Path:
+    return home / ".maceff" / "brief"
+
+
+def brief_name(written: datetime) -> str:
+    """A spool file's name: the instant it was written, in UTC, so names sort as times do."""
+    return written.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".md"
+
+
+def _written(path: Path) -> Optional[datetime]:
+    try:
+        return datetime.strptime(path.stem, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None  # noqa: MACEFF003 - a spool file not named by its write time is no brief: it's skipped
 
 
 def plain_agenda(card: str, entries: Iterable[dict], now: datetime) -> str:
@@ -207,25 +228,34 @@ def plain_agenda(card: str, entries: Iterable[dict], now: datetime) -> str:
     return "\n".join(out)
 
 
-def brief_send(config: "SenderConfig", card: str, home: Path, entries: List[dict], sent: Set[str],
-               now: datetime) -> Optional[Send]:
-    """The day's brief or, past its grace, the plain agenda, or None when neither is due."""
-    if config.brief_at is None:
-        return None
+def _slots(config: "SenderConfig", now: datetime) -> Tuple[Optional[datetime], Optional[datetime]]:
+    """The newest brief time at or before ``now``, and the one before it, in the sender's zone."""
     tz = ZoneInfo(config.timezone)
     local = now.astimezone(tz)
-    day = local.date().isoformat()
-    send_id = f"brief:{card}:{day}"
-    if send_id in sent or local.strftime("%H:%M") < config.brief_at:
+    times = sorted(config.briefs)
+    every = [datetime.combine(local.date() + timedelta(days=d), datetime.min.time(), tz).replace(
+        hour=int(t[:2]), minute=int(t[3:])) for d in (-1, 0) for t in times]
+    past = [t for t in every if t <= local]
+    return (past[-1], past[-2]) if len(past) >= 2 else (past[-1] if past else None, None)
+
+
+def brief_send(config: "SenderConfig", card: str, home: Path, entries: List[dict], sent: Set[str],
+               now: datetime) -> Optional[Send]:
+    """The brief due at the latest brief time or, past its grace, the plain agenda; None when
+    neither is due. The brief is the newest the agent wrote since the brief time before."""
+    due, before = _slots(config, now)
+    if due is None:
         return None
-    try:
-        return Send(send_id, card, brief_path(home, day).read_text())
-    except FileNotFoundError:
-        hour, minute = map(int, config.brief_at.split(":"))
-        due = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if local < due + timedelta(minutes=config.brief_grace_min):
-            return None
-        return Send(send_id, card, "No brief arrived; the plain agenda follows.\n" + plain_agenda(card, entries, now))
+    send_id = f"brief:{card}:{due.strftime('%Y-%m-%dT%H:%M')}"
+    if send_id in sent:
+        return None
+    since = before or due - timedelta(days=1)
+    written = sorted((w, p) for p in brief_dir(home).glob("*.md") if (w := _written(p)) and since < w <= now)
+    if written:
+        return Send(send_id, card, written[-1][1].read_text())
+    if now < due + timedelta(minutes=config.brief_grace_min):
+        return None
+    return Send(send_id, card, "No brief arrived; the plain agenda follows.\n" + plain_agenda(card, entries, now))
 
 
 def quiet_until(config: SenderConfig, now: datetime) -> Optional[datetime]:
