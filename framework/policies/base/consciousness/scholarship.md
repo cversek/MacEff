@@ -74,6 +74,7 @@ Scholarship policy establishes enhanced citation practices for consciousness art
 - What normalization rules apply?
 - When should I add a Wiki-Links section?
 - Which tools build, query and repair the web?
+- How are query results ordered, and what does the expansion threshold trade?
 - How do I record that a suggested concept is wrong for an artifact, so it is not suggested again?
 
 **3.5 Node Classes and Provenance**
@@ -563,7 +564,9 @@ Common concepts to reuse when applicable (agents may create new concepts freely)
 
 ```bash
 macf_tools knowledge graph                  # Cross-CA web (idea graph: ideas only)
-macf_tools knowledge query <concept>        # What a concept connects
+macf_tools knowledge query <concept> ...    # What concepts connect, ranked (several terms: all of them; --any: any)
+macf_tools knowledge query --like <node>    # What bears on an artifact, ranked
+macf_tools knowledge eval                   # How well the query ranks, against what you wrote (corpus_integrity §6)
 macf_tools knowledge link <target> <concept> ...   # Link any artifact type (unlink removes)
 macf_tools knowledge gaps                   # Suggested concepts for weakly connected nodes
 macf_tools knowledge doctor                 # What the web cannot see: orphans, drift, singletons
@@ -573,7 +576,18 @@ macf_tools knowledge viz [path]             # Interactive HTML visualization
 
 Wiki-links create edges: two artifacts sharing `[[compaction]]` are connected through that concept. The graph reveals clusters, hubs, and isolated artifacts that could benefit from cross-linking. Consult each command's `--help` for current flags; this section names what exists, not how it renders.
 
-#### 3.4.5 Declining a Suggested Concept
+#### 3.4.5 How Query Results Are Ordered
+
+`knowledge query` ranks what it returns, and shows each result's score and the concepts it matched through. A list in name order is not a neutral default: measured against what agents' own artifacts say is relevant, it ranked worse than random for two of three relations.
+
+- **The score** is the summed inverse document frequency (IDF) of the query concepts a node carries: a concept on three artifacts says more than one on three hundred. A matched node also scores for how strongly it ties into the rest of the match through specific concepts.
+- **Neighbours** (the expansion beyond direct matches) come in only through a concept with IDF at least `--min-idf`. A common concept connects nearly everything, so expanding through it buries the specific results. The default, 2.0, was chosen with `knowledge eval` on the development split: it returns a list about four times shorter for a few percent of recall. Lower it to see more; raise it to see less.
+- **`--like <node>`** makes that artifact's concepts the query: "what bears on this?" It is the form `knowledge eval` measures, and the one to use before writing something that should connect to what exists.
+- **Equal scores** go to the node with fewer concepts first, since it is more specifically about what it shares with the query, then to a stable order that two runs reproduce.
+
+What concepts can't do, ranking can't fix: the query reaches only artifacts that carry concepts, and reads concepts, not text. A change to how the query ranks reports its `knowledge eval` figures, so it is judged by the corpus and not by its author.
+
+#### 3.4.6 Declining a Suggested Concept
 
 `knowledge gaps` proposes concepts from keyword overlap, and some of its proposals are wrong every time it runs: a word in a title that means something else here. A curator who has judged a suggestion wrong records that judgement **with the artifact**, beside its links, so no later curation re-judges it:
 
