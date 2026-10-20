@@ -255,7 +255,7 @@ The operator runs `macf_tools knowledge push status` and sees, for the last day,
 ## 12 Landing Plan
 
 Planned, and re-planned from whatever the deliberation accepts:
-1. **The knowledge index and the query** (R01 to R12), replacing the recommender's index, with the scholarship and search_service text.
+1. **The knowledge index and the query** (R01 to R12), replacing the recommender's index, with the scholarship and search_service text. The proposed home is MacEff's existing search service, the warm daemon that already serves policy recommendations over a Unix socket in about 20 ms: a knowledge-index retriever beside its policy retriever, so the query, the recommender and the push share one warm process and one index, and no hook loads a model.
 2. **A host trial of the push,** outside MacEff's hooks, as evidence for this deliberation, on the author's host only, by the operator's direction (Oct 17, 20:45). Its conclusion is posted here as evidence, not as a decision.
 3. **The push in MacEff, off by default** (R13 to R25), with policy_awareness section 2.5 changed as accepted (Q01).
 4. **The seats,** at their next rebuild, in the operator's window.
@@ -279,6 +279,7 @@ None yet.
 ## 15 Revision History
 
 - 2026-10-20: first draft.
+- 2026-10-20: the landing plan names the search service as the index's home, after the repo owner asked how hybrid search runs.
 - 2026-10-20: the repo owner designated the macOS maintainer as Secretary, and holds the deliberation until MIS-0004 is decided (#751).
 
 ## Wiki-Links
