@@ -2521,7 +2521,7 @@ def other_claude_md_in_load_path(reconciled_path):
     cwd = _Path.cwd()
     candidates += [cwd / "CLAUDE.md", cwd / ".claude" / "CLAUDE.md"]
 
-    reconciled = _Path(reconciled_path).resolve()
+    reconciled = Path(reconciled_path).resolve()
     seen, out = set(), []
     for c in candidates:
         try:
@@ -11754,6 +11754,37 @@ def cmd_knowledge_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_knowledge_eval(args: argparse.Namespace) -> int:
+    """Score the knowledge query against relevance the agent's past selves wrote."""
+    import hashlib
+
+    from .knowledge_eval import (EvalRefused, Corpus, build_snapshot, evaluate, format_report,
+                                 load_snapshot, save_snapshot, snapshot_bytes)
+
+    if args.snapshot:
+        try:
+            snap, digest = load_snapshot(Path(args.snapshot))
+        except (OSError, ValueError) as e:
+            print(f"❌ cannot read the snapshot {args.snapshot}: {e}")
+            return 2
+    else:
+        snap = build_snapshot(exclude=args.exclude or ())
+        digest = hashlib.sha256(snapshot_bytes(snap)).hexdigest()
+    if args.save_snapshot:
+        digest = save_snapshot(snap, Path(args.save_snapshot))
+        print(f"📸 snapshot {digest[:12]} saved to {args.save_snapshot} (owner-only: it holds private text)")
+    try:
+        out = evaluate(Corpus(snap, digest), args.rankers or ["random", "today", "idf"],
+                       sources=args.labels or ("xref", "citations", "same_subject"), which=args.split,
+                       seed=args.split_seed, seal_path=Path(args.seal) if args.seal else None,
+                       compare=tuple(args.compare) if args.compare else None)
+    except EvalRefused as e:
+        print(f"❌ refused: {e}")
+        return 2
+    print(json.dumps(out, indent=2) if args.json_output else format_report(out))
+    return 0
+
+
 def cmd_knowledge_link(args: argparse.Namespace) -> int:
     """Add (or with unlink, remove) wiki-link concepts on any artifact."""
     from .knowledge_link import LinkError, apply_links
@@ -11797,7 +11828,7 @@ def cmd_learnings_index_verify(args: argparse.Namespace) -> int:
     from .diagnostics import Severity, format_diagnosis
     from .learnings_index import verify
     from pathlib import Path as _Path
-    dx = verify(memory_file=_Path(args.memory).expanduser() if args.memory else None)
+    dx = verify(memory_file=Path(args.memory).expanduser() if args.memory else None)
     if getattr(args, "json_output", False):
         print(json.dumps(dx.to_dict(), indent=2, default=str))
     else:
@@ -13610,6 +13641,38 @@ def _build_parser() -> argparse.ArgumentParser:
     kg_status.add_argument("--json", dest="json_output", action="store_true",
                            help="machine-readable output")
     kg_status.set_defaults(func=cmd_knowledge_status)
+
+    kg_eval = knowledge_sub.add_parser(
+        "eval", help="score the query against relevance your own artifacts wrote, on a sealed split",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Score rankers against three label sources your past selves wrote: learning\n"
+            "cross-references (xref), enhanced citations (citations) and learnings-index\n"
+            "clusters (same_subject). A fifth of the queries is held out by a stable hash.\n"
+            "Run dev as often as you like; every held run is recorded in your agent state and\n"
+            "counted on every later report. When to run it: corpus_integrity, section 6."),
+        epilog=("examples:\n"
+                "  macf_tools knowledge eval                       # dev split, every ranker\n"
+                "  macf_tools knowledge eval --compare today idf   # paired difference, idf minus today\n"
+                "  macf_tools knowledge eval --save-snapshot s.json # pin the corpus for a later rerun\n"
+                "  macf_tools knowledge eval --snapshot s.json --split held"))
+    kg_eval.add_argument("--split", choices=["dev", "held"], default="dev",
+                         help="dev (default), or held: spent once read, and recorded")
+    kg_eval.add_argument("--ranker", dest="rankers", action="append", metavar="NAME",
+                         help="random, today or idf; repeat for several (default: all three)")
+    kg_eval.add_argument("--labels", action="append", choices=["xref", "citations", "same_subject"],
+                         help="label source; repeat for several (default: all three)")
+    kg_eval.add_argument("--compare", nargs=2, metavar=("A", "B"),
+                         help="paired bootstrap interval of B minus A")
+    kg_eval.add_argument("--snapshot", metavar="PATH", help="score a pinned snapshot instead of the live corpus")
+    kg_eval.add_argument("--save-snapshot", metavar="PATH", help="write the corpus scored to PATH, owner-only")
+    kg_eval.add_argument("--exclude", action="append", metavar="TEXT",
+                         help="leave out files whose path contains TEXT (an experiment's own folder)")
+    kg_eval.add_argument("--split-seed", default="knowledge-eval-heldout", metavar="SEED",
+                         help="the seed of the held split; a new seed is a new seal")
+    kg_eval.add_argument("--seal", metavar="PATH", help="the seal record (default: agent state)")
+    kg_eval.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
+    kg_eval.set_defaults(func=cmd_knowledge_eval)
 
     for _verb, _help in (("link", "add wiki-link concepts to an artifact of any type"),
                          ("unlink", "remove wiki-link concepts from an artifact")):

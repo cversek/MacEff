@@ -1,6 +1,6 @@
 # Corpus Integrity and the Doctor Family
 
-**Version**: 1.0.0
+**Version**: 1.1.0
 **Tier**: RECOMMENDED
 **Category**: Infrastructure
 **Status**: ACTIVE
@@ -45,6 +45,13 @@ A **doctor** is the instrument that reports that drift for one corpus.
 **5 Building a New Doctor**
 - What must a new doctor ship with?
 - What verification does a checker require before it is trusted?
+
+**6 The Relevance Check: `knowledge eval`**
+- How do I know whether the knowledge query answers well, rather than whether the corpus is intact?
+- Where does the relevance come from, and why not from the query's author?
+- Why is the held split spent once read, and how is its use counted?
+- What is a leak, and why is it found by content rather than by field name?
+- When is running it worth doing?
 
 === CEP_NAV_BOUNDARY ===
 
@@ -155,12 +162,59 @@ A finding names an artifact a reader has to find. When a corpus nests artifacts 
 
 ---
 
+## 6 The Relevance Check: `knowledge eval`
+
+A doctor asks whether a corpus still describes what it claims to. A different instrument is needed to ask whether the **query over it answers well**. The query's author can't settle that by reading results: a ranking that looks sensible to the person who wrote it has been judged by the party least able to see its faults. `macf_tools knowledge eval` asks someone else, the agent's own earlier artifacts.
+
+### 6.1 Where the relevance comes from
+
+Each label source is something a past self wrote about what an artifact bears on, which the query never reads:
+
+| source | an artifact is relevant to the query when |
+|---|---|
+| `xref` | the query learning names it in its Cross-References section |
+| `citations` | a reflection or checkpoint cites it with an enhanced citation, resolved by the citation's date and title |
+| `same_subject` | both are learnings filed under one cluster of the learnings index |
+
+Every artifact with labels is a query. A ranker sees the query artifact, never its labels, and orders the web's other nodes. The chart reports each source's queries, pairs and unresolved references **before** any score, so a thin source reads as thin, not as a result.
+
+The sources measure different relations, and a ranker can be best on one and near the worst on another. Read each source on its own; never average them into one number.
+
+### 6.2 The held split is spent once read
+
+A fifth of each source's queries is held out by a stable hash of the query's id, so a query keeps its side as the corpus grows. Run the `dev` split as often as you like. **A `held` run is recorded** in the agent's own state (`.maceff/knowledge_eval/seal.json`) with its time and snapshot, and every later report prints how many held runs came before it.
+
+The reason is the one experiments give for a sealed split: a configuration chosen by looking at the figures that judge it measures the choosing. The count doesn't stop anyone. It makes the spending visible, so a reader can tell a first held run from a tenth.
+
+- Tune on `dev`. Run `held` once, when the change is finished, and report that run.
+- A new `--split-seed` is a new seal. Changing the seed to get a fresh held split is the same as tuning on the old one, unless the old one's figures were never read.
+- Pin the corpus with `--save-snapshot` and score it later with `--snapshot`, so two configurations are compared on the same state. A pinned snapshot holds the agent's private text and is written owner-only; it never goes into a repository.
+
+### 6.3 What a leak is, and why it is found by content
+
+A ranker that reads an artifact's text can be handed the answer: a learning's Cross-References section names exactly the learnings the `xref` labels say are relevant. Such a ranker scores well by copying, not by finding.
+
+Before scoring a ranker that reads text, the eval checks each query's input **by content**: does it contain a target's file stem or title? Above 5% of the pairs it refuses to score, and names the ranker and some of the leaking pairs. The remedy is to remove the field that names the answer from what the ranker reads, then run it again.
+
+A leak can't be found reliably by field name. Experiment 010 found a `Related` line that named the answers in about a third of its pairs, a field nobody had listed as a label. Ask whether the answer is in the question.
+
+### 6.4 When to run it
+
+- **Before and after a change to how the knowledge query ranks or searches**, on one pinned snapshot, with `--compare OLD NEW` for the paired interval of the difference.
+- **To check a claim about the query** ("it ranks", "it finds what I cite"), before stating it.
+- **After a large curation pass**, to see whether new wiki-links changed what the query finds.
+
+The `today` ranker is the shipping query, run on each of the query artifact's concepts in turn. `random` is the floor, and a metric that doesn't separate a ranker from it isn't measuring ranking. `idf` is a reference: nodes that share a concept, ordered by how rare the shared concepts are.
+
+---
+
 ## Integration with Other Policies
 
 - `scholarship.md` — node classes, provenance, and emergent participation in the knowledge web
 - `core_principles.md` — Policy Ships With the Capability
 - `debugging_and_validation.md` — evidence standards a doctor's own verification must meet
-- `learnings.md` — the index a learnings doctor would examine
+- `learnings.md` — the index a learnings doctor would examine, and one of the relevance check's label sources
+- `experiments.md` and `empiricism.md` — the sealed-split discipline the relevance check applies to the query
 
 ## Anti-Patterns
 
@@ -171,6 +225,10 @@ A finding names an artifact a reader has to find. When a corpus nests artifacts 
 **Remedy-free findings.** "Something is wrong" with no next step. Trains skimming.
 
 **Gate-first.** Reaching for CI enforcement before writing down when the check is worth running.
+
+**Judging the query by reading its results.** The author of a ranking is the reader least able to see its faults. Score it with `knowledge eval` against labels the query never read.
+
+**Tuning on the held split.** Choosing a configuration by its held figures, then reporting those figures as a test. Tune on dev; run held once.
 
 **Vocabulary hoarding.** The first doctor keeping the shared terms inside its own module, so the second invents its own and the two become unreadable together.
 
