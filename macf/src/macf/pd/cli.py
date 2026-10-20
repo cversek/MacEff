@@ -51,6 +51,11 @@ def add_pd_parser(sub) -> None:
     add.add_argument("--remind", action="store_true",
                      help="remind the operator instead of waking this session; it waits for the operator's "
                           "acceptance before its text is ever sent")
+    add.add_argument("--check", metavar="TEMPLATE",
+                     help="run one of the operator's check templates at its time, waking this session only "
+                          "when its condition holds")
+    add.add_argument("--arg", action="append", default=[], metavar="NAME=VALUE",
+                     help="an argument for the check's template, as NAME=VALUE; repeat for each")
     add.add_argument("--missed", choices=("once", "skip", "report"), required=True,
                      help="a firing missed while the daemon was down: once, late and said so; skip, "
                           "recorded only; report, recorded and told")
@@ -160,8 +165,17 @@ def _ask_entries(request: dict):
 
 
 def cmd_pd_entry_add(args: argparse.Namespace) -> int:
-    reply = _ask_entries({"op": "entry_add", "when": args.when, "purpose": args.purpose,
-                          "action": "remind" if args.remind else "wake", "missed": args.missed})
+    if args.remind and args.check:
+        print("⚠️ MACF: pd: an entry either reminds the operator or runs a check, not both", file=sys.stderr)
+        return 2
+    if any("=" not in a for a in args.arg):
+        print("⚠️ MACF: pd: each --arg is NAME=VALUE", file=sys.stderr)
+        return 2
+    request = {"op": "entry_add", "when": args.when, "purpose": args.purpose, "missed": args.missed,
+               "action": "remind" if args.remind else "check" if args.check else "wake"}
+    if args.check:
+        request.update(template=args.check, args=dict(a.split("=", 1) for a in args.arg))
+    reply = _ask_entries(request)
     if reply is None:
         return 1
     made = reply.entries[-1] if reply.entries else None

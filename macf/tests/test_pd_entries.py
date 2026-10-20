@@ -390,3 +390,129 @@ def test_pd_entry_show_prints_one_entry_in_full(monkeypatch, capsys):
     assert run("show", "e-000000000000") == 1 and "no entry" in capsys.readouterr().err
     assert run("add", "in 20m", "p", "--remind", "--missed", "once") == 0
     assert sent[-1]["action"] == "remind"
+    assert run("add", "in 20m", "p", "--check", "count", "--arg", "n=3", "--arg", "repo=o/r=x", "--missed", "once") == 0
+    assert (sent[-1]["action"], sent[-1]["template"], sent[-1]["args"]) == ("check", "count", {"n": "3", "repo": "o/r=x"})
+    assert run("add", "in 20m", "p", "--check", "count", "--remind", "--missed", "once") == 2
+    assert run("add", "in 20m", "p", "--check", "count", "--arg", "n", "--missed", "once") == 2
+
+
+def test_a_check_template_fills_whole_arguments_of_the_declared_kind():
+    """Each slot takes one whole argv element of its declared kind, so text meant to splice in a
+    second command is refused, and a template's slots must match its declared args (4.2)."""
+    from pydantic import ValidationError
+
+    from macf.pd.interface import CheckArg, CheckTemplate
+    t = CheckTemplate(command=["gh", "issue", "view", "<issue>", "--repo", "<repo>"], wake_when="stdout", timeout_s=30,
+                      args={"issue": CheckArg(kind="integer"), "repo": CheckArg(kind="pattern", pattern=r"[\w.-]+/[\w.-]+")})
+    assert t.argv({"issue": "552", "repo": "o/r"}) == ["gh", "issue", "view", "552", "--repo", "o/r"]
+    for bad in ({"issue": "552; curl x", "repo": "o/r"}, {"issue": "552", "repo": "o/r --web"}, {"issue": "552"}):
+        with pytest.raises(ValueError):
+            t.argv(bad)
+    with pytest.raises(ValidationError):
+        CheckTemplate(command=["gh", "<issue>"], wake_when="stdout", timeout_s=30, args={})
+    with pytest.raises(ValidationError):
+        CheckTemplate(command=["<prog>"], wake_when="stdout", timeout_s=30, args={"prog": CheckArg(kind="integer")})
+
+
+def _check_scheduler(tmp_path, log, now, templates, **options):
+    from channel_receiver import ChannelReceiver
+    from macf.pd import scheduler as sc
+    from macf.pd.interface import Declaration
+    from test_pd_schedule import CARD, ROUTED
+    channel = ChannelReceiver(tmp_path / "agent")
+    decl = Declaration(version=1, agent=CARD, timezone="UTC", notice_routes=ROUTED, check_templates=templates)
+    s = sc.Scheduler(decl, CARD, {"agent_home": str(tmp_path / "home")}, work_dir=tmp_path / "runs",
+                     append=log.append, events=log.read, now=lambda: now[0], on_notice=channel, **options)
+    s.boot()
+    return s, channel
+
+
+def test_a_check_wakes_the_agent_only_when_its_condition_holds_and_keeps_what_it_said(tmp_path):
+    """A check entry runs its template at its time. Its firing wakes nobody; its run does, when
+    the condition holds, and the output is kept for the agent. Nothing to say, no notice (4.2)."""
+    import sys
+
+    from macf.pd import scheduler as sc
+    from macf.pd.entries import EVENT_ENTRY_ADDED
+    from macf.pd.interface import CheckArg, CheckTemplate
+    from test_pd_schedule import CARD, Log, at, finish
+    template = CheckTemplate(command=[sys.executable, "-c", "import sys; print('moved' * int(sys.argv[1]))", "<n>"],
+                             wake_when="stdout", timeout_s=10, args={"n": CheckArg(kind="integer")})
+    log, now = Log(), [at("2026-10-19 12:00")]
+    moved, quiet = new_entry_id(), new_entry_id()
+    for entry_id, n in ((moved, "1"), (quiet, "0")):
+        log.append(EVENT_ENTRY_ADDED, {"agent": CARD, "id": entry_id, "when": "2026-10-19T12:00:00+00:00", "zone": "UTC",
+                                       "start": "2026-10-19T11:00:00+00:00", "action": "check", "missed": "once",
+                                       "template": "count", "args": {"n": n}, "state": "active"})
+    s, channel = _check_scheduler(tmp_path, log, now, {"count": template})
+    s.tick()
+    assert channel.received == [] and set(s.running) == {moved, quiet}
+    finish(s)
+    assert channel.received == [("pd_entry_due", moved)]
+    assert (tmp_path / "runs" / f"{moved}.out").read_text() == "moved\n"
+    assert not (tmp_path / "runs" / f"{quiet}.out").exists()
+    assert {d["schedule"]: d["wake"] for d in log.of(sc.EVENT_DONE)} == {moved: True, quiet: False}
+
+
+def test_a_check_whose_program_the_agent_could_rewrite_or_that_changed_since_install_never_runs(tmp_path):
+    """A template whose program is in the agent's home, or one changed since pd install where
+    that's checked, isn't started; the agent is told it failed (4.2)."""
+    import sys
+
+    from macf.pd import scheduler as sc
+    from macf.pd.entries import EVENT_ENTRY_ADDED
+    from macf.pd.interface import CheckTemplate
+    from test_pd_schedule import CARD, Log, at
+    log, now = Log(), [at("2026-10-19 12:00")]
+    mine = CheckTemplate(command=[str(tmp_path / "home" / "bin" / "check")], wake_when="exit_code", timeout_s=10)
+    fine = CheckTemplate(command=[sys.executable, "-c", "pass"], wake_when="exit_code", timeout_s=10)
+    in_home, changed = new_entry_id(), new_entry_id()
+    for entry_id, name in ((in_home, "mine"), (changed, "fine")):
+        log.append(EVENT_ENTRY_ADDED, {"agent": CARD, "id": entry_id, "when": "2026-10-19T12:00:00+00:00", "zone": "UTC",
+                                       "start": "2026-10-19T11:00:00+00:00", "action": "check", "missed": "once",
+                                       "template": name, "args": {}, "state": "active"})
+    from macf.pd.interface import Declaration
+    from test_pd_schedule import ROUTED
+    installed = sc.schedule_digests(Declaration(version=1, agent=CARD, timezone="UTC", notice_routes=ROUTED,
+                                                check_templates={"mine": mine}))
+    log.append(sc.EVENT_INSTALLED, {"agent": CARD, "digests": {**installed, "template:fine": "an older digest"}})
+    s, channel = _check_scheduler(tmp_path, log, now, {"mine": mine, "fine": fine}, check_installed=True)
+    s.tick()
+    assert s.running == {}
+    outcomes = {d["schedule"]: d["outcome"] for d in log.of(sc.EVENT_DONE)}
+    assert "agent's home" in outcomes[in_home] and "changed since the last pd install" in outcomes[changed]
+    assert [source for source, _ in channel.received] == ["pd_run_failed", "pd_run_failed"]
+
+
+def test_the_daemon_checks_a_check_entry_against_its_template_when_it_is_made(
+        tmp_path, base, run_daemon, isolated_events_log, monkeypatch):
+    """An unknown template, or arguments that don't fit, are refused when the entry is made. A
+    check from a marked context waits even as a one-shot, since it runs a command (4.2, 5.3)."""
+    import os
+    import sys
+
+    from macf.agent_events_log import append_event
+    from macf.notify.session import proc_start
+    from macf.pd import scheduler as sc
+    from macf.pd.interface import CheckArg, CheckTemplate, Declaration, declaration_path
+    from test_primal_daemon import CARD, ask, make_home
+    home = make_home(tmp_path, [])
+    template = CheckTemplate(command=[sys.executable, "-c", "pass", "<n>"], wake_when="exit_code", timeout_s=10,
+                             args={"n": CheckArg(kind="integer")})
+    decl = Declaration(version=1, agent=CARD, check_templates={"count": template})
+    declaration_path(home).write_text(decl.model_dump_json())
+    append_event(sc.EVENT_INSTALLED, {"agent": CARD, "digests": sc.schedule_digests(decl)})
+    daemon = run_daemon(home, base)
+    me = (os.getpid(), proc_start(os.getpid()))
+    monkeypatch.setattr(daemon.core, "session_incarnation", lambda: me)
+    append_event("session_started", {"session_id": "s"})
+
+    def add(**fields):
+        return ask(daemon, {"op": "entry_add", "when": "in 20m", "purpose": "p", "action": "check", "missed": "once",
+                            **fields})
+    assert "no check template 'other'" in add(template="other")["error"]
+    assert "don't fit" in add(template="count", args={"n": "1; rm"})["error"]
+    clean = add(template="count", args={"n": "3"})["entries"][-1]
+    assert (clean["state"], clean["template"], clean["args"]) == ("active", "count", {"n": "3"})
+    append_event("tool_call_started", {"tool": "WebFetch", "session_id": "s"})
+    assert add(template="count", args={"n": "3"})["entries"][-1]["state"] == "waiting"

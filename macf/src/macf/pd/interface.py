@@ -241,6 +241,62 @@ class CommandRun(_Closed):
         return _usable_environment(v)
 
 
+#: An argument slot in a check template: an argv element that is exactly ``<name>``. It's
+#: replaced whole by the argument's value, so a value can never become a second argument.
+ARG_SLOT = re.compile(r"^<([a-z][a-z0-9_]{0,31})>$")
+
+
+class CheckArg(_Closed):
+    """A check template's argument: an integer, or text that matches ``pattern`` whole."""
+
+    kind: Literal["integer", "pattern"]
+    pattern: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _pattern_iff_pattern(self) -> "CheckArg":
+        if (self.kind == "pattern") != (self.pattern is not None):
+            raise ValueError("a pattern is given exactly when the argument's kind is pattern")
+        if self.pattern is not None:
+            re.compile(self.pattern)
+        return self
+
+    def accepts(self, value: str) -> bool:
+        if self.kind == "integer":
+            return re.fullmatch(r"-?\d{1,18}", value) is not None
+        return re.fullmatch(self.pattern, value) is not None
+
+
+class CheckTemplate(_Closed):
+    """A command the operator declares for agents' ``check`` entries (the scheduler design, 4.2):
+    inline argv run with no shell, and typed arguments, each filling one whole argv element. Its
+    program may not live in the agent's home, where the agent could rewrite it; the daemon
+    refuses one that does. It wakes the agent when its condition holds, as a CommandRun does."""
+
+    command: List[str] = Field(min_length=1)
+    args: Dict[str, CheckArg] = Field(default_factory=dict)
+    wake_when: Literal["exit_code", "stdout"]
+    timeout_s: float = Field(gt=0, le=600)
+
+    @model_validator(mode="after")
+    def _slots_match_args(self) -> "CheckTemplate":
+        slots = [m.group(1) for m in map(ARG_SLOT.match, self.command) if m]
+        if sorted(slots) != sorted(self.args):
+            raise ValueError(f"the command's slots {sorted(slots)} and the declared args {sorted(self.args)} differ")
+        if ARG_SLOT.match(self.command[0]):
+            raise ValueError("the program itself can't be an argument")
+        _known_placeholders([a for a in self.command if not ARG_SLOT.match(a)])
+        return self
+
+    def argv(self, args: Dict[str, str]) -> List[str]:
+        """The command with each slot filled, or ValueError naming what doesn't fit."""
+        if sorted(args) != sorted(self.args):
+            raise ValueError(f"this template takes {sorted(self.args)}, not {sorted(args)}")
+        bad = [k for k, v in args.items() if not self.args[k].accepts(v)]
+        if bad:
+            raise ValueError(f"not a valid {', '.join(bad)}")
+        return [args[m.group(1)] if (m := ARG_SLOT.match(a)) else a for a in self.command]
+
+
 class Schedule(_Closed):
     """A schedule, for step 2 (MIS-0002-R24, MIS-0002-R29 (schedule_MUST_declare_target)).
     Declared now so the format does not change under the steps that come later.
@@ -329,6 +385,8 @@ class Declaration(_Closed):
     keep_harness_idle_compaction: bool = False
     wind_down: Optional[WindDown] = None
     timezone: Optional[str] = None
+    #: Commands the agent's ``check`` entries may run, by name (the scheduler design, 4.2).
+    check_templates: Dict[str, CheckTemplate] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _names_unique(self) -> "Declaration":
@@ -338,6 +396,9 @@ class Declaration(_Closed):
             raise ValueError(f"names declared more than once: {', '.join(dupes)}")
         if sum(u.kind == "session" for u in self.units) > 1:
             raise ValueError("at most one unit may be the session")
+        bad = sorted(n for n in self.check_templates if not re.fullmatch(r"[a-z][a-z0-9_-]{0,47}", n))
+        if bad:
+            raise ValueError(f"check template names must be short lowercase words: {', '.join(bad)}")
         return self
 
     @model_validator(mode="after")
@@ -569,8 +630,17 @@ class EntryAddRequest(_Closed):
     op: Literal["entry_add"]
     when: str = Field(min_length=1, max_length=200)
     purpose: str = Field(min_length=1, max_length=500)
-    action: Literal["wake", "remind"]
+    action: Literal["wake", "remind", "check"]
     missed: Literal["once", "skip", "report"]
+    #: For a ``check``: the operator's template it runs, and its arguments (design 4.2).
+    template: Optional[str] = Field(default=None, max_length=48)
+    args: Dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _template_iff_check(self) -> "EntryAddRequest":
+        if (self.action == "check") != (self.template is not None):
+            raise ValueError("a template is named exactly when the action is check")
+        return self
 
 
 class EntryListRequest(_Closed):

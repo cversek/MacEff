@@ -66,7 +66,7 @@ from zoneinfo import ZoneInfo
 from macf.agent_events_log import append_event, read_events
 from macf.notify.session import proc_start, verify_incarnation
 from macf.pd.core import group_members
-from macf.pd.interface import CommandRun, Declaration, PromptRun, Schedule, render
+from macf.pd.interface import CommandRun, Declaration, MissedRunPolicy, PromptRun, Schedule, render
 from macf.pd.schedule import CronExpr, plan_runs
 
 EVENT_SEEN = "pd_schedule_seen"
@@ -92,6 +92,10 @@ RESULT_MAX = 4 * 1024 * 1024
 NOTICE_RUN_FAILED = "pd_run_failed"
 #: Each schedule's digest as ``pd install`` took it, the record a host's daemon checks (R33).
 EVENT_INSTALLED = "pd_declaration_installed"
+#: Where a check template's digest sits among the schedules' (the scheduler design, 4.2).
+TEMPLATE_PREFIX = "template:"
+#: How much of a check's output is kept for the woken agent to read.
+CHECK_OUTPUT_BYTES = 4096
 #: The notice a schedule changed since that record raises.
 NOTICE_SCHEDULE_CHANGED = "pd_schedule_changed"
 #: An agent's own entry, due: its notice's id is the entry's (the scheduler design, 4.1).
@@ -106,10 +110,16 @@ def schedule_digests(declaration: Declaration, agent_home: Optional[Path] = None
     """Each schedule's digest: its declared form, the timezone its cron is read in, and for a
     prompt run the bytes of its prompt file, which sits in the agent's home where a run can
     rewrite it. A command's script isn't read: its path is digested, its contents aren't."""
-    return {s.name: hashlib.sha256(json.dumps([declaration.timezone, s.model_dump(mode="json"),
-                                               _prompt_digest(s, agent_home)],
-                                              sort_keys=True).encode()).hexdigest()
-            for s in declaration.schedules}
+    digests = {s.name: hashlib.sha256(json.dumps([declaration.timezone, s.model_dump(mode="json"),
+                                                  _prompt_digest(s, agent_home)],
+                                                 sort_keys=True).encode()).hexdigest()
+               for s in declaration.schedules}
+    # A check template is the operator's too, so a template added or changed in a home copy
+    # since pd install runs nothing until installed again (the scheduler design, 4.2).
+    digests.update({f"{TEMPLATE_PREFIX}{name}": hashlib.sha256(json.dumps(t.model_dump(mode="json"),
+                                                                           sort_keys=True).encode()).hexdigest()
+                    for name, t in declaration.check_templates.items()})
+    return digests
 
 
 def _prompt_digest(s: Schedule, agent_home: Optional[Path]) -> Optional[str]:
@@ -398,6 +408,42 @@ class Scheduler:
                     and (self.boot_at - fired).total_seconds() > HOLD_MAX_S and self.on_notice is not None):
                 self.on_notice(NOTICE_ENTRY_DUE, entry_id)
 
+    def template_refusal(self, name: Optional[str], args: Dict[str, str]) -> str:
+        """Why a check may not run this template with these arguments, or "" when it may: one the
+        declaration names, unchanged since pd install where that's checked, whose program isn't in
+        the agent's home, where the agent could rewrite it (the scheduler design, 4.2)."""
+        template = self.declaration.check_templates.get(name or "")
+        if template is None:
+            return f"no check template {name!r} is declared"
+        if self.check_installed:
+            key = f"{TEMPLATE_PREFIX}{name}"
+            if self.installed is None or self.installed.get(key) != schedule_digests(self.declaration)[key]:
+                return f"the check template {name!r} changed since the last pd install"
+        try:
+            argv = template.argv(args)
+            program = Path(render(argv[0], self.placeholders))
+        except (ValueError, KeyError) as e:
+            return f"the check's arguments don't fit its template: {e}"
+        home = self.placeholders.get("agent_home")
+        if home and program.is_absolute() and program.resolve().is_relative_to(Path(home).resolve()):
+            return f"the template's program {program} is in the agent's home, where the agent could rewrite it"
+        return ""
+
+    def _start_check(self, entry_id: str, entry: dict, due: datetime, late_s: float) -> None:
+        """Run an entry's check through the declared-command path, as an isolated command run."""
+        why = self.template_refusal(entry.get("template"), entry.get("args") or {})
+        template = self.declaration.check_templates.get(entry.get("template") or "")
+        if why or template is None:
+            self._say(EVENT_DONE, {"schedule": entry_id, "scheduled_for": _iso(due),
+                                   "outcome": f"not started: {why}", "exit_code": None, "wake": False})
+            if self.on_notice is not None:
+                self.on_notice(NOTICE_RUN_FAILED, _notice_id(entry_id, due))
+            return
+        run = Schedule(name=entry_id, cron="* * * * *", missed_run=MissedRunPolicy(kind="skip"), target="isolated",
+                       run=CommandRun(command=template.argv(entry.get("args") or {}), wake_when=template.wake_when),
+                       timeout_s=template.timeout_s)
+        self._start(run, due, late_s)
+
     def _fire_entry(self, entry_id: str, now: datetime) -> None:
         """Fire an entry that is due: once, for the newest instant owed, however many passed while
         the daemon was down. The firing is recorded before the notice is raised (R26)."""
@@ -424,6 +470,12 @@ class Scheduler:
         late = (now - due).total_seconds() > ENTRY_GRACE_S
         quiet = late and entry.get("missed") == "skip"
         self.entry_fired[entry_id] = due
+        if entry.get("action") == "check":
+            # A check wakes nobody by firing: its run does, when its condition holds (4.2).
+            self._say(EVENT_ENTRY_FIRED, {"id": entry_id, "for": _iso(due), "missed": missed, "notified": False})
+            if entry_id not in self.running and not quiet:
+                self._start_check(entry_id, entry, due, (now - due).total_seconds())
+            return
         self._say(EVENT_ENTRY_FIRED, {"id": entry_id, "for": _iso(due), "missed": missed, "notified": not quiet})
         if self.on_notice is not None and not quiet:
             self.on_notice(NOTICE_ENTRY_DUE, entry_id)
@@ -554,6 +606,15 @@ class Scheduler:
         outcome, wake = self._judge(run, code)
         if run.group_left and run.stopped_by is None and run.killed_at is None:
             outcome += "; the rest of its process group was stopped"
+        is_check = run.schedule.name in self.entries
+        if is_check and wake:
+            # What moved, kept for the woken agent, so it needn't run a check whose state has moved on.
+            kept = self.work_dir / f"{run.schedule.name}.out"
+            try:
+                with open(run.stdout_path, "rb") as f:
+                    kept.write_bytes(f.read(CHECK_OUTPUT_BYTES))
+            except OSError:
+                kept.write_bytes(b"")
         try:
             run.stdout_path.unlink()
         except FileNotFoundError:
@@ -563,6 +624,8 @@ class Scheduler:
         # Failed as `pd status` reads it, less a run stopped on purpose.
         if not outcome.startswith(("ok", "stopped")):
             self._notice_failed(run.schedule, run.scheduled_for)
+        elif is_check and wake and self.on_notice is not None:
+            self.on_notice(NOTICE_ENTRY_DUE, run.schedule.name)
 
     def _notice_failed(self, s: Schedule, scheduled_for: datetime) -> None:
         """Owe the agent the failure notice for a run that failed, was killed at its limit, or

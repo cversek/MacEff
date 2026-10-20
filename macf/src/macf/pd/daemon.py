@@ -545,9 +545,14 @@ class Daemon:
             except ValueError as e:
                 return Response(ok=False, error=f"the entry's time was refused: {e}")
             first = when.next_after(now)
+            if request.action == "check":
+                why = self.scheduler.template_refusal(request.template, request.args)
+                if why:
+                    return Response(ok=False, error=f"the check was refused: {why}")
             # From a context that read untrusted input, a one-shot wake is made and marked, and
             # anything that recurs waits for the operator's acceptance (the scheduler design, 5.3).
-            # A reminder always waits: its text goes to the operator only once accepted (4.3).
+            # A reminder always waits: its text goes to the operator only once accepted (4.3). A
+            # check from a marked context waits even as a one-shot, since it runs a command (5.3).
             # The whole log is asked for, and the scan stops at the context's own boundary.
             marked = taint(read_events(reverse=True, scope="all"))
             entry = {"agent": self.card, "id": new_entry_id(),
@@ -555,8 +560,9 @@ class Daemon:
                      "start": now.isoformat(), "zone": zone or "UTC", "first": first.isoformat() if first else None,
                      "purpose": request.purpose, "action": request.action, "missed": request.missed,
                      "asked_by_pid": creds.pid, "marked": marked,
-                     "state": "waiting" if request.action == "remind" or (marked and not isinstance(when, OneShot))
-                              else "active"}
+                     "template": request.template, "args": request.args,
+                     "state": "waiting" if request.action == "remind" or (marked and (
+                         request.action == "check" or not isinstance(when, OneShot))) else "active"}
             if not append_event(EVENT_ENTRY_ADDED, entry):
                 return Response(ok=False, error="the entry could not be recorded in the event log")
             self.scheduler.add_entry(entry)
