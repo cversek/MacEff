@@ -271,17 +271,21 @@ def test_a_waiting_entry_fires_only_once_accepted_and_only_from_then(tmp_path):
 
 
 def test_only_the_operator_answers_an_entry_that_waits(tmp_path, base, run_daemon, isolated_events_log, monkeypatch):
-    """An answer from the agent's own session is refused. From elsewhere, accepting makes the
-    entry active in the log and in the scheduler, declining removes it, and an entry that
-    doesn't wait can't be answered (the scheduler design, 5.3 and 5.4)."""
+    """The operator's answer is a positive act: taken only while the session runs, from a process
+    with a controlling terminal that isn't the agent's own. A command the agent backgrounds is
+    reparented, so lineage can't refuse it; it has the agent's terminal or none, and is refused.
+    A pane in the session's own multiplexer has its own terminal, and is taken. Accepting makes
+    the entry active in the log and the scheduler, declining removes it, and an entry that doesn't
+    wait can't be answered (the scheduler design, 5.3 and 5.4)."""
     import os
 
     from macf.agent_events_log import append_event
     from macf.notify.session import proc_start
+    from macf.pd import daemon as pd_daemon
     from test_primal_daemon import ask, make_home
     daemon = run_daemon(make_home(tmp_path, []), base)
-    me = (os.getpid(), proc_start(os.getpid()))
-    session = [me]
+    me = os.getpid()
+    session = [(me, proc_start(me))]
     monkeypatch.setattr(daemon.core, "session_incarnation", lambda: session[0])
     append_event("session_started", {"session_id": "s"})
     append_event("tool_call_started", {"tool": "WebFetch", "session_id": "s"})
@@ -290,19 +294,46 @@ def test_only_the_operator_answers_an_entry_that_waits(tmp_path, base, run_daemo
     second = ask(daemon, add)["entries"][-1]
     assert first["state"] == second["state"] == "waiting"
 
+    def asked_from(tty, ppid=me):
+        """The process table as ps would give it: the session's client on pts/0, and the asker."""
+        table = {90001: {"ppid": me, "tty": "pts/0", "comm": "claude"},
+                 me: {"ppid": 1, "tty": None, "comm": "python"}}
+        monkeypatch.setattr(pd_daemon, "process_table", lambda: {**table, me: {"ppid": ppid, "tty": tty, "comm": "bash"}})
+
     def decide(entry, accept):
         return ask(daemon, {"op": "entry_decide", "id": entry["id"], "accept": accept})
-    refused = decide(first, True)
-    assert not refused["ok"] and "operator's act" in refused["error"]
-    session[0] = None                                        # asked from outside the session
+    session[0] = None
+    asked_from("pts/3")
+    assert "isn't running" in decide(first, True)["error"]             # the session down
+    session[0] = (me, proc_start(me))
+    asked_from(None, ppid=1)
+    assert "no controlling terminal" in decide(first, True)["error"]   # detached or backgrounded
+    asked_from("pts/0", ppid=1)
+    assert "agent's own terminal" in decide(first, True)["error"]      # reparented, the agent's terminal
+    asked_from("pts/3")                                                 # a pane of its own
     accepted = decide(first, True)
     assert accepted["ok"] and {e["id"]: e["state"] for e in accepted["entries"]} == {
         first["id"]: "active", second["id"]: "waiting"}
     assert daemon.scheduler.entries[first["id"]]["state"] == "active"
-    assert not decide(first, True)["ok"]                     # it no longer waits
+    assert not decide(first, True)["ok"]                                # it no longer waits
     declined = decide(second, False)
     assert declined["ok"] and [e["id"] for e in declined["entries"]] == [first["id"]]
     assert second["id"] not in daemon.scheduler.entries
+
+
+def test_the_process_table_reads_terminals_and_finds_the_agents():
+    """ps gives each process's parent, terminal and name; the agent's terminals are those of the
+    client processes below the session unit, and a process with no terminal reads as None."""
+    from macf.pd.daemon import agent_terminals, process_table
+    import os
+    table = process_table()
+    assert os.getpid() in table and table[os.getpid()]["ppid"] == os.getppid()
+    fake = {10: {"ppid": 1, "tty": None, "comm": "python"},
+            11: {"ppid": 10, "tty": None, "comm": "tmux: server"},
+            12: {"ppid": 11, "tty": "pts/0", "comm": "/usr/bin/claude"},
+            13: {"ppid": 11, "tty": "pts/1", "comm": "bash"},
+            14: {"ppid": 1, "tty": "pts/5", "comm": "claude"}}
+    assert agent_terminals(fake, 10) == {"pts/0"}
 
 
 def test_the_cli_answers_an_entry_and_shows_what_waits(monkeypatch, capsys):
@@ -549,3 +580,17 @@ def test_an_entry_is_removed_by_the_agent_or_the_operator_and_stops(tmp_path, ba
     cli.add_pd_parser(parser.add_subparsers(dest="cmd"))
     args = parser.parse_args(["pd", "entry", "remove", "e-0123456789ab"])
     assert args.func(args) == 0 and sent == [{"op": "entry_remove", "id": "e-0123456789ab"}]
+
+
+def test_ps_lines_without_a_terminal_read_as_none(monkeypatch):
+    """Linux writes ? and macOS ?? for a process with no controlling terminal; both read as None."""
+    import subprocess
+
+    from macf.pd import daemon as pd_daemon
+
+    class Done:
+        stdout = "  1     0 ?        systemd\n 42     1 ??       launchd job\n 77    42 pts/2    -bash\n"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Done())
+    assert pd_daemon.process_table() == {1: {"ppid": 0, "tty": None, "comm": "systemd"},
+                                         42: {"ppid": 1, "tty": None, "comm": "launchd job"},
+                                         77: {"ppid": 42, "tty": "pts/2", "comm": "-bash"}}

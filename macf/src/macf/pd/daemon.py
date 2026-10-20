@@ -15,10 +15,11 @@ the socket is bound, so a client that finds a record finds a daemon it can reach
 import os
 import selectors
 import socket
+import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional
 
 from pydantic import ValidationError
 
@@ -88,6 +89,36 @@ def card_for_home(agent_home: Path) -> str:
         return agent_card(Path(agent_home))
     except IdentityError as e:
         raise DeclarationRefused(str(e)) from e
+
+
+def process_table() -> Dict[int, dict]:
+    """Every process's parent, controlling terminal (None without one) and command name, from
+    ``ps``, which reads the same way on Linux and macOS."""
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,tty=,comm="], capture_output=True, text=True,
+                             timeout=5, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    table = {}
+    for line in out.splitlines():
+        parts = line.split(None, 3)
+        if len(parts) == 4 and parts[0].isdigit() and parts[1].isdigit():
+            tty = parts[2] if parts[2] not in ("?", "??", "-") else None
+            table[int(parts[0])] = {"ppid": int(parts[1]), "tty": tty, "comm": parts[3].strip()}
+    return table
+
+
+def agent_terminals(table: Dict[int, dict], session_pid: int) -> set:
+    """The controlling terminals of the agent's own client processes: those named claude below the
+    session unit. A command the agent runs, or backgrounds, inherits one of these or none."""
+    below, frontier = set(), [session_pid]
+    while frontier:
+        pid = frontier.pop()
+        for child, row in table.items():
+            if row["ppid"] == pid and child not in below:
+                below.add(child)
+                frontier.append(child)
+    return {table[p]["tty"] for p in below if table[p]["tty"] and Path(table[p]["comm"]).name == "claude"}
 
 
 class Daemon:
@@ -448,6 +479,20 @@ class Daemon:
         return ("no session unit runs" if session is None
                 else f"pid {peer.pid} (uid {peer.uid}) is not below the session unit's pid {session[0]}")
 
+    def _not_the_operator(self, peer) -> str:
+        """Why ``peer``'s answer can't be taken as the operator's, or "" when it can."""
+        session = self.core.session_incarnation()
+        if session is None:
+            return "the agent's session isn't running, so an answer can't be told from the agent's"
+        table = process_table()
+        terminal = table.get(peer.pid, {}).get("tty")
+        if not terminal:
+            return ("it came from a process with no controlling terminal, as the agent's own commands and "
+                    "anything detached do")
+        if terminal in agent_terminals(table, session[0]):
+            return "it came from the agent's own terminal"
+        return ""
+
     def _channel_readable(self, conn: socket.socket) -> None:
         """A channel never writes, so a readable channel has closed (or broke the protocol)."""
         try:
@@ -546,7 +591,7 @@ class Daemon:
         from macf.pd.taint import taint
         why = self._outside_session(creds)
         if isinstance(request, EntryDecideRequest):
-            return self._decide(request, creds, from_session=not why)
+            return self._decide(request, creds)
         if why and isinstance(request, EntryAddRequest):
             return Response(ok=False, error=f"an entry is made only from the agent's live session, and {why}")
         if isinstance(request, EntryRemoveRequest):
@@ -591,18 +636,20 @@ class Daemon:
         held = fold(read_events(reverse=False, scope="all", only=ENTRY_EVENTS), self.card)
         return Response(ok=True, entries=list(held.values()))
 
-    def _decide(self, request, creds, from_session: bool) -> Response:
-        """The operator's answer to an entry that waits. Refused from the agent's own session;
-        anywhere else on this login it's taken, which is advisory where the agent and the
-        operator share a login (the scheduler design, 5.4)."""
+    def _decide(self, request, creds) -> Response:
+        """The operator's answer to an entry that waits, taken only as a positive act (the
+        scheduler design, 5.4). Not being the agent's session isn't proof of the operator: a
+        command the agent backgrounds is reparented and stops descending from it. So, on this
+        login, an answer is taken only while the session runs, from a process with a controlling
+        terminal that isn't the agent's own. That stops a confused agent, not a compromised one,
+        which can make itself a terminal, and the policy says so."""
         from datetime import datetime, timezone
 
         from macf.agent_events_log import append_event, read_events
         from macf.pd.entries import ENTRY_EVENTS, EVENT_ENTRY_ACCEPTED, EVENT_ENTRY_DECLINED, fold
-        if from_session:
-            return Response(ok=False, error=(
-                "accepting or declining an entry is the operator's act, and this came from the agent's "
-                "own session"))
+        why = self._not_the_operator(creds)
+        if why:
+            return Response(ok=False, error=f"accepting or declining an entry is the operator's act, and {why}")
         held = fold(read_events(reverse=False, scope="all", only=ENTRY_EVENTS), self.card)
         entry = held.get(request.id)
         if entry is None or entry.get("state") != "waiting":
