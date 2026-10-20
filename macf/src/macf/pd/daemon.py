@@ -534,7 +534,7 @@ class Daemon:
         why = self._outside_session(creds)
         if isinstance(request, EntryDecideRequest):
             return self._decide(request, creds, from_session=not why)
-        if why:
+        if why and isinstance(request, EntryAddRequest):
             return Response(ok=False, error=f"an entry is made only from the agent's live session, and {why}")
         if isinstance(request, EntryAddRequest):
             zone = self.core.declaration.timezone
@@ -547,6 +547,7 @@ class Daemon:
             first = when.next_after(now)
             # From a context that read untrusted input, a one-shot wake is made and marked, and
             # anything that recurs waits for the operator's acceptance (the scheduler design, 5.3).
+            # A reminder always waits: its text goes to the operator only once accepted (4.3).
             # The whole log is asked for, and the scan stops at the context's own boundary.
             marked = taint(read_events(reverse=True, scope="all"))
             entry = {"agent": self.card, "id": new_entry_id(),
@@ -554,7 +555,8 @@ class Daemon:
                      "start": now.isoformat(), "zone": zone or "UTC", "first": first.isoformat() if first else None,
                      "purpose": request.purpose, "action": request.action, "missed": request.missed,
                      "asked_by_pid": creds.pid, "marked": marked,
-                     "state": "waiting" if marked and not isinstance(when, OneShot) else "active"}
+                     "state": "waiting" if request.action == "remind" or (marked and not isinstance(when, OneShot))
+                              else "active"}
             if not append_event(EVENT_ENTRY_ADDED, entry):
                 return Response(ok=False, error="the entry could not be recorded in the event log")
             self.scheduler.add_entry(entry)

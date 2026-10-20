@@ -45,9 +45,12 @@ def add_pd_parser(sub) -> None:
     entry = pd_sub.add_parser(
         "entry", help="your own timed entries, made from your live session (policy: persistent_layer)")
     entry_sub = entry.add_subparsers(dest="entry_cmd", required=True)
-    add = entry_sub.add_parser("add", help="make an entry that wakes this session when it falls due")
+    add = entry_sub.add_parser("add", help="make an entry that wakes this session, or reminds the operator, when it falls due")
     add.add_argument("when", help="an instant, 'in 20m', 'tomorrow 06:30', 'cron:<five fields>' or 'rrule:<rule>'")
     add.add_argument("purpose", help="what the entry is for, written so a later self can act on it cold")
+    add.add_argument("--remind", action="store_true",
+                     help="remind the operator instead of waking this session; it waits for the operator's "
+                          "acceptance before its text is ever sent")
     add.add_argument("--missed", choices=("once", "skip", "report"), required=True,
                      help="a firing missed while the daemon was down: once, late and said so; skip, "
                           "recorded only; report, recorded and told")
@@ -57,6 +60,9 @@ def add_pd_parser(sub) -> None:
             verb, help=f"{verb} an entry that waits for the operator; refused from the agent's own session")
         decide.add_argument("id", help="the entry's id, e- and 12 hex digits")
         decide.set_defaults(func=cmd_pd_entry_decide, accept=accept)
+    show = entry_sub.add_parser("show", help="one entry in full: its purpose, time, state and why it was marked")
+    show.add_argument("id", help="the entry's id, e- and 12 hex digits")
+    show.set_defaults(func=cmd_pd_entry_show)
     lst = entry_sub.add_parser("list", help="the entries you hold")
     lst.add_argument("--json", action="store_true", help="print them as JSON")
     lst.set_defaults(func=cmd_pd_entry_list)
@@ -150,7 +156,7 @@ def _ask_entries(request: dict):
 
 def cmd_pd_entry_add(args: argparse.Namespace) -> int:
     reply = _ask_entries({"op": "entry_add", "when": args.when, "purpose": args.purpose,
-                          "action": "wake", "missed": args.missed})
+                          "action": "remind" if args.remind else "wake", "missed": args.missed})
     if reply is None:
         return 1
     made = reply.entries[-1] if reply.entries else None
@@ -158,6 +164,22 @@ def cmd_pd_entry_add(args: argparse.Namespace) -> int:
     if made and made.get("state") == "waiting":
         print(f"it waits for the operator's acceptance: this context read untrusted input "
               f"({'; '.join(made.get('marked') or [])})")
+    return 0
+
+
+def cmd_pd_entry_show(args: argparse.Namespace) -> int:
+    reply = _ask_entries({"op": "entry_list"})
+    if reply is None:
+        return 1
+    entry = next((e for e in reply.entries or [] if e.get("id") == args.id), None)
+    if entry is None:
+        print(f"⚠️ MACF: pd: no entry {args.id} is held", file=sys.stderr)
+        return 1
+    for key in ("id", "agent", "action", "purpose", "when", "zone", "first", "missed", "state", "marked",
+                "start", "accepted_at"):
+        if entry.get(key) not in (None, "", []):
+            value = "; ".join(entry[key]) if isinstance(entry[key], list) else entry[key]
+            print(f"{key + ':':13} {value}")
     return 0
 
 

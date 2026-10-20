@@ -70,9 +70,10 @@ def test_the_entries_held_are_what_the_events_fold_to():
 
 
 def test_only_the_live_session_makes_an_entry(tmp_path, base, run_daemon, isolated_events_log, monkeypatch):
-    """The daemon takes an entry request only from a process below the session unit: with
-    no session, or from outside it, the request is refused and nothing is recorded. From the
-    session, the entry is recorded with its time fixed, and listed (the scheduler design, 1)."""
+    """The daemon makes an entry only for a process below the session unit: with no session, or
+    from outside it, the request is refused and nothing is recorded, though the entries held can
+    still be read. From the session, the entry is recorded with its time fixed, and listed (the
+    scheduler design, 1 and 5.5)."""
     import os
 
     from macf.notify.session import proc_start
@@ -81,7 +82,8 @@ def test_only_the_live_session_makes_an_entry(tmp_path, base, run_daemon, isolat
     add = {"op": "entry_add", "when": "in 20m", "purpose": "check the pace", "action": "wake", "missed": "once"}
     refused = ask(daemon, add)
     assert not refused["ok"] and "live session" in refused["error"]
-    assert ask(daemon, {"op": "entry_list"})["ok"] is False
+    listed = ask(daemon, {"op": "entry_list"})
+    assert listed["ok"] and listed["entries"] == []           # reading needs only the uid
 
     me = (os.getpid(), proc_start(os.getpid()))            # this test stands in for the session
     monkeypatch.setattr(daemon.core, "session_incarnation", lambda: me)
@@ -331,3 +333,60 @@ def test_the_cli_answers_an_entry_and_shows_what_waits(monkeypatch, capsys):
     assert run("decline", "e-0123456789ab") == 0
     assert sent[-2:] == [{"op": "entry_decide", "id": "e-0123456789ab", "accept": True},
                          {"op": "entry_decide", "id": "e-0123456789ab", "accept": False}]
+
+
+def test_a_reminder_always_waits_and_never_wakes_the_session(
+        tmp_path, base, run_daemon, isolated_events_log, monkeypatch):
+    """A reminder is for the operator, so it waits for the operator's acceptance even from a clean
+    context, and the scheduler never raises pd_entry_due for it, accepted or not: the sender sends
+    it (the scheduler design, 4.3)."""
+    import os
+
+    from channel_receiver import ChannelReceiver
+    from macf.agent_events_log import append_event
+    from macf.notify.session import proc_start
+    from macf.pd.entries import EVENT_ENTRY_ADDED
+    from test_pd_schedule import CARD, Log, at, make_scheduler
+    from test_primal_daemon import ask, make_home
+    daemon = run_daemon(make_home(tmp_path, []), base)
+    me = (os.getpid(), proc_start(os.getpid()))
+    monkeypatch.setattr(daemon.core, "session_incarnation", lambda: me)
+    append_event("session_started", {"session_id": "s"})
+    made = ask(daemon, {"op": "entry_add", "when": "in 20m", "purpose": "p", "action": "remind", "missed": "once"})
+    assert made["entries"][-1]["state"] == "waiting" and made["entries"][-1]["marked"] == []
+
+    log, now = Log(), [at("2026-10-19 12:00")]
+    log.append(EVENT_ENTRY_ADDED, {"agent": CARD, "id": new_entry_id(), "when": "cron:0 * * * *", "zone": "UTC",
+                                   "start": "2026-10-19T11:30:00+00:00", "action": "remind", "missed": "once",
+                                   "state": "active", "accepted_at": "2026-10-19T11:30:00+00:00"})
+    channel = ChannelReceiver(tmp_path / "agent")
+    make_scheduler(tmp_path, [], log, now, on_notice=channel).tick()
+    assert channel.received == []
+
+
+def test_pd_entry_show_prints_one_entry_in_full(monkeypatch, capsys):
+    import argparse
+
+    from macf.pd import cli, client
+    from macf.pd.interface import Response
+    sent = []
+    held = {"id": "e-0123456789ab", "agent": "Tester@abc123", "action": "remind", "when": "cron:0 9 * * *",
+            "purpose": "the weekly audit is due", "missed": "once", "state": "waiting", "marked": ["a web fetch"]}
+
+    def ask(card, request, **kw):
+        sent.append(request)
+        return Response(ok=True, entries=[held])
+    monkeypatch.setattr(client, "ask", ask)
+    monkeypatch.setattr(cli, "_this_agent", lambda: (None, "Tester@abc123"))
+    parser = argparse.ArgumentParser()
+    cli.add_pd_parser(parser.add_subparsers(dest="cmd"))
+
+    def run(*argv):
+        args = parser.parse_args(["pd", "entry", *argv])
+        return args.func(args)
+    assert run("show", "e-0123456789ab") == 0
+    out = capsys.readouterr().out
+    assert "the weekly audit is due" in out and "a web fetch" in out and "waiting" in out
+    assert run("show", "e-000000000000") == 1 and "no entry" in capsys.readouterr().err
+    assert run("add", "in 20m", "p", "--remind", "--missed", "once") == 0
+    assert sent[-1]["action"] == "remind"

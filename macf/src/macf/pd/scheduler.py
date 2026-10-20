@@ -403,8 +403,8 @@ class Scheduler:
         the daemon was down. The firing is recorded before the notice is raised (R26)."""
         from macf.pd.entries import OneShot, parse_when
         entry = self.entries[entry_id]
-        if entry.get("state") == "waiting":
-            return                               # until the operator accepts it (the design, 5.3)
+        if entry.get("state") == "waiting" or entry.get("action") == "remind":
+            return                               # waits for the operator (5.3); a reminder is the sender's (4.3)
         tz = timezone.utc if entry.get("zone") in (None, "UTC") else ZoneInfo(entry["zone"])
         start = _when(entry.get("start"))
         try:

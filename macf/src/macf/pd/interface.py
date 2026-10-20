@@ -569,12 +569,14 @@ class EntryAddRequest(_Closed):
     op: Literal["entry_add"]
     when: str = Field(min_length=1, max_length=200)
     purpose: str = Field(min_length=1, max_length=500)
-    action: Literal["wake"]
+    action: Literal["wake", "remind"]
     missed: Literal["once", "skip", "report"]
 
 
 class EntryListRequest(_Closed):
-    """The entries the agent holds, asked from its live session."""
+    """The entries the agent holds. Anyone with the daemon's uid may read them, the operator
+    included, since the operator reads an entry's text before accepting it (the scheduler
+    design, 4.3 and 5.5); only making one needs the live session."""
 
     op: Literal["entry_list"]
 
