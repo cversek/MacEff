@@ -86,6 +86,7 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **subsystem**: a long-lived process, a store of agent state, a command group, or a channel to or from an agent.
 - **synthesis**: the Secretary's comment that quotes and links every position, names agreements and disagreements, and proposes a disposition.
 - **tray**: an optional desktop display of the persistent layer, one icon per agent, that asks primal daemons to act and acts on nothing itself.
+- **use trial**: a trial in which the people or agents an MIS's capabilities are for use them for real work, recorded with the evidence, and judged shown or not shown by the operator or a maintainer other than the Secretary.
 - **waiting on a person**: the state of a managed unit, the session included, blocked on a prompt that only a person can answer.
 - **wake**: the delivery of a notice into a live session.
 - **wind-down**: the steps an agent declares to preserve its state before a compaction, ending in its request for that compaction.
