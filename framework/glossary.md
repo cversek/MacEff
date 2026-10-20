@@ -77,7 +77,10 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **revision**: a substantive change to an accepted MIS that the repo owner asked its Secretary for, made in the MIS itself by pull request; it takes no MIS number.
 - **run done**: an event recording that a run owed ran, with its result.
 - **run owed**: a time at which a schedule must run.
-- **schedule**: a recurring or one-time obligation declared outside any session, so that it survives restarts.
+- **schedule**: a recurring or one-time obligation held outside any session, so that it survives restarts: declared by the operator, or an agent's own entry.
+- **entry**: an agent's own schedule, made from its live session and held by its primal daemon as events: a wake, a check or a reminder.
+- **marked**: said of an entry made while its session's context held untrusted input. A marked entry is read and reported, never acted on.
+- **sender**: the one process that sends anything to the operator, outside every session and every primal daemon, with its own ledger of sends.
 - **scheduler**: the part of a primal daemon that runs its agent's schedules.
 - **Secretary**: the agent the operator designates for an MIS before it leaves Draft, with or without a deliberation, who confirms its number, edits it to the language standard, keeps this glossary, writes the synthesis and tracks conformance.
 - **semantic slug**: a short name made of ASCII letters, digits, hyphens and underscores, given in parentheses at the end of a requirement line, that states the requirement's subject and strength, for example `req_MUST_have_30_words_max`.
