@@ -65,6 +65,9 @@ def add_pd_parser(sub) -> None:
             verb, help=f"{verb} an entry that waits for the operator; refused from the agent's own session")
         decide.add_argument("id", help="the entry's id, e- and 12 hex digits")
         decide.set_defaults(func=cmd_pd_entry_decide, accept=accept)
+    remove = entry_sub.add_parser("remove", help="remove an entry; the agent or the operator may, since it only stops work")
+    remove.add_argument("id", help="the entry's id, e- and 12 hex digits")
+    remove.set_defaults(func=cmd_pd_entry_remove)
     show = entry_sub.add_parser("show", help="one entry in full: its purpose, time, state and why it was marked")
     show.add_argument("id", help="the entry's id, e- and 12 hex digits")
     show.set_defaults(func=cmd_pd_entry_show)
@@ -220,6 +223,14 @@ def cmd_pd_entry_show(args: argparse.Namespace) -> int:
         if entry.get(key) not in (None, "", []):
             value = "; ".join(entry[key]) if isinstance(entry[key], list) else entry[key]
             print(f"{key + ':':13} {value}")
+    return 0
+
+
+def cmd_pd_entry_remove(args: argparse.Namespace) -> int:
+    reply = _ask_entries({"op": "entry_remove", "id": args.id})
+    if reply is None:
+        return 1
+    print(f"entry {args.id} removed; you hold {len(reply.entries or [])}")
     return 0
 
 

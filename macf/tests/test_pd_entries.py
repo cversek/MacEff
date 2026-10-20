@@ -516,3 +516,36 @@ def test_the_daemon_checks_a_check_entry_against_its_template_when_it_is_made(
     assert (clean["state"], clean["template"], clean["args"]) == ("active", "count", {"n": "3"})
     append_event("tool_call_started", {"tool": "WebFetch", "session_id": "s"})
     assert add(template="count", args={"n": "3"})["entries"][-1]["state"] == "waiting"
+
+
+def test_an_entry_is_removed_by_the_agent_or_the_operator_and_stops(tmp_path, base, run_daemon, isolated_events_log,
+                                                                     monkeypatch, capsys):
+    """Removing only stops work, so the agent's session and the operator outside it may both
+    remove an entry; it leaves the log's fold and the scheduler, and an unknown id is refused."""
+    import argparse
+    import os
+
+    from macf.notify.session import proc_start
+    from macf.pd import cli, client
+    from test_primal_daemon import ask, make_home
+    daemon = run_daemon(make_home(tmp_path, []), base)
+    session = [(os.getpid(), proc_start(os.getpid()))]
+    monkeypatch.setattr(daemon.core, "session_incarnation", lambda: session[0])
+    add = {"op": "entry_add", "when": "cron:0 9 * * *", "purpose": "p", "action": "wake", "missed": "once"}
+    first = ask(daemon, add)["entries"][-1]["id"]
+    second = ask(daemon, add)["entries"][-1]["id"]
+    gone = ask(daemon, {"op": "entry_remove", "id": first})            # from the session
+    assert gone["ok"] and [e["id"] for e in gone["entries"]] == [second] and first not in daemon.scheduler.entries
+    session[0] = None                                                   # the operator, outside it
+    assert ask(daemon, {"op": "entry_remove", "id": second})["entries"] == []
+    assert second not in daemon.scheduler.entries
+    assert "no entry" in ask(daemon, {"op": "entry_remove", "id": second})["error"]
+
+    sent = []
+    monkeypatch.setattr(client, "ask", lambda card, request, **kw: sent.append(request) or
+                        __import__("macf.pd.interface", fromlist=["Response"]).Response(ok=True, entries=[]))
+    monkeypatch.setattr(cli, "_this_agent", lambda: (None, "Tester@abc123"))
+    parser = argparse.ArgumentParser()
+    cli.add_pd_parser(parser.add_subparsers(dest="cmd"))
+    args = parser.parse_args(["pd", "entry", "remove", "e-0123456789ab"])
+    assert args.func(args) == 0 and sent == [{"op": "entry_remove", "id": "e-0123456789ab"}]

@@ -30,6 +30,7 @@ from macf.pd.interface import (
     EntryAddRequest,
     EntryDecideRequest,
     EntryListRequest,
+    EntryRemoveRequest,
     IdentityError,
     Peer,
     Response,
@@ -507,7 +508,7 @@ class Daemon:
             request = parse_request(line)
         except ValidationError as e:
             return Response(ok=False, error=f"request refused: {e.errors()[0]['msg']}")
-        if isinstance(request, (EntryAddRequest, EntryListRequest, EntryDecideRequest)):
+        if isinstance(request, (EntryAddRequest, EntryListRequest, EntryDecideRequest, EntryRemoveRequest)):
             return self._entry_request(request, creds)
         if isinstance(request, StatusRequest):
             return Response(ok=True, units=self.core.statuses())
@@ -540,13 +541,23 @@ class Daemon:
         from zoneinfo import ZoneInfo
 
         from macf.agent_events_log import append_event, read_events
-        from macf.pd.entries import ENTRY_EVENTS, EVENT_ENTRY_ADDED, OneShot, fold, new_entry_id, parse_when
+        from macf.pd.entries import (ENTRY_EVENTS, EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED, OneShot, fold, new_entry_id,
+                                     parse_when)
         from macf.pd.taint import taint
         why = self._outside_session(creds)
         if isinstance(request, EntryDecideRequest):
             return self._decide(request, creds, from_session=not why)
         if why and isinstance(request, EntryAddRequest):
             return Response(ok=False, error=f"an entry is made only from the agent's live session, and {why}")
+        if isinstance(request, EntryRemoveRequest):
+            held = fold(read_events(reverse=False, scope="all", only=ENTRY_EVENTS), self.card)
+            if request.id not in held:
+                return Response(ok=False, error=f"no entry {request.id} is held")
+            removed = {"agent": self.card, "id": request.id, "at": datetime.now(timezone.utc).isoformat(),
+                       "by_pid": creds.pid, "from_session": not why}
+            if not append_event(EVENT_ENTRY_REMOVED, removed):
+                return Response(ok=False, error="the removal could not be recorded in the event log")
+            self.scheduler.entries.pop(request.id, None)
         if isinstance(request, EntryAddRequest):
             zone = self.core.declaration.timezone
             tz = ZoneInfo(zone) if zone else timezone.utc

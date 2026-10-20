@@ -651,6 +651,15 @@ class EntryListRequest(_Closed):
     op: Literal["entry_list"]
 
 
+class EntryRemoveRequest(_Closed):
+    """Remove an entry the agent holds. Removing only ever stops work, so anyone with the
+    daemon's uid may ask: the agent, from its session, and the operator, revoking an entry that
+    is already active (the scheduler design, 5.4)."""
+
+    op: Literal["entry_remove"]
+    id: str = Field(pattern=r"^e-[0-9a-f]{12}$")
+
+
 class EntryDecideRequest(_Closed):
     """The operator's answer to an entry that waits: accept it or decline it. The daemon refuses
     it from the agent's own session, because acceptance is the operator's act. Where the agent
@@ -662,7 +671,8 @@ class EntryDecideRequest(_Closed):
     accept: bool
 
 
-Request = Union[StatusRequest, ActRequest, CompactRequest, EntryAddRequest, EntryListRequest, EntryDecideRequest]
+Request = Union[StatusRequest, ActRequest, CompactRequest, EntryAddRequest, EntryListRequest, EntryDecideRequest,
+                EntryRemoveRequest]
 
 
 class UnitStatus(_Closed):
