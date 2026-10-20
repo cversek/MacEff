@@ -445,6 +445,13 @@ def test_a_check_template_fills_whole_arguments_of_the_declared_kind():
         CheckTemplate(command=["<prog>"], wake_when="stdout", timeout_s=30, args={"prog": CheckArg(kind="integer")})
 
 
+def _not_writable(monkeypatch, *writable):
+    """The test's interpreter, which the runner's account can usually write, is treated as the
+    operator's: only the paths given read as writable by the agent."""
+    from macf.pd import scheduler as sc
+    monkeypatch.setattr(sc, "agent_can_write", lambda program: any(str(program).startswith(str(w)) for w in writable))
+
+
 def _check_scheduler(tmp_path, log, now, templates, **options):
     from channel_receiver import ChannelReceiver
     from macf.pd import scheduler as sc
@@ -458,7 +465,7 @@ def _check_scheduler(tmp_path, log, now, templates, **options):
     return s, channel
 
 
-def test_a_check_wakes_the_agent_only_when_its_condition_holds_and_keeps_what_it_said(tmp_path):
+def test_a_check_wakes_the_agent_only_when_its_condition_holds_and_keeps_what_it_said(tmp_path, monkeypatch):
     """A check entry runs its template at its time. Its firing wakes nobody; its run does, when
     the condition holds, and the output is kept for the agent. Nothing to say, no notice (4.2)."""
     import sys
@@ -467,6 +474,7 @@ def test_a_check_wakes_the_agent_only_when_its_condition_holds_and_keeps_what_it
     from macf.pd.entries import EVENT_ENTRY_ADDED
     from macf.pd.interface import CheckArg, CheckTemplate
     from test_pd_schedule import CARD, Log, at, finish
+    _not_writable(monkeypatch)
     template = CheckTemplate(command=[sys.executable, "-c", "import sys; print('moved' * int(sys.argv[1]))", "<n>"],
                              wake_when="stdout", timeout_s=10, args={"n": CheckArg(kind="integer")})
     log, now = Log(), [at("2026-10-19 12:00")]
@@ -485,7 +493,7 @@ def test_a_check_wakes_the_agent_only_when_its_condition_holds_and_keeps_what_it
     assert {d["schedule"]: d["wake"] for d in log.of(sc.EVENT_DONE)} == {moved: True, quiet: False}
 
 
-def test_a_check_whose_program_the_agent_could_rewrite_or_that_changed_since_install_never_runs(tmp_path):
+def test_a_check_whose_program_the_agent_could_rewrite_or_that_changed_since_install_never_runs(tmp_path, monkeypatch):
     """A template whose program is in the agent's home, or one changed since pd install where
     that's checked, isn't started; the agent is told it failed (4.2)."""
     import sys
@@ -495,6 +503,7 @@ def test_a_check_whose_program_the_agent_could_rewrite_or_that_changed_since_ins
     from macf.pd.interface import CheckTemplate
     from test_pd_schedule import CARD, Log, at
     log, now = Log(), [at("2026-10-19 12:00")]
+    _not_writable(monkeypatch, tmp_path)                       # what the agent can write: here, its tmp tree
     mine = CheckTemplate(command=[str(tmp_path / "home" / "bin" / "check")], wake_when="exit_code", timeout_s=10)
     fine = CheckTemplate(command=[sys.executable, "-c", "pass"], wake_when="exit_code", timeout_s=10)
     in_home, changed = new_entry_id(), new_entry_id()
@@ -511,7 +520,7 @@ def test_a_check_whose_program_the_agent_could_rewrite_or_that_changed_since_ins
     s.tick()
     assert s.running == {}
     outcomes = {d["schedule"]: d["outcome"] for d in log.of(sc.EVENT_DONE)}
-    assert "agent's home" in outcomes[in_home] and "changed since the last pd install" in outcomes[changed]
+    assert "can write" in outcomes[in_home] and "changed since the last pd install" in outcomes[changed]
     assert [source for source, _ in channel.received] == ["pd_run_failed", "pd_run_failed"]
 
 
@@ -528,6 +537,7 @@ def test_the_daemon_checks_a_check_entry_against_its_template_when_it_is_made(
     from macf.pd.interface import CheckArg, CheckTemplate, Declaration, declaration_path
     from test_primal_daemon import CARD, ask, make_home
     home = make_home(tmp_path, [])
+    _not_writable(monkeypatch)
     template = CheckTemplate(command=[sys.executable, "-c", "pass", "<n>"], wake_when="exit_code", timeout_s=10,
                              args={"n": CheckArg(kind="integer")})
     decl = Declaration(version=1, agent=CARD, check_templates={"count": template})
@@ -594,3 +604,43 @@ def test_ps_lines_without_a_terminal_read_as_none(monkeypatch):
     assert pd_daemon.process_table() == {1: {"ppid": 0, "tty": None, "comm": "systemd"},
                                          42: {"ppid": 1, "tty": None, "comm": "launchd job"},
                                          77: {"ppid": 42, "tty": "pts/2", "comm": "-bash"}}
+
+
+def test_a_program_counts_as_writable_by_its_file_or_its_folder(tmp_path):
+    """The agent could rewrite a program it can write, or replace one in a folder it can write;
+    a root-owned program in a root-owned folder is neither (MIS-0002-R143)."""
+    import os
+    import stat
+
+    from macf.pd.scheduler import agent_can_write
+    mine = tmp_path / "check"
+    mine.write_text("#!/bin/sh\n")
+    assert agent_can_write(mine)
+    readonly = tmp_path / "readonly"                     # can't be written, but its folder can
+    readonly.write_text("x")
+    readonly.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    assert agent_can_write(readonly) or os.geteuid() == 0
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    prog = locked / "tool"
+    prog.write_text("x")
+    prog.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    open_file = locked / "open"                      # writable itself, in a folder that isn't
+    open_file.write_text("x")
+    locked.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    try:
+        if os.geteuid() != 0:                     # root can write anything, so the check is moot there
+            assert not agent_can_write(prog)
+            assert agent_can_write(open_file)
+    finally:
+        locked.chmod(stat.S_IRWXU)
+    assert not agent_can_write(__import__("pathlib").Path("/bin/sh").resolve()) or os.geteuid() == 0
+
+
+def test_a_template_must_name_its_program_by_absolute_path(tmp_path, monkeypatch):
+    from macf.pd.interface import CheckTemplate
+    from test_pd_schedule import Log, at
+    _not_writable(monkeypatch)
+    bare = CheckTemplate(command=["gh", "api", "x"], wake_when="stdout", timeout_s=10)
+    s, _ = _check_scheduler(tmp_path, Log(), [at("2026-10-19 12:00")], {"bare": bare})
+    assert "absolute path" in s.template_refusal("bare", {})

@@ -122,6 +122,13 @@ def schedule_digests(declaration: Declaration, agent_home: Optional[Path] = None
     return digests
 
 
+def agent_can_write(program: Path) -> bool:
+    """Whether this account can rewrite ``program``: the file itself, or the folder that holds it,
+    where it could be replaced. On a shared login that reaches past the agent's home, to a
+    package manager's bin among others (MIS-0002-R143)."""
+    return os.access(program, os.W_OK) or os.access(program.parent, os.W_OK)
+
+
 def _prompt_digest(s: Schedule, agent_home: Optional[Path]) -> Optional[str]:
     if not isinstance(s.run, PromptRun):
         return None
@@ -424,9 +431,10 @@ class Scheduler:
             program = Path(render(argv[0], self.placeholders))
         except (ValueError, KeyError) as e:
             return f"the check's arguments don't fit its template: {e}"
-        home = self.placeholders.get("agent_home")
-        if home and program.is_absolute() and program.resolve().is_relative_to(Path(home).resolve()):
-            return f"the template's program {program} is in the agent's home, where the agent could rewrite it"
+        if not program.is_absolute():
+            return f"the template names its program {program} without an absolute path, so what runs isn't fixed"
+        if agent_can_write(program.resolve()):
+            return f"the template's program {program} is one the agent's account can write, so it could rewrite it"
         return ""
 
     def _start_check(self, entry_id: str, entry: dict, due: datetime, late_s: float) -> None:
