@@ -79,7 +79,7 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **run owed**: a time at which a schedule must run.
 - **schedule**: a recurring or one-time obligation held outside any session, so that it survives restarts: declared by the operator, or an agent's own entry.
 - **entry**: an agent's own schedule, made from its live session and held by its primal daemon as events: a wake, a check or a reminder.
-- **marked**: said of an entry made while its session's context held untrusted input. A marked entry is read and reported, never acted on.
+- **marked**: said of an entry made while its session's context held untrusted input. Until the operator accepts it, a marked entry is read and reported, never acted on.
 - **sender**: the one process that sends anything to the operator, outside every session and every primal daemon, with its own ledger of sends.
 - **scheduler**: the part of a primal daemon that runs its agent's schedules.
 - **Secretary**: the agent the operator designates for an MIS before it leaves Draft, with or without a deliberation, who confirms its number, edits it to the language standard, keeps this glossary, writes the synthesis and tracks conformance.
