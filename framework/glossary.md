@@ -78,10 +78,11 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **run done**: an event recording that a run owed ran, with its result.
 - **run owed**: a time at which a schedule must run.
 - **schedule**: a recurring or one-time obligation held outside any session, so that it survives restarts: declared by the operator, or an agent's own entry.
-- **entry**: an agent's own schedule, made from its live session and held by its primal daemon as events: a wake, a check or a reminder.
+- **entry**: an agent's own schedule, made from its live session and held by its primal daemon as events: a wake or a check.
 - **marked**: said of an entry made while its session's context held untrusted input. A marked entry is acted on with care: what it asks beyond what the agent would do unprompted is reported, not done.
-- **sender**: the one process that sends anything to the operator, outside every session and every primal daemon, with its own ledger of sends.
-- **scheduler**: the part of a primal daemon that runs its agent's schedules.
+- **scheduler**: the part of a primal daemon that runs its agent's schedules, and fires its agent's wake and check entries into that agent's session.
+- **event stream**: one merged stream of the persistent layer's own events, published as they are recorded, for subscribers to read.
+- **subscriber**: a reader of the event stream that chose the sources it takes: the MacEff channel, the tray, or a bridge to the operator.
 - **Secretary**: the agent the operator designates for an MIS before it leaves Draft, with or without a deliberation, who confirms its number, edits it to the language standard, keeps this glossary, writes the synthesis and tracks conformance.
 - **semantic slug**: a short name made of ASCII letters, digits, hyphens and underscores, given in parentheses at the end of a requirement line, that states the requirement's subject and strength, for example `req_MUST_have_30_words_max`.
 - **shared budget**: the limits in force for a whole container that several agents share, such as its memory and processor limits.
