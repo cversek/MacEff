@@ -211,11 +211,10 @@ def test_the_agenda_shows_both_tiers_soonest_first():
     assert lines[1].startswith("2026-10-19T13:00:00+00:00")
 
 
-def test_from_a_tainted_context_a_recurring_entry_waits_and_a_one_shot_is_marked(
-        tmp_path, base, run_daemon, isolated_events_log, monkeypatch):
-    """After the session read untrusted input, a one-shot wake is made and marked, and a
-    recurring one waits for the operator. From a clean context both are active and unmarked.
-    The reading comes from the session's own tool events (the scheduler design, 5.3)."""
+def test_an_entry_from_a_tainted_context_is_marked(tmp_path, base, run_daemon, isolated_events_log, monkeypatch):
+    """After the session read untrusted input, an entry is made marked, with why; from a clean
+    context it's unmarked. Marking is provenance: the operator's consent is the ask prompt on
+    pd entry add, met before the request (the scheduler design, 5.3, as ruled on #744)."""
     import os
 
     from macf.agent_events_log import append_event
@@ -226,170 +225,23 @@ def test_from_a_tainted_context_a_recurring_entry_waits_and_a_one_shot_is_marked
     monkeypatch.setattr(daemon.core, "session_incarnation", lambda: me)
 
     def add(when):
-        made = ask(daemon, {"op": "entry_add", "when": when, "purpose": "p", "action": "wake", "missed": "once"})
-        return next(e for e in made["entries"] if e["id"] not in seen)
-    seen = set()
+        return ask(daemon, {"op": "entry_add", "when": when, "purpose": "p", "action": "wake", "missed": "once"})["entries"][-1]
     append_event("session_started", {"session_id": "s"})
-    clean = add("cron:0 9 * * *")
-    seen.add(clean["id"])
-    assert (clean["state"], clean["marked"]) == ("active", [])
+    assert add("cron:0 9 * * *")["marked"] == []
     append_event("tool_call_started", {"tool": "WebFetch", "session_id": "s"})
-    recurring = add("cron:0 9 * * *")
-    seen.add(recurring["id"])
-    once = add("in 20m")
-    assert (recurring["state"], recurring["marked"]) == ("waiting", ["a web fetch"])
-    assert (once["state"], once["marked"]) == ("active", ["a web fetch"])
+    made = add("cron:0 9 * * *")
+    assert made["marked"] == ["a web fetch"] and "state" not in made
 
 
-def test_a_waiting_entry_fires_only_once_accepted_and_only_from_then(tmp_path):
-    """A waiting entry never fires. Accepted, it fires from its acceptance on, and the firings
-    it waited through aren't owed. Declined, it's gone (the scheduler design, 5.3)."""
+def test_a_reminder_never_wakes_the_session(tmp_path):
+    """A reminder is for the operator: the scheduler never raises pd_entry_due for it, and the
+    sender sends it (the scheduler design, 4.3)."""
     from channel_receiver import ChannelReceiver
-    from macf.pd import scheduler as sc
-    from macf.pd.entries import EVENT_ENTRY_ACCEPTED, EVENT_ENTRY_ADDED, EVENT_ENTRY_DECLINED
-    from test_pd_schedule import CARD, Log, at, make_scheduler
-    log, now = Log(), [at("2026-10-19 12:30")]
-    hourly, declined = new_entry_id(), new_entry_id()
-    for entry_id in (hourly, declined):
-        log.append(EVENT_ENTRY_ADDED, {"agent": CARD, "id": entry_id, "when": "cron:0 * * * *", "zone": "UTC",
-                                       "start": "2026-10-19T08:30:00+00:00", "action": "wake", "missed": "once",
-                                       "state": "waiting", "marked": ["a web fetch"]})
-    channel = ChannelReceiver(tmp_path / "agent")
-    s = make_scheduler(tmp_path, [], log, now, on_notice=channel)
-    s.tick()
-    assert channel.received == [] and log.of(sc.EVENT_ENTRY_FIRED) == []
-    log.append(EVENT_ENTRY_ACCEPTED, {"agent": CARD, "id": hourly, "at": "2026-10-19T12:30:00+00:00"})
-    log.append(EVENT_ENTRY_DECLINED, {"agent": CARD, "id": declined, "at": "2026-10-19T12:30:00+00:00"})
-    s = make_scheduler(tmp_path, [], log, now, on_notice=channel)
-    assert list(s.entries) == [hourly]
-    s.tick()
-    assert channel.received == []                              # 09:00 to 12:00 waited, not owed
-    now[0] = at("2026-10-19 13:00")
-    s.tick()
-    assert channel.received == [("pd_entry_due", hourly)]
-    assert log.of(sc.EVENT_ENTRY_FIRED)[0]["missed"] == 0
-
-
-def test_only_the_operator_answers_an_entry_that_waits(tmp_path, base, run_daemon, isolated_events_log, monkeypatch):
-    """The operator's answer is a positive act: taken only while the session runs, from a process
-    with a controlling terminal that isn't the agent's own. A command the agent backgrounds is
-    reparented, so lineage can't refuse it; it has the agent's terminal or none, and is refused.
-    A pane in the session's own multiplexer has its own terminal, and is taken. Accepting makes
-    the entry active in the log and the scheduler, declining removes it, and an entry that doesn't
-    wait can't be answered (the scheduler design, 5.3 and 5.4)."""
-    import os
-
-    from macf.agent_events_log import append_event
-    from macf.notify.session import proc_start
-    from macf.pd import daemon as pd_daemon
-    from test_primal_daemon import ask, make_home
-    daemon = run_daemon(make_home(tmp_path, []), base)
-    me = os.getpid()
-    session = [(me, proc_start(me))]
-    monkeypatch.setattr(daemon.core, "session_incarnation", lambda: session[0])
-    append_event("session_started", {"session_id": "s"})
-    append_event("tool_call_started", {"tool": "WebFetch", "session_id": "s"})
-    add = {"op": "entry_add", "when": "cron:0 9 * * *", "purpose": "p", "action": "wake", "missed": "once"}
-    first = ask(daemon, add)["entries"][-1]
-    second = ask(daemon, add)["entries"][-1]
-    assert first["state"] == second["state"] == "waiting"
-
-    def asked_from(tty, ppid=me):
-        """The process table as ps would give it: the session's client on pts/0, and the asker."""
-        table = {90001: {"ppid": me, "tty": "pts/0", "comm": "claude"},
-                 me: {"ppid": 1, "tty": None, "comm": "python"}}
-        monkeypatch.setattr(pd_daemon, "process_table", lambda: {**table, me: {"ppid": ppid, "tty": tty, "comm": "bash"}})
-
-    def decide(entry, accept):
-        return ask(daemon, {"op": "entry_decide", "id": entry["id"], "accept": accept})
-    session[0] = None
-    asked_from("pts/3")
-    assert "isn't running" in decide(first, True)["error"]             # the session down
-    session[0] = (me, proc_start(me))
-    asked_from(None, ppid=1)
-    assert "no controlling terminal" in decide(first, True)["error"]   # detached or backgrounded
-    asked_from("pts/0", ppid=1)
-    assert "agent's own terminal" in decide(first, True)["error"]      # reparented, the agent's terminal
-    asked_from("pts/3")                                                 # a pane of its own
-    accepted = decide(first, True)
-    assert accepted["ok"] and {e["id"]: e["state"] for e in accepted["entries"]} == {
-        first["id"]: "active", second["id"]: "waiting"}
-    assert daemon.scheduler.entries[first["id"]]["state"] == "active"
-    assert not decide(first, True)["ok"]                                # it no longer waits
-    declined = decide(second, False)
-    assert declined["ok"] and [e["id"] for e in declined["entries"]] == [first["id"]]
-    assert second["id"] not in daemon.scheduler.entries
-
-
-def test_the_process_table_reads_terminals_and_finds_the_agents():
-    """ps gives each process's parent, terminal and name; the agent's terminals are those of the
-    client processes below the session unit, and a process with no terminal reads as None."""
-    from macf.pd.daemon import agent_terminals, process_table
-    import os
-    table = process_table()
-    assert os.getpid() in table and table[os.getpid()]["ppid"] == os.getppid()
-    fake = {10: {"ppid": 1, "tty": None, "comm": "python"},
-            11: {"ppid": 10, "tty": None, "comm": "tmux: server"},
-            12: {"ppid": 11, "tty": "pts/0", "comm": "/usr/bin/claude"},
-            13: {"ppid": 11, "tty": "pts/1", "comm": "bash"},
-            14: {"ppid": 1, "tty": "pts/5", "comm": "claude"}}
-    assert agent_terminals(fake, 10) == {"pts/0"}
-
-
-def test_the_cli_answers_an_entry_and_shows_what_waits(monkeypatch, capsys):
-    """pd entry accept and decline send the operator's answer; list shows an entry that waits,
-    and one made from a marked context, as such."""
-    import argparse
-
-    from macf.pd import cli, client
-    from macf.pd.interface import Response
-    sent, held = [], {"id": "e-0123456789ab", "when": "cron:0 9 * * *", "first": "2026-10-20T09:00:00+00:00",
-                      "missed": "once", "purpose": "check the pace", "state": "waiting", "marked": ["a web fetch"]}
-
-    def ask(card, request, **kw):
-        sent.append(request)
-        return Response(ok=True, entries=[held])
-    monkeypatch.setattr(client, "ask", ask)
-    monkeypatch.setattr(cli, "_this_agent", lambda: (None, "Tester@abc123"))
-    parser = argparse.ArgumentParser()
-    cli.add_pd_parser(parser.add_subparsers(dest="cmd"))
-
-    def run(*argv):
-        args = parser.parse_args(["pd", "entry", *argv])
-        return args.func(args)
-    assert run("list") == 0 and "[waiting] [marked] check the pace" in capsys.readouterr().out
-    assert run("add", "cron:0 9 * * *", "check the pace", "--missed", "once") == 0
-    assert "waits for the operator's acceptance" in capsys.readouterr().out
-    assert run("accept", "e-0123456789ab") == 0
-    assert run("decline", "e-0123456789ab") == 0
-    assert sent[-2:] == [{"op": "entry_decide", "id": "e-0123456789ab", "accept": True},
-                         {"op": "entry_decide", "id": "e-0123456789ab", "accept": False}]
-
-
-def test_a_reminder_always_waits_and_never_wakes_the_session(
-        tmp_path, base, run_daemon, isolated_events_log, monkeypatch):
-    """A reminder is for the operator, so it waits for the operator's acceptance even from a clean
-    context, and the scheduler never raises pd_entry_due for it, accepted or not: the sender sends
-    it (the scheduler design, 4.3)."""
-    import os
-
-    from channel_receiver import ChannelReceiver
-    from macf.agent_events_log import append_event
-    from macf.notify.session import proc_start
     from macf.pd.entries import EVENT_ENTRY_ADDED
     from test_pd_schedule import CARD, Log, at, make_scheduler
-    from test_primal_daemon import ask, make_home
-    daemon = run_daemon(make_home(tmp_path, []), base)
-    me = (os.getpid(), proc_start(os.getpid()))
-    monkeypatch.setattr(daemon.core, "session_incarnation", lambda: me)
-    append_event("session_started", {"session_id": "s"})
-    made = ask(daemon, {"op": "entry_add", "when": "in 20m", "purpose": "p", "action": "remind", "missed": "once"})
-    assert made["entries"][-1]["state"] == "waiting" and made["entries"][-1]["marked"] == []
-
     log, now = Log(), [at("2026-10-19 12:00")]
     log.append(EVENT_ENTRY_ADDED, {"agent": CARD, "id": new_entry_id(), "when": "cron:0 * * * *", "zone": "UTC",
-                                   "start": "2026-10-19T11:30:00+00:00", "action": "remind", "missed": "once",
-                                   "state": "active", "accepted_at": "2026-10-19T11:30:00+00:00"})
+                                   "start": "2026-10-19T11:30:00+00:00", "action": "remind", "missed": "once"})
     channel = ChannelReceiver(tmp_path / "agent")
     make_scheduler(tmp_path, [], log, now, on_notice=channel).tick()
     assert channel.received == []
@@ -402,7 +254,7 @@ def test_pd_entry_show_prints_one_entry_in_full(monkeypatch, capsys):
     from macf.pd.interface import Response
     sent = []
     held = {"id": "e-0123456789ab", "agent": "Tester@abc123", "action": "remind", "when": "cron:0 9 * * *",
-            "purpose": "the weekly audit is due", "missed": "once", "state": "waiting", "marked": ["a web fetch"]}
+            "purpose": "the weekly audit is due", "missed": "once", "marked": ["a web fetch"]}
 
     def ask(card, request, **kw):
         sent.append(request)
@@ -417,7 +269,7 @@ def test_pd_entry_show_prints_one_entry_in_full(monkeypatch, capsys):
         return args.func(args)
     assert run("show", "e-0123456789ab") == 0
     out = capsys.readouterr().out
-    assert "the weekly audit is due" in out and "a web fetch" in out and "waiting" in out
+    assert "the weekly audit is due" in out and "a web fetch" in out
     assert run("show", "e-000000000000") == 1 and "no entry" in capsys.readouterr().err
     assert run("add", "in 20m", "p", "--remind", "--missed", "once") == 0
     assert sent[-1]["action"] == "remind"
@@ -554,9 +406,9 @@ def test_the_daemon_checks_a_check_entry_against_its_template_when_it_is_made(
     assert "no check template 'other'" in add(template="other")["error"]
     assert "don't fit" in add(template="count", args={"n": "1; rm"})["error"]
     clean = add(template="count", args={"n": "3"})["entries"][-1]
-    assert (clean["state"], clean["template"], clean["args"]) == ("active", "count", {"n": "3"})
+    assert (clean["marked"], clean["template"], clean["args"]) == ([], "count", {"n": "3"})
     append_event("tool_call_started", {"tool": "WebFetch", "session_id": "s"})
-    assert add(template="count", args={"n": "3"})["entries"][-1]["state"] == "waiting"
+    assert add(template="count", args={"n": "3"})["entries"][-1]["marked"] == ["a web fetch"]
 
 
 def test_an_entry_is_removed_by_the_agent_or_the_operator_and_stops(tmp_path, base, run_daemon, isolated_events_log,
@@ -590,20 +442,6 @@ def test_an_entry_is_removed_by_the_agent_or_the_operator_and_stops(tmp_path, ba
     cli.add_pd_parser(parser.add_subparsers(dest="cmd"))
     args = parser.parse_args(["pd", "entry", "remove", "e-0123456789ab"])
     assert args.func(args) == 0 and sent == [{"op": "entry_remove", "id": "e-0123456789ab"}]
-
-
-def test_ps_lines_without_a_terminal_read_as_none(monkeypatch):
-    """Linux writes ? and macOS ?? for a process with no controlling terminal; both read as None."""
-    import subprocess
-
-    from macf.pd import daemon as pd_daemon
-
-    class Done:
-        stdout = "  1     0 ?        systemd\n 42     1 ??       launchd job\n 77    42 pts/2    -bash\n"
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Done())
-    assert pd_daemon.process_table() == {1: {"ppid": 0, "tty": None, "comm": "systemd"},
-                                         42: {"ppid": 1, "tty": None, "comm": "launchd job"},
-                                         77: {"ppid": 42, "tty": "pts/2", "comm": "-bash"}}
 
 
 def test_a_program_counts_as_writable_by_its_file_or_its_folder(tmp_path):
@@ -659,3 +497,25 @@ def test_the_list_and_agenda_show_when_an_entry_next_fires_not_when_it_first_did
     assert _next(hourly, now) == "2026-10-20T13:29:00+00:00"
     assert _next(done, now) == "none"
     assert agenda_lines(None, [done, hourly], now)[0].startswith("2026-10-20T13:29:00+00:00  entry     e-000000000001")
+
+
+def test_pd_entry_add_starts_in_ask_and_an_operator_who_loosens_it_keeps_that(tmp_path, monkeypatch):
+    """Installing the mode's permissions puts pd entry add in ask, so approving its prompt is the
+    operator's consent. One the operator has moved to allow is left there, at every later install,
+    unlike the permanent lists (persistent_layer 10.6)."""
+    import json
+
+    from macf.utils import claude_settings as cs
+    rule = "Bash(macf_tools pd entry add:*)"
+    settings = tmp_path / "settings.local.json"
+    settings.write_text(json.dumps({"permissions": {}}))
+    monkeypatch.setattr(cs, "_read_settings", lambda root=None: (json.loads(settings.read_text()), settings))
+    added = cs.ensure_mode_safety_permissions()
+    assert rule in added["ask_added"] and rule in json.loads(settings.read_text())["permissions"]["ask"]
+    loosened = json.loads(settings.read_text())
+    loosened["permissions"]["ask"].remove(rule)
+    loosened["permissions"]["allow"].append(rule)
+    settings.write_text(json.dumps(loosened))
+    cs.ensure_mode_safety_permissions()
+    after = json.loads(settings.read_text())["permissions"]
+    assert rule not in after["ask"] and rule in after["allow"]

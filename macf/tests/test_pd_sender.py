@@ -34,17 +34,13 @@ def test_a_missed_reminder_is_sent_once_late_for_its_newest_instant():
     assert len(sends) == 1 and sends[0].text.startswith("Late, due 2026-10-22T09:00:00+00:00: ")
 
 
-def test_an_agents_text_never_leaves_unaccepted():
-    """A waiting entry sends a fixed template naming it, never its purpose, once. An agent's
-    reminder with no acceptance sends nothing; the operator's own sends its text."""
-    waiting = remind("e-000000000002", "cron:0 9 * * *", state="waiting", marked=["a web fetch"])
-    unaccepted = remind("e-000000000003", "cron:0 9 * * *")
-    mine = remind("e-000000000004", "cron:0 9 * * *", agent="operator")
-    sends = due_sends([waiting, unaccepted, mine], sent=[], now=at("2026-10-19 09:00"))
-    assert [s.id for s in sends] == ["e-000000000002@accept", "e-000000000004@1792400400"]
-    assert "the weekly audit" not in sends[0].text and "a web fetch" in sends[0].text
-    assert sends[1].text == "the weekly audit is due"
-    assert due_sends([waiting], sent=["e-000000000002@accept"], now=at("2026-10-19 10:00")) == []
+def test_a_reminders_text_goes_to_the_operator():
+    """An agent's reminder sends its purpose: the operator approved it at the ask prompt when it
+    was added. A wake is the session's, not the sender's."""
+    mine = remind("e-000000000004", "cron:0 9 * * *")
+    wake = remind("e-000000000005", "cron:0 9 * * *", action="wake")
+    sends = due_sends([mine, wake], sent=[], now=at("2026-10-19 09:00"))
+    assert [(s.id, s.text) for s in sends] == [("e-000000000004@1792400400", "the weekly audit is due")]
 
 
 def test_quiet_hours_hold_all_but_an_urgent_entry():
@@ -178,9 +174,7 @@ def test_the_brief_goes_at_each_time_or_the_plain_agenda_after_its_grace(tmp_pat
     home = _home_with(
         tmp_path,
         (EVENT_ENTRY_ADDED, {**remind("e-000000000001", "cron:0 9 * * *", **ACCEPTED), "agent": CARD}),
-        (EVENT_ENTRY_ADDED, {**remind("e-000000000002", "cron:0 10 * * *", state="waiting",
-                                      purpose="unaccepted words"), "agent": CARD}),
-        (EVENT_ENTRY_ADDED, {**remind("e-000000000003", "cron:0 8 * * *", action="wake",
+        (EVENT_ENTRY_ADDED, {**remind("e-000000000003", "cron:0 8 * * *", action="wake", marked=["a web fetch"],
                                       purpose="a note to myself"), "agent": CARD}))
     config = SenderConfig(homes=[str(home)], alert_command=command, state_dir=str(tmp_path / "state"),
                           briefs=["07:00", "21:00"], daily_bound=100)
@@ -190,14 +184,13 @@ def test_the_brief_goes_at_each_time_or_the_plain_agenda_after_its_grace(tmp_pat
     def write(text, when):
         (spool / brief_name(at(when))).write_text(text)
     write("Written long ago.", "2026-10-18 06:00")              # before the time before: stale
-    assert run_pass(config, at("2026-10-19 06:59")) == 2          # the acceptance push; the 18th's 21:00, late
+    assert run_pass(config, at("2026-10-19 06:59")) == 1          # the 18th's 21:00, late
     assert run_pass(config, at("2026-10-19 07:10")) == 0          # no brief, still within its grace
     assert run_pass(config, at("2026-10-19 07:30")) == 1          # the plain agenda
     text = phone.read_text()
     assert f"MacEff daily brief from {CARD}\nNo brief arrived" in text and "Written long ago." not in text
-    assert "e-000000000001  the weekly audit is due" in text and "unaccepted words" not in text
-    assert "wake  e-000000000003\n" in text and "a note to myself" not in text
-    assert "waiting for your acceptance: e-000000000002" in text
+    assert "e-000000000001  the weekly audit is due" in text
+    assert "wake  e-000000000003  [marked] a note to myself" in text
 
     write("A late morning brief.", "2026-10-19 07:40")         # too late: that time's one went
     assert run_pass(config, at("2026-10-19 08:00")) == 0

@@ -457,17 +457,15 @@ class Scheduler:
         the daemon was down. The firing is recorded before the notice is raised (R26)."""
         from macf.pd.entries import OneShot, parse_when
         entry = self.entries[entry_id]
-        if entry.get("state") == "waiting" or entry.get("action") == "remind":
-            return                               # waits for the operator (5.3); a reminder is the sender's (4.3)
+        if entry.get("action") == "remind":
+            return                               # a reminder is the sender's (the scheduler design, 4.3)
         tz = timezone.utc if entry.get("zone") in (None, "UTC") else ZoneInfo(entry["zone"])
         start = _when(entry.get("start"))
         try:
             when = OneShot(datetime.fromisoformat(entry["when"]))
         except ValueError:
             when = parse_when(entry["when"], tz, start, start=start)
-        # An accepted entry is owed from its acceptance, never for the firings it waited through.
-        since = _when(entry.get("accepted_at")) or start
-        due = when.next_after(self.entry_fired.get(entry_id) or since - timedelta(seconds=1))
+        due = when.next_after(self.entry_fired.get(entry_id) or start - timedelta(seconds=1))
         if due is None or due > now:
             return
         missed = 0

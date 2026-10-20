@@ -645,8 +645,7 @@ class EntryAddRequest(_Closed):
 
 class EntryListRequest(_Closed):
     """The entries the agent holds. Anyone with the daemon's uid may read them, the operator
-    included, since the operator reads an entry's text before accepting it (the scheduler
-    design, 4.3 and 5.5); only making one needs the live session."""
+    included (the scheduler design, 5.5); only making one needs the live session."""
 
     op: Literal["entry_list"]
 
@@ -660,18 +659,7 @@ class EntryRemoveRequest(_Closed):
     id: str = Field(pattern=r"^e-[0-9a-f]{12}$")
 
 
-class EntryDecideRequest(_Closed):
-    """The operator's answer to an entry that waits: accept it or decline it. The daemon refuses
-    it from the agent's own session, because acceptance is the operator's act. Where the agent
-    runs as the operator's own login, that stops a confused agent, not a compromised one (the
-    scheduler design, 5.3 and 5.4)."""
-
-    op: Literal["entry_decide"]
-    id: str = Field(pattern=r"^e-[0-9a-f]{12}$")
-    accept: bool
-
-
-Request = Union[StatusRequest, ActRequest, CompactRequest, EntryAddRequest, EntryListRequest, EntryDecideRequest,
+Request = Union[StatusRequest, ActRequest, CompactRequest, EntryAddRequest, EntryListRequest,
                 EntryRemoveRequest]
 
 

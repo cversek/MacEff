@@ -49,8 +49,7 @@ def add_pd_parser(sub) -> None:
     add.add_argument("when", help="an instant, 'in 20m', 'tomorrow 06:30', 'cron:<five fields>' or 'rrule:<rule>'")
     add.add_argument("purpose", help="what the entry is for, written so a later self can act on it cold")
     add.add_argument("--remind", action="store_true",
-                     help="remind the operator instead of waking this session; it waits for the operator's "
-                          "acceptance before its text is ever sent")
+                     help="remind the operator instead of waking this session, through the sender")
     add.add_argument("--check", metavar="TEMPLATE",
                      help="run one of the operator's check templates at its time, waking this session only "
                           "when its condition holds")
@@ -60,11 +59,6 @@ def add_pd_parser(sub) -> None:
                      help="a firing missed while the daemon was down: once, late and said so; skip, "
                           "recorded only; report, recorded and told")
     add.set_defaults(func=cmd_pd_entry_add)
-    for verb, accept in (("accept", True), ("decline", False)):
-        decide = entry_sub.add_parser(
-            verb, help=f"{verb} an entry that waits for the operator; refused from the agent's own session")
-        decide.add_argument("id", help="the entry's id, e- and 12 hex digits")
-        decide.set_defaults(func=cmd_pd_entry_decide, accept=accept)
     remove = entry_sub.add_parser("remove", help="remove an entry; the agent or the operator may, since it only stops work")
     remove.add_argument("id", help="the entry's id, e- and 12 hex digits")
     remove.set_defaults(func=cmd_pd_entry_remove)
@@ -184,9 +178,8 @@ def cmd_pd_entry_add(args: argparse.Namespace) -> int:
         return 1
     made = reply.entries[-1] if reply.entries else None
     print(f"entry made; you hold {len(reply.entries or [])}" + (f", the newest {made['id']}" if made else ""))
-    if made and made.get("state") == "waiting":
-        print(f"it waits for the operator's acceptance: this context read untrusted input "
-              f"({'; '.join(made.get('marked') or [])})")
+    if made and made.get("marked"):
+        print(f"it is marked: this context read untrusted input ({'; '.join(made['marked'])})")
     return 0
 
 
@@ -218,8 +211,7 @@ def cmd_pd_entry_show(args: argparse.Namespace) -> int:
     if entry is None:
         print(f"⚠️ MACF: pd: no entry {args.id} is held", file=sys.stderr)
         return 1
-    for key in ("id", "agent", "action", "purpose", "when", "zone", "first", "missed", "state", "marked",
-                "start", "accepted_at"):
+    for key in ("id", "agent", "action", "purpose", "when", "zone", "first", "missed", "marked", "start"):
         if entry.get(key) not in (None, "", []):
             value = "; ".join(entry[key]) if isinstance(entry[key], list) else entry[key]
             print(f"{key + ':':13} {value}")
@@ -231,14 +223,6 @@ def cmd_pd_entry_remove(args: argparse.Namespace) -> int:
     if reply is None:
         return 1
     print(f"entry {args.id} removed; you hold {len(reply.entries or [])}")
-    return 0
-
-
-def cmd_pd_entry_decide(args: argparse.Namespace) -> int:
-    reply = _ask_entries({"op": "entry_decide", "id": args.id, "accept": args.accept})
-    if reply is None:
-        return 1
-    print(f"entry {args.id} {'accepted' if args.accept else 'declined'}")
     return 0
 
 
@@ -270,9 +254,9 @@ def _next(entry: dict, now=None) -> str:
 
 
 def _state(entry: dict) -> str:
-    """What an entry's line says before its purpose: waiting for the operator, and marked as made
-    from a context that read untrusted input (the scheduler design, 5.3)."""
-    return ("[waiting] " if entry.get("state") == "waiting" else "") + ("[marked] " if entry.get("marked") else "")
+    """What an entry's line says before its purpose: marked, when it was made from a context that
+    read untrusted input (the scheduler design, 5.3)."""
+    return "[marked] " if entry.get("marked") else ""
 
 
 def agenda_lines(declaration, entries, now) -> list:

@@ -4,16 +4,13 @@ The sender is the only path to the operator. This module is its decision, pure o
 given: the entries it can read, what its ledger says it already sent, the time, and the quiet
 hours. The runner around it reads the stores, sends, and keeps the ledger.
 
-**Exactly once.** Each send has an idempotent id: an entry's id and the instant it's for, or the
-entry's id and ``accept`` for the push asking the operator to accept it. An id in the ledger is
-never sent again. A reminder missed while nothing ran is sent once, late, saying so, for its
+**Exactly once.** Each send has an idempotent id: an entry's id and the instant it's for. An id in
+the ledger is never sent again. A reminder missed while nothing ran is sent once, late, saying so, for its
 newest instant only.
 
-**What may be sent.**
-- An entry the operator owns, or one the operator accepted: its purpose, the agent's text.
-- An entry that waits for acceptance: a fixed template naming its id, its owner, when it was made
-  and why it waits. Never its text, so an agent can't put words on the operator's phone before
-  the operator has read them where they're stored.
+**What may be sent.** A reminder's purpose, which the operator approved when the agent added the
+entry: ``pd entry add`` starts in the operator's ask list, so its prompt shows the whole command.
+An operator who loosens it to allow lets the agent remind them unprompted (persistent_layer 10.6).
 
 **Quiet hours.** A send due inside a quiet window is held to the window's end, unless its entry
 is urgent.
@@ -26,7 +23,7 @@ morning and evening. Its text is the agent's by design: the agent writes it to i
 ``.maceff/brief/`` in its home, and at each brief time the sender sends the newest brief written
 since the previous one, under a fixed header naming the agent. The agent needn't know the times. If
 none has arrived ``brief_grace_min`` after its time, the sender sends a plain agenda instead, built
-from the entries alone, with no text the operator hasn't accepted. Brief and agenda share one id per
+from the entries alone. Brief and agenda share one id per
 brief time, so the operator gets one or the other, late once if need be, never both.
 
 **The runner** (``python -m macf.pd.sender --config <path>``) is one pass, run by its own timer
@@ -86,12 +83,6 @@ def _newest_due(entry: dict, after: datetime, now: datetime) -> Optional[datetim
     return due
 
 
-def _accept_text(entry: dict) -> str:
-    why = "; ".join(entry.get("marked") or []) or "it's a reminder"
-    return (f"{entry.get('agent')} made entry {entry['id']} at {entry.get('start')}. It waits for your "
-            f"acceptance ({why}). Read it with: macf_tools pd entry show {entry['id']}")
-
-
 def due_sends(entries: Iterable[dict], sent: Iterable[str], now: datetime,
               quiet_until: Callable[[datetime], Optional[datetime]] = lambda _now: None,
               sent_today: Optional[Dict[str, int]] = None, bound: int = DAILY_BOUND) -> List[Send]:
@@ -123,14 +114,9 @@ def due_sends(entries: Iterable[dict], sent: Iterable[str], now: datetime,
 
     for entry in entries:
         owner = entry.get("agent") or "operator"
-        if entry.get("state") == "waiting":
-            offer(entry, Send(f"{entry['id']}@accept", owner, _accept_text(entry)))
+        if entry.get("action") != "remind":
             continue
-        if entry.get("action") != "remind" or entry.get("state") not in (None, "active"):
-            continue
-        if owner != "operator" and not entry.get("accepted_at"):
-            continue                                         # never the agent's text unaccepted
-        since = datetime.fromisoformat(entry.get("accepted_at") or entry["start"]) - timedelta(seconds=1)
+        since = datetime.fromisoformat(entry["start"]) - timedelta(seconds=1)
         due = _newest_due(entry, since, now)
         if due is None:
             continue
@@ -202,25 +188,17 @@ def _written(path: Path) -> Optional[datetime]:
 
 
 def plain_agenda(card: str, entries: Iterable[dict], now: datetime) -> str:
-    """The day's agenda from the entries alone: what fires in the next day, and what waits. An
-    entry's purpose is shown only once accepted, or when the operator owns it."""
-    lines, waiting = [], []
+    """The day's agenda from the entries alone: what fires in the next day, each with its purpose,
+    marked where it was made after untrusted input."""
+    lines = []
     for entry in entries:
-        if entry.get("state") == "waiting":
-            waiting.append(entry["id"])
-            continue
-        if entry.get("state") not in (None, "active"):
-            continue
         when, _ = _when(entry)
         nxt = when.next_after(now)
         if nxt is None or nxt > now + timedelta(days=1):
             continue
-        shown = entry.get("purpose", "") if entry.get("accepted_at") or entry.get("agent") == "operator" else ""
-        lines.append((nxt, f"{nxt.isoformat()}  {entry.get('action', 'wake')}  {entry['id']}  {shown}".rstrip()))
-    out = [text for _, text in sorted(lines)] or ["nothing scheduled in the next day"]
-    if waiting:
-        out.append(f"waiting for your acceptance: {', '.join(waiting)}")
-    return "\n".join(out)
+        mark = "[marked] " if entry.get("marked") else ""
+        lines.append((nxt, f"{nxt.isoformat()}  {entry.get('action', 'wake')}  {entry['id']}  {mark}{entry.get('purpose', '')}"))
+    return "\n".join([text for _, text in sorted(lines)] or ["nothing scheduled in the next day"])
 
 
 def _slots(config: "SenderConfig", now: datetime) -> Tuple[Optional[datetime], Optional[datetime]]:
@@ -328,8 +306,7 @@ def deliver(alert_command: List[str], send: Send, ledger: Path, day: str) -> boo
     The command's own output is never echoed, since a transport error can carry its URL."""
     base = {"id": send.id, "owner": send.owner, "day": day}
     _write(ledger, {**base, "state": "sending", "ts": time.time()})
-    header = ("MacEff: an entry waits for you" if send.id.endswith("@accept")
-              else f"MacEff daily brief from {send.owner}" if send.id.startswith("brief:")
+    header = (f"MacEff daily brief from {send.owner}" if send.id.startswith("brief:")
               else f"MacEff reminder from {send.owner}")
     try:
         result = subprocess.run(list(alert_command), input=f"{header}\n{send.text}\n", text=True,
