@@ -44,7 +44,7 @@ def add_pd_parser(sub) -> None:
     alive.set_defaults(func=cmd_pd_alive)
     entry = pd_sub.add_parser(
         "entry", help="your own timed entries, made from your live session (policy: persistent_layer)")
-    entry_sub = entry.add_subparsers(dest="entry_cmd", required=True)
+    entry_sub = entry.add_subparsers(dest="entry_cmd")
     add = entry_sub.add_parser("add", help="make an entry that wakes this session, or reminds the operator, when it falls due")
     add.add_argument("when", help="an instant, 'in 20m', 'tomorrow 06:30', 'cron:<five fields>' or 'rrule:<rule>'")
     add.add_argument("purpose", help="what the entry is for, written so a later self can act on it cold")
@@ -72,7 +72,7 @@ def add_pd_parser(sub) -> None:
     lst.add_argument("--json", action="store_true", help="print them as JSON")
     lst.set_defaults(func=cmd_pd_entry_list)
     brief = pd_sub.add_parser("brief", help="the daily brief the operator asked for, sent by the sender at its time")
-    brief_sub = brief.add_subparsers(dest="brief_cmd", required=True)
+    brief_sub = brief.add_subparsers(dest="brief_cmd")
     write = brief_sub.add_parser("write", help="write today's brief to your brief spool, from a file or - for stdin")
     write.add_argument("source", help="the brief's text: a file, or - to read stdin")
     write.set_defaults(func=cmd_pd_brief_write)
