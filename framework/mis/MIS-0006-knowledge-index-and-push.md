@@ -4,8 +4,8 @@
 **Type**: Standards
 **Status**: Draft
 **Authors**: the host-side maintainer, from two experiments run on its own record, with directions the operator gave while planning them
-**Secretary**: none
-**Deliberation**: pending
+**Secretary**: the macOS maintainer, designated by the repo owner on 2026-10-20 (#751)
+**Deliberation**: pending: the repo owner holds it until MIS-0004 is decided (#751)
 **Created**: 2026-10-20
 **Updates**: none
 **Supersedes**: none
@@ -279,6 +279,7 @@ None yet.
 ## 15 Revision History
 
 - 2026-10-20: first draft.
+- 2026-10-20: the repo owner designated the macOS maintainer as Secretary, and holds the deliberation until MIS-0004 is decided (#751).
 
 ## Wiki-Links
 
