@@ -120,3 +120,45 @@ def test_the_runner_sends_each_reminder_once_through_the_alert_command(tmp_path)
         fh.write(json.dumps({"id": "e-000000000001@1792486800", "owner": CARD, "day": "2026-10-20",
                              "state": "sending", "ts": 0}) + "\n")
     assert run_pass(config, at("2026-10-20 09:00")) == 0
+
+
+def test_quiet_hours_by_weekday_and_date():
+    """A window is read in the sender's zone on the days it starts, past midnight when its end
+    comes first; a quiet date is quiet all day (the design, 4.3)."""
+    from zoneinfo import ZoneInfo
+
+    from macf.pd.sender import QuietWindow, SenderConfig, quiet_until
+    new_york = ZoneInfo("America/New_York")
+    config = SenderConfig(homes=[], alert_command=["true"], state_dir="s", timezone="America/New_York",
+                          quiet=[QuietWindow(start="22:00", end="07:00", days=["MO", "TU", "WE", "TH", "SU"]),
+                                 QuietWindow(start="12:00", end="13:00", days=["SA"])],
+                          quiet_dates=["2026-12-25"])
+
+    def local(text):
+        return datetime.fromisoformat(text).replace(tzinfo=new_york)
+    assert quiet_until(config, local("2026-10-19T23:30")) == local("2026-10-20T07:00")   # Monday night
+    assert quiet_until(config, local("2026-10-20T06:59")) == local("2026-10-20T07:00")   # Monday's, past midnight
+    assert quiet_until(config, local("2026-10-20T07:00")) is None
+    assert quiet_until(config, local("2026-10-23T23:30")) is None                        # Friday isn't quiet
+    assert quiet_until(config, local("2026-10-24T06:00")) is None                        # nor Friday's night
+    assert quiet_until(config, local("2026-10-24T12:30")) == local("2026-10-24T13:00")   # Saturday noon
+    assert quiet_until(config, local("2026-12-25T15:00")) == local("2026-12-26T00:00")
+    assert quiet_until(config, at("2026-10-19 00:00")) is None   # given in UTC: Sunday 20:00 in New York
+
+
+def test_the_runner_holds_a_reminder_through_quiet_hours(tmp_path):
+    """Due at 02:00 inside the quiet window, a reminder waits for its end and goes then, saying
+    it's late."""
+    from macf.pd.entries import EVENT_ENTRY_ADDED
+    from macf.pd.sender import QuietWindow, SenderConfig, run_pass
+    from test_primal_daemon import CARD
+    code = tmp_path / "code"
+    code.write_text("0")
+    command, phone = _alert(tmp_path, code)
+    home = _home_with(tmp_path, (EVENT_ENTRY_ADDED, {**remind("e-000000000001", "cron:0 2 * * *", **ACCEPTED),
+                                                     "agent": CARD}))
+    config = SenderConfig(homes=[str(home)], alert_command=command, state_dir=str(tmp_path / "state"),
+                          quiet=[QuietWindow(start="22:00", end="07:00")])
+    assert run_pass(config, at("2026-10-20 02:00")) == 0
+    assert run_pass(config, at("2026-10-20 07:00")) == 1
+    assert "Late, due 2026-10-20T02:00:00+00:00" in phone.read_text()

@@ -142,9 +142,24 @@ SEND_TIMEOUT_S = 30
 LEDGER = "sent.jsonl"
 
 
+DAYS = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
+
+
+class QuietWindow(BaseModel):
+    """The operator's quiet hours, ``HH:MM`` to ``HH:MM`` in the sender's timezone, on the days
+    named, each the day the window starts. One whose end comes before its start runs past
+    midnight."""
+
+    model_config = ConfigDict(extra="forbid")
+    start: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    end: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    days: List[Literal["MO", "TU", "WE", "TH", "FR", "SA", "SU"]] = Field(default_factory=lambda: list(DAYS))
+
+
 class SenderConfig(BaseModel):
-    """The homes whose entries the sender reads, the command that reaches the operator, and
-    where its ledger lives. Rendered at install, never kept by hand."""
+    """The homes whose entries the sender reads, the command that reaches the operator, where
+    its ledger lives, and the operator's quiet hours: windows by weekday, and whole days by date.
+    Rendered at install, never kept by hand."""
 
     model_config = ConfigDict(extra="forbid")
     version: Literal[1] = 1
@@ -152,6 +167,33 @@ class SenderConfig(BaseModel):
     alert_command: List[str] = Field(min_length=1)
     state_dir: str = Field(min_length=1)
     daily_bound: int = Field(default=DAILY_BOUND, ge=1)
+    timezone: str = "UTC"
+    quiet: List[QuietWindow] = Field(default_factory=list)
+    quiet_dates: List[str] = Field(default_factory=list)   # YYYY-MM-DD, quiet all day
+
+
+def quiet_until(config: SenderConfig, now: datetime) -> Optional[datetime]:
+    """The end of the quiet window or day ``now`` falls in, or None when it falls in none."""
+    tz = ZoneInfo(config.timezone)
+    local = now.astimezone(tz)
+    today, hhmm = local.date(), local.strftime("%H:%M")
+    if today.isoformat() in config.quiet_dates:
+        return datetime.combine(today + timedelta(days=1), datetime.min.time(), tz)
+
+    def at(day, text):
+        hour, minute = map(int, text.split(":"))
+        return datetime.combine(day, datetime.min.time(), tz).replace(hour=hour, minute=minute)
+    yesterday = today - timedelta(days=1)
+    for w in config.quiet:
+        on = DAYS[today.weekday()] in w.days
+        if w.start <= w.end:
+            if on and w.start <= hhmm < w.end:
+                return at(today, w.end)
+        elif on and hhmm >= w.start:
+            return at(today + timedelta(days=1), w.end)
+        elif DAYS[yesterday.weekday()] in w.days and hhmm < w.end:
+            return at(today, w.end)
+    return None
 
 
 def read_entries(home: Path) -> List[dict]:
@@ -226,7 +268,8 @@ def run_pass(config: SenderConfig, now: Optional[datetime] = None) -> int:
     ledger, day = state / LEDGER, now.date().isoformat()
     sent, today = read_ledger(ledger, day)
     entries = [e for home in config.homes for e in read_entries(Path(home))]
-    sends = due_sends(entries, sent, now, sent_today=today, bound=config.daily_bound)
+    sends = due_sends(entries, sent, now, quiet_until=lambda t: quiet_until(config, t),
+                      sent_today=today, bound=config.daily_bound)
     return sum(deliver(config.alert_command, s, ledger, day) for s in sends)
 
 
