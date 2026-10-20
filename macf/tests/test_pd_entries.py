@@ -644,3 +644,18 @@ def test_a_template_must_name_its_program_by_absolute_path(tmp_path, monkeypatch
     bare = CheckTemplate(command=["gh", "api", "x"], wake_when="stdout", timeout_s=10)
     s, _ = _check_scheduler(tmp_path, Log(), [at("2026-10-19 12:00")], {"bare": bare})
     assert "absolute path" in s.template_refusal("bare", {})
+
+
+def test_the_list_and_agenda_show_when_an_entry_next_fires_not_when_it_first_did():
+    """An hourly entry made days ago shows its next hour, and a one-shot that has fired shows none."""
+    from datetime import datetime, timezone
+
+    from macf.pd.cli import _next, agenda_lines
+    now = datetime(2026, 10, 20, 13, 5, tzinfo=timezone.utc)
+    hourly = {"id": "e-000000000001", "when": "cron:29 * * * *", "zone": "UTC", "start": "2026-10-17T03:00:00+00:00",
+              "first": "2026-10-17T03:29:00+00:00", "purpose": "check-in"}
+    done = {"id": "e-000000000002", "when": "2026-10-19T09:00:00+00:00", "zone": "UTC",
+            "start": "2026-10-19T08:00:00+00:00", "first": "2026-10-19T09:00:00+00:00", "purpose": "once"}
+    assert _next(hourly, now) == "2026-10-20T13:29:00+00:00"
+    assert _next(done, now) == "none"
+    assert agenda_lines(None, [done, hourly], now)[0].startswith("2026-10-20T13:29:00+00:00  entry     e-000000000001")

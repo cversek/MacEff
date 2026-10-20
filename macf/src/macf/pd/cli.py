@@ -251,10 +251,22 @@ def cmd_pd_entry_list(args: argparse.Namespace) -> int:
         print(json.dumps(entries, indent=2))
         return 0
     for e in entries:
-        print(f"{e['id']}  next {e.get('first') or 'none'}  {e['when']}  ({e['missed']})  {_state(e)}{e['purpose']}")
+        print(f"{e['id']}  next {_next(e)}  {e['when']}  ({e['missed']})  {_state(e)}{e['purpose']}")
     if not entries:
         print("no entries")
     return 0
+
+
+def _next(entry: dict, now=None) -> str:
+    """When an entry next fires, from now, as text; "none" when it never will again."""
+    from datetime import datetime, timezone
+
+    from macf.pd.entries import next_fire
+    try:
+        nxt = next_fire(entry, now or datetime.now(timezone.utc))
+    except (KeyError, ValueError):
+        return entry.get("first") or "none"
+    return nxt.isoformat() if nxt else "none"
 
 
 def _state(entry: dict) -> str:
@@ -274,7 +286,7 @@ def agenda_lines(declaration, entries, now) -> list:
         nxt = CronExpr.parse(s.cron, tz).next_after(now) if tz else None
         rows.append((nxt.isoformat() if nxt else "none", f"declared  {s.name}  {s.cron}"))
     for e in entries:
-        rows.append((e.get("first") or "none", f"entry     {e['id']}  {_state(e)}{e['purpose']}"))
+        rows.append((_next(e, now), f"entry     {e['id']}  {_state(e)}{e['purpose']}"))
     return [f"{when}  {what}" for when, what in sorted(rows)]
 
 

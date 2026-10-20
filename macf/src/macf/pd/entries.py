@@ -13,7 +13,7 @@ times: nothing here reads a clock.
 """
 import re
 import secrets
-from datetime import datetime, time, timedelta, tzinfo
+from datetime import datetime, time, timedelta, timezone, tzinfo
 from typing import Dict, Iterable, Optional, Union
 
 from macf.pd.recurrence import Recurrence
@@ -77,6 +77,23 @@ class OneShot:
 
 
 When = Union[OneShot, CronExpr, Recurrence]
+
+
+def when_of(entry: dict) -> When:
+    """An entry's time shape, read back from what was recorded: a fixed instant, or the shape and
+    its start, in the entry's zone."""
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(entry["zone"]) if entry.get("zone") not in (None, "UTC") else timezone.utc
+    start = datetime.fromisoformat(entry["start"])
+    try:
+        return OneShot(datetime.fromisoformat(entry["when"]))
+    except ValueError:
+        return parse_when(entry["when"], tz, start, start=start)
+
+
+def next_fire(entry: dict, now: datetime) -> Optional[datetime]:
+    """When ``entry`` next fires after ``now``, or None when it never will."""
+    return when_of(entry).next_after(now)
 
 
 def parse_when(text: str, tz: tzinfo, now: datetime, start: Optional[datetime] = None,

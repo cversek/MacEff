@@ -52,7 +52,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from macf.pd import interface
-from macf.pd.entries import ENTRY_EVENTS, OneShot, fold, parse_when
+from macf.pd.entries import ENTRY_EVENTS, fold, when_of
 from macf.utils.streaming import iter_lines_forward
 
 #: A reminder sent more than this late says so.
@@ -69,12 +69,7 @@ class Send:
 
 
 def _when(entry: dict):
-    tz = timezone.utc if entry.get("zone") in (None, "UTC") else ZoneInfo(entry["zone"])
-    start = datetime.fromisoformat(entry["start"])
-    try:
-        return OneShot(datetime.fromisoformat(entry["when"])), start
-    except ValueError:
-        return parse_when(entry["when"], tz, start, start=start), start
+    return when_of(entry), datetime.fromisoformat(entry["start"])
 
 
 def _newest_due(entry: dict, after: datetime, now: datetime) -> Optional[datetime]:
