@@ -21,6 +21,13 @@ is urgent.
 **Rate.** Each owner may cause a bounded number of sends a day. Past the bound, the sender sends
 one fixed line saying so, once that day, and holds the rest.
 
+**The brief** (5.5) is the operator's, declared once in the sender's config with its time. Its
+text is the agent's by design: the agent writes it to its brief spool, ``.maceff/brief/<date>.md``
+in its home, and the sender sends it at its time under a fixed header naming the agent. If none
+has arrived ``brief_grace_min`` after its time, the sender sends a plain agenda instead, built
+from the entries alone, with no text the operator hasn't accepted. Brief and agenda share one id
+a day, so the operator gets one or the other, late once if need be, never both.
+
 **The runner** (``python -m macf.pd.sender --config <path>``) is one pass, run by its own timer
 outside every session, as the outside watch is, with the watch's kind of ``alert_command``: it
 receives the message on stdin and holds its own credential (MIS-0002-R75). Its ledger is its own
@@ -170,6 +177,55 @@ class SenderConfig(BaseModel):
     timezone: str = "UTC"
     quiet: List[QuietWindow] = Field(default_factory=list)
     quiet_dates: List[str] = Field(default_factory=list)   # YYYY-MM-DD, quiet all day
+    brief_at: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    brief_grace_min: int = Field(default=30, ge=0)
+
+
+def brief_path(home: Path, day: str) -> Path:
+    return home / ".maceff" / "brief" / f"{day}.md"
+
+
+def plain_agenda(card: str, entries: Iterable[dict], now: datetime) -> str:
+    """The day's agenda from the entries alone: what fires in the next day, and what waits. An
+    entry's purpose is shown only once accepted, or when the operator owns it."""
+    lines, waiting = [], []
+    for entry in entries:
+        if entry.get("state") == "waiting":
+            waiting.append(entry["id"])
+            continue
+        if entry.get("state") not in (None, "active"):
+            continue
+        when, _ = _when(entry)
+        nxt = when.next_after(now)
+        if nxt is None or nxt > now + timedelta(days=1):
+            continue
+        shown = entry.get("purpose", "") if entry.get("accepted_at") or entry.get("agent") == "operator" else ""
+        lines.append((nxt, f"{nxt.isoformat()}  {entry.get('action', 'wake')}  {entry['id']}  {shown}".rstrip()))
+    out = [text for _, text in sorted(lines)] or ["nothing scheduled in the next day"]
+    if waiting:
+        out.append(f"waiting for your acceptance: {', '.join(waiting)}")
+    return "\n".join(out)
+
+
+def brief_send(config: "SenderConfig", card: str, home: Path, entries: List[dict], sent: Set[str],
+               now: datetime) -> Optional[Send]:
+    """The day's brief or, past its grace, the plain agenda, or None when neither is due."""
+    if config.brief_at is None:
+        return None
+    tz = ZoneInfo(config.timezone)
+    local = now.astimezone(tz)
+    day = local.date().isoformat()
+    send_id = f"brief:{card}:{day}"
+    if send_id in sent or local.strftime("%H:%M") < config.brief_at:
+        return None
+    try:
+        return Send(send_id, card, brief_path(home, day).read_text())
+    except FileNotFoundError:
+        hour, minute = map(int, config.brief_at.split(":"))
+        due = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if local < due + timedelta(minutes=config.brief_grace_min):
+            return None
+        return Send(send_id, card, "No brief arrived; the plain agenda follows.\n" + plain_agenda(card, entries, now))
 
 
 def quiet_until(config: SenderConfig, now: datetime) -> Optional[datetime]:
@@ -247,7 +303,9 @@ def deliver(alert_command: List[str], send: Send, ledger: Path, day: str) -> boo
     The command's own output is never echoed, since a transport error can carry its URL."""
     base = {"id": send.id, "owner": send.owner, "day": day}
     _write(ledger, {**base, "state": "sending", "ts": time.time()})
-    header = "MacEff: an entry waits for you" if send.id.endswith("@accept") else f"MacEff reminder from {send.owner}"
+    header = ("MacEff: an entry waits for you" if send.id.endswith("@accept")
+              else f"MacEff daily brief from {send.owner}" if send.id.startswith("brief:")
+              else f"MacEff reminder from {send.owner}")
     try:
         result = subprocess.run(list(alert_command), input=f"{header}\n{send.text}\n", text=True,
                                 capture_output=True, timeout=SEND_TIMEOUT_S)
@@ -267,9 +325,16 @@ def run_pass(config: SenderConfig, now: Optional[datetime] = None) -> int:
     state.mkdir(parents=True, exist_ok=True)
     ledger, day = state / LEDGER, now.date().isoformat()
     sent, today = read_ledger(ledger, day)
-    entries = [e for home in config.homes for e in read_entries(Path(home))]
-    sends = due_sends(entries, sent, now, quiet_until=lambda t: quiet_until(config, t),
-                      sent_today=today, bound=config.daily_bound)
+    held = quiet_until(config, now)
+    sends, entries = [], []
+    for home in map(Path, config.homes):
+        mine = read_entries(home)
+        entries += mine
+        brief = brief_send(config, interface.agent_card(home), home, mine, sent, now) if held is None else None
+        if brief is not None:
+            sends.append(brief)
+    sends += due_sends(entries, sent, now, quiet_until=lambda t: quiet_until(config, t),
+                       sent_today=today, bound=config.daily_bound)
     return sum(deliver(config.alert_command, s, ledger, day) for s in sends)
 
 
