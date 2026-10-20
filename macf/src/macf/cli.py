@@ -11618,7 +11618,17 @@ def cmd_knowledge_query(args: argparse.Namespace) -> int:
     """Query knowledge graph by concept, node ID, or keyword."""
     from .knowledge_web import query_knowledge_web, format_query_result
 
-    result = query_knowledge_web(args.term)
+    terms = list(getattr(args, "term", None) or [])
+    like = getattr(args, "like", None)
+    if bool(terms) == bool(like):
+        print("❌ give one or more terms, or --like NODE, not both")
+        return 2
+    try:
+        kwargs = {} if args.min_idf is None else {"min_idf": args.min_idf}
+        result = query_knowledge_web(terms, like=like, any_term=getattr(args, "any_term", False), **kwargs)
+    except ValueError as e:
+        print(f"❌ {e}")
+        return 2
 
     # Filter by node class. A checkpoint's claims expire and a learning's do
     # not; a query asking "what do I know about X" wants durable insight, while
@@ -11774,7 +11784,7 @@ def cmd_knowledge_eval(args: argparse.Namespace) -> int:
         digest = save_snapshot(snap, Path(args.save_snapshot))
         print(f"📸 snapshot {digest[:12]} saved to {args.save_snapshot} (owner-only: it holds private text)")
     try:
-        out = evaluate(Corpus(snap, digest), args.rankers or ["random", "today", "idf"],
+        out = evaluate(Corpus(snap, digest), args.rankers or ["random", "today", "idf", "like"],
                        sources=args.labels or ("xref", "citations", "same_subject"), which=args.split,
                        seed=args.split_seed, compare=tuple(args.compare) if args.compare else None)
     except EvalRefused as e:
@@ -13601,8 +13611,18 @@ def _build_parser() -> argparse.ArgumentParser:
     kg_graph.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
     kg_graph.set_defaults(func=cmd_knowledge_graph)
 
-    kg_query = knowledge_sub.add_parser("query", help="query subgraph by concept, node ID, or keyword")
-    kg_query.add_argument("term", help="concept name, node ID (#007), or keyword")
+    kg_query = knowledge_sub.add_parser(
+        "query", help="ranked results for concepts, node IDs or keywords, or for what bears on a node",
+        description=("Results are ranked by the summed IDF of the query concepts they carry, plus how "
+                     "strongly they tie into the match through specific concepts; neighbours come in "
+                     "only through concepts with IDF at least --min-idf. Several terms match nodes that "
+                     "answer every term (--any: any of them). See the scholarship policy on ordering."))
+    kg_query.add_argument("term", nargs="*", help="concept names, node IDs (#007) or keywords")
+    kg_query.add_argument("--like", metavar="NODE", help="what bears on this node: its concepts are the query")
+    kg_query.add_argument("--any", dest="any_term", action="store_true",
+                          help="with several terms, match nodes that answer any of them")
+    kg_query.add_argument("--min-idf", type=float, default=None, metavar="T",
+                          help="admit a neighbour only through a concept this specific (default: chosen by knowledge eval)")
     kg_query.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
     kg_query.add_argument(
         "--class", dest="node_class",
@@ -13658,7 +13678,7 @@ def _build_parser() -> argparse.ArgumentParser:
     kg_eval.add_argument("--split", choices=["dev", "held"], default="dev",
                          help="dev (default), or held: spent once read, and recorded")
     kg_eval.add_argument("--ranker", dest="rankers", action="append", metavar="NAME",
-                         help="random, today or idf; repeat for several (default: all three)")
+                         help="random, today, idf or like; repeat for several (default: all four)")
     kg_eval.add_argument("--labels", action="append", choices=["xref", "citations", "same_subject"],
                          help="label source; repeat for several (default: all three)")
     kg_eval.add_argument("--compare", nargs=2, metavar=("A", "B"),

@@ -334,10 +334,18 @@ def _idf(q: str, corpus: Corpus) -> List[str]:
     return sorted(scores, key=lambda x: (-scores[x], stable_key("idf", x)))
 
 
+def _query_like(q: str, corpus: Corpus) -> List[str]:
+    """The shipping query asked what bears on the query artifact: `knowledge query --like`."""
+    from .knowledge_web import query_knowledge_web
+    r = query_knowledge_web(like=q, kg=corpus.kg())
+    return [str(n["id"]) for n in r["nodes"]]
+
+
 RANKERS: Dict[str, Ranker] = {r.name: r for r in (
     Ranker("random", _random, "the floor: every web node in a seeded random order"),
     Ranker("today", _today, "the shipping knowledge query, run on each of the query's concepts"),
     Ranker("idf", _idf, "reference: nodes sharing a concept, by the summed IDF of the shared concepts"),
+    Ranker("like", _query_like, "the shipping knowledge query --like, at its default --min-idf"),
 )}
 
 
