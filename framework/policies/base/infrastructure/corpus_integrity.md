@@ -182,7 +182,7 @@ The sources measure different relations, and a ranker can be best on one and nea
 
 ### 6.2 The held split is spent once read
 
-A fifth of each source's queries is held out by a stable hash of the query's id, so a query keeps its side as the corpus grows. Run the `dev` split as often as you like. **A `held` run is recorded** in the agent's own state (`.maceff/knowledge_eval/seal.json`) with its time and snapshot, and every later report prints how many held runs came before it.
+A fifth of each source's queries is held out by a stable hash of the query's id, so a query keeps its side as the corpus grows. Run the `dev` split as often as you like. **A `held` run is recorded** in the agent's event log (`knowledge_eval_held_run`, with its seed, snapshot and rankers), and a seed is sealed on its first use the same way (`knowledge_eval_sealed`). Every report prints how many held runs came before it, counted from the log, so deleting a file can't reset it, and a gap in the log shows.
 
 The reason is the one experiments give for a sealed split: a configuration chosen by looking at the figures that judge it measures the choosing. The count doesn't stop anyone. It makes the spending visible, so a reader can tell a first held run from a tenth.
 
@@ -194,7 +194,7 @@ The reason is the one experiments give for a sealed split: a configuration chose
 
 A ranker that reads an artifact's text can be handed the answer: a learning's Cross-References section names exactly the learnings the `xref` labels say are relevant. Such a ranker scores well by copying, not by finding.
 
-Before scoring a ranker that reads text, the eval checks each query's input **by content**: does it contain a target's file stem or title? Above 5% of the pairs it refuses to score, and names the ranker and some of the leaking pairs. The remedy is to remove the field that names the answer from what the ranker reads, then run it again.
+Before scoring a ranker that reads text, the eval checks each query's input **by content**: does it contain a target's file stem or title? Above 5% of the pairs it can audit it refuses to score, and names the ranker and some of the leaking pairs. A target whose file stem and title are both too short to search for can't be audited: it is counted apart and reported, never counted as clean, so it can't pull the share under the limit. The remedy is to remove the field that names the answer from what the ranker reads, then run it again.
 
 A leak can't be found reliably by field name. Experiment 010 found a `Related` line that named the answers in about a third of its pairs, a field nobody had listed as a label. Ask whether the answer is in the question.
 

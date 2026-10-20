@@ -11776,8 +11776,7 @@ def cmd_knowledge_eval(args: argparse.Namespace) -> int:
     try:
         out = evaluate(Corpus(snap, digest), args.rankers or ["random", "today", "idf"],
                        sources=args.labels or ("xref", "citations", "same_subject"), which=args.split,
-                       seed=args.split_seed, seal_path=Path(args.seal) if args.seal else None,
-                       compare=tuple(args.compare) if args.compare else None)
+                       seed=args.split_seed, compare=tuple(args.compare) if args.compare else None)
     except EvalRefused as e:
         print(f"❌ refused: {e}")
         return 2
@@ -13649,7 +13648,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Score rankers against three label sources your past selves wrote: learning\n"
             "cross-references (xref), enhanced citations (citations) and learnings-index\n"
             "clusters (same_subject). A fifth of the queries is held out by a stable hash.\n"
-            "Run dev as often as you like; every held run is recorded in your agent state and\n"
+            "Run dev as often as you like; every held run is recorded in your event log and\n"
             "counted on every later report. When to run it: corpus_integrity, section 6."),
         epilog=("examples:\n"
                 "  macf_tools knowledge eval                       # dev split, every ranker\n"
@@ -13670,7 +13669,6 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="leave out files whose path contains TEXT (an experiment's own folder)")
     kg_eval.add_argument("--split-seed", default="knowledge-eval-heldout", metavar="SEED",
                          help="the seed of the held split; a new seed is a new seal")
-    kg_eval.add_argument("--seal", metavar="PATH", help="the seal record (default: agent state)")
     kg_eval.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
     kg_eval.set_defaults(func=cmd_knowledge_eval)
 

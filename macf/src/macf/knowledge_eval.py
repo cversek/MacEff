@@ -13,15 +13,18 @@ Each artifact with labels is a query. A ranker sees the query artifact, never it
 returns the web's other nodes in its order; the labels say which of them were relevant.
 
 **The seal.** A fifth of the queries, chosen by a stable hash, are held out. Development runs
-use the rest as often as they like. A held run is recorded in the agent's own state with its
-time and the snapshot it scored, and every later run prints how many held runs came before it.
+use the rest as often as they like. A seed is sealed on its first use, and each held run is
+recorded, both as events in the agent's event log, so the count of held runs before this one is
+a fold over the log like every other count in MacEff, and a reset shows as a gap rather than a
+quiet zero.
 A configuration tuned on the split that judges it measures the tuning, so the count is the
 evidence of how far the held figures can be trusted.
 
 **The leak audit.** A ranker that reads text can be handed the answer: a learning's
 Cross-References section names its targets. Before such a ranker is scored, the audit checks
 by content whether each query's input names its target, and refuses to score above a small
-share, naming the pairs.
+share, naming the pairs. A target with no name long enough to search for can't be audited, so
+it is counted apart and left out of the share, never counted as clean.
 
 The method, the figures it must reproduce and the defects it guards against are Experiment
 010's; see the corpus_integrity policy, section 6.
@@ -32,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import random
 import re
 import time
@@ -47,6 +51,8 @@ BOOTSTRAP = 2000
 BOOT_SEED = "knowledge-eval-boot"
 LEAK_LIMIT = 0.05
 LABEL_SOURCES = ("xref", "citations", "same_subject")
+EVENT_SEALED = "knowledge_eval_sealed"
+EVENT_HELD_RUN = "knowledge_eval_held_run"
 
 _LEARNING_FILE = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}_[A-Za-z0-9_\-]+?_learning\.md)")
 _CITE = re.compile(r'\[(OBSERVATION|LEARNING|REFLECTION|JOTEWR|CCP|CHECKPOINT|EXPERIMENT|REPORT|ROADMAP|MISSION|IDEA)\s+'
@@ -137,11 +143,15 @@ def snapshot_bytes(snap: dict) -> bytes:
 
 
 def save_snapshot(snap: dict, path: Path) -> str:
-    """Write *snap* owner-only (it holds the agent's private text) and return its digest."""
+    """Write *snap* owner-only (it holds the agent's private text) and return its digest. The
+    file is created 0600, and an existing one is narrowed before a byte is written, so the text
+    is never readable by others, even briefly."""
     blob = snapshot_bytes(snap)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(blob)
-    path.chmod(0o600)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        os.fchmod(fd, 0o600)
+        f.write(blob)
     return hashlib.sha256(blob).hexdigest()
 
 
@@ -344,19 +354,36 @@ def _names(node: dict) -> List[str]:
     return out
 
 
+@dataclass
+class LeakAudit:
+    """What the audit found: the leaking pairs, the pairs it could check, and the pairs whose
+    target has no name long enough to search for, which are left out of the share."""
+    leaks: List[Tuple[str, str]] = field(default_factory=list)
+    audited: int = 0
+    unauditable: int = 0
+
+    @property
+    def share(self) -> float:
+        return len(self.leaks) / self.audited if self.audited else 0.0
+
+
 def leak_audit(ranker: Ranker, queries: Sequence[str], labels: Dict[str, Set[str]],
-               corpus: Corpus) -> Tuple[float, List[Tuple[str, str]]]:
-    """The share of (query, target) pairs whose ranker input names the target, and the pairs."""
+               corpus: Corpus) -> LeakAudit:
+    """Which (query, target) pairs have a ranker input that names the target."""
+    audit = LeakAudit()
     if ranker.reads is None:
-        return 0.0, []
-    pairs, leaks = 0, []
+        return audit
     for q in queries:
         seen = _norm(ranker.reads(q, corpus))
         for t in sorted(labels[q]):
-            pairs += 1
-            if any(n in seen for n in _names(corpus.nodes[t])):
-                leaks.append((q, t))
-    return (len(leaks) / pairs if pairs else 0.0), leaks
+            names = _names(corpus.nodes[t])
+            if not names:
+                audit.unauditable += 1
+                continue
+            audit.audited += 1
+            if any(n in seen for n in names):
+                audit.leaks.append((q, t))
+    return audit
 
 
 # ---- metrics and intervals ---------------------------------------------------------------------
@@ -409,58 +436,49 @@ def interval(values: List[float], idx: List[List[int]]) -> Dict[str, object]:
     return {"mean": round(mean, 4), "ci95": [round(_percentile(boots, 0.025), 4), round(_percentile(boots, 0.975), 4)]}
 
 
-# ---- the seal ----------------------------------------------------------------------------------
+# ---- the seal, as events ----------------------------------------------------------------------
 
-def default_seal_path() -> Path:
-    from .utils.paths import find_agent_home
-    return find_agent_home() / ".maceff" / "knowledge_eval" / "seal.json"
+def _default_events() -> Iterable[dict]:
+    from .agent_events_log import read_events
+    return read_events(reverse=False, scope="all", only=(EVENT_SEALED, EVENT_HELD_RUN))
 
 
-@dataclass
-class Seal:
-    """The record of the held split: when it was sealed, which ids it held, and every held run."""
-    path: Path
-    data: dict = field(default_factory=dict)
+def _default_append(event: str, data: dict) -> None:
+    from .agent_events_log import append_event
+    if not append_event(event, data):
+        raise EvalRefused(f"could not record {event} in the event log, so this run would not be counted")
 
-    @classmethod
-    def open(cls, path: Path) -> "Seal":
-        data = json.loads(path.read_text()) if path.is_file() else {}
-        return cls(path, data)
 
-    def entry(self, seed: str) -> dict:
-        return self.data.get(seed, {})
-
-    def ensure(self, seed: str, held: Dict[str, List[str]]) -> dict:
-        """Seal *seed* on its first use, before anything is scored under it."""
-        if seed not in self.data:
-            self.data[seed] = {"sealed_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                               "held_ids_sha256": {s: ids_digest(ids) for s, ids in held.items()},
-                               "held_counts": {s: len(ids) for s, ids in held.items()}, "held_runs": []}
-            self._write()
-        return self.data[seed]
-
-    def record_held_run(self, seed: str, snapshot: str, rankers: Sequence[str]) -> int:
-        runs = self.data[seed]["held_runs"]
-        runs.append({"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "snapshot": snapshot[:12], "rankers": list(rankers)})
-        self._write()
-        return len(runs)
-
-    def _write(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.data, indent=2, sort_keys=True) + "\n")
+def seal_state(events: Iterable[dict], seed: str) -> Tuple[Optional[dict], int]:
+    """The seal of *seed* (its event, or None if it was never used) and how many held runs it has
+    had: a fold over the log."""
+    sealed, runs = None, 0
+    for e in events:
+        data = e.get("data") or {}
+        if data.get("seed") != seed:
+            continue
+        if e.get("event") == EVENT_SEALED and sealed is None:
+            sealed = e
+        elif e.get("event") == EVENT_HELD_RUN:
+            runs += 1
+    return sealed, runs
 
 
 # ---- the run -----------------------------------------------------------------------------------
 
 def evaluate(corpus: Corpus, rankers: Sequence[str], sources: Sequence[str] = LABEL_SOURCES,
-             which: str = "dev", seed: str = DEFAULT_SEED, seal_path: Optional[Path] = None,
+             which: str = "dev", seed: str = DEFAULT_SEED,
              compare: Optional[Tuple[str, str]] = None, boot: int = BOOTSTRAP,
-             extra_rankers: Optional[Dict[str, Ranker]] = None) -> dict:
+             extra_rankers: Optional[Dict[str, Ranker]] = None,
+             append: Optional[Callable[[str, dict], None]] = None,
+             events: Optional[Callable[[], Iterable[dict]]] = None) -> dict:
     """Score *rankers* on *sources* over the *which* split, and return the chart and results.
 
     Raises EvalRefused for an unknown ranker or source, and for a ranker whose input names its
-    targets in more than LEAK_LIMIT of the pairs.
+    targets in more than LEAK_LIMIT of the pairs it can audit. The seal and each held run are
+    written through *append* and counted from *events*, the agent's event log by default.
     """
+    append, events = append or _default_append, events or _default_events
     if which not in ("dev", "held"):
         raise EvalRefused(f"--split is dev or held, not {which!r}")
     known = {**RANKERS, **(extra_rankers or {})}
@@ -484,25 +502,37 @@ def evaluate(corpus: Corpus, rankers: Sequence[str], sources: Sequence[str] = LA
                                "unresolved": unresolved, "dev": len(dev), "held": len(held)}
         if s == "same_subject" and not index_text:
             chart["sources"][s]["note"] = "no learnings index in this snapshot"
-    seal = Seal.open(seal_path or default_seal_path())
-    entry = seal.ensure(seed, {s: split_ids[s][1] for s in sources})
-    drift = {s: entry["held_ids_sha256"].get(s) != ids_digest(split_ids[s][1])
-             for s in sources if s in entry["held_ids_sha256"]}
-    chart["seal"] = {"sealed_at": entry["sealed_at"], "held_runs_before": len(entry["held_runs"]),
-                     "held_set_changed_since_sealing": sorted(s for s, d in drift.items() if d)}
+    sealed, held_runs = seal_state(events(), seed)
+    if sealed is None:                       # sealed on first use, before anything is scored
+        append(EVENT_SEALED, {"seed": seed,
+                              "held_ids_sha256": {s: ids_digest(split_ids[s][1]) for s in sources},
+                              "held_counts": {s: len(split_ids[s][1]) for s in sources}})
+        sealed, held_runs = seal_state(events(), seed)
+        if sealed is None:
+            raise EvalRefused("the seal was written but can't be read back from the event log")
+    recorded = sealed["data"]["held_ids_sha256"]
+    chart["seal"] = {"sealed_at": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(sealed.get("timestamp", 0))),
+                     "held_runs_before": held_runs,
+                     "held_set_changed_since_sealing": sorted(s for s in sources if s in recorded
+                                                              and recorded[s] != ids_digest(split_ids[s][1]))}
     # Audit every text-reading ranker before anything is scored.
     for name in rankers:
         r = known[name]
         for s in sources:
             qs = split_ids[s][0 if which == "dev" else 1]
-            share, leaks = leak_audit(r, qs, labelled[s], corpus)
-            if share > LEAK_LIMIT:
-                shown = "; ".join(f"{q} -> {t}" for q, t in leaks[:5])
-                raise EvalRefused(f"ranker {name!r} reads text that names its target in {len(leaks)} of the "
-                                  f"{s} pairs ({share:.0%}, limit {LEAK_LIMIT:.0%}), e.g. {shown}. "
-                                  f"Remove the field that names the answer from what it reads.")
+            audit = leak_audit(r, qs, labelled[s], corpus)
+            if audit.unauditable:
+                chart.setdefault("unauditable", {}).setdefault(name, {})[s] = audit.unauditable
+            if audit.share > LEAK_LIMIT:
+                shown = "; ".join(f"{q} -> {t}" for q, t in audit.leaks[:5])
+                raise EvalRefused(f"ranker {name!r} reads text that names its target in {len(audit.leaks)} of the "
+                                  f"{audit.audited} {s} pairs it could audit ({audit.share:.0%}, limit "
+                                  f"{LEAK_LIMIT:.0%}; {audit.unauditable} more have no name to search for), "
+                                  f"e.g. {shown}. Remove the field that names the answer from what it reads.")
     if which == "held":
-        chart["seal"]["this_held_run"] = seal.record_held_run(seed, corpus.digest, rankers)
+        append(EVENT_HELD_RUN, {"seed": seed, "snapshot": corpus.digest, "rankers": list(rankers),
+                                "sources": list(sources)})
+        chart["seal"]["this_held_run"] = held_runs + 1
     results: Dict[str, Dict[str, dict]] = {}
     rows: Dict[str, Dict[str, List[Dict[str, float]]]] = {}
     for s in sources:
@@ -538,6 +568,9 @@ def format_report(out: dict) -> str:
     if c["seal"]["held_set_changed_since_sealing"]:
         lines.append(f"   note: the held set of {', '.join(c['seal']['held_set_changed_since_sealing'])} "
                      f"has changed since sealing, as the corpus grew")
+    for name, by in c.get("unauditable", {}).items():
+        lines.append(f"   leak audit, {name}: " + ", ".join(f"{n} {s} pairs unauditable (no name to search for)"
+                                                      for s, n in by.items()))
     for s, info in c["sources"].items():
         extra = f", {info['note']}" if info.get("note") else ""
         lines.append(f"   {s}: {info['queries']} queries, {info['pairs']} pairs, {info['unresolved']} unresolved, "

@@ -46,6 +46,27 @@ def corpus():
     return ke.Corpus(snap, "f" * 64)
 
 
+class EventLog:
+    """An in-memory event log: the seal and held runs go through it as they would the agent's."""
+
+    def __init__(self):
+        self.rows = []
+
+    def append(self, event, data):
+        self.rows.append({"event": event, "data": data, "timestamp": 1792000000.0 + len(self.rows)})
+
+    def read(self):
+        return iter(list(self.rows))
+
+    def kw(self):
+        return {"append": self.append, "events": self.read}
+
+
+@pytest.fixture
+def log():
+    return EventLog()
+
+
 def test_labels_come_from_cross_references_citations_and_index_clusters(corpus):
     xref, _ = ke.xref_labels(corpus)
     assert len(xref) == N
@@ -64,28 +85,33 @@ def test_the_split_is_stable_and_a_query_keeps_its_side_as_the_corpus_grows():
     assert set(held) <= set(held2) and set(dev) <= set(dev2)
 
 
-def test_concept_ranking_beats_the_floor_and_today_is_scored_from_the_snapshot(corpus, tmp_path):
-    out = ke.evaluate(corpus, ["random", "today", "idf"], sources=["xref"], seal_path=tmp_path / "seal.json", boot=50)
+def test_concept_ranking_beats_the_floor_and_today_is_scored_from_the_snapshot(corpus, log):
+    out = ke.evaluate(corpus, ["random", "today", "idf"], sources=["xref"], **log.kw(), boot=50)
     r = out["results"]["xref"]
     assert r["idf"]["MRR"]["mean"] > r["random"]["MRR"]["mean"]
     assert r["today"]["returned_share"]["mean"] > 0
 
 
-def test_every_held_run_is_recorded_and_counted_on_the_next(corpus, tmp_path):
-    seal = tmp_path / "seal.json"
-    first = ke.evaluate(corpus, ["idf"], sources=["xref"], seal_path=seal, boot=10)
+def test_every_held_run_is_an_event_and_the_count_is_a_fold_over_the_log(corpus, log):
+    """The seed is sealed by its first run, dev or held; each held run is an event; the count a
+    report prints is read back from the log, so another seed's runs don't count."""
+    first = ke.evaluate(corpus, ["idf"], sources=["xref"], **log.kw(), boot=10)
     assert first["chart"]["seal"]["held_runs_before"] == 0          # sealed by the dev run
-    sealed = json.loads(seal.read_text())[ke.DEFAULT_SEED]
+    sealed = [r for r in log.rows if r["event"] == ke.EVENT_SEALED]
     held_ids = ke.split(ke.xref_labels(corpus)[0], ke.DEFAULT_SEED)[1]
-    assert sealed["held_ids_sha256"]["xref"] == ke.ids_digest(held_ids)
-    one = ke.evaluate(corpus, ["idf"], sources=["xref"], which="held", seal_path=seal, boot=10)
-    two = ke.evaluate(corpus, ["idf"], sources=["xref"], which="held", seal_path=seal, boot=10)
+    assert len(sealed) == 1 and sealed[0]["data"]["held_ids_sha256"]["xref"] == ke.ids_digest(held_ids)
+    one = ke.evaluate(corpus, ["idf"], sources=["xref"], which="held", **log.kw(), boot=10)
+    ke.evaluate(corpus, ["idf"], sources=["xref"], which="held", seed="other", **log.kw(), boot=10)
+    two = ke.evaluate(corpus, ["idf"], sources=["xref"], which="held", **log.kw(), boot=10)
     assert one["chart"]["seal"]["this_held_run"] == 1
     assert two["chart"]["seal"]["held_runs_before"] == 1 and two["chart"]["seal"]["this_held_run"] == 2
-    assert len(json.loads(seal.read_text())[ke.DEFAULT_SEED]["held_runs"]) == 2
+    runs = [r["data"] for r in log.rows if r["event"] == ke.EVENT_HELD_RUN]
+    assert [r["seed"] for r in runs] == [ke.DEFAULT_SEED, "other", ke.DEFAULT_SEED]
+    assert runs[0]["snapshot"] == corpus.digest and runs[0]["rankers"] == ["idf"]
+    assert sum(1 for r in log.rows if r["event"] == ke.EVENT_SEALED) == 2     # one per seed
 
 
-def test_a_ranker_that_reads_the_cross_references_is_refused_by_name(corpus, tmp_path):
+def test_a_ranker_that_reads_the_cross_references_is_refused_by_name(corpus, log):
     """The planted leak: a text ranker whose input includes the section that names the answer."""
     def reads_all(q, c):
         return c.nodes[q]["text"]
@@ -96,25 +122,24 @@ def test_a_ranker_that_reads_the_cross_references_is_refused_by_name(corpus, tmp
 
     leaky = ke.Ranker("leaky", rank, "reads the whole body", reads=reads_all)
     with pytest.raises(ke.EvalRefused, match=r"ranker 'leaky' reads text that names its target"):
-        ke.evaluate(corpus, ["leaky"], sources=["xref"], seal_path=tmp_path / "s.json",
+        ke.evaluate(corpus, ["leaky"], sources=["xref"], **log.kw(),
                     extra_rankers={"leaky": leaky}, boot=10)
 
 
-def test_the_same_ranker_is_scored_once_its_input_no_longer_names_the_answer(corpus, tmp_path):
+def test_the_same_ranker_is_scored_once_its_input_no_longer_names_the_answer(corpus, log):
     """The opposite control: strip the section, and the audit goes quiet."""
     def reads_clean(q, c):
         return re.sub(r"## Cross-References.*", "", c.nodes[q]["text"], flags=re.S)
 
     clean = ke.Ranker("clean", lambda q, c: ke._idf(q, c), "reads the body without its references", reads=reads_clean)
-    out = ke.evaluate(corpus, ["clean"], sources=["xref"], seal_path=tmp_path / "s.json",
+    out = ke.evaluate(corpus, ["clean"], sources=["xref"], **log.kw(),
                       extra_rankers={"clean": clean}, boot=10)
     assert out["results"]["xref"]["clean"]["MRR"]["mean"] > 0
 
 
-def test_two_runs_on_one_snapshot_give_identical_results(corpus, tmp_path):
-    seal = tmp_path / "s.json"
-    a = ke.evaluate(corpus, ["random", "today", "idf"], seal_path=seal, compare=("today", "idf"), boot=100)
-    b = ke.evaluate(ke.Corpus(_snapshot(), "f" * 64), ["random", "today", "idf"], seal_path=seal,
+def test_two_runs_on_one_snapshot_give_identical_results(corpus, log):
+    a = ke.evaluate(corpus, ["random", "today", "idf"], **log.kw(), compare=("today", "idf"), boot=100)
+    b = ke.evaluate(ke.Corpus(_snapshot(), "f" * 64), ["random", "today", "idf"], **log.kw(),
                     compare=("today", "idf"), boot=100)
     assert json.dumps(a["results"], sort_keys=True) == json.dumps(b["results"], sort_keys=True)
     assert a["comparison"] == b["comparison"]
@@ -128,18 +153,44 @@ def test_metrics_rank_a_relevant_item_by_its_position():
 
 
 def test_a_snapshot_saves_owner_only_and_reloads_to_the_same_digest(tmp_path):
+    """Created 0600 whatever the umask, and an existing readable file is narrowed before it is
+    written, so the private text is never readable by others."""
+    import os
     p = tmp_path / "snap.json"
-    digest = ke.save_snapshot(_snapshot(), p)
+    old = os.umask(0o000)
+    try:
+        digest = ke.save_snapshot(_snapshot(), p)
+    finally:
+        os.umask(old)
     assert p.stat().st_mode & 0o777 == 0o600
     assert ke.load_snapshot(p)[1] == digest
+    p.chmod(0o644)
+    ke.save_snapshot(_snapshot(), p)
+    assert p.stat().st_mode & 0o777 == 0o600
 
 
-def test_the_command_scores_a_pinned_snapshot_and_refuses_an_unknown_ranker(tmp_path, capsys):
+def test_a_target_with_no_name_to_search_for_is_unauditable_not_clean(corpus):
+    """Pairs whose target can't be searched for are counted apart and left out of the share, so
+    they can't pull a leaking ranker under the limit."""
+    labels = ke.xref_labels(corpus)[0]                        # labels first: they resolve by file name
+    for nid, n in corpus.nodes.items():
+        if n["type"] == "learnings" and int(nid.split("_")[1]) % 2:
+            n["path"], n["title"] = "/x/a.md", "short"
+    reader = ke.Ranker("reader", ke._idf, "reads the whole body", reads=lambda q, c: c.nodes[q]["text"])
+    audit = ke.leak_audit(reader, sorted(labels), labels, corpus)
+    assert audit.unauditable == N // 2 and audit.audited == N // 2
+    assert audit.share == len(audit.leaks) / audit.audited
+
+
+def test_the_command_scores_a_pinned_snapshot_and_refuses_an_unknown_ranker(tmp_path, capsys, monkeypatch):
     from macf.cli import cmd_knowledge_eval
     p = tmp_path / "snap.json"
     ke.save_snapshot(_snapshot(), p)
-    base = dict(snapshot=str(p), save_snapshot=None, exclude=None, rankers=["idf"], labels=["xref"],
-                split="dev", split_seed="t", seal=str(tmp_path / "seal.json"), compare=None, json_output=True)
+    log = EventLog()
+    monkeypatch.setattr(ke, "_default_append", log.append)
+    monkeypatch.setattr(ke, "_default_events", log.read)
+    base = {"snapshot": str(p), "save_snapshot": None, "exclude": None, "rankers": ["idf"], "labels": ["xref"],
+            "split": "dev", "split_seed": "t", "compare": None, "json_output": True}
     assert cmd_knowledge_eval(Namespace(**base)) == 0
     assert json.loads(capsys.readouterr().out)["results"]["xref"]["idf"]["MRR"]["mean"] > 0
     assert cmd_knowledge_eval(Namespace(**{**base, "rankers": ["nope"]})) == 2
