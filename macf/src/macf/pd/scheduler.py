@@ -465,7 +465,9 @@ class Scheduler:
             when = OneShot(datetime.fromisoformat(entry["when"]))
         except ValueError:
             when = parse_when(entry["when"], tz, start, start=start)
-        due = when.next_after(self.entry_fired.get(entry_id) or start - timedelta(seconds=1))
+        # Strictly after the start: a recurrence counts its start as its first occurrence, and an
+        # entry's start is the moment it was made, so firing it would wake on creation.
+        due = when.next_after(self.entry_fired.get(entry_id) or start)
         if due is None or due > now:
             return
         missed = 0

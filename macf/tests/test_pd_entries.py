@@ -122,6 +122,27 @@ def test_a_due_entry_fires_once_through_the_channel_even_across_a_restart(tmp_pa
     assert len(channel.received) == 2                          # nothing fires again
 
 
+def test_a_recurring_entry_first_fires_one_step_after_it_is_made(tmp_path):
+    """A recurrence counts its start as its first occurrence, and an entry's start is the moment
+    it was made. The scheduler fires the first occurrence strictly after that, as the list and
+    show views say, never the instant the entry is added (a trial finding, 20 October)."""
+    from channel_receiver import ChannelReceiver
+    from macf.pd.entries import EVENT_ENTRY_ADDED
+    from test_pd_schedule import CARD, Log, at, make_scheduler
+    log, now = Log(), [at("2026-10-19 12:00")]
+    entry_id = new_entry_id()
+    log.append(EVENT_ENTRY_ADDED, {"agent": CARD, "id": entry_id, "when": "rrule:FREQ=MINUTELY;INTERVAL=50",
+                                   "zone": "UTC", "start": "2026-10-19T12:00:00+00:00", "action": "wake",
+                                   "missed": "skip"})
+    channel = ChannelReceiver(tmp_path / "agent")
+    s = make_scheduler(tmp_path, [], log, now, on_notice=channel)
+    s.tick()
+    assert channel.received == []                              # made at 12:00: nothing due yet
+    now[0] = at("2026-10-19 12:50")
+    s.tick()
+    assert channel.received == [("pd_entry_due", entry_id)]
+
+
 def test_a_skip_entry_records_a_missed_firing_and_says_nothing(tmp_path):
     """An entry whose missed policy is skip, due while the daemon was down, is recorded and not
     notified; on time, it notifies (the scheduler design, 3.5)."""
