@@ -132,6 +132,15 @@ class Daemon:
         self._channel_listener: Optional[socket.socket] = None
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound
         self.notifier = Notifier(self.home, self.core.declaration.notice_routes)
+        #: The agent's duties, hosted so a duty that falls due wakes it (the scheduler design, 4.4).
+        from macf.agent_events_log import append_event, read_events
+        from macf.pd.duties import HostedDuties
+        from macf.roles.location import ROLES_DIR_ENV
+        from macf.roles.source import EVENT as DUTY_EVENT
+        roles = Path(os.environ.get(ROLES_DIR_ENV) or self.home / "agent" / "public" / "roles")
+        self.duties = HostedDuties(self.card, roles, append_event,
+                                   lambda: read_events(reverse=False, scope="all", only=(DUTY_EVENT,)),
+                                   self.notifier.raise_notice, time.monotonic)
         self.core.on_notice = self.notifier.raise_notice    # the core's own notices (R60)
         self.scheduler.on_notice = self.notifier.raise_notice   # a denied prompt run (R32)
         if any(u.kind == "session" for u in self.core.declaration.units) \
@@ -203,6 +212,7 @@ class Daemon:
         if self.unread_mail is not None:
             self.unread_mail.boot()
         self.scheduler.boot()
+        self.duties.boot()
 
     def _notice_denied_grants(self) -> None:
         """Owe the agent a notice for each declared grant the last install found denied
@@ -282,6 +292,7 @@ class Daemon:
                     self.dark_channel.tick(self.core.session_incarnation(), bool(self.notifier.channels))
                 if self.unread_mail is not None:
                     self.unread_mail.tick(self.core.session_active_since())
+                self.duties.tick()
                 self._keep_record()
         finally:
             for conn in self.notifier.channels:

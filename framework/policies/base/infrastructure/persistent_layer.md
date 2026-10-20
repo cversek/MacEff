@@ -128,6 +128,7 @@ A channel event carries **a notice and nothing else**: the source's own fixed wo
   - `pd_run_failed`: a scheduled run of yours failed, was killed at its limit, or couldn't start [MIS-0002-R32 (run_MUST_fail_on_prompt)]. See 10.4.
   - `pd_schedule_changed`: a schedule of yours changed since the operator last ran `pd install`, so your daemon isn't running it [MIS-0002-R33 (run_MUST-NOT_change_schedules)]. See 10.4.
   - `pd_entry_due`: an entry you set is due. The notice's id is the entry's, and the entry is your own note, never the operator's word.
+  - `pd_duty_due`: a duty of yours became due soon or overdue. The event log's `duty_tier_crossed` entry names it, and one that crossed while no daemon ran is announced once at its start.
 - The daemon's notice about your mail:
   - `pd_unread_mail`: mail has waited in your pickup box past your declared threshold [MIS-0002-R55 (unread_mail_MUST_raise_notice)]. See 1.11.
 
