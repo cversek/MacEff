@@ -9,7 +9,7 @@
 **Created**: 2026-10-20
 **Updates**: none
 **Supersedes**: none
-**Lands-in**: planned: the knowledge query and a knowledge index in `macf` (replacing the policy recommender's index); a push behind an off-by-default switch; policy text in scholarship, corpus_integrity, search_service and policy_awareness; framework/glossary.md
+**Lands-in**: planned: the knowledge query and a knowledge index in `macf` (replacing the policy recommender's index), served by a search unit of each agent's primal daemon; a push behind an off-by-default switch; policy text in scholarship, corpus_integrity, search_service and policy_awareness; framework/glossary.md
 **Resolution**: none
 
 <!--
@@ -108,6 +108,7 @@ The operator runs `macf_tools knowledge push status` and sees, for the last day,
 ## 5 Terms
 
 - **knowledge index**: the searchable store of every knowledge-web artifact and policy section, with a vector view, a full-text view and the concepts of each entry.
+- **search unit**: the managed unit of an agent's primal daemon that holds the embedding model and the knowledge index warm, and answers every reader's searches.
 - **trace**: a query built from a decaying record of the session's recent events, weighted by source: the task tree, the knowledge web the agent touched, and the conversation.
 - **push**: an item from the knowledge index placed into an agent's context without the agent asking.
 - **push moment**: a point in a session at which a push may happen: a shallow operator prompt, an artifact write, or every Nth tool call of autonomous work.
@@ -126,6 +127,7 @@ The operator runs `macf_tools knowledge push status` and sees, for the last day,
 - **R06** [MUST · decidable: macf/tests/test_knowledge_index.py::test_the_index_is_owner_only (planned)] The knowledge index MUST be readable by the agent's account only. (index_MUST_be_owner_only)
 - **R07** [SHOULD · judgment: the operator, at review of the landing pull request] The knowledge index SHOULD hold task notes by default, and transcript spans only when the operator turns them on. (spans_SHOULD_need_operator_flag)
 - **R08** [MUST · decidable: macf/tests/test_knowledge_index.py::test_the_recommender_reads_the_knowledge_index (planned)] The policy recommender MUST search the knowledge index, and no index of its own. (recommender_MUST_use_knowledge_index)
+- **R26** [MUST · judgment: the head maintainer, at review of each landing pull request] The knowledge index and its embedding model MUST be served by one warm unit of each agent's primal daemon, which every reader shares. (index_MUST_be_served_by_daemon_unit)
 
 ### 6.2 The knowledge query
 
@@ -162,6 +164,7 @@ The operator runs `macf_tools knowledge push status` and sees, for the last day,
 - **R06**: the index holds private artifacts' text.
 - **R07**: the operator's direction on Oct 17 (20:45): task notes by default, transcript spans by flag. Spans hold the most private text and the least distilled knowledge.
 - **R08**: two indexes of one corpus drift apart. One index, kept fresh, serves three readers.
+- **R26**: MIS-0002 made every long-lived process a managed unit of the agent's primal daemon, started, supervised, restarted and reported by it, and the repo owner held new services back until that layer could carry them. A warm model is a long-lived process: as a unit it has one supervisor, a memory limit and liveness events, and no hook or command ever loads the model itself. One unit for every reader means one model in memory per agent, not one per caller. The repo owner's direction, 2026-10-20: "a single warmed model loader and cached search service that is a unit of the Primal Daemon".
 
 ### The query
 
@@ -209,7 +212,7 @@ The operator runs `macf_tools knowledge push status` and sees, for the last day,
 - **The knowledge query's output changes:** ranked, scored, with new fields. Under the development-phase rule there is no compatibility mode for the old order.
 - **The policy recommender's index is replaced.** A deployment rebuilds once with `macf_tools knowledge index`.
 - **The push changes nothing until the operator turns it on,** per agent.
-- **Dependencies:** the index uses the embedding model and vector store the recommender already uses; both stay optional. Without them the query falls back to concept ranking and says so (R04), and the push abstains (R24).
+- **Dependencies:** the index uses the embedding model and vector store the recommender already uses; both stay optional. A deployment declares the search unit in its primal daemon's declaration. Without them the query falls back to concept ranking and says so (R04), and the push abstains (R24).
 
 ## 10 Security and Safety
 
@@ -230,6 +233,7 @@ The operator runs `macf_tools knowledge push status` and sees, for the last day,
 | R06 | decidable | macf/tests/test_knowledge_index.py::test_the_index_is_owner_only | planned |
 | R07 | judgment | the operator, at review of the landing pull request | pending |
 | R08 | decidable | macf/tests/test_knowledge_index.py::test_the_recommender_reads_the_knowledge_index | planned |
+| R26 | judgment | the head maintainer, at review of each landing pull request | standing |
 | R09 | decidable | macf/tests/test_knowledge_query.py::test_results_are_ranked_and_scored | planned |
 | R10 | decidable | macf/tests/test_knowledge_query.py::test_prose_and_like_use_the_hybrid_search | planned |
 | R11 | decidable | macf/tests/test_knowledge_query.py::test_lineage_mode_ranks_continuations | planned |
@@ -255,7 +259,7 @@ The operator runs `macf_tools knowledge push status` and sees, for the last day,
 ## 12 Landing Plan
 
 Planned, and re-planned from whatever the deliberation accepts:
-1. **The knowledge index and the query** (R01 to R12), replacing the recommender's index, with the scholarship and search_service text. The proposed home is MacEff's existing search service, the warm daemon that already serves policy recommendations over a Unix socket in about 20 ms: a knowledge-index retriever beside its policy retriever, so the query, the recommender and the push share one warm process and one index, and no hook loads a model.
+1. **The knowledge index and the query** (R01 to R12), replacing the recommender's index, with the scholarship and search_service text. Its home is a **search unit** of each agent's primal daemon (R26): one warm process that holds the embedding model and the index, so the query, the recommender and the push share one model in memory and no hook or command loads it. MacEff's existing search-service daemon, which serves policy recommendations warm over a Unix socket, is folded into that unit rather than kept beside it.
 2. **A host trial of the push,** outside MacEff's hooks, as evidence for this deliberation, on the author's host only, by the operator's direction (Oct 17, 20:45). Its conclusion is posted here as evidence, not as a decision.
 3. **The push in MacEff, off by default** (R13 to R25), with policy_awareness section 2.5 changed as accepted (Q01).
 4. **The seats,** at their next rebuild, in the operator's window.
@@ -280,6 +284,7 @@ None yet.
 
 - 2026-10-20: first draft.
 - 2026-10-20: the landing plan names the search service as the index's home, after the repo owner asked how hybrid search runs.
+- 2026-10-20: R26 and the term search unit: the index and its model are served by one warm unit of each agent's primal daemon, at the repo owner's direction; the existing search-service daemon folds into it.
 - 2026-10-20: the repo owner designated the macOS maintainer as Secretary, and holds the deliberation until MIS-0004 is decided (#751).
 
 ## Wiki-Links
