@@ -338,6 +338,31 @@ def run_pass(config: SenderConfig, now: Optional[datetime] = None) -> int:
     return sum(deliver(config.alert_command, s, ledger, day) for s in sends)
 
 
+def render_systemd(config_path: Path, every_s: int = 60, python: str = sys.executable) -> Dict[str, str]:
+    """The Linux user units: a oneshot service and its timer. The sender is its own process on its
+    own timer, outside every session and every daemon, so a reminder goes while both are down.
+    Installing them is the operator's act, with an alert command the operator chooses."""
+    service = (
+        "[Unit]\n"
+        "Description=MacEff sender: reminders and the brief to the operator\n\n"
+        "[Service]\n"
+        "Type=oneshot\n"
+        f"ExecStart={python} -m macf.pd.sender --config {config_path}\n"
+    )
+    timer = (
+        "[Unit]\n"
+        "Description=Run the MacEff sender\n\n"
+        "[Timer]\n"
+        f"OnBootSec={every_s}\n"
+        f"OnUnitActiveSec={every_s}\n"
+        "AccuracySec=5\n\n"
+        "[Install]\n"
+        "WantedBy=timers.target\n"
+    )
+    return {f"{interface.PD_IDENTIFIER}_sender.service": service,
+            f"{interface.PD_IDENTIFIER}_sender.timer": timer}
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m macf.pd.sender",
                                      description="One pass of the sender: what is due goes to the operator.")

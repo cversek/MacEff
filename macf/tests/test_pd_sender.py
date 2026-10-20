@@ -236,3 +236,24 @@ def test_quiet_hours_hold_the_brief_too(tmp_path):
                           brief_at="06:00", brief_grace_min=0, quiet=[QuietWindow(start="22:00", end="07:00")])
     assert run_pass(config, at("2026-10-19 06:30")) == 0
     assert run_pass(config, at("2026-10-19 07:00")) == 1
+
+
+def test_the_sender_runs_from_its_own_timer_and_main_runs_one_pass(tmp_path):
+    """The rendered units run one pass of this module on a timer, outside any session; main
+    reads the config they name and refuses one it can't use."""
+    import json
+    import sys
+
+    from macf.pd.sender import main, render_systemd
+    units = render_systemd(tmp_path / "sender.json", every_s=60, python="/usr/bin/python3")
+    service = next(text for name, text in units.items() if name.endswith(".service"))
+    timer = next(text for name, text in units.items() if name.endswith(".timer"))
+    assert f"ExecStart=/usr/bin/python3 -m macf.pd.sender --config {tmp_path / 'sender.json'}" in service
+    assert "OnUnitActiveSec=60" in timer and "WantedBy=timers.target" in timer
+
+    config = tmp_path / "sender.json"
+    config.write_text(json.dumps({"homes": [], "alert_command": [sys.executable, "-c", "pass"],
+                                  "state_dir": str(tmp_path / "state")}))
+    assert main(["--config", str(config)]) == 0 and (tmp_path / "state").is_dir()
+    config.write_text("{}")
+    assert main(["--config", str(config)]) == 2
