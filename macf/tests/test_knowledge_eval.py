@@ -195,3 +195,18 @@ def test_the_command_scores_a_pinned_snapshot_and_refuses_an_unknown_ranker(tmp_
     assert json.loads(capsys.readouterr().out)["results"]["xref"]["idf"]["MRR"]["mean"] > 0
     assert cmd_knowledge_eval(Namespace(**{**base, "rankers": ["nope"]})) == 2
     assert "unknown ranker 'nope'" in capsys.readouterr().out
+
+
+def test_held_runs_go_through_the_real_event_log_and_a_failed_append_refuses(corpus, isolated_events_log, monkeypatch):
+    """No stand-in log: the seal and two held runs are appended to the agent's event log (isolated
+    here), the count is read back from it, and a run whose event can't be appended is refused
+    rather than scored uncounted (the head maintainer's surviving plant on #750)."""
+    from macf import agent_events_log
+    ke.evaluate(corpus, ["idf"], sources=["xref"], which="held", boot=10)
+    second = ke.evaluate(corpus, ["idf"], sources=["xref"], which="held", boot=10)
+    assert second["chart"]["seal"]["held_runs_before"] == 1 and second["chart"]["seal"]["this_held_run"] == 2
+    written = [json.loads(line)["event"] for line in isolated_events_log.read_text().splitlines()]
+    assert written.count(ke.EVENT_SEALED) == 1 and written.count(ke.EVENT_HELD_RUN) == 2
+    monkeypatch.setattr(agent_events_log, "append_event", lambda *a, **k: False)
+    with pytest.raises(ke.EvalRefused, match="could not record knowledge_eval_held_run"):
+        ke.evaluate(corpus, ["idf"], sources=["xref"], which="held", boot=10)
