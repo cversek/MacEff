@@ -1,8 +1,5 @@
 ### Fixed
 
 - **Taint reads each session back to its own boundary** (`pd/taint.py`, policy `persistent_layer`, the scheduler's taint paragraph). With a second session on the same agent, a fork or a resume, the other session's start or compaction used to end the scan and hide what the asking session read before it. The daemon can't name the asking session without taking the agent's word, so it reads every session back to its own start or compaction. What any of them read marks the entry: an over-count, failing closed like the rest of the heuristic. Found in review on #744.
-
-### Tests
-
 - **A duty crossing reaches the channel** (`test_pd_duties.py`). A real duty in a real roles store, overdue and due soon, is announced through the channel's own record (`ChannelReceiver`). A duty id the channel would refuse fails it. Found in review on #744.
 - **A check entry's run states its lateness** (`test_pd_entries.py`), started or refused before it starts, in the done record its notice points to (R34). Found in review on #757.
