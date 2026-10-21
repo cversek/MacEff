@@ -261,6 +261,21 @@ def test_a_queued_channel_message_takes_its_server_from_the_delivery(monkeypatch
     assert [(d["source"], d["channel_server"]) for _, d in run.emitted] == [("channel", "plugin:telegram:operator")]
 
 
+
+def test_a_delivered_queued_copy_counts_only_by_its_declared_server(monkeypatch, tmp_path):
+    """MIS-0002-R107 and R106 on the queued path: when the delivery's record names the channel,
+    that name is what counts, so an undeclared server and the MacEff channel are not the
+    operator, even when the queued copy itself named a declared one (found in review)."""
+    _declare(_declared(["plugin:telegram:telegram"]))
+
+    def emitted(server):
+        delivered = _user(TELEGRAM, {"kind": "channel", "server": server}, isMeta=True)
+        run = _Monitor(monkeypatch, tmp_path).feed(_queued(TELEGRAM), delivered)
+        return [(d["source"], d["channel_server"]) for _, d in run.emitted]
+    assert emitted("plugin:discord:discord") == []
+    assert emitted("plugin:maceff-channel:maceff") == []
+    assert emitted("plugin:telegram:telegram") == [("channel", "plugin:telegram:telegram")]
+
 ACTIVITY_DETECTORS = {"detect_user_activity", "detect_permission_denial",
                       "detect_dialog_answer", "detect_mid_turn_enqueue"}
 OTHER_DETECTORS = {"detect_compact_boundary", "detect_api_error", "detect_context_collapse",
