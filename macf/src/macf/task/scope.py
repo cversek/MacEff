@@ -80,18 +80,29 @@ def set_scope(task_ids: List[str], parent_expanded: bool = False,
               expanded_from: Optional[str] = None, session_id: str = "") -> dict:
     """Activate scope for a set of task IDs.
 
-    Updates MTMD scope_status to "active" on each task file.
+    A task that is already completed is not scoped: it has no work left for the gate to
+    wait on, and the replay below can't see a task's status, so listing it again would make
+    it read active until something removes it by hand (#610). It's returned, so the caller
+    can say so.
 
     Returns:
-        Dict with 'tasks_scoped' (list of IDs), 'parent_expanded' (bool),
-        'expanded_from' (parent ID or None), 'success' (bool).
+        Dict with 'tasks_scoped' (list of IDs), 'skipped_completed' (list of IDs),
+        'parent_expanded' (bool), 'expanded_from' (parent ID or None), 'success' (bool).
     """
+    from .reader import TaskReader
+    reader = TaskReader()
+    skipped = [str(t) for t in task_ids
+               if (task := reader.read_task(str(t))) is not None and task.status == "completed"]
+    task_ids = [t for t in task_ids if str(t) not in skipped]
     result = {
         "tasks_scoped": list(task_ids),
+        "skipped_completed": skipped,
         "parent_expanded": parent_expanded,
         "expanded_from": expanded_from,
         "success": False,
     }
+    if not task_ids:
+        return result
 
     # Event for history
     success = append_event(
@@ -436,8 +447,11 @@ def add_to_scope(task_ids: List[str], session_id: str = "") -> dict:
         session_id: current session
 
     Returns:
-        Dict with 'added_ids', 'skipped_ids' (already in scope), 'success'.
+        Dict with 'added_ids', 'skipped_ids' (already in scope, or completed, as in
+        ``set_scope``), 'success'.
     """
+    from .reader import TaskReader
+    reader = TaskReader()
     result = {"added_ids": [], "skipped_ids": [], "success": False}
     scope = get_scope_state()
     addable: List[str] = []
@@ -445,6 +459,10 @@ def add_to_scope(task_ids: List[str], session_id: str = "") -> dict:
         sid = str(tid)
         if sid in scope:
             result["skipped_ids"].append({"id": sid, "reason": f"already_in_scope ({scope[sid]})"})
+            continue
+        task = reader.read_task(sid)
+        if task is not None and task.status == "completed":
+            result["skipped_ids"].append({"id": sid, "reason": "completed"})
             continue
         addable.append(sid)
 

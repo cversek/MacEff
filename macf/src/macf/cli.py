@@ -8543,8 +8543,13 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
     result = set_scope(expanded, parent_expanded=len(expanded) > len(raw_ids),
                        expanded_from=raw_ids[0] if len(raw_ids) == 1 else None)
 
+    for _done in result.get("skipped_completed", []):
+        print(f"⚠️  Task #{_done} is completed, so it was not scoped")
+    if not result["success"] and not result["tasks_scoped"]:
+        print("❌ No open tasks to scope")
+        return 1
     if result["success"]:
-        print(f"✅ Scoped {len(expanded)} task(s):")
+        print(f"✅ Scoped {len(result['tasks_scoped'])} task(s):")
         for _pid in _kept_paused:
             # Re-listing a paused task does not answer what it waits on; unpause is explicit.
             print(f"   ⏸️  #{_pid} stays paused (macf_tools task scope unpause {_pid} to resume it)")
@@ -8559,7 +8564,7 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
             marker = "📌" if is_parent else "  └─"
             print(f"   {marker} #{tid} {subject}")
         if result["parent_expanded"]:
-            print(f"   (parent #{result['expanded_from']} expanded to {len(expanded) - len(raw_ids)} children)")
+            print(f"   (parent #{result['expanded_from']} expanded to {len([t for t in result['tasks_scoped'] if t not in raw_ids])} children)")
         print(f"   Breadcrumb: {get_breadcrumb()}")
 
         # Show full scope state after adding
