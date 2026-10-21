@@ -431,6 +431,29 @@ class Declaration(_Closed):
         return self
 
     @model_validator(mode="after")
+    def _routes_are_ones_that_are_served(self) -> "Declaration":
+        # A route that reaches nobody is refused, not accepted and dropped (MIS-0002-R42
+        # (notice_source_MUST_be_routed); the repo owner's ruling of 2026-10-21, option A). The
+        # agent's route is served for every source; the operator's only for unread mail, by the
+        # outside watch; holding until the operator is present is served nowhere yet. A source
+        # routed to `both` keeps its agent half, and the daemon says at start that the operator's
+        # half is unserved (half_served_routes), so a half-served route never stops a daemon.
+        for source, route in sorted(self.notice_routes.items()):
+            if route == "held_until_present":
+                raise ValueError(f"notice_routes routes {source!r} to 'held_until_present', which no "
+                                 f"part of the layer serves yet, so its notices would reach nobody; "
+                                 f"route it to 'agent'")
+            if route == "operator" and source != UNREAD_MAIL_SOURCE:
+                raise ValueError(f"notice_routes routes {source!r} to 'operator', but only "
+                                 f"{UNREAD_MAIL_SOURCE!r} reaches the operator today (by the outside "
+                                 f"watch), so its notices would reach nobody; route it to 'agent'")
+        return self
+
+    def half_served_routes(self) -> List[str]:
+        """Sources routed to `both` whose operator half nothing serves yet: every one but unread mail."""
+        return sorted(s for s, r in self.notice_routes.items() if r == "both" and s != UNREAD_MAIL_SOURCE)
+
+    @model_validator(mode="after")
     def _unread_mail_notice_is_routed(self) -> "Declaration":
         # A threshold with nowhere to send its notice would be enforcement nobody hears
         # (MIS-0002-R42 (notice_source_MUST_be_routed)).
@@ -445,7 +468,7 @@ class Declaration(_Closed):
         # (MIS-0002-R32 (run_MUST_fail_on_prompt)). Only the agent's routes deliver a daemon
         # notice today, so any other route would reach nobody.
         if any(s.target == "isolated" and isinstance(s.run, PromptRun) for s in self.schedules) \
-                and self.notice_routes.get(RUN_FAILED_SOURCE) not in ("agent", "both"):
+                and self.notice_routes.get(RUN_FAILED_SOURCE, "agent") not in ("agent", "both"):
             raise ValueError(f"an isolated prompt run is declared, so notice_routes must route "
                              f"{RUN_FAILED_SOURCE!r} to 'agent' or 'both', the routes its notice is "
                              f"delivered on")
