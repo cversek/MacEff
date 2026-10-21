@@ -1726,10 +1726,10 @@ def _run_task_start(task_id: int, session_uuid: Optional[str] = None,
     return True
 
 
-def _run_scope_set(task_ids: List[int], timer_minutes: int = 0) -> bool:
+def _run_scope_set(task_ids: List[int], timer_minutes: int = 0) -> int:
     """Activate scope for the given task IDs programmatically.
 
-    Returns True on success, False on failure.
+    Returns how many were scoped (a completed or archived task is left out), or 0 on failure.
     """
     from .scope import set_scope
     from ..agent_events_log import append_event
@@ -1738,7 +1738,7 @@ def _run_scope_set(task_ids: List[int], timer_minutes: int = 0) -> bool:
     str_ids = [str(tid) for tid in task_ids]
     result = set_scope(str_ids)
     if not result.get("success"):
-        return False
+        return 0
 
     if timer_minutes > 0:
         from .scope import get_active_timer
@@ -1751,7 +1751,7 @@ def _run_scope_set(task_ids: List[int], timer_minutes: int = 0) -> bool:
                 "timer_end_epoch": timer_end,
                 "session_id": _get_sid(),
             })
-    return True
+    return len(result["tasks_scoped"])
 
 
 def _run_mode_set_work(mode: str) -> bool:
@@ -2010,11 +2010,12 @@ def create_sprint(
         try:
             if not _run_task_start(task_id, session_uuid=session_uuid):
                 raise RuntimeError(f"task start #{task_id} failed")
-            if not _run_scope_set(scope_ids, timer_minutes=0):
+            scoped = _run_scope_set(scope_ids, timer_minutes=0)
+            if not scoped:
                 raise RuntimeError("scope set failed")
             if not _run_mode_set_work("SPRINT"):
                 raise RuntimeError("mode set-work SPRINT failed")
-            scope_count = len(scope_ids) - 1  # exclude sprint itself
+            scope_count = scoped - 1  # what was scoped, less the sprint itself
             launch_note = (
                 f"SPRINT: Launched. Goal: {effective_goal}. "
                 f"Scope: {scope_count} task(s)."
