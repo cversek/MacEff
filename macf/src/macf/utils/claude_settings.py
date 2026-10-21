@@ -8,7 +8,7 @@ to user's Claude Code settings (autocompact, etc.).
 import json
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 
 def get_autocompact_setting(project_root: Optional[Path] = None) -> bool:
@@ -702,6 +702,17 @@ def _version_tuple(version: str) -> tuple:
         raise ValueError(f"cannot read a Claude Code version from {version!r}")
 
 
+def _option_value(argv: List[str], option: str) -> Optional[str]:
+    """An option's value in an argument list, in either form argparse takes: ``--opt value``
+    or ``--opt=value``. None when it's absent or has no value."""
+    for i, word in enumerate(argv):
+        if word == option and i + 1 < len(argv):
+            return argv[i + 1]
+        if word.startswith(option + "="):
+            return word[len(option) + 1:] or None
+    return None
+
+
 def session_project_root(agent_home: Optional[Path] = None) -> tuple:
     """The project this agent's session starts in, and where that was read: the settings the
     client applies to the session are that project's (MIS-0002-R126). The session unit's
@@ -715,11 +726,13 @@ def session_project_root(agent_home: Optional[Path] = None) -> tuple:
         units = json.loads(declaration_path(home).read_text()).get("units", [])
     except (OSError, ValueError, AttributeError):
         units = []
-    for unit in units:
-        command = [str(word) for word in (unit.get("command") or [])] if isinstance(unit, dict) else []
-        if unit.get("kind") == "session" and "--project-dir" in command[:-1]:
-            value = command[command.index("--project-dir") + 1].replace("{agent_home}", str(home))
-            return Path(value), "the session unit's --project-dir"
+    for unit in units if isinstance(units, list) else []:
+        if not isinstance(unit, dict) or unit.get("kind") != "session":
+            continue
+        command = [str(word) for word in (unit.get("command") or [])]
+        value = _option_value(command, "--project-dir")
+        if value:
+            return Path(value.replace("{agent_home}", str(home))), "the session unit's --project-dir"
     try:
         from .harness import default_params, load_settings
         installed = load_settings(default_params(home=home)).project_dir
