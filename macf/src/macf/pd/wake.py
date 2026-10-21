@@ -21,20 +21,27 @@ because something went wrong without it:
   raised would approve it.
 - **Sent is recorded at the send**, before the turn is verified, so a misread status can't
   send it again; then the turn's start is looked for, and the log says whether it came.
-- **A refractory window and a daily cap**, each said once rather than on every poll.
+- **A refractory window and a daily cap**, each said once rather than on every poll. A
+  wake the window holds is said as a hold like any other, with the seconds left, so a
+  late wake always has a reason in the log.
+- **A dialog or draft hold keeps the screen it read**, private to the agent, so what the
+  fallback took for a dialog can be checked afterwards against the classifier.
 
 The screen is read and typed into through a ``Pane``; ``TmuxPane`` reaches a session
 unit's pane through its own tmux server.
 """
 from __future__ import annotations
 
+import math
+import os
 import re
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Callable, Iterable, List, Optional, Protocol
+from pathlib import Path
+from typing import Callable, Iterable, List, Optional, Protocol, Tuple
 
 from macf.agent_events_log import append_event
 from macf.utils.input_origin import WAKE_OPENING
@@ -43,7 +50,9 @@ from macf.utils.input_origin import WAKE_OPENING
 MESSAGE_ID = re.compile(r"^msg-\d{10}-[0-9a-f]{12}$")
 #: How many ids a wake names before "+N more".
 MAX_NAMED = 8
-#: Seconds after a wake before another may be typed; arrivals meanwhile wait for the next.
+#: Seconds after a wake before another may be typed; arrivals meanwhile wait for the next. The
+#: declaration's ``wake_refractory_s`` defaults to the same value (pinned equal by a test), and
+#: the agent may pace it (``pace_refusal``, ``window_at_boot``).
 REFRACTORY_S = 600.0
 #: Wakes per day at most; reaching it is recorded once.
 DAILY_CAP = 48
@@ -61,9 +70,21 @@ EVENT_HELD = "pd_wake_held"
 EVENT_RELEASED = "pd_wake_released"
 EVENT_TURN = "pd_wake_turn"
 EVENT_CAP = "pd_wake_cap_reached"
+#: The agent, or the operator, paced the wake over the control socket (persistent_layer 1.9):
+#: the window asked for, the one it replaced, and who asked, why and from which process. The
+#: next daemon reads the newest back at its start.
+EVENT_PACED = "pd_wake_paced"
 
 # The screen states, from the most to the least cautious.
 DIALOG, RUNNING, DRAFT, WAKE_IN_BOX, IDLE_EMPTY = "dialog", "running", "draft", "wake_in_box", "idle_empty"
+#: The hold reason while the refractory window runs: the agent's pace, not its screen.
+REFRACTORY = "refractory"
+
+#: The holds whose screen is kept: the two a person may be behind, and the two the
+#: Oct 17 demo could not explain afterwards.
+SCREEN_KEPT_FOR = (DIALOG, DRAFT)
+#: Saved screens kept per agent, the newest; older ones are removed as new ones are written.
+SCREENS_KEPT = 20
 
 #: A border of the input box: a run of rule characters, which since client 2.1.300 may be
 #: broken once by a label (the session's name, near the right end of the top border).
@@ -77,6 +98,55 @@ _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 _SPINNER = re.compile(r"…\s*\((?:[^()]*?·\s*)?(\d+h )?(\d+m )?\d+s")
 _DIALOG_MARKERS = ("esc to cancel", "enter to select", "do you want to")
 _RUNNING_MARKER = "esc to interrupt"
+
+
+def pace_refusal(wanted_s: Optional[float], floor_s: Optional[float],
+                 ceiling_s: Optional[float] = None) -> Optional[str]:
+    """Why a pace is refused, or None. Only the declaration sets the floor and the ceiling: a pace
+    may lengthen the window up to the ceiling, or shorten it down to the floor, and never past
+    either. None asks for the declared window, which the declaration holds between the two."""
+    if wanted_s is None:
+        return None
+    if not math.isfinite(wanted_s):
+        return f"{wanted_s!r} is not a window: a pace is a finite number of seconds"
+    if floor_s is not None and wanted_s < floor_s:
+        return (f"{wanted_s:g} s is under the declared floor of {floor_s:g} s, and only the "
+                f"declaration sets the floor")
+    if ceiling_s is not None and wanted_s > ceiling_s:
+        return (f"{wanted_s:g} s is over the declared ceiling of {ceiling_s:g} s, and only the "
+                f"declaration sets the ceiling: past it, the agent would go unwoken longer than a "
+                f"held wake may before the operator is told")
+    return None
+
+
+def window_at_boot(declared_s: float, floor_s: Optional[float],
+                   paced: Optional[dict], ceiling_s: Optional[float] = None) -> Tuple[float, str]:
+    """The window a starting daemon puts in force, and where it came from, from the newest
+    ``pd_wake_paced`` event of this agent, or None. The newest pace holds until another replaces
+    it; a floor declared above it, or a ceiling below it, since then wins, and the answer says
+    so. A saved pace that is not a finite number (written before paces were bounded) is held to
+    the ceiling."""
+    if paced is None:
+        return declared_s, "the declaration"
+    data = paced.get("data") or {}
+    when = paced.get("timestamp") or 0
+    wanted = data.get("refractory_s")
+    if wanted is None:
+        return declared_s, f"the declaration, which the pace of {_minute(when)} went back to"
+    if ceiling_s is not None and not (isinstance(wanted, (int, float)) and wanted <= ceiling_s):
+        return ceiling_s, f"the declared ceiling, under the pace of {_minute(when)}, which asked for {wanted!r} s"
+    if floor_s is not None and wanted < floor_s:
+        return floor_s, f"the declared floor, raised since the pace of {_minute(when)} asked for {wanted:g} s"
+    return wanted, pace_source(when, (data.get("asked_by") or {}).get("kind", "agent"), data.get("reason", ""))
+
+
+def pace_source(when: float, asker_kind: str, reason: str) -> str:
+    """Where a paced window came from, said the same way live and after a restart."""
+    return f"the pace of {_minute(when)} by the {asker_kind}: {reason}"
+
+
+def _minute(epoch: float) -> str:
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(epoch))
 
 
 def wake_text(ids: Iterable[str]) -> Optional[str]:
@@ -148,6 +218,30 @@ def classify(screen: str) -> str:
     return DRAFT
 
 
+def saved_screens_dir(agent_home: Path) -> Path:
+    """Where an agent's held wakes keep their screens: beside its event log, which the
+    daemon writes wherever it runs."""
+    return Path(agent_home) / ".maceff" / "wake_screens"
+
+
+def save_screen(directory: Path, screen: str, reason: str, when: float,
+                keep: int = SCREENS_KEPT) -> Path:
+    """Write a held wake's screen, escape codes and all, to *directory*, private to this
+    user, keeping the newest *keep*; the path written. It never leaves this host: a screen
+    can show anything the session showed. Raises OSError when it cannot be written."""
+    from macf.pd.session_unit import _private_dir
+    _private_dir(directory)
+    # UTC, so the names sort by time through a change of the clocks, and the oldest go first.
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime(when)) + f".{int(when * 1000) % 1000:03d}Z"
+    path = directory / f"wake-{stamp}-{reason}.txt"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)   # never another file's
+    with os.fdopen(fd, "w") as f:
+        f.write(screen)
+    for old in sorted(directory.glob("wake-*.txt"))[:-keep]:
+        old.unlink(missing_ok=True)
+    return path
+
+
 def box_text(screen: str) -> Optional[str]:
     """The text in an idle session's input box, empty when the box is empty; None while the
     screen shows a running turn, a dialog, or no box. Only the box counts, never an echo."""
@@ -190,6 +284,10 @@ class Waker:
     #: The agent's calling card, named in every event so the outside watch can tell whose a
     #: held wake is in a log several agents share (rule 14 of the clock's list, on #552).
     card: str = ""
+    #: Where a dialog or draft hold keeps the screen it read; None keeps none.
+    screens_dir: Optional[Path] = None
+    #: The wall clock, for a saved screen's name; ``clock`` only measures intervals.
+    wall: Callable[[], float] = time.time
 
     def tick(self, waiting_ids: List[str]) -> Optional[str]:
         """One step. Returns "sent" on the step a wake is typed, else None."""
@@ -201,7 +299,12 @@ class Waker:
         if not fresh:
             # The held stretch ends without a wake: whatever waited has been read meanwhile.
             self.release("nothing waits any more")
-        if not fresh or now - self.last_sent < self.refractory_s:
+            return None
+        left = self.refractory_s - (now - self.last_sent)
+        if left > 0:
+            if self.held != REFRACTORY:                    # once per stretch, like the screen's reasons
+                self.held = REFRACTORY
+                self._say(EVENT_HELD, {"reason": REFRACTORY, "left_s": math.ceil(left), "waiting": len(fresh)})
             return None
         if self.day != self.today():
             self.day, self.sent_today = self.today(), 0
@@ -215,7 +318,7 @@ class Waker:
         if state != IDLE_EMPTY:
             if self.held != state:                         # once per busy stretch
                 self.held = state
-                self._say(EVENT_HELD, {"reason": state, "waiting": len(fresh)})
+                self._say(EVENT_HELD, {"reason": state, "waiting": len(fresh), **self._evidence(screen, state)})
             return None
         self.held = None
         text = wake_text(waiting_ids)
@@ -240,6 +343,20 @@ class Waker:
 
     def _say(self, event: str, data: dict) -> None:
         self.append(event, {"agent": self.card, **data} if self.card else data)
+
+    def _evidence(self, screen: Optional[str], state: str) -> dict:
+        """What a hold can show for itself: the saved screen's path for a dialog or a draft,
+        or that no screen could be read at all, which also reads as a dialog."""
+        if screen is None:
+            return {"captured": False}
+        if state not in SCREEN_KEPT_FOR or self.screens_dir is None:
+            return {}
+        try:
+            return {"screen": str(save_screen(self.screens_dir, screen, state, self.wall()))}
+        except OSError as e:
+            print(f"⚠️ MACF: pd: the held wake's screen was not saved (the hold is still said): {e}",
+                  file=sys.stderr)
+            return {"screen_error": str(e)}
 
     def _submit(self, now: float) -> None:
         """Press Enter only while the wake is still in the box, at most three times; then
