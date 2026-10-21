@@ -13,6 +13,7 @@ surface from it through ``session_identifier`` (MIS-0002-R06
 import json
 import os
 import stat
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -72,6 +73,26 @@ def systemd_unit(card: str) -> str:
 def launchd_label(card: str) -> str:
     """The outer tier's label on macOS (MIS-0002-R05): ``maceff_pd.<id>``."""
     return f"{PD_IDENTIFIER}.{pd_id(card)}"
+
+
+def name_this_process(name: str = PD_IDENTIFIER) -> bool:
+    """Give this process the name ``ps``, ``top`` and ``pgrep`` show, so a daemon reads as
+    ``maceff_pd`` in a process listing rather than as the interpreter (MIS-0002-R06). True when
+    the name was set.
+
+    Linux only, through ``prctl(PR_SET_NAME)``, which takes at most 15 bytes and leaves the
+    command line alone, so ``pgrep -f macf.pd`` still finds it. A unit the daemon starts gets
+    its own name at exec. macOS has no call that renames a running process, so there the
+    process keeps the interpreter's name and this returns False.
+    """
+    if not sys.platform.startswith("linux"):
+        return False
+    import ctypes
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        return libc.prctl(15, name.encode()[:15], 0, 0, 0) == 0   # 15: PR_SET_NAME
+    except (OSError, AttributeError):
+        return False
 
 
 def runtime_dir() -> Path:

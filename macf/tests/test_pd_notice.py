@@ -137,6 +137,61 @@ def test_routing_declared(tmp_path, isolated_events_log, capsys):
     assert "'weather' is declared but this daemon has no poller" in capsys.readouterr().err
 
 
+def _operator_heard(home, log, routes):
+    """The operator's share, as the outside watch serves it: the watch's findings about this
+    home's mail, read from the agent's own event log (*log*) under *routes*."""
+    import shutil
+    from macf.pd import watch
+    from macf.pd.interface import Declaration, declaration_path
+    declaration_path(home).write_text(Declaration(
+        version=1, agent="Tester@abc123", unread_mail_threshold_s=600,
+        notice_routes=routes).model_dump_json())
+    if log.exists():
+        shutil.copy(log, home / ".maceff" / "agent_events_log.jsonl")
+    return [f.verdict for f in watch.check_home(home, time.time(), probe=None) if f.subject == "mail"]
+
+
+@pytest.mark.parametrize("route", ["agent", "operator", "both"])
+def test_each_route_reaches_its_audience_and_no_other(tmp_path, isolated_events_log, route):
+    """R42: a source routed to the agent, or to both, reaches the agent's channel, a store's
+    source and one the daemon raises alike; a source routed to the operator alone does not.
+    The operator's share, the outside watch's alert, is given where the route is the
+    operator's or both, and not where it is the agent's alone. Only unread mail may be routed
+    to the operator alone (the repo owner's ruling of 2026-10-21), so in that case the other
+    sources go to the agent and unread mail must reach the operator and not the agent."""
+    from macf.agent_events_log import append_event
+    from macf.pd.interface import EVENT_UNREAD_MAIL
+    home = make_home(tmp_path, [])
+    _box(home)
+    others = "agent" if route == "operator" else route
+    routes = {"amail": others, "pd_limit_exceeded": others, "pd_unread_mail": route}
+    n = nt.Notifier(home, routes)
+    n.boot()
+    _mail(home, "m1")
+    n.poll()
+    n.raise_notice("pd_limit_exceeded", "limit-worker-1")
+    n.raise_notice("pd_unread_mail", "unread-mail-1")
+    append_event(EVENT_UNREAD_MAIL, {"agent": "Tester@abc123", "count": 1, "reason": "1 message(s) unread"})
+    ours, theirs = _pair()
+    n.attach(ours)
+    n.flush()
+    to_agent = sorted(r.source for r in _records(theirs))
+    assert to_agent == sorted(s for s, r in routes.items() if r in ("agent", "both"))
+    to_operator = _operator_heard(home, isolated_events_log, routes)
+    assert to_operator == (["UNREAD"] if route in ("operator", "both") else [])
+
+
+def test_a_route_outside_the_declared_ones_is_refused_at_load():
+    """R42: a declaration names one of the routes for each source it routes, and a source the
+    daemon must notice on (unread mail past a threshold) cannot be left unrouted."""
+    from macf.pd.interface import Declaration
+    with pytest.raises(ValueError):
+        Declaration(version=1, agent="Tester@abc123", notice_routes={"amail": "nobody"})
+    with pytest.raises(ValueError, match="pd_unread_mail"):
+        Declaration(version=1, agent="Tester@abc123", unread_mail_threshold_s=600,
+                    notice_routes={"amail": "agent"})
+
+
 def test_nothing_is_sent_for_no_change(tmp_path, isolated_events_log):
     """Polls that find nothing new produce nothing to send (R46)."""
     home = _home(tmp_path)
@@ -314,6 +369,34 @@ def test_unread_mail_notice(tmp_path):
     tracker.tick(0.0)
     assert len(notices) == 2
     assert [e for e, _ in said].count(EVENT_UNREAD_MAIL) == 2
+
+
+@pytest.mark.parametrize("route", ["agent", "operator", "both"])
+def test_unread_mail_reaches_the_routes_declared_for_it(tmp_path, base, run_daemon, isolated_events_log,
+                                                        route):
+    """R55, end to end: a running daemon with a threshold notices mail left unread, and the
+    notice reaches the routes declared for it and no other. The agent's share is the notice
+    owed on its channel; the operator's is the outside watch's alert, read from the same log."""
+    from macf.pd.interface import Declaration, EVENT_UNREAD_MAIL, declaration_path
+    home = make_home(tmp_path, [])
+    routes = {"pd_unread_mail": route}
+    declaration_path(home).write_text(Declaration(
+        version=1, agent="Tester@abc123", unread_mail_threshold_s=0.2,
+        notice_routes=routes).model_dump_json())
+    _mail(home, "waiting")
+    daemon = run_daemon(home, base)
+    to_agent = route in ("agent", "both")
+    deadline = time.time() + 5
+    while time.time() < deadline and not (
+            list(read_events(only=(EVENT_UNREAD_MAIL,)))
+            and (not to_agent or any(o.source == "pd_unread_mail" for o in daemon.notifier.owed.values()))):
+        time.sleep(0.1)                                   # the serve loop ticks on its own
+    time.sleep(0.3)                                       # a notice owed in error has time to show
+    [event] = list(read_events(only=(EVENT_UNREAD_MAIL,)))
+    assert event["data"]["agent"] == "Tester@abc123"
+    assert any(o.source == "pd_unread_mail" for o in daemon.notifier.owed.values()) == to_agent
+    to_operator = _operator_heard(home, isolated_events_log, routes)
+    assert to_operator == (["UNREAD"] if route in ("operator", "both") else [])
 
 
 def test_unread_mail_counts_only_the_time_the_session_ran(tmp_path):
@@ -590,6 +673,59 @@ def test_an_unrouted_carried_notice_reaches_the_agent(tmp_path, isolated_events_
     notifier = nt.Notifier(_home(tmp_path), {})
     assert notifier.raise_notice("pd_carried", "carried-1") is True
     assert list(notifier.owed)
+
+
+def test_the_daemon_wires_its_core_and_scheduler_notices_to_its_notifier(tmp_path):
+    """R60's subject is the primal daemon: the core's over-limit notice reaches the channel only
+    because the daemon connects the core to its notifier. Review on #770 planted that wiring away
+    and every other test passed, since they wire it by hand."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+    from macf.pd import interface
+    from macf.pd.daemon import Daemon
+    home = tmp_path / "home"
+    (home / ".maceff" / "pd").mkdir(parents=True)
+    (home / ".maceff_primary_agent.id").write_text("abc123def4567890\n")
+    (home / ".maceff" / "config.json").write_text('{"agent_identity": {"moniker": "Tester"}}')
+    interface.declaration_path(home).write_text(
+        interface.Declaration(version=1, agent="Tester@abc123").model_dump_json())
+    base = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))
+    try:
+        daemon = Daemon(home, base=base)
+        assert daemon.core.on_notice == daemon.notifier.raise_notice
+        assert daemon.scheduler.on_notice == daemon.notifier.raise_notice
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_a_unit_measured_past_its_limit_reaches_the_channel(make_core, script, tmp_path, monkeypatch,
+                                                            isolated_events_log):
+    """MIS-0002-R60 (pd_MUST_notice_limit_exceeded): the core's own memory reading, not a
+    notice raised by hand, owes the notice. A running unit read under its declared limit owes
+    nothing; read over it, the core raises pd_limit_exceeded into the notifier, wired as the
+    daemon wires it, and the record goes out on the channel."""
+    from macf.pd import core as pd_core
+    used = [10.0]                                                   # the unit's limit is 64 MB
+    monkeypatch.setattr(pd_core, "tree_rss_mb", lambda pid: used[0])
+    notifier = nt.Notifier(_home(tmp_path), {"pd_limit_exceeded": "agent"})
+    notifier.boot()
+    core = make_core([make_unit("worker", script, {})], memory_check_s=0.0)
+    core.on_notice = notifier.raise_notice
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    core.tick()
+    assert not notifier.owed, "a unit under its limit owed a notice"
+    used[0] = 80.0
+    core.tick()
+    assert [o.source for o in notifier.owed.values()] == ["pd_limit_exceeded"]
+    ours, theirs = _pair()
+    notifier.attach(ours)
+    assert notifier.flush() == 1
+    [record] = _records(theirs)
+    assert record.source == "pd_limit_exceeded"
+    [over] = [e["data"] for e in read_events(reverse=False, scope="all", only=(pd_core.EVENT_OVER_LIMIT,))]
+    assert (over["unit"], over["used_mb"], over["limit_mb"]) == ("worker", 80.0, 64)
 
 
 def test_a_compaction_no_daemon_saw_is_reported_at_the_next_start(make_core, script):
