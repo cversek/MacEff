@@ -184,3 +184,13 @@ def test_duty_add_normalizes_links_as_edit_does(store, lab):
     assert _run(["role", "duty", "add", role.id, "board plan", "--wiki-links", "Honeypot, container-deployment"]) == 0
     d = store.find_duty("board plan")[0]
     assert d.wiki_links == ["honeypot", "container_deployment"]
+
+
+def test_role_create_normalizes_links_as_edit_does(store):
+    """The third verb that stores links: a role created with a concept in another spelling
+    stores it as the knowledge web normalizes it (review on #766)."""
+    assert _run(["role", "create", "Board Keeper", "--icon", "🎓", "--expires", "2026-12-15",
+                 "--review-by", "2026-12-15", "--review-horizon", "14d",
+                 "--wiki-links", "Honeypot, container-deployment"]) == 0
+    role = store.find_role("Board Keeper")[0]
+    assert role.wiki_links == ["honeypot", "container_deployment"]
