@@ -4209,45 +4209,16 @@ def cmd_events_show(args: argparse.Namespace) -> int:
 
 
 def cmd_events_history(args: argparse.Namespace) -> int:
-    """Display recent events from log."""
+    """The newest events, one readable line each, oldest first: ``events query --limit N``
+    with no filter (the same formatter, `macf.eventlog.reader`)."""
     from .agent_events_log import read_events
+    from .eventlog.reader import format_line, select
 
-    try:
-        limit = getattr(args, 'limit', 10)
-
-        print(f"Recent Events (last {limit})")
-        print("=" * 50)
-
-        events = list(read_events(limit=limit, reverse=True))
-
-        if not events:
-            print("No events found")
-            return 0
-
-        for event in events:
-            timestamp = event.get('timestamp', 0)
-            event_type = event.get('event', 'unknown')
-            breadcrumb = event.get('breadcrumb', 'N/A')
-
-            # Format timestamp
-            dt = datetime.fromtimestamp(timestamp, tz=_pick_tz())
-            time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
-
-            print(f"[{time_str}] {event_type}")
-            print(f"  Breadcrumb: {breadcrumb}")
-
-            # Show key data fields
-            data = event.get('data', {})
-            if data:
-                for key, value in data.items():
-                    print(f"  {key}: {value}")
-            print()
-
-        return 0
-
-    except Exception as e:
-        print(f"Error reading event history: {e}")
-        return 1
+    tz = _pick_tz()
+    today = datetime.now(tz=tz).date()
+    for event in select(read_events(limit=None, reverse=True), limit=getattr(args, "limit", 10) or 10):
+        print(format_line(event, tz, today))
+    return 0
 
 
 def cmd_events_analyze(args: argparse.Namespace) -> int:
@@ -4325,96 +4296,83 @@ def cmd_events_analyze(args: argparse.Namespace) -> int:
 
 
 def cmd_events_query(args: argparse.Namespace) -> int:
-    """Query events with filters."""
-    from .agent_events_log import query_events
+    """Read the event log as lines a person can follow (`macf.eventlog.reader`).
 
+    One line per event; ``--verbose`` prints every field, and ``--json`` one JSON line per event
+    for scripts. ``--event`` repeats and takes globs; ``--after`` and ``--before`` take 30m, 2h,
+    09:00, an ISO time or an epoch; ``--follow`` keeps printing new events until Ctrl+C. A query
+    with no bound reads the current cycle, and one bounded by time or a breadcrumb reads the whole
+    log, newest first, stopping where its bound says (``coding_standards`` §6.3, §6.4)."""
+    import json as _json
+    from .agent_events_log import _matches_filter, get_log_path, query_scope_for, read_events
+    from .eventlog.reader import follow, format_line, format_verbose, matches, parse_when, select
+
+    tz = _pick_tz()
     try:
-        # Build filter dict from args
-        filters = {}
+        after = parse_when(args.after, tz=tz) if getattr(args, "after", None) else None
+        before = parse_when(args.before, tz=tz) if getattr(args, "before", None) else None
+    except ValueError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 2
 
-        # Event type filter
-        if hasattr(args, 'event') and args.event:
-            filters['event_type'] = args.event
+    crumbs = {}
+    for key, attr in (("c", "cycle"), ("g", "git_hash"), ("s", "session"), ("p", "prompt")):
+        value = getattr(args, attr, None)
+        if value:
+            crumbs[key] = int(value) if key == "c" else value
+    filters = {"breadcrumb": crumbs} if crumbs else {}
+    if after is not None:
+        filters["since"] = after
+    if before is not None:
+        filters["until"] = before          # any time bound reads the whole log, not this cycle
+    command = getattr(args, "command", None)
 
-        # Breadcrumb filters
-        breadcrumb_filters = {}
+    def keep(event: dict) -> bool:
+        if crumbs and not _matches_filter(event, {"breadcrumb": crumbs}):
+            return False
+        if command:
+            data = event.get("data") or {}
+            argv = data.get("argv") if isinstance(data, dict) else None
+            if event.get("event") != "cli_command_invoked" or command not in " ".join(map(str, argv or [])):
+                return False
+        return True
 
-        if hasattr(args, 'cycle') and args.cycle:
-            breadcrumb_filters['c'] = int(args.cycle)
+    patterns = list(getattr(args, "event", None) or [])
+    today = datetime.now(tz=tz).date()
+    as_json, verbose = getattr(args, "json_output", False), getattr(args, "verbose", False)
 
-        if hasattr(args, 'git_hash') and args.git_hash:
-            breadcrumb_filters['g'] = args.git_hash
+    def show(event: dict) -> None:
+        if as_json:
+            print(_json.dumps(event, default=str))
+        elif verbose:
+            print(format_verbose(event, tz, today))
+        else:
+            print(format_line(event, tz, today), flush=True)
 
-        if hasattr(args, 'session') and args.session:
-            breadcrumb_filters['s'] = args.session
+    # Where --follow starts, taken before the scan, so an event written while it runs is
+    # printed by one or the other, never lost between them.
+    log_path = get_log_path()
+    follow_from = os.path.getsize(log_path) if os.path.exists(log_path) else 0
+    events = select(read_events(limit=None, reverse=True, scope=query_scope_for(filters)),
+                    after=after, before=before, patterns=patterns,
+                    limit=getattr(args, "limit", None), keep=keep)
+    for event in events:
+        show(event)
+    if not events and not getattr(args, "follow", False):
+        print("no matching events", file=sys.stderr)
+    if getattr(args, "follow", False):
+        def keep_new(event: dict) -> bool:
+            stamp = event.get("timestamp")
+            if before is not None and isinstance(stamp, (int, float)) and stamp > before:
+                return False
+            return (not patterns or matches(str(event.get("event", "")), patterns)) and keep(event)
 
-        if hasattr(args, 'prompt') and args.prompt:
-            breadcrumb_filters['p'] = args.prompt
-
-        if breadcrumb_filters:
-            filters['breadcrumb'] = breadcrumb_filters
-
-        # Timestamp filters
-        if hasattr(args, 'after') and args.after:
-            filters['since'] = float(args.after)
-
-        if hasattr(args, 'before') and args.before:
-            filters['until'] = float(args.before)
-
-        # Execute query
-        results = query_events(filters)
-
-        # Post-filter by command if specified (for cli_command_invoked events)
-        command_filter = getattr(args, 'command', None)
-        if command_filter:
-            filtered = []
-            for event in results:
-                if event.get('event') == 'cli_command_invoked':
-                    argv = event.get('data', {}).get('argv', [])
-                    cmd_str = ' '.join(argv)
-                    if command_filter in cmd_str:
-                        filtered.append(event)
-            results = filtered
-
-        print(f"Query Results: {len(results)} events")
-        print("=" * 50)
-
-        if not results:
-            print("No matching events found")
+        try:
+            for event in follow(log_path, keep_new, start=follow_from):
+                show(event)
+        except KeyboardInterrupt:
             return 0
-
-        verbose = getattr(args, 'verbose', False)
-
-        for event in results:
-            timestamp = event.get('timestamp', 0)
-            event_type = event.get('event', 'unknown')
-            breadcrumb = event.get('breadcrumb', 'N/A')
-            data = event.get('data', {})
-
-            # Format timestamp
-            dt = datetime.fromtimestamp(timestamp, tz=_pick_tz())
-            time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
-
-            print(f"[{time_str}] {event_type}")
-            print(f"  Breadcrumb: {breadcrumb}")
-
-            # Show command details for cli_command_invoked
-            if event_type == 'cli_command_invoked' and 'argv' in data:
-                argv = data.get('argv', [])
-                print(f"  Command: {' '.join(argv)}")
-
-            # Verbose mode: show all data
-            if verbose and data:
-                import json
-                print(f"  Data: {json.dumps(data, indent=4)}")
-
-            print()
-
-        return 0
-
-    except Exception as e:
-        print(f"Error querying events: {e}")
-        return 1
+    return 0
 
 
 def cmd_events_query_set(args: argparse.Namespace) -> int:
@@ -12458,22 +12416,30 @@ def _build_parser() -> argparse.ArgumentParser:
     show_parser.set_defaults(func=cmd_events_show)
 
     # events history
-    history_parser = events_sub.add_parser("history", help="show recent events")
+    history_parser = events_sub.add_parser("history", help="the newest events, one readable line each")
     history_parser.add_argument("--limit", type=int, default=10,
                                help="number of events to show (default: 10)")
     history_parser.set_defaults(func=cmd_events_history)
 
     # events query
-    query_parser = events_sub.add_parser("query", help="query events with filters")
-    query_parser.add_argument("--event", help="filter by event type")
+    query_parser = events_sub.add_parser(
+        "query", help="read the event log: one line per event, filtered by name, time and breadcrumb")
+    query_parser.add_argument("--event", action="append", metavar="NAME",
+                              help="an event name or glob (pd_wake_*); repeat for several")
     query_parser.add_argument("--cycle", help="filter by cycle number")
     query_parser.add_argument("--git-hash", help="filter by git hash")
     query_parser.add_argument("--session", help="filter by session ID")
     query_parser.add_argument("--prompt", help="filter by prompt UUID")
-    query_parser.add_argument("--after", help="events after timestamp")
-    query_parser.add_argument("--before", help="events before timestamp")
+    query_parser.add_argument("--after", metavar="WHEN",
+                              help="events after a time: 30m, 2h, 7d, 09:00, an ISO time or an epoch")
+    query_parser.add_argument("--before", metavar="WHEN", help="events before a time, in the same forms")
+    query_parser.add_argument("--limit", type=int, metavar="N", help="only the newest N matching events")
+    query_parser.add_argument("--follow", "-f", action="store_true",
+                              help="keep printing matching events as they arrive, until Ctrl+C")
     query_parser.add_argument("--command", help="filter cli_command_invoked by command (e.g., 'policy read')")
-    query_parser.add_argument("--verbose", "-v", action="store_true", help="show full event data")
+    query_parser.add_argument("--verbose", "-v", action="store_true", help="every field of each event")
+    query_parser.add_argument("--json", dest="json_output", action="store_true",
+                              help="one JSON line per event, for scripts")
     query_parser.set_defaults(func=cmd_events_query)
 
     # events query-set
