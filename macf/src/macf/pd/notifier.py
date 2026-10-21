@@ -64,6 +64,10 @@ CHANNEL_GRACE_S = 60.0
 
 #: The routes whose notices go to the agent's session.
 AGENT_ROUTES = ("agent", "both")
+#: Where a notice the daemon raises itself goes when the declaration doesn't route it: to the
+#: agent, so a declaration rendered without routes still tells the session what was carried
+#: (MIS-0002-R47) and what fell due (the repo owner's ruling of 2026-10-21, option A).
+DEFAULT_INTERNAL_ROUTE = "agent"
 
 def _say_mail_box(agent_home: Path) -> None:
     """Say which box mail is watched in, and how it was found, on the error stream. A guessed
@@ -190,7 +194,7 @@ class Notifier:
         and the event log keeps the facts. Returns whether it is owed."""
         if source not in INTERNAL_SOURCES:
             raise ValueError(f"{source!r} is not a notice this daemon raises")
-        if self._routes.get(source) not in AGENT_ROUTES:
+        if self._routes.get(source, DEFAULT_INTERNAL_ROUTE) not in AGENT_ROUTES:
             return False
         if not channel_takes(source, notice_id):
             print(f"⚠️ MACF: pd: a {source} notice is not owed: the MacEff channel would refuse its "

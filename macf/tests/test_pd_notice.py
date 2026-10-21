@@ -216,24 +216,24 @@ def test_daemon_releases_the_channel_socket(tmp_path, base, isolated_events_log)
 
 
 def test_a_unit_past_its_limit_is_a_notice_held_and_delivered(tmp_path, isolated_events_log):
-    """MIS-0002-R60: the daemon's own over-limit notice is owed only where the declaration
-    routes it to the agent (R42), held through a restart like mail's (R41), and arrives on
-    the channel as the never-masked pd_limit_exceeded notice."""
+    """MIS-0002-R60: the daemon's own over-limit notice is owed to the agent, by its declared
+    route or, unrouted, by default (R42, the ruling of 2026-10-21), held through a restart like
+    mail's (R41), and arrives on the channel as the never-masked pd_limit_exceeded notice."""
     home = _home(tmp_path)
     unrouted = nt.Notifier(home, {"amail": "agent"})
-    assert unrouted.raise_notice("pd_limit_exceeded", "limit-worker-1") is False
-    assert not unrouted.owed
+    assert unrouted.raise_notice("pd_limit_exceeded", "limit-worker-1") is True
+    assert list(unrouted.owed)
     first = nt.Notifier(home, {"pd_limit_exceeded": "agent"})
     first.boot()
     assert first.raise_notice("pd_limit_exceeded", "limit-worker-2") is True
     assert first.flush() == 0                                # no channel: held
     second = nt.Notifier(home, {"pd_limit_exceeded": "agent"})   # the restarted daemon's
     second.boot()
-    assert list(second.owed) == ["limit-worker-2"]
+    assert list(second.owed) == ["limit-worker-1", "limit-worker-2"]   # both held across the restart
     ours, theirs = _pair()
     second.attach(ours)
-    assert second.flush() == 1
-    [record] = _records(theirs)
+    assert second.flush() == 2
+    record = _records(theirs)[-1]
     assert record.source == "pd_limit_exceeded" and record.count is None
     assert "macf-daemon" in build_event(record)["params"]["content"]
     with pytest.raises(ValueError):
@@ -538,32 +538,27 @@ def test_a_session_restart_is_reported(make_core, script):
     assert owed[0] == "pd_carried"
 
 
-@pytest.mark.parametrize("route, warned", [(None, True), ("operator", True), ("held_until_present", True),
-                                           ("agent", False), ("both", False)])
-def test_an_unheard_carried_notice_is_warned_at_start(tmp_path, capsys, route, warned):
-    """R47's notice is delivered on the agent's routes only, so a daemon with a session unit warns
-    at start unless pd_carried is routed to 'agent' or 'both'."""
-    import shutil
-    import tempfile
-    from pathlib import Path
+@pytest.mark.parametrize("route", ["operator", "both", "held_until_present"])
+def test_a_route_that_reaches_nobody_is_refused_at_load(route):
+    """R42 and R47, the repo owner's ruling of 2026-10-21 (option A): a declaration may name only
+    routes something serves. The operator's route serves unread mail alone, by the outside watch;
+    holding until present is served nowhere yet. Anything else is refused, naming the route that
+    works, instead of being accepted and dropped."""
+    from pydantic import ValidationError
     from macf.pd import interface
-    from macf.pd.daemon import Daemon
-    home = tmp_path / "home"
-    (home / ".maceff" / "pd").mkdir(parents=True)
-    (home / ".maceff_primary_agent.id").write_text("abc123def4567890\n")
-    (home / ".maceff" / "config.json").write_text('{"agent_identity": {"moniker": "Tester"}}')
-    session = interface.Unit(name="session", kind="session", command=["/usr/bin/true"],
-                             account=__import__("pwd").getpwuid(os.getuid()).pw_name,
-                             restart="always", liveness_interval_s=10, memory_limit_mb=64)
-    interface.declaration_path(home).write_text(interface.Declaration(
-        version=1, agent="Tester@abc123", units=[session],
-        notice_routes={"pd_carried": route} if route else {}).model_dump_json())
-    base = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))
-    try:
-        Daemon(home, base=base)
-    finally:
-        shutil.rmtree(base, ignore_errors=True)
-    assert ("doesn't route 'pd_carried'" in capsys.readouterr().err) == warned
+    with pytest.raises(ValidationError, match="route it to 'agent'"):
+        interface.Declaration(version=1, agent="Tester@abc123", notice_routes={"pd_carried": route})
+    interface.Declaration(version=1, agent="Tester@abc123", notice_routes={"pd_carried": "agent"})
+    if route != "held_until_present":
+        interface.Declaration(version=1, agent="Tester@abc123", notice_routes={"pd_unread_mail": route})
+
+
+def test_an_unrouted_carried_notice_reaches_the_agent(tmp_path, isolated_events_log):
+    """R47: a declaration rendered with no routes, as the containers' are, still tells the session
+    what was carried, changed and lost; the notice goes to the agent by default."""
+    notifier = nt.Notifier(_home(tmp_path), {})
+    assert notifier.raise_notice("pd_carried", "carried-1") is True
+    assert list(notifier.owed)
 
 
 def test_a_compaction_no_daemon_saw_is_reported_at_the_next_start(make_core, script):

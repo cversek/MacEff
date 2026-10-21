@@ -793,18 +793,16 @@ def test_prompt_fails_run(tmp_path):
 
 
 def test_an_isolated_prompt_run_routes_its_failure_notice():
-    """R32's notice must reach someone: a declaration with an isolated prompt run is refused at
-    load unless it routes pd_run_failed where the notice is delivered, to the agent."""
+    """R32's notice must reach someone: unrouted, pd_run_failed goes to the agent by default, and
+    a route that reaches nobody is refused at load (the ruling of 2026-10-21)."""
     from pydantic import ValidationError
-    with pytest.raises(ValidationError, match="pd_run_failed"):
-        Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()])
-    for nobody in ("operator", "held_until_present"):    # routes no daemon notice is delivered on yet
-        with pytest.raises(ValidationError, match="'agent' or 'both'"):
+    Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()])
+    Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()],
+                notice_routes={"pd_run_failed": "agent"})
+    for nobody in ("operator", "both", "held_until_present"):
+        with pytest.raises(ValidationError, match="route it to 'agent'"):
             Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()],
                         notice_routes={"pd_run_failed": nobody})
-    for heard in ("agent", "both"):
-        Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()],
-                    notice_routes={"pd_run_failed": heard})
 
 
 def test_the_client_is_found_on_the_session_units_path(tmp_path, monkeypatch):
