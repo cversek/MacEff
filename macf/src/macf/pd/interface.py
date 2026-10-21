@@ -342,6 +342,14 @@ class ChannelPlugin(_Closed):
     def __str__(self) -> str:
         return f"{self.plugin}@{self.marketplace}"
 
+#: How long the keystroke wake rests after each wake when the declaration says nothing: the
+#: ten minutes the mail clocks learned, which the operator kept as the default on 2026-10-17.
+DEFAULT_WAKE_REFRACTORY_S = 600.0
+#: The longest window a pace may set, unless the declaration says otherwise: the outside watch's
+#: allowance for a held wake (``watch.WAKE_HELD_ALERT_S``), so no pace can keep an agent unwoken
+#: past the point where a stuck wake would have reached the operator.
+DEFAULT_WAKE_REFRACTORY_CEILING_S = 1800.0
+
 
 class Declaration(_Closed):
     """Everything an agent declares to its primal daemon. Audited by reading it.
@@ -381,6 +389,15 @@ class Declaration(_Closed):
     #: How long mail may sit in the agent's pickup box, while its session runs, before the
     #: daemon raises the ``pd_unread_mail`` notice (MIS-0002-R55). None: no notice.
     unread_mail_threshold_s: Optional[float] = Field(default=None, gt=0)
+    #: How long the keystroke wake rests after each wake, until the agent paces it otherwise
+    #: over the control socket (persistent_layer 1.9).
+    wake_refractory_s: float = Field(default=DEFAULT_WAKE_REFRACTORY_S, gt=0, allow_inf_nan=False)
+    #: The shortest window a pace may set. Only the declaration sets it, never the socket, and
+    #: in a container the declaration is rendered by root. None: no floor.
+    wake_refractory_floor_s: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
+    #: The longest window a pace may set. Only the declaration sets it, like the floor.
+    wake_refractory_ceiling_s: float = Field(default=DEFAULT_WAKE_REFRACTORY_CEILING_S, gt=0,
+                                             allow_inf_nan=False)
     quiet_windows: List[Window] = Field(default_factory=list)
     keep_harness_idle_compaction: bool = False
     wind_down: Optional[WindDown] = None
@@ -402,6 +419,41 @@ class Declaration(_Closed):
         return self
 
     @model_validator(mode="after")
+    def _wake_floor_under_its_window(self) -> "Declaration":
+        floor = self.wake_refractory_floor_s
+        if floor is not None and floor > self.wake_refractory_s:
+            raise ValueError(f"wake_refractory_floor_s ({floor:g} s) is above wake_refractory_s "
+                             f"({self.wake_refractory_s:g} s): the declared window would be under its own floor")
+        ceiling = self.wake_refractory_ceiling_s
+        if self.wake_refractory_s > ceiling:
+            raise ValueError(f"wake_refractory_s ({self.wake_refractory_s:g} s) is above wake_refractory_ceiling_s "
+                             f"({ceiling:g} s): the declared window would be over its own ceiling")
+        return self
+
+    @model_validator(mode="after")
+    def _routes_are_ones_that_are_served(self) -> "Declaration":
+        # A route that reaches nobody is refused, not accepted and dropped (MIS-0002-R42
+        # (notice_source_MUST_be_routed); the repo owner's ruling of 2026-10-21, option A). The
+        # agent's route is served for every source; the operator's only for unread mail, by the
+        # outside watch; holding until the operator is present is served nowhere yet. A source
+        # routed to `both` keeps its agent half, and the daemon says at start that the operator's
+        # half is unserved (half_served_routes), so a half-served route never stops a daemon.
+        for source, route in sorted(self.notice_routes.items()):
+            if route == "held_until_present":
+                raise ValueError(f"notice_routes routes {source!r} to 'held_until_present', which no "
+                                 f"part of the layer serves yet, so its notices would reach nobody; "
+                                 f"route it to 'agent'")
+            if route == "operator" and source != UNREAD_MAIL_SOURCE:
+                raise ValueError(f"notice_routes routes {source!r} to 'operator', but only "
+                                 f"{UNREAD_MAIL_SOURCE!r} reaches the operator today (by the outside "
+                                 f"watch), so its notices would reach nobody; route it to 'agent'")
+        return self
+
+    def half_served_routes(self) -> List[str]:
+        """Sources routed to `both` whose operator half nothing serves yet: every one but unread mail."""
+        return sorted(s for s, r in self.notice_routes.items() if r == "both" and s != UNREAD_MAIL_SOURCE)
+
+    @model_validator(mode="after")
     def _unread_mail_notice_is_routed(self) -> "Declaration":
         # A threshold with nowhere to send its notice would be enforcement nobody hears
         # (MIS-0002-R42 (notice_source_MUST_be_routed)).
@@ -416,7 +468,7 @@ class Declaration(_Closed):
         # (MIS-0002-R32 (run_MUST_fail_on_prompt)). Only the agent's routes deliver a daemon
         # notice today, so any other route would reach nobody.
         if any(s.target == "isolated" and isinstance(s.run, PromptRun) for s in self.schedules) \
-                and self.notice_routes.get(RUN_FAILED_SOURCE) not in ("agent", "both"):
+                and self.notice_routes.get(RUN_FAILED_SOURCE, "agent") not in ("agent", "both"):
             raise ValueError(f"an isolated prompt run is declared, so notice_routes must route "
                              f"{RUN_FAILED_SOURCE!r} to 'agent' or 'both', the routes its notice is "
                              f"delivered on")
@@ -510,10 +562,11 @@ class Asker(_Closed):
     ``harness`` is for a compaction nobody asked for, found by the absence of an ask
     (MIS-0002-R127 (harness_compaction_MUST_be_recorded)); ``policy`` for the daemon
     acting on its own declared rules: a unit's restart policy after a failure, the start of
-    declared units at boot, and the stops of a shutdown.
+    declared units at boot, and the stops of a shutdown. ``agent`` is the agent itself, over
+    the control socket from its own command line, pacing its wake (persistent_layer 1.9).
     """
 
-    kind: Literal["operator", "wind_down", "policy", "harness"]
+    kind: Literal["operator", "wind_down", "policy", "harness", "agent"]
     card: Optional[str] = None
 
 
@@ -531,11 +584,12 @@ class Control(_Closed):
 
     ``peer`` is absent only for acts with no requesting process: the daemon's own policy,
     and a harness compaction, where the event the harness detector wrote is the
-    observation and this record is the decision.
+    observation and this record is the decision. A pace acts on no unit, so its ``unit`` is
+    empty, and the window it set is in its ``WakePaced`` record.
     """
 
     agent: str
-    act: Literal["start", "stop", "restart", "compact"]
+    act: Literal["start", "stop", "restart", "compact", "pace"]
     unit: str
     asked_by: Asker
     peer: Optional[Peer] = None
@@ -543,11 +597,25 @@ class Control(_Closed):
 
     @model_validator(mode="after")
     def _peer_iff_requested(self) -> "Control":
-        requested = self.asked_by.kind in ("operator", "wind_down")
+        requested = self.asked_by.kind in ("operator", "wind_down", "agent")
         if requested != (self.peer is not None):
             raise ValueError("an act asked for over the control socket records its peer, "
                              "and only such an act does")
         return self
+
+
+class WakePaced(_Closed):
+    """The keystroke wake was paced over the control socket (persistent_layer 1.9): written
+    before the daemon answers, beside the act's ``Control`` record, and read back by the next
+    daemon at its start, which re-asserts it. ``refractory_s`` is the window asked for, or None
+    to go back to the declared one; ``previous_s`` is the window it replaced."""
+
+    agent: str
+    refractory_s: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
+    previous_s: float = Field(gt=0)
+    asked_by: Asker
+    peer: Peer
+    reason: str = Field(min_length=1)
 
 
 class DaemonStart(_Closed):
@@ -659,8 +727,25 @@ class EntryRemoveRequest(_Closed):
     id: str = Field(pattern=r"^e-[0-9a-f]{12}$")
 
 
-Request = Union[StatusRequest, ActRequest, CompactRequest, EntryAddRequest, EntryListRequest,
-                EntryRemoveRequest]
+class PaceRequest(_Closed):
+    """How long the keystroke wake rests after each wake, or None to go back to the declared
+    window. The agent paces itself, or the operator paces it; it acts on no unit. No pace goes
+    under the declared floor, which only the declaration sets (persistent_layer 1.9)."""
+
+    op: Literal["pace"]
+    refractory_s: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
+    asked_by: Asker
+    reason: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _only_agent_or_operator(self) -> "PaceRequest":
+        if self.asked_by.kind not in ("agent", "operator"):
+            raise ValueError("only the agent or the operator may pace the wake")
+        return self
+
+
+Request = Union[StatusRequest, ActRequest, CompactRequest, PaceRequest, EntryAddRequest,
+                EntryListRequest, EntryRemoveRequest]
 
 
 class UnitStatus(_Closed):
@@ -678,10 +763,15 @@ class UnitStatus(_Closed):
 
 
 class Response(_Closed):
+    """``wake_refractory_s`` and ``wake_window_from`` answer a status or a pace where a session
+    unit has a keystroke wake: the window in force, and where it came from."""
+
     ok: bool
     error: Optional[str] = None
     units: Optional[List[UnitStatus]] = None
     entries: Optional[List[dict]] = None
+    wake_refractory_s: Optional[float] = None
+    wake_window_from: Optional[str] = None
 
 
 _REQUEST = TypeAdapter(Annotated[Request, Field(discriminator="op")])
