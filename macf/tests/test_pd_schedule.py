@@ -314,6 +314,19 @@ def test_late_run_says_so(tmp_path):
     assert log.of(sc.EVENT_STARTED)[0]["late_s"] == 150.0
     finish(s)
 
+    # The record a notice points to states it too. A failed run's notice, received through the
+    # channel's own record, points to pd_run_done, so that record carries how late the run began.
+    log, now = Log(), [at("2026-10-14 12:00")]
+    channel = ChannelReceiver(tmp_path / "agent")
+    s = make_scheduler(tmp_path, [command_schedule(["/bin/sh", "-c", "exit 3"], name="fails")],
+                       log, now, on_notice=channel)
+    now[0] = at("2026-10-14 12:07:30")
+    s.tick()
+    finish(s)
+    assert [source for source, _ in channel.received] == ["pd_run_failed"]
+    done = log.of(sc.EVENT_DONE)[0]
+    assert done["schedule"] == "fails" and done["late_s"] == 150.0, done
+
 
 def test_wall_clock_cap(tmp_path):
     """A run past its limit has its process group killed, and says so (R36)."""
