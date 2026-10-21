@@ -594,3 +594,30 @@ def test_a_compaction_no_daemon_saw_is_reported_at_the_next_start(make_core, scr
     now[0] += pd_core.COMPACTION_SETTLE_S + 1
     again.tick()
     assert len(reports()) == 1                                      # already covered
+
+
+@pytest.mark.parametrize("channels, warned", [(None, True), ([], False), (["plugin:telegram:telegram"], False)])
+def test_a_session_with_no_operator_channels_is_warned_at_start(tmp_path, capsys, channels, warned):
+    """MIS-0002-R107: with no operator_channels declared no channel counts as the operator,
+    so a daemon with a session unit says so at start. An empty list is a declaration."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+    from macf.pd import interface
+    from macf.pd.daemon import Daemon
+    home = tmp_path / "home"
+    (home / ".maceff" / "pd").mkdir(parents=True)
+    (home / ".maceff_primary_agent.id").write_text("abc123def4567890\n")
+    (home / ".maceff" / "config.json").write_text('{"agent_identity": {"moniker": "Tester"}}')
+    session = interface.Unit(name="session", kind="session", command=["/usr/bin/true"],
+                             account=__import__("pwd").getpwuid(os.getuid()).pw_name,
+                             restart="always", liveness_interval_s=10, memory_limit_mb=64)
+    interface.declaration_path(home).write_text(interface.Declaration(
+        version=1, agent="Tester@abc123", units=[session], notice_routes={"pd_carried": "agent"},
+        operator_channels=channels).model_dump_json())
+    base = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))
+    try:
+        Daemon(home, base=base)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+    assert ("lists no operator_channels" in capsys.readouterr().err) == warned

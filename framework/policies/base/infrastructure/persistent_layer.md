@@ -770,7 +770,6 @@ Specified in MIS-0002 and arriving with their landing steps, each in the pull re
   - the refusal at load of a declaration that doesn't route `pd_carried` to the agent, once the deployed declarations route it, so that the notice of what a restart, recreate or compaction carried, changed and lost always reaches the agent (11.1) [MIS-0002-R47 (pd_MUST_report_carried_changed_lost)];
   - the operator's routes for sources other than unread mail, and `held_until_present`, which a declaration may name but nothing serves yet (1.11);
   - sources besides mail (MIS-0002 §6.6).
-- **The end of R107's transitional rule** [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)] (1.4): until an agent declares `operator_channels`, every channel but the MacEff channel counts as the operator's.
 - **Observation** (5): messages from an onlooker into the observed session, an optional feature that nobody has built. Wherever one is built, its source comes from the transport and the onlooker's card from the invitation [MIS-0002-R95 (onlooker_message_MUST_carry_transport_source)] [MIS-0002-R116 (onlooker_card_MUST_come_from_invitation)].
 
 Not specified as a requirement, and listed so that nobody assumes it:

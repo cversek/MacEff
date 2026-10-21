@@ -149,6 +149,12 @@ class Daemon:
             print("⚠️ MACF: pd: notice_routes doesn't route 'pd_carried' to 'agent' or 'both', so after "
                   "a restart or a compaction the session isn't told what was carried, changed and lost "
                   "(MIS-0002-R47)", file=sys.stderr)
+        if any(u.kind == "session" for u in self.core.declaration.units) \
+                and self.core.declaration.operator_channels is None:
+            # R107 ends the rule that counted every channel while none was declared.
+            print("⚠️ MACF: pd: the declaration lists no operator_channels, so no channel message counts "
+                  "as the operator's activity (MIS-0002-R107); list the operator's channels, or [] for none",
+                  file=sys.stderr)
         if any(u.privacy_grants for u in self.core.declaration.units) \
                 and self.core.declaration.notice_routes.get(GRANT_NOTICE_SOURCE) not in ("agent", "both"):
             print(f"⚠️ MACF: pd: notice_routes doesn't route '{GRANT_NOTICE_SOURCE}' to 'agent' or 'both', "
