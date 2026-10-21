@@ -203,6 +203,16 @@ def apply(p: Plan, chown: Callable[[str, int, int], None] = None) -> Tuple[int, 
     return done, failed
 
 
+def _zombie(status: str) -> bool:
+    """Whether a /proc status is a zombie: state Z with one thread. A process whose main thread
+    exited while another still runs also reads Z, but it still runs, holds files and writes as
+    its number, so it counts as running."""
+    fields = dict(line.split(":", 1) for line in status.splitlines() if ":" in line)
+    state = fields.get("State", "").split()[:1]
+    threads = fields.get("Threads", "1").strip()
+    return state == ["Z"] and threads == "1"
+
+
 def processes_on(numbers: Iterable[int], proc: Path = Path("/proc"),
                  gids: Iterable[int] = ()) -> List[Tuple[int, str, str]]:
     """(pid, which number, command) for each running process whose real or effective uid is one
@@ -219,7 +229,7 @@ def processes_on(numbers: Iterable[int], proc: Path = Path("/proc"),
             comm = (d / "comm").read_text().strip()
         except OSError:
             continue
-        if any(line.split()[1:2] == ["Z"] for line in status.splitlines() if line.startswith("State:")):
+        if _zombie(status):
             continue  # a zombie runs nothing and holds no files; only its parent can reap it
         hits = {}
         for line in status.splitlines():

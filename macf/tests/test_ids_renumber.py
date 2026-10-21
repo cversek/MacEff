@@ -298,6 +298,17 @@ def test_a_zombie_on_a_moved_number_is_not_a_running_process(tmp_path):
     assert rn.processes_on({998}, proc=proc) == [(21, "uid 998", "broker")]
 
 
+def test_a_process_whose_main_thread_exited_still_runs(tmp_path):
+    """On Linux, a process whose main thread called pthread_exit while another thread runs reads
+    State Z with Threads 2. It still runs and writes as its number, so --apply must still see it."""
+    proc = tmp_path / "proc"
+    (proc / "30").mkdir(parents=True)
+    (proc / "30" / "status").write_text(
+        "Name:\tworker\nState:\tZ (zombie)\nUid:\t998\t998\t998\t998\nGid:\t998\t998\t998\t998\nThreads:\t2\n")
+    (proc / "30" / "comm").write_text("worker\n")
+    assert rn.processes_on({998}, proc=proc) == [(30, "uid 998", "worker")]
+
+
 def test_apply_refuses_while_a_process_runs_as_a_moved_number(tmp_path, capsys, monkeypatch):
     """--apply looks for processes on the numbers it moves before it re-owns anything, and refuses,
     naming each, so nothing writes as its old number mid-move (container_operations 6.2, step 3)."""
