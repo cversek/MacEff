@@ -22,15 +22,23 @@ from typing import Callable, Iterable, List, Optional
 
 from pydantic import ValidationError
 
+from macf.agent_events_log import append_event, read_events
 from macf.notify.session import descends_from, proc_start, verify_incarnation
 from macf.pd.core import POLICY_POINTER, Core, DeclarationRefused, load_declaration
 from macf.pd.interface import (
+    EVENT_CONTROL,
     ActRequest,
+    Control,
     DaemonRecord,
+    EntryAddRequest,
+    EntryListRequest,
+    EntryRemoveRequest,
     IdentityError,
+    PaceRequest,
     Peer,
     Response,
     StatusRequest,
+    WakePaced,
     agent_card,
     channel_socket,
     check_socket_path,
@@ -45,9 +53,10 @@ from macf.pd.unread_mail import UnreadMail, pickup_box
 from macf.pd.notifier import Notifier
 from macf.utils.peercred import peer_credentials
 
-#: The askers a control-socket request may name. The daemon's own policy and the harness
+#: The askers an act over the control socket may name. The daemon's own policy and the harness
 #: ask from inside, so no requesting process exists to record (MIS-0002-R52
-#: (control_act_MUST_name_who_asked)).
+#: (control_act_MUST_name_who_asked)). A pace, which acts on no unit, names the agent or the
+#: operator (``PaceRequest``).
 SOCKET_ASKERS = ("operator", "wind_down")
 
 #: How often the core makes its pass when nothing else wakes the loop.
@@ -110,39 +119,35 @@ class Daemon:
         placeholders = {"agent_home": str(self.home), "card": self.card, "runtime_dir": str(self.base)}
         self.core = Core(load_declaration(self.home, self.card), self.card,
                          placeholders=placeholders, **core_options)
-        #: The declared schedules, run by this daemon (MIS-0002 step 2), or None without any.
-        self.scheduler = None
-        if self.core.declaration.schedules:
-            from macf.pd.names import rendered_declaration_path
-            from macf.pd.scheduler import Scheduler
-            # A rendered declaration is out of the agent's reach; a home copy is checked against
-            # what pd install recorded (MIS-0002-R33 (run_MUST-NOT_change_schedules)).
-            self.scheduler = Scheduler(self.core.declaration, self.card, placeholders,
-                                       work_dir=self.base / f"{self.record_path.stem}.runs",
-                                       check_installed=not rendered_declaration_path(self.home).exists())
-            if self.scheduler.check_installed and \
-                    self.core.declaration.notice_routes.get("pd_schedule_changed") not in ("agent", "both"):
-                print("⚠️ MACF: pd: notice_routes doesn't route 'pd_schedule_changed' to 'agent' or 'both', so "
-                      "a schedule changed since pd install is said only on this stream and in pd status "
-                      "(MIS-0002-R33)", file=sys.stderr)
+        #: The declared schedules and the agent's own entries, run by this daemon (MIS-0002 step
+        #: 2). It runs with no schedule declared, since an agent's entries need it all the same.
+        from macf.pd.names import rendered_declaration_path
+        from macf.pd.scheduler import Scheduler
+        # A rendered declaration is out of the agent's reach; a home copy is checked against
+        # what pd install recorded (MIS-0002-R33 (run_MUST-NOT_change_schedules)).
+        self.scheduler = Scheduler(self.core.declaration, self.card, placeholders,
+                                   work_dir=self.base / f"{self.record_path.stem}.runs",
+                                   check_installed=not rendered_declaration_path(self.home).exists())
         self._listener: Optional[socket.socket] = None
         self._channel_listener: Optional[socket.socket] = None
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound
         self.notifier = Notifier(self.home, self.core.declaration.notice_routes)
+        #: The agent's duties, hosted so a duty that falls due wakes it (the scheduler design, 4.4).
+        from macf.agent_events_log import append_event, read_events
+        from macf.pd.duties import HostedDuties
+        from macf.roles.location import ROLES_DIR_ENV
+        from macf.roles.source import EVENT as DUTY_EVENT
+        roles = Path(os.environ.get(ROLES_DIR_ENV) or self.home / "agent" / "public" / "roles")
+        self.duties = HostedDuties(self.card, roles, append_event,
+                                   lambda: read_events(reverse=False, scope="all", only=(DUTY_EVENT,)),
+                                   self.notifier.raise_notice, time.monotonic)
         self.core.on_notice = self.notifier.raise_notice    # the core's own notices (R60)
-        if self.scheduler is not None:
-            self.scheduler.on_notice = self.notifier.raise_notice   # a denied prompt run (R32)
-        if any(u.kind == "session" for u in self.core.declaration.units) \
-                and self.core.declaration.notice_routes.get("pd_carried") not in ("agent", "both"):
-            # Only the agent's routes deliver a daemon notice, so any other route reaches nobody.
-            print("⚠️ MACF: pd: notice_routes doesn't route 'pd_carried' to 'agent' or 'both', so after "
-                  "a restart or a compaction the session isn't told what was carried, changed and lost "
-                  "(MIS-0002-R47)", file=sys.stderr)
-        if any(u.privacy_grants for u in self.core.declaration.units) \
-                and self.core.declaration.notice_routes.get(GRANT_NOTICE_SOURCE) not in ("agent", "both"):
-            print(f"⚠️ MACF: pd: notice_routes doesn't route '{GRANT_NOTICE_SOURCE}' to 'agent' or 'both', "
-                  f"so a declared grant found denied is said only on this stream (MIS-0002-R65)",
-                  file=sys.stderr)
+        self.scheduler.on_notice = self.notifier.raise_notice   # a denied prompt run (R32)
+        half = self.core.declaration.half_served_routes()
+        if half:
+            print(f"⚠️ MACF: pd: notice_routes routes {', '.join(half)} to 'both', and only the agent's half "
+                  f"is served: the operator hears unread mail alone today, so the rest reach the agent only "
+                  f"(MIS-0002-R42)", file=sys.stderr)
         connect_s = self.core.declaration.channel_connect_s
         #: Where a channel is expected, whether it is dark (R115); the outside watch tells the operator.
         self.dark_channel = DarkChannel(self.card, connect_s) if connect_s else None
@@ -150,16 +155,19 @@ class Daemon:
         threshold = self.core.declaration.unread_mail_threshold_s
         self.unread_mail = UnreadMail(self.card, threshold, pickup_box(self.home),
                                       self.notifier.raise_notice) if threshold else None
+        #: Where the keystroke wake's window in force came from, for a status or a pace to say.
+        self._wake_from = "the declaration"
         if any(u.kind == "session" for u in self.core.declaration.units):
             # The keystroke fallback types into the session unit's own pane (pd.session_unit),
             # recording each wake first so it never reads as the operator (MIS-0002-R105).
-            from macf.pd.wake import TmuxPane, Waker
+            from macf.pd.wake import TmuxPane, Waker, saved_screens_dir
             from macf.supervisor import record_keys_sent
             from macf.utils.identity import session_identifier
             ident = session_identifier(self.card)
             self.notifier.waker = Waker(TmuxPane(ident, self.base),
                                         record_keys=lambda text, kind: record_keys_sent(text, kind, ident),
-                                        card=self.card)
+                                        card=self.card, screens_dir=saved_screens_dir(self.home),
+                                        refractory_s=self.core.declaration.wake_refractory_s)
         self._sel: Optional[selectors.BaseSelector] = None
         self._wake_r, self._wake_w = os.pipe()
         os.set_blocking(self._wake_w, False)
@@ -198,10 +206,11 @@ class Daemon:
         self.core.boot()
         self.notifier.boot()
         self._notice_denied_grants()
+        self._reassert_pace()
         if self.unread_mail is not None:
             self.unread_mail.boot()
-        if self.scheduler is not None:
-            self.scheduler.boot()
+        self.scheduler.boot()
+        self.duties.boot()
 
     def _notice_denied_grants(self) -> None:
         """Owe the agent a notice for each declared grant the last install found denied
@@ -273,8 +282,7 @@ class Daemon:
                     else:
                         os.read(self._wake_r, 512)
                 self.core.tick()
-                if self.scheduler is not None:
-                    self.scheduler.tick()
+                self.scheduler.tick()
                 self.notifier.poll()
                 self.notifier.flush()
                 self.notifier.wake()
@@ -282,13 +290,13 @@ class Daemon:
                     self.dark_channel.tick(self.core.session_incarnation(), bool(self.notifier.channels))
                 if self.unread_mail is not None:
                     self.unread_mail.tick(self.core.session_active_since())
+                self.duties.tick()
                 self._keep_record()
         finally:
             for conn in self.notifier.channels:
                 self.notifier.detach(conn)
             self.notifier.on_detach = None
-            if self.scheduler is not None:
-                self.scheduler.shutdown()
+            self.scheduler.shutdown()
             sel.close()
             self._sel = None
             if self._stop_units:
@@ -413,10 +421,8 @@ class Daemon:
             print(f"⚠️ MACF: pd: cannot read a channel's peer (refusing it): {e}", file=sys.stderr)
             conn.close()
             return
-        session = self.core.session_incarnation()
-        if peer.uid != os.getuid() or session is None or not descends_from(peer.pid, *session):
-            why = ("no session unit runs" if session is None
-                   else f"pid {peer.pid} (uid {peer.uid}) is not below the session unit's pid {session[0]}")
+        why = self._outside_session(peer)
+        if why:
             print(f"⚠️ MACF: pd: refused a channel: {why}", file=sys.stderr)
             conn.close()
             return
@@ -426,6 +432,18 @@ class Daemon:
             self._sel.register(conn, selectors.EVENT_READ, "attached")
         print(f"📡 MACF: pd: channel attached (pid {peer.pid}); "
               f"{len(self.notifier.owed)} notice(s) owed", file=sys.stderr)
+
+    def _outside_session(self, peer) -> str:
+        """Why ``peer`` isn't the agent's live session, or "" when it is: the same uid, and a
+        process that descends from the session unit's live process. Every command the agent
+        runs shares the uid, so lineage is what tells the session from a cron job, a run or
+        another shell (MIS-0002-R122 (pd_MUST_check_channel_peer_lineage)). The channel is
+        checked this way, and so are an agent's requests about its own entries."""
+        session = self.core.session_incarnation()
+        if peer.uid == os.getuid() and session is not None and descends_from(peer.pid, *session):
+            return ""
+        return ("no session unit runs" if session is None
+                else f"pid {peer.pid} (uid {peer.uid}) is not below the session unit's pid {session[0]}")
 
     def _channel_readable(self, conn: socket.socket) -> None:
         """A channel never writes, so a readable channel has closed (or broke the protocol)."""
@@ -487,8 +505,12 @@ class Daemon:
             request = parse_request(line)
         except ValidationError as e:
             return Response(ok=False, error=f"request refused: {e.errors()[0]['msg']}")
+        if isinstance(request, (EntryAddRequest, EntryListRequest, EntryRemoveRequest)):
+            return self._entry_request(request, creds)
         if isinstance(request, StatusRequest):
-            return Response(ok=True, units=self.core.statuses())
+            return Response(ok=True, units=self.core.statuses(), **self._wake_window())
+        if isinstance(request, PaceRequest):
+            return self._pace(request, creds)
         if isinstance(request, ActRequest):
             if request.asked_by.kind not in SOCKET_ASKERS:
                 return Response(ok=False, error=(
@@ -509,6 +531,125 @@ class Daemon:
                 return Response(ok=False, error=str(e.args[0]))
             return Response(ok=True, units=self.core.statuses())
         return Response(ok=False, error="compaction is not available in step 1")
+
+    def _entry_request(self, request, creds) -> Response:
+        """An agent's request about its own entries, taken only from its live session. A
+        relative time is fixed now, so "in 20m" means the same moment after a restart. The
+        event log is the store: what is held is what its events fold to."""
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+
+        from macf.agent_events_log import append_event, read_events
+        from macf.pd.entries import (ENTRY_EVENTS, EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED, OneShot, fold, new_entry_id,
+                                     parse_when)
+        from macf.pd.taint import taint
+        why = self._outside_session(creds)
+        if why and isinstance(request, EntryAddRequest):
+            return Response(ok=False, error=f"an entry is made only from the agent's live session, and {why}")
+        if isinstance(request, EntryRemoveRequest):
+            held = fold(read_events(reverse=False, scope="all", only=ENTRY_EVENTS), self.card)
+            if request.id not in held:
+                return Response(ok=False, error=f"no entry {request.id} is held")
+            removed = {"agent": self.card, "id": request.id, "at": datetime.now(timezone.utc).isoformat(),
+                       "by_pid": creds.pid, "from_session": not why}
+            if not append_event(EVENT_ENTRY_REMOVED, removed):
+                return Response(ok=False, error="the removal could not be recorded in the event log")
+            self.scheduler.entries.pop(request.id, None)
+        if isinstance(request, EntryAddRequest):
+            zone = self.core.declaration.timezone
+            tz = ZoneInfo(zone) if zone else timezone.utc
+            now = datetime.now(timezone.utc)
+            try:
+                when = parse_when(request.when, tz, now)
+            except ValueError as e:
+                return Response(ok=False, error=f"the entry's time was refused: {e}")
+            first = when.next_after(now)
+            if request.action == "check":
+                why = self.scheduler.template_refusal(request.template, request.args)
+                if why:
+                    return Response(ok=False, error=f"the check was refused: {why}")
+            # The operator's consent is the ask prompt on pd entry add, met before this request
+            # was made. Taint is kept as provenance: an entry made after untrusted input is marked,
+            # and says so wherever it's shown (the scheduler design, 5.3, as the repo owner ruled
+            # it on #744). The whole log is asked for, and the scan stops at the context's boundary.
+            marked = taint(read_events(reverse=True, scope="all"))
+            entry = {"agent": self.card, "id": new_entry_id(),
+                     "when": first.isoformat() if isinstance(when, OneShot) else request.when,
+                     "start": now.isoformat(), "zone": zone or "UTC", "first": first.isoformat() if first else None,
+                     "purpose": request.purpose, "action": request.action, "missed": request.missed,
+                     "asked_by_pid": creds.pid, "marked": marked,
+                     "template": request.template, "args": request.args}
+            if not append_event(EVENT_ENTRY_ADDED, entry):
+                return Response(ok=False, error="the entry could not be recorded in the event log")
+            self.scheduler.add_entry(entry)
+        held = fold(read_events(reverse=False, scope="all", only=ENTRY_EVENTS), self.card)
+        return Response(ok=True, entries=list(held.values()))
+
+    # ------------------------------------------------------------------ the wake's pace
+
+    def _wake_window(self) -> dict:
+        """The keystroke wake's window in force and where it came from, for a reply; nothing
+        where no session unit is declared, since there is no keystroke wake."""
+        waker = self.notifier.waker
+        if waker is None:
+            return {}
+        return {"wake_refractory_s": waker.refractory_s, "wake_window_from": self._wake_from}
+
+    def _pace(self, request: PaceRequest, creds) -> Response:
+        """The agent, or the operator, sets how long the keystroke wake rests (persistent_layer
+        1.9). The floor comes only from the declaration, never from this socket. The pace is
+        recorded like every act, and in ``pd_wake_paced``, which the next daemon re-asserts,
+        before the waker changes and before it is answered."""
+        from macf.pd.wake import EVENT_PACED, pace_refusal, pace_source
+        if self.notifier.waker is None:
+            return Response(ok=False, error="no session unit is declared, so there is no keystroke wake to pace")
+        declaration = self.core.declaration
+        refused = pace_refusal(request.refractory_s, declaration.wake_refractory_floor_s,
+                               declaration.wake_refractory_ceiling_s)
+        if refused:
+            return Response(ok=False, error=refused)
+        started = proc_start(creds.pid)
+        if not started:
+            return Response(ok=False, error=(
+                f"the asking process (pid {creds.pid}) has no start time to record, "
+                f"so who asked cannot be named (MIS-0002-R52 (control_act_MUST_name_who_asked))"))
+        peer = Peer(uid=creds.uid, pid=creds.pid, proc_start=started)
+        paced = WakePaced(agent=self.card, refractory_s=request.refractory_s,
+                          previous_s=self.notifier.waker.refractory_s, asked_by=request.asked_by,
+                          peer=peer, reason=request.reason)
+        if not append_event(EVENT_PACED, paced.model_dump()):
+            return Response(ok=False, error=(
+                "the pace could not be recorded, so it is not set: a pace the next daemon "
+                "cannot read back would be lost at its restart"))
+        if not append_event(EVENT_CONTROL, Control(agent=self.card, act="pace", unit="",
+                                                   asked_by=request.asked_by, peer=peer,
+                                                   reason=request.reason).model_dump()):
+            print(f"⚠️ MACF: pd: the pace's {EVENT_CONTROL} event was not recorded", file=sys.stderr)
+        back_to_declared = request.refractory_s is None
+        self.notifier.pace(declaration.wake_refractory_s if back_to_declared else request.refractory_s)
+        self._wake_from = ("the declaration" if back_to_declared
+                           else pace_source(time.time(), request.asked_by.kind, request.reason))
+        return Response(ok=True, **self._wake_window())
+
+    def _reassert_pace(self) -> None:
+        """A pace outlives the daemon that set it. At start, the newest ``pd_wake_paced`` of this
+        agent is read back once and re-asserted, naming the event it came from; a floor declared
+        above it since then wins, and the daemon says so."""
+        if self.notifier.waker is None:
+            return
+        from macf.pd.wake import EVENT_PACED, window_at_boot
+        # A lifetime read, scope "all": a pace holds until another replaces it, across compactions,
+        # restarts and log rotation, so no cycle bounds where the newest one is. It stops there.
+        newest = next((e for e in read_events(reverse=True, scope="all", only={EVENT_PACED})
+                       if (e.get("data") or {}).get("agent") == self.card), None)
+        declaration = self.core.declaration
+        window, source = window_at_boot(declaration.wake_refractory_s,
+                                        declaration.wake_refractory_floor_s, newest,
+                                        declaration.wake_refractory_ceiling_s)
+        self.notifier.pace(window)
+        self._wake_from = source
+        if newest is not None:
+            print(f"maceff_pd: the wake rests {window:g} s after each wake, from {source}", file=sys.stderr)
 
     @staticmethod
     def _read_line(conn: socket.socket) -> Optional[str]:

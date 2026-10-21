@@ -4,9 +4,12 @@
 manager and take it out. Starting, stopping and restarting a unit over the control socket
 must name who asks (MIS-0002-R52 (control_act_MUST_name_who_asked)), and which asker a
 command line typed in a session claims is still an open question, so no unit act is here.
+``wake`` paces the keystroke wake, which acts on no unit: it is asked by the agent, or by the
+operator with ``--asked-by operator`` (persistent_layer 1.9).
 """
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -33,6 +36,20 @@ def add_pd_parser(sub) -> None:
         "uninstall", help="stop this agent's primal daemon and remove its unit; the units it "
                           "supervises keep running, for a later daemon to adopt")
     rm.set_defaults(func=cmd_pd_uninstall)
+    tray = pd_sub.add_parser(
+        "tray", help="keep the operator's tray running under the service manager, outside every "
+                     "agent's daemon (macOS)")
+    tray_sub = tray.add_subparsers(dest="tray_cmd")
+    tray_inst = tray_sub.add_parser(
+        "install", help="install the tray as this user's own LaunchAgent and start it; refused where "
+                        "this host can't show it")
+    tray_inst.add_argument("--plan", action="store_true", help="print the steps it would take, and change nothing")
+    tray_inst.add_argument("--force", action="store_true", help="replace an installed plist that differs")
+    tray_inst.set_defaults(func=cmd_pd_tray_install)
+    tray_rm = tray_sub.add_parser(
+        "uninstall", help="stop the tray and remove its LaunchAgent")
+    tray_rm.add_argument("--plan", action="store_true", help="print the steps it would take, and change nothing")
+    tray_rm.set_defaults(func=cmd_pd_tray_uninstall)
     alive = pd_sub.add_parser(
         "alive", help="write one liveness event for the unit this process runs as (for shell "
                       "units, once per pass); does nothing outside a primal daemon (MIS-0002-R14)")
@@ -42,6 +59,43 @@ def add_pd_parser(sub) -> None:
     alive.add_argument("--in-flight", type=int, default=None, metavar="N",
                        help="work started and not finished, which the daemon checks before a restart")
     alive.set_defaults(func=cmd_pd_alive)
+    entry = pd_sub.add_parser(
+        "entry", help="your own timed entries, made from your live session (policy: persistent_layer)")
+    entry_sub = entry.add_subparsers(dest="entry_cmd")
+    add = entry_sub.add_parser("add", help="make an entry that wakes this session when it falls due")
+    add.add_argument("when", help="an instant, 'in 20m', 'tomorrow 06:30', 'cron:<five fields>' or 'rrule:<rule>'")
+    add.add_argument("purpose", help="what the entry is for, written so a later self can act on it cold")
+    add.add_argument("--check", metavar="TEMPLATE",
+                     help="run one of the operator's check templates at its time, waking this session only "
+                          "when its condition holds")
+    add.add_argument("--arg", action="append", default=[], metavar="NAME=VALUE",
+                     help="an argument for the check's template, as NAME=VALUE; repeat for each")
+    add.add_argument("--missed", choices=("once", "skip", "report"), required=True,
+                     help="a firing missed while the daemon was down: once, late and said so; skip, "
+                          "recorded only; report, recorded and told")
+    add.set_defaults(func=cmd_pd_entry_add)
+    remove = entry_sub.add_parser("remove", help="remove an entry; the agent or the operator may, since it only stops work")
+    remove.add_argument("id", help="the entry's id, e- and 12 hex digits")
+    remove.set_defaults(func=cmd_pd_entry_remove)
+    show = entry_sub.add_parser("show", help="one entry in full: its purpose, time, state and why it was marked")
+    show.add_argument("id", help="the entry's id, e- and 12 hex digits")
+    show.set_defaults(func=cmd_pd_entry_show)
+    lst = entry_sub.add_parser("list", help="the entries you hold")
+    lst.add_argument("--json", action="store_true", help="print them as JSON")
+    lst.set_defaults(func=cmd_pd_entry_list)
+    agenda = pd_sub.add_parser(
+        "agenda", help="what is scheduled: the declared schedules' next runs and your own entries")
+    agenda.set_defaults(func=cmd_pd_agenda)
+    wake = pd_sub.add_parser(
+        "wake", help="the keystroke wake's window: show it, or pace it (persistent_layer 1.9)")
+    wake.add_argument("--refractory", default=None, metavar="DURATION",
+                      help="rest this long after each wake: seconds, or 90s, 5m, 1h; never under "
+                           "the declared floor")
+    wake.add_argument("--declared", action="store_true", help="go back to the declared window")
+    wake.add_argument("--reason", default=None, help="why; recorded with the pace, and needed to pace")
+    wake.add_argument("--asked-by", choices=("agent", "operator"), default="agent",
+                      help="who paces: the agent itself (default), or the operator")
+    wake.set_defaults(func=cmd_pd_wake)
 
 
 def cmd_pd_alive(args: argparse.Namespace) -> int:
@@ -55,6 +109,68 @@ def cmd_pd_alive(args: argparse.Namespace) -> int:
         return 1
     pid = args.pid or os.getppid()
     return 0 if liveness.emit(found.card, found.unit, found.interval_s, args.in_flight, pid=pid) else 1
+
+
+def _seconds(text: str) -> float:
+    """A duration from the command line: a plain number of seconds, or one with s, m or h."""
+    units = {"s": 1, "m": 60, "h": 3600}
+    scale = units.get(text[-1:].lower(), 1)
+    number = text[:-1] if text[-1:].lower() in units else text
+    try:
+        value = float(number) * scale
+    except ValueError:
+        raise ValueError(f"not a duration: {text!r} (use seconds, or 90s, 5m, 1h)") from None
+    if not math.isfinite(value):
+        raise ValueError(f"a window is a finite length of time: {text!r}")
+    if not value > 0:
+        raise ValueError(f"a window must be longer than nothing: {text!r}")
+    return value
+
+
+def cmd_pd_wake(args: argparse.Namespace) -> int:
+    """0 when shown or paced; 1 when the daemon refused, could not be reached, or has no wake."""
+    from macf.pd.client import DaemonUnavailable, ask
+    from macf.pd.core import POLICY_POINTER, DeclarationRefused
+    from macf.pd.daemon import card_for_home
+    from macf.utils.paths import find_agent_home
+
+    home = find_agent_home()
+    try:
+        card = card_for_home(home)
+    except DeclarationRefused as e:
+        print(f"maceff_pd: {e}\n{POLICY_POINTER}", file=sys.stderr)
+        return 1
+    if args.refractory is not None and args.declared:
+        print("maceff_pd: --refractory and --declared ask for different windows; give one", file=sys.stderr)
+        return 1
+    pacing = args.refractory is not None or args.declared
+    if pacing and not args.reason:
+        print("maceff_pd: a pace is recorded with its reason; give --reason", file=sys.stderr)
+        return 1
+    if pacing:
+        try:
+            window = None if args.declared else _seconds(args.refractory)
+        except ValueError as e:
+            print(f"maceff_pd: {e}", file=sys.stderr)
+            return 1
+        asker = {"kind": args.asked_by, **({"card": card} if args.asked_by == "agent" else {})}
+        request = {"op": "pace", "refractory_s": window, "asked_by": asker, "reason": args.reason}
+    else:
+        request = {"op": "status"}
+    try:
+        reply = ask(card, request)
+    except DaemonUnavailable as e:
+        print(f"maceff_pd: {card}: {e}", file=sys.stderr)
+        return 1
+    if not reply.ok:
+        print(f"maceff_pd: {card}: refused: {reply.error}", file=sys.stderr)
+        return 1
+    if reply.wake_refractory_s is None:
+        print(f"{card}: no session unit is declared, so there is no keystroke wake")
+        return 1
+    print(f"{card}: the wake rests {reply.wake_refractory_s:g} s after each wake, "
+          f"from {reply.wake_window_from}")
+    return 0
 
 
 def _when(epoch: Optional[float]) -> str:
@@ -111,6 +227,127 @@ def _say_tray(report) -> None:
         print(report.tray)
 
 
+def _ask_entries(request: dict):
+    """The daemon's reply to an entry request, or None, having said why on the error stream."""
+    from macf.pd import client
+    _, card = _this_agent()
+    try:
+        reply = client.ask(card, request)
+    except client.DaemonUnavailable as e:
+        print(f"⚠️ MACF: pd: no daemon answered ({e}); your entries are held by your primal daemon",
+              file=sys.stderr)
+        return None
+    if not reply.ok:
+        print(f"⚠️ MACF: pd: {reply.error}", file=sys.stderr)
+        return None
+    return reply
+
+
+def cmd_pd_entry_add(args: argparse.Namespace) -> int:
+    if any("=" not in a for a in args.arg):
+        print("⚠️ MACF: pd: each --arg is NAME=VALUE", file=sys.stderr)
+        return 2
+    request = {"op": "entry_add", "when": args.when, "purpose": args.purpose, "missed": args.missed,
+               "action": "check" if args.check else "wake"}
+    if args.check:
+        request.update(template=args.check, args=dict(a.split("=", 1) for a in args.arg))
+    reply = _ask_entries(request)
+    if reply is None:
+        return 1
+    made = reply.entries[-1] if reply.entries else None
+    print(f"entry made; you hold {len(reply.entries or [])}" + (f", the newest {made['id']}" if made else ""))
+    if made and made.get("marked"):
+        print(f"it is marked: this context read untrusted input ({'; '.join(made['marked'])})")
+    return 0
+
+
+def cmd_pd_entry_show(args: argparse.Namespace) -> int:
+    reply = _ask_entries({"op": "entry_list"})
+    if reply is None:
+        return 1
+    entry = next((e for e in reply.entries or [] if e.get("id") == args.id), None)
+    if entry is None:
+        print(f"⚠️ MACF: pd: no entry {args.id} is held", file=sys.stderr)
+        return 1
+    for key in ("id", "agent", "action", "purpose", "when", "zone", "first", "missed", "marked", "start"):
+        if entry.get(key) not in (None, "", []):
+            value = "; ".join(entry[key]) if isinstance(entry[key], list) else entry[key]
+            print(f"{key + ':':13} {value}")
+    return 0
+
+
+def cmd_pd_entry_remove(args: argparse.Namespace) -> int:
+    reply = _ask_entries({"op": "entry_remove", "id": args.id})
+    if reply is None:
+        return 1
+    print(f"entry {args.id} removed; you hold {len(reply.entries or [])}")
+    return 0
+
+
+def cmd_pd_entry_list(args: argparse.Namespace) -> int:
+    reply = _ask_entries({"op": "entry_list"})
+    if reply is None:
+        return 1
+    entries = reply.entries or []
+    if args.json:
+        print(json.dumps(entries, indent=2))
+        return 0
+    for e in entries:
+        print(f"{e['id']}  next {_next(e)}  {e['when']}  ({e['missed']})  {_state(e)}{e['purpose']}")
+    if not entries:
+        print("no entries")
+    return 0
+
+
+def _next(entry: dict, now=None) -> str:
+    """When an entry next fires, from now, as text; "none" when it never will again."""
+    from datetime import datetime, timezone
+
+    from macf.pd.entries import next_fire
+    try:
+        nxt = next_fire(entry, now or datetime.now(timezone.utc))
+    except (KeyError, ValueError):
+        return entry.get("first") or "none"
+    return nxt.isoformat() if nxt else "none"
+
+
+def _state(entry: dict) -> str:
+    """What an entry's line says before its purpose: marked, when it was made from a context that
+    read untrusted input (the scheduler design, 5.3)."""
+    return "[marked] " if entry.get("marked") else ""
+
+
+def agenda_lines(declaration, entries, now) -> list:
+    """One line per declared schedule and per entry, soonest first, each marked with its tier."""
+    from zoneinfo import ZoneInfo
+
+    from macf.pd.schedule import CronExpr
+    tz = ZoneInfo(declaration.timezone) if declaration and declaration.timezone else None
+    rows = []
+    for s in (declaration.schedules if declaration else []):
+        nxt = CronExpr.parse(s.cron, tz).next_after(now) if tz else None
+        rows.append((nxt.isoformat() if nxt else "none", f"declared  {s.name}  {s.cron}"))
+    for e in entries:
+        rows.append((_next(e, now), f"entry     {e['id']}  {_state(e)}{e['purpose']}"))
+    return [f"{when}  {what}" for when, what in sorted(rows)]
+
+
+def cmd_pd_agenda(args: argparse.Namespace) -> int:
+    from datetime import datetime, timezone
+
+    from macf.pd.core import load_declaration
+    home, card = _this_agent()
+    try:
+        declaration = load_declaration(home, card)
+    except Exception as e:  # a missing or refused declaration still leaves the entries to show
+        print(f"⚠️ MACF: pd: the declaration couldn't be read ({e}); showing entries only", file=sys.stderr)
+        declaration = None
+    reply = _ask_entries({"op": "entry_list"})
+    lines = agenda_lines(declaration, (reply.entries or []) if reply else [], datetime.now(timezone.utc))
+    print("\n".join(lines) if lines else "nothing scheduled")
+    return 0 if reply is not None else 1
+
+
 def _this_agent():
     """The agent home, resolved, and the card its own files name, or the refusal's reason."""
     from pathlib import Path
@@ -129,14 +366,14 @@ _SERVICE_ENV_KEEP = ("HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG")
 _SERVICE_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 
 
-def daemon_macf(python: str) -> Tuple[Optional[Path], str]:
+def daemon_macf(python: str, modules: Tuple[str, ...] = ("macf.pd",)) -> Tuple[Optional[Path], str]:
     """The macf that ``python -m macf.pd`` imports when the service manager runs it, or None and
     why not. Asked of the interpreter itself, from ``/`` and without the installing shell's Python
-    settings, because the unit carries neither (#650)."""
+    settings, because the unit carries neither (#650). *modules* are what the job must import."""
     env = {k: os.environ[k] for k in _SERVICE_ENV_KEEP if k in os.environ}
     env["PATH"] = _SERVICE_PATH
     try:
-        out = subprocess.run([python, "-c", "import macf.pd, macf; print(macf.__file__)"],
+        out = subprocess.run([python, "-c", f"import {', '.join(modules)}, macf; print(macf.__file__)"],
                              cwd="/", env=env, capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
         return None, str(e)
@@ -295,3 +532,64 @@ def _gone(said: str) -> bool:
     """Whether a status line says the service is no longer loaded: launchd's "not loaded",
     or systemd's LoadState=not-found."""
     return said.startswith("not loaded") or "LoadState=not-found" in said
+
+
+def _tray_log_dir() -> str:
+    """Where the tray's job writes its output: one tray for the user, so not under any agent's home."""
+    return str(Path.home() / "Library" / "Logs" / "MacEff")
+
+
+def cmd_pd_tray_install(args: argparse.Namespace) -> int:
+    """The tray as this user's own LaunchAgent, so launchd relaunches it when it dies (#747)."""
+    from macf.platform import launchd
+    from macf.platform.tray_host import tray_host
+
+    host = tray_host()
+    if not host.available:
+        # MIS-0002-R73: where the host can't show the tray, say why, and install nothing.
+        print(f"maceff_pd: tray not installed: {host.reason}", file=sys.stderr)
+        return 1
+    tray_macf, why = daemon_macf(sys.executable, modules=("rumps", "macf.tray"))
+    import macf
+    planned = Path(macf.__file__).resolve().parent
+    if tray_macf != planned:
+        found = f"imports macf from {tray_macf}" if tray_macf else f"can't import the tray ({why})"
+        print(f"maceff_pd: tray not {'planned' if args.plan else 'installed'}: run as launchd runs it, "
+              f"{sys.executable} {found}, not the macf this command runs ({planned}). Install from an "
+              f"interpreter with macf[tray] installed in it.", file=sys.stderr)
+        return 1
+    argv = [sys.executable, "-m", "macf.tray"]
+    steps = launchd.tray_install_plan(argv, str(Path.home()), _tray_log_dir(), os.getuid())
+    if args.plan:
+        print(f"# the tray, not installed (--plan); it runs {sys.executable}, with macf from {planned}")
+        for s in steps:
+            print(s.describe())
+        print(launchd.render_tray_launch_agent(argv, str(Path.home()), _tray_log_dir())[1].decode("utf-8"))
+        return 0
+    try:
+        Path(_tray_log_dir()).mkdir(parents=True, exist_ok=True)
+        launchd.apply_plan(steps, force=args.force)
+    except (OSError, RuntimeError) as e:
+        print(f"maceff_pd: tray install stopped: {e}", file=sys.stderr)
+        return 1
+    print(f"tray: installed at {steps[0].path}; it runs {sys.executable}, with macf from {planned}. "
+          f"A tray started by hand is still running: quit it, or there are two icons.")
+    return 0
+
+
+def cmd_pd_tray_uninstall(args: argparse.Namespace) -> int:
+    from macf.platform import launchd
+
+    steps = launchd.tray_uninstall_plan(str(Path.home()), os.getuid())
+    if args.plan:
+        print("# removing the tray (--plan)")
+        for s in steps:
+            print(s.describe())
+        return 0
+    try:
+        launchd.apply_plan(steps)
+    except (OSError, RuntimeError) as e:
+        print(f"maceff_pd: tray uninstall stopped: {e}", file=sys.stderr)
+        return 1
+    print("tray: uninstalled; launchd no longer keeps it running")
+    return 0

@@ -241,6 +241,62 @@ class CommandRun(_Closed):
         return _usable_environment(v)
 
 
+#: An argument slot in a check template: an argv element that is exactly ``<name>``. It's
+#: replaced whole by the argument's value, so a value can never become a second argument.
+ARG_SLOT = re.compile(r"^<([a-z][a-z0-9_]{0,31})>$")
+
+
+class CheckArg(_Closed):
+    """A check template's argument: an integer, or text that matches ``pattern`` whole."""
+
+    kind: Literal["integer", "pattern"]
+    pattern: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _pattern_iff_pattern(self) -> "CheckArg":
+        if (self.kind == "pattern") != (self.pattern is not None):
+            raise ValueError("a pattern is given exactly when the argument's kind is pattern")
+        if self.pattern is not None:
+            re.compile(self.pattern)
+        return self
+
+    def accepts(self, value: str) -> bool:
+        if self.kind == "integer":
+            return re.fullmatch(r"-?\d{1,18}", value) is not None
+        return re.fullmatch(self.pattern, value) is not None
+
+
+class CheckTemplate(_Closed):
+    """A command the operator declares for agents' ``check`` entries (the scheduler design, 4.2):
+    inline argv run with no shell, and typed arguments, each filling one whole argv element. Its
+    program may not live in the agent's home, where the agent could rewrite it; the daemon
+    refuses one that does. It wakes the agent when its condition holds, as a CommandRun does."""
+
+    command: List[str] = Field(min_length=1)
+    args: Dict[str, CheckArg] = Field(default_factory=dict)
+    wake_when: Literal["exit_code", "stdout"]
+    timeout_s: float = Field(gt=0, le=600)
+
+    @model_validator(mode="after")
+    def _slots_match_args(self) -> "CheckTemplate":
+        slots = [m.group(1) for m in map(ARG_SLOT.match, self.command) if m]
+        if sorted(slots) != sorted(self.args):
+            raise ValueError(f"the command's slots {sorted(slots)} and the declared args {sorted(self.args)} differ")
+        if ARG_SLOT.match(self.command[0]):
+            raise ValueError("the program itself can't be an argument")
+        _known_placeholders([a for a in self.command if not ARG_SLOT.match(a)])
+        return self
+
+    def argv(self, args: Dict[str, str]) -> List[str]:
+        """The command with each slot filled, or ValueError naming what doesn't fit."""
+        if sorted(args) != sorted(self.args):
+            raise ValueError(f"this template takes {sorted(self.args)}, not {sorted(args)}")
+        bad = [k for k, v in args.items() if not self.args[k].accepts(v)]
+        if bad:
+            raise ValueError(f"not a valid {', '.join(bad)}")
+        return [args[m.group(1)] if (m := ARG_SLOT.match(a)) else a for a in self.command]
+
+
 class Schedule(_Closed):
     """A schedule, for step 2 (MIS-0002-R24, MIS-0002-R29 (schedule_MUST_declare_target)).
     Declared now so the format does not change under the steps that come later.
@@ -286,6 +342,14 @@ class ChannelPlugin(_Closed):
     def __str__(self) -> str:
         return f"{self.plugin}@{self.marketplace}"
 
+#: How long the keystroke wake rests after each wake when the declaration says nothing: the
+#: ten minutes the mail clocks learned, which the operator kept as the default on 2026-10-17.
+DEFAULT_WAKE_REFRACTORY_S = 600.0
+#: The longest window a pace may set, unless the declaration says otherwise: the outside watch's
+#: allowance for a held wake (``watch.WAKE_HELD_ALERT_S``), so no pace can keep an agent unwoken
+#: past the point where a stuck wake would have reached the operator.
+DEFAULT_WAKE_REFRACTORY_CEILING_S = 1800.0
+
 
 class Declaration(_Closed):
     """Everything an agent declares to its primal daemon. Audited by reading it.
@@ -325,10 +389,21 @@ class Declaration(_Closed):
     #: How long mail may sit in the agent's pickup box, while its session runs, before the
     #: daemon raises the ``pd_unread_mail`` notice (MIS-0002-R55). None: no notice.
     unread_mail_threshold_s: Optional[float] = Field(default=None, gt=0)
+    #: How long the keystroke wake rests after each wake, until the agent paces it otherwise
+    #: over the control socket (persistent_layer 1.9).
+    wake_refractory_s: float = Field(default=DEFAULT_WAKE_REFRACTORY_S, gt=0, allow_inf_nan=False)
+    #: The shortest window a pace may set. Only the declaration sets it, never the socket, and
+    #: in a container the declaration is rendered by root. None: no floor.
+    wake_refractory_floor_s: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
+    #: The longest window a pace may set. Only the declaration sets it, like the floor.
+    wake_refractory_ceiling_s: float = Field(default=DEFAULT_WAKE_REFRACTORY_CEILING_S, gt=0,
+                                             allow_inf_nan=False)
     quiet_windows: List[Window] = Field(default_factory=list)
     keep_harness_idle_compaction: bool = False
     wind_down: Optional[WindDown] = None
     timezone: Optional[str] = None
+    #: Commands the agent's ``check`` entries may run, by name (the scheduler design, 4.2).
+    check_templates: Dict[str, CheckTemplate] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _names_unique(self) -> "Declaration":
@@ -338,7 +413,45 @@ class Declaration(_Closed):
             raise ValueError(f"names declared more than once: {', '.join(dupes)}")
         if sum(u.kind == "session" for u in self.units) > 1:
             raise ValueError("at most one unit may be the session")
+        bad = sorted(n for n in self.check_templates if not re.fullmatch(r"[a-z][a-z0-9_-]{0,47}", n))
+        if bad:
+            raise ValueError(f"check template names must be short lowercase words: {', '.join(bad)}")
         return self
+
+    @model_validator(mode="after")
+    def _wake_floor_under_its_window(self) -> "Declaration":
+        floor = self.wake_refractory_floor_s
+        if floor is not None and floor > self.wake_refractory_s:
+            raise ValueError(f"wake_refractory_floor_s ({floor:g} s) is above wake_refractory_s "
+                             f"({self.wake_refractory_s:g} s): the declared window would be under its own floor")
+        ceiling = self.wake_refractory_ceiling_s
+        if self.wake_refractory_s > ceiling:
+            raise ValueError(f"wake_refractory_s ({self.wake_refractory_s:g} s) is above wake_refractory_ceiling_s "
+                             f"({ceiling:g} s): the declared window would be over its own ceiling")
+        return self
+
+    @model_validator(mode="after")
+    def _routes_are_ones_that_are_served(self) -> "Declaration":
+        # A route that reaches nobody is refused, not accepted and dropped (MIS-0002-R42
+        # (notice_source_MUST_be_routed); the repo owner's ruling of 2026-10-21, option A). The
+        # agent's route is served for every source; the operator's only for unread mail, by the
+        # outside watch; holding until the operator is present is served nowhere yet. A source
+        # routed to `both` keeps its agent half, and the daemon says at start that the operator's
+        # half is unserved (half_served_routes), so a half-served route never stops a daemon.
+        for source, route in sorted(self.notice_routes.items()):
+            if route == "held_until_present":
+                raise ValueError(f"notice_routes routes {source!r} to 'held_until_present', which no "
+                                 f"part of the layer serves yet, so its notices would reach nobody; "
+                                 f"route it to 'agent'")
+            if route == "operator" and source != UNREAD_MAIL_SOURCE:
+                raise ValueError(f"notice_routes routes {source!r} to 'operator', but only "
+                                 f"{UNREAD_MAIL_SOURCE!r} reaches the operator today (by the outside "
+                                 f"watch), so its notices would reach nobody; route it to 'agent'")
+        return self
+
+    def half_served_routes(self) -> List[str]:
+        """Sources routed to `both` whose operator half nothing serves yet: every one but unread mail."""
+        return sorted(s for s, r in self.notice_routes.items() if r == "both" and s != UNREAD_MAIL_SOURCE)
 
     @model_validator(mode="after")
     def _unread_mail_notice_is_routed(self) -> "Declaration":
@@ -355,7 +468,7 @@ class Declaration(_Closed):
         # (MIS-0002-R32 (run_MUST_fail_on_prompt)). Only the agent's routes deliver a daemon
         # notice today, so any other route would reach nobody.
         if any(s.target == "isolated" and isinstance(s.run, PromptRun) for s in self.schedules) \
-                and self.notice_routes.get(RUN_FAILED_SOURCE) not in ("agent", "both"):
+                and self.notice_routes.get(RUN_FAILED_SOURCE, "agent") not in ("agent", "both"):
             raise ValueError(f"an isolated prompt run is declared, so notice_routes must route "
                              f"{RUN_FAILED_SOURCE!r} to 'agent' or 'both', the routes its notice is "
                              f"delivered on")
@@ -449,10 +562,11 @@ class Asker(_Closed):
     ``harness`` is for a compaction nobody asked for, found by the absence of an ask
     (MIS-0002-R127 (harness_compaction_MUST_be_recorded)); ``policy`` for the daemon
     acting on its own declared rules: a unit's restart policy after a failure, the start of
-    declared units at boot, and the stops of a shutdown.
+    declared units at boot, and the stops of a shutdown. ``agent`` is the agent itself, over
+    the control socket from its own command line, pacing its wake (persistent_layer 1.9).
     """
 
-    kind: Literal["operator", "wind_down", "policy", "harness"]
+    kind: Literal["operator", "wind_down", "policy", "harness", "agent"]
     card: Optional[str] = None
 
 
@@ -470,11 +584,12 @@ class Control(_Closed):
 
     ``peer`` is absent only for acts with no requesting process: the daemon's own policy,
     and a harness compaction, where the event the harness detector wrote is the
-    observation and this record is the decision.
+    observation and this record is the decision. A pace acts on no unit, so its ``unit`` is
+    empty, and the window it set is in its ``WakePaced`` record.
     """
 
     agent: str
-    act: Literal["start", "stop", "restart", "compact"]
+    act: Literal["start", "stop", "restart", "compact", "pace"]
     unit: str
     asked_by: Asker
     peer: Optional[Peer] = None
@@ -482,11 +597,25 @@ class Control(_Closed):
 
     @model_validator(mode="after")
     def _peer_iff_requested(self) -> "Control":
-        requested = self.asked_by.kind in ("operator", "wind_down")
+        requested = self.asked_by.kind in ("operator", "wind_down", "agent")
         if requested != (self.peer is not None):
             raise ValueError("an act asked for over the control socket records its peer, "
                              "and only such an act does")
         return self
+
+
+class WakePaced(_Closed):
+    """The keystroke wake was paced over the control socket (persistent_layer 1.9): written
+    before the daemon answers, beside the act's ``Control`` record, and read back by the next
+    daemon at its start, which re-asserts it. ``refractory_s`` is the window asked for, or None
+    to go back to the declared one; ``previous_s`` is the window it replaced."""
+
+    agent: str
+    refractory_s: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
+    previous_s: float = Field(gt=0)
+    asked_by: Asker
+    peer: Peer
+    reason: str = Field(min_length=1)
 
 
 class DaemonStart(_Closed):
@@ -562,7 +691,61 @@ class CompactRequest(_Closed):
         return self
 
 
-Request = Union[StatusRequest, ActRequest, CompactRequest]
+class EntryAddRequest(_Closed):
+    """An agent's own entry, asked from its live session: the daemon takes it only from a
+    process below the session unit (the scheduler design, sections 1 and 4.1)."""
+
+    op: Literal["entry_add"]
+    when: str = Field(min_length=1, max_length=200)
+    purpose: str = Field(min_length=1, max_length=500)
+    action: Literal["wake", "check"]
+    missed: Literal["once", "skip", "report"]
+    #: For a ``check``: the operator's template it runs, and its arguments (design 4.2).
+    template: Optional[str] = Field(default=None, max_length=48)
+    args: Dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _template_iff_check(self) -> "EntryAddRequest":
+        if (self.action == "check") != (self.template is not None):
+            raise ValueError("a template is named exactly when the action is check")
+        return self
+
+
+class EntryListRequest(_Closed):
+    """The entries the agent holds. Anyone with the daemon's uid may read them, the operator
+    included (the scheduler design, 5.5); only making one needs the live session."""
+
+    op: Literal["entry_list"]
+
+
+class EntryRemoveRequest(_Closed):
+    """Remove an entry the agent holds. Removing only ever stops work, so anyone with the
+    daemon's uid may ask: the agent, from its session, and the operator, revoking an entry that
+    is already active (the scheduler design, 5.4)."""
+
+    op: Literal["entry_remove"]
+    id: str = Field(pattern=r"^e-[0-9a-f]{12}$")
+
+
+class PaceRequest(_Closed):
+    """How long the keystroke wake rests after each wake, or None to go back to the declared
+    window. The agent paces itself, or the operator paces it; it acts on no unit. No pace goes
+    under the declared floor, which only the declaration sets (persistent_layer 1.9)."""
+
+    op: Literal["pace"]
+    refractory_s: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
+    asked_by: Asker
+    reason: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _only_agent_or_operator(self) -> "PaceRequest":
+        if self.asked_by.kind not in ("agent", "operator"):
+            raise ValueError("only the agent or the operator may pace the wake")
+        return self
+
+
+Request = Union[StatusRequest, ActRequest, CompactRequest, PaceRequest, EntryAddRequest,
+                EntryListRequest, EntryRemoveRequest]
 
 
 class UnitStatus(_Closed):
@@ -580,9 +763,15 @@ class UnitStatus(_Closed):
 
 
 class Response(_Closed):
+    """``wake_refractory_s`` and ``wake_window_from`` answer a status or a pace where a session
+    unit has a keystroke wake: the window in force, and where it came from."""
+
     ok: bool
     error: Optional[str] = None
     units: Optional[List[UnitStatus]] = None
+    entries: Optional[List[dict]] = None
+    wake_refractory_s: Optional[float] = None
+    wake_window_from: Optional[str] = None
 
 
 _REQUEST = TypeAdapter(Annotated[Request, Field(discriminator="op")])
