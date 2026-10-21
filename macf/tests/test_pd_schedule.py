@@ -118,6 +118,28 @@ def test_no_replayed_restart():
     assert (plan.run_at, plan.missed) == (None, 3)
 
 
+@pytest.mark.parametrize("kind, window", [("skip", None), ("run_once", None),
+                                          ("run_once_in_window", ("09:00", "10:00")), ("report_only", None)])
+def test_the_scheduler_replays_no_restart_after_downtime(tmp_path, kind, window):
+    """R27 through the scheduler itself, under every policy on the closed list: a schedule
+    whose act restarts a unit, missed while no daemon ran, starts nothing when the daemon
+    boots. The control, the same schedule without restarts_unit under run_once, does run, so
+    the refusal is R27's and not a scheduler that runs nothing."""
+    def booted(restarts, policy_kind, policy_window):
+        log, now = Log(), [at("2026-10-10 09:20")]
+        sched = Schedule(name="bounce", cron="0 * * * *", missed_run=policy(policy_kind, policy_window),
+                         target="isolated", timeout_s=30.0, restarts_unit=restarts,
+                         run=CommandRun(command=["/usr/bin/true"], wake_when="exit_code"))
+        for event in (sc.EVENT_STARTED, sc.EVENT_DONE):
+            log.append(event, {"agent": CARD, "schedule": "bounce", "scheduled_for": "2026-10-10T06:00:00+00:00"})
+        s = make_scheduler(tmp_path, [sched], log, now)
+        s.tick()
+        finish(s)
+        return [d for d in log.of(sc.EVENT_STARTED) if d.get("scheduled_for") != "2026-10-10T06:00:00+00:00"]
+    assert booted(True, kind, window) == []
+    assert booted(False, "run_once", None), "the control didn't run, so the refusal above proves nothing"
+
+
 def test_due_run_states_its_lateness():
     """A run that comes due while the daemon is up runs now and carries how late it is (R34);
     a new schedule owes nothing from before it was declared."""
@@ -313,6 +335,19 @@ def test_late_run_says_so(tmp_path):
     s.tick()
     assert log.of(sc.EVENT_STARTED)[0]["late_s"] == 150.0
     finish(s)
+
+    # The record a notice points to states it too. A failed run's notice, received through the
+    # channel's own record, points to pd_run_done, so that record carries how late the run began.
+    log, now = Log(), [at("2026-10-14 12:00")]
+    channel = ChannelReceiver(tmp_path / "agent")
+    s = make_scheduler(tmp_path, [command_schedule(["/bin/sh", "-c", "exit 3"], name="fails")],
+                       log, now, on_notice=channel)
+    now[0] = at("2026-10-14 12:07:30")
+    s.tick()
+    finish(s)
+    assert [source for source, _ in channel.received] == ["pd_run_failed"]
+    done = log.of(sc.EVENT_DONE)[0]
+    assert done["schedule"] == "fails" and done["late_s"] == 150.0, done
 
 
 def test_wall_clock_cap(tmp_path):
