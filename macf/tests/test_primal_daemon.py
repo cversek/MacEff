@@ -1270,7 +1270,18 @@ def test_no_own_compaction(make_core, script):
     second = core.pid("worker")
     assert drive(core, lambda: core.pid("worker") not in (None, first, second))
     acts = [d.get("act") for d in events("pd_control", "worker")]
-    assert acts and "compact" not in acts
+    assert acts and not {"compact", "clear"} & set(acts)
+    # The only text the layer ever types into a session is the keystroke wake. Whatever ids it
+    # is handed, that text can't begin a slash command (/compact, /clear) or carry a line break
+    # that would submit one after it, so the layer has no way to compact or clear on its own.
+    from macf.pd import wake
+    hostile = [["/clear"], ["/compact"], ["x\n/clear"], ["\r/compact"], ["msg-1792000000-abc123abc123", "/clear"]]
+    typed = [wake.wake_text(ids) for ids in hostile + [["msg-1792000000-abc123abc123"]]]
+    assert any(typed), "no wake text was built, so nothing here was checked"
+    for text in typed:
+        if text is not None:
+            assert not text.lstrip().startswith("/") and "\n" not in text and "\r" not in text, text
+            assert "/clear" not in text and "/compact" not in text, text
 
 
 def test_the_record_outlives_a_temp_cleaner(tmp_path, script, base, run_daemon):
