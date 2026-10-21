@@ -228,6 +228,34 @@ def test_env_rendered_at_start(make_core, script, tmp_path):
         core.shutdown("next start")
 
 
+def test_env_is_only_what_the_declaration_says(make_core, script, tmp_path, monkeypatch):
+    """R13's other half: the unit's environment is the declared one and the core's own keys,
+    never a file a persistent volume carried forward, and never the daemon's own environment.
+    Stale env files are planted where a home keeps them, and a stray variable in the daemon's
+    environment, and none of them reaches the unit."""
+    from macf.pd.core import ENV_HOME, ENV_INTERVAL, ENV_UNIT
+    home = tmp_path / "home"
+    for stale in (home / ".env", home / ".maceff" / "pd" / "worker.env", home / ".maceff" / "env"):
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_text("SETTING=carried-forward\nSTALE_KEY=1\n")
+    monkeypatch.setenv("STRAY_FROM_DAEMON", "1")
+    dump = tmp_path / "seen.json"
+    unit = make_unit("worker", script, {"dump": str(dump)}, environment={"SETTING": "declared"})
+    core = make_core([unit], placeholders={"agent_home": str(home), "card": CARD, "runtime_dir": str(tmp_path)})
+    core.boot()
+    assert drive(core, lambda: dump.exists())
+    env = json.loads(dump.read_text())["env"]
+    assert env["SETTING"] == "declared"
+    declared = set(unit.environment) | {ENV_UNIT, ENV_INTERVAL, ENV_HOME}
+    assert set(env) - declared <= _INTERPRETER_KEYS, set(env) - declared
+    assert "STALE_KEY" not in env and "STRAY_FROM_DAEMON" not in env
+
+
+#: What the interpreter itself sets in a child's environment on some platforms, which no
+#: declaration or file put there.
+_INTERPRETER_KEYS = {"__CF_USER_TEXT_ENCODING", "LC_CTYPE", "PWD", "SHLVL", "_"}
+
+
 def test_placeholders_filled_at_start(make_core, script, tmp_path):
     """A declared value names the agent home, the card or the runtime directory by
     placeholder, and the core fills each in when it starts the unit (R13). A core given no
@@ -393,6 +421,28 @@ def test_no_cross_agent_control(tmp_path, script):
 
     with pytest.raises(DeclarationRefused, match="R07"):
         load_declaration(tmp_path, CARD)
+
+
+def test_a_running_daemon_controls_no_other_agents_unit(tmp_path, script, base, run_daemon):
+    """R07 at run time, where the operator's own asks arrive: a running daemon asked to stop,
+    start or restart a unit its declaration doesn't name refuses each one, names R07, records
+    no control act for it, and leaves the other agent's process running. Its own unit is
+    untouched by the asks."""
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+    try:
+        daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+        assert wait_for(lambda: unit_state(daemon, "worker") == "running")
+        mine = unit_pid(daemon, "worker")
+        for op in ("stop", "restart", "start"):
+            reply = ask(daemon, {"op": op, "unit": "other-agents-broker", "reason": "not mine",
+                                 "asked_by": {"kind": "operator", "card": "Operator@000000"}})
+            assert not reply["ok"] and "R07" in reply["error"], (op, reply)
+        assert not events("pd_control", "other-agents-broker")
+        assert other.poll() is None, "the other agent's process was signalled"
+        assert unit_state(daemon, "worker") == "running" and unit_pid(daemon, "worker") == mine
+    finally:
+        other.kill()
+        other.wait()
 
 
 def test_stop_after_a_failure_is_stopped(make_core, script):
@@ -964,6 +1014,16 @@ def test_control_events(tmp_path, script, base, run_daemon):
     assert (peer["uid"], peer["pid"]) == (os.getuid(), os.getpid())
     assert verify_incarnation(peer["pid"], peer["proc_start"])
 
+    # A restart is a control act too (R52 names stop, restart and compaction; compaction is
+    # refused in step 1). Started again, then restarted, each is recorded with who asked and why.
+    for op, reason in (("start", "back up"), ("restart", "new config")):
+        assert ask(daemon, {"op": op, "unit": "worker", "reason": reason,
+                            "asked_by": {"kind": "operator", "card": "Operator@000000"}})["ok"]
+        assert wait_for(lambda: any(d["act"] == op and d["reason"] == reason
+                                    for d in events("pd_control", "worker"))), op
+    restarted = [d for d in events("pd_control", "worker") if d["act"] == "restart"][-1]
+    assert restarted["asked_by"]["kind"] == "operator" and restarted["peer"]["pid"] == os.getpid()
+
 
 def test_a_request_cannot_claim_an_inside_asker(tmp_path, script, base, run_daemon):
     """Over the socket the asker is the operator or the declared wind-down. A request that
@@ -1242,7 +1302,18 @@ def test_no_own_compaction(make_core, script):
     second = core.pid("worker")
     assert drive(core, lambda: core.pid("worker") not in (None, first, second))
     acts = [d.get("act") for d in events("pd_control", "worker")]
-    assert acts and "compact" not in acts
+    assert acts and not {"compact", "clear"} & set(acts)
+    # The only text the layer ever types into a session is the keystroke wake. Whatever ids it
+    # is handed, that text can't begin a slash command (/compact, /clear) or carry a line break
+    # that would submit one after it, so the layer has no way to compact or clear on its own.
+    from macf.pd import wake
+    hostile = [["/clear"], ["/compact"], ["x\n/clear"], ["\r/compact"], ["msg-1792000000-abc123abc123", "/clear"]]
+    typed = [wake.wake_text(ids) for ids in hostile + [["msg-1792000000-abc123abc123"]]]
+    assert any(typed), "no wake text was built, so nothing here was checked"
+    for text in typed:
+        if text is not None:
+            assert not text.lstrip().startswith("/") and "\n" not in text and "\r" not in text, text
+            assert "/clear" not in text and "/compact" not in text, text
 
 
 def test_the_record_outlives_a_temp_cleaner(tmp_path, script, base, run_daemon):
@@ -1667,3 +1738,168 @@ def test_an_untested_newest_probe_speaks_for_the_grants(tmp_path, script, base, 
               {"timestamp": 100, "data": {"agent": CARD, "tested": True, "verdicts": {"local_network": "denied"}}}]
     daemon = run_daemon(home, base, grant_probes=lambda: iter(probes))
     assert not [o for o in daemon.notifier.owed.values() if o.source == "pd_grant_denied"]
+
+
+# ---- pacing the keystroke wake (persistent_layer 1.9) ------------------------------------
+
+class _NoPane:
+    """A pane for a waker that never ticks here: with no mail owed, the notifier types nothing."""
+
+    def capture(self):
+        return ""
+
+    def type(self, text):
+        return False
+
+    def enter(self):
+        return False
+
+
+def _attach_waker(daemon, refractory_s=600.0):
+    from macf.pd.wake import Waker
+    daemon.notifier.waker = Waker(_NoPane(), record_keys=lambda text, kind: None,
+                                  append=lambda e, d: True, refractory_s=refractory_s)
+    return daemon.notifier.waker
+
+
+def _declare(home, **fields):
+    path = declaration_path(home)
+    data = json.loads(path.read_text())
+    data.update(fields)
+    path.write_text(Declaration.model_validate(data).model_dump_json())
+
+
+def test_the_agent_paces_its_wake_and_the_pace_is_recorded_like_an_act(tmp_path, script, base, run_daemon):
+    """A pace sets the waker's window and answers with it and where it came from. It is recorded
+    before it is answered: like every act (the asker, the reason and the asking process, with no
+    unit), and in pd_wake_paced with the window it replaced."""
+    daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+    waker = _attach_waker(daemon)
+    agent = {"kind": "agent", "card": CARD}
+
+    reply = ask(daemon, {"op": "pace", "refractory_s": 300, "asked_by": agent, "reason": "a busy hour"})
+    assert reply["ok"], reply
+    assert reply["wake_refractory_s"] == 300 and "a busy hour" in reply["wake_window_from"]
+    assert waker.refractory_s == 300
+    [paced] = events("pd_wake_paced")
+    assert (paced["refractory_s"], paced["previous_s"]) == (300, 600)
+    assert paced["peer"]["pid"] == os.getpid() and paced["asked_by"] == agent
+    [control] = [c for c in events("pd_control") if c["act"] == "pace"]
+    assert control["unit"] == "" and control["peer"]["pid"] == os.getpid() and control["reason"] == "a busy hour"
+    assert ask(daemon, {"op": "status"})["wake_refractory_s"] == 300
+
+    reply = ask(daemon, {"op": "pace", "refractory_s": None, "asked_by": agent, "reason": "the hour is over"})
+    assert reply["ok"] and waker.refractory_s == 600 and reply["wake_window_from"] == "the declaration"
+
+
+def test_no_pace_goes_under_the_declared_floor_and_only_the_agent_or_operator_paces(tmp_path, script, base, run_daemon):
+    """The floor comes only from the declaration. A pace under it is refused naming it, the window
+    stays, and nothing is recorded. A pace may lengthen the window; the daemon's own askers and the
+    wind-down may not pace."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    _declare(home, wake_refractory_s=600.0, wake_refractory_floor_s=120.0)
+    daemon = run_daemon(home, base)
+    waker = _attach_waker(daemon)
+    agent = {"kind": "agent", "card": CARD}
+
+    reply = ask(daemon, {"op": "pace", "refractory_s": 60, "asked_by": agent, "reason": "faster"})
+    assert not reply["ok"] and "120" in reply["error"] and "floor" in reply["error"]
+    assert waker.refractory_s == 600 and events("pd_wake_paced") == []
+    assert ask(daemon, {"op": "pace", "refractory_s": 120, "asked_by": agent, "reason": "the floor"})["ok"]
+    assert ask(daemon, {"op": "pace", "refractory_s": 1800, "asked_by": {"kind": "operator"},
+                        "reason": "slower"})["ok"]
+    assert waker.refractory_s == 1800
+    for kind in ("policy", "harness", "wind_down"):
+        assert not ask(daemon, {"op": "pace", "refractory_s": 300, "asked_by": {"kind": kind}, "reason": "x"})["ok"]
+    assert waker.refractory_s == 1800
+
+
+def test_no_pace_goes_over_the_declared_ceiling_or_past_any_finite_window(tmp_path, script, base, run_daemon):
+    """#761 review: a pace of inf, or of 1e9 hours, would have muted the wake for good and never
+    alerted. The ceiling comes only from the declaration, 30 minutes unless it says otherwise, and
+    a pace over it is refused naming it, with nothing recorded and the window unchanged."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    _declare(home, wake_refractory_s=600.0)
+    daemon = run_daemon(home, base)
+    waker = _attach_waker(daemon)
+    agent = {"kind": "agent", "card": CARD}
+    for seconds in (1801, 3.6e12):
+        reply = ask(daemon, {"op": "pace", "refractory_s": seconds, "asked_by": agent, "reason": "quiet"})
+        assert not reply["ok"] and "ceiling" in reply["error"] and "1800" in reply["error"], reply
+    reply = ask(daemon, {"op": "pace", "refractory_s": float("inf"), "asked_by": agent, "reason": "mute"})
+    assert not reply["ok"], reply
+    assert waker.refractory_s == 600 and events("pd_wake_paced") == []
+    assert ask(daemon, {"op": "pace", "refractory_s": 1800, "asked_by": agent, "reason": "the ceiling"})["ok"]
+    assert waker.refractory_s == 1800
+
+
+
+def test_a_starting_daemon_puts_the_saved_pace_in_force(tmp_path, script, base):
+    """Through start() itself, not a direct call: the boot sequence re-asserts the newest pace.
+    A rebase that drops or moves the call is what this catches (found in review)."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    append_event("pd_wake_paced", {"agent": CARD, "refractory_s": 240.0, "previous_s": 600.0,
+                                   "asked_by": {"kind": "agent"}, "reason": "a long build",
+                                   "peer": {"uid": os.getuid(), "pid": os.getpid(), "proc_start": "x"}})
+    daemon = Daemon(home, base=base, backoff_base_s=0.05, backoff_cap_s=0.2)
+    waker = _attach_waker(daemon)
+    try:
+        daemon.start()
+        assert waker.refractory_s == 240.0 and "a long build" in daemon._wake_from
+    finally:
+        daemon.stop(units=True)
+        daemon.core.shutdown("the test is over")
+
+def test_a_starting_daemon_holds_a_saved_unbounded_pace_to_the_ceiling(tmp_path, script, base):
+    """A pace saved before paces were bounded (#761 review: inf was accepted) is held to the
+    declared ceiling at boot, through start(), and the daemon says where the window came from."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    append_event("pd_wake_paced", {"agent": CARD, "refractory_s": 1e12, "previous_s": 600.0,
+                                   "asked_by": {"kind": "agent"}, "reason": "mute it",
+                                   "peer": {"uid": os.getuid(), "pid": os.getpid(), "proc_start": "x"}})
+    daemon = Daemon(home, base=base, backoff_base_s=0.05, backoff_cap_s=0.2)
+    waker = _attach_waker(daemon)
+    try:
+        daemon.start()
+        assert waker.refractory_s == 1800.0 and "ceiling" in daemon._wake_from
+    finally:
+        daemon.stop(units=True)
+        daemon.core.shutdown("the test is over")
+
+
+def test_a_pace_with_no_keystroke_wake_is_refused(tmp_path, script, base, run_daemon):
+    daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+    reply = ask(daemon, {"op": "pace", "refractory_s": 300, "asked_by": {"kind": "agent"}, "reason": "x"})
+    assert not reply["ok"] and "no keystroke wake" in reply["error"]
+    assert "wake_refractory_s" not in ask(daemon, {"op": "status"})
+
+
+def test_the_next_daemon_reasserts_the_newest_pace_and_a_raised_floor_wins(tmp_path, script, base):
+    """A pace outlives its daemon: the next one reads the newest pd_wake_paced of its own agent back
+    at its start. Another agent's pace in a shared log is not its own, and a floor declared above
+    the pace since then wins, saying so."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    _declare(home, wake_refractory_s=900.0)
+    daemon = Daemon(home, base=base)
+    waker = _attach_waker(daemon)
+    daemon._reassert_pace()
+    assert waker.refractory_s == 900.0 and daemon._wake_from == "the declaration"    # no pace yet
+
+    peer = {"uid": os.getuid(), "pid": os.getpid(), "proc_start": "x"}
+
+    def pace(card, seconds, reason):
+        append_event("pd_wake_paced", {"agent": card, "refractory_s": seconds, "previous_s": 600.0,
+                                       "asked_by": {"kind": "agent"}, "peer": peer, "reason": reason})
+    pace(CARD, 240.0, "a long build")
+    pace("Other@ffffff", 30.0, "not mine")
+
+    daemon = Daemon(home, base=base)
+    waker = _attach_waker(daemon)
+    daemon._reassert_pace()
+    assert waker.refractory_s == 240.0 and "a long build" in daemon._wake_from
+
+    _declare(home, wake_refractory_s=600.0, wake_refractory_floor_s=300.0)
+    daemon = Daemon(home, base=base)
+    waker = _attach_waker(daemon)
+    daemon._reassert_pace()
+    assert waker.refractory_s == 300.0 and "floor" in daemon._wake_from and "240" in daemon._wake_from
