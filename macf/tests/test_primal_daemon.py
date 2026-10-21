@@ -1014,6 +1014,16 @@ def test_control_events(tmp_path, script, base, run_daemon):
     assert (peer["uid"], peer["pid"]) == (os.getuid(), os.getpid())
     assert verify_incarnation(peer["pid"], peer["proc_start"])
 
+    # A restart is a control act too (R52 names stop, restart and compaction; compaction is
+    # refused in step 1). Started again, then restarted, each is recorded with who asked and why.
+    for op, reason in (("start", "back up"), ("restart", "new config")):
+        assert ask(daemon, {"op": op, "unit": "worker", "reason": reason,
+                            "asked_by": {"kind": "operator", "card": "Operator@000000"}})["ok"]
+        assert wait_for(lambda: any(d["act"] == op and d["reason"] == reason
+                                    for d in events("pd_control", "worker"))), op
+    restarted = [d for d in events("pd_control", "worker") if d["act"] == "restart"][-1]
+    assert restarted["asked_by"]["kind"] == "operator" and restarted["peer"]["pid"] == os.getpid()
+
 
 def test_a_request_cannot_claim_an_inside_asker(tmp_path, script, base, run_daemon):
     """Over the socket the asker is the operator or the declared wind-down. A request that
