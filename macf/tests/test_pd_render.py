@@ -3,11 +3,17 @@
 This file holds the macOS rendering (MIS-0002 step 4). Linux renderings belong to
 step 1 and get their own classes here.
 """
+import json
+import os
 import plistlib
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 import textwrap
+import time
+from pathlib import Path
 
 import pytest
 
@@ -77,6 +83,57 @@ class TestMacOSLaunchAgent:
         target = tmp_path / "agent.plist"
         target.write_bytes(data)
         assert subprocess.run(["plutil", "-lint", str(target)], capture_output=True).returncode == 0
+
+
+class TestEveryNameCarriesTheIdentifier:
+    """MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd) past the label: the Linux unit, the
+    sockets a daemon binds, and the name its process shows in a listing."""
+
+    def test_the_linux_unit_is_named_maceff_pd(self):
+        from macf.platform.systemd import render_pd_user_unit
+        path, _ = render_pd_user_unit(CARD, ARGV, "/home/someone")
+        assert Path(path).name == "maceff_pd-IraMacEff_ee9a78.service"
+
+    @pytest.mark.parametrize("xdg", [True, False], ids=["XDG_RUNTIME_DIR", "no XDG_RUNTIME_DIR"])
+    def test_every_socket_path_runs_through_a_directory_named_maceff_pd(self, xdg, monkeypatch, tmp_path):
+        """A socket's file is named for the agent; the directory it lives in carries the
+        identifier, with or without a runtime directory from the session."""
+        from macf.pd.names import channel_socket, control_socket
+        if xdg:
+            monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+        else:
+            monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+        for sock in (control_socket(CARD), channel_socket(CARD)):
+            assert sock.parent.name.startswith("maceff_pd"), sock
+            assert sock.name.startswith("IraMacEff_ee9a78."), sock
+
+    @pytest.mark.skipif(not Path("/proc/self/comm").exists(), reason="a process name is read from /proc on Linux")
+    def test_a_running_daemon_is_listed_as_maceff_pd_and_binds_only_maceff_pd_sockets(self, tmp_path):
+        """The daemon as the outer tier starts it, ``python -m macf.pd <home>``: its process
+        name, what ``ps`` and ``pgrep`` show, is maceff_pd, and every socket it binds lies under
+        the runtime directory named maceff_pd."""
+        home = tmp_path / "home"
+        (home / ".maceff" / "pd").mkdir(parents=True)
+        (home / ".maceff_primary_agent.id").write_text("ee9a78aa-0000\n")
+        (home / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": "IraMacEff"}}))
+        (home / ".maceff" / "pd" / "declaration.json").write_text(json.dumps({"version": 1, "agent": CARD}))
+        xdg = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))   # short enough for a socket path
+        env = {k: v for k, v in os.environ.items() if k != "MACF_EVENTS_LOG_PATH"}
+        daemon = subprocess.Popen([sys.executable, "-m", "macf.pd", str(home)], env={**env, "XDG_RUNTIME_DIR": str(xdg)},
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.monotonic() + 30
+            sockets = []
+            while len(sockets) < 2 and time.monotonic() < deadline and daemon.poll() is None:
+                time.sleep(0.05)
+                sockets = [p for p in xdg.rglob("*") if stat.S_ISSOCK(p.lstat().st_mode)]
+            assert len(sockets) >= 2, f"the daemon bound {sockets}: {daemon.stderr.read() if daemon.poll() is not None else ''}"
+            assert all(p.relative_to(xdg).parts[0] == "maceff_pd" for p in sockets), sockets
+            assert Path(f"/proc/{daemon.pid}/comm").read_text().strip() == "maceff_pd"
+        finally:
+            daemon.terminate()
+            daemon.wait(timeout=30)
+            shutil.rmtree(xdg, ignore_errors=True)
 
 
 class TestMacOSInstall:

@@ -20,6 +20,7 @@ from pathlib import Path
 
 from macf.pd.core import POLICY_POINTER, DeclarationRefused
 from macf.pd.daemon import AlreadyRunning, Daemon
+from macf.pd.names import name_this_process
 
 
 def main(argv=None) -> int:
@@ -28,6 +29,8 @@ def main(argv=None) -> int:
     parser.add_argument("agent_home", type=Path, help="the agent's home directory")
     args = parser.parse_args(argv)
     home = args.agent_home.resolve()
+    # A process listing shows maceff_pd, not the interpreter (MIS-0002-R06); Linux only.
+    name_this_process()
 
     os.environ["MACEFF_AGENT_HOME_DIR"] = str(home)
     # A log path inherited from whatever started us would send this agent's events

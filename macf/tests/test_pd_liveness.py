@@ -1,10 +1,13 @@
 """A unit's own liveness (MIS-0002-R14): the helper a unit uses to write ``pd_unit_alive``."""
 import json
 import os
+import sys
 import time
 
 from macf.pd import liveness as lv
 from macf.pd.interface import EVENT_LIVENESS, Liveness
+from test_primal_daemon import (CARD, MACF_SRC, ME, base, make_home, run_daemon,  # noqa: F401 - fixtures
+                                unit_pid, unit_state, wait_for)
 
 
 def _home(tmp_path, name="Resident", uuid="1a2b3c4d-0000"):
@@ -54,6 +57,55 @@ def test_the_heartbeat_reports_at_once_and_then_at_its_interval():
     assert n >= 3, f"{n} events within 1 s at a 0.05 s interval"
     time.sleep(0.12)
     assert len(events) <= n + 1, "the heartbeat kept writing after stop"
+
+
+#: A unit as the mail broker and inbound watcher are wired: its work loop ticks the heartbeat
+#: it gets from its environment, and nothing in it names the unit, the interval or the log.
+MANAGED_UNIT = r'''
+import time
+from macf.pd.liveness import heartbeat_from_env
+
+beat = heartbeat_from_env()
+while True:
+    if beat is not None:
+        beat.tick()
+    time.sleep(0.02)
+'''
+
+
+def test_a_managed_unit_writes_its_liveness_to_its_agents_log_at_its_declared_interval(
+        tmp_path, base, run_daemon):
+    """R14 where it lives: a unit the daemon starts, declared with no liveness settings of its
+    own, writes ``pd_unit_alive`` into its agent's event log, the one in the agent home, naming
+    the process the daemon started, at the interval its declaration gives. The daemon credits
+    it, so the unit reads running."""
+    from macf.agent_events_log import set_log_path
+    from macf.pd.interface import Unit
+    script = tmp_path / "managed_unit.py"
+    script.write_text(MANAGED_UNIT)
+    interval = 0.25
+    unit = Unit(name="worker", command=[sys.executable, str(script)], account=ME, restart="on-failure",
+                liveness_interval_s=interval, memory_limit_mb=256, environment={"PYTHONPATH": MACF_SRC},
+                stop_grace_s=1.0)
+    home = make_home(tmp_path, [unit])
+    agent_log = home / ".maceff" / "agent_events_log.jsonl"
+    set_log_path(agent_log)       # the daemon reads the agent's log, as it does outside a test
+
+    def beats():
+        rows = [json.loads(line) for line in agent_log.read_text().splitlines()] if agent_log.exists() else []
+        return [r for r in rows if r.get("event") == EVENT_LIVENESS and r["data"].get("unit") == "worker"]
+
+    daemon = run_daemon(home, base)
+    assert wait_for(lambda: len(beats()) >= 5, timeout=15), f"{len(beats())} beats in the agent's log"
+    found = beats()
+    pid = unit_pid(daemon, "worker")
+    assert unit_state(daemon, "worker") == "running"
+    for row in found:
+        live = Liveness.model_validate(row["data"])
+        assert (live.agent, live.unit, live.pid, live.interval_s) == (CARD, "worker", pid, interval)
+    gaps = sorted(b["timestamp"] - a["timestamp"] for a, b in zip(found, found[1:]))
+    assert gaps[0] >= 0.8 * interval, f"beats closer than the declared {interval} s: {gaps}"
+    assert gaps[len(gaps) // 2] <= 2 * interval, f"beats further apart than the declared {interval} s: {gaps}"
 
 
 def test_a_loop_that_stops_passing_stops_the_events_within_one_interval(capsys):

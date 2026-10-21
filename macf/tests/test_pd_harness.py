@@ -57,6 +57,74 @@ def test_declaration_can_keep_idle_compaction(project):
     assert "idleCompaction" not in _settings(project)
 
 
+def _start_session_unit(tmp_path, project, monkeypatch, keep):
+    """Run the harness adapter's own entry point (``macf_tools harness unit``) with the client
+    launch stubbed out, for a home whose declaration keeps idle compaction or not, a client
+    new enough to have the setting, and the session's project at *project*. Returns the
+    sessions the stub was asked to start."""
+    from types import SimpleNamespace
+
+    import macf.cli as cli
+    from macf.pd import names as pd_names
+    from macf.pd import session_unit
+    from macf.utils import harness
+    from macf.utils.paths import find_project_root
+
+    home = tmp_path / "home"
+    (home / ".maceff" / "pd").mkdir(parents=True)
+    card = "Resident@1a2b3c"
+    (home / ".maceff" / "pd" / "declaration.json").write_text(json.dumps(
+        {"version": 1, "agent": card, "keep_harness_idle_compaction": keep}))
+    monkeypatch.setattr(pd_names, "RENDERED_DECLARATIONS", tmp_path / "rendered")   # none rendered
+    monkeypatch.setattr(pd_names, "agent_card", lambda h: card)
+    monkeypatch.setattr(cli, "_claude_launcher", lambda: ("/usr/bin/claude", "2.1.296 (Claude Code)"))
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(home))
+    find_project_root.cache_clear()
+    params = SimpleNamespace(agent="resident", home=home, project_dir=project,
+                             child_path=home / "child", context_window=200000,
+                             term="xterm-256color", proxy_port=0)
+    monkeypatch.setattr(harness, "default_params", lambda agent=None, home=None: params)
+    monkeypatch.setattr(harness, "load_settings", lambda p: p)
+    started = []
+    monkeypatch.setattr(session_unit, "run", lambda agent, child, **kw: started.append(agent) or 0)
+    try:
+        assert session_unit.main(["--no-proxy"]) == 0
+    finally:
+        find_project_root.cache_clear()
+    return started
+
+
+def test_the_adapter_turns_idle_compaction_off_when_it_starts_the_session(tmp_path, project, monkeypatch):
+    """R126 at the place it names: starting the session through the adapter's own entry point
+    leaves the project's settings with idle compaction off, every other key untouched."""
+    started = _start_session_unit(tmp_path, project, monkeypatch, keep=False)
+    assert started == ["resident"]
+    settings = _settings(project)
+    assert settings.get("idleCompaction") is False
+    assert settings["env"] == {"A": "1"} and "hooks" in settings
+
+
+def test_an_unreadable_declaration_keeps_nothing_so_idle_compaction_goes_off(tmp_path, project, monkeypatch):
+    """The protection holds when the keep can't be read: a declaration that doesn't parse turns
+    idle compaction off and says so, and the session still starts."""
+    import macf.pd.core as core
+    monkeypatch.setattr(core, "load_declaration", lambda home, card: (_ for _ in ()).throw(
+        core.DeclarationRefused("not a valid declaration")))
+    started = _start_session_unit(tmp_path, project, monkeypatch, keep=True)
+    assert started == ["resident"] and _settings(project).get("idleCompaction") is False
+
+
+def test_the_adapter_leaves_idle_compaction_alone_when_the_declaration_keeps_it(
+        tmp_path, project, monkeypatch):
+    """R126's keep clause, through the adapter: a declaration with keep_harness_idle_compaction
+    true starts the session and writes nothing to the project's settings."""
+    before = _settings(project)
+    started = _start_session_unit(tmp_path, project, monkeypatch, keep=True)
+    assert started == ["resident"]
+    assert _settings(project) == before
+
+
 def test_turning_it_back_on_removes_the_key(project):
     """`true` does not turn idle compaction on in the client, so on means the key is gone."""
     set_idle_compaction(False, client_version="2.1.296", project_root=project)
