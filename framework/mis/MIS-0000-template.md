@@ -118,6 +118,8 @@ No new exposure: a template changes nothing at run time.
 
 **Cold-reader trial**: not applicable to a template.
 
+**Use trial**: not applicable to a template.
+
 ## 12 Landing Plan
 
 *Where the normative text lands (which policies and sections), which code and tests ship with it, and in which pull requests. Policy ships with its capability, in one change (`core_principles`).*
