@@ -60,8 +60,8 @@ def resolve_target(ref: str) -> Tuple[str, str]:
     if re.fullmatch(r"\d+", ref):
         raise LinkError(f"'{ref}' could be an idea or a task; say idea:{ref} or task:{ref}")
     if ref.startswith("duties:"):
-        raise LinkError("a duty's links are declared with the duty (macf_tools role duty add "
-                        "--wiki-links); the roles subsystem owns duty records")
+        raise LinkError("a duty's links live on its record, which the roles subsystem owns: "
+                        "macf_tools role duty edit <id> --wiki-links <concepts> (it replaces the list)")
     path = Path(ref).expanduser()
     if path.is_file():
         if path.suffix != ".md":

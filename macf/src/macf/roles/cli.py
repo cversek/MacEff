@@ -333,9 +333,13 @@ def cmd_duty_edit(args: argparse.Namespace) -> int:
             changes["horizon"] = None
         if args.depends_on is not None:
             changes["depends_on"] = _csv(args.depends_on)
+        if args.wiki_links is not None:
+            # Normalized the one way the knowledge web normalizes, so the link is the concept it names.
+            from macf.concepts import normalize_concepts
+            changes["wiki_links"] = normalize_concepts(_csv(args.wiki_links))
         if not changes:
-            raise RoleError("say what to change: --title, --body, --due, --horizon, --cadence, --importance "
-                            "or --depends-on (state changes are engage, done, defer and reactivate)")
+            raise RoleError("say what to change: --title, --body, --due, --horizon, --cadence, --importance, "
+                            "--depends-on or --wiki-links (state changes are engage, done, defer and reactivate)")
         duty = store.edit_duty(duty, path.parent, changes, why=args.why or "")
     except (RoleError, ValueError) as e:
         return _fail(e, args.json)
@@ -872,6 +876,7 @@ def add_role_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--cadence", help="as for duty add")
     p.add_argument("--clear-cadence", action="store_true")
     p.add_argument("--depends-on", action="append", help="replaces the list: duty ids, comma-separated")
+    p.add_argument("--wiki-links", action="append", help="replaces the list: concepts, comma-separated")
     p.add_argument("--why", help="the reason; required when due, horizon or cadence changes")
     js(p); p.set_defaults(func=cmd_duty_edit)
 
