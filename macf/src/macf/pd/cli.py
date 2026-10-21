@@ -42,6 +42,33 @@ def add_pd_parser(sub) -> None:
     alive.add_argument("--in-flight", type=int, default=None, metavar="N",
                        help="work started and not finished, which the daemon checks before a restart")
     alive.set_defaults(func=cmd_pd_alive)
+    entry = pd_sub.add_parser(
+        "entry", help="your own timed entries, made from your live session (policy: persistent_layer)")
+    entry_sub = entry.add_subparsers(dest="entry_cmd")
+    add = entry_sub.add_parser("add", help="make an entry that wakes this session when it falls due")
+    add.add_argument("when", help="an instant, 'in 20m', 'tomorrow 06:30', 'cron:<five fields>' or 'rrule:<rule>'")
+    add.add_argument("purpose", help="what the entry is for, written so a later self can act on it cold")
+    add.add_argument("--check", metavar="TEMPLATE",
+                     help="run one of the operator's check templates at its time, waking this session only "
+                          "when its condition holds")
+    add.add_argument("--arg", action="append", default=[], metavar="NAME=VALUE",
+                     help="an argument for the check's template, as NAME=VALUE; repeat for each")
+    add.add_argument("--missed", choices=("once", "skip", "report"), required=True,
+                     help="a firing missed while the daemon was down: once, late and said so; skip, "
+                          "recorded only; report, recorded and told")
+    add.set_defaults(func=cmd_pd_entry_add)
+    remove = entry_sub.add_parser("remove", help="remove an entry; the agent or the operator may, since it only stops work")
+    remove.add_argument("id", help="the entry's id, e- and 12 hex digits")
+    remove.set_defaults(func=cmd_pd_entry_remove)
+    show = entry_sub.add_parser("show", help="one entry in full: its purpose, time, state and why it was marked")
+    show.add_argument("id", help="the entry's id, e- and 12 hex digits")
+    show.set_defaults(func=cmd_pd_entry_show)
+    lst = entry_sub.add_parser("list", help="the entries you hold")
+    lst.add_argument("--json", action="store_true", help="print them as JSON")
+    lst.set_defaults(func=cmd_pd_entry_list)
+    agenda = pd_sub.add_parser(
+        "agenda", help="what is scheduled: the declared schedules' next runs and your own entries")
+    agenda.set_defaults(func=cmd_pd_agenda)
 
 
 def cmd_pd_alive(args: argparse.Namespace) -> int:
@@ -109,6 +136,127 @@ def _say_tray(report) -> None:
     # (readout_MUST_say_tray_unavailable)). A report built without it says nothing.
     if report.tray:
         print(report.tray)
+
+
+def _ask_entries(request: dict):
+    """The daemon's reply to an entry request, or None, having said why on the error stream."""
+    from macf.pd import client
+    _, card = _this_agent()
+    try:
+        reply = client.ask(card, request)
+    except client.DaemonUnavailable as e:
+        print(f"⚠️ MACF: pd: no daemon answered ({e}); your entries are held by your primal daemon",
+              file=sys.stderr)
+        return None
+    if not reply.ok:
+        print(f"⚠️ MACF: pd: {reply.error}", file=sys.stderr)
+        return None
+    return reply
+
+
+def cmd_pd_entry_add(args: argparse.Namespace) -> int:
+    if any("=" not in a for a in args.arg):
+        print("⚠️ MACF: pd: each --arg is NAME=VALUE", file=sys.stderr)
+        return 2
+    request = {"op": "entry_add", "when": args.when, "purpose": args.purpose, "missed": args.missed,
+               "action": "check" if args.check else "wake"}
+    if args.check:
+        request.update(template=args.check, args=dict(a.split("=", 1) for a in args.arg))
+    reply = _ask_entries(request)
+    if reply is None:
+        return 1
+    made = reply.entries[-1] if reply.entries else None
+    print(f"entry made; you hold {len(reply.entries or [])}" + (f", the newest {made['id']}" if made else ""))
+    if made and made.get("marked"):
+        print(f"it is marked: this context read untrusted input ({'; '.join(made['marked'])})")
+    return 0
+
+
+def cmd_pd_entry_show(args: argparse.Namespace) -> int:
+    reply = _ask_entries({"op": "entry_list"})
+    if reply is None:
+        return 1
+    entry = next((e for e in reply.entries or [] if e.get("id") == args.id), None)
+    if entry is None:
+        print(f"⚠️ MACF: pd: no entry {args.id} is held", file=sys.stderr)
+        return 1
+    for key in ("id", "agent", "action", "purpose", "when", "zone", "first", "missed", "marked", "start"):
+        if entry.get(key) not in (None, "", []):
+            value = "; ".join(entry[key]) if isinstance(entry[key], list) else entry[key]
+            print(f"{key + ':':13} {value}")
+    return 0
+
+
+def cmd_pd_entry_remove(args: argparse.Namespace) -> int:
+    reply = _ask_entries({"op": "entry_remove", "id": args.id})
+    if reply is None:
+        return 1
+    print(f"entry {args.id} removed; you hold {len(reply.entries or [])}")
+    return 0
+
+
+def cmd_pd_entry_list(args: argparse.Namespace) -> int:
+    reply = _ask_entries({"op": "entry_list"})
+    if reply is None:
+        return 1
+    entries = reply.entries or []
+    if args.json:
+        print(json.dumps(entries, indent=2))
+        return 0
+    for e in entries:
+        print(f"{e['id']}  next {_next(e)}  {e['when']}  ({e['missed']})  {_state(e)}{e['purpose']}")
+    if not entries:
+        print("no entries")
+    return 0
+
+
+def _next(entry: dict, now=None) -> str:
+    """When an entry next fires, from now, as text; "none" when it never will again."""
+    from datetime import datetime, timezone
+
+    from macf.pd.entries import next_fire
+    try:
+        nxt = next_fire(entry, now or datetime.now(timezone.utc))
+    except (KeyError, ValueError):
+        return entry.get("first") or "none"
+    return nxt.isoformat() if nxt else "none"
+
+
+def _state(entry: dict) -> str:
+    """What an entry's line says before its purpose: marked, when it was made from a context that
+    read untrusted input (the scheduler design, 5.3)."""
+    return "[marked] " if entry.get("marked") else ""
+
+
+def agenda_lines(declaration, entries, now) -> list:
+    """One line per declared schedule and per entry, soonest first, each marked with its tier."""
+    from zoneinfo import ZoneInfo
+
+    from macf.pd.schedule import CronExpr
+    tz = ZoneInfo(declaration.timezone) if declaration and declaration.timezone else None
+    rows = []
+    for s in (declaration.schedules if declaration else []):
+        nxt = CronExpr.parse(s.cron, tz).next_after(now) if tz else None
+        rows.append((nxt.isoformat() if nxt else "none", f"declared  {s.name}  {s.cron}"))
+    for e in entries:
+        rows.append((_next(e, now), f"entry     {e['id']}  {_state(e)}{e['purpose']}"))
+    return [f"{when}  {what}" for when, what in sorted(rows)]
+
+
+def cmd_pd_agenda(args: argparse.Namespace) -> int:
+    from datetime import datetime, timezone
+
+    from macf.pd.core import load_declaration
+    home, card = _this_agent()
+    try:
+        declaration = load_declaration(home, card)
+    except Exception as e:  # a missing or refused declaration still leaves the entries to show
+        print(f"⚠️ MACF: pd: the declaration couldn't be read ({e}); showing entries only", file=sys.stderr)
+        declaration = None
+    reply = _ask_entries({"op": "entry_list"})
+    lines = agenda_lines(declaration, (reply.entries or []) if reply else [], datetime.now(timezone.utc))
+    print("\n".join(lines) if lines else "nothing scheduled")
+    return 0 if reply is not None else 1
 
 
 def _this_agent():

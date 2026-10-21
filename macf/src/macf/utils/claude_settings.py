@@ -257,6 +257,14 @@ _PERMANENT_ASK = [
     "Bash(macf_tools mode set AUTO_MODE:*)",
 ]
 
+# Commands that start in 'ask', where the operator hasn't ruled on them: approving the prompt is the
+# operator's consent. Unlike the permanent lists, an entry here is added only when it's in neither
+# 'ask' nor 'allow', so an operator who loosens one to 'allow' keeps that choice (persistent_layer
+# 10.6; the repo owner's ruling on #744).
+_DEFAULT_ASK = [
+    "Bash(macf_tools pd entry add:*)",
+]
+
 # Permissions that must always be in 'allow': the agent can always de-escalate,
 # and can always compact itself. The injected /compact passes every Stop gate
 # once (stop_bypass), so under the client's auto mode the only thing that could
@@ -337,6 +345,10 @@ def ensure_mode_safety_permissions(project_root: Optional[Path] = None) -> dict:
             if entry not in allow_list:
                 allow_list.append(entry)
                 result['allow_added'].append(entry)
+        for entry in _DEFAULT_ASK:
+            if entry not in ask_list and entry not in allow_list:
+                ask_list.append(entry)
+                result['ask_added'].append(entry)
 
         if any(result.values()):
             _write_settings(settings, settings_path)

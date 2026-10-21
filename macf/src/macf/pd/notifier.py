@@ -48,7 +48,7 @@ EVENT_DELIVERED = "pd_notice_delivered"
 #: from a store. Each is delivered only where the declaration routes it to the agent
 #: (MIS-0002-R42).
 INTERNAL_SOURCES = frozenset({"pd_limit_exceeded", "pd_unread_mail", "pd_carried", "pd_run_failed",
-                              "pd_schedule_changed", "pd_grant_denied"})
+                              "pd_schedule_changed", "pd_grant_denied", "pd_entry_due", "pd_duty_due"})
 #: Who wrote a detection: the daemon's notifier, as against any other poller of a store.
 NOTIFIER = "pd"
 
