@@ -545,7 +545,7 @@ None of these is repaired at start. Moving an existing deployment onto its decla
 
 1. Back up the deployment and verify the backup.
 2. Add `ids` and every agent's `uid` to agents.yaml.
-3. Pause the seats and wait until they're quiet. Then stop everything that runs as a number the move changes: the seats' sessions, the amail broker and ingest (their stores are among the framework's roots), and any admin login. A process left running keeps writing as its old number while its files move, and what it writes ends up outside the block. `--apply` refuses while any such process runs, under a user or a group number the move changes, and names each one.
+3. Pause the seats and wait until they're quiet. Then stop everything that runs as a number the move changes: the seats' sessions, the amail broker and ingest (their stores are among the framework's roots), and any admin login. A process left running keeps writing as its old number while its files move, and what it writes ends up outside the block. `--apply` refuses while any such process runs, under a user or a group number the move changes, and names each one. A zombie, a process that has exited and whose parent hasn't reaped it, doesn't count: it runs nothing and holds no files. One whose main thread exited while another thread still runs reads the same way in `/proc` but does count, so only a zombie with a single thread is passed over.
 4. As root in the old container, plan:
 
    ```bash
