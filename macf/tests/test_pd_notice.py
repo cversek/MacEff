@@ -137,6 +137,58 @@ def test_routing_declared(tmp_path, isolated_events_log, capsys):
     assert "'weather' is declared but this daemon has no poller" in capsys.readouterr().err
 
 
+def _operator_heard(home, log, routes):
+    """The operator's share, as the outside watch serves it: the watch's findings about this
+    home's mail, read from the agent's own event log (*log*) under *routes*."""
+    import shutil
+    from macf.pd import watch
+    from macf.pd.interface import Declaration, declaration_path
+    declaration_path(home).write_text(Declaration(
+        version=1, agent="Tester@abc123", unread_mail_threshold_s=600,
+        notice_routes=routes).model_dump_json())
+    if log.exists():
+        shutil.copy(log, home / ".maceff" / "agent_events_log.jsonl")
+    return [f.verdict for f in watch.check_home(home, time.time(), probe=None) if f.subject == "mail"]
+
+
+@pytest.mark.parametrize("route", ["agent", "operator", "both"])
+def test_each_route_reaches_its_audience_and_no_other(tmp_path, isolated_events_log, route):
+    """R42: a source routed to the agent, or to both, reaches the agent's channel, a store's
+    source and one the daemon raises alike; a source routed to the operator alone does not.
+    The operator's share, the outside watch's alert, is given where the route is the
+    operator's or both, and not where it is the agent's alone."""
+    from macf.agent_events_log import append_event
+    from macf.pd.interface import EVENT_UNREAD_MAIL
+    home = make_home(tmp_path, [])
+    _box(home)
+    routes = {"amail": route, "pd_limit_exceeded": route, "pd_unread_mail": route}
+    n = nt.Notifier(home, routes)
+    n.boot()
+    _mail(home, "m1")
+    n.poll()
+    n.raise_notice("pd_limit_exceeded", "limit-worker-1")
+    n.raise_notice("pd_unread_mail", "unread-mail-1")
+    append_event(EVENT_UNREAD_MAIL, {"agent": "Tester@abc123", "count": 1, "reason": "1 message(s) unread"})
+    ours, theirs = _pair()
+    n.attach(ours)
+    n.flush()
+    to_agent = sorted(r.source for r in _records(theirs))
+    assert to_agent == (["amail", "pd_limit_exceeded", "pd_unread_mail"] if route in ("agent", "both") else [])
+    to_operator = _operator_heard(home, isolated_events_log, routes)
+    assert to_operator == (["UNREAD"] if route in ("operator", "both") else [])
+
+
+def test_a_route_outside_the_declared_ones_is_refused_at_load():
+    """R42: a declaration names one of the routes for each source it routes, and a source the
+    daemon must notice on (unread mail past a threshold) cannot be left unrouted."""
+    from macf.pd.interface import Declaration
+    with pytest.raises(ValueError):
+        Declaration(version=1, agent="Tester@abc123", notice_routes={"amail": "nobody"})
+    with pytest.raises(ValueError, match="pd_unread_mail"):
+        Declaration(version=1, agent="Tester@abc123", unread_mail_threshold_s=600,
+                    notice_routes={"amail": "agent"})
+
+
 def test_nothing_is_sent_for_no_change(tmp_path, isolated_events_log):
     """Polls that find nothing new produce nothing to send (R46)."""
     home = _home(tmp_path)
@@ -314,6 +366,34 @@ def test_unread_mail_notice(tmp_path):
     tracker.tick(0.0)
     assert len(notices) == 2
     assert [e for e, _ in said].count(EVENT_UNREAD_MAIL) == 2
+
+
+@pytest.mark.parametrize("route", ["agent", "operator", "both"])
+def test_unread_mail_reaches_the_routes_declared_for_it(tmp_path, base, run_daemon, isolated_events_log,
+                                                        route):
+    """R55, end to end: a running daemon with a threshold notices mail left unread, and the
+    notice reaches the routes declared for it and no other. The agent's share is the notice
+    owed on its channel; the operator's is the outside watch's alert, read from the same log."""
+    from macf.pd.interface import Declaration, EVENT_UNREAD_MAIL, declaration_path
+    home = make_home(tmp_path, [])
+    routes = {"pd_unread_mail": route}
+    declaration_path(home).write_text(Declaration(
+        version=1, agent="Tester@abc123", unread_mail_threshold_s=0.2,
+        notice_routes=routes).model_dump_json())
+    _mail(home, "waiting")
+    daemon = run_daemon(home, base)
+    to_agent = route in ("agent", "both")
+    deadline = time.time() + 5
+    while time.time() < deadline and not (
+            list(read_events(only=(EVENT_UNREAD_MAIL,)))
+            and (not to_agent or any(o.source == "pd_unread_mail" for o in daemon.notifier.owed.values()))):
+        time.sleep(0.1)                                   # the serve loop ticks on its own
+    time.sleep(0.3)                                       # a notice owed in error has time to show
+    [event] = list(read_events(only=(EVENT_UNREAD_MAIL,)))
+    assert event["data"]["agent"] == "Tester@abc123"
+    assert any(o.source == "pd_unread_mail" for o in daemon.notifier.owed.values()) == to_agent
+    to_operator = _operator_heard(home, isolated_events_log, routes)
+    assert to_operator == (["UNREAD"] if route in ("operator", "both") else [])
 
 
 def test_unread_mail_counts_only_the_time_the_session_ran(tmp_path):
