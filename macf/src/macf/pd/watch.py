@@ -235,6 +235,15 @@ def check_unread_mail(card: str, event: Optional[dict], now: float) -> Finding:
 #: person, and nothing in the session can say so.
 WAKE_HELD_ALERT_S = 1800.0
 _WAKE_EVENTS = ("pd_wake_held", "pd_wake_sent", "pd_wake_released")
+#: Hold reasons that are the agent's own pace, not something in its pane: the refractory
+#: window between wakes (``pd.wake.REFRACTORY``). Nobody needs telling about them.
+_PACING_REASONS = ("refractory",)
+
+
+def _obstacle(event: dict) -> bool:
+    """A hold by something in the pane, which a person may have to clear."""
+    return (event.get("event") == "pd_wake_held"
+            and (event.get("data") or {}).get("reason") not in _PACING_REASONS)
 
 
 def last_wake_event(log_path: Path, card: str, now: float,
@@ -243,14 +252,15 @@ def last_wake_event(log_path: Path, card: str, now: float,
 
     A hold carries ``held_since``, the time of the first hold of its stretch: a hold whose
     reason changes, a dialog then a draft, writes a new event, and the allowance must not
-    start again with it."""
+    start again with it. A refractory hold is pacing, so it never starts the allowance: a
+    dialog after the window counts from the dialog."""
     newest = None
     for event in _wake_events(log_path, card, now - lookback_s):
         if newest is None:
-            if event.get("event") != "pd_wake_held":
+            if not _obstacle(event):
                 return event
             newest = dict(event)
-        elif event.get("event") != "pd_wake_held":
+        elif not _obstacle(event):
             break
         newest["held_since"] = event.get("timestamp")
     return newest
@@ -278,9 +288,11 @@ def _wake_events(log_path: Path, card: str, cutoff: float):
 def check_wake(card: str, event: Optional[dict], now: float,
                held_alert_s: float = WAKE_HELD_ALERT_S) -> Finding:
     """A typed wake held too long: the newest wake event is a hold whose stretch began more
-    than ``held_alert_s`` ago. A sent wake, or a stretch released because nothing waits, clears it."""
+    than ``held_alert_s`` ago. A sent wake, or a stretch released because nothing waits, clears it,
+    and a refractory hold is never one: the window is the agent's pace, and a daily cap reached
+    after it leaves it the newest event all day."""
     stamp = (event or {}).get("held_since", (event or {}).get("timestamp"))
-    if (event is None or event.get("event") != "pd_wake_held"
+    if (event is None or not _obstacle(event)
             or not isinstance(stamp, (int, float)) or now - stamp < held_alert_s):
         return Finding(card, "wake", "ALIVE", "no wake held past its allowance")
     reason = (event.get("data") or {}).get("reason", "held")

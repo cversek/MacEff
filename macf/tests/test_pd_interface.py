@@ -331,3 +331,43 @@ def test_a_session_unit_must_restart_always():
         with pytest.raises(ValidationError, match="'session' is the session unit"):
             pdi.Unit.model_validate(_unit(name="session", kind="session", restart=policy))
     pdi.Unit.model_validate(_unit(restart="on-failure"))
+
+
+def test_the_wake_floor_is_never_above_the_window():
+    """The declared window, and the floor no pace goes under (persistent_layer 1.9)."""
+    with pytest.raises(ValidationError, match="floor"):
+        pdi.Declaration.model_validate(_declaration(wake_refractory_s=60, wake_refractory_floor_s=120))
+    d = pdi.Declaration.model_validate(_declaration(wake_refractory_s=600, wake_refractory_floor_s=120))
+    assert (d.wake_refractory_s, d.wake_refractory_floor_s) == (600, 120)
+
+
+def test_the_wake_ceiling_is_never_under_the_window_and_every_window_is_finite():
+    """No pace goes over the ceiling (#761 review); the declared window sits under it, and no
+    window, floor or ceiling may be infinite or not a number."""
+    d = pdi.Declaration.model_validate(_declaration())
+    assert d.wake_refractory_ceiling_s == pdi.DEFAULT_WAKE_REFRACTORY_CEILING_S == 1800
+    with pytest.raises(ValidationError, match="ceiling"):
+        pdi.Declaration.model_validate(_declaration(wake_refractory_s=3600))
+    d = pdi.Declaration.model_validate(_declaration(wake_refractory_s=3600, wake_refractory_ceiling_s=7200))
+    assert d.wake_refractory_ceiling_s == 7200
+    for field in ("wake_refractory_s", "wake_refractory_floor_s", "wake_refractory_ceiling_s"):
+        for bad in (float("inf"), float("nan")):
+            with pytest.raises(ValidationError):
+                pdi.Declaration.model_validate(_declaration(**{field: bad}))
+
+
+def test_a_pace_is_asked_by_the_agent_or_the_operator_only():
+    """A pace acts on no unit. The daemon's own askers have no process to record, and a wind-down
+    asks for compactions, so neither paces; a window is longer than nothing, or None."""
+    ok = '{"op":"pace","refractory_s":300,"asked_by":{"kind":"agent"},"reason":"r"}'
+    assert pdi.parse_request(ok).refractory_s == 300
+    assert pdi.parse_request(ok.replace('"agent"', '"operator"')).asked_by.kind == "operator"
+    for kind in ("policy", "harness", "wind_down"):
+        with pytest.raises(ValidationError):
+            pdi.parse_request(ok.replace('"agent"', f'"{kind}"'))
+    with pytest.raises(ValidationError):
+        pdi.parse_request(ok.replace("300", "0"))
+    assert pdi.parse_request(ok.replace("300", "null")).refractory_s is None
+    for bad in ("Infinity", "NaN", "-Infinity"):          # what json.dumps writes for inf and nan
+        with pytest.raises(ValidationError):
+            pdi.parse_request(ok.replace("300", bad))

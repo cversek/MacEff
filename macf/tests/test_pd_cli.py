@@ -148,3 +148,43 @@ def test_the_command_shows_a_held_restart(tmp_path, monkeypatch, capsys):
     line = next(ln for ln in capsys.readouterr().out.splitlines() if "session:" in ln)
     assert line.startswith("  session: stopped")
     assert line.endswith("; restart held until 07:00 (quiet window)")
+
+
+def test_a_wake_window_is_read_as_seconds_or_with_a_unit():
+    from macf.pd.cli import _seconds
+    assert [_seconds(t) for t in ("300", "90s", "5m", "1.5h")] == [300, 90, 300, 5400]
+    for bad in ("0", "-5", "five", "5d", "", "inf", "infh", "nan", "1e400"):
+        with pytest.raises(ValueError):
+            _seconds(bad)
+
+
+def test_pd_wake_shows_or_paces_and_a_pace_needs_its_reason(monkeypatch, capsys):
+    """pd wake alone asks for the status and says the window and where it came from; with a window
+    it sends a pace asked by the agent, with its card; a pace needs a reason, and one window."""
+    import argparse
+
+    import macf.pd.client as client
+    import macf.pd.daemon as daemon
+    import macf.utils.paths as paths
+    from macf.pd.cli import cmd_pd_wake
+    from macf.pd.interface import Response
+    sent = []
+    monkeypatch.setattr(paths, "find_agent_home", lambda: Path("/nowhere"))
+    monkeypatch.setattr(daemon, "card_for_home", lambda home: "Tester@abc123")
+    monkeypatch.setattr(client, "ask", lambda card, request: sent.append(request) or Response(
+        ok=True, wake_refractory_s=request.get("refractory_s") or 600.0, wake_window_from="the declaration"))
+
+    def run(**kw):
+        args = argparse.Namespace(**{"refractory": None, "declared": False, "reason": None,
+                                     "asked_by": "agent", **kw})
+        return cmd_pd_wake(args)
+
+    assert run() == 0 and sent[-1] == {"op": "status"}
+    assert "600 s" in capsys.readouterr().out
+    assert run(refractory="5m") == 1 and len(sent) == 1, "a pace without a reason was sent"
+    assert run(refractory="5m", declared=True, reason="r") == 1 and len(sent) == 1
+    assert run(refractory="5m", reason="a busy hour") == 0
+    assert sent[-1] == {"op": "pace", "refractory_s": 300.0, "reason": "a busy hour",
+                        "asked_by": {"kind": "agent", "card": "Tester@abc123"}}
+    assert run(declared=True, reason="done", asked_by="operator") == 0
+    assert sent[-1]["refractory_s"] is None and sent[-1]["asked_by"] == {"kind": "operator"}
