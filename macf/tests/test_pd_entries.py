@@ -254,27 +254,13 @@ def test_an_entry_from_a_tainted_context_is_marked(tmp_path, base, run_daemon, i
     assert made["marked"] == ["a web fetch"] and "state" not in made
 
 
-def test_a_reminder_never_wakes_the_session(tmp_path):
-    """A reminder is for the operator: the scheduler never raises pd_entry_due for it, and the
-    sender sends it (the scheduler design, 4.3)."""
-    from channel_receiver import ChannelReceiver
-    from macf.pd.entries import EVENT_ENTRY_ADDED
-    from test_pd_schedule import CARD, Log, at, make_scheduler
-    log, now = Log(), [at("2026-10-19 12:00")]
-    log.append(EVENT_ENTRY_ADDED, {"agent": CARD, "id": new_entry_id(), "when": "cron:0 * * * *", "zone": "UTC",
-                                   "start": "2026-10-19T11:30:00+00:00", "action": "remind", "missed": "once"})
-    channel = ChannelReceiver(tmp_path / "agent")
-    make_scheduler(tmp_path, [], log, now, on_notice=channel).tick()
-    assert channel.received == []
-
-
 def test_pd_entry_show_prints_one_entry_in_full(monkeypatch, capsys):
     import argparse
 
     from macf.pd import cli, client
     from macf.pd.interface import Response
     sent = []
-    held = {"id": "e-0123456789ab", "agent": "Tester@abc123", "action": "remind", "when": "cron:0 9 * * *",
+    held = {"id": "e-0123456789ab", "agent": "Tester@abc123", "action": "wake", "when": "cron:0 9 * * *",
             "purpose": "the weekly audit is due", "missed": "once", "marked": ["a web fetch"]}
 
     def ask(card, request, **kw):
@@ -292,11 +278,12 @@ def test_pd_entry_show_prints_one_entry_in_full(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "the weekly audit is due" in out and "a web fetch" in out
     assert run("show", "e-000000000000") == 1 and "no entry" in capsys.readouterr().err
-    assert run("add", "in 20m", "p", "--remind", "--missed", "once") == 0
-    assert sent[-1]["action"] == "remind"
+    assert run("add", "in 20m", "p", "--missed", "once") == 0
+    assert sent[-1]["action"] == "wake"
+    with pytest.raises(SystemExit):                  # the operator sender was withdrawn (MIS-0002 revision)
+        run("add", "in 20m", "p", "--remind", "--missed", "once")
     assert run("add", "in 20m", "p", "--check", "count", "--arg", "n=3", "--arg", "repo=o/r=x", "--missed", "once") == 0
     assert (sent[-1]["action"], sent[-1]["template"], sent[-1]["args"]) == ("check", "count", {"n": "3", "repo": "o/r=x"})
-    assert run("add", "in 20m", "p", "--check", "count", "--remind", "--missed", "once") == 2
     assert run("add", "in 20m", "p", "--check", "count", "--arg", "n", "--missed", "once") == 2
 
 

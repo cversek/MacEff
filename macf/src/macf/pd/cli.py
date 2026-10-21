@@ -45,11 +45,9 @@ def add_pd_parser(sub) -> None:
     entry = pd_sub.add_parser(
         "entry", help="your own timed entries, made from your live session (policy: persistent_layer)")
     entry_sub = entry.add_subparsers(dest="entry_cmd")
-    add = entry_sub.add_parser("add", help="make an entry that wakes this session, or reminds the operator, when it falls due")
+    add = entry_sub.add_parser("add", help="make an entry that wakes this session when it falls due")
     add.add_argument("when", help="an instant, 'in 20m', 'tomorrow 06:30', 'cron:<five fields>' or 'rrule:<rule>'")
     add.add_argument("purpose", help="what the entry is for, written so a later self can act on it cold")
-    add.add_argument("--remind", action="store_true",
-                     help="remind the operator instead of waking this session, through the sender")
     add.add_argument("--check", metavar="TEMPLATE",
                      help="run one of the operator's check templates at its time, waking this session only "
                           "when its condition holds")
@@ -68,12 +66,6 @@ def add_pd_parser(sub) -> None:
     lst = entry_sub.add_parser("list", help="the entries you hold")
     lst.add_argument("--json", action="store_true", help="print them as JSON")
     lst.set_defaults(func=cmd_pd_entry_list)
-    brief = pd_sub.add_parser("brief", help="the daily brief the operator asked for, sent by the sender at its time")
-    brief_sub = brief.add_subparsers(dest="brief_cmd")
-    write = brief_sub.add_parser("write", help="write your brief to the spool, from a file or - for stdin; the "
-                                               "sender sends the newest at the next brief time")
-    write.add_argument("source", help="the brief's text: a file, or - to read stdin")
-    write.set_defaults(func=cmd_pd_brief_write)
     agenda = pd_sub.add_parser(
         "agenda", help="what is scheduled: the declared schedules' next runs and your own entries")
     agenda.set_defaults(func=cmd_pd_agenda)
@@ -163,14 +155,11 @@ def _ask_entries(request: dict):
 
 
 def cmd_pd_entry_add(args: argparse.Namespace) -> int:
-    if args.remind and args.check:
-        print("⚠️ MACF: pd: an entry either reminds the operator or runs a check, not both", file=sys.stderr)
-        return 2
     if any("=" not in a for a in args.arg):
         print("⚠️ MACF: pd: each --arg is NAME=VALUE", file=sys.stderr)
         return 2
     request = {"op": "entry_add", "when": args.when, "purpose": args.purpose, "missed": args.missed,
-               "action": "remind" if args.remind else "check" if args.check else "wake"}
+               "action": "check" if args.check else "wake"}
     if args.check:
         request.update(template=args.check, args=dict(a.split("=", 1) for a in args.arg))
     reply = _ask_entries(request)
@@ -180,26 +169,6 @@ def cmd_pd_entry_add(args: argparse.Namespace) -> int:
     print(f"entry made; you hold {len(reply.entries or [])}" + (f", the newest {made['id']}" if made else ""))
     if made and made.get("marked"):
         print(f"it is marked: this context read untrusted input ({'; '.join(made['marked'])})")
-    return 0
-
-
-def cmd_pd_brief_write(args: argparse.Namespace) -> int:
-    """A brief into the spool the sender reads, named by when it was written. Written whole then
-    renamed, so the sender never sends half of one."""
-    from datetime import datetime, timezone
-
-    from macf.pd.sender import brief_dir, brief_name
-    home, _ = _this_agent()
-    text = sys.stdin.read() if args.source == "-" else Path(args.source).read_text()
-    if not text.strip():
-        print("⚠️ MACF: pd: the brief is empty; nothing was written", file=sys.stderr)
-        return 1
-    path = brief_dir(Path(home)) / brief_name(datetime.now(timezone.utc))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_suffix(".part")
-    partial.write_text(text)
-    partial.replace(path)
-    print("brief written; the sender sends the newest at the next brief time")
     return 0
 
 

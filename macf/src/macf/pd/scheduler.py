@@ -457,8 +457,6 @@ class Scheduler:
         the daemon was down. The firing is recorded before the notice is raised (R26)."""
         from macf.pd.entries import OneShot, parse_when
         entry = self.entries[entry_id]
-        if entry.get("action") == "remind":
-            return                               # a reminder is the sender's (the scheduler design, 4.3)
         tz = timezone.utc if entry.get("zone") in (None, "UTC") else ZoneInfo(entry["zone"])
         start = _when(entry.get("start"))
         try:

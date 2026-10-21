@@ -630,7 +630,7 @@ class EntryAddRequest(_Closed):
     op: Literal["entry_add"]
     when: str = Field(min_length=1, max_length=200)
     purpose: str = Field(min_length=1, max_length=500)
-    action: Literal["wake", "remind", "check"]
+    action: Literal["wake", "check"]
     missed: Literal["once", "skip", "report"]
     #: For a ``check``: the operator's template it runs, and its arguments (design 4.2).
     template: Optional[str] = Field(default=None, max_length=48)
