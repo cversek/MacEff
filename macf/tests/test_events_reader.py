@@ -162,3 +162,31 @@ def test_follow_yields_only_new_matching_events_and_waits_for_a_line_to_end(tmp_
         next(steps)()
     got = rd.follow(path, lambda e: e["event"].startswith("pd_"), sleep=sleep)
     assert next(got) == new
+
+
+def test_the_carried_notice_pointer_shows_what_it_says_it_will(capsys):
+    """The pd_carried notice says its command shows what was carried, changed and lost: run the
+    command exactly as the notice quotes it, and it does, an empty list included."""
+    import re
+    import shlex
+
+    from macf.agent_events_log import get_log_path
+    from macf.channels.maceff_channel import DAEMON_POINTERS
+    from macf.cli import _build_parser
+    path = get_log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    older = ev("pd_carried", time.time() - 60, occasion="restart", carried=["old"], changed=[], lost=[])
+    newest = ev("pd_carried", time.time(), occasion="compaction", carried=["amail-broker", "session"],
+                changed=[], lost=["the session's working context (summarized)"])
+    path.write_text(json.dumps(older) + "\n" + json.dumps(newest) + "\n")
+    command = re.search(r"`(macf_tools events query[^`]*)`", DAEMON_POINTERS["pd_carried"]).group(1)
+    args = _build_parser().parse_args(shlex.split(command)[1:])
+    assert args.func(args) == 0
+    out = capsys.readouterr().out
+    assert "compaction" in out and "restart" not in out
+    assert '"amail-broker"' in out and "changed: []" in out and "working context" in out
+
+
+def test_a_carried_event_reads_as_its_occasion_and_counts():
+    event = ev("pd_carried", 0, occasion="compaction", carried=["a", "b", "c"], changed=[], lost=["x"])
+    assert rd.summary_of(event) == "compaction: carried 3, changed 0, lost 1"
