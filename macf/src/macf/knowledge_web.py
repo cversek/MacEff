@@ -82,11 +82,29 @@ SIDECAR_ROOT = ".links"
 _MAIL_BOXES = ("inbox", "outbox")
 
 
+def mail_roots(agent_home: Optional[Path] = None) -> List[Path]:
+    """The amail folders the web walks: ``amail`` directly under the agent's
+    private and public trees, and each subagent's. Nothing else is mail, however
+    its folders are named, so a bundle's own ``amail/`` is just a folder in it."""
+    if agent_home is None:
+        from .utils.paths import find_agent_home
+        agent_home = find_agent_home()
+    if agent_home is None:
+        return []
+    parents = [agent_home / "agent" / base for base in ("private", "public")]
+    subagents = agent_home / "agent" / "subagents"
+    if subagents.is_dir():
+        parents += [role / base for role in sorted(subagents.iterdir()) if role.is_dir()
+                    for base in ("private", "public")]
+    return [(parent / "amail").resolve() for parent in parents if (parent / "amail").is_dir()]
+
+
 def _mail_root(path: Path) -> Optional[Path]:
-    """The amail root ``path`` lies under (the nearest folder named amail), or None."""
-    for parent in path.resolve().parents:
-        if parent.name == "amail":
-            return parent
+    """The walked amail root ``path`` lies under (``mail_roots``), or None."""
+    resolved = path.resolve()
+    for root in mail_roots():
+        if resolved.is_relative_to(root) and resolved != root:
+            return root
     return None
 
 
@@ -101,11 +119,12 @@ def sidecar_path(path: Path) -> Path:
 
 
 def stray_sidecars(root: Path) -> List[Path]:
-    """Sidecar-named files under an amail root but outside its .links folder.
+    """Sidecar-named files under an amail root but not under its own .links
+    folder (a nested .links inside a thread is a stray too).
     The web never reads them; the doctor names them, since one may have
     arrived inside a bundle its sender built."""
     return [f for f in _files_under(root, "*" + SIDECAR_SUFFIX)
-            if SIDECAR_ROOT not in f.relative_to(root).parts]
+            if f.relative_to(root).parts[0] != SIDECAR_ROOT]
 
 
 def read_sidecar(path: Path) -> Tuple[List[str], List[str]]:
@@ -152,9 +171,8 @@ def is_mail_unit(path: Path) -> bool:
 
 
 def in_mail_root(path: Path) -> bool:
-    """Whether ``path`` lies under a directory named amail: the web takes a
-    type from its directory's name, so that directory IS the amail root."""
-    return "amail" in path.resolve().parent.parts
+    """Whether ``path`` lies under an amail folder the web walks (mail_roots)."""
+    return _mail_root(path) is not None
 
 
 def node_id_for(ca_type: str, type_root: Path, path: Path) -> str:
@@ -327,7 +345,9 @@ def concepts_of(ca_type: str, path: Path, content: str) -> List[str]:
     concepts to this agent's web: only the sidecar it writes itself does."""
     if ca_type == "amail":
         from .concepts import normalize_concepts
-        own = extract_wiki_concepts(content) if path.suffix == ".md" and "inbox" not in path.parts else []
+        root = _mail_root(path)
+        box = path.resolve().relative_to(root).parts[0] if root else "inbox"
+        own = extract_wiki_concepts(content) if path.suffix == ".md" and box != "inbox" else []
         return normalize_concepts(own + read_sidecar(path)[0])
     if ca_type == "tasks" and path.suffix == ".json":
         rec = task_record(content, path)

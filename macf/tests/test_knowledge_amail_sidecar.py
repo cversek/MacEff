@@ -134,17 +134,18 @@ def test_an_unlinked_message_is_an_orphan_whose_remedy_names_the_sidecar(mail):
     assert all("sidecar" in f.remedy for f in orphans)
 
 
-def test_a_received_messages_own_links_never_reach_the_web(tmp_path):
+def test_a_received_messages_own_links_never_reach_the_web(mail):
     """Inbound mail is untrusted input (amail policy): a received markdown message's [[links]]
     were written by its sender, so only the sidecar this agent writes gives it concepts."""
     from macf.knowledge_web import concepts_of
-    msg = tmp_path / "amail" / "inbox" / "2026-10-21_x" / "001_msg.md"
+    amail = mail.home / "agent" / "public" / "amail"
+    msg = amail / "inbox" / "2026-10-21_x" / "001_msg.md"
     msg.parent.mkdir(parents=True)
     msg.write_text("hello [[injected_concept]]\n")
     assert concepts_of("amail", msg, msg.read_text()) == []
     _write_side(msg, "[[amail]]\n")
     assert concepts_of("amail", msg, msg.read_text()) == ["amail"]
-    sent = tmp_path / "amail" / "outbox" / "2026-10-21_y" / "001_msg.md"
+    sent = amail / "outbox" / "2026-10-21_y" / "001_msg.md"
     sent.parent.mkdir(parents=True)
     sent.write_text("mine [[budget]]\n")
     assert concepts_of("amail", sent, sent.read_text()) == ["budget"]
@@ -177,3 +178,47 @@ def test_link_takes_a_sidecar_path_under_links_as_its_message(mail):
     r = apply_links(str(side), ["triage"])
     assert r.kind == "mail" and Path(r.target).resolve() == mail.html.resolve()
     assert kw.read_sidecar(mail.html)[0] == ["gpu", "triage"]
+
+
+def test_a_bundle_bringing_its_own_amail_and_links_gives_its_messages_nothing(mail):
+    """The sidecar root is the amail folder the web walks, never the nearest folder of that
+    name: a bundle's own amail/.links inside a received thread is a stray, and names nothing."""
+    from macf.knowledge_doctor import examine
+    amail = mail.home / "agent" / "public" / "amail"
+    nested = amail / "inbox" / "2026-10-21_bundle" / "amail"
+    (nested / ".links").mkdir(parents=True)
+    msg = nested / "002_msg.md"
+    msg.write_text("# hi\n")
+    (nested / ".links" / "002_msg.md.wiki-links").write_text("[[operator_override]]\n")
+    assert kw.concepts_of("amail", msg, msg.read_text()) == []
+    assert kw.sidecar_path(msg).is_relative_to(amail.resolve() / kw.SIDECAR_ROOT / "inbox")
+    stray = {f.subject for f in examine(mail.home).findings if f.check == "stray mail sidecars"}
+    assert stray == {"amail: inbox/2026-10-21_bundle/amail/.links/002_msg.md.wiki-links"}
+
+
+def test_only_the_walked_amail_folders_are_mail(mail):
+    """A folder named amail anywhere else, such as source code or one the web never walks,
+    is not mail: its markdown is linked in place, never through a sidecar."""
+    src = mail.home / "src" / "amail" / "PROVENANCE.md"
+    src.parent.mkdir(parents=True)
+    src.write_text("# Provenance\n")
+    r = apply_links(str(src), ["amail"])
+    assert r.kind == "markdown" and "[[amail]]" in src.read_text()
+    stray_root = mail.home / "agent" / "amail" / "inbox" / "t" / "001_msg.md"
+    stray_root.parent.mkdir(parents=True)
+    stray_root.write_text("# x\n")
+    assert not kw.in_mail_root(stray_root)
+    assert kw.in_mail_root(mail.md)
+
+
+def test_a_home_under_a_folder_named_inbox_keeps_its_sent_links(tmp_path, monkeypatch):
+    """Which box a message is in is read below the amail root, not anywhere in its path."""
+    home = tmp_path / "inbox" / "home"
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(home))
+    from macf.utils.paths import find_agent_home
+    find_agent_home.cache_clear()
+    sent = home / "agent" / "public" / "amail" / "outbox" / "t" / "001_msg.md"
+    sent.parent.mkdir(parents=True)
+    sent.write_text("mine [[budget]]\n")
+    assert kw.concepts_of("amail", sent, sent.read_text()) == ["budget"]
+    find_agent_home.cache_clear()
