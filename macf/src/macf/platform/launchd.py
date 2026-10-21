@@ -178,6 +178,55 @@ def apply_plan(steps: List[Step], run=None, force: bool = False) -> List[str]:
     return done
 
 
+# ---------------------------------------------------------------------------
+# The tray: one LaunchAgent per GUI user, outside every agent
+# ---------------------------------------------------------------------------
+
+#: The tray's label. One job for the user, not one per agent: a single icon stands for every
+#: agent on the host (MIS-0002-R69), and the tray finds them by ``maceff_pd.*``, which this
+#: label does not match.
+TRAY_LABEL = "maceff_tray"
+
+
+def render_tray_launch_agent(program_argv: List[str], home: str, log_dir: str) -> Tuple[str, bytes]:
+    """The plist that keeps the operator's tray running, and where it belongs.
+
+    The tray is its own job rather than a unit of an agent's primal daemon: it is how the
+    operator sees a daemon in trouble, so it must not share that daemon's failure domain.
+    launchd relaunches it when it crashes or is killed, and leaves it down after the
+    operator picks Quit, which exits 0.
+    """
+    if not program_argv:
+        raise ValueError("program_argv is empty")
+    plist = {
+        "Label": TRAY_LABEL,
+        "ProgramArguments": list(program_argv),
+        "RunAtLoad": True,
+        "KeepAlive": {"SuccessfulExit": False},
+        "ThrottleInterval": 10,
+        "LimitLoadToSessionType": "Aqua",
+        # A menu-bar app answers the person at the screen, so it isn't throttled as background.
+        "ProcessType": "Interactive",
+        "StandardOutPath": f"{log_dir}/{TRAY_LABEL}.out.log",
+        "StandardErrorPath": f"{log_dir}/{TRAY_LABEL}.err.log",
+    }
+    path = f"{home}/Library/LaunchAgents/{TRAY_LABEL}.plist"
+    return path, plistlib.dumps(plist, fmt=plistlib.FMT_XML, sort_keys=True)
+
+
+def tray_install_plan(program_argv: List[str], home: str, log_dir: str, uid: int) -> List[Step]:
+    """What installing the tray does, in order, without doing it."""
+    path, data = render_tray_launch_agent(program_argv, home, log_dir)
+    return [Step("write", path=path, content=data),
+            Step("launchctl", argv=launchctl_argv("bootstrap", TRAY_LABEL, uid, plist_path=path))]
+
+
+def tray_uninstall_plan(home: str, uid: int) -> List[Step]:
+    """What removing the tray does: boot it out, whether or not it is loaded, then remove its plist."""
+    return [Step("launchctl", argv=launchctl_argv("bootout", TRAY_LABEL, uid), not_loaded_ok=True),
+            Step("remove", path=f"{home}/Library/LaunchAgents/{TRAY_LABEL}.plist")]
+
+
 @dataclass(frozen=True)
 class AgentStatus:
     """What launchd says about one agent's daemon."""
