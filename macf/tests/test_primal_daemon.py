@@ -1667,6 +1667,8 @@ def test_an_untested_newest_probe_speaks_for_the_grants(tmp_path, script, base, 
               {"timestamp": 100, "data": {"agent": CARD, "tested": True, "verdicts": {"local_network": "denied"}}}]
     daemon = run_daemon(home, base, grant_probes=lambda: iter(probes))
     assert not [o for o in daemon.notifier.owed.values() if o.source == "pd_grant_denied"]
+
+
 # ---- pacing the keystroke wake (persistent_layer 1.9) ------------------------------------
 
 class _NoPane:
@@ -1740,6 +1742,23 @@ def test_no_pace_goes_under_the_declared_floor_and_only_the_agent_or_operator_pa
         assert not ask(daemon, {"op": "pace", "refractory_s": 300, "asked_by": {"kind": kind}, "reason": "x"})["ok"]
     assert waker.refractory_s == 3600
 
+
+
+def test_a_starting_daemon_puts_the_saved_pace_in_force(tmp_path, script, base):
+    """Through start() itself, not a direct call: the boot sequence re-asserts the newest pace.
+    A rebase that drops or moves the call is what this catches (found in review)."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    append_event("pd_wake_paced", {"agent": CARD, "refractory_s": 240.0, "previous_s": 600.0,
+                                   "asked_by": {"kind": "agent"}, "reason": "a long build",
+                                   "peer": {"uid": os.getuid(), "pid": os.getpid(), "proc_start": "x"}})
+    daemon = Daemon(home, base=base, backoff_base_s=0.05, backoff_cap_s=0.2)
+    waker = _attach_waker(daemon)
+    try:
+        daemon.start()
+        assert waker.refractory_s == 240.0 and "a long build" in daemon._wake_from
+    finally:
+        daemon.stop(units=True)
+        daemon.core.shutdown("the test is over")
 
 def test_a_pace_with_no_keystroke_wake_is_refused(tmp_path, script, base, run_daemon):
     daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
