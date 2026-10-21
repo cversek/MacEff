@@ -616,7 +616,8 @@ class Daemon:
         if self.notifier.waker is None:
             return Response(ok=False, error="no session unit is declared, so there is no keystroke wake to pace")
         declaration = self.core.declaration
-        refused = pace_refusal(request.refractory_s, declaration.wake_refractory_floor_s)
+        refused = pace_refusal(request.refractory_s, declaration.wake_refractory_floor_s,
+                               declaration.wake_refractory_ceiling_s)
         if refused:
             return Response(ok=False, error=refused)
         started = proc_start(creds.pid)
@@ -655,7 +656,8 @@ class Daemon:
                        if (e.get("data") or {}).get("agent") == self.card), None)
         declaration = self.core.declaration
         window, source = window_at_boot(declaration.wake_refractory_s,
-                                        declaration.wake_refractory_floor_s, newest)
+                                        declaration.wake_refractory_floor_s, newest,
+                                        declaration.wake_refractory_ceiling_s)
         self.notifier.pace(window)
         self._wake_from = source
         if newest is not None:

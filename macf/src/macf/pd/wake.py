@@ -100,21 +100,32 @@ _DIALOG_MARKERS = ("esc to cancel", "enter to select", "do you want to")
 _RUNNING_MARKER = "esc to interrupt"
 
 
-def pace_refusal(wanted_s: Optional[float], floor_s: Optional[float]) -> Optional[str]:
-    """Why a pace is refused, or None. Only the declaration sets the floor: a pace may lengthen
-    the window, or shorten it down to the floor, and never past it. None asks for the declared
-    window, which the declaration already holds at or above its floor."""
-    if wanted_s is not None and floor_s is not None and wanted_s < floor_s:
+def pace_refusal(wanted_s: Optional[float], floor_s: Optional[float],
+                 ceiling_s: Optional[float] = None) -> Optional[str]:
+    """Why a pace is refused, or None. Only the declaration sets the floor and the ceiling: a pace
+    may lengthen the window up to the ceiling, or shorten it down to the floor, and never past
+    either. None asks for the declared window, which the declaration holds between the two."""
+    if wanted_s is None:
+        return None
+    if not math.isfinite(wanted_s):
+        return f"{wanted_s!r} is not a window: a pace is a finite number of seconds"
+    if floor_s is not None and wanted_s < floor_s:
         return (f"{wanted_s:g} s is under the declared floor of {floor_s:g} s, and only the "
                 f"declaration sets the floor")
+    if ceiling_s is not None and wanted_s > ceiling_s:
+        return (f"{wanted_s:g} s is over the declared ceiling of {ceiling_s:g} s, and only the "
+                f"declaration sets the ceiling: past it, the agent would go unwoken longer than a "
+                f"held wake may before the operator is told")
     return None
 
 
 def window_at_boot(declared_s: float, floor_s: Optional[float],
-                   paced: Optional[dict]) -> Tuple[float, str]:
+                   paced: Optional[dict], ceiling_s: Optional[float] = None) -> Tuple[float, str]:
     """The window a starting daemon puts in force, and where it came from, from the newest
     ``pd_wake_paced`` event of this agent, or None. The newest pace holds until another replaces
-    it; a floor declared above it since then wins, and the answer says so."""
+    it; a floor declared above it, or a ceiling below it, since then wins, and the answer says
+    so. A saved pace that is not a finite number (written before paces were bounded) is held to
+    the ceiling."""
     if paced is None:
         return declared_s, "the declaration"
     data = paced.get("data") or {}
@@ -122,6 +133,8 @@ def window_at_boot(declared_s: float, floor_s: Optional[float],
     wanted = data.get("refractory_s")
     if wanted is None:
         return declared_s, f"the declaration, which the pace of {_minute(when)} went back to"
+    if ceiling_s is not None and not (isinstance(wanted, (int, float)) and wanted <= ceiling_s):
+        return ceiling_s, f"the declared ceiling, under the pace of {_minute(when)}, which asked for {wanted!r} s"
     if floor_s is not None and wanted < floor_s:
         return floor_s, f"the declared floor, raised since the pace of {_minute(when)} asked for {wanted:g} s"
     return wanted, pace_source(when, (data.get("asked_by") or {}).get("kind", "agent"), data.get("reason", ""))

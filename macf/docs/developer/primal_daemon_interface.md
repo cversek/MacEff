@@ -75,6 +75,7 @@ JSON, validated closed: an unknown key is refused, because a key the daemon igno
 - `wind_down`: the skill that winds the agent down and asks for its compaction through the control socket. Absent means only the operator may ask [MIS-0002-R108 (compaction_MUST_be_asked_by_operator_or_wind-down)].
 - `wake_refractory_s`: how long the keystroke wake rests after each wake, 600 by default, until the agent paces it (`pace` below).
 - `wake_refractory_floor_s`: the shortest window a pace may set, at most `wake_refractory_s`. Absent means no floor. Only the declaration sets it, never the socket.
+- `wake_refractory_ceiling_s`: the longest window a pace may set, at least `wake_refractory_s`. The default, 1800 s, is the outside watch's allowance for a held wake, so no pace can keep an agent unwoken past the point where a stuck wake alerts. Only the declaration sets it. No window, floor or ceiling may be infinite or not a number.
 
 ## 3. The events
 
@@ -107,7 +108,7 @@ Two Unix sockets, so that each carries one shape and has one peer rule; never a 
   - `{"op": "status"}` returns each unit's state, pid, start time and since when.
   - `{"op": "start" | "stop" | "restart", "unit", "asked_by", "reason"}` acts on one unit. A stop from outside a session succeeds whatever gate the session enforces [MIS-0002-R48 (outside_stop_MUST_override_gates)].
   - `{"op": "compact", "asked_by", "reason"}` is accepted only from the operator or the declared wind-down [MIS-0002-R108 (compaction_MUST_be_asked_by_operator_or_wind-down)].
-  - `{"op": "pace", "refractory_s", "asked_by", "reason"}` sets how long the keystroke wake rests, or with `refractory_s` null goes back to the declared window. It's asked by the `agent` or the `operator`, acts on no unit, and is refused under `wake_refractory_floor_s`. A status or a pace answers with `wake_refractory_s` and `wake_window_from` wherever a session unit has a keystroke wake.
+  - `{"op": "pace", "refractory_s", "asked_by", "reason"}` sets how long the keystroke wake rests, or with `refractory_s` null goes back to the declared window. It's asked by the `agent` or the `operator`, acts on no unit, and is refused under `wake_refractory_floor_s`, over `wake_refractory_ceiling_s`, or when it isn't a finite number. A status or a pace answers with `wake_refractory_s` and `wake_window_from` wherever a session unit has a keystroke wake.
   - Any unknown operation or field refuses the whole request, with `{"ok": false, "error": ...}`.
 - **Channel**, a stream. The daemon writes closed notice records in the shape the MacEff channel defines (#545), and reads nothing. The peer must descend from the agent's live session [MIS-0002-R122 (pd_MUST_check_channel_peer_lineage)].
 - **The daemon record** holds `pid`, `proc_start` and `version`. It is written atomically after both sockets are bound, and every client checks its peer against it [MIS-0002-R123 (channel_MUST_check_its_peer_is_its_pd)].

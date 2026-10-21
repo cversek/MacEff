@@ -1735,12 +1735,31 @@ def test_no_pace_goes_under_the_declared_floor_and_only_the_agent_or_operator_pa
     assert not reply["ok"] and "120" in reply["error"] and "floor" in reply["error"]
     assert waker.refractory_s == 600 and events("pd_wake_paced") == []
     assert ask(daemon, {"op": "pace", "refractory_s": 120, "asked_by": agent, "reason": "the floor"})["ok"]
-    assert ask(daemon, {"op": "pace", "refractory_s": 3600, "asked_by": {"kind": "operator"},
+    assert ask(daemon, {"op": "pace", "refractory_s": 1800, "asked_by": {"kind": "operator"},
                         "reason": "slower"})["ok"]
-    assert waker.refractory_s == 3600
+    assert waker.refractory_s == 1800
     for kind in ("policy", "harness", "wind_down"):
         assert not ask(daemon, {"op": "pace", "refractory_s": 300, "asked_by": {"kind": kind}, "reason": "x"})["ok"]
-    assert waker.refractory_s == 3600
+    assert waker.refractory_s == 1800
+
+
+def test_no_pace_goes_over_the_declared_ceiling_or_past_any_finite_window(tmp_path, script, base, run_daemon):
+    """#761 review: a pace of inf, or of 1e9 hours, would have muted the wake for good and never
+    alerted. The ceiling comes only from the declaration, 30 minutes unless it says otherwise, and
+    a pace over it is refused naming it, with nothing recorded and the window unchanged."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    _declare(home, wake_refractory_s=600.0)
+    daemon = run_daemon(home, base)
+    waker = _attach_waker(daemon)
+    agent = {"kind": "agent", "card": CARD}
+    for seconds in (1801, 3.6e12):
+        reply = ask(daemon, {"op": "pace", "refractory_s": seconds, "asked_by": agent, "reason": "quiet"})
+        assert not reply["ok"] and "ceiling" in reply["error"] and "1800" in reply["error"], reply
+    reply = ask(daemon, {"op": "pace", "refractory_s": float("inf"), "asked_by": agent, "reason": "mute"})
+    assert not reply["ok"], reply
+    assert waker.refractory_s == 600 and events("pd_wake_paced") == []
+    assert ask(daemon, {"op": "pace", "refractory_s": 1800, "asked_by": agent, "reason": "the ceiling"})["ok"]
+    assert waker.refractory_s == 1800
 
 
 
@@ -1759,6 +1778,23 @@ def test_a_starting_daemon_puts_the_saved_pace_in_force(tmp_path, script, base):
     finally:
         daemon.stop(units=True)
         daemon.core.shutdown("the test is over")
+
+def test_a_starting_daemon_holds_a_saved_unbounded_pace_to_the_ceiling(tmp_path, script, base):
+    """A pace saved before paces were bounded (#761 review: inf was accepted) is held to the
+    declared ceiling at boot, through start(), and the daemon says where the window came from."""
+    home = make_home(tmp_path, [make_unit("worker", script, {})])
+    append_event("pd_wake_paced", {"agent": CARD, "refractory_s": 1e12, "previous_s": 600.0,
+                                   "asked_by": {"kind": "agent"}, "reason": "mute it",
+                                   "peer": {"uid": os.getuid(), "pid": os.getpid(), "proc_start": "x"}})
+    daemon = Daemon(home, base=base, backoff_base_s=0.05, backoff_cap_s=0.2)
+    waker = _attach_waker(daemon)
+    try:
+        daemon.start()
+        assert waker.refractory_s == 1800.0 and "ceiling" in daemon._wake_from
+    finally:
+        daemon.stop(units=True)
+        daemon.core.shutdown("the test is over")
+
 
 def test_a_pace_with_no_keystroke_wake_is_refused(tmp_path, script, base, run_daemon):
     daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)

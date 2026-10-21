@@ -153,7 +153,7 @@ def test_the_command_shows_a_held_restart(tmp_path, monkeypatch, capsys):
 def test_a_wake_window_is_read_as_seconds_or_with_a_unit():
     from macf.pd.cli import _seconds
     assert [_seconds(t) for t in ("300", "90s", "5m", "1.5h")] == [300, 90, 300, 5400]
-    for bad in ("0", "-5", "five", "5d", ""):
+    for bad in ("0", "-5", "five", "5d", "", "inf", "infh", "nan", "1e400"):
         with pytest.raises(ValueError):
             _seconds(bad)
 

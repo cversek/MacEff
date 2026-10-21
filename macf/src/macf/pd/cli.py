@@ -9,6 +9,7 @@ operator with ``--asked-by operator`` (persistent_layer 1.9).
 """
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -105,6 +106,8 @@ def _seconds(text: str) -> float:
         value = float(number) * scale
     except ValueError:
         raise ValueError(f"not a duration: {text!r} (use seconds, or 90s, 5m, 1h)") from None
+    if not math.isfinite(value):
+        raise ValueError(f"a window is a finite length of time: {text!r}")
     if not value > 0:
         raise ValueError(f"a window must be longer than nothing: {text!r}")
     return value

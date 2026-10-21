@@ -523,6 +523,22 @@ def test_a_pace_may_shorten_the_window_to_the_floor_and_never_past_it():
     assert refused and "300" in refused and "floor" in refused
 
 
+def test_no_pace_goes_over_the_ceiling_and_none_is_infinite():
+    """#761 review: an unbounded pace muted the wake and was never alerted on."""
+    assert wk.pace_refusal(1800, None, 1800) is None
+    refused = wk.pace_refusal(1801, None, 1800)
+    assert refused and "1800" in refused and "ceiling" in refused
+    for bad in (float("inf"), float("nan")):
+        assert "finite" in wk.pace_refusal(bad, None, None)
+
+
+def test_the_default_ceiling_is_the_watchs_allowance_for_a_held_wake():
+    """So a pace can never keep an agent unwoken past the point where a stuck wake alerts."""
+    from macf.pd.interface import DEFAULT_WAKE_REFRACTORY_CEILING_S
+    from macf.pd.watch import WAKE_HELD_ALERT_S
+    assert DEFAULT_WAKE_REFRACTORY_CEILING_S == WAKE_HELD_ALERT_S
+
+
 def test_the_newest_pace_holds_at_boot_and_a_raised_floor_wins_saying_so():
     paced = {"timestamp": 1_800_000_000, "data": {"refractory_s": 120.0, "reason": "a busy hour",
                                                    "asked_by": {"kind": "agent"}}}
@@ -534,6 +550,14 @@ def test_the_newest_pace_holds_at_boot_and_a_raised_floor_wins_saying_so():
     back = {"timestamp": 1_800_000_000, "data": {"refractory_s": None, "reason": "done"}}
     window, source = wk.window_at_boot(900.0, None, back)
     assert window == 900.0 and "declaration" in source
+
+
+def test_a_saved_pace_over_the_ceiling_or_not_finite_is_held_to_the_ceiling_at_boot():
+    for wanted in (7200.0, float("inf"), float("nan")):
+        paced = {"timestamp": 1_800_000_000, "data": {"refractory_s": wanted, "reason": "quiet",
+                                                       "asked_by": {"kind": "agent"}}}
+        window, source = wk.window_at_boot(600.0, None, paced, 1800.0)
+        assert window == 1800.0 and "ceiling" in source, (wanted, source)
 
 
 def test_a_window_paced_shorter_lets_the_next_tick_wake(tmp_path):

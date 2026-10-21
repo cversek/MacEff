@@ -345,6 +345,10 @@ class ChannelPlugin(_Closed):
 #: How long the keystroke wake rests after each wake when the declaration says nothing: the
 #: ten minutes the mail clocks learned, which the operator kept as the default on 2026-10-17.
 DEFAULT_WAKE_REFRACTORY_S = 600.0
+#: The longest window a pace may set, unless the declaration says otherwise: the outside watch's
+#: allowance for a held wake (``watch.WAKE_HELD_ALERT_S``), so no pace can keep an agent unwoken
+#: past the point where a stuck wake would have reached the operator.
+DEFAULT_WAKE_REFRACTORY_CEILING_S = 1800.0
 
 
 class Declaration(_Closed):
@@ -387,10 +391,13 @@ class Declaration(_Closed):
     unread_mail_threshold_s: Optional[float] = Field(default=None, gt=0)
     #: How long the keystroke wake rests after each wake, until the agent paces it otherwise
     #: over the control socket (persistent_layer 1.9).
-    wake_refractory_s: float = Field(default=DEFAULT_WAKE_REFRACTORY_S, gt=0)
+    wake_refractory_s: float = Field(default=DEFAULT_WAKE_REFRACTORY_S, gt=0, allow_inf_nan=False)
     #: The shortest window a pace may set. Only the declaration sets it, never the socket, and
     #: in a container the declaration is rendered by root. None: no floor.
-    wake_refractory_floor_s: Optional[float] = Field(default=None, gt=0)
+    wake_refractory_floor_s: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
+    #: The longest window a pace may set. Only the declaration sets it, like the floor.
+    wake_refractory_ceiling_s: float = Field(default=DEFAULT_WAKE_REFRACTORY_CEILING_S, gt=0,
+                                             allow_inf_nan=False)
     quiet_windows: List[Window] = Field(default_factory=list)
     keep_harness_idle_compaction: bool = False
     wind_down: Optional[WindDown] = None
@@ -417,6 +424,10 @@ class Declaration(_Closed):
         if floor is not None and floor > self.wake_refractory_s:
             raise ValueError(f"wake_refractory_floor_s ({floor:g} s) is above wake_refractory_s "
                              f"({self.wake_refractory_s:g} s): the declared window would be under its own floor")
+        ceiling = self.wake_refractory_ceiling_s
+        if self.wake_refractory_s > ceiling:
+            raise ValueError(f"wake_refractory_s ({self.wake_refractory_s:g} s) is above wake_refractory_ceiling_s "
+                             f"({ceiling:g} s): the declared window would be over its own ceiling")
         return self
 
     @model_validator(mode="after")
@@ -577,7 +588,7 @@ class WakePaced(_Closed):
     to go back to the declared one; ``previous_s`` is the window it replaced."""
 
     agent: str
-    refractory_s: Optional[float] = Field(default=None, gt=0)
+    refractory_s: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
     previous_s: float = Field(gt=0)
     asked_by: Asker
     peer: Peer
@@ -699,7 +710,7 @@ class PaceRequest(_Closed):
     under the declared floor, which only the declaration sets (persistent_layer 1.9)."""
 
     op: Literal["pace"]
-    refractory_s: Optional[float] = Field(default=None, gt=0)
+    refractory_s: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
     asked_by: Asker
     reason: str = Field(min_length=1)
 
