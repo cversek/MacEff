@@ -173,11 +173,11 @@ def select(events_newest_first: Iterable[dict], after: Optional[float] = None, b
 
 
 def follow(path, keep: Callable[[dict], bool], sleep: Callable[[float], None] = time.sleep,
-           poll_s: float = 1.0) -> Iterator[dict]:
-    """Events appended to the log at ``path`` from now on that ``keep`` accepts, as they arrive,
-    until the caller stops. A line still being written is held until it ends; a log that shrinks
-    (rotated) is read again from its start."""
-    position = os.path.getsize(path) if os.path.exists(path) else 0
+           poll_s: float = 1.0, start: Optional[int] = None) -> Iterator[dict]:
+    """Events appended to the log at ``path`` from now on, or from byte ``start`` when given,
+    that ``keep`` accepts, as they arrive, until the caller stops. A line still being written is
+    held until it ends; a log that shrinks (rotated) is read again from its start."""
+    position = start if start is not None else (os.path.getsize(path) if os.path.exists(path) else 0)
     partial = ""
     while True:
         sleep(poll_s)

@@ -190,3 +190,41 @@ def test_the_carried_notice_pointer_shows_what_it_says_it_will(capsys):
 def test_a_carried_event_reads_as_its_occasion_and_counts():
     event = ev("pd_carried", 0, occasion="compaction", carried=["a", "b", "c"], changed=[], lost=["x"])
     assert rd.summary_of(event) == "compaction: carried 3, changed 0, lost 1"
+
+
+def test_a_before_bound_reads_past_the_last_compaction(capsys):
+    """Any time bound reads the whole log: an event before the last compaction is found by a
+    query bounded only by --before (it once read the current cycle only)."""
+    from macf.agent_events_log import get_log_path
+    from macf.cli import cmd_events_query
+    now = time.time()
+    events = [ev("pd_wake_sent", now - 7200, ids=["msg-1"], chars=10),
+              ev("compaction_detected", now - 3600, cycle=2, detection_method="hook"),
+              ev("tool_call_started", now - 60, tool="Bash")]
+    path = get_log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(e) + "\n" for e in events))
+    before = datetime.fromtimestamp(now - 5400).isoformat(timespec="seconds")
+    assert cmd_events_query(_query(event=["pd_wake_sent"], before=before)) == 0
+    assert "mail: msg-1" in capsys.readouterr().out
+
+
+def test_follow_from_a_given_offset_yields_what_was_written_after_it(tmp_path):
+    """An event written between the scan and the follow is not lost: follow can start at the
+    byte the scan began from."""
+    path = tmp_path / "log.jsonl"
+    path.write_text(json.dumps(ev("a", 1)) + "\n")
+    start = path.stat().st_size
+    with path.open("a") as f:                    # written "during the scan"
+        f.write(json.dumps(ev("b", 2)) + "\n")
+
+    def stop_after_one_poll(_s, polls=[0]):
+        polls[0] += 1
+        if polls[0] > 1:
+            raise KeyboardInterrupt
+
+    got = []
+    with pytest.raises(KeyboardInterrupt):
+        for e in rd.follow(path, lambda e: True, sleep=stop_after_one_poll, start=start):
+            got.append(e["event"])
+    assert got == ["b"]

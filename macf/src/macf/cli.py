@@ -4314,6 +4314,8 @@ def cmd_events_query(args: argparse.Namespace) -> int:
     filters = {"breadcrumb": crumbs} if crumbs else {}
     if after is not None:
         filters["since"] = after
+    if before is not None:
+        filters["until"] = before          # any time bound reads the whole log, not this cycle
     command = getattr(args, "command", None)
 
     def keep(event: dict) -> bool:
@@ -4338,6 +4340,10 @@ def cmd_events_query(args: argparse.Namespace) -> int:
         else:
             print(format_line(event, tz, today), flush=True)
 
+    # Where --follow starts, taken before the scan, so an event written while it runs is
+    # printed by one or the other, never lost between them.
+    log_path = get_log_path()
+    follow_from = os.path.getsize(log_path) if os.path.exists(log_path) else 0
     events = select(read_events(limit=None, reverse=True, scope=query_scope_for(filters)),
                     after=after, before=before, patterns=patterns,
                     limit=getattr(args, "limit", None), keep=keep)
@@ -4347,10 +4353,13 @@ def cmd_events_query(args: argparse.Namespace) -> int:
         print("no matching events", file=sys.stderr)
     if getattr(args, "follow", False):
         def keep_new(event: dict) -> bool:
+            stamp = event.get("timestamp")
+            if before is not None and isinstance(stamp, (int, float)) and stamp > before:
+                return False
             return (not patterns or matches(str(event.get("event", "")), patterns)) and keep(event)
 
         try:
-            for event in follow(get_log_path(), keep_new):
+            for event in follow(log_path, keep_new, start=follow_from):
                 show(event)
         except KeyboardInterrupt:
             return 0
