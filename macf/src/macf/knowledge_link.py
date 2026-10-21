@@ -2,7 +2,8 @@
 
 Wiki-links live in four shapes: a ``## Wiki-Links`` section in a markdown
 artifact, ``links.wiki_links`` in an idea record, the ``wiki_links`` field
-of a task's metadata, and a ``.wiki-links`` sidecar beside a mail message. Curating them used to take a different tool for each
+of a task's metadata, and a ``.wiki-links`` sidecar for a mail message, kept
+under the amail folder's ``.links``. Curating them used to take a different tool for each
 (and a hand edit for the markdown), so this module takes a target in any of the
 forms the graph prints and applies the change in that target's own shape.
 
@@ -87,14 +88,20 @@ def _mail_target(path: Path) -> Optional[str]:
     is not a mail node (a manifest, an index.html) is refused, so the link
     cannot land in a sidecar the web never reads.
     """
-    from .knowledge_web import SIDECAR_SUFFIX, in_mail_root, is_mail_unit
+    from .knowledge_web import SIDECAR_ROOT, SIDECAR_SUFFIX, _mail_root, in_mail_root, is_mail_unit
     if not in_mail_root(path):
         return None
     if path.name.endswith(SIDECAR_SUFFIX):
+        root = _mail_root(path)
+        rel = path.resolve().relative_to(root)
+        if rel.parts[:1] != (SIDECAR_ROOT,):
+            raise LinkError(f"{path} is not a sidecar the web reads; a message's links live under "
+                            f"{root / SIDECAR_ROOT} (amail policy: knowledge web participation)")
+        path = root.joinpath(*rel.parts[1:])
         path = path.with_name(path.name[:-len(SIDECAR_SUFFIX)])
     if not (path.is_file() and is_mail_unit(path)):
-        raise LinkError(f"{path} is not a mail message or markdown attachment; the web reads "
-                        "sidecars only beside those (amail policy: knowledge web participation)")
+        raise LinkError(f"{path} is not a mail message or markdown attachment; the web keeps "
+                        "sidecars only for those (amail policy: knowledge web participation)")
     return str(path)
 
 
@@ -133,14 +140,21 @@ def _edit_sidecar(message: Path, concepts: List[str], remove: bool = False,
         present = present + changed
     if not changed:
         return []
+    from .knowledge_web import SIDECAR_ROOT
     side = sidecar_path(message)
     lines = [f"[[{c}]]" for c in present]
     if not_linked:
         lines.append(f"<!-- not linked: {', '.join(not_linked)} -->")
     if lines:
+        side.parent.mkdir(parents=True, exist_ok=True)
         side.write_text("\n".join(lines) + "\n")
     elif side.exists():
         side.unlink()
+        # Folders emptied by the unlink go too, up to the .links root.
+        d = side.parent
+        while d.name != SIDECAR_ROOT and not any(d.iterdir()):
+            d.rmdir()
+            d = d.parent
     return changed
 
 

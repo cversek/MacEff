@@ -40,8 +40,8 @@ def _link_remedy(ca_type: str) -> str:
         return ("macf_tools knowledge link task:<id> <concept>; see the task_management policy on "
                 "knowledge web participation for what a task links")
     if ca_type == "amail":
-        return ("macf_tools knowledge link <message path> <concept>, which writes a .wiki-links sidecar "
-                "beside the message and never edits it; see the amail policy on knowledge web "
+        return ("macf_tools knowledge link <message path> <concept>, which writes the message's "
+                ".wiki-links sidecar under amail/.links and never edits it; see the amail policy on knowledge web "
                 "participation for what mail links")
     return (f"add a ## Wiki-Links section (or macf_tools knowledge link <path> <concept>); see the "
             f"{ca_type} policy on knowledge web participation "
@@ -157,6 +157,25 @@ def examine(agent_home: Optional[Path] = None,
                 remedy=("rewrite the intended links outside code formatting, or add a "
                         "## Wiki-Links section if the mentions were deliberate"
                         if is_mention_only else _link_remedy(ca_type)),
+            ))
+
+    # ---- sidecars the web does not read ------------------------------------
+    # A mail message's links are read only from amail/.links. A sidecar-named
+    # file anywhere else under amail is ignored, and named here, because one
+    # inside a received thread may have come in a bundle its sender built.
+    from .knowledge_web import SIDECAR_ROOT, _type_roots, stray_sidecars
+    for ca_type, root in _type_roots(agent_home):
+        if ca_type != "amail":
+            continue
+        for f in stray_sidecars(root):
+            findings.append(Finding(
+                check="stray mail sidecars",
+                severity=Severity.NOTE,
+                subject=f"amail: {f.relative_to(root)}",
+                detail=(f"a sidecar outside {SIDECAR_ROOT}, so the web ignores it; "
+                        "if it sits in a received thread, its sender may have written it"),
+                remedy=("read it before trusting any of it; to link the message, use macf_tools "
+                        "knowledge link on the message, which writes under " + SIDECAR_ROOT),
             ))
 
     # ---- normalization drift in source text --------------------------------

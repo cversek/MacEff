@@ -11815,7 +11815,7 @@ def cmd_knowledge_link(args: argparse.Namespace) -> int:
     print(f"   Concepts: {', '.join(r.concepts) if r.concepts else '(none)'}")
     if r.kind == "mail":
         from .knowledge_web import sidecar_path
-        print(f"   Links kept in {sidecar_path(Path(r.target)).name}; a message is never edited (amail policy)")
+        print(f"   Links kept in {sidecar_path(Path(r.target))}; a message is never edited (amail policy)")
         if r.still_inline:
             print(f"   ⚠️  the message itself links {', '.join(r.still_inline)}, so it stays linked; "
                   f"a sent message keeps its bytes")

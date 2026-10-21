@@ -71,20 +71,45 @@ _DEFAULT_CLASS = "conceptual_authority"
 # A task record in the home store: N.json, or .N.json when hidden.
 _TASK_FILE = re.compile(r"\.?\d+\.json")
 
-# Mail joins the web through a sidecar beside each message (amail policy:
-# knowledge web participation). A message is a record of what was sent, so its
-# bytes stay as sent; `001_msg.html.wiki-links` holds its concepts instead.
+# Mail joins the web through a sidecar per message (amail policy: knowledge web
+# participation). A message is a record of what was sent, so its bytes stay as
+# sent; `.links/<box>/<thread>/001_msg.html.wiki-links` holds its concepts.
+# The sidecars sit under one root no mail folder unpacks into: a bundle is a
+# folder of files its sender named, so a sidecar beside a received message
+# could be the sender's, and the web reads none there.
 SIDECAR_SUFFIX = ".wiki-links"
+SIDECAR_ROOT = ".links"
 _MAIL_BOXES = ("inbox", "outbox")
 
 
+def _mail_root(path: Path) -> Optional[Path]:
+    """The amail root ``path`` lies under (the nearest folder named amail), or None."""
+    for parent in path.resolve().parents:
+        if parent.name == "amail":
+            return parent
+    return None
+
+
 def sidecar_path(path: Path) -> Path:
-    """The sidecar that holds a mail message's links: its name plus .wiki-links."""
-    return path.with_name(path.name + SIDECAR_SUFFIX)
+    """The sidecar that holds a mail message's links: under the amail root's
+    .links folder, at the message's own path plus .wiki-links."""
+    root = _mail_root(path)
+    if root is None:
+        raise ValueError(f"{path} is not under an amail folder")
+    rel = path.resolve().relative_to(root)
+    return root / SIDECAR_ROOT / rel.parent / (rel.name + SIDECAR_SUFFIX)
+
+
+def stray_sidecars(root: Path) -> List[Path]:
+    """Sidecar-named files under an amail root but outside its .links folder.
+    The web never reads them; the doctor names them, since one may have
+    arrived inside a bundle its sender built."""
+    return [f for f in _files_under(root, "*" + SIDECAR_SUFFIX)
+            if SIDECAR_ROOT not in f.relative_to(root).parts]
 
 
 def read_sidecar(path: Path) -> Tuple[List[str], List[str]]:
-    """(concepts, not_linked) from the sidecar beside ``path``; empty if none.
+    """(concepts, not_linked) from the sidecar of ``path``; empty if none.
 
     One concept per line, bare or as ``[[concept]]``, normalized as every other
     link is; a ``<!-- not linked: ... -->`` line holds the declined concepts,

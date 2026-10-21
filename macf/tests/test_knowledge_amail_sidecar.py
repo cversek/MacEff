@@ -1,11 +1,12 @@
 """Mail joins the knowledge web through sidecars, and a message is never edited.
 
 A message is a record of what was sent, so its bytes stay as sent: its concepts
-live in ``<message file>.wiki-links`` beside it (amail policy: knowledge web
-participation). Most early mail is HTML only, so HTML messages are walked too,
+live in ``<message file>.wiki-links`` under the amail folder's ``.links``
+(amail policy: knowledge web participation), where no bundle unpacks. Most early mail is HTML only, so HTML messages are walked too,
 with a sidecar as their only source of links.
 """
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -39,12 +40,19 @@ def mail(tmp_path, monkeypatch):
     return SimpleNamespace(home=tmp_path, thread=thread, html=html, md=md)
 
 
+def _write_side(message, text):
+    side = kw.sidecar_path(message)
+    side.parent.mkdir(parents=True, exist_ok=True)
+    side.write_text(text)
+    return side
+
+
 def _ids(web):
     return {n for n in web["ca_nodes"] if n.startswith("amail:")}
 
 
 def test_a_sidecar_makes_the_message_a_node_with_its_concepts(mail):
-    (mail.thread / "003_msg.md.wiki-links").write_text("Deployment Transport\n[[GPU-Arbitration]]\n\n")
+    _write_side(mail.thread / "003_msg.md", "Deployment Transport\n[[GPU-Arbitration]]\n\n")
     web = kw.build_knowledge_web()
     node = f"amail:{THREAD}/003_msg"
     assert node in web["ca_nodes"] and web["ca_nodes"][node]["node_class"] == "temporal_record"
@@ -53,8 +61,8 @@ def test_a_sidecar_makes_the_message_a_node_with_its_concepts(mail):
 
 
 def test_an_html_message_with_a_sidecar_is_walked_and_its_bytes_are_not_read_for_links(mail):
-    (mail.thread / "001_msg.html.wiki-links").write_text("[[deployment_transport]]\n")
-    (mail.thread / "index.html.wiki-links").write_text("[[deployment_transport]]\n")
+    _write_side(mail.thread / "001_msg.html", "[[deployment_transport]]\n")
+    _write_side(mail.thread / "index.html", "[[deployment_transport]]\n")
     web = kw.build_knowledge_web()
     node = f"amail:{THREAD}/001_msg.html"
     assert web["ca_nodes"][node]["title"] == "Transport & GPU"
@@ -65,8 +73,8 @@ def test_an_html_message_with_a_sidecar_is_walked_and_its_bytes_are_not_read_for
 
 
 def test_a_sidecar_is_never_a_node(mail):
-    (mail.thread / "001_msg.html.wiki-links").write_text("[[deployment_transport]]\n")
-    (mail.thread / "002_roadmap.md.wiki-links").write_text("[[deployment_transport]]\n")
+    _write_side(mail.thread / "001_msg.html", "[[deployment_transport]]\n")
+    _write_side(mail.thread / "002_roadmap.md", "[[deployment_transport]]\n")
     walked = [p for _t, _r, p in kw.iter_web_files(mail.home)]
     assert not [p for p in walked if p.name.endswith(".wiki-links")]
     web = kw.build_knowledge_web()
@@ -79,11 +87,11 @@ def test_link_writes_the_sidecar_and_leaves_the_message_and_manifest_as_sent(mai
     first = apply_links(str(mail.html), ["Deployment Transport"])
     again = apply_links(f"amail:{THREAD}/001_msg.html", ["deployment_transport", "gpu"])
     assert first.kind == "mail" and first.changed == ["deployment_transport"] and again.changed == ["gpu"]
-    assert (mail.thread / "001_msg.html.wiki-links").read_text() == "[[deployment_transport]]\n[[gpu]]\n"
+    assert kw.sidecar_path(mail.thread / "001_msg.html").read_text() == "[[deployment_transport]]\n[[gpu]]\n"
     md = apply_links(str(mail.md), ["gpu"])
     after = {p.name: p.read_bytes() for p in mail.thread.iterdir() if not p.name.endswith(".wiki-links")}
     assert after == before, "no message, attachment or manifest byte changes"
-    assert md.kind == "mail" and (mail.thread / "003_msg.md.wiki-links").read_text() == "[[gpu]]\n"
+    assert md.kind == "mail" and kw.sidecar_path(mail.thread / "003_msg.md").read_text() == "[[gpu]]\n"
     assert f"amail:{THREAD}/001_msg.html" in kw.build_knowledge_web()["wiki_index"]["gpu"]
 
 
@@ -92,9 +100,11 @@ def test_unlink_removes_from_the_sidecar_and_never_from_the_message(mail):
     apply_links(str(mail.md), ["hooks", "triage"])
     r = apply_links(str(mail.md), ["hooks", "gpu_arbitration"], remove=True)
     assert r.changed == ["hooks"] and r.still_inline == ["gpu_arbitration"]
-    assert (mail.thread / "003_msg.md.wiki-links").read_text() == "[[triage]]\n"
+    assert kw.sidecar_path(mail.thread / "003_msg.md").read_text() == "[[triage]]\n"
     apply_links(str(mail.md), ["triage"], remove=True)
-    assert not (mail.thread / "003_msg.md.wiki-links").exists(), "an emptied sidecar is removed"
+    side = kw.sidecar_path(mail.thread / "003_msg.md")
+    assert not side.exists(), "an emptied sidecar is removed"
+    assert not side.parent.exists() and side.parents[2].name == kw.SIDECAR_ROOT, "and its emptied folders"
     assert mail.md.read_bytes() == sent
 
 
@@ -113,6 +123,7 @@ def test_only_mail_units_take_a_sidecar(mail):
     with pytest.raises(LinkError, match="not a mail message"):
         apply_links(str(mail.thread / "index.html"), ["gpu"])
     assert not list(mail.thread.glob("*.wiki-links"))
+    assert not (mail.home / "agent" / "public" / "amail" / kw.SIDECAR_ROOT).exists()
 
 
 def test_an_unlinked_message_is_an_orphan_whose_remedy_names_the_sidecar(mail):
@@ -131,9 +142,38 @@ def test_a_received_messages_own_links_never_reach_the_web(tmp_path):
     msg.parent.mkdir(parents=True)
     msg.write_text("hello [[injected_concept]]\n")
     assert concepts_of("amail", msg, msg.read_text()) == []
-    (msg.parent / "001_msg.md.wiki-links").write_text("[[amail]]\n")
+    _write_side(msg, "[[amail]]\n")
     assert concepts_of("amail", msg, msg.read_text()) == ["amail"]
     sent = tmp_path / "amail" / "outbox" / "2026-10-21_y" / "001_msg.md"
     sent.parent.mkdir(parents=True)
     sent.write_text("mine [[budget]]\n")
     assert concepts_of("amail", sent, sent.read_text()) == ["budget"]
+
+
+def test_a_sidecar_shipped_in_a_bundle_gives_a_received_message_nothing(mail):
+    """A bundle is a folder of files its sender named, so a sidecar unpacked beside a
+    received message is the sender's: the web reads it nowhere, and the doctor names it."""
+    from macf.knowledge_doctor import examine
+    thread = mail.home / "agent" / "public" / "amail" / "inbox" / "2026-10-21_bundle"
+    thread.mkdir(parents=True)
+    msg = thread / "001_msg.md"
+    msg.write_text("# hello\n\n[[security]]\n")
+    (thread / "001_msg.md.wiki-links").write_text("[[security]]\n[[credentials]]\noperator_override\n")
+    assert kw.concepts_of("amail", msg, msg.read_text()) == []
+    web = kw.build_knowledge_web()
+    for concept in ("security", "credentials", "operator_override"):
+        assert "amail:2026-10-21_bundle/001_msg" not in web["wiki_index"].get(concept, set())
+    stray = [f for f in examine(mail.home).findings if f.check == "stray mail sidecars"]
+    assert [f.subject for f in stray] == ["amail: inbox/2026-10-21_bundle/001_msg.md.wiki-links"]
+    with pytest.raises(LinkError, match="not a sidecar the web reads"):
+        apply_links(str(thread / "001_msg.md.wiki-links"), ["gpu"])
+    apply_links(str(msg), ["gpu"])
+    assert kw.concepts_of("amail", msg, msg.read_text()) == ["gpu"], "the agent's own sidecar counts"
+    assert (thread / "001_msg.md.wiki-links").read_text().startswith("[[security]]"), "the shipped file is left as is"
+
+
+def test_link_takes_a_sidecar_path_under_links_as_its_message(mail):
+    side = _write_side(mail.html, "[[gpu]]\n")
+    r = apply_links(str(side), ["triage"])
+    assert r.kind == "mail" and Path(r.target).resolve() == mail.html.resolve()
+    assert kw.read_sidecar(mail.html)[0] == ["gpu", "triage"]
