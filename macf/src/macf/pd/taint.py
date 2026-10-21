@@ -15,6 +15,12 @@ host, and nothing in the tool events can prove it didn't. What it counts as untr
 
 It fails closed: a log with no session start or compaction to bound the scan reads tainted.
 Pure over the events it's given, newest first; nothing here reads the log or a clock.
+
+**Each session is read back to its own boundary.** An agent's log can hold more than one
+session: a fork, a resume, a second terminal. The daemon can't name the asking session without
+taking the agent's word for it, so it reads them all, each back to its own start or compaction.
+Another session's boundary doesn't end the scan, and another session's untrusted input marks the
+entry too: an over-count, failing closed like everything else here.
 """
 import re
 from typing import Iterable, List
@@ -56,11 +62,24 @@ def _why(event: dict) -> str:
 
 def taint(events_newest_first: Iterable[dict]) -> List[str]:
     """Why the current context holds untrusted input, each kind once, newest first; empty when
-    it holds none. Reads back to the first context boundary and stops there."""
+    it holds none. Reads each session back to its own context boundary, and stops once every
+    session it has seen is bounded. A boundary that names no session bounds them all."""
     reasons: List[str] = []
+    seen: set = set()
+    bounded: set = set()
     for event in events_newest_first:
+        session = (event.get("data") or {}).get("session_id") or ""
         if event.get("event") in BOUNDARIES:
-            return reasons
+            if not session:
+                return reasons
+            bounded.add(session)
+            if seen <= bounded:
+                return reasons
+            continue
+        if session in bounded:
+            continue
+        if session:
+            seen.add(session)
         why = _why(event)
         if why and why not in reasons:
             reasons.append(why)

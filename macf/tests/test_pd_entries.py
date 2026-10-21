@@ -338,7 +338,7 @@ def test_a_check_wakes_the_agent_only_when_its_condition_holds_and_keeps_what_it
     _not_writable(monkeypatch)
     template = CheckTemplate(command=[sys.executable, "-c", "import sys; print('moved' * int(sys.argv[1]))", "<n>"],
                              wake_when="stdout", timeout_s=10, args={"n": CheckArg(kind="integer")})
-    log, now = Log(), [at("2026-10-19 12:00")]
+    log, now = Log(), [at("2026-10-19 12:05")]           # five minutes late, which the done record states
     moved, quiet = new_entry_id(), new_entry_id()
     for entry_id, n in ((moved, "1"), (quiet, "0")):
         log.append(EVENT_ENTRY_ADDED, {"agent": CARD, "id": entry_id, "when": "2026-10-19T12:00:00+00:00", "zone": "UTC",
@@ -352,6 +352,8 @@ def test_a_check_wakes_the_agent_only_when_its_condition_holds_and_keeps_what_it
     assert (tmp_path / "runs" / f"{moved}.out").read_text() == "moved\n"
     assert not (tmp_path / "runs" / f"{quiet}.out").exists()
     assert {d["schedule"]: d["wake"] for d in log.of(sc.EVENT_DONE)} == {moved: True, quiet: False}
+    # A check run states how late it began, in the done record its notice points to (R34; #757 review).
+    assert {d["schedule"]: d["late_s"] for d in log.of(sc.EVENT_DONE)} == {moved: 300.0, quiet: 300.0}
 
 
 def test_a_check_whose_program_the_agent_could_rewrite_or_that_changed_since_install_never_runs(tmp_path, monkeypatch):
@@ -363,7 +365,7 @@ def test_a_check_whose_program_the_agent_could_rewrite_or_that_changed_since_ins
     from macf.pd.entries import EVENT_ENTRY_ADDED
     from macf.pd.interface import CheckTemplate
     from test_pd_schedule import CARD, Log, at
-    log, now = Log(), [at("2026-10-19 12:00")]
+    log, now = Log(), [at("2026-10-19 12:05")]           # five minutes late, which the done record states
     _not_writable(monkeypatch, tmp_path)                       # what the agent can write: here, its tmp tree
     mine = CheckTemplate(command=[str(tmp_path / "home" / "bin" / "check")], wake_when="exit_code", timeout_s=10)
     fine = CheckTemplate(command=[sys.executable, "-c", "pass"], wake_when="exit_code", timeout_s=10)
@@ -382,6 +384,8 @@ def test_a_check_whose_program_the_agent_could_rewrite_or_that_changed_since_ins
     assert s.running == {}
     outcomes = {d["schedule"]: d["outcome"] for d in log.of(sc.EVENT_DONE)}
     assert "can write" in outcomes[in_home] and "changed since the last pd install" in outcomes[changed]
+    # A check refused before it starts still states how late it was due (R34; #757 review).
+    assert {d["schedule"]: d["late_s"] for d in log.of(sc.EVENT_DONE)} == {in_home: 300.0, changed: 300.0}
     assert [source for source, _ in channel.received] == ["pd_run_failed", "pd_run_failed"]
 
 

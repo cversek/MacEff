@@ -59,3 +59,31 @@ def test_a_roles_store_that_fails_is_said_once_and_the_daemon_goes_on(tmp_path, 
         clock[0] = t
         h.tick()
     assert capsys.readouterr().err.count("couldn't be read for duties") == 1 and notices == []
+
+
+def test_a_duty_crossing_reaches_the_channel(tmp_path):
+    """#744 review: the duty notice's id carries the duty's own id and its tier, so a real duty in
+    a real roles store, overdue and due soon, is announced through the channel's own record (the
+    receiver #734 asked for), not a stand-in. An id the channel can't take would never reach
+    ``received``."""
+    import sys
+    from datetime import date, datetime, timedelta
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent))
+    from channel_receiver import ChannelReceiver
+    from macf.roles.store import RoleStore
+    store = RoleStore(tmp_path / "roles")
+    role, folder = store.create_role("Board Keeper", icon="🎓", expires=date(2027, 1, 1),
+                                     review_by=date(2027, 1, 1), review_horizon="14d")
+    now = datetime.now()                    # the roles clock is local and naive (priority.now)
+    store.add_duty(role, folder, "overdue one", due=now - timedelta(days=1), horizon="1d", why="a test duty")
+    store.add_duty(role, folder, "due soon", due=now + timedelta(hours=2), horizon="1d",
+                   why="its horizon starts a day ahead")
+    channel, log = ChannelReceiver(tmp_path / "agent"), []
+    h = HostedDuties(CARD, tmp_path / "roles", lambda e, d: log.append({"event": e, "data": d}) or True,
+                     lambda: list(log), channel, lambda: 0.0)
+    h.boot()
+    h.tick()
+    raised = [d["data"]["arrival_id"] for d in log if d["event"] == EVENT]
+    assert len(raised) == 2, log
+    assert sorted(channel.received) == sorted((NOTICE_DUTY_DUE, a) for a in raised)
