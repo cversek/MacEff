@@ -69,35 +69,68 @@ _DEFAULT_CLASS = "conceptual_authority"
 _TASK_FILE = re.compile(r"\.?\d+\.json")
 
 
+# A type folder holding this file is out of the web (scholarship policy, the
+# section on opting a folder out): material that is not an artifact, such as an
+# archive or a scratch dump. The exclusion is never silent: the doctor names
+# every folder it removes, through excluded_type_roots below.
+OPT_OUT_MARKER = ".not-in-knowledge-web"
+
+
+def _opted_out(folder: Path) -> bool:
+    """Whether a type folder carries the opt-out marker."""
+    return (folder / OPT_OUT_MARKER).exists()
+
+
+def _subagent_parents(agent_home: Path) -> List[Path]:
+    """Each subagent's private and public trees, in role order."""
+    subagents = agent_home / "agent" / "subagents"
+    if not subagents.exists():
+        return []
+    return [role / base for role in sorted(p for p in subagents.iterdir() if p.is_dir())
+            for base in ("private", "public")]
+
+
+def _type_folders(parents: List[Path]) -> Iterator[Tuple[str, Path, bool]]:
+    """(name, folder, opted_out) for each type folder under the given parents."""
+    for parent in parents:
+        if not parent.exists():
+            continue
+        for d in sorted(p for p in parent.iterdir() if p.is_dir()):
+            yield d.name, d, _opted_out(d)
+
+
+def _agent_parents(agent_home: Path) -> List[Path]:
+    return [agent_home / "agent" / base for base in ("private", "public")]
+
+
+def excluded_type_roots(agent_home: Path) -> List[Tuple[str, Path]]:
+    """The (name, folder) pairs taken out of the web by the opt-out marker.
+
+    Discovered over the same folders ``_type_roots`` walks. The doctor and
+    ``knowledge status`` report these, so an exclusion is always visible to
+    whoever reads the web's health.
+    """
+    parents = _agent_parents(agent_home) + _subagent_parents(agent_home)
+    return [(name, d) for name, d, out in _type_folders(parents) if out]
+
+
 def _type_roots(agent_home: Path) -> List[Tuple[str, Path]]:
     """Discover (ca_type, root) pairs from the filesystem — nothing is declared.
 
     Every subdirectory of ``agent/private`` and ``agent/public`` is an
-    artifact-producing location; its name is its type. Personal policies and
-    subagent trees are walked the same way. Framework policies are the one
+    artifact-producing location; its name is its type, unless it carries the
+    opt-out marker (``OPT_OUT_MARKER``). Personal policies and subagent trees
+    are walked the same way. Framework policies are the one
     location outside the agent tree; the direction is safe (public policy read
     into a private web) and the reverse is forbidden — a policy must never
     link a concept that resolves only in some agent's private tree.
     """
-    roots: List[Tuple[str, Path]] = []
-    for base in ("private", "public"):
-        parent = agent_home / "agent" / base
-        if not parent.exists():
-            continue
-        for d in sorted(p for p in parent.iterdir() if p.is_dir()):
-            roots.append((d.name, d))
+    roots: List[Tuple[str, Path]] = [
+        (name, d) for name, d, out in _type_folders(_agent_parents(agent_home)) if not out]
     personal = agent_home / "agent" / "policies" / "personal"
     if personal.exists():
         roots.append(("personal_policies", personal))
-    subagents = agent_home / "agent" / "subagents"
-    if subagents.exists():
-        for role in sorted(p for p in subagents.iterdir() if p.is_dir()):
-            for base in ("private", "public"):
-                parent = role / base
-                if not parent.exists():
-                    continue
-                for d in sorted(p for p in parent.iterdir() if p.is_dir()):
-                    roots.append((d.name, d))
+    roots.extend((name, d) for name, d, out in _type_folders(_subagent_parents(agent_home)) if not out)
     try:
         from .utils.manifest import get_framework_policies_path
         pol = get_framework_policies_path()
@@ -120,7 +153,7 @@ def _type_roots(agent_home: Path) -> List[Tuple[str, Path]]:
     except (OSError, ImportError, ValueError) as e:
         print(f"⚠️ MACF: task store not resolved for the web: {e}", file=sys.stderr)
         store = None
-    if store is not None and store.is_dir():
+    if store is not None and store.is_dir() and not _opted_out(store):
         known = {r.resolve() for _, r in roots}
         if store.resolve() not in known:
             roots.append(("tasks", store))
@@ -301,7 +334,7 @@ def build_knowledge_web(scan_dirs: Optional[List[Path]] = None) -> Dict[str, Any
     if scan_dirs is not None:
         walk = []
         for scan_dir in scan_dirs:
-            if not scan_dir.exists():
+            if not scan_dir.exists() or _opted_out(scan_dir):
                 continue
             walk.extend(_walk_type(scan_dir.name, scan_dir))
     else:

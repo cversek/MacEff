@@ -11757,6 +11757,12 @@ def cmd_knowledge_status(args: argparse.Namespace) -> int:
         "acute": counts.get(Severity.ACUTE, 0), "chronic": counts.get(Severity.CHRONIC, 0),
         "gaps": len(detect_web_gaps(kg)),
     }
+    # Folders the opt-out marker takes out of the web: named, never only counted.
+    # The doctor above reports them as notes; status carries the same list.
+    from .knowledge_doctor import excluded_folders
+    from .utils.paths import find_agent_home
+    home = find_agent_home()
+    status["opted_out"] = excluded_folders(home) if home else []
     if getattr(args, "json_output", False):
         print(json.dumps(status, indent=2))
     else:

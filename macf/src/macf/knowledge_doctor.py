@@ -21,7 +21,24 @@ from typing import Any, Dict, List, Optional
 from .concepts import extract_wiki_concepts, normalize_concept
 from .diagnostics import Chart, Diagnosis, Finding, Severity
 
-__all__ = ["examine"]
+__all__ = ["examine", "excluded_folders", "OPTED_OUT_CHECK"]
+
+OPTED_OUT_CHECK = "opted out"
+
+
+def excluded_folders(agent_home: Path) -> List[str]:
+    """Each folder the opt-out marker takes out of the web, named by its path
+    under ``agent/`` (``private/scratchpad_archive``), so two subagents'
+    folders of the same name stay distinguishable."""
+    from .knowledge_web import excluded_type_roots
+    base = agent_home / "agent"
+    out = []
+    for _name, d in excluded_type_roots(agent_home):
+        try:
+            out.append(str(d.relative_to(base)))
+        except ValueError:
+            out.append(str(d))
+    return out
 
 # Spellings that normalize to the same concept but are written differently in
 # source. Harmless to the graph now that extraction normalizes, but they are
@@ -80,7 +97,7 @@ def examine(agent_home: Optional[Path] = None,
     alone, the bulk pass over one type. The chart's orphan count is the whole
     census either way.
     """
-    from .knowledge_web import build_knowledge_web, concepts_of, iter_web_files
+    from .knowledge_web import OPT_OUT_MARKER, build_knowledge_web, concepts_of, iter_web_files
     from .utils.paths import find_agent_home
 
     agent_home = agent_home or find_agent_home()
@@ -153,6 +170,20 @@ def examine(agent_home: Optional[Path] = None,
                         if is_mention_only else _link_remedy(ca_type)),
             ))
 
+    # ---- folders opted out by the marker -----------------------------------
+    # An exclusion is never silent: every folder the marker removes is named
+    # here, so a reader of the web's health sees what the web does not hold.
+    excluded = excluded_folders(agent_home)
+    for label in excluded:
+        findings.append(Finding(
+            check=OPTED_OUT_CHECK,
+            severity=Severity.NOTE,
+            subject=f"{label}: out of the web by its marker",
+            detail=f"the folder holds {OPT_OUT_MARKER}, so none of its files is walked",
+            remedy=(f"none if the folder holds no artifacts; if it does, delete {OPT_OUT_MARKER} "
+                    "and link them instead (see the scholarship policy on opting a folder out)"),
+        ))
+
     # ---- normalization drift in source text --------------------------------
     drift: Dict[str, set] = {}
     for _ca_type, _root, path in iter_web_files(agent_home):
@@ -218,6 +249,7 @@ def examine(agent_home: Optional[Path] = None,
             "edges": stats.get("total_edges", 0),
             "concepts": stats.get("wiki_concepts", 0),
             "orphans": sum(len(v) for v in orphans_by_type.values()),
+            "opted_out": len(excluded),
         },
     )
     return Diagnosis(chart=chart, findings=findings)
