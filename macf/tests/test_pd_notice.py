@@ -566,6 +566,35 @@ def test_an_unheard_carried_notice_is_warned_at_start(tmp_path, capsys, route, w
     assert ("doesn't route 'pd_carried'" in capsys.readouterr().err) == warned
 
 
+def test_a_unit_measured_past_its_limit_reaches_the_channel(make_core, script, tmp_path, monkeypatch,
+                                                            isolated_events_log):
+    """MIS-0002-R60 (pd_MUST_notice_limit_exceeded): the core's own memory reading, not a
+    notice raised by hand, owes the notice. A running unit read under its declared limit owes
+    nothing; read over it, the core raises pd_limit_exceeded into the notifier, wired as the
+    daemon wires it, and the record goes out on the channel."""
+    from macf.pd import core as pd_core
+    used = [10.0]                                                   # the unit's limit is 64 MB
+    monkeypatch.setattr(pd_core, "tree_rss_mb", lambda pid: used[0])
+    notifier = nt.Notifier(_home(tmp_path), {"pd_limit_exceeded": "agent"})
+    notifier.boot()
+    core = make_core([make_unit("worker", script, {})], memory_check_s=0.0)
+    core.on_notice = notifier.raise_notice
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    core.tick()
+    assert not notifier.owed, "a unit under its limit owed a notice"
+    used[0] = 80.0
+    core.tick()
+    assert [o.source for o in notifier.owed.values()] == ["pd_limit_exceeded"]
+    ours, theirs = _pair()
+    notifier.attach(ours)
+    assert notifier.flush() == 1
+    [record] = _records(theirs)
+    assert record.source == "pd_limit_exceeded"
+    [over] = [e["data"] for e in read_events(reverse=False, scope="all", only=(pd_core.EVENT_OVER_LIMIT,))]
+    assert (over["unit"], over["used_mb"], over["limit_mb"]) == ("worker", 80.0, 64)
+
+
 def test_a_compaction_no_daemon_saw_is_reported_at_the_next_start(make_core, script):
     """Review of #714. The tail starts at the log's end, so a compaction made while no daemon
     ran, or inside the settle before a restart, is taken up when the next daemon boots, once its
