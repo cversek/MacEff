@@ -114,6 +114,7 @@ def test_a_due_entry_fires_once_through_the_channel_even_across_a_restart(tmp_pa
     s.tick()
     assert channel.received == [("pd_entry_due", daily)]       # 09:00 on the 16th to the 19th: once
     assert log.of(sc.EVENT_ENTRY_FIRED)[0]["missed"] == 3
+    assert log.of(sc.EVENT_ENTRY_FIRED)[0]["late_s"] == 3 * 3600.0     # R34: due 09:00, fired 12:00
     now[0] = at("2026-10-19 12:20")
     s.tick()
     assert channel.received[-1] == ("pd_entry_due", once)

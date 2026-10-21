@@ -228,6 +228,34 @@ def test_env_rendered_at_start(make_core, script, tmp_path):
         core.shutdown("next start")
 
 
+def test_env_is_only_what_the_declaration_says(make_core, script, tmp_path, monkeypatch):
+    """R13's other half: the unit's environment is the declared one and the core's own keys,
+    never a file a persistent volume carried forward, and never the daemon's own environment.
+    Stale env files are planted where a home keeps them, and a stray variable in the daemon's
+    environment, and none of them reaches the unit."""
+    from macf.pd.core import ENV_HOME, ENV_INTERVAL, ENV_UNIT
+    home = tmp_path / "home"
+    for stale in (home / ".env", home / ".maceff" / "pd" / "worker.env", home / ".maceff" / "env"):
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_text("SETTING=carried-forward\nSTALE_KEY=1\n")
+    monkeypatch.setenv("STRAY_FROM_DAEMON", "1")
+    dump = tmp_path / "seen.json"
+    unit = make_unit("worker", script, {"dump": str(dump)}, environment={"SETTING": "declared"})
+    core = make_core([unit], placeholders={"agent_home": str(home), "card": CARD, "runtime_dir": str(tmp_path)})
+    core.boot()
+    assert drive(core, lambda: dump.exists())
+    env = json.loads(dump.read_text())["env"]
+    assert env["SETTING"] == "declared"
+    declared = set(unit.environment) | {ENV_UNIT, ENV_INTERVAL, ENV_HOME}
+    assert set(env) - declared <= _INTERPRETER_KEYS, set(env) - declared
+    assert "STALE_KEY" not in env and "STRAY_FROM_DAEMON" not in env
+
+
+#: What the interpreter itself sets in a child's environment on some platforms, which no
+#: declaration or file put there.
+_INTERPRETER_KEYS = {"__CF_USER_TEXT_ENCODING", "LC_CTYPE", "PWD", "SHLVL", "_"}
+
+
 def test_placeholders_filled_at_start(make_core, script, tmp_path):
     """A declared value names the agent home, the card or the runtime directory by
     placeholder, and the core fills each in when it starts the unit (R13). A core given no
@@ -393,6 +421,28 @@ def test_no_cross_agent_control(tmp_path, script):
 
     with pytest.raises(DeclarationRefused, match="R07"):
         load_declaration(tmp_path, CARD)
+
+
+def test_a_running_daemon_controls_no_other_agents_unit(tmp_path, script, base, run_daemon):
+    """R07 at run time, where the operator's own asks arrive: a running daemon asked to stop,
+    start or restart a unit its declaration doesn't name refuses each one, names R07, records
+    no control act for it, and leaves the other agent's process running. Its own unit is
+    untouched by the asks."""
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+    try:
+        daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+        assert wait_for(lambda: unit_state(daemon, "worker") == "running")
+        mine = unit_pid(daemon, "worker")
+        for op in ("stop", "restart", "start"):
+            reply = ask(daemon, {"op": op, "unit": "other-agents-broker", "reason": "not mine",
+                                 "asked_by": {"kind": "operator", "card": "Operator@000000"}})
+            assert not reply["ok"] and "R07" in reply["error"], (op, reply)
+        assert not events("pd_control", "other-agents-broker")
+        assert other.poll() is None, "the other agent's process was signalled"
+        assert unit_state(daemon, "worker") == "running" and unit_pid(daemon, "worker") == mine
+    finally:
+        other.kill()
+        other.wait()
 
 
 def test_stop_after_a_failure_is_stopped(make_core, script):
@@ -964,6 +1014,16 @@ def test_control_events(tmp_path, script, base, run_daemon):
     assert (peer["uid"], peer["pid"]) == (os.getuid(), os.getpid())
     assert verify_incarnation(peer["pid"], peer["proc_start"])
 
+    # A restart is a control act too (R52 names stop, restart and compaction; compaction is
+    # refused in step 1). Started again, then restarted, each is recorded with who asked and why.
+    for op, reason in (("start", "back up"), ("restart", "new config")):
+        assert ask(daemon, {"op": op, "unit": "worker", "reason": reason,
+                            "asked_by": {"kind": "operator", "card": "Operator@000000"}})["ok"]
+        assert wait_for(lambda: any(d["act"] == op and d["reason"] == reason
+                                    for d in events("pd_control", "worker"))), op
+    restarted = [d for d in events("pd_control", "worker") if d["act"] == "restart"][-1]
+    assert restarted["asked_by"]["kind"] == "operator" and restarted["peer"]["pid"] == os.getpid()
+
 
 def test_a_request_cannot_claim_an_inside_asker(tmp_path, script, base, run_daemon):
     """Over the socket the asker is the operator or the declared wind-down. A request that
@@ -1242,7 +1302,18 @@ def test_no_own_compaction(make_core, script):
     second = core.pid("worker")
     assert drive(core, lambda: core.pid("worker") not in (None, first, second))
     acts = [d.get("act") for d in events("pd_control", "worker")]
-    assert acts and "compact" not in acts
+    assert acts and not {"compact", "clear"} & set(acts)
+    # The only text the layer ever types into a session is the keystroke wake. Whatever ids it
+    # is handed, that text can't begin a slash command (/compact, /clear) or carry a line break
+    # that would submit one after it, so the layer has no way to compact or clear on its own.
+    from macf.pd import wake
+    hostile = [["/clear"], ["/compact"], ["x\n/clear"], ["\r/compact"], ["msg-1792000000-abc123abc123", "/clear"]]
+    typed = [wake.wake_text(ids) for ids in hostile + [["msg-1792000000-abc123abc123"]]]
+    assert any(typed), "no wake text was built, so nothing here was checked"
+    for text in typed:
+        if text is not None:
+            assert not text.lstrip().startswith("/") and "\n" not in text and "\r" not in text, text
+            assert "/clear" not in text and "/compact" not in text, text
 
 
 def test_the_record_outlives_a_temp_cleaner(tmp_path, script, base, run_daemon):

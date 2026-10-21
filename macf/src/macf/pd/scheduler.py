@@ -236,8 +236,14 @@ class Scheduler:
     #: it records them, and the instant each last fired for.
     entries: Dict[str, dict] = field(default_factory=dict)
     entry_fired: Dict[str, datetime] = field(default_factory=dict)
+    #: How late each started run began, by (schedule, firing), until its done record states it.
+    late: Dict[tuple, Optional[float]] = field(default_factory=dict)
 
     def _say(self, event: str, data: dict) -> None:
+        # A failed run's notice points to its done record, so that record states how late the
+        # run began, not only the record of its start (MIS-0002-R34 (late_run_MUST_state_lateness)).
+        if event == EVENT_DONE and "late_s" not in data:
+            data = {**data, "late_s": self.late.pop((data.get("schedule"), data.get("scheduled_for")), None)}
         if not self.append(event, {"agent": self.card, **data}):
             print(f"⚠️ MACF: pd: the {event} event for {data.get('schedule')} was not recorded",
                   file=sys.stderr)
@@ -441,6 +447,7 @@ class Scheduler:
         """Run an entry's check through the declared-command path, as an isolated command run."""
         why = self.template_refusal(entry.get("template"), entry.get("args") or {})
         template = self.declaration.check_templates.get(entry.get("template") or "")
+        self.late[(entry_id, _iso(due))] = round(late_s, 1)
         if why or template is None:
             self._say(EVENT_DONE, {"schedule": entry_id, "scheduled_for": _iso(due),
                                    "outcome": f"not started: {why}", "exit_code": None, "wake": False})
@@ -478,11 +485,13 @@ class Scheduler:
         self.entry_fired[entry_id] = due
         if entry.get("action") == "check":
             # A check wakes nobody by firing: its run does, when its condition holds (4.2).
-            self._say(EVENT_ENTRY_FIRED, {"id": entry_id, "for": _iso(due), "missed": missed, "notified": False})
+            self._say(EVENT_ENTRY_FIRED, {"id": entry_id, "for": _iso(due), "missed": missed, "notified": False,
+                                          "late_s": round((now - due).total_seconds(), 1)})
             if entry_id not in self.running and not quiet:
                 self._start_check(entry_id, entry, due, (now - due).total_seconds())
             return
-        self._say(EVENT_ENTRY_FIRED, {"id": entry_id, "for": _iso(due), "missed": missed, "notified": not quiet})
+        self._say(EVENT_ENTRY_FIRED, {"id": entry_id, "for": _iso(due), "missed": missed, "notified": not quiet,
+                                      "late_s": round((now - due).total_seconds(), 1)})
         if self.on_notice is not None and not quiet:
             self.on_notice(NOTICE_ENTRY_DUE, entry_id)
 
@@ -523,6 +532,7 @@ class Scheduler:
     def _start(self, s: Schedule, scheduled_for: datetime, late_s: Optional[float]) -> None:
         # The next run time moves on first (R26): this record is what the next plan reads.
         self.last_due[s.name] = scheduled_for
+        self.late[(s.name, _iso(scheduled_for))] = round(late_s, 1) if late_s is not None else None
         self.work_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         try:
             if isinstance(s.run, PromptRun):
