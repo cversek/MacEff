@@ -122,12 +122,6 @@ class Daemon:
         self.scheduler = Scheduler(self.core.declaration, self.card, placeholders,
                                    work_dir=self.base / f"{self.record_path.stem}.runs",
                                    check_installed=not rendered_declaration_path(self.home).exists())
-        if self.core.declaration.schedules:
-            if self.scheduler.check_installed and \
-                    self.core.declaration.notice_routes.get("pd_schedule_changed") not in ("agent", "both"):
-                print("⚠️ MACF: pd: notice_routes doesn't route 'pd_schedule_changed' to 'agent' or 'both', so "
-                      "a schedule changed since pd install is said only on this stream and in pd status "
-                      "(MIS-0002-R33)", file=sys.stderr)
         self._listener: Optional[socket.socket] = None
         self._channel_listener: Optional[socket.socket] = None
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound
@@ -143,17 +137,11 @@ class Daemon:
                                    self.notifier.raise_notice, time.monotonic)
         self.core.on_notice = self.notifier.raise_notice    # the core's own notices (R60)
         self.scheduler.on_notice = self.notifier.raise_notice   # a denied prompt run (R32)
-        if any(u.kind == "session" for u in self.core.declaration.units) \
-                and self.core.declaration.notice_routes.get("pd_carried") not in ("agent", "both"):
-            # Only the agent's routes deliver a daemon notice, so any other route reaches nobody.
-            print("⚠️ MACF: pd: notice_routes doesn't route 'pd_carried' to 'agent' or 'both', so after "
-                  "a restart or a compaction the session isn't told what was carried, changed and lost "
-                  "(MIS-0002-R47)", file=sys.stderr)
-        if any(u.privacy_grants for u in self.core.declaration.units) \
-                and self.core.declaration.notice_routes.get(GRANT_NOTICE_SOURCE) not in ("agent", "both"):
-            print(f"⚠️ MACF: pd: notice_routes doesn't route '{GRANT_NOTICE_SOURCE}' to 'agent' or 'both', "
-                  f"so a declared grant found denied is said only on this stream (MIS-0002-R65)",
-                  file=sys.stderr)
+        half = self.core.declaration.half_served_routes()
+        if half:
+            print(f"⚠️ MACF: pd: notice_routes routes {', '.join(half)} to 'both', and only the agent's half "
+                  f"is served: the operator hears unread mail alone today, so the rest reach the agent only "
+                  f"(MIS-0002-R42)", file=sys.stderr)
         connect_s = self.core.declaration.channel_connect_s
         #: Where a channel is expected, whether it is dark (R115); the outside watch tells the operator.
         self.dark_channel = DarkChannel(self.card, connect_s) if connect_s else None
