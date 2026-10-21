@@ -4336,7 +4336,7 @@ def cmd_events_query(args: argparse.Namespace) -> int:
         if as_json:
             print(_json.dumps(event, default=str))
         elif verbose:
-            print(format_verbose(event, tz))
+            print(format_verbose(event, tz, today))
         else:
             print(format_line(event, tz, today), flush=True)
 

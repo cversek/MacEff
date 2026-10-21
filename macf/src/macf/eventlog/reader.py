@@ -133,9 +133,10 @@ def format_line(event: dict, tz=None, today: Optional[date] = None) -> str:
     return f"{stamp}  {event.get('event', '?')}  {summary_of(event)}".rstrip()
 
 
-def format_verbose(event: dict, tz=None) -> str:
-    """The event's line, then every field: the breadcrumb, each data field, and the hook input."""
-    lines = [format_line(event, tz), f"  breadcrumb: {event.get('breadcrumb', '')}"]
+def format_verbose(event: dict, tz=None, today: Optional[date] = None) -> str:
+    """The event's line, dated as ``format_line`` dates it, then every field: the breadcrumb, each
+    data field, and the hook input."""
+    lines = [format_line(event, tz, today), f"  breadcrumb: {event.get('breadcrumb', '')}"]
     data = event.get("data")
     if isinstance(data, dict):
         lines += [f"  {k}: {v if isinstance(v, str) else json.dumps(v, default=str)}" for k, v in data.items()]

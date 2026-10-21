@@ -228,3 +228,75 @@ def test_follow_from_a_given_offset_yields_what_was_written_after_it(tmp_path):
         for e in rd.follow(path, lambda e: True, sleep=stop_after_one_poll, start=start):
             got.append(e["event"])
     assert got == ["b"]
+
+
+# --- the command's follow, through cmd_events_query ------------------------------------------
+
+def _follow_once(monkeypatch):
+    """The command's follow, polling once and then stopped as Ctrl+C stops it."""
+    from functools import partial
+
+    def stop_after_one_poll(_s, polls=[0]):
+        polls[0] += 1
+        if polls[0] > 1:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(rd, "follow", partial(rd.follow, sleep=stop_after_one_poll, poll_s=0))
+
+
+def _write_during_scan(monkeypatch, path, *events):
+    """read_events, standing in for a scan during which ``events`` are written to the log: the
+    scan reads what was there, then the events land before it returns."""
+    import macf.agent_events_log as log_mod
+    real = log_mod.read_events
+
+    def scanning(*a, **kw):
+        seen = list(real(*a, **kw))
+        with path.open("a") as f:
+            for e in events:
+                f.write(json.dumps(e) + "\n")
+        return iter(seen)
+
+    monkeypatch.setattr(log_mod, "read_events", scanning)
+
+
+def test_follow_prints_an_event_written_while_the_scan_ran(log, capsys, monkeypatch):
+    """The command measures where --follow starts before the scan, and passes it on: an event
+    written during the scan is printed by the follow, not lost between the two."""
+    from macf.cli import cmd_events_query
+    path, _ = log
+    _follow_once(monkeypatch)
+    _write_during_scan(monkeypatch, path, ev("pd_wake_sent", time.time(), ids=["msg-during"], chars=5))
+    assert cmd_events_query(_query(event=["pd_*"], follow=True)) == 0
+    out = capsys.readouterr().out
+    assert out.count("msg-during") == 1, out
+
+
+def test_follow_holds_back_events_past_before(log, capsys, monkeypatch):
+    """--before bounds the follow as it bounds the scan: an event stamped after it is not printed."""
+    from macf.cli import cmd_events_query
+    path, _ = log
+    bound = time.time() - 30
+    _follow_once(monkeypatch)
+    _write_during_scan(monkeypatch, path,
+                       ev("pd_wake_sent", bound - 10, ids=["msg-inside"], chars=5),
+                       ev("pd_wake_sent", bound + 10, ids=["msg-past"], chars=5))
+    before = datetime.fromtimestamp(bound).isoformat(timespec="seconds")
+    assert cmd_events_query(_query(event=["pd_wake_sent"], before=before, follow=True)) == 0
+    out = capsys.readouterr().out
+    assert "msg-inside" in out and "msg-past" not in out, out
+
+
+def test_an_event_from_today_shows_no_date_in_either_form(log, capsys):
+    """The default line and the verbose line both leave the date off an event from today."""
+    from macf.cli import _pick_tz, cmd_events_query
+    _, events = log
+    tz = _pick_tz()
+    moment = datetime.fromtimestamp(events[-1]["timestamp"], tz=tz)
+    if moment.date() != datetime.now(tz=tz).date():
+        pytest.skip("the fixture's newest event fell on yesterday; run again after midnight passes")
+    clock = moment.strftime("%H:%M:%S")
+    for verbose in (False, True):
+        assert cmd_events_query(_query(event=["pd_unit_state"], verbose=verbose)) == 0
+        first = capsys.readouterr().out.splitlines()[0]
+        assert first.startswith(f"{clock}  pd_unit_state"), (verbose, first)
