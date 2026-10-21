@@ -124,6 +124,15 @@ def _format_time_ago(file_path: Path) -> str:
         print(f"⚠️ MACF: file age calculation failed: {e}", file=sys.stderr)
         return "unknown"
 
+def _task_id_list(value: str) -> list:
+    """One ``--blocked-by`` value: a task ID, or a comma list of them, each without its ``#``.
+
+    The option takes one value per flag and may repeat, so a positional after it stays
+    positional. With ``nargs="+"`` it swallowed the phase title that followed it
+    (cversek/MacEff#688)."""
+    return [v.strip().lstrip("#") for v in value.split(",") if v.strip().lstrip("#")]
+
+
 def _parse_task_id_arg(arg: str):
     """Parse a task ID CLI argument into the form TaskReader.read_task expects.
 
@@ -6038,6 +6047,8 @@ def cmd_task_metadata_set(args: argparse.Namespace) -> int:
                 task_type=new_mtmd.task_type,
                 title=title_for_recompose,
                 parent_id=new_mtmd.parent_id,
+                plan_ca_ref=new_mtmd.plan_ca_ref,
+                custom=new_mtmd.custom or None,
             )
             updates["subject"] = new_subject
 
@@ -8344,7 +8355,12 @@ def cmd_task_note(args: argparse.Namespace) -> int:
 
 
 def cmd_task_block(args: argparse.Namespace) -> int:
-    """Add blocking relationship: task blocks another task."""
+    """Add blocking relationship: task blocks another task.
+
+    Written as the forward edge, on the blocked task's ``blockedBy``: the one ``task start``
+    enforces and ``task get`` shows from both ends (``dependents_of`` derives the inverse).
+    Writing ``blocks`` on the blocking task instead left the blocked task showing no
+    blocker and starting freely (cversek/MacEff#688)."""
     from .task import TaskReader, update_task_file
     from .utils.breadcrumbs import get_breadcrumb
 
@@ -8367,15 +8383,12 @@ def cmd_task_block(args: argparse.Namespace) -> int:
         print(f"❌ Target task #{target_id} not found")
         return 1
 
-    # Get current blocks array
-    current_blocks = task.blocks or []
-    if str(target_id) in current_blocks or target_id in current_blocks:
+    current = target.blocked_by or []
+    if str(task_id) in [str(b).lstrip("#") for b in current]:
         print(f"⚠️  Task #{task_id} already blocks #{target_id}")
         return 0
 
-    # Add to blocks
-    new_blocks = current_blocks + [str(target_id)]
-    update_task_file(task_id, {"blocks": new_blocks})
+    update_task_file(target_id, {"blockedBy": current + [str(task_id)]})
 
     print(f"✅ Task #{task_id} now blocks #{target_id}")
     print(f"   Breadcrumb: {get_breadcrumb()}")
@@ -8383,7 +8396,8 @@ def cmd_task_block(args: argparse.Namespace) -> int:
 
 
 def cmd_task_unblock(args: argparse.Namespace) -> int:
-    """Remove blocking relationship."""
+    """Remove blocking relationship: the forward edge on the blocked task, and the ``blocks``
+    entry the command used to write on the blocking task, if one is still there."""
     from .task import TaskReader, update_task_file
     from .utils.breadcrumbs import get_breadcrumb
 
@@ -8400,15 +8414,18 @@ def cmd_task_unblock(args: argparse.Namespace) -> int:
         print(f"❌ Task #{task_id} not found")
         return 1
 
-    current_blocks = task.blocks or []
-    # Check both str and int forms
-    if str(target_id) not in current_blocks and target_id not in current_blocks:
+    target = reader.read_task(target_id)
+    current = (target.blocked_by or []) if target else []
+    edge = str(task_id) in [str(b).lstrip("#") for b in current]
+    stale = str(target_id) in [str(b) for b in (task.blocks or [])]
+    if not edge and not stale:
         print(f"⚠️  Task #{task_id} does not block #{target_id}")
         return 0
 
-    # Remove from blocks
-    new_blocks = [b for b in current_blocks if str(b) != str(target_id)]
-    update_task_file(task_id, {"blocks": new_blocks})
+    if edge:
+        update_task_file(target_id, {"blockedBy": [b for b in current if str(b).lstrip("#") != str(task_id)]})
+    if stale:
+        update_task_file(task_id, {"blocks": [b for b in task.blocks if str(b) != str(target_id)]})
 
     print(f"✅ Task #{task_id} no longer blocks #{target_id}")
     print(f"   Breadcrumb: {get_breadcrumb()}")
@@ -12725,8 +12742,10 @@ def _build_parser() -> argparse.ArgumentParser:
     phase_plan_group = task_create_phase_parser.add_mutually_exclusive_group(required=True)
     phase_plan_group.add_argument("--plan", dest="plan", help="inline plan description")
     phase_plan_group.add_argument("--plan-ca-ref", dest="plan_ca_ref", help="path to plan CA")
-    task_create_phase_parser.add_argument("--blocked-by", dest="blocked_by", nargs="+",
-                                          help="task IDs that block this phase (e.g., #50 51)")
+    task_create_phase_parser.add_argument("--blocked-by", dest="blocked_by", action="extend",
+                                          type=_task_id_list, metavar="ID[,ID...]",
+                                          help="a task that blocks this phase; repeat the flag or give "
+                                               "a comma list (e.g., --blocked-by 50,51)")
     task_create_phase_parser.add_argument("--json", dest="json", action="store_true",
                                           help="output as JSON")
     task_create_phase_parser.set_defaults(func=cmd_task_create_phase)
