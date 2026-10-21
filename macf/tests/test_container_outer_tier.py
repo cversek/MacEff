@@ -239,3 +239,39 @@ def test_primal_daemons_start_after_access_and_before_optional_units():
     at = {name: src.index(f'("{name}",') for name in
           ("MACF tools", "agent initialization", "amail", "primal daemons", "policy index", "search service")}
     assert at["agent initialization"] < at["primal daemons"] < at["policy index"] < at["search service"]
+
+
+def test_main_starts_the_access_path_before_the_daemons_and_both_before_any_optional_unit(
+        tmp_path, monkeypatch):
+    """R57, at the place it names: main() itself, run in-process with every step stubbed to
+    record when it runs. sshd (the access path) must start before the primal daemons, and
+    both before the optional units (policy index, search service)."""
+    import subprocess
+    start = _start()
+    order = []
+    agents_yaml = tmp_path / "agents.yaml"
+    agents_yaml.write_text("{}\n")
+    monkeypatch.setattr(start, "AGENTS_CONFIG", agents_yaml)
+    monkeypatch.setattr(start, "PROJECTS_CONFIG", tmp_path / "absent.yaml")
+    cfg = SimpleNamespace(agents={}, subagents={}, defaults=None, ids=SimpleNamespace(slot=lambda name: 0))
+    monkeypatch.setattr(start, "AgentsConfig", lambda **kw: cfg)
+    for quiet in ("run_command", "check_image_ids", "check_service_paths", "ensure_group",
+                  "setup_shared_workspace_permissions", "apply_egress_policy",
+                  "propagate_container_env", "install_ssh_key", "install_macf_tools",
+                  "initialize_agents", "setup_policies", "setup_policy_editors", "place_secrets",
+                  "start_amail_services", "render_pd_declarations"):
+        monkeypatch.setattr(start, quiet, lambda *a, **kw: None)
+    for name, recorded in (("start_primal_daemons", "primal daemons"),
+                           ("start_policy_index", "policy index"),
+                           ("start_search_service_daemon", "search service")):
+        monkeypatch.setattr(start, name, lambda *a, _r=recorded, **kw: order.append(_r))
+
+    def popen(argv, *a, **kw):
+        order.append("sshd" if argv[0].endswith("sshd") else argv[0])
+        return SimpleNamespace(pid=1, wait=lambda: 0)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+
+    start.main()
+    assert {"sshd", "primal daemons", "policy index", "search service"} <= set(order), order
+    optional = min(order.index("policy index"), order.index("search service"))
+    assert order.index("sshd") < order.index("primal daemons") < optional, order
