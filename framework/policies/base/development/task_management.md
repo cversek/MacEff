@@ -1473,7 +1473,7 @@ Task scope defines the boundary of authorized work in AUTO_MODE. Scoped tasks ar
 
 Optional field `scope_status`: `active` | `paused` | `inactive` | `null` (3-state model — extended Cycle 514, BUG #1067)
 
-- Set by `macf_tools task scope set` or `task scope add`. Neither scopes a task that is already completed: it has no work left for the gate to wait on, so each names it and leaves it out
+- Set by `macf_tools task scope set` or `task scope add`. Neither scopes a task that is already completed or archived: it has no work left for the gate to wait on, so each names it and leaves it out
 - Transitions to `paused` via `task scope pause` (with mandatory --justification)
 - Transitions to `inactive` when task is completed while scoped
 - Cleared by `macf_tools task scope clear` (sets all to None) or `task scope remove` (drops specific tasks)
