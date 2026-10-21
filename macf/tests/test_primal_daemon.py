@@ -423,6 +423,28 @@ def test_no_cross_agent_control(tmp_path, script):
         load_declaration(tmp_path, CARD)
 
 
+def test_a_running_daemon_controls_no_other_agents_unit(tmp_path, script, base, run_daemon):
+    """R07 at run time, where the operator's own asks arrive: a running daemon asked to stop,
+    start or restart a unit its declaration doesn't name refuses each one, names R07, records
+    no control act for it, and leaves the other agent's process running. Its own unit is
+    untouched by the asks."""
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+    try:
+        daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+        assert wait_for(lambda: unit_state(daemon, "worker") == "running")
+        mine = unit_pid(daemon, "worker")
+        for op in ("stop", "restart", "start"):
+            reply = ask(daemon, {"op": op, "unit": "other-agents-broker", "reason": "not mine",
+                                 "asked_by": {"kind": "operator", "card": "Operator@000000"}})
+            assert not reply["ok"] and "R07" in reply["error"], (op, reply)
+        assert not events("pd_control", "other-agents-broker")
+        assert other.poll() is None, "the other agent's process was signalled"
+        assert unit_state(daemon, "worker") == "running" and unit_pid(daemon, "worker") == mine
+    finally:
+        other.kill()
+        other.wait()
+
+
 def test_stop_after_a_failure_is_stopped(make_core, script):
     """An operator's stop of a unit already failed and being killed ends in stopped, not failed."""
     core = make_core([make_unit("worker", script, {"alive_for": 0.15}, restart="never")])
