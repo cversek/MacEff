@@ -82,8 +82,8 @@ DAEMON_POINTERS: Dict[str, str] = {
                        "the event log names the grant.",
     # MIS-0002-R47 (pd_MUST_report_carried_changed_lost)
     "pd_carried": "Your primal daemon restarted, your session restarted, or your session was compacted. "
-                  "Run `macf_tools events query --event pd_carried`; the newest entry says which, and what "
-                  "was carried, changed and lost.",
+                  "Run `macf_tools events query --event pd_carried --limit 1 -v`; it says which, and lists "
+                  "what was carried, changed and lost.",
     # MIS-0002-R32 (run_MUST_fail_on_prompt), and every other run that fails (#739)
     "pd_run_failed": "A scheduled run of yours failed, was killed at its limit, or couldn't start. Run "
                      "`macf_tools pd status`; the event log's pd_run_done entry names the schedule and "
