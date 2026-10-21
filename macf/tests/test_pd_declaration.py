@@ -25,7 +25,7 @@ def _unit(name, kind="service", memory=256, env=None):
             "environment": env or {}}
 
 
-def _declaration(agent="Manny2@78e0aa", units=None):
+def _declaration(agent="B@4d5e6f", units=None):
     return interface.Declaration.model_validate(
         {"version": 1, "agent": agent, "units": units if units is not None else [_unit("broker")]})
 
@@ -83,14 +83,14 @@ def test_a_summary_carries_no_command_and_no_environment(tmp_path):
 def test_every_agents_units_are_seen_and_none_controlled(tmp_path):
     """MIS-0002-R62: each agent's units appear in the view; the view offers no act."""
     homes = tmp_path / "home"
-    for user, card in (("pa_manny", "Manny@b82044"), ("pa_manny2", "Manny2@78e0aa")):
+    for user, card in (("pa_manny", "A@1a2b3c"), ("pa_manny2", "B@4d5e6f")):
         (homes / user / "agent" / "public").mkdir(parents=True)
         sv.publish(homes / user, _declaration(agent=card, units=[_unit("broker", memory=512)]), now=1.0)
     (homes / "student" / "agent" / "public").mkdir(parents=True)        # a home that published nothing
     views = sv.read_agents(homes)
     assert [v.status for v in views] == ["PUBLISHED", "PUBLISHED", "UNPUBLISHED"]
     text = sv.render(views, sv.read_budget(_cgroup(tmp_path)))
-    assert "Manny@b82044 broker (service, 512 MB" in text and "Manny2@78e0aa broker" in text
+    assert "A@1a2b3c broker (service, 512 MB" in text and "B@4d5e6f broker" in text
     assert "UNPUBLISHED" in text and "held 42.1 GiB (66%)" in text
     assert "Declared unit limits sum to 1024 MB of the container's 65536 MB." in text
     assert not any(hasattr(sv, act) for act in ("stop", "start", "restart", "act", "control"))
@@ -257,7 +257,7 @@ def test_every_unit_declared(tmp_path):
     from macf.pd.core import Core
     from macf.pd.interface import Asker
     operator = Asker(kind="operator", card="Operator@000000")
-    core = Core(_declaration(units=[_unit("broker"), _unit("watcher")]), "Manny2@78e0aa",
+    core = Core(_declaration(units=[_unit("broker"), _unit("watcher")]), "B@4d5e6f",
                 placeholders={"agent_home": str(tmp_path)})
     assert {name: core.state(name) for name in ("broker", "watcher")}
     for act in (core.start, core.stop, core.restart):
