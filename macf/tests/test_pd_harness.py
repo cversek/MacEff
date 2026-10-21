@@ -133,6 +133,66 @@ def test_turning_it_back_on_removes_the_key(project):
     assert idle_compaction_status(project)["state"] == "client default"
 
 
+def test_the_sessions_project_is_read_wherever_the_command_runs(tmp_path, monkeypatch):
+    """#722: run from inside another checkout with its own .claude/, the status and the switch
+    use the project the session starts in, from its unit's --project-dir, and say so. Without a
+    session unit naming one, the lookup by working directory is used, and named as such."""
+    from macf.pd.interface import declaration_path
+    from macf.utils.claude_settings import session_project_root
+    from macf.utils.paths import find_project_root
+    home, work, checkout = tmp_path / "home", tmp_path / "work", tmp_path / "checkout"
+    for d in (work / ".claude", checkout / ".claude", checkout / ".git"):
+        d.mkdir(parents=True)
+    path = declaration_path(home)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"version": 1, "agent": "Resident@1a2b3c", "units": [{
+        "name": "session", "kind": "session", "account": "resident",
+        "command": ["python", "-m", "macf.cli", "harness", "unit", "--home", "{agent_home}",
+                    "--project-dir", str(work), "--no-proxy"]}]}))
+    monkeypatch.chdir(checkout)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    root, source = session_project_root(home)
+    assert root == work and "session unit" in source
+    set_idle_compaction(False, client_version="2.1.296", project_root=root)
+    assert idle_compaction_status(root)["state"] == "off"
+    assert idle_compaction_status(checkout)["state"] == "client default"   # the checkout is untouched
+    path.unlink()
+    find_project_root.cache_clear()   # cached per process; an earlier test may have filled it
+    root, source = session_project_root(home)
+    assert root == checkout and "current directory" in source
+
+
+
+def _declare(home, units):
+    from macf.pd.interface import declaration_path
+    path = declaration_path(home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"version": 1, "agent": "Resident@1a2b3c", "units": units}))
+
+
+def test_the_equals_form_and_a_malformed_unit(tmp_path, monkeypatch):
+    """--project-dir=PATH is read as argparse reads it, and a units entry that isn't an object is
+    passed over rather than crashing the command (both found in review)."""
+    from macf.utils.claude_settings import session_project_root
+    home, work = tmp_path / "home", tmp_path / "work"
+    _declare(home, ["not a unit", {"name": "session", "kind": "session", "account": "resident",
+                                   "command": ["claude", f"--project-dir={work}"]}])
+    monkeypatch.chdir(tmp_path)
+    assert session_project_root(home) == (work, "the session unit's --project-dir")
+
+
+def test_the_harness_installed_project_comes_second(tmp_path, monkeypatch):
+    """With no session unit naming a project, the harness's installed project is used, and named."""
+    from types import SimpleNamespace
+
+    from macf.utils import harness
+    from macf.utils.claude_settings import session_project_root
+    home, installed = tmp_path / "home", tmp_path / "installed"
+    _declare(home, [{"name": "broker", "kind": "service", "account": "resident", "command": ["broker"]}])
+    monkeypatch.setattr(harness, "load_settings", lambda params: SimpleNamespace(project_dir=str(installed)))
+    monkeypatch.chdir(tmp_path)
+    assert session_project_root(home) == (installed, "the harness's installed project")
+
 def test_status_without_settings_file(tmp_path):
     """No settings file is the client default, reported plainly rather than raised."""
     status = idle_compaction_status(tmp_path)
