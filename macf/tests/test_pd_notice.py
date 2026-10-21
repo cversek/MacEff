@@ -592,6 +592,59 @@ def test_an_unrouted_carried_notice_reaches_the_agent(tmp_path, isolated_events_
     assert list(notifier.owed)
 
 
+def test_the_daemon_wires_its_core_and_scheduler_notices_to_its_notifier(tmp_path):
+    """R60's subject is the primal daemon: the core's over-limit notice reaches the channel only
+    because the daemon connects the core to its notifier. Review on #770 planted that wiring away
+    and every other test passed, since they wire it by hand."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+    from macf.pd import interface
+    from macf.pd.daemon import Daemon
+    home = tmp_path / "home"
+    (home / ".maceff" / "pd").mkdir(parents=True)
+    (home / ".maceff_primary_agent.id").write_text("abc123def4567890\n")
+    (home / ".maceff" / "config.json").write_text('{"agent_identity": {"moniker": "Tester"}}')
+    interface.declaration_path(home).write_text(
+        interface.Declaration(version=1, agent="Tester@abc123").model_dump_json())
+    base = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))
+    try:
+        daemon = Daemon(home, base=base)
+        assert daemon.core.on_notice == daemon.notifier.raise_notice
+        assert daemon.scheduler.on_notice == daemon.notifier.raise_notice
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_a_unit_measured_past_its_limit_reaches_the_channel(make_core, script, tmp_path, monkeypatch,
+                                                            isolated_events_log):
+    """MIS-0002-R60 (pd_MUST_notice_limit_exceeded): the core's own memory reading, not a
+    notice raised by hand, owes the notice. A running unit read under its declared limit owes
+    nothing; read over it, the core raises pd_limit_exceeded into the notifier, wired as the
+    daemon wires it, and the record goes out on the channel."""
+    from macf.pd import core as pd_core
+    used = [10.0]                                                   # the unit's limit is 64 MB
+    monkeypatch.setattr(pd_core, "tree_rss_mb", lambda pid: used[0])
+    notifier = nt.Notifier(_home(tmp_path), {"pd_limit_exceeded": "agent"})
+    notifier.boot()
+    core = make_core([make_unit("worker", script, {})], memory_check_s=0.0)
+    core.on_notice = notifier.raise_notice
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    core.tick()
+    assert not notifier.owed, "a unit under its limit owed a notice"
+    used[0] = 80.0
+    core.tick()
+    assert [o.source for o in notifier.owed.values()] == ["pd_limit_exceeded"]
+    ours, theirs = _pair()
+    notifier.attach(ours)
+    assert notifier.flush() == 1
+    [record] = _records(theirs)
+    assert record.source == "pd_limit_exceeded"
+    [over] = [e["data"] for e in read_events(reverse=False, scope="all", only=(pd_core.EVENT_OVER_LIMIT,))]
+    assert (over["unit"], over["used_mb"], over["limit_mb"]) == ("worker", 80.0, 64)
+
+
 def test_a_compaction_no_daemon_saw_is_reported_at_the_next_start(make_core, script):
     """Review of #714. The tail starts at the log's end, so a compaction made while no daemon
     ran, or inside the settle before a restart, is taken up when the next daemon boots, once its
