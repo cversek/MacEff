@@ -28,6 +28,13 @@ import json
 import os
 import subprocess
 import sys
+
+# A child Python (subprocess, or the macf_tools script) imports from the environment, not from
+# pytest's pythonpath, so it would load the editable install's checkout instead of this one.
+# Putting this checkout's source first in PYTHONPATH makes every child test this checkout too.
+_SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+if os.environ.get("PYTHONPATH", "").split(os.pathsep)[0] != _SRC:
+    os.environ["PYTHONPATH"] = os.pathsep.join(p for p in (_SRC, os.environ.get("PYTHONPATH")) if p)
 import tempfile
 import warnings
 from datetime import datetime, timedelta, timezone
