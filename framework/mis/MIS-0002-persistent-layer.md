@@ -139,7 +139,7 @@ stateDiagram-v2
 - **R04** [MUST NOT · judgment: the head maintainer, at review of each rendering] The outer tier MUST NOT hold any agent's declaration or configuration. (outer_tier_MUST-NOT_hold_agent_config)
 - **R05** [MUST · decidable: macf/tests/test_pd_render.py::test_launchd_is_launchagent] Where the host runs macOS, the platform adapter MUST render each primal daemon as a per-user LaunchAgent. (macos_MUST_render_LaunchAgent)
 - **R06** [MUST · decidable: macf/tests/test_pd_render.py::test_identifier] Each process name, unit name, launchd label and socket of a primal daemon MUST use the identifier `maceff_pd`. (pd_identifiers_MUST_use_maceff_pd)
-- **R07** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_cross_agent_control] A primal daemon MUST NOT start, stop or signal a managed unit of another agent. (pd_MUST-NOT_control_other_agents)
+- **R07** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_cross_agent_control and macf/tests/test_primal_daemon.py::test_a_running_daemon_controls_no_other_agents_unit] A primal daemon MUST NOT start, stop or signal a managed unit of another agent. (pd_MUST-NOT_control_other_agents)
 - **R80** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_network_listener] A primal daemon MUST NOT listen on a network port. (pd_MUST-NOT_listen_on_network)
 - **R129** [MUST · decidable: macf/tests/test_pd_render.py::test_socket_path_length and macf/tests/test_pd_install.py::test_a_socket_path_too_long_stops_the_systemd_install_before_anything_is_written] When the platform adapter installs a primal daemon, it MUST check that the daemon's socket path fits the platform's length limit. (adapter_MUST_check_socket_path_length)
 
@@ -152,7 +152,7 @@ stateDiagram-v2
 - **R10** [MUST · decidable: macf/tests/test_pd_declaration.py::test_renderings_exist] CI MUST fail when a declared unit has no rendering for a supported platform. (CI_MUST_fail_unrendered_unit)
 - **R11** [MUST · decidable: macf/tests/test_pd_declaration.py::test_schedules_hosted] CI MUST fail when a declared schedule has no primal daemon to run it. (CI_MUST_fail_unhosted_schedule)
 - **R12** [MUST · decidable: macf/tests/test_primal_daemon.py::test_clean_parent] The primal daemon MUST start each managed unit itself, as the unit's parent, with the declared environment only. (pd_MUST_start_units_itself)
-- **R13** [MUST · decidable: macf/tests/test_primal_daemon.py::test_env_rendered_at_start] When a primal daemon starts, it MUST render the declared environment, instead of reading environment files a persistent volume carried forward. (pd_MUST_render_env_at_start)
+- **R13** [MUST · decidable: macf/tests/test_primal_daemon.py::test_env_is_only_what_the_declaration_says] When a primal daemon starts, it MUST render the declared environment, instead of reading environment files a persistent volume carried forward. (pd_MUST_render_env_at_start)
 
 ### 6.3 Liveness, runs and health
 
@@ -181,7 +181,7 @@ stateDiagram-v2
 - **R109** [MUST · decidable: macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails] CI MUST fail when a declared schedule names no missed-run policy. (CI_MUST_fail_schedule_without_policy)
 - **R110** [MUST NOT · decidable: macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails] The scheduler MUST NOT apply a default missed-run policy. (scheduler_MUST-NOT_default_missed-run_policy)
 - **R26** [MUST · decidable: macf/tests/test_pd_schedule.py::test_advance_before_run] The scheduler MUST move a schedule's next run time forward before the run starts. (scheduler_MUST_advance_before_run)
-- **R27** [MUST NOT · decidable: macf/tests/test_pd_schedule.py::test_no_replayed_restart] After the scheduler restarts, it MUST NOT replay a missed run whose act restarts a unit. (scheduler_MUST-NOT_replay_restart_runs)
+- **R27** [MUST NOT · decidable: macf/tests/test_pd_schedule.py::test_the_scheduler_replays_no_restart_after_downtime] After the scheduler restarts, it MUST NOT replay a missed run whose act restarts a unit. (scheduler_MUST-NOT_replay_restart_runs)
 - **R28** [MUST · decidable: macf/tests/test_pd_schedule.py::test_leases_released] When the scheduler restarts, it MUST release every lease held before the restart. (scheduler_MUST_release_leases_on_restart)
 - **R29** [MUST · decidable: macf/tests/test_pd_schedule.py::test_target_declared] Each schedule MUST declare its target: an isolated session, or its own agent's live session. (schedule_MUST_declare_target)
   - *Revised 2026-10-20 at the repo owner's request (#552, comment 6271268641); previous text: MacEff g_551b8506.*
@@ -453,13 +453,13 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R04 | judgment | the head maintainer, at review of each rendering | standing |
 | R05 | decidable | macf/tests/test_pd_render.py::test_launchd_is_launchagent | passing |
 | R06 | decidable | macf/tests/test_pd_render.py::test_identifier | planned (the process name is unchecked, and socket names are checked for the agent part only) |
-| R07 | decidable | macf/tests/test_primal_daemon.py::test_no_cross_agent_control | planned (only a refusal at load is checked, not that a stop or signal can't reach another agent's process) |
+| R07 | decidable | macf/tests/test_primal_daemon.py::test_no_cross_agent_control and macf/tests/test_primal_daemon.py::test_a_running_daemon_controls_no_other_agents_unit | passing |
 | R08 | decidable | macf/tests/test_pd_declaration.py::test_every_unit_declared and macf/tests/test_pd_declaration.py::test_schedules_hosted | passing |
 | R09 | decidable | macf/tests/test_pd_interface.py::test_unit_fields_are_required_and_the_exit_code_contract_defaults | passing |
 | R10 | decidable | macf/tests/test_pd_declaration.py::test_renderings_exist | passing (under the reading recorded on 2026-10-10: the outer tier renders the daemon and the daemon starts the units, so a platform without a rendering of the daemon is what CI must catch; a rewording to say so is the maintainers' choice) |
 | R11 | decidable | macf/tests/test_pd_declaration.py::test_schedules_hosted | passing |
 | R12 | decidable | macf/tests/test_primal_daemon.py::test_clean_parent | passing |
-| R13 | decidable | macf/tests/test_primal_daemon.py::test_env_rendered_at_start | planned (no test plants an environment file a persistent volume carried forward) |
+| R13 | decidable | macf/tests/test_primal_daemon.py::test_env_is_only_what_the_declaration_says | passing |
 | R14 | decidable | macf/tests/test_pd_liveness.py::test_the_heartbeat_reports_at_once_and_then_at_its_interval | planned (its test drives the heartbeat helper with an injected recorder, not a managed unit writing to its agent's event log) |
 | R15 | decidable | macf/tests/test_pd_readout.py::test_liveness_probed | passing |
 | R16 | judgment | the head maintainer, at review of each landing pull request | standing |
@@ -473,14 +473,14 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R24 | decidable | macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails | planned |
 | R25 | decidable | macf/tests/test_pd_schedule.py::test_policy_values | planned |
 | R26 | decidable | macf/tests/test_pd_schedule.py::test_advance_before_run | passing |
-| R27 | decidable | macf/tests/test_pd_schedule.py::test_no_replayed_restart | planned (run_once_in_window is checked through the planning helper, not through a restarted scheduler) |
+| R27 | decidable | macf/tests/test_pd_schedule.py::test_the_scheduler_replays_no_restart_after_downtime | passing |
 | R28 | decidable | macf/tests/test_pd_schedule.py::test_leases_released | passing |
 | R29 | decidable | macf/tests/test_pd_schedule.py::test_target_declared | planned |
 | R30 | judgment | the Secretary, at review of each declaration | standing |
 | R31 | decidable | macf/tests/test_pd_schedule.py::test_permissions_settled | planned |
 | R32 | decidable | macf/tests/test_pd_schedule.py::test_prompt_fails_run | passing |
 | R33 | decidable | macf/tests/test_pd_schedule.py::test_run_cannot_schedule | passing |
-| R34 | decidable | macf/tests/test_pd_schedule.py::test_late_run_says_so | planned (the late run's event is checked, not its notice stating how late) |
+| R34 | decidable | macf/tests/test_pd_schedule.py::test_late_run_says_so | passing |
 | R35 | judgment | the Secretary, at review of each declaration | standing |
 | R36 | decidable | macf/tests/test_pd_schedule.py::test_wall_clock_cap | passing |
 | R37 | judgment | the Secretary, at review of each declaration | standing |
@@ -497,7 +497,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R48 | decidable | macf/tests/test_primal_daemon.py::test_outside_stop_beats_gates | passing |
 | R49 | decidable | macf/tests/test_primal_daemon.py::test_work_in_flight_checked | passing |
 | R50 | decidable | macf/tests/test_primal_daemon.py::test_quiet_window and macf/tests/test_primal_daemon.py::test_control_refuses_what_it_cannot_do | passing (binds while the daemon refuses every compaction; when compaction lands (R108) the row needs a quiet-window compaction test) |
-| R51 | decidable | macf/tests/test_primal_daemon.py::test_no_own_compaction | planned (compaction is checked, clearing is not) |
+| R51 | decidable | macf/tests/test_primal_daemon.py::test_no_own_compaction | passing |
 | R52 | decidable | macf/tests/test_primal_daemon.py::test_control_events and macf/tests/test_primal_daemon.py::test_a_held_restart_is_the_operators_act_when_the_window_ends | passing (the layer performs no compaction yet, so the compaction clause binds when it does) |
 | R53 | decidable | macf/tests/test_pd_declaration.py::test_mail_units | passing |
 | R54 | decidable | macf/tests/test_pd_declaration.py::test_periodic_clock_is_schedule | passing |
@@ -741,7 +741,7 @@ Objections recorded:
   - R64's named test has been `macf/tests/test_pd_install.py::test_grants_tested_at_install` since #724, where MIS-0002 had `test_pd_render.py`. It is the same test, in the file of the command it drives, and #724's line didn't say so. The head maintainer noted it on #552.
   The persistent_layer policy's section 13 lists the scheduler's notices as not yet delivered, until #734's fix.
 - 2026-10-19: R32 (run_MUST_fail_on_prompt) and R104 (adapter_MUST_deliver_through_channel) move back to passing, with the fix for #734 and the tests they name. The scheduler's notice ids now take an epoch second, which the MacEff channel's record accepts. R32's test receives its notice through a notifier, a socket and the channel's own `parse_record`, as each notice producer's test now does. R104's test now also shows that a notice the channel's record would refuse is refused where it's raised, and never recorded as delivered. The same pull request fixes #735 to #739, and none of those changes a row's state. Editorial (mis 8.1).
-- 2026-10-21: conformance sweep 7, editorial (mis 8.1), by the Secretary, agreed on #552 with the head maintainer. Every passing decidable row was read against its named test, asking whether the test would fail if the code broke the requirement as written. 75 bound. Of the 28 that didn't, 13 name a second test on main that checks the missing clause, and stay passing: R03, R08, R39, R45, R50, R52, R70, R91, R113, R115, R122, R123 and R129, each caveat in its state. 14 move back to planned, each with the clause its test misses: R06, R07, R13, R14, R27, R34, R42, R51, R55, R57, R60, R69, R90 and R126. R10 stays passing under the reading its 2026-10-10 entry records, which the audit missed. Each returns to passing in the pull request that adds a binding test. No requirement changed.
+- 2026-10-21: conformance sweep 7, editorial (mis 8.1), by the Secretary, agreed on #552 with the head maintainer. Every passing decidable row was read against its named test, asking whether the test would fail if the code broke the requirement as written. 75 bound. Of the 28 that didn't, 13 name a second test on main that checks the missing clause, and stay passing: R03, R08, R39, R45, R50, R52, R70, R91, R113, R115, R122, R123 and R129, each caveat in its state. 14 move back to planned, each with the clause its test misses: R06, R07, R13, R14, R27, R34, R42, R51, R55, R57, R60, R69, R90 and R126. R10 stays passing under the reading its 2026-10-10 entry records, which the audit missed. Each returns to passing in the pull request that adds a binding test. No requirement changed. #757 (the head maintainer's binding tests, with a fix for R34's done record) landed first, so R07, R13, R27, R34 and R51 are passing again here on its tests, and R52's test now covers start and restart too.
 
 - 2026-10-20: a revision at the repo owner's request (#552, comment 6271268641), by the Secretary under MIS-0001-R53 (revision_MUST_edit_MIS_in_place). The scheduler served no one: no agent could plan its own wake, and no schedule had ever run on the host whose agent wrote the rows (section 2). Section 6.15 adds an agent's own entries and the event stream (R130 to R136, R143 to R146, R149 to R156). R08, R24, R25, R29, R31, R34 and R41 are revised, each with its note. During the comment window the repo owner ruled that the operator's consent is the ask prompt on `pd entry add`, so R134, R135, R136 and R146 say that; the Conformance rows of R24, R25, R29, R31, R34 and R41 move to planned until the code that meets their new sense lands; R08's test still checks it, and it stays passing. The Summary, Motivation, Terms, rationale, security and landing step 2 change with them, and Q13 is opened, then answered by R149. Later in the window the repo owner ruled that MIS-0002 specifies infrastructure and no separate reminder system for the operator, so the rows of a sender (R137 to R142, R147, R148) were withdrawn before the merge, their IDs not reused, and R150 to R156 specify one event stream instead, its transport left to Q14; R156 and the bounds in R154 and R155 came from the macOS maintainer's comment. R45's subject is named the harness adapter, which R44 and R105 already call the part that wakes by keystrokes. The glossary and persistent_layer's lines citing R29 change in the same pull request (mis 8.1). The design behind it was red-teamed and reviewed by both maintainers on #552, and the code is in the trial build's pull request, #744.
 
