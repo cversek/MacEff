@@ -264,7 +264,8 @@ A compaction ends the agent's working memory. The persistent layer compacts a se
 
 **The harness adapter turns that off unless the declaration keeps it** [MIS-0002-R126 (adapter_MUST_turn_off_harness_idle_compaction)]. From Claude Code 2.1.290 the settings key `idleCompaction: false` stops the idle compaction alone, and leaves compaction at the context limit on. The declaration's `keep_harness_idle_compaction`, false by default, is the one way to keep it.
 
-- `macf_tools claude-config idle-compaction status` reports the state, with the settings file it read. `off` sets the key and leaves every other key alone. `on` removes it, which returns the client to its default.
+- `macf_tools claude-config idle-compaction status` reports the state, with the settings file it read and where that project came from. `off` sets the key and leaves every other key alone. `on` removes it, which returns the client to its default.
+- **All three act on the project the session starts in, wherever they're run:** the session unit's `--project-dir`, then the harness's installed project. Only where neither names one do they fall back to the lookup by `CLAUDE_PROJECT_DIR`, git root and working directory, and they say so. Run from inside another checkout, that lookup would otherwise name the checkout's settings, which the session never reads.
 - On a client older than 2.1.290 the command refuses and names the version. That client ignores the key, so writing it there would claim a protection that does not exist.
 - Each change is an event, `harness_setting_changed`.
 
