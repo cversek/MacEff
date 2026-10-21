@@ -8544,7 +8544,7 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
                        expanded_from=raw_ids[0] if len(raw_ids) == 1 else None)
 
     for _done in result.get("skipped_completed", []):
-        print(f"⚠️  Task #{_done} is completed, so it was not scoped")
+        print(f"⚠️  Task #{_done} is done (completed or archived), so it was not scoped")
     if not result["success"] and not result["tasks_scoped"]:
         print("❌ No open tasks to scope")
         return 1

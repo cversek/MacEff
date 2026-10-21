@@ -33,6 +33,10 @@ from typing import Dict, List, Optional
 from ..agent_events_log import append_event, read_events
 
 
+#: A task in either state has no work left for the scope gate to wait on (#610).
+_DONE = frozenset({"completed", "archived"})
+
+
 def _update_task_scope_status(task_id: str, scope_status: Optional[str]) -> bool:
     """RETIRED — no-op.
 
@@ -80,7 +84,7 @@ def set_scope(task_ids: List[str], parent_expanded: bool = False,
               expanded_from: Optional[str] = None, session_id: str = "") -> dict:
     """Activate scope for a set of task IDs.
 
-    A task that is already completed is not scoped: it has no work left for the gate to
+    A task that is already completed, or archived, is not scoped: it has no work left for the gate to
     wait on, and the replay below can't see a task's status, so listing it again would make
     it read active until something removes it by hand (#610). It's returned, so the caller
     can say so.
@@ -92,7 +96,7 @@ def set_scope(task_ids: List[str], parent_expanded: bool = False,
     from .reader import TaskReader
     reader = TaskReader()
     skipped = [str(t) for t in task_ids
-               if (task := reader.read_task(str(t))) is not None and task.status == "completed"]
+               if (task := reader.read_task(str(t))) is not None and task.status in _DONE]
     task_ids = [t for t in task_ids if str(t) not in skipped]
     result = {
         "tasks_scoped": list(task_ids),
@@ -461,8 +465,8 @@ def add_to_scope(task_ids: List[str], session_id: str = "") -> dict:
             result["skipped_ids"].append({"id": sid, "reason": f"already_in_scope ({scope[sid]})"})
             continue
         task = reader.read_task(sid)
-        if task is not None and task.status == "completed":
-            result["skipped_ids"].append({"id": sid, "reason": "completed"})
+        if task is not None and task.status in _DONE:
+            result["skipped_ids"].append({"id": sid, "reason": task.status})
             continue
         addable.append(sid)
 

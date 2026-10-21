@@ -34,7 +34,7 @@ def test_a_completed_task_is_not_scoped_and_is_named(cli):
     assert cli("complete", "1", "--report", "done")[0] == 0
     code, out = cli("scope", "set", "1", "2")
     assert code == 0
-    assert "#1 is completed, so it was not scoped" in out and "Scoped 1 task(s)" in out
+    assert "#1 is done (completed or archived), so it was not scoped" in out and "Scoped 1 task(s)" in out
     assert get_scope_state() == {"2": "active"}
 
 
@@ -57,3 +57,23 @@ def test_scope_add_skips_a_completed_task_too(cli):
     code, out = cli("scope", "add", "1", "2")
     assert code == 0 and "#1: completed" in out
     assert get_scope_state() == {"2": "active"}
+
+
+def test_an_archived_task_is_not_scoped_either(cli, tmp_path):
+    """A task file with status "archived" (written by the archiver before `task archive` was
+    deprecated) is as finished as a completed one; listing it again must not revive it."""
+    import json
+    from macf.task.reader import TaskReader
+    from macf.task.scope import get_scope_state
+    for title in ("A", "B"):
+        cli("create", "task", title, "--plan", "p", "--parent", "000")
+    path = tmp_path / "tasks" / "1.json"
+    record = json.loads(path.read_text())
+    record["status"] = "archived"
+    path.write_text(json.dumps(record))
+    assert TaskReader().read_task("1").status == "archived"
+    code, out = cli("scope", "set", "1", "2")
+    assert code == 0 and "#1 is done" in out
+    assert get_scope_state() == {"2": "active"}
+    _, out = cli("scope", "add", "1")
+    assert "#1: archived" in out
