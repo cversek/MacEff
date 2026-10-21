@@ -1411,6 +1411,8 @@ macf_tools task blocked-by #68 #67     # #68 is blocked by #67
 macf_tools task unblocked-by #68 #67   # Remove blocked-by
 ```
 
+`task block #67 #68` and `task blocked-by #68 #67` record the same edge, on the blocked task's `blockedBy`: the one `task start` enforces. `task get` shows it from both ends, the blocking side derived. `task create phase --blocked-by` takes one task per flag, repeated or as a comma list (`--blocked-by 67,69`), so a title after it stays the title.
+
 ### 9.8 Tree Display Modes
 
 ```bash
