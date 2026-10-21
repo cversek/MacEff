@@ -77,3 +77,27 @@ def test_an_archived_task_is_not_scoped_either(cli, tmp_path):
     assert get_scope_state() == {"2": "active"}
     _, out = cli("scope", "add", "1")
     assert "#1: archived" in out
+
+
+def test_a_sprint_launch_note_counts_only_what_was_scoped(cli, monkeypatch, tmp_path):
+    """A sprint over an archived task and an open one scopes one task besides itself, and its
+    launch note says one, not two (the count once came from the ids asked for). The creator
+    refuses a completed task up front, but not an archived one, so that is the case that reaches
+    the count."""
+    import json
+    import macf.task.create as create
+    notes = []
+    monkeypatch.setattr(create, "_run_task_start", lambda *a, **k: True)
+    monkeypatch.setattr(create, "_run_mode_set_work", lambda mode: True)
+    monkeypatch.setattr(create, "_verify_tm_running", lambda: True)
+    monkeypatch.setattr(create, "_run_task_note", lambda tid, msg: notes.append(msg) or True)
+    for title in ("A", "B"):
+        assert cli("create", "task", title, "--plan", "p", "--parent", "000")[0] == 0
+    path = tmp_path / "tasks" / "1.json"
+    record = json.loads(path.read_text())
+    record["status"] = "archived"
+    path.write_text(json.dumps(record))
+    code, out = cli("create", "sprint", "a goal", "--scoped", "1", "2")
+    assert code == 0, out
+    launch = [n for n in notes if n.startswith("SPRINT: Launched")]
+    assert launch and "Scope: 1 task(s)." in launch[0], notes
