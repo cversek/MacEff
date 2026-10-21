@@ -203,7 +203,7 @@ stateDiagram-v2
 - **R40** [MUST NOT · judgment: the head maintainer, at review of the notifier] The persistent layer MUST NOT present a notice as a person's instruction. (layer_MUST-NOT_present_notice_as_instruction)
 - **R41** [MUST · decidable: macf/tests/test_pd_notice.py::test_held_while_down] When a notice arrives while its agent's session is down, the primal daemon MUST hold the notice until the session starts, an entry's wake included, whatever its age. (pd_MUST_hold_notices_while_down)
   - *Revised 2026-10-20 at the repo owner's request (#552, comment 6271268641); previous text: MacEff g_551b8506.*
-- **R42** [MUST · decidable: macf/tests/test_pd_notice.py::test_routing_declared] Each notice source MUST be routed to the agent, the operator, both, or held until the operator is present. (notice_source_MUST_be_routed)
+- **R42** [MUST · decidable: macf/tests/test_pd_notice.py::test_routing_declared and macf/tests/test_pd_notice.py::test_a_route_that_reaches_nobody_is_refused_at_load] Each notice source MUST be routed to the agent, the operator, both, or held until the operator is present. (notice_source_MUST_be_routed)
 - **R43** [MUST · decidable: macf/tests/test_pd_wake.py::test_wake_through_notifier] Each wake MUST go through the notifier. (wake_MUST_use_notifier)
 - **R44** [MUST NOT · judgment: the head maintainer, at review of each harness adapter] Where a harness offers a session socket or an API, its harness adapter MUST NOT wake the session by keystrokes. (adapter_MUST-NOT_type_given_api)
 - **R45** [MUST · decidable: macf/tests/test_pd_wake.py::test_a_busy_stretch_is_said_once_and_nothing_is_typed] If a wake uses keystrokes, then the harness adapter MUST type only into an empty input box of an idle session. (keystroke_wake_MUST_need_empty_idle_box)
@@ -213,7 +213,7 @@ stateDiagram-v2
 - **R106** [MUST NOT · decidable: macf/tests/test_mode_activity.py::test_wake_is_not_operator_activity] The presence state and the operational modes MUST NOT count a wake as the operator's activity. (wake_MUST-NOT_count_as_operator_activity)
 - **R107** [MUST · decidable: macf/tests/test_mode_activity.py::test_channels_told_apart_by_name (planned)] Each producer of the operator's activity MUST count a channel event as the operator's only when its exact channel name is one the declaration lists as the operator's. (hooks_MUST_tell_channels_apart_by_name)
 - **R46** [MUST NOT · judgment: the Secretary, at review of each notice source] The persistent layer MUST NOT spend an agent's context to report that nothing changed. (layer_MUST-NOT_report_no_change)
-- **R47** [MUST · decidable: macf/tests/test_pd_notice.py::test_after_restart_notice (planned)] After each restart, recreate or compaction, the primal daemon MUST deliver one notice that states what was carried, what changed and what was lost. (pd_MUST_report_carried_changed_lost)
+- **R47** [MUST · decidable: macf/tests/test_pd_notice.py::test_after_restart_notice and macf/tests/test_pd_notice.py::test_an_unrouted_carried_notice_reaches_the_agent] After each restart, recreate or compaction, the primal daemon MUST deliver one notice that states what was carried, what changed and what was lost. (pd_MUST_report_carried_changed_lost)
 
 ### 6.15 An agent's own entries, and the event stream
 
@@ -488,12 +488,12 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R39 | decidable | macf/tests/test_pd_notice.py::test_three_times | passing |
 | R40 | judgment | the head maintainer, at review of the notifier | standing |
 | R41 | decidable | macf/tests/test_pd_notice.py::test_held_while_down | planned |
-| R42 | decidable | macf/tests/test_pd_notice.py::test_routing_declared | passing |
+| R42 | decidable | macf/tests/test_pd_notice.py::test_routing_declared and macf/tests/test_pd_notice.py::test_a_route_that_reaches_nobody_is_refused_at_load | planned (the agent's route is served for every source and a route that reaches nobody is refused at load, by the repo owner's ruling of 2026-10-21; the operator's route beyond unread mail and held_until_present wait for the event stream) |
 | R43 | decidable | macf/tests/test_pd_wake.py::test_wake_through_notifier | passing |
 | R44 | judgment | the head maintainer, at review of each harness adapter | standing |
 | R45 | decidable | macf/tests/test_pd_wake.py::test_a_busy_stretch_is_said_once_and_nothing_is_typed | passing |
 | R46 | judgment | the Secretary, at review of each notice source | standing |
-| R47 | decidable | macf/tests/test_pd_notice.py::test_after_restart_notice | planned (the notice is delivered where `pd_carried` is routed to the agent; a declaration that doesn't route it is refused at load once the deployed declarations do) |
+| R47 | decidable | macf/tests/test_pd_notice.py::test_after_restart_notice and macf/tests/test_pd_notice.py::test_an_unrouted_carried_notice_reaches_the_agent | passing |
 | R48 | decidable | macf/tests/test_primal_daemon.py::test_outside_stop_beats_gates | passing |
 | R49 | decidable | macf/tests/test_primal_daemon.py::test_work_in_flight_checked | passing |
 | R50 | decidable | macf/tests/test_primal_daemon.py::test_quiet_window | passing |
@@ -744,6 +744,7 @@ Objections recorded:
 
 - 2026-10-20: a revision at the repo owner's request (#552, comment 6271268641), by the Secretary under MIS-0001-R53 (revision_MUST_edit_MIS_in_place). The scheduler served no one: no agent could plan its own wake, and no schedule had ever run on the host whose agent wrote the rows (section 2). Section 6.15 adds an agent's own entries and the event stream (R130 to R136, R143 to R146, R149 to R156). R08, R24, R25, R29, R31, R34 and R41 are revised, each with its note. During the comment window the repo owner ruled that the operator's consent is the ask prompt on `pd entry add`, so R134, R135, R136 and R146 say that; the Conformance rows of R24, R25, R29, R31, R34 and R41 move to planned until the code that meets their new sense lands; R08's test still checks it, and it stays passing. The Summary, Motivation, Terms, rationale, security and landing step 2 change with them, and Q13 is opened, then answered by R149. Later in the window the repo owner ruled that MIS-0002 specifies infrastructure and no separate reminder system for the operator, so the rows of a sender (R137 to R142, R147, R148) were withdrawn before the merge, their IDs not reused, and R150 to R156 specify one event stream instead, its transport left to Q14; R156 and the bounds in R154 and R155 came from the macOS maintainer's comment. R45's subject is named the harness adapter, which R44 and R105 already call the part that wakes by keystrokes. The glossary and persistent_layer's lines citing R29 change in the same pull request (mis 8.1). The design behind it was red-teamed and reviewed by both maintainers on #552, and the code is in the trial build's pull request, #744.
 - 2026-10-21: R60 (pd_MUST_notice_limit_exceeded) names a second test, which drives the core's own memory check from a measured use over the limit to a notice on the channel; the first test, kept, checks routing and holding. It fails when the check skips the notice, and a third test that the daemon wires the core's notices to its notifier fails when that wiring is removed. Conformance, editorial (mis 8.1); no requirement changed.
+- 2026-10-21: notice routes, by the repo owner's ruling on #552 (option A of comment 6321883767), conformance, editorial (mis 8.1). A declaration names only routes something serves: a source routed to held_until_present, or to the operator for anything but pd_unread_mail, is refused at load instead of accepted and dropped; both for another source keeps its agent half, said at start. A notice the daemon raises itself goes to the agent when unrouted, so a declaration rendered without routes, as the containers' are, still delivers pd_carried; R47 moves to passing. R42 stays planned for the operator's route beyond unread mail and for held_until_present, which wait for the event stream. No requirement changed.
 
 ## Wiki-Links
 
