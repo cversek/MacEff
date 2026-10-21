@@ -65,12 +65,17 @@ def test_acts_through_pd():
 
 
 def test_the_layer_does_not_import_the_tray():
-    """MIS-0002-R68: no persistent-layer module names the tray package."""
+    """MIS-0002-R68: no persistent-layer module imports the tray package. Naming it as a program
+    to run is allowed: ``pd tray install`` hands ``-m macf.tray`` to launchd, and checks it in a
+    child interpreter, without importing it here (test_pd_render's runs-without-tray proves that)."""
     import pathlib
+    import re
     import macf
+    imports = re.compile(r"^\s*(import\s+macf\.tray|from\s+(macf\.tray|\.\.?tray)\b)"
+                         r"|import_module\(\s*[\"']macf\.tray", re.M)
     root = pathlib.Path(macf.__file__).parent
     offenders = [str(p.relative_to(root)) for p in root.rglob("*.py")
-                 if "tray" not in p.parts and ("macf.tray" in p.read_text(errors="ignore") or "from ..tray" in p.read_text(errors="ignore"))]
+                 if "tray" not in p.parts and imports.search(p.read_text(errors="ignore"))]
     assert offenders == []
 
 
