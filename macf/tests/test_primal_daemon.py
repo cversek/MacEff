@@ -228,6 +228,34 @@ def test_env_rendered_at_start(make_core, script, tmp_path):
         core.shutdown("next start")
 
 
+def test_env_is_only_what_the_declaration_says(make_core, script, tmp_path, monkeypatch):
+    """R13's other half: the unit's environment is the declared one and the core's own keys,
+    never a file a persistent volume carried forward, and never the daemon's own environment.
+    Stale env files are planted where a home keeps them, and a stray variable in the daemon's
+    environment, and none of them reaches the unit."""
+    from macf.pd.core import ENV_HOME, ENV_INTERVAL, ENV_UNIT
+    home = tmp_path / "home"
+    for stale in (home / ".env", home / ".maceff" / "pd" / "worker.env", home / ".maceff" / "env"):
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_text("SETTING=carried-forward\nSTALE_KEY=1\n")
+    monkeypatch.setenv("STRAY_FROM_DAEMON", "1")
+    dump = tmp_path / "seen.json"
+    unit = make_unit("worker", script, {"dump": str(dump)}, environment={"SETTING": "declared"})
+    core = make_core([unit], placeholders={"agent_home": str(home), "card": CARD, "runtime_dir": str(tmp_path)})
+    core.boot()
+    assert drive(core, lambda: dump.exists())
+    env = json.loads(dump.read_text())["env"]
+    assert env["SETTING"] == "declared"
+    declared = set(unit.environment) | {ENV_UNIT, ENV_INTERVAL, ENV_HOME}
+    assert set(env) - declared <= _INTERPRETER_KEYS, set(env) - declared
+    assert "STALE_KEY" not in env and "STRAY_FROM_DAEMON" not in env
+
+
+#: What the interpreter itself sets in a child's environment on some platforms, which no
+#: declaration or file put there.
+_INTERPRETER_KEYS = {"__CF_USER_TEXT_ENCODING", "LC_CTYPE", "PWD", "SHLVL", "_"}
+
+
 def test_placeholders_filled_at_start(make_core, script, tmp_path):
     """A declared value names the agent home, the card or the runtime directory by
     placeholder, and the core fills each in when it starts the unit (R13). A core given no
