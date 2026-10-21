@@ -71,6 +71,7 @@ def test_the_sessions_project_is_read_wherever_the_command_runs(tmp_path, monkey
     session unit naming one, the lookup by working directory is used, and named as such."""
     from macf.pd.interface import declaration_path
     from macf.utils.claude_settings import session_project_root
+    from macf.utils.paths import find_project_root
     home, work, checkout = tmp_path / "home", tmp_path / "work", tmp_path / "checkout"
     for d in (work / ".claude", checkout / ".claude", checkout / ".git"):
         d.mkdir(parents=True)
@@ -88,6 +89,7 @@ def test_the_sessions_project_is_read_wherever_the_command_runs(tmp_path, monkey
     assert idle_compaction_status(root)["state"] == "off"
     assert idle_compaction_status(checkout)["state"] == "client default"   # the checkout is untouched
     path.unlink()
+    find_project_root.cache_clear()   # cached per process; an earlier test may have filled it
     root, source = session_project_root(home)
     assert root == checkout and "current directory" in source
 
