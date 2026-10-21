@@ -799,7 +799,9 @@ def test_an_isolated_prompt_run_routes_its_failure_notice():
     Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()])
     Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()],
                 notice_routes={"pd_run_failed": "agent"})
-    for nobody in ("operator", "both", "held_until_present"):
+    Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()],
+                notice_routes={"pd_run_failed": "both"})            # half served: the agent hears it
+    for nobody in ("operator", "held_until_present"):
         with pytest.raises(ValidationError, match="route it to 'agent'"):
             Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()],
                         notice_routes={"pd_run_failed": nobody})

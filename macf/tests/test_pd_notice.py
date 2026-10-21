@@ -538,7 +538,7 @@ def test_a_session_restart_is_reported(make_core, script):
     assert owed[0] == "pd_carried"
 
 
-@pytest.mark.parametrize("route", ["operator", "both", "held_until_present"])
+@pytest.mark.parametrize("route", ["operator", "held_until_present"])
 def test_a_route_that_reaches_nobody_is_refused_at_load(route):
     """R42 and R47, the repo owner's ruling of 2026-10-21 (option A): a declaration may name only
     routes something serves. The operator's route serves unread mail alone, by the outside watch;
@@ -551,6 +551,37 @@ def test_a_route_that_reaches_nobody_is_refused_at_load(route):
     interface.Declaration(version=1, agent="Tester@abc123", notice_routes={"pd_carried": "agent"})
     if route != "held_until_present":
         interface.Declaration(version=1, agent="Tester@abc123", notice_routes={"pd_unread_mail": route})
+
+
+def test_both_keeps_its_agent_half_and_the_rest_is_said(tmp_path, isolated_events_log):
+    """CTB on #552: a source routed to `both` is half served, so it loads, its notice reaches the
+    agent, and the daemon names it as reaching the agent only. Unread mail's `both` is whole."""
+    from macf.pd import interface
+    d = interface.Declaration(version=1, agent="Tester@abc123",
+                              notice_routes={"pd_run_failed": "both", "pd_unread_mail": "both"})
+    assert d.half_served_routes() == ["pd_run_failed"]
+    assert nt.Notifier(_home(tmp_path), d.notice_routes).raise_notice("pd_run_failed", "run-1") is True
+
+
+def test_a_half_served_both_is_said_at_start(tmp_path, capsys):
+    """The daemon names a source routed to `both` whose operator half nothing serves, once, at start."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+    from macf.pd import interface
+    from macf.pd.daemon import Daemon
+    home = tmp_path / "home"
+    (home / ".maceff" / "pd").mkdir(parents=True)
+    (home / ".maceff_primary_agent.id").write_text("abc123def4567890\n")
+    (home / ".maceff" / "config.json").write_text('{"agent_identity": {"moniker": "Tester"}}')
+    interface.declaration_path(home).write_text(interface.Declaration(
+        version=1, agent="Tester@abc123", notice_routes={"pd_run_failed": "both"}).model_dump_json())
+    base = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))
+    try:
+        Daemon(home, base=base)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+    assert "routes pd_run_failed to 'both', and only the agent's half is served" in capsys.readouterr().err
 
 
 def test_an_unrouted_carried_notice_reaches_the_agent(tmp_path, isolated_events_log):

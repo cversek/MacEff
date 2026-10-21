@@ -137,6 +137,11 @@ class Daemon:
                                    self.notifier.raise_notice, time.monotonic)
         self.core.on_notice = self.notifier.raise_notice    # the core's own notices (R60)
         self.scheduler.on_notice = self.notifier.raise_notice   # a denied prompt run (R32)
+        half = self.core.declaration.half_served_routes()
+        if half:
+            print(f"⚠️ MACF: pd: notice_routes routes {', '.join(half)} to 'both', and only the agent's half "
+                  f"is served: the operator hears unread mail alone today, so the rest reach the agent only "
+                  f"(MIS-0002-R42)", file=sys.stderr)
         connect_s = self.core.declaration.channel_connect_s
         #: Where a channel is expected, whether it is dark (R115); the outside watch tells the operator.
         self.dark_channel = DarkChannel(self.card, connect_s) if connect_s else None
