@@ -566,6 +566,30 @@ def test_an_unheard_carried_notice_is_warned_at_start(tmp_path, capsys, route, w
     assert ("doesn't route 'pd_carried'" in capsys.readouterr().err) == warned
 
 
+def test_the_daemon_wires_its_core_and_scheduler_notices_to_its_notifier(tmp_path):
+    """R60's subject is the primal daemon: the core's over-limit notice reaches the channel only
+    because the daemon connects the core to its notifier. Review on #770 planted that wiring away
+    and every other test passed, since they wire it by hand."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+    from macf.pd import interface
+    from macf.pd.daemon import Daemon
+    home = tmp_path / "home"
+    (home / ".maceff" / "pd").mkdir(parents=True)
+    (home / ".maceff_primary_agent.id").write_text("abc123def4567890\n")
+    (home / ".maceff" / "config.json").write_text('{"agent_identity": {"moniker": "Tester"}}')
+    interface.declaration_path(home).write_text(
+        interface.Declaration(version=1, agent="Tester@abc123").model_dump_json())
+    base = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))
+    try:
+        daemon = Daemon(home, base=base)
+        assert daemon.core.on_notice == daemon.notifier.raise_notice
+        assert daemon.scheduler.on_notice == daemon.notifier.raise_notice
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
 def test_a_unit_measured_past_its_limit_reaches_the_channel(make_core, script, tmp_path, monkeypatch,
                                                             isolated_events_log):
     """MIS-0002-R60 (pd_MUST_notice_limit_exceeded): the core's own memory reading, not a
