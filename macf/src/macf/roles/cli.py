@@ -74,6 +74,13 @@ def _datetime(text: Optional[str], flag: str) -> Optional[datetime]:
     raise RoleError(f"{flag} needs YYYY-MM-DD or YYYY-MM-DDTHH:MM, not {text!r}")
 
 
+def _links(items: Optional[List[str]]) -> List[str]:
+    """Concepts given on the command line, normalized the one way the knowledge web normalizes,
+    so a link stored on a role or duty is the concept it names, whichever verb stored it."""
+    from macf.concepts import normalize_concepts
+    return normalize_concepts(_csv(items))
+
+
 def _csv(items: Optional[List[str]]) -> List[str]:
     out: List[str] = []
     for chunk in items or []:
@@ -130,7 +137,7 @@ def cmd_role_create(args: argparse.Namespace) -> int:
                       review_by=_date(args.review_by, "--review-by"),
                       review_horizon=args.review_horizon,
                       resources=_csv(args.resource), charter_seed=args.charter or "",
-                      wiki_links=_csv(args.wiki_links), why=args.why or "")
+                      wiki_links=_links(args.wiki_links), why=args.why or "")
         if args.from_task:
             if args.title and not args.title.strip():
                 raise RoleError("--from-task takes the title from the task; pass a title to override it")
@@ -291,7 +298,7 @@ def cmd_duty_add(args: argparse.Namespace) -> int:
         fields = dict(body=args.body or "", importance=args.importance, meta=bool(args.meta),
                       due=_datetime(args.due, "--due"), horizon=args.horizon, why=args.why or "",
                       cadence=args.cadence, depends_on=_csv(args.depends_on), tracks=_csv(args.tracks),
-                      wiki_links=_csv(args.wiki_links))
+                      wiki_links=_links(args.wiki_links))
         if args.from_task:
             duty, path = store.add_duty_from_task(role, folder, args.from_task, title=args.title or None, **fields)
         else:
@@ -335,8 +342,7 @@ def cmd_duty_edit(args: argparse.Namespace) -> int:
             changes["depends_on"] = _csv(args.depends_on)
         if args.wiki_links is not None:
             # Normalized the one way the knowledge web normalizes, so the link is the concept it names.
-            from macf.concepts import normalize_concepts
-            changes["wiki_links"] = normalize_concepts(_csv(args.wiki_links))
+            changes["wiki_links"] = _links(args.wiki_links)
         if not changes:
             raise RoleError("say what to change: --title, --body, --due, --horizon, --cadence, --importance, "
                             "--depends-on or --wiki-links (state changes are engage, done, defer and reactivate)")

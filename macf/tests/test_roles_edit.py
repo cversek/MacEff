@@ -175,3 +175,12 @@ def test_knowledge_link_and_the_doctor_name_the_verb_that_works():
     with pytest.raises(LinkError, match="role duty edit"):
         resolve_target("duties:07b568")
     assert "role duty edit" in _link_remedy("duties")
+
+
+def test_duty_add_normalizes_links_as_edit_does(store, lab):
+    """A duty added with a concept in another spelling stores it normalized, so a later edit to
+    the same concept records nothing spurious."""
+    role, folder = lab
+    assert _run(["role", "duty", "add", role.id, "board plan", "--wiki-links", "Honeypot, container-deployment"]) == 0
+    d = store.find_duty("board plan")[0]
+    assert d.wiki_links == ["honeypot", "container_deployment"]

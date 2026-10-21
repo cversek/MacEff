@@ -8,8 +8,8 @@ forms the graph prints and applies the change in that target's own shape.
 
 Concepts are normalized the one way the web normalizes them, and adding a
 concept that is already there changes nothing. Role duties are records the
-roles subsystem owns and are declared with their links; they are refused here
-with a pointer to that CLI rather than edited behind its back.
+roles subsystem owns; they are refused here with a pointer to `role duty edit
+--wiki-links`, which changes them on the record, rather than edited behind its back.
 """
 
 from __future__ import annotations
