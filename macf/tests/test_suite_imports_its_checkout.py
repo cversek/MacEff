@@ -10,3 +10,13 @@ def test_the_suite_imports_the_source_beside_it():
     assert Path(macf.__file__).resolve().is_relative_to(src), (
         f"macf was imported from {macf.__file__}, not from {src}, "
         "so this run tests another checkout's code")
+
+
+def test_a_child_python_imports_the_source_beside_it_too():
+    """A test that starts Python in a subprocess, or runs macf_tools, gets the same source."""
+    import subprocess
+    import sys
+    src = Path(__file__).resolve().parents[1] / "src"
+    out = subprocess.run([sys.executable, "-c", "import macf; print(macf.__file__)"],
+                         capture_output=True, text=True, check=True).stdout.strip()
+    assert Path(out).resolve().is_relative_to(src), f"a child imported macf from {out}, not {src}"
