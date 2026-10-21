@@ -41,6 +41,9 @@ from .concepts import extract_not_linked, extract_wiki_concepts
 #   roles:       the charter is the node; data.json holds the appointment's
 #                facts and changes without the charter being wrong; each
 #                DUTY_*.json is its own node of type "duties" (roles policy).
+#   amail:       each message and each markdown attachment; HTML is walked
+#                only for messages (is_mail_unit), and a message's links live
+#                in its sidecar, never in it (amail policy).
 _UNIT_OF_NODE: Dict[str, set] = {
     "experiments": {"protocol", "analysis"},
     "roadmaps": {"roadmap"},
@@ -67,6 +70,76 @@ _DEFAULT_CLASS = "conceptual_authority"
 
 # A task record in the home store: N.json, or .N.json when hidden.
 _TASK_FILE = re.compile(r"\.?\d+\.json")
+
+# Mail joins the web through a sidecar beside each message (amail policy:
+# knowledge web participation). A message is a record of what was sent, so its
+# bytes stay as sent; `001_msg.html.wiki-links` holds its concepts instead.
+SIDECAR_SUFFIX = ".wiki-links"
+_MAIL_BOXES = ("inbox", "outbox")
+
+
+def sidecar_path(path: Path) -> Path:
+    """The sidecar that holds a mail message's links: its name plus .wiki-links."""
+    return path.with_name(path.name + SIDECAR_SUFFIX)
+
+
+def read_sidecar(path: Path) -> Tuple[List[str], List[str]]:
+    """(concepts, not_linked) from the sidecar beside ``path``; empty if none.
+
+    One concept per line, bare or as ``[[concept]]``, normalized as every other
+    link is; a ``<!-- not linked: ... -->`` line holds the declined concepts,
+    as it does in a markdown artifact's Wiki-Links section.
+    """
+    side = sidecar_path(path)
+    try:
+        text = side.read_text(errors="replace")
+    except FileNotFoundError:
+        return [], []   # the usual case: a message nobody has linked yet
+    except OSError as e:
+        print(f"⚠️ MACF: mail sidecar {side} unreadable for the web: {e}", file=sys.stderr)
+        return [], []
+    from .concepts import normalize_concepts
+    declined = extract_not_linked(text)
+    raw: List[str] = []
+    for line in re.sub(r"<!--.*?-->", "\n", text, flags=re.DOTALL).splitlines():
+        line = line.strip()
+        if line:
+            raw.extend(re.findall(r"\[\[(.+?)\]\]", line) or [line])
+    return normalize_concepts(raw), declined
+
+
+def is_mail_unit(path: Path) -> bool:
+    """Whether a file under an amail root is a mail node (amail policy).
+
+    Markdown is a node as everywhere else: a markdown message or attachment.
+    HTML is a node only when it is a message, either ``*msg.html`` in a thread
+    folder or a one-file message sitting directly in inbox/ or outbox/; an
+    index.html or an HTML attachment (a tool page sent along) is not. Most
+    early mail is HTML only, which is why HTML messages are walked at all.
+    """
+    if path.name.endswith(SIDECAR_SUFFIX):
+        return False
+    if path.suffix == ".md":
+        return path.name != "INDEX.md"
+    if path.suffix != ".html" or path.name == "index.html":
+        return False
+    return path.stem.endswith("msg") or path.parent.name in _MAIL_BOXES
+
+
+def in_mail_root(path: Path) -> bool:
+    """Whether ``path`` lies under a directory named amail: the web takes a
+    type from its directory's name, so that directory IS the amail root."""
+    return "amail" in path.resolve().parent.parts
+
+
+def node_id_for(ca_type: str, type_root: Path, path: Path) -> str:
+    """The builder's id for a walked file: type, plus the parent folder when
+    nested. A markdown file is named by its stem; any other keeps its suffix,
+    so a thread's 003_msg.md and 003_msg.html are two nodes, not one."""
+    name = path.stem if path.suffix == ".md" else path.name
+    if path.parent != type_root:
+        name = f"{path.parent.name}/{name}"
+    return f"{ca_type}:{name}"
 
 
 def _type_roots(agent_home: Path) -> List[Tuple[str, Path]]:
@@ -165,6 +238,11 @@ def _walk_type(ca_type: str, root: Path) -> Iterator[Tuple[str, Path, Path]]:
         if unit is not None and f.stem not in unit:
             continue
         yield ca_type, root, f
+    if ca_type == "amail":
+        # HTML messages, whose links live only in their sidecars (is_mail_unit).
+        for f in _files_under(root, "*.html"):
+            if is_mail_unit(f):
+                yield ca_type, root, f
     if ca_type == "roles":
         # Duties are JSON records with a wiki_links field, as ideas are; they
         # participate through the same walk so the doctor sees them too.
@@ -217,7 +295,15 @@ def task_record(content: str, path: Optional[Path] = None) -> Optional[TaskRecor
 
 def concepts_of(ca_type: str, path: Path, content: str) -> List[str]:
     """The concepts a walked file carries: [[links]] in markdown, the
-    wiki_links field in a duty record or in a task's metadata."""
+    wiki_links field in a duty record or in a task's metadata, and for mail
+    the message's own [[links]] (markdown this agent sent only) plus its sidecar's.
+    A received message's text was written by its sender, and inbound mail is
+    untrusted input (amail policy), so another agent's words never add
+    concepts to this agent's web: only the sidecar it writes itself does."""
+    if ca_type == "amail":
+        from .concepts import normalize_concepts
+        own = extract_wiki_concepts(content) if path.suffix == ".md" and "inbox" not in path.parts else []
+        return normalize_concepts(own + read_sidecar(path)[0])
     if ca_type == "tasks" and path.suffix == ".json":
         rec = task_record(content, path)
         return rec.concepts if rec else []
@@ -344,23 +430,30 @@ def build_knowledge_web(scan_dirs: Optional[List[Path]] = None) -> Dict[str, Any
             for concept in rec.concepts:
                 wiki_index[concept].add(node_id)
             continue
-        concepts = extract_wiki_concepts(content)
+        concepts = concepts_of(ca_type, md_file, content)
         if not concepts:
             continue
         # Node ID relative to the type root. For nested CAs (experiments),
         # include the immediate parent folder for disambiguation.
-        if md_file.parent != type_root:
-            stem_part = f"{md_file.parent.name}/{md_file.stem}"
+        node_id = node_id_for(ca_type, type_root, md_file)
+        # Extract title from first heading (an HTML message: its <title>)
+        if md_file.suffix == ".html":
+            title_match = re_mod.search(r'<title[^>]*>(.*?)</title>', content, re_mod.IGNORECASE | re_mod.DOTALL)
         else:
-            stem_part = md_file.stem
-        node_id = f"{ca_type}:{stem_part}"
-        # Extract title from first heading
-        title_match = re_mod.search(r'^#\s+(.+)', content, re_mod.MULTILINE)
-        title = title_match.group(1)[:50] if title_match else md_file.stem[:50]
+            title_match = re_mod.search(r'^#\s+(.+)', content, re_mod.MULTILINE)
+        title = title_match.group(1).strip() if title_match else md_file.stem
+        if md_file.suffix == ".html":
+            from html import unescape
+            title = unescape(title)
+        title = title[:50]
+        not_linked = extract_not_linked(content) if md_file.suffix == ".md" else []
+        if ca_type == "amail":
+            from .concepts import normalize_concepts
+            not_linked = normalize_concepts(not_linked + read_sidecar(md_file)[1])
         ca_nodes[node_id] = {"type": ca_type, "title": title,
                              "path": str(md_file),
                              "node_class": node_class_for(ca_type),
-                             "not_linked": extract_not_linked(content)}
+                             "not_linked": not_linked}
         path_to_node[str(md_file.resolve())] = node_id
         for concept in concepts:
             wiki_index[concept].add(node_id)

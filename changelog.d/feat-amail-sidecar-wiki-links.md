@@ -1,0 +1,3 @@
+### Added
+
+- **Mail joins the knowledge web through sidecar files, and a message is never edited** (`knowledge_web.py`, `knowledge_link.py`, policy `amail` §9, 1.5.0): each mail message and markdown attachment under the agent's `amail` folder is a temporal-record node, and its concepts live in `<message file>.wiki-links` beside it, one per line. HTML messages are now walked too, since most early mail is HTML only; `index.html` and HTML attachments are not. `knowledge link` and `unlink` on a message path or `amail:` node id write that sidecar, and `knowledge gaps --reject` records a declined concept there, so a message and its manifest keep the bytes they were sent with. The doctor's orphan remedy for mail names the sidecar.

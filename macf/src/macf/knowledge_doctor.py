@@ -39,6 +39,10 @@ def _link_remedy(ca_type: str) -> str:
     if ca_type == "tasks":
         return ("macf_tools knowledge link task:<id> <concept>; see the task_management policy on "
                 "knowledge web participation for what a task links")
+    if ca_type == "amail":
+        return ("macf_tools knowledge link <message path> <concept>, which writes a .wiki-links sidecar "
+                "beside the message and never edits it; see the amail policy on knowledge web "
+                "participation for what mail links")
     return (f"add a ## Wiki-Links section (or macf_tools knowledge link <path> <concept>); see the "
             f"{ca_type} policy on knowledge web participation "
             f"for what this type should link")
@@ -109,7 +113,9 @@ def examine(agent_home: Optional[Path] = None,
         orphans_by_type.setdefault(ca_type, []).append(path)
         # Distinguish "never linked" from "wrote links that do not count".
         # The second is a different mistake and deserves a different remedy.
-        if _RAW_LINK.search(content):
+        # An HTML message's links are only ever in its sidecar, so any [[..]]
+        # in its bytes is text, not a link written wrongly.
+        if path.suffix != ".html" and _RAW_LINK.search(content):
             mention_only.append(path)
 
     for ca_type, paths in sorted(orphans_by_type.items()):
@@ -156,6 +162,8 @@ def examine(agent_home: Optional[Path] = None,
     # ---- normalization drift in source text --------------------------------
     drift: Dict[str, set] = {}
     for _ca_type, _root, path in iter_web_files(agent_home):
+        if path.suffix == ".html":
+            continue    # an HTML message is never read for links (amail policy)
         try:
             content = path.read_text(errors="replace")
         except OSError:
