@@ -103,7 +103,8 @@ def test_the_launch_agent_runs_exactly_the_daemon_on_the_home(tmp_path):
     only argument."""
     home = tmp_path / "home"
     plist = plistlib.loads(adapters.LaunchdAdapter(user_home=tmp_path).render(CARD, home).encode())
-    assert plist["ProgramArguments"] == [sys.executable, "-m", "macf.pd", str(home)]
+    assert plist["Program"] == sys.executable
+    assert plist["ProgramArguments"] == ["maceff_pd", "-m", "macf.pd", str(home)]
 
 
 def test_a_socket_path_too_long_stops_the_launchd_install_before_anything_is_written(tmp_path, monkeypatch):

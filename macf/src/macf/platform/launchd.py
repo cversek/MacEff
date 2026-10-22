@@ -10,11 +10,13 @@ Rendering, then install and removal as plans: ``install_plan`` and ``uninstall_p
 what would be written and run, and only ``apply_plan`` does it. A LaunchAgent persists on
 the host, so a plan is shown before it is applied.
 """
+import os
 import plistlib
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from macf.pd.interface import launchd_label
+from macf.pd.names import PD_IDENTIFIER
 from macf.utils.atomic import write_text_atomic
 
 _VERBS = ("bootstrap", "bootout", "kickstart", "print")
@@ -43,13 +45,23 @@ def render_pd_launch_agent(card: str, program_argv: List[str], home: str,
     *program_argv* starts the daemon; the plist carries no declaration and no agent
     configuration (MIS-0002-R04 (outer_tier_MUST-NOT_hold_agent_config)), and no
     identity in its environment.
+
+    launchd runs its first element, the interpreter, as ``Program``, with ``maceff_pd`` in
+    its place as ``argv[0]``. macOS has no call that renames a running process, so this is
+    where the daemon gets the name ``ps`` and ``pgrep`` show
+    (MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd)). The kernel's own name, which ``top``
+    shows, stays the interpreter's, and a framework-build interpreter re-execs through its
+    Python.app, which then names the process.
     """
     if not program_argv:
         raise ValueError("program_argv is empty")
+    if not os.path.isabs(program_argv[0]):
+        raise ValueError(f"launchd runs a program by its absolute path, not {program_argv[0]!r}")
     label = pd_label(card)
     plist = {
         "Label": label,
-        "ProgramArguments": list(program_argv),
+        "Program": program_argv[0],
+        "ProgramArguments": [PD_IDENTIFIER, *program_argv[1:]],
         "RunAtLoad": True,
         "KeepAlive": True,
         "ThrottleInterval": 10,

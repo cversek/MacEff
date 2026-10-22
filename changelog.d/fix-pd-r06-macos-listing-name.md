@@ -1,0 +1,3 @@
+### Fixed
+
+- **On macOS the primal daemon is listed as `maceff_pd`** (`platform/launchd.py`, policy `persistent_layer`, MIS-0002-R06): the LaunchAgent gives launchd the interpreter as `Program` and `maceff_pd` as `argv[0]`, so `ps` and `pgrep maceff_pd` find the daemon by its identifier rather than as the interpreter. macOS can't rename a running process, so the name is given at exec. Two limits remain. The kernel's own name, which `top` shows, stays the interpreter's. A framework-build interpreter (Homebrew's, python.org's) re-execs through its Python.app, which then names the process. An installed agent gets the new plist when it is installed again.
