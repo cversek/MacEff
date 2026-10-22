@@ -368,6 +368,31 @@ def test_each_record_names_its_source_agent_and_time(tmp_path, base, daemons):
     assert copy["origin"] == "log"
 
 
+def test_a_foreign_line_at_the_daemons_offset_is_origin_log(tmp_path):
+    """R155: origin daemon needs the log to hold the daemon's very bytes at the offset it wrote.
+    A racing writer whose line lands where the daemon noted its own is origin log; the offset
+    alone vouches for nothing."""
+    import macf.pd.stream as stream
+    log = tmp_path / "events.jsonl"
+    log.write_bytes(b"")
+    s = stream.EventStream(CARD, log)
+    ours = json.dumps({"timestamp": 1.0, "event": "pd_stream_rule", "data": {"by": "daemon"}}).encode() + b"\n"
+    theirs = json.dumps({"timestamp": 1.0, "event": "pd_stream_rule", "data": {"by": "racer"}}).encode() + b"\n"
+    with open(log, "ab") as f:
+        f.write(theirs)                                  # the racer's line took offset 0
+    s.note_own_append(log, 0, ours)                      # where the daemon believes its line is
+    with open(log, "ab") as f:
+        f.write(ours)                                    # the daemon's line, shifted after it
+    s._settle_own()
+    lines, gap = s._follow()
+    assert gap is None and len(lines) == 2
+    origins = [json.loads(s._render(*line)[1])["origin"] for line in lines]
+    assert origins == ["log", "log"], origins
+    s.note_own_append(log, len(theirs), ours)            # and where it really is: only that is daemon
+    s._settle_own()
+    assert json.loads(s._render(*lines[1])[1])["origin"] == "daemon"
+
+
 # ---------------------------------------------------------------------------- R156
 
 def test_a_subscriber_cannot_read_an_agent_it_was_not_granted(tmp_path, base, daemons, monkeypatch):
