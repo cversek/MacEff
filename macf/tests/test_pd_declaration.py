@@ -207,7 +207,12 @@ def test_renderings_hold_only_the_agent_home(tmp_path):
     unit = adapters.SystemdAdapter(user_home=tmp_path).render(CARD_T, home)
     for text in (launch, unit):
         assert "macf.pd" in text and str(home) in text
-    assert "EnvironmentVariables" not in launch
+    # The one variable a LaunchAgent may carry is interpreter plumbing, never agent
+    # configuration: a framework-build Python's venv path, as its own launcher passes it.
+    import plistlib
+    import sys
+    env = plistlib.loads(launch.encode()).get("EnvironmentVariables", {})
+    assert env in ({}, {"__PYVENV_LAUNCHER__": sys.executable}), env
     assert not any(line.startswith("Environment=") for line in unit.splitlines())
 
 
