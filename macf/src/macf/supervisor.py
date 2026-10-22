@@ -715,6 +715,9 @@ def _pane_of(data: dict) -> Optional[str]:
             fields = line.split()
             if len(fields) == 2 and fields[1] == str(pid):
                 return fields[0]
+    # The old behaviour, and exactly the case that types into the wrong pane (#777): say so.
+    print(f"⚠️ MACF: no pane of session {session} runs supervisor {pid}; keys go to the "
+          f"session's active pane", file=sys.stderr)
     return session
 
 

@@ -165,12 +165,18 @@ def test_send_keys_no_enter(monkeypatch):
 
 
 def _tmux_server(tmp_path, monkeypatch):
-    """A private tmux server for one test: its own TMUX_TMPDIR, killed afterwards."""
+    """A private tmux server for one test: its own TMUX_TMPDIR, killed afterwards. The
+    socket directory is a short one under /tmp, since pytest's tmp_path makes a socket path
+    longer than macOS allows (104 characters), and tmux would not start there."""
     import shutil
     import subprocess
+    import tempfile
     if not shutil.which("tmux"):
         pytest.skip("tmux not installed")
-    monkeypatch.setenv("TMUX_TMPDIR", str(tmp_path))
+    sock = tempfile.mkdtemp(prefix="tmux-", dir="/tmp")
+    monkeypatch.setenv("TMUX_TMPDIR", sock)
+    import atexit
+    atexit.register(shutil.rmtree, sock, True)
     monkeypatch.delenv("TMUX", raising=False)
     return subprocess
 
@@ -197,6 +203,13 @@ def test_send_keys_reaches_the_supervisor_pane_after_a_split(tmp_path, monkeypat
         assert out0.read_text().strip() == "/compact"
         assert (out1.read_text() if out1.exists() else "") == ""
         assert "/compact" in sup.capture_pane("agent")
+        # press_enter is what the compaction follow-up uses after typing its prompt.
+        assert sup.press_enter("agent") == 0
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and out0.read_text().count("\n") < 2:
+            time.sleep(0.05)
+        assert out0.read_text() == "/compact\n\n", "the Enter lands in the supervisor's pane"
+        assert (out1.read_text() if out1.exists() else "") == ""
     finally:
         sp.run(["tmux", "kill-server"], capture_output=True)
 

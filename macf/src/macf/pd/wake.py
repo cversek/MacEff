@@ -415,6 +415,9 @@ class TmuxPane:
             fields = line.split()
             if len(fields) == 2 and fields[1].isdigit() and int(fields[1]) in groups:
                 return fields[0]
+        # A record that names no live pane is the case that types into the wrong one (#777).
+        print(f"⚠️ MACF: pd: no pane of {self.agent} is the unit's own; the wake goes to the "
+              f"session's active pane", file=sys.stderr)
         return fallback
 
     def capture(self) -> Optional[str]:
