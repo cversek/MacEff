@@ -35,7 +35,7 @@ from that, so nothing a run grants itself outlives it
 file: no user, project or local settings, no MCP server. Anything else that would prompt is
 denied at once instead (``dontAsk``, no prompt answerer), so a run never waits on a person. A
 run that was denied fails, and raises the ``pd_run_failed`` notice
-[MIS-0002-R32 (run_MUST_fail_on_prompt)]. A prompt run into a named live session isn't run yet,
+[MIS-0002-R32 (run_MUST_fail_on_prompt)]. A prompt run into the agent's own live session isn't run yet,
 and that is said once.
 The schedules are read when the daemon starts and never from a run, so a run cannot change
 them [MIS-0002-R33 (run_MUST-NOT_change_schedules)]. Across a restart, a container's
@@ -340,7 +340,7 @@ class Scheduler:
         if isinstance(s.run, CommandRun):
             return ""
         if s.target != "isolated":
-            return "a prompt run into a named live session is not run yet"
+            return "a prompt run into the agent's own live session is not run yet"
         path, where = self._client_path()
         if self.client is None:
             self.client = shutil.which("claude", path=path)
@@ -412,9 +412,10 @@ class Scheduler:
                 newest.setdefault(data.get("id"), "fired" if data.get("notified", True) else "quiet")
             elif kind == EVENT_DELIVERED and data.get("source") == NOTICE_ENTRY_DUE:
                 newest.setdefault(data.get("arrival_id"), "delivered")
-        # A notice still owed is held by the notifier for a day (its own read-back); one owed
-        # longer would be dropped there, so it is owed again here: a wake owed over a weekend
-        # must not vanish at a Monday restart (the scheduler design, 4.1).
+        # A notice still owed is held by the notifier through its pd_notices_owed checkpoint,
+        # whatever its age. The first start after checkpoints came in reads back only a day, so a
+        # wake owed longer is owed again here, under its own id, which the notifier owes once: a
+        # wake owed over a weekend must not vanish at a Monday restart (the scheduler design, 4.1).
         for entry_id, last in sorted(newest.items()):
             fired = self.entry_fired.get(entry_id)
             if (last == "fired" and entry_id in self.entries and fired is not None
@@ -482,8 +483,10 @@ class Scheduler:
         # hears of it: "skip" records it and says nothing (the scheduler design, 3.5).
         late = (now - due).total_seconds() > ENTRY_GRACE_S
         quiet = late and entry.get("missed") == "skip"
+        # "report" says it was missed and does nothing else (R25): a late check is reported, not run.
+        report_only = late and entry.get("missed") == "report"
         self.entry_fired[entry_id] = due
-        if entry.get("action") == "check":
+        if entry.get("action") == "check" and not report_only:
             # A check wakes nobody by firing: its run does, when its condition holds (4.2).
             self._say(EVENT_ENTRY_FIRED, {"id": entry_id, "for": _iso(due), "missed": missed, "notified": False,
                                           "late_s": round((now - due).total_seconds(), 1)})
