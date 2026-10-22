@@ -19,7 +19,12 @@ has nothing to write even if it tried, and no declaration carries a field that n
 container's budget (R103). The operator changes it in the compose files and recreates.
 
 Unknown is never "fine": a home whose summary cannot be read is listed as UNREADABLE, and a
-budget file that cannot be read is shown as unknown.
+budget file that cannot be read is shown as unknown. A summary outlives the daemon that wrote
+it, so the view prints each one's age, and one left by a stopped daemon doesn't read as current.
+
+**Who publishes.** The agent's primal daemon, at each start (``Daemon.start``). Its
+declaration is read only when it starts, so a changed declaration takes effect, and is
+published again, through a restart of the daemon.
 """
 import argparse
 import json
@@ -169,7 +174,30 @@ def _gib(n: Optional[int]) -> str:
     return "no limit" if n == 0 else f"{n / 2**30:.1f} GiB"
 
 
-def render(agents: List[AgentView], budget: Budget) -> str:
+def _age(seconds: float) -> str:
+    """How long ago, coarsely: a summary is declaration facts, so minutes are precision enough."""
+    s = int(seconds)
+    if s < 120:
+        return f"{s}s"
+    if s < 2 * 3600:
+        return f"{s // 60}m"
+    if s < 48 * 3600:
+        return f"{s // 3600}h"
+    return f"{s // 86400}d"
+
+
+def published_age(units: PublishedUnits, now: float) -> str:
+    """When a summary was published, as an age. The file outlives the daemon that wrote it, so
+    the age is what tells a reader whether its writer still runs: a running daemon publishes at
+    each start, and a summary days old was left by one that stopped."""
+    ahead = units.published_at - now
+    if ahead > 0:
+        return f"stamped {_age(ahead)} ahead of this clock"
+    return f"published {_age(-ahead)} ago"
+
+
+def render(agents: List[AgentView], budget: Budget, now: Optional[float] = None) -> str:
+    now = time.time() if now is None else now
     lines = ["Shared budget (the operator's; read-only here):",
              f"  memory limit {_gib(budget.memory_max_bytes)}, held {_gib(budget.memory_held_bytes)}"
              + (f" ({100 * budget.memory_held_bytes / budget.memory_max_bytes:.0f}%)"
@@ -183,12 +211,12 @@ def render(agents: List[AgentView], budget: Budget) -> str:
         if a.status != "PUBLISHED":
             lines.append(f"  {a.home}: {a.status}, {a.detail}")
             continue
+        lines.append(f"  {a.units.agent}: summary {published_age(a.units, now)}"
+                     + ("" if a.units.units else ", no units"))
         for u in a.units.units:
             declared += u.memory_limit_mb
             lines.append(f"  {a.units.agent} {u.name} ({u.kind}, {u.memory_limit_mb} MB, restart {u.restart}"
                          + (", optional" if u.optional else "") + ")")
-        if not a.units.units:
-            lines.append(f"  {a.units.agent}: no units")
     if budget.memory_max_bytes:
         lines.append(f"Declared unit limits sum to {declared} MB of the container's "
                      f"{budget.memory_max_bytes // 2**20} MB.")

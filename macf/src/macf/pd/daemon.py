@@ -35,11 +35,14 @@ from macf.pd.interface import (
     EntryAddRequest,
     EntryListRequest,
     EntryRemoveRequest,
+    EVENT_STREAM_RULE,
     IdentityError,
     PaceRequest,
     Peer,
     Response,
     StatusRequest,
+    StreamRule,
+    StreamRuleRequest,
     WakePaced,
     agent_card,
     channel_socket,
@@ -47,6 +50,7 @@ from macf.pd.interface import (
     control_socket,
     parse_request,
     ensure_runtime_dir,
+    events_socket,
     record_path,
     runtime_dir,
 )
@@ -123,8 +127,10 @@ class Daemon:
         self.control_path = control_socket(self.card, self.base)
         self.record_path = record_path(self.card, self.base)
         self.channel_path = channel_socket(self.card, self.base)
+        self.events_path = events_socket(self.card, self.base)
         check_socket_path(self.control_path)
         check_socket_path(self.channel_path)
+        check_socket_path(self.events_path)
         placeholders = {"agent_home": str(self.home), "card": self.card, "runtime_dir": str(self.base)}
         self.core = Core(load_declaration(self.home, self.card), self.card,
                          placeholders=placeholders, **core_options)
@@ -137,6 +143,11 @@ class Daemon:
         self.scheduler = Scheduler(self.core.declaration, self.card, placeholders,
                                    work_dir=self.base / f"{self.record_path.stem}.runs",
                                    check_installed=not rendered_declaration_path(self.home).exists())
+        #: The event stream (persistent_layer 11.4): the log, followed and fanned out.
+        from macf.agent_events_log import get_log_path
+        from macf.pd.stream import EventStream
+        self.stream = EventStream(self.card, get_log_path(), self.core.declaration.stream_grants)
+        self._events_bound: Optional[tuple] = None
         self._listener: Optional[socket.socket] = None
         self._channel_listener: Optional[socket.socket] = None
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound
@@ -211,10 +222,12 @@ class Daemon:
         channel.listen(4)
         channel.setblocking(False)
         self._channel_listener = channel
+        self._bind_stream()
         record = self._record = self._write_record()
         self.core.record_start(record.pid, record.proc_start)
         self._compare_allowlist()
         self.core.boot()
+        self._publish_units()
         self.notifier.boot()
         self._notice_denied_grants()
         self._reassert_pace()
@@ -222,6 +235,36 @@ class Daemon:
             self.unread_mail.boot()
         self.scheduler.boot()
         self.duties.boot()
+
+    def _bind_stream(self) -> None:
+        """Bind the event stream's socket, fold the operator's rules from the log, and learn this
+        process's own appends as it makes them, so they carry ``origin: daemon``."""
+        from macf.agent_events_log import add_append_listener
+        from macf.pd.stream import fold_rules
+        self.stream.rules = fold_rules(read_events(reverse=False, scope="all", only=(EVENT_STREAM_RULE,)),
+                                       self.card)
+        self.stream.bind(self.events_path)
+        st = os.stat(self.events_path)
+        self._events_bound = (st.st_dev, st.st_ino)
+        add_append_listener(self.stream.note_own_append)
+
+    def _publish_units(self) -> None:
+        """Publish a summary of this agent's units into its own public tree, for its peers in a
+        shared container (MIS-0002-R62 (agent_MUST_see_shared_container)): names, kinds, limits,
+        restart rules, never a command or environment (``shared_view.summarize``). The
+        declaration is read only at start, so a changed declaration is published by the restart
+        that loads it. A home with no public tree has no peers reading it, and gets none made.
+        Publishing never stops the daemon: a failure is said, and peers read the home as
+        UNPUBLISHED, or see the old summary's age."""
+        from macf.pd import shared_view
+        if not (self.home / "agent" / "public").is_dir():
+            return
+        try:
+            shared_view.publish(self.home, self.core.declaration)
+        except Exception as e:  # noqa: BLE001 - GUARD, not handler: a peer's view must not end the daemon
+            print(f"⚠️ MACF: pd: could not publish this agent's units at "
+                  f"{shared_view.published_path(self.home)} (the daemon goes on; peers see "
+                  f"no summary or an old one, with its age): {e!r}", file=sys.stderr)
 
     def _notice_denied_grants(self) -> None:
         """Owe the agent a notice for each declared grant the last install found denied
@@ -278,6 +321,9 @@ class Daemon:
         the outer tier restarts the daemon alone."""
         sel = self._sel = selectors.DefaultSelector()
         self.notifier.on_detach = self._channel_gone
+        self.stream.on_register = lambda conn: sel.register(conn, selectors.EVENT_READ, "subscriber")
+        self.stream.on_unregister = sel.unregister
+        sel.register(self.stream.listener, selectors.EVENT_READ, "events")
         sel.register(self._listener, selectors.EVENT_READ, "control")
         sel.register(self._channel_listener, selectors.EVENT_READ, "channel")
         sel.register(self._wake_r, selectors.EVENT_READ, "wake")
@@ -290,6 +336,10 @@ class Daemon:
                         self._accept_channel()
                     elif key.data == "attached":
                         self._channel_readable(key.fileobj)
+                    elif key.data == "events":
+                        self.stream.accept()
+                    elif key.data == "subscriber":
+                        self.stream.readable(key.fileobj)
                     else:
                         os.read(self._wake_r, 512)
                 self.core.tick()
@@ -303,17 +353,28 @@ class Daemon:
                 if self.unread_mail is not None:
                     self.unread_mail.tick(self.core.session_active_since())
                 self.duties.tick()
+                self._pump_stream()
                 self._keep_record()
         finally:
             for conn in self.notifier.channels:
                 self.notifier.detach(conn)
             self.notifier.on_detach = None
+            self.stream.on_unregister = None
+            self.stream.close()
             self.scheduler.shutdown()
             sel.close()
             self._sel = None
             if self._stop_units:
                 self.core.shutdown("every unit stopped as asked, with the daemon")
             self._release()
+
+    def _pump_stream(self) -> None:
+        """One pass of the event stream. A failure inside it costs the stream's pass, never the
+        loop that supervises the units (MIS-0002-R153 (subscriber_MUST-NOT_block_layer))."""
+        try:
+            self.stream.pump()
+        except Exception as e:  # noqa: BLE001 - GUARD, not handler: the stream must not end the daemon
+            print(f"⚠️ MACF: pd: the event stream's pass failed (the daemon goes on): {e!r}", file=sys.stderr)
 
     def stop(self, units: bool = False) -> None:
         """Ask ``serve`` to finish, and with ``units`` to stop every unit first; a plain stop,
@@ -389,8 +450,12 @@ class Daemon:
             self._listener.close()
         if self._channel_listener is not None:
             self._channel_listener.close()
+        from macf.agent_events_log import remove_append_listener
+        remove_append_listener(self.stream.note_own_append)
+        self.stream.close()
         for path, still_mine in ((self.control_path, self._socket_is_mine),
                                  (self.channel_path, self._channel_is_mine),
+                                 (self.events_path, self._events_is_mine),
                                  (self.record_path, self._record_is_mine)):
             try:
                 if still_mine():
@@ -403,6 +468,10 @@ class Daemon:
     def _channel_is_mine(self) -> bool:
         st = os.stat(self.channel_path)
         return (st.st_dev, st.st_ino) == self._channel_bound
+
+    def _events_is_mine(self) -> bool:
+        st = os.stat(self.events_path)
+        return (st.st_dev, st.st_ino) == self._events_bound
 
     def _socket_is_mine(self) -> bool:
         st = os.stat(self.control_path)
@@ -560,7 +629,8 @@ class Daemon:
             creds = peer_credentials(conn)
         except OSError as e:
             return Response(ok=False, error=f"the peer cannot be identified: {e}")
-        if creds.uid != os.getuid():
+        operator_uid = self.core.declaration.operator_uid
+        if creds.uid != os.getuid() and creds.uid != operator_uid:
             return Response(ok=False, error="this socket serves only the daemon's own user")
         try:
             line = self._read_line(conn)
@@ -572,6 +642,11 @@ class Daemon:
             request = parse_request(line)
         except ValidationError as e:
             return Response(ok=False, error=f"request refused: {e.errors()[0]['msg']}")
+        if isinstance(request, StreamRuleRequest):
+            return self._stream_rule(request, creds)
+        if creds.uid != os.getuid():
+            return Response(ok=False, error="this socket serves only the daemon's own user, but for the "
+                                            "operator's rules for the event stream")
         if isinstance(request, (EntryAddRequest, EntryListRequest, EntryRemoveRequest)):
             return self._entry_request(request, creds)
         if isinstance(request, StatusRequest):
@@ -651,6 +726,33 @@ class Daemon:
             self.scheduler.add_entry(entry)
         held = fold(read_events(reverse=False, scope="all", only=ENTRY_EVENTS), self.card)
         return Response(ok=True, entries=list(held.values()))
+
+    # ------------------------------------------------------------------ the event stream's rules
+
+    def _stream_rule(self, request: StreamRuleRequest, creds) -> Response:
+        """The operator silences, unsilences or reroutes a source or a subscriber of the event
+        stream (MIS-0002-R152 (operator_MUST_silence_and_reroute)). The rule is recorded as a
+        ``pd_stream_rule`` event before it takes effect, so the next daemon folds it back, and
+        takes effect at once. Where the declaration names the operator's own uid, as in a
+        container, only that uid may set one; elsewhere the client's ask prompt on the command is
+        the operator's act (persistent_layer 11.4)."""
+        operator_uid = self.core.declaration.operator_uid
+        if operator_uid is not None and creds.uid != operator_uid:
+            return Response(ok=False, error=(f"the event stream's rules are taken only from the operator's "
+                                             f"uid {operator_uid}, not uid {creds.uid}"))
+        started = proc_start(creds.pid)
+        if not started:
+            return Response(ok=False, error=(
+                f"the asking process (pid {creds.pid}) has no start time to record, "
+                f"so who asked cannot be named (MIS-0002-R52 (control_act_MUST_name_who_asked))"))
+        rule = StreamRule(agent=self.card, act=request.act, target=request.target,
+                          subscriber=request.subscriber, asked_by=request.asked_by,
+                          peer=Peer(uid=creds.uid, pid=creds.pid, proc_start=started), reason=request.reason)
+        if not append_event(EVENT_STREAM_RULE, rule.model_dump()):
+            return Response(ok=False, error=("the rule could not be recorded, so it is not set: a rule the "
+                                             "next daemon cannot read back would be lost at its restart"))
+        self.stream.rules.apply(rule.act, rule.target, rule.subscriber)
+        return Response(ok=True, stream_rules=self.stream.rules.as_dict())
 
     # ------------------------------------------------------------------ the wake's pace
 
