@@ -434,3 +434,129 @@ def test_r49_a_citation_by_a_previous_slug_still_resolves(plant):
     assert "R49" not in plant(extra=cite("substantive_change_MUST_be_made_in_place"))
     assert "R49" in plant(extra=cite("substantive_change_MUST_be_imagined"))
     assert "R49" in plant(extra=cite("substantive_change_MUST_be_new_MIS", rid="R34"))
+
+
+# ---- the tests that decidable requirements name (R18) -----------------------------------------
+# The real template names macf/tests/test_mis_check.py::test_repo_mis_files_pass in R01's bracket
+# and in its Conformance row, state passing. Each check below runs on the template alone, in a
+# fresh copy of the framework with a fake tests tree beside it standing for the checkout.
+
+NAMED = "macf/tests/test_mis_check.py::test_repo_mis_files_pass"
+ROW = f"| R01 | decidable | {NAMED} | passing |"
+R01_LINE = next(n for n, line in enumerate(TEMPLATE.splitlines(), start=1) if line.startswith("- **R01**"))
+ROW_LINE = TEMPLATE.splitlines().index(ROW) + 1
+
+
+def _named_tests(tmp_path, *edits, tests=None):
+    """The R18 findings for the template with `edits` applied, in a checkout whose
+    macf/tests/test_mis_check.py holds `tests`; with tests None the copy is not a checkout."""
+    import tempfile
+    root = Path(tempfile.mkdtemp(dir=tmp_path))
+    d = _framework(root)
+    text = TEMPLATE
+    for edit in edits:
+        text = edit(text)
+    template = d / "MIS-0000-template.md"
+    template.write_text(text, encoding="utf-8")
+    if tests is not None:
+        t = root / "macf" / "tests"
+        t.mkdir(parents=True)
+        (t / "test_mis_check.py").write_text(tests, encoding="utf-8")
+    return [f for f in mis.check([template], GLOSSARY) if f.rule == "R18"]
+
+
+def _row(how, state="passing"):
+    return sub(ROW, f"| R01 | decidable | {how} | {state} |")
+
+
+def _rename(new):
+    """Name `new` in place of the template's test, in the bracket and the row alike."""
+    return lambda text: text.replace(NAMED, new)
+
+
+def test_r18_a_named_test_that_exists_passes(tmp_path):
+    assert _named_tests(tmp_path, tests="def test_repo_mis_files_pass():\n    pass\n") == []
+
+
+def test_r18_a_passing_row_whose_test_does_not_exist(tmp_path):
+    """A row that reads passing while its test is not there claims a check nobody can run."""
+    found = _named_tests(tmp_path, tests="def test_something_else():\n    pass\n")
+    assert [(f.line, f.message) for f in found] == [
+        (ROW_LINE, f"R01 (MIS_MUST_pass_check): the Conformance state is 'passing', but {NAMED} does not exist")]
+    assert "MIS-0001-R18 (conformance_MUST_list_every_req)" in str(found[0])
+
+
+def test_r18_a_named_test_file_that_does_not_exist(tmp_path):
+    found = _named_tests(tmp_path, _rename(NAMED.replace("test_mis_check.py", "test_gone.py")), tests="")
+    assert len(found) == 1 and "names a file that does not exist (macf/tests/test_gone.py)" in found[0].message
+
+
+def test_r18_a_named_test_file_that_cannot_be_parsed(tmp_path):
+    found = _named_tests(tmp_path, tests="def test_repo_mis_files_pass(:\n")
+    assert len(found) == 1 and "names a file that cannot be parsed (line 1" in found[0].message
+
+
+def test_r18_planned_and_na_rows_need_no_test_yet(tmp_path):
+    """Policy mis §3.1: a decidable requirement may name a planned test before Final."""
+    assert _named_tests(tmp_path, _row(NAMED, "planned"), tests="") == []
+    assert _named_tests(tmp_path, _row(NAMED, "n/a: the condition never arose"), tests="") == []
+    assert _named_tests(tmp_path, sub(f"decidable: {NAMED}]", f"decidable: {NAMED} (planned)]"), tests="") == []
+
+
+def test_r18_a_method_named_without_its_class(tmp_path):
+    """pytest names a method file::Class::test; file::test names nothing it collects."""
+    tests = "class TestChecks:\n    def test_repo_mis_files_pass(self):\n        pass\n"
+    found = _named_tests(tmp_path, tests=tests)
+    assert len(found) == 1
+    assert (f"is a method of TestChecks; name it {NAMED.replace('::', '::TestChecks::')}"
+            in found[0].message)
+
+
+def test_r18_a_method_named_with_its_class_passes(tmp_path):
+    tests = ("class TestChecks:\n    class TestInner:\n        async def test_repo_mis_files_pass(self):\n"
+             "            pass\n")
+    assert _named_tests(tmp_path, _rename(NAMED.replace("::", "::TestChecks::TestInner::")), tests=tests) == []
+
+
+def test_r18_a_class_or_method_that_does_not_exist(tmp_path):
+    tests = "class TestChecks:\n    def test_other(self):\n        pass\n"
+    for cls, says in (("TestNope", "has no test class TestNope"),
+                      ("TestChecks", "class TestChecks has no test test_repo_mis_files_pass")):
+        found = _named_tests(tmp_path, _rename(NAMED.replace("::", f"::{cls}::")), tests=tests)
+        assert len(found) == 1 and says in found[0].message, found
+
+
+def test_r18_a_parametrized_test_is_named_without_its_brackets(tmp_path):
+    tests = "import pytest\n\n\n@pytest.mark.parametrize('x', [1])\ndef test_repo_mis_files_pass(x):\n    pass\n"
+    assert _named_tests(tmp_path, _row(NAMED + "[1]"), tests=tests) == []
+
+
+def test_r18_bracket_and_row_name_different_tests(tmp_path):
+    """A requirement's bracket and its Conformance row are one check, written twice. MIS-0002's R145
+    named a test in its bracket that its row did not, and nothing noticed. The comparison needs
+    no checkout."""
+    other = "macf/tests/test_mis_check.py::test_the_unedited_copy_passes"
+    found = _named_tests(tmp_path, _row(other))
+    assert [f.line for f in found] == [R01_LINE]
+    assert f"only the bracket names ['{NAMED}']" in found[0].message
+    assert f"only the Conformance row (line {ROW_LINE}) names ['{other}']" in found[0].message
+    # The same tests in another order, joined another way, are the same check.
+    assert _named_tests(tmp_path, sub(f"decidable: {NAMED}]", f"decidable: {NAMED} and {other}]"),
+                        _row(f"{other}, {NAMED}")) == []
+
+
+def test_r18_no_checkout_skips_the_lookup_and_says_so(tmp_path, capsys):
+    """Outside a checkout the test paths name nothing to read: the lookup is skipped, and the CLI
+    says so, rather than print a clean run as if every named test had been found."""
+    import argparse
+    from macf import cli
+    assert _named_tests(tmp_path, _rename(NAMED.replace("pass", "gone"))) == []
+    d = _framework(tmp_path)
+    assert mis.checkout_root(d / "MIS-0000-template.md") is None
+    cli.cmd_mis_check(argparse.Namespace(paths=[str(d / "MIS-0000-template.md")], glossary=str(GLOSSARY)))
+    assert "were not looked up" in capsys.readouterr().out
+
+
+def test_r18_the_repository_is_a_checkout():
+    """The repository's own run looks its named tests up, so test_repo_mis_files_pass covers them."""
+    assert mis.checkout_root(MIS1) == REPO
