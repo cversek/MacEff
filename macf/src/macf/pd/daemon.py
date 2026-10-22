@@ -683,7 +683,8 @@ class Daemon:
 
         from macf.agent_events_log import append_event, read_events
         from macf.pd.entries import (ENTRY_EVENTS, EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED, OneShot, fold, new_entry_id,
-                                     parse_when)
+                                     parse_when, with_last_firing)
+        from macf.pd.scheduler import EVENT_ENTRY_FIRED
         from macf.pd.taint import taint
         why = self._outside_session(creds)
         if why and isinstance(request, EntryAddRequest):
@@ -724,8 +725,9 @@ class Daemon:
             if not append_event(EVENT_ENTRY_ADDED, entry):
                 return Response(ok=False, error="the entry could not be recorded in the event log")
             self.scheduler.add_entry(entry)
-        held = fold(read_events(reverse=False, scope="all", only=ENTRY_EVENTS), self.card)
-        return Response(ok=True, entries=list(held.values()))
+        rows = list(read_events(reverse=False, scope="all", only=(*ENTRY_EVENTS, EVENT_ENTRY_FIRED)))
+        held = fold(rows, self.card)
+        return Response(ok=True, entries=with_last_firing(held, rows, self.card, EVENT_ENTRY_FIRED))
 
     # ------------------------------------------------------------------ the event stream's rules
 
