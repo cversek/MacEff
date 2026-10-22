@@ -84,6 +84,9 @@ DRAIN_TIMEOUT_S = 300.0
 MEMORY_CHECK_S = 30.0
 #: The notice source for a unit past its memory limit, as the MacEff channel knows it.
 LIMIT_NOTICE_SOURCE = "pd_limit_exceeded"
+#: The notice source for a unit that failed: exited with a failing code, missed its liveness, or
+#: couldn't be started. Its id is ``<unit>:<failures in a row>:<epoch>`` (``_unit_failed_id``).
+UNIT_FAILED_NOTICE_SOURCE = "pd_unit_failed"
 #: What a restart, a recreate or a compaction carried, changed and lost: the event, and the
 #: notice that points to it (MIS-0002-R47 (pd_MUST_report_carried_changed_lost)).
 EVENT_CARRIED = "pd_carried"
@@ -95,6 +98,13 @@ EVENT_COMPACTION = "compaction_detected"
 COMPACTION_SETTLE_S = 60.0
 #: What a compaction always loses, in a report's words.
 CONTEXT_LOST = "the session's working context (summarized)"
+
+
+def _unit_failed_id(unit: str, failures: int, at: float) -> str:
+    """A unit failure's notice id: the unit, its failures in a row, and an epoch second. A unit's
+    name holds no ``:`` (``interface.Unit``), so the notifier keys it per unit by its first field;
+    the epoch keeps two spells with the same count apart."""
+    return f"{unit}:{failures}:{int(at)}"
 
 
 def _float_or_none(value) -> Optional[float]:
@@ -1083,9 +1093,8 @@ class Core:
             elif code in r.spec.exit_codes.success:
                 self._stopped(r, why)
             else:
-                r.failures += 1
-                self._transition(r, "failed", why if r.remnant is None
-                                 else f"{why}; the rest of its group was sent SIGTERM")
+                self._count_failure(r, why if r.remnant is None
+                                    else f"{why}; the rest of its group was sent SIGTERM")
         elif not r.want_up or r.state != "failed":
             # A stop this core sent. After a liveness failure the unit is already
             # recorded failed, and stays so unless the stop was asked for. While members of
@@ -1224,8 +1233,7 @@ class Core:
             )
         except OSError as e:
             r.proc, r.pid, r.proc_start = None, None, None
-            r.failures += 1
-            self._transition(r, "failed", f"could not start: {e}")
+            self._count_failure(r, f"could not start: {e}")
             if r.want_up and r.spec.restart in ("always", "on-failure"):
                 r.restart_at = self._clock() + backoff_s(r.failures, *self._backoff)
             return
@@ -1327,10 +1335,21 @@ class Core:
     def _fail(self, r: _Runner, reason: str) -> None:
         """A unit that is running but not working: record it failed, then stop what is
         left of it so the restart policy can act on the exit."""
-        r.failures += 1
         r.auth_failed = None       # from here it is an ordinary failure, for the restart policy
-        self._transition(r, "failed", reason)
+        self._count_failure(r, reason)
         self._signal_stop(r, reason)
+
+    def _count_failure(self, r: _Runner, reason: str) -> None:
+        """A failure the restart backoff counts: record the unit failed, and owe the agent the
+        ``pd_unit_failed`` notice, whose id carries the failures in a row. The notifier owes only
+        the newest per unit, so a crash loop while the session is down comes back as one notice
+        with the count. Restarting is left to the policy, as before; the notice only says.
+        A session failed for its login is not counted here: it is still running, and a notice
+        would open a turn that can't authenticate (MIS-0002-R19)."""
+        r.failures += 1
+        self._transition(r, "failed", reason)
+        if self.on_notice is not None:
+            self.on_notice(UNIT_FAILED_NOTICE_SOURCE, _unit_failed_id(r.spec.name, r.failures, self._wall()))
 
     def _signal_stop(self, r: _Runner, reason: str) -> None:
         """SIGTERM now, and SIGKILL once the unit's own declared grace has passed, so a

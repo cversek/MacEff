@@ -22,7 +22,7 @@ the client itself stores, compared through ``verify_incarnation``.
 """
 import re
 from pathlib import Path
-from typing import Annotated, Dict, List, Literal, Optional, Union, get_args
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union, get_args
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
@@ -35,6 +35,7 @@ from macf.pd.names import (  # re-exported: interface's callers import these fro
     control_socket,
     declaration_path,
     ensure_runtime_dir,
+    events_socket,
     launchd_label,
     pd_id,
     record_path,
@@ -263,6 +264,10 @@ class CheckArg(_Closed):
     def accepts(self, value: str) -> bool:
         if self.kind == "integer":
             return re.fullmatch(r"-?\d{1,18}", value) is not None
+        # A run renders its command's placeholders ({agent_home}) after the slots are filled,
+        # so a brace in a value would turn a checked value into another (MIS-0002-R143).
+        if "{" in value or "}" in value:
+            return False
         return re.fullmatch(self.pattern, value) is not None
 
 
@@ -299,7 +304,8 @@ class CheckTemplate(_Closed):
 
 class Schedule(_Closed):
     """A schedule, for step 2 (MIS-0002-R24, MIS-0002-R29 (schedule_MUST_declare_target)).
-    Declared now so the format does not change under the steps that come later.
+    Declared now so the format does not change under the steps that come later. ``target`` is
+    ``isolated`` or the declaring agent's own card; the declaration refuses any other card.
     ``timeout_s`` is required (MIS-0002-R36 (run_MUST_have_wall-clock_limit)). ``restarts_unit``
     marks a schedule whose act restarts a unit, a run a downtime never replays
     (MIS-0002-R27 (scheduler_MUST-NOT_replay_restart_runs))."""
@@ -351,6 +357,21 @@ DEFAULT_WAKE_REFRACTORY_S = 600.0
 DEFAULT_WAKE_REFRACTORY_CEILING_S = 1800.0
 
 
+#: A source pattern on the event stream: an event name, with ``*`` and ``?`` globs.
+_STREAM_SOURCE = r"^[A-Za-z0-9_*?\[\]-]{1,200}$"
+#: A subscriber's name on the event stream, as its hello gives it and a rule names it after ``@``.
+STREAM_SUBSCRIBER_NAME = r"^[a-z][a-z0-9_-]{0,47}$"
+
+
+class StreamGrant(_Closed):
+    """A uid other than the agent's own that may subscribe to its event stream, and the sources
+    it may take (MIS-0002-R156 (subscriber_MUST_be_granted_agents); persistent_layer 11.4). Least
+    privilege: a tray or a host-wide watch is granted unit states and notices, not tool events."""
+
+    uid: int = Field(ge=0)
+    sources: List[Annotated[str, Field(pattern=_STREAM_SOURCE)]] = Field(min_length=1)
+
+
 class Declaration(_Closed):
     """Everything an agent declares to its primal daemon. Audited by reading it.
 
@@ -374,6 +395,11 @@ class Declaration(_Closed):
       schedule or quiet window is declared, because a host reads a bare time of day in its
       local time and a container usually in UTC, so the same declaration would act at
       different moments.
+    - ``stream_grants``: the other uids that may subscribe to the event stream, each with the
+      sources it may take; the agent's own uid needs none (persistent_layer 11.4).
+    - ``operator_uid``: where the operator has an account of its own, as in a container, the
+      only uid the daemon takes the event stream's rules from. None: the daemon's own uid, as
+      for every control act.
     """
 
     version: Literal[1]
@@ -404,6 +430,17 @@ class Declaration(_Closed):
     timezone: Optional[str] = None
     #: Commands the agent's ``check`` entries may run, by name (the scheduler design, 4.2).
     check_templates: Dict[str, CheckTemplate] = Field(default_factory=dict)
+    stream_grants: List[StreamGrant] = Field(default_factory=list)
+    operator_uid: Optional[int] = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _one_grant_per_uid(self) -> "Declaration":
+        uids = [g.uid for g in self.stream_grants]
+        dupes = sorted({u for u in uids if uids.count(u) > 1})
+        if dupes:
+            raise ValueError(f"stream_grants names uid {', '.join(map(str, dupes))} more than once; "
+                             f"give each uid one grant listing every source it may take")
+        return self
 
     @model_validator(mode="after")
     def _names_unique(self) -> "Declaration":
@@ -463,6 +500,17 @@ class Declaration(_Closed):
         return self
 
     @model_validator(mode="after")
+    def _schedules_target_isolated_or_own_session(self) -> "Declaration":
+        # A schedule targets an isolated session or its own agent's live session, never another
+        # agent's (MIS-0002-R29 (schedule_MUST_declare_target)). A foreign card is refused here,
+        # at load, rather than accepted and never run.
+        for s in self.schedules:
+            if s.target not in ("isolated", self.agent):
+                raise ValueError(f"schedule {s.name!r} targets {s.target!r}, but a schedule may target "
+                                 f"only 'isolated' or this declaration's own agent, {self.agent!r}")
+        return self
+
+    @model_validator(mode="after")
     def _a_failed_prompt_run_is_routed(self) -> "Declaration":
         # A prompt run that meets a permission prompt fails with a notice
         # (MIS-0002-R32 (run_MUST_fail_on_prompt)). Only the agent's routes deliver a daemon
@@ -504,6 +552,9 @@ EVENT_UNDER_LIMIT = "pd_unit_back_under_limit"
 #: The session's MacEff channel went dark, and came back (MIS-0002-R115).
 EVENT_CHANNEL_DARK = "pd_channel_dark"
 EVENT_CHANNEL_BACK = "pd_channel_back"
+#: An attached MacEff channel said which notice sources it takes (MIS-0002-R149). ``takes``
+#: lists them; a channel that sent no hello declares nothing and has no such event.
+EVENT_CHANNEL_DECLARED = "pd_channel_declared"
 #: Mail sat in the agent's pickup box past its declared threshold, and the box was then
 #: emptied (MIS-0002-R55). One of each per unread spell.
 EVENT_UNREAD_MAIL = "pd_unread_mail"
@@ -512,6 +563,8 @@ EVENT_UNREAD_MAIL_CLEARED = "pd_unread_mail_cleared"
 #: (MIS-0002-R124). ``findings`` names each difference.
 EVENT_ALLOWLIST_MISMATCH = "pd_allowlist_mismatch"
 EVENT_DAEMON_START = "pd_daemon_start"
+#: An operator's rule for the event stream: what its rules in force fold to (persistent_layer 11.4).
+EVENT_STREAM_RULE = "pd_stream_rule"
 
 
 class Liveness(_Closed):
@@ -618,6 +671,42 @@ class WakePaced(_Closed):
     reason: str = Field(min_length=1)
 
 
+class StreamRule(_Closed):
+    """A rule the operator set for the event stream, written before it takes effect; the
+    daemon's rules in force are what these events fold to, so a rule survives a restart
+    (MIS-0002-R152 (operator_MUST_silence_and_reroute)).
+
+    ``silence`` and ``unsilence`` name a source pattern, or a subscriber as ``@name``; ``route``
+    sends the sources ``target`` matches only to the subscriber ``subscriber`` names, and
+    ``unroute`` takes that route away. A silenced source still lands in the log."""
+
+    agent: str
+    act: Literal["silence", "unsilence", "route", "unroute"]
+    target: str = Field(min_length=1, max_length=200)
+    subscriber: Optional[str] = Field(default=None, pattern=STREAM_SUBSCRIBER_NAME)
+    asked_by: Asker
+    peer: Optional[Peer] = None
+    reason: str = ""
+
+    @model_validator(mode="after")
+    def _well_formed(self) -> "StreamRule":
+        _check_stream_rule(self.act, self.target, self.subscriber)
+        return self
+
+
+def _check_stream_rule(act: str, target: str, subscriber: Optional[str]) -> None:
+    """A rule names a source pattern, or a subscriber where silencing; a route names both."""
+    if target.startswith("@"):
+        if act not in ("silence", "unsilence"):
+            raise ValueError(f"a {act} names a source, not a subscriber ({target!r})")
+        if not re.fullmatch(STREAM_SUBSCRIBER_NAME, target[1:]):
+            raise ValueError(f"{target!r} is not a subscriber name: '@' and a short lowercase word")
+    elif not re.fullmatch(_STREAM_SOURCE, target):
+        raise ValueError(f"{target!r} is not a source: an event name, with * and ? globs")
+    if (act == "route") != (subscriber is not None):
+        raise ValueError("a route names the subscriber it sends the source to, and only a route does")
+
+
 class DaemonStart(_Closed):
     """A daemon's life began, written once by the daemon itself, with the fields of its
     record: after its sockets are bound and the record is written, and before it adopts or
@@ -646,7 +735,11 @@ class DaemonStart(_Closed):
 #            the daemon's own user. The operator's command line and the tray connect here
 #            (MIS-0002-R48 (outside_stop_MUST_override_gates), MIS-0002-R70
 #            (tray_MUST_act_through_pd)).
-#   channel  the daemon writes closed notice records, one per line, and reads nothing.
+#   channel  the daemon writes closed notice records, one per line. The channel writes
+#            one line only, its hello, right after it attaches (``ChannelHello``): the
+#            notice sources it takes, so the daemon holds the rest for a channel that takes
+#            them (MIS-0002-R149 (pd_MUST_hold_sources_channel_did_not_declare)). Anything
+#            else a channel writes breaks the protocol, and the daemon drops it.
 #            The peer must descend from the agent's live session
 #            (MIS-0002-R122 (pd_MUST_check_channel_peer_lineage)). The record shape is the
 #            channel's own (``macf.channels.maceff_channel.NoticeRecord``, #545).
@@ -661,6 +754,25 @@ class DaemonRecord(_Closed):
     pid: int = Field(gt=1)
     proc_start: str = Field(min_length=1)
     version: Literal[1] = 1
+
+
+#: A notice source as a hello names it: the names the channel's records use.
+_SOURCE_NAME = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
+
+
+class HelloBody(_Closed):
+    """The sources a channel takes. A source this daemon doesn't know is declared all the
+    same: a newer channel may take one, and declaring it holds nothing."""
+
+    takes: List[_SOURCE_NAME] = Field(max_length=64)
+
+
+class ChannelHello(_Closed):
+    """The one line a MacEff channel writes, ``{"hello": {"takes": [...]}}``, right after it
+    attaches and has checked its peer (MIS-0002-R149). A channel that sends none declares
+    nothing, so the daemon sends it nothing and holds every notice for one that declares."""
+
+    hello: HelloBody
 
 
 class StatusRequest(_Closed):
@@ -744,8 +856,27 @@ class PaceRequest(_Closed):
         return self
 
 
+class StreamRuleRequest(_Closed):
+    """Silence, unsilence or reroute a source or a subscriber of the event stream, asked by the
+    operator; it takes effect at once and is recorded first (persistent_layer 11.4)."""
+
+    op: Literal["stream_rule"]
+    act: Literal["silence", "unsilence", "route", "unroute"]
+    target: str = Field(min_length=1, max_length=200)
+    subscriber: Optional[str] = Field(default=None, pattern=STREAM_SUBSCRIBER_NAME)
+    asked_by: Asker
+    reason: str = Field(default="", max_length=500)
+
+    @model_validator(mode="after")
+    def _operator_and_well_formed(self) -> "StreamRuleRequest":
+        if self.asked_by.kind != "operator":
+            raise ValueError("only the operator sets the event stream's rules")
+        _check_stream_rule(self.act, self.target, self.subscriber)
+        return self
+
+
 Request = Union[StatusRequest, ActRequest, CompactRequest, PaceRequest, EntryAddRequest,
-                EntryListRequest, EntryRemoveRequest]
+                EntryListRequest, EntryRemoveRequest, StreamRuleRequest]
 
 
 class UnitStatus(_Closed):
@@ -772,6 +903,8 @@ class Response(_Closed):
     entries: Optional[List[dict]] = None
     wake_refractory_s: Optional[float] = None
     wake_window_from: Optional[str] = None
+    #: The event stream's rules in force, answering a stream rule.
+    stream_rules: Optional[Dict[str, Any]] = None
 
 
 _REQUEST = TypeAdapter(Annotated[Request, Field(discriminator="op")])
