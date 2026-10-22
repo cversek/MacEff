@@ -701,6 +701,10 @@ A schedule also names its target, an isolated session or its own agent's live se
 - `skip`: it is recorded and does nothing else. No notice, no run.
 - `report`: you are told, and nothing runs [MIS-0002-R25 (missed-run_policy_MUST_be_listed)]. A wake notifies you as `once` does, and a check sends the `pd_entry_due` notice instead of running its template, so a check meant for 06:30 doesn't act at noon on a condition that was true at 06:30.
 
+No other value is taken: the daemon refuses an `entry_add` whose `--missed` is anything but these three, a schedule's `run_once` included, and records nothing.
+
+**`pd entry show <id>` says how late the wake is.** The `pd_entry_due` notice points there, so that record states it: a `last fired:` line names the instant the entry last fired for, and how late it fired (`fired 3h 0m late`, or `on time` within the minute's grace), with the earlier firings it stood for and, under `skip`, that no wake was sent. An entry not yet fired reads `not yet`. The daemon reads it from the entry's newest `pd_entry_fired` in the event log, still the only store, and `pd entry list --json` carries it as `last_fired` [MIS-0002-R34 (late_run_MUST_state_lateness)].
+
 **What an entry does when it falls due:**
 - **wake** (the default): the `pd_entry_due` notice, whose id is the entry's. It's a doorbell; its pointer sends you to `pd entry show <id>`.
 - **check** (`--check TEMPLATE --arg NAME=VALUE`): runs one of the operator's *check templates* (`check_templates` in the declaration). It wakes you only when the template's condition holds, as a command schedule does (10.4), and the first 4 KB of what it said is kept for you. A template is inline argv with no shell. Each argument fills one whole argv element and must be an integer or match its pattern whole, so a value can never become a second command. A template names its program by absolute path, and one whose program your account can write, the file or the folder holding it, never runs: on a shared login that reaches past your home, to a package manager's `bin`. On a host, a template added or changed since `pd install` runs nothing until it's installed again.
