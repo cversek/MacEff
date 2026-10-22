@@ -743,6 +743,13 @@ Every start, stop and restart the core performs is a `pd_control` event naming w
 - its **origin**;
 - the record itself.
 
+**On the wire**, one JSON object per line each way:
+- hello: `{"sources": ["pd_unit_*"], "position": {"log": "<identity>", "offset": 1234}, "name": "watch"}`, with `position` and `name` optional. A position is copied whole from the last record received.
+- welcome: `{"type": "welcome", "agent", "position", "sources", "granted"}`.
+- record: `{"type": "record", "position", "source", "agent", "time", "origin", "record"}`.
+- gap: `{"type": "gap", "agent", "time", "from", "to", "reason"}`, where `reason` is `rotated`, `not_a_line_boundary`, `backlog` or `overflow`.
+- refused: `{"type": "refused", "error"}`.
+
 A subscriber receives only the sources it chose [MIS-0002-R151 (subscriber_MUST_receive_chosen_sources)]. A subscriber refused for any reason gets one `refused` line saying why, and the connection closes.
 
 **Nothing is skipped in silence** [MIS-0002-R154 (subscriber_MUST_resume_from_last_record)]. On reconnect with a position, the stream resumes just after it, from the log. If rotation has removed that record, or the position isn't on a line boundary of the log it names, the stream sends one `gap` record saying from where to where records may be missing, then continues. A subscriber is never handed the next record as if nothing were missed. A resume reads at most 8 MB of the log at once, and one from further back gets a `gap` (`backlog`) to where that read starts. A subscriber connected through a rotation goes on without a gap when its last record was kept, which rotation does for the current cycle.
@@ -751,7 +758,7 @@ A subscriber receives only the sources it chose [MIS-0002-R151 (subscriber_MUST_
 
 **What a record can claim** [MIS-0002-R155 (stream_record_MUST_name_source)]. `agent` and `time` come from the layer, never from a field a publisher put in the event's data: `agent` is the daemon's own agent, and `time` the record's timestamp in the log, which `append_event` writes.
 - Anything running as your uid can append a line to your log: a shell redirect, or a tool steered by injected text. So a record read back from the log carries `origin: log`, whatever its event name claims.
-- A record the daemon writes itself carries `origin: daemon`. The daemon learns the line in-process as it writes it, and checks that the log holds exactly those bytes at that offset; a copy appended by anything else, even byte for byte, is `origin: log`. Only these can vouch that the layer did what they say.
+- A record the daemon writes itself carries `origin: daemon`. The daemon learns the line in-process as it writes it, and checks that the log holds exactly those bytes at that offset; a copy appended by anything else, even byte for byte, is `origin: log`. Only these can vouch that the layer did what they say. The daemon remembers the last ten thousand lines it wrote, in memory, so a record from before this daemon started, or replayed on a resume from further back, is `origin: log` even if the layer wrote it. `origin: daemon` marks live records, not history.
 - A subscriber that alerts a person, such as an operator bridge, alerts on `origin: daemon` records.
 - This is the same threat model as your own entries (10.6): it stops a confused agent, not a compromised one. The operator's rules below are folded from the log too, so a forged rule line is read like any other.
 
@@ -764,6 +771,7 @@ A subscriber receives only the sources it chose [MIS-0002-R151 (subscriber_MUST_
 **The operator can silence or reroute any source or subscriber without a restart** [MIS-0002-R152 (operator_MUST_silence_and_reroute)]. The commands are `macf_tools pd stream silence <source|@subscriber>`, `unsilence <source|@subscriber>`, and `route <source> <subscriber>`, which sends a source only to that subscriber, among those that chose it; `route <source> --clear` takes the route away. A subscriber is named with `@`, by the name its hello gave.
 - Each one is recorded as a `pd_stream_rule` event before it takes effect, and the daemon's rules are what those events fold to, so a rule survives a restart. A rule that can't be recorded isn't set.
 - A silenced source still lands in the log. Only its delivery stops.
+- **Today this reaches only the stream's subscribers.** The MacEff channel isn't one yet (above), so silencing `amail` on the stream doesn't stop mail notices reaching your session. Nothing does today: `notice_routes` has no route that turns a notice off, and it is read only at the daemon's start. The channel becoming a subscriber is what brings your session's notices under these rules.
 - Setting the mode puts these commands in the client's ask list, as `pd entry add` is, so on a login you share with the operator, approving the prompt is the operator's act. An operator who loosens one to `allow` keeps that choice.
 - Where the operator has an account of its own, as in a container, the declaration names it as `operator_uid`, and the daemon takes the stream's rules only from that uid, refusing your own. That uid is let through the control socket for these rules alone. On a shared login the uid check separates nothing: every agent on that login has the operator's uid, so there the ask prompt is what makes a rule the operator's act.
 
