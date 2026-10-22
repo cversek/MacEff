@@ -20,7 +20,11 @@ says nothing about it.
   points only to the log, so nothing is lost, and a crash loop through a weekend down comes
   back as one notice, not hundreds.
 - **Delivery** is one closed record per notice on the channel socket, to a channel whose
-  process descends from the session unit (the daemon checks that before attaching it).
+  process descends from the session unit (the daemon checks that before attaching it),
+  and only to a channel whose hello declared the notice's source. A notice no attached
+  channel declared stays owed, for a channel that declares it [MIS-0002-R149
+  (pd_MUST_hold_sources_channel_did_not_declare)]: a channel running older code than the
+  daemon would drop a record it doesn't know after the daemon logged it delivered.
   The record names the source and carries the time the store was read and the time it
   was sent; the channel adds the time it was received [MIS-0002-R38
   (notice_MUST_name_source), MIS-0002-R39 (notice_MUST_carry_three_times)].
@@ -168,6 +172,8 @@ class Notifier:
         self.waker = None
         self.sources: List[StoreSource] = []
         self._channels: List[socket.socket] = []
+        #: The sources each attached channel's hello declared; none until it says (R149).
+        self._takes: Dict[socket.socket, frozenset] = {}
         #: Called with a channel just before it is closed, so its owner can stop watching it.
         self.on_detach: Optional[Callable[[socket.socket], None]] = None
         self._routes = dict(routes)
@@ -292,15 +298,28 @@ class Notifier:
 
     # ------------------------------------------------------------------ delivery
 
-    def attach(self, conn: socket.socket) -> None:
+    def attach(self, conn: socket.socket, takes: Iterable[str] = ()) -> None:
         """A channel whose peer the daemon has checked. The newest is written to first: a
-        session that restarted has a new channel, and its old one is gone or going."""
+        session that restarted has a new channel, and its old one is gone or going. It takes
+        only the sources ``takes`` names, which is none until its hello declares them."""
         self._channels.insert(0, conn)
+        self._takes[conn] = frozenset(takes)
+
+    def declare(self, conn: socket.socket, takes: Iterable[str]) -> None:
+        """Record the sources an attached channel's hello declared (MIS-0002-R149)."""
+        if conn in self._channels:
+            self._takes[conn] = frozenset(takes)
+
+    def declared(self, source: str) -> bool:
+        """Whether some attached channel declared ``source``. Where none did, that source has
+        no channel: its notices are held, and the keystroke fallback counts it as such (R105)."""
+        return any(source in self._takes.get(c, ()) for c in self._channels)
 
     def detach(self, conn: socket.socket) -> None:
         if conn not in self._channels:
             return
         self._channels.remove(conn)
+        self._takes.pop(conn, None)
         if self.on_detach is not None:
             self.on_detach(conn)
         try:
@@ -321,13 +340,14 @@ class Notifier:
 
     def wake(self) -> bool:
         """The fallback, MIS-0002-R105 (keystroke_wake_MUST_be_fallback_only): with no channel
-        attached, and mail owed for longer than ``CHANNEL_GRACE_S`` (time for a channel to
+        attached that declared mail (MIS-0002-R149: "no channel" is counted per source, so a
+        channel whose hello left mail out never holds it forever), and mail owed for longer than ``CHANNEL_GRACE_S`` (time for a channel to
         connect), type a wake naming what waits in the box. A typed wake delivers the mail
         notices it covers. A wake already typed is followed through on every call, until its
         turn is seen starting or the look gives up. Returns whether a wake was typed now."""
         if self.waker is None:
             return False
-        if self._channels:
+        if self.declared("amail"):
             # A channel took over: the notices a held wake waited on are its to deliver, so
             # the hold ends here rather than staying open for the outside watch to alert on.
             self.waker.release("a channel attached")
@@ -352,11 +372,21 @@ class Notifier:
         return True
 
     def flush(self) -> int:
-        """Write every owed notice to the newest channel that takes it; return how many went."""
+        """Write every owed notice to the newest channel that declared its source; return how
+        many went. A notice no attached channel declared stays owed (MIS-0002-R149)."""
         sent = 0
-        while self.owed and self._channels:
-            aid, owed = next(iter(self.owed.items()))
-            conn = self._channels[0]
+        for aid, owed in list(self.owed.items()):
+            if self._send(aid, owed):
+                sent += 1
+        return sent
+
+    def _send(self, aid: str, owed: Owed) -> bool:
+        """Write one owed notice to the newest channel that declared its source, trying the
+        next if one went away. Returns whether it went."""
+        while True:
+            conn = next((c for c in self._channels if owed.source in self._takes.get(c, ())), None)
+            if conn is None:
+                return False
             sent_at = self._clock()
             record = {"source": owed.source, "arrival_id": aid, "read_at": owed.read_at, "sent_at": sent_at}
             if owed.count is not None:
@@ -372,5 +402,4 @@ class Notifier:
                                            "read_at": owed.read_at, "sent_at": sent_at,
                                            "via": "channel", "notifier": NOTIFIER})
             del self.owed[aid]
-            sent += 1
-        return sent
+            return True

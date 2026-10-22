@@ -483,8 +483,10 @@ class Scheduler:
         # hears of it: "skip" records it and says nothing (the scheduler design, 3.5).
         late = (now - due).total_seconds() > ENTRY_GRACE_S
         quiet = late and entry.get("missed") == "skip"
+        # "report" says it was missed and does nothing else (R25): a late check is reported, not run.
+        report_only = late and entry.get("missed") == "report"
         self.entry_fired[entry_id] = due
-        if entry.get("action") == "check":
+        if entry.get("action") == "check" and not report_only:
             # A check wakes nobody by firing: its run does, when its condition holds (4.2).
             self._say(EVENT_ENTRY_FIRED, {"id": entry_id, "for": _iso(due), "missed": missed, "notified": False,
                                           "late_s": round((now - due).total_seconds(), 1)})
