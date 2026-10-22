@@ -324,6 +324,31 @@ def test_a_notice_owed_past_a_day_is_held_by_the_checkpoint(tmp_path, isolated_e
     assert not again.owed                                # delivered after the checkpoint: owed no more
 
 
+def test_a_boot_reads_back_no_further_than_the_newest_checkpoint(tmp_path, isolated_events_log):
+    """MIS-0002-R41: the checkpoint exists so a boot's scan stays short on a log of millions of
+    events. A boot reads back to the newest pd_notices_owed and stops, so the records before it
+    are never read again, however many there are."""
+    home = _home(tmp_path)
+    first = nt.Notifier(home, {"pd_run_failed": "agent"})
+    first.boot()
+    for i in range(200):                                 # all before the next boot's checkpoint
+        first.raise_notice("pd_run_failed", f"job{i}:1792600000")
+    nt.Notifier(home, {"pd_run_failed": "agent"}).boot()
+    read = []
+
+    def counted():
+        for event in read_events(reverse=True, scope="all",
+                                 only=(nt.EVENT_DETECTED, nt.EVENT_DELIVERED, nt.EVENT_NOTICES_OWED)):
+            read.append(event)
+            yield event
+
+    late = nt.Notifier(home, {"pd_run_failed": "agent"}, events=counted)
+    late.boot()
+    assert len(read) == 1, f"the boot read {len(read)} records, not just the newest checkpoint"
+    assert read[0]["event"] == nt.EVENT_NOTICES_OWED
+    assert len(late.owed) == 200                         # and what is owed came from that checkpoint
+
+
 def test_a_crash_loop_while_down_is_one_notice_per_schedule(tmp_path, isolated_events_log):
     """MIS-0002-R41: only the newest daemon-raised notice per thing is owed, per schedule for
     run failures, so many failures of one schedule while the session is down come back as one
