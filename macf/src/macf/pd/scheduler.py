@@ -395,10 +395,9 @@ class Scheduler:
     def _load_entries(self) -> None:
         """The entries the log folds to, and the instant each last fired for (R16)."""
         from macf.pd.entries import ENTRY_EVENTS, fold
-        from macf.pd.notifier import EVENT_DELIVERED, HOLD_MAX_S
+        from macf.pd.notifier import HOLD_MAX_S, SETTLED
         read = self.events or (lambda: read_events(reverse=True, scope="all",
-                                                   only=(*ENTRY_EVENTS, EVENT_ENTRY_FIRED,
-                                                         EVENT_DELIVERED)))
+                                                   only=(*ENTRY_EVENTS, EVENT_ENTRY_FIRED, *SETTLED)))
         rows = list(read())                      # newest first
         self.entries = fold(reversed(rows), self.card)
         newest: Dict[str, str] = {}              # each entry's newest firing or delivery
@@ -410,7 +409,9 @@ class Scheduler:
                 if fired is not None:
                     self.entry_fired.setdefault(data.get("id"), fired)
                 newest.setdefault(data.get("id"), "fired" if data.get("notified", True) else "quiet")
-            elif kind == EVENT_DELIVERED and data.get("source") == NOTICE_ENTRY_DUE:
+            elif kind in SETTLED and data.get("source") == NOTICE_ENTRY_DUE:
+                # Delivered, or kept from the session by the operator's rules: either way not owed
+                # again past a day (MIS-0002-R152).
                 newest.setdefault(data.get("arrival_id"), "delivered")
         # A notice still owed is held by the notifier through its pd_notices_owed checkpoint,
         # whatever its age. The first start after checkpoints came in reads back only a day, so a

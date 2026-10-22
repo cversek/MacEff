@@ -153,7 +153,10 @@ class Daemon:
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound
         #: Each attached channel still owed its hello: (deadline, peer pid, bytes so far).
         self._hellos: dict = {}
-        self.notifier = Notifier(self.home, self.core.declaration.notice_routes)
+        # The stream's rules, read live at each delivery: _bind_stream folds them anew at start
+        # and a stream rule changes them at runtime (MIS-0002-R152).
+        self.notifier = Notifier(self.home, self.core.declaration.notice_routes,
+                                 rules=lambda: self.stream.rules)
         #: The agent's duties, hosted so a duty that falls due wakes it (the scheduler design, 4.4).
         from macf.agent_events_log import append_event, read_events
         from macf.pd.duties import HostedDuties
@@ -712,7 +715,8 @@ class Daemon:
 
     def _stream_rule(self, request: StreamRuleRequest, creds) -> Response:
         """The operator silences, unsilences or reroutes a source or a subscriber of the event
-        stream (MIS-0002-R152 (operator_MUST_silence_and_reroute)). The rule is recorded as a
+        stream, the agent's session among them as ``@channel`` (MIS-0002-R152
+        (operator_MUST_silence_and_reroute)). The rule is recorded as a
         ``pd_stream_rule`` event before it takes effect, so the next daemon folds it back, and
         takes effect at once. Where the declaration names the operator's own uid, as in a
         container, only that uid may set one; elsewhere the client's ask prompt on the command is
