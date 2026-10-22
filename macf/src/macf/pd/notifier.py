@@ -16,8 +16,9 @@ says nothing about it.
   boot reads back only as far as it, so a notice is held whatever its age while the read-back
   stays bounded by the time since the last start. A daemon-raised notice is owed once per
   thing: a newer one from the same source (the same schedule, for a run failure; the same
-  entry, for an entry's wake) replaces the older. Each points only to the log, so nothing is
-  lost, and a crash loop through a weekend down comes back as one notice, not hundreds.
+  unit, for a unit failure; the same entry, for an entry's wake) replaces the older. Each
+  points only to the log, so nothing is lost, and a crash loop through a weekend down comes
+  back as one notice, not hundreds.
 - **Delivery** is one closed record per notice on the channel socket, to a channel whose
   process descends from the session unit (the daemon checks that before attaching it),
   and only to a channel whose hello declared the notice's source. A notice no attached
@@ -58,7 +59,8 @@ EVENT_DELIVERED = "pd_notice_delivered"
 #: from a store. Each is delivered only where the declaration routes it to the agent
 #: (MIS-0002-R42).
 INTERNAL_SOURCES = frozenset({"pd_limit_exceeded", "pd_unread_mail", "pd_carried", "pd_run_failed",
-                              "pd_run_missed", "pd_schedule_changed", "pd_grant_denied", "pd_entry_due", "pd_duty_due"})
+                              "pd_run_missed", "pd_schedule_changed", "pd_grant_denied", "pd_entry_due", "pd_duty_due",
+                              "pd_unit_failed"})
 #: What each boot still owes, after reading back: the checkpoint the next boot reads back to
 #: (MIS-0002-R41). Its data lists each owed notice's source, arrival id, count and read time.
 EVENT_NOTICES_OWED = "pd_notices_owed"
@@ -132,11 +134,14 @@ def channel_takes(source: str, arrival_id: str) -> bool:
 
 def subject(source: str, arrival_id: str) -> str:
     """What a daemon-raised notice is about, so that only the newest per thing is owed. A run
-    failure's, missed spell's or schedule change's id is ``<schedule>:<epoch>``
-    (``scheduler._notice_id``), so it is per schedule; an entry's wake has the entry's id, so it is per entry; any other is
+    failure's, missed spell's or schedule change's id is ``<schedule>:<epoch>`` (``scheduler._notice_id``), so
+    it is per schedule; a unit failure's is ``<unit>:<failures>:<epoch>`` (``core._unit_failed_id``),
+    so it is per unit; an entry's wake has the entry's id, so it is per entry; any other is
     per source."""
     if source in ("pd_run_failed", "pd_run_missed", "pd_schedule_changed"):
         return f"{source}/{arrival_id.rsplit(':', 1)[0]}"
+    if source == "pd_unit_failed":
+        return f"{source}/{arrival_id.split(':', 1)[0]}"
     if source == "pd_entry_due":
         return f"{source}/{arrival_id}"
     return source
