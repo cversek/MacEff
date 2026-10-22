@@ -419,10 +419,21 @@ def collected_tests(path: Path):
         return f"cannot be parsed (line {e.lineno}: {e.msg})"
     funcs = (ast.FunctionDef, ast.AsyncFunctionDef)
     out: dict = {"functions": set(), "classes": {}, "methods": {}}
+    # pytest collects a class's inherited test methods under it too; bases defined in this
+    # file are followed, a base imported from elsewhere is not (its methods read as missing,
+    # the safe direction).
+    top = {n.name: n for n in tree.body if isinstance(n, ast.ClassDef)}
+
+    def own_and_inherited(node, seen: frozenset = frozenset()) -> set:
+        found = {b.name for b in node.body if isinstance(b, funcs) and b.name.startswith("test")}
+        for base in node.bases:
+            if isinstance(base, ast.Name) and base.id in top and base.id not in seen:
+                found |= own_and_inherited(top[base.id], seen | {node.name})
+        return found
 
     def visit_class(node, prefix: str) -> None:
         name = f"{prefix}::{node.name}" if prefix else node.name
-        methods = {b.name for b in node.body if isinstance(b, funcs) and b.name.startswith("test")}
+        methods = own_and_inherited(node)
         out["classes"][name] = methods
         for m in methods:
             out["methods"].setdefault(m, []).append(name)

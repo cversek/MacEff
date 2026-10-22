@@ -518,6 +518,16 @@ def test_r18_a_method_named_with_its_class_passes(tmp_path):
     assert _named_tests(tmp_path, _rename(NAMED.replace("::", "::TestChecks::TestInner::")), tests=tests) == []
 
 
+def test_r18_an_inherited_method_is_found_under_the_subclass(tmp_path):
+    """pytest collects a test a class inherits under that class too (the head maintainer's
+    note on #795), so a row naming it there names a real test. A base from this file is
+    followed, mixin or not, and a cycle doesn't hang the lookup."""
+    tests = ("class _Shared:\n    def test_repo_mis_files_pass(self):\n        pass\n\n\n"
+             "class TestChecks(_Shared):\n    def test_other(self):\n        pass\n\n\n"
+             "class TestLoopA(TestLoopB):\n    pass\n\n\nclass TestLoopB(TestLoopA):\n    pass\n")
+    assert _named_tests(tmp_path, _rename(NAMED.replace("::", "::TestChecks::")), tests=tests) == []
+
+
 def test_r18_a_class_or_method_that_does_not_exist(tmp_path):
     tests = "class TestChecks:\n    def test_other(self):\n        pass\n"
     for cls, says in (("TestNope", "has no test class TestNope"),
