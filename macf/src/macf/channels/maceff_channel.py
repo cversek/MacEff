@@ -98,6 +98,12 @@ DAEMON_POINTERS: Dict[str, str] = {
     "pd_run_failed": "A scheduled run of yours failed, was killed at its limit, or couldn't start. Run "
                      "`macf_tools pd status`; the event log's pd_run_done entry names the schedule and "
                      "how the run ended.",
+    # MIS-0002-R25 (missed-run_policy_MUST_be_listed): a report_only schedule's missed firings
+    "pd_run_missed": "Scheduled runs of yours were missed while your primal daemon was down, and the "
+                     "schedule's missed-run policy is report_only, so none of them was run. Run "
+                     "`macf_tools events query --event pd_run_missed --limit 1 -v`; it names the schedule, "
+                     "how many firings were missed, and the first and last. `macf_tools pd status` shows "
+                     "each schedule's health.",
     # MIS-0002-R33 (run_MUST-NOT_change_schedules), on a host
     "pd_schedule_changed": "A schedule of yours changed since the operator last ran `pd install`, so your "
                            "primal daemon isn't running it. Run `macf_tools pd status`; the event log's "
@@ -129,7 +135,7 @@ class NoticeRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: Literal["amail", "pd_limit_exceeded", "pd_grant_denied", "pd_carried", "pd_unread_mail",
-                    "pd_run_failed", "pd_schedule_changed", "pd_entry_due", "pd_duty_due",
+                    "pd_run_failed", "pd_run_missed", "pd_schedule_changed", "pd_entry_due", "pd_duty_due",
                     "pd_unit_failed"]
     arrival_id: str = Field(pattern=r"^[A-Za-z0-9._:-]{1,128}$")
     count: Optional[int] = Field(default=None, ge=0)

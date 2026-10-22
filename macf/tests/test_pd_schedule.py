@@ -540,6 +540,43 @@ def test_missed_runs_are_reported_once(tmp_path):
     assert len(log.of(sc.EVENT_MISSED)) == 1, "the restart recorded the same missed firings again"
 
 
+@pytest.mark.parametrize("kind", ["report_only", "skip"])
+def test_report_only_tells_the_agent_of_a_missed_spell(tmp_path, kind):
+    """R25, ruled on #552: report_only runs none of a downtime's missed firings and raises the
+    pd_run_missed notice, once per spell, through the channel's own record; skip raises none.
+    The id is the schedule's name and the last missed firing, and only the newest is owed."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    make_scheduler(tmp_path, [command_schedule(["/usr/bin/true"], kind=kind)], log, now)
+    log.append(sc.EVENT_STARTED, {"agent": CARD, "schedule": "check", "scheduled_for": "2026-10-14T12:00:00+00:00"})
+    log.append(sc.EVENT_DONE, {"agent": CARD, "schedule": "check", "scheduled_for": "2026-10-14T12:00:00+00:00"})
+    channel = ChannelReceiver(tmp_path / "agent")
+    now[0] = at("2026-10-14 13:02")                             # the daemon was down an hour
+    s = make_scheduler(tmp_path, [command_schedule(["/usr/bin/true"], kind=kind)], log, now, on_notice=channel)
+    for _ in range(3):
+        s.tick()
+    assert len(log.of(sc.EVENT_STARTED)) == 1, f"{kind} ran a missed firing"
+    assert [d["policy"] for d in log.of(sc.EVENT_MISSED)] == [kind]
+    first = ("pd_run_missed", f"check:{int(at('2026-10-14 13:00').timestamp())}")
+    assert channel.received == ([first] if kind == "report_only" else [])
+    now[0] = at("2026-10-14 13:03")                             # restarted before 13:05's firing
+    make_scheduler(tmp_path, [command_schedule(["/usr/bin/true"], kind=kind)], log, now,
+                   on_notice=channel).tick()
+    assert channel.received == ([first] if kind == "report_only" else []), "one spell, told twice"
+    now[0] = at("2026-10-14 15:02")                             # down again: a newer spell
+    make_scheduler(tmp_path, [command_schedule(["/usr/bin/true"], kind=kind)], log, now,
+                   on_notice=channel).tick()
+    second = ("pd_run_missed", f"check:{int(at('2026-10-14 15:00').timestamp())}")
+    assert channel.received == ([first, second] if kind == "report_only" else [])
+    assert len(log.of(sc.EVENT_STARTED)) == 1
+
+    # Unrouted, it goes to the agent, and an unread older spell gives way to the newer one.
+    from macf.pd import notifier as nt
+    owed = nt.Notifier(tmp_path / "agent", {}, append=lambda event, data: True, events=lambda: [])
+    for notice in (first, second, ("pd_run_missed", "digest:1792600030")):
+        assert owed.raise_notice(*notice) is True
+    assert list(owed.owed) == [second[1], "digest:1792600030"]
+
+
 def test_missed_firings_are_read_back_from_the_event_log(tmp_path, isolated_events_log):
     """#738 through the daemon's own reader of the event log, not a list handed to it: a
     daemon and the same daemon restarted before the next firing record the downtime once.
