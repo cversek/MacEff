@@ -646,7 +646,9 @@ def test_after_restart_notice(make_core, script, tmp_path):
     assert drive(second, lambda: carried_events()[-1]["after"] == "the session unit restarted")
     assert carried_events()[-1]["changed"] == ["survives"] and owed().count("pd_carried") == 3
     # Each id names its occasion, so a daemon restart and a session restart in one second differ.
-    assert [i.split("-")[1] for _, i in channel.received] == ["daemon", "compaction", "session"]
+    assert [i.split("-")[1] for s, i in channel.received if s == "pd_carried"] == ["daemon", "compaction", "session"]
+    # Killed outright, the session failed, which is its own notice beside the report.
+    assert ("pd_unit_failed", "survives:1") in [(s, i.rsplit(":", 1)[0]) for s, i in channel.received]
 
 
 def test_a_session_restart_is_reported(make_core, script):
@@ -804,3 +806,78 @@ def test_a_compaction_no_daemon_saw_is_reported_at_the_next_start(make_core, scr
     now[0] += pd_core.COMPACTION_SETTLE_S + 1
     again.tick()
     assert len(reports()) == 1                                      # already covered
+
+
+from test_primal_daemon import ask, wait_for  # noqa: E402 - helpers
+
+
+def _unit_failed_owed(notifier):
+    """Each owed pd_unit_failed notice as (unit, failures in a row), from its id."""
+    return sorted((o.arrival_id.split(":")[0], int(o.arrival_id.split(":")[1]))
+                  for o in notifier.owed.values() if o.source == "pd_unit_failed")
+
+
+def test_a_failed_unit_raises_a_notice_through_the_channel(make_core, script, tmp_path, capsys):
+    """A unit that misses its liveness is failed and restarted as before, and the agent is owed
+    the pd_unit_failed notice, which arrives through the MacEff channel's own record. Its id
+    names the unit and its failures in a row. A unit that stops as it asked to, or exits with its
+    success code, has not failed and raises none. The pointer's command shows the failure."""
+    import re
+    import shlex
+
+    from macf.channels.maceff_channel import DAEMON_POINTERS
+    from macf.cli import _build_parser
+    channel = ChannelReceiver(tmp_path)
+    core = make_core([
+        make_unit("stale", script, {"alive_for": 1.0}, interval=0.5),
+        make_unit("done", script, {"exit_after": 0.1, "code": 78}, interval=0.5, restart="always"),
+        make_unit("clean", script, {"exit_after": 0.1}, interval=0.5),
+    ])
+    core.on_notice = channel
+    core.boot()
+    assert drive(core, lambda: channel.received, timeout=10)
+    [(source, notice_id)] = channel.received
+    unit, failures, at = notice_id.split(":")
+    assert (source, unit, failures) == ("pd_unit_failed", "stale", "1") and int(at) > 0
+    assert "liveness stale" in [d for d in _logged("pd_unit_state")
+                                if d["unit"] == "stale" and d["state"] == "failed"][-1]["reason"]
+    assert drive(core, lambda: core.pid("stale") is not None and core.state("stale") == "starting")
+    assert core.state("done") == "stopped" and core.state("clean") == "stopped"
+    assert [s for s, _ in channel.received] == ["pd_unit_failed"]      # neither stop raised one
+
+    command = re.search(r"`(macf_tools events query[^`]*)`", DAEMON_POINTERS["pd_unit_failed"]).group(1)
+    args = _build_parser().parse_args(shlex.split(command)[1:])
+    capsys.readouterr()
+    assert args.func(args) == 0
+    assert "liveness stale" in capsys.readouterr().out
+
+
+def test_a_crash_loop_is_one_notice_per_unit_with_its_count(tmp_path, script, base, run_daemon):
+    """A real daemon whose unit fails again and again, with no session to deliver to, owes one
+    pd_unit_failed notice for that unit, the newest, carrying its failures in a row; a second
+    unit's single failure is its own notice. The event log keeps every failure, and a daemon
+    that starts later owes the same two notices and delivers them through the channel's record.
+    The loop itself is left to the restart policy: it keeps restarting until it is stopped."""
+    flaky = make_unit("flaky", script, {"exit_after": 0.05, "code": 1}, interval=0.5)
+    steady = make_unit("steady", script, {"crash_once": str(tmp_path / "crashed")}, interval=0.5)
+    daemon = run_daemon(make_home(tmp_path, [flaky, steady]), base)
+    assert wait_for(lambda: daemon.core.failures("flaky") >= 4, timeout=10)
+    reply = ask(daemon, {"op": "stop", "unit": "flaky", "reason": "the loop has been seen",
+                         "asked_by": {"kind": "operator", "card": "Operator@000000"}})
+    assert reply["ok"]
+    assert wait_for(lambda: daemon.core.state("flaky") == "stopped")
+    loops = max(int(d["arrival_id"].split(":")[1]) for d in _logged(nt.EVENT_DETECTED)
+                if d["source"] == "pd_unit_failed" and d["arrival_id"].startswith("flaky:"))
+    assert loops >= 4
+    raised = [d for d in _logged(nt.EVENT_DETECTED) if d["source"] == "pd_unit_failed"]
+    assert len(raised) == loops + 1                                 # every failure is in the log
+    assert _unit_failed_owed(daemon.notifier) == [("flaky", loops), ("steady", 1)]
+
+    later = nt.Notifier(daemon.home, {})                            # unrouted: to the agent
+    later.boot()
+    assert _unit_failed_owed(later) == [("flaky", loops), ("steady", 1)]
+    ours, theirs = _pair()
+    later.attach(ours)
+    assert later.flush() == 2
+    assert sorted((r.source, r.arrival_id.split(":")[0]) for r in _records(theirs)) == [
+        ("pd_unit_failed", "flaky"), ("pd_unit_failed", "steady")]
