@@ -153,7 +153,10 @@ class Daemon:
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound
         #: Each attached channel still owed its hello: (deadline, peer pid, bytes so far).
         self._hellos: dict = {}
-        self.notifier = Notifier(self.home, self.core.declaration.notice_routes)
+        # The stream's rules, read live at each delivery: _bind_stream folds them anew at start
+        # and a stream rule changes them at runtime (MIS-0002-R152).
+        self.notifier = Notifier(self.home, self.core.declaration.notice_routes,
+                                 rules=lambda: self.stream.rules)
         #: The agent's duties, hosted so a duty that falls due wakes it (the scheduler design, 4.4).
         from macf.agent_events_log import append_event, read_events
         from macf.pd.duties import HostedDuties
@@ -227,6 +230,7 @@ class Daemon:
         self.core.record_start(record.pid, record.proc_start)
         self._compare_allowlist()
         self.core.boot()
+        self._publish_units()
         self.notifier.boot()
         self._notice_denied_grants()
         self._reassert_pace()
@@ -246,6 +250,24 @@ class Daemon:
         st = os.stat(self.events_path)
         self._events_bound = (st.st_dev, st.st_ino)
         add_append_listener(self.stream.note_own_append)
+
+    def _publish_units(self) -> None:
+        """Publish a summary of this agent's units into its own public tree, for its peers in a
+        shared container (MIS-0002-R62 (agent_MUST_see_shared_container)): names, kinds, limits,
+        restart rules, never a command or environment (``shared_view.summarize``). The
+        declaration is read only at start, so a changed declaration is published by the restart
+        that loads it. A home with no public tree has no peers reading it, and gets none made.
+        Publishing never stops the daemon: a failure is said, and peers read the home as
+        UNPUBLISHED, or see the old summary's age."""
+        from macf.pd import shared_view
+        if not (self.home / "agent" / "public").is_dir():
+            return
+        try:
+            shared_view.publish(self.home, self.core.declaration)
+        except Exception as e:  # noqa: BLE001 - GUARD, not handler: a peer's view must not end the daemon
+            print(f"⚠️ MACF: pd: could not publish this agent's units at "
+                  f"{shared_view.published_path(self.home)} (the daemon goes on; peers see "
+                  f"no summary or an old one, with its age): {e!r}", file=sys.stderr)
 
     def _notice_denied_grants(self) -> None:
         """Owe the agent a notice for each declared grant the last install found denied
@@ -664,7 +686,8 @@ class Daemon:
 
         from macf.agent_events_log import append_event, read_events
         from macf.pd.entries import (ENTRY_EVENTS, EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED, OneShot, fold, new_entry_id,
-                                     parse_when)
+                                     parse_when, with_last_firing)
+        from macf.pd.scheduler import EVENT_ENTRY_FIRED
         from macf.pd.taint import taint
         why = self._outside_session(creds)
         if why and isinstance(request, EntryAddRequest):
@@ -705,14 +728,16 @@ class Daemon:
             if not append_event(EVENT_ENTRY_ADDED, entry):
                 return Response(ok=False, error="the entry could not be recorded in the event log")
             self.scheduler.add_entry(entry)
-        held = fold(read_events(reverse=False, scope="all", only=ENTRY_EVENTS), self.card)
-        return Response(ok=True, entries=list(held.values()))
+        rows = list(read_events(reverse=False, scope="all", only=(*ENTRY_EVENTS, EVENT_ENTRY_FIRED)))
+        held = fold(rows, self.card)
+        return Response(ok=True, entries=with_last_firing(held, rows, self.card, EVENT_ENTRY_FIRED))
 
     # ------------------------------------------------------------------ the event stream's rules
 
     def _stream_rule(self, request: StreamRuleRequest, creds) -> Response:
         """The operator silences, unsilences or reroutes a source or a subscriber of the event
-        stream (MIS-0002-R152 (operator_MUST_silence_and_reroute)). The rule is recorded as a
+        stream, the agent's session among them as ``@channel`` (MIS-0002-R152
+        (operator_MUST_silence_and_reroute)). The rule is recorded as a
         ``pd_stream_rule`` event before it takes effect, so the next daemon folds it back, and
         takes effect at once. Where the declaration names the operator's own uid, as in a
         container, only that uid may set one; elsewhere the client's ask prompt on the command is
