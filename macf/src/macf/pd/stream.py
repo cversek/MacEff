@@ -39,9 +39,10 @@ import time
 from pathlib import Path
 from typing import Callable, Deque, Dict, Iterable, List, Optional, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from macf.pd.interface import EVENT_STREAM_RULE, STREAM_SUBSCRIBER_NAME, StreamGrant, StreamRule
+from macf.pd.interface import (CHANNEL_SUBSCRIBER, EVENT_STREAM_RULE, STREAM_SUBSCRIBER_NAME, StreamGrant,
+                               StreamRule)
 from macf.utils.peercred import peer_credentials
 
 #: How long a new connection has to send its hello.
@@ -95,9 +96,20 @@ class Hello(BaseModel):
     position: Optional[At] = None
     name: Optional[str] = Field(default=None, pattern=STREAM_SUBSCRIBER_NAME)
 
+    @field_validator("name")
+    @classmethod
+    def _not_the_session(cls, name: Optional[str]) -> Optional[str]:
+        if name == CHANNEL_SUBSCRIBER:
+            raise ValueError(f"{CHANNEL_SUBSCRIBER!r} names the agent's own session in the rules "
+                             f"(@{CHANNEL_SUBSCRIBER}), not a subscriber of the stream")
+        return name
+
 
 class Rules:
-    """The operator's rules in force: what the ``pd_stream_rule`` events fold to."""
+    """The operator's rules in force: what the ``pd_stream_rule`` events fold to. The notifier
+    reads the same rules, live, for the agent's session under the name ``channel``
+    (``CHANNEL_SUBSCRIBER``), so a rule silences or reroutes a notice to the session as it does
+    a record to a subscriber (MIS-0002-R152)."""
 
     def __init__(self):
         self.silenced: List[str] = []

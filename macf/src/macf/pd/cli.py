@@ -110,11 +110,13 @@ def add_pd_parser(sub) -> None:
     for act, helptext in (("silence", "stop delivering a source, or anything to a subscriber (@name); it still lands in the log"),
                           ("unsilence", "deliver a source or a subscriber (@name) again")):
         rule = stream_sub.add_parser(act, help=helptext)
-        rule.add_argument("target", help="an event name with * globs, or @name for a subscriber")
+        rule.add_argument("target", help="an event name or notice source with * globs, or @name for a "
+                                         "subscriber (@channel: the agent's own session)")
         rule.add_argument("--reason", default="", help="why; recorded with the rule")
         rule.set_defaults(func=cmd_pd_stream_rule, act=act)
     route = stream_sub.add_parser("route", help="send a source only to one subscriber, or --clear that route")
-    route.add_argument("target", metavar="source", help="an event name, with * globs")
+    route.add_argument("target", metavar="source", help="an event name or notice source, with * globs; "
+                                                        "routed elsewhere, it no longer reaches the session")
     route.add_argument("subscriber", nargs="?", default=None, help="the subscriber's name, with or without @")
     route.add_argument("--clear", action="store_true", help="take the source's route away")
     route.add_argument("--reason", default="", help="why; recorded with the rule")

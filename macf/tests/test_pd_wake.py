@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from macf.agent_events_log import read_events
 from macf.channels.maceff_channel import TAKES
 from macf.pd import notifier as nt
 from macf.pd import wake as wk
@@ -254,6 +255,31 @@ def test_a_source_no_attached_channel_declared_is_typed(tmp_path, isolated_event
         theirs.recv(1)
     n.detach(ours)
     theirs.close()
+
+
+@pytest.mark.parametrize("rule", [("silence", "amail", None), ("silence", "@channel", None),
+                                  ("route", "amail", "tray")])
+def test_the_wake_honors_the_operators_rules(tmp_path, isolated_events_log, rule):
+    """MIS-0002-R152 for the keystroke wake: a typed wake is delivery to the session, so mail
+    silenced, the session (@channel) silenced, or mail routed to another subscriber is never
+    typed. The notice is settled as silenced, not owed, and taking the rule away later types
+    nothing for it. The rules are read live: the rule is set after the notifier was made."""
+    from macf.pd.stream import Rules
+    clock, rules = [1000.0], Rules()
+    n = nt.Notifier(_home_with_mail(tmp_path, ID1), {"amail": "agent"}, clock=lambda: clock[0],
+                    rules=lambda: rules)
+    n.boot()
+    pane = FakePane([screen()])
+    n.waker = _waker(pane, []).waker
+    rules.apply(*rule)
+    clock[0] += nt.CHANNEL_GRACE_S + 1
+    assert not n.wake() and pane.typed == [], "a wake was typed for mail the rules keep from the session"
+    assert not n.owed, "a silenced notice stayed owed"
+    assert [e["data"]["source"] for e in read_events(reverse=False, scope="all")
+            if e.get("event") == nt.EVENT_SILENCED] == ["amail"]
+    rules.apply("unroute" if rule[0] == "route" else "unsilence", rule[1])
+    clock[0] += 3600
+    assert not n.wake() and pane.typed == [], "a silenced notice was typed once the rule was gone"
 
 
 # --- the real pane ---------------------------------------------------------------

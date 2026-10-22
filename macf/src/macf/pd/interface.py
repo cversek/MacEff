@@ -361,6 +361,10 @@ DEFAULT_WAKE_REFRACTORY_CEILING_S = 1800.0
 _STREAM_SOURCE = r"^[A-Za-z0-9_*?\[\]-]{1,200}$"
 #: A subscriber's name on the event stream, as its hello gives it and a rule names it after ``@``.
 STREAM_SUBSCRIBER_NAME = r"^[a-z][a-z0-9_-]{0,47}$"
+#: The agent's own session, as the stream's rules name it (``@channel``): the notifier asks the
+#: rules whether a notice is delivered to this name before it writes the notice to the MacEff
+#: channel or types a keystroke wake for it. No subscriber of the stream may take the name.
+CHANNEL_SUBSCRIBER = "channel"
 
 
 class StreamGrant(_Closed):
