@@ -203,7 +203,8 @@ Requirements live in the Specification section, one per line, in this form [MIS-
 Mark each one honestly, so that a conformance table never claims more than was checked.
 
 - **A test that does not exist yet:** a decidable requirement may name a planned test in any status before Final. Its Conformance state then says `planned`, and the test must exist and pass before the MIS becomes Final (§7.2).
-- **What the checker cannot see:** `mis check` cannot tell whether a named test exists, whether a judgment was really made, or whether a sentence means what it says (a double negative passes it). The Final gate covers the first two (§7.2); review covers the third.
+- **Name each test as pytest names it:** `path/to/test_file.py::test_name`, or `path/to/test_file.py::TestClass::test_name` for a method, without any parametrization in brackets, and the same tests in the bracket as in the Conformance row (§4). `mis check` holds both, in a checkout of the repository.
+- **What the checker cannot see:** `mis check` cannot tell whether a named test passes, whether a judgment was really made, or whether a sentence means what it says (a double negative passes it). Outside a checkout it cannot tell whether a named test exists either, and it says so when it runs. The Final gate covers the first two (§7.2); review covers the third.
 
 ### 3.2 Keywords
 
@@ -255,6 +256,11 @@ Naked numbers shut out every reader who does not hold the table. Slugs are a cou
 
 - The Rationale section MUST name every requirement ID [MIS-0001-R17 (rationale_MUST_name_every_req)]. Naming the ID is what the checker sees; what a reader needs is the reason for that requirement, beside its ID. The section also lists the rejected alternatives with their reasons, so that a later reader does not propose them again without new evidence.
 - The Conformance section MUST list every requirement ID with its check [MIS-0001-R18 (conformance_MUST_list_every_req)], in a table: requirement, check type, how, state. The states are, for a decidable requirement, `planned`, `passing` or `failing`; for a one-time judgment, `pending` or `recorded` (with who and when); for a standing judgment, a duty that recurs on every pull request or deliberation, `standing`, with the reviewer named in the How column; and `n/a` only when the requirement's condition never arose for this MIS, with the reason. It also records the cold-reader trial (§7.3) and the use trial (§7.2), each or "not yet held".
+  `mis check` holds each decidable row to the check its requirement names, under the same requirement:
+  - **Same tests:** the tests a requirement's bracket names and the tests its Conformance row names are the same set; a test named in only one of them is a finding.
+  - **Named tests exist:** in a checkout of the repository, each test a row names exists, unless the row's state is `planned` or `n/a` or the bracket marks the test `(planned)`. A row that reads `passing` or `failing` and names a missing file, function, class or method is a finding.
+  - **Methods with their class:** a test that is a method of a test class is named `file::Class::test`; `file::test` is a finding, which gives the full name.
+  - The lookup reads each test file's syntax tree, as pytest's default collection rules would find it, and imports or runs nothing. Outside a checkout (a deployment's framework tree, an MIS file kept elsewhere), the lookup is skipped, the run says so, and only the comparison applies.
 - Each MIS MUST end with a Wiki-Links section that names at least two concepts [MIS-0001-R19 (MIS_MUST_end_with_wiki-links)].
 
 **Motivation cites evidence with its tier** (`empiricism`). A proposal with no lived failure behind it may still be written: say so ("reasoning only"), and the operator weighs it accordingly.

@@ -629,6 +629,87 @@ def test_an_entry_request_carrying_a_permission_is_refused_at_the_socket(
     assert ask(daemon, add)["ok"]                         # the same entry, with no permission, is made
 
 
+def test_an_entry_whose_missed_run_policy_is_not_listed_is_refused_at_the_socket(
+        tmp_path, base, run_daemon, isolated_events_log, monkeypatch):
+    """MIS-0002-R25 (missed-run_policy_MUST_be_listed), the entry half: from the live session,
+    an entry_add whose missed-run policy is anything but once, skip or report, a schedule's
+    policy name, a near spelling or an empty one among them, is refused at the daemon's socket
+    and nothing is recorded. Each of the three listed values is made."""
+    from macf.pd.entries import EVENT_ENTRY_ADDED
+    from test_primal_daemon import ask
+    daemon = _live_session_daemon(tmp_path, base, run_daemon, monkeypatch)
+    add = {"op": "entry_add", "when": "in 20m", "purpose": "p", "action": "wake"}
+    for missed in ("run_once", "catch_up", "", "Once", "skip ", "report_only", "window", None):
+        refused = ask(daemon, {**add, "missed": missed})
+        assert not refused["ok"] and "request refused" in refused["error"], missed
+    assert _entry_events() == [] and ask(daemon, {"op": "entry_list"})["entries"] == []
+    for missed in ("once", "skip", "report"):
+        assert ask(daemon, {**add, "missed": missed})["ok"], missed
+    assert [e["data"]["missed"] for e in _entry_events() if e["event"] == EVENT_ENTRY_ADDED] == ["once", "skip", "report"]
+
+
+def test_an_entry_that_fired_late_says_how_late_where_its_notice_points(
+        tmp_path, base, run_daemon, isolated_events_log, monkeypatch, capsys):
+    """MIS-0002-R34 (late_run_MUST_state_lateness), the entry half: an entry the daemon fires
+    three hours late raises pd_entry_due, received through the MacEff channel's own record, and
+    the command its pointer names, run with the notice's id, states the firing's instant and how
+    late it fired. The lateness is read from the pd_entry_fired event, the log's only record."""
+    import re
+    import shlex
+    from datetime import timedelta
+
+    from macf.agent_events_log import append_event
+    from macf.channels.maceff_channel import DAEMON_POINTERS, TAKES
+    from macf.cli import _build_parser
+    from macf.pd import cli, client
+    from macf.pd import scheduler as sc
+    from macf.pd.entries import EVENT_ENTRY_ADDED
+    from test_pd_notice import _connect, _records
+    from test_primal_daemon import CARD, make_home, wait_for
+    home = make_home(tmp_path, [])
+    entry_id = new_entry_id()
+    due = (datetime.now(UTC) - timedelta(hours=3, minutes=5)).replace(microsecond=0)
+    append_event(EVENT_ENTRY_ADDED, {"agent": CARD, "id": entry_id, "when": due.isoformat(), "zone": "UTC",
+                                     "start": (due - timedelta(hours=1)).isoformat(), "first": due.isoformat(),
+                                     "purpose": "the weekly audit is due", "action": "wake", "missed": "once"})
+    daemon = _live_session_daemon(tmp_path, base, run_daemon, monkeypatch, home=home)
+    assert wait_for(lambda: any(e["event"] == sc.EVENT_ENTRY_FIRED for e in _fired_events()))
+    conn = _connect(daemon, takes=TAKES)
+    [record] = [r for r in _records(conn) if r.source == "pd_entry_due"]
+    conn.close()
+    assert record.arrival_id == entry_id
+
+    command = re.search(r"`(macf_tools pd entry show <id>)`", DAEMON_POINTERS["pd_entry_due"]).group(1)
+    real_ask = client.ask
+    monkeypatch.setattr(client, "ask", lambda card, request, **kw: real_ask(card, request, base=base, **kw))
+    monkeypatch.setattr(cli, "_this_agent", lambda: (home, CARD))
+    args = _build_parser().parse_args(shlex.split(command.replace("<id>", record.arrival_id))[1:])
+    capsys.readouterr()
+    assert args.func(args) == 0
+    out = capsys.readouterr().out
+    assert "the weekly audit is due" in out
+    assert f"for {due.isoformat()}, fired 3h 5m late" in out, out
+
+
+def test_the_last_firing_reads_on_time_within_the_grace_and_says_what_it_stood_for():
+    """How entry show words a firing: on time within the scheduler's grace, late in days, hours
+    and minutes past it, with the firings a late one stood for; an entry never fired says so."""
+    from macf.pd.cli import _last_fired
+    assert _last_fired(None) == "not yet"
+    assert _last_fired({"for": "T", "late_s": 59.0, "missed": 0, "notified": True}) == "for T, on time"
+    assert _last_fired({"for": "T", "late_s": 10800.0, "missed": 3, "notified": True}) == (
+        "for T, fired 3h 0m late, standing for 3 earlier firing(s) missed")
+    assert _last_fired({"for": "T", "late_s": 90000.0, "missed": 0, "notified": False}) == (
+        "for T, fired 1d 1h 0m late; no wake was sent")
+    assert "not recorded" in _last_fired({"for": "T", "late_s": None})
+
+
+def _fired_events():
+    from macf.agent_events_log import read_events
+    from macf.pd import scheduler as sc
+    return list(read_events(reverse=False, scope="all", only=(sc.EVENT_ENTRY_FIRED,)))
+
+
 def test_entry_add_and_remove_are_events_and_a_restarted_scheduler_holds_their_fold(
         tmp_path, base, run_daemon, isolated_events_log, monkeypatch):
     """MIS-0002-R131 (entry_MUST_be_events): each add and each remove asked at the daemon's
