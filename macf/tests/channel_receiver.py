@@ -14,7 +14,7 @@ import socket
 from pathlib import Path
 from typing import List, Tuple
 
-from macf.channels.maceff_channel import parse_record
+from macf.channels.maceff_channel import TAKES, parse_record
 from macf.pd import notifier as nt
 
 
@@ -27,7 +27,7 @@ class ChannelReceiver:
                                      append=lambda event, data: True, events=lambda: [])
         self._ours, self._theirs = socket.socketpair()
         self._theirs.settimeout(2)
-        self._notifier.attach(self._ours)
+        self._notifier.attach(self._ours, takes=TAKES)
         self.received: List[Tuple[str, str]] = []
 
     def __call__(self, source: str, notice_id: str) -> bool:

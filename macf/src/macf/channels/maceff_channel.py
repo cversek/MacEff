@@ -16,6 +16,10 @@ What this server does, and the requirement behind each part:
     process start time the daemon published (MIS-0002-R123
     (channel_MUST_check_its_peer_is_its_pd)): any process of this user can bind a known
     path while the daemon is down;
+  * says which notice sources it takes, in one hello line right after it connects and
+    has checked its peer, so the daemon holds a source this code doesn't know for a
+    channel that takes it, instead of logging delivered a record this channel would drop
+    (MIS-0002-R149 (pd_MUST_hold_sources_channel_did_not_declare));
   * turns each record it reads into one channel event whose metadata carries the
     notice's identifier, source, read time and sent time (MIS-0002-R114
     (channel_event_MUST_carry_notice_metadata)).
@@ -37,7 +41,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Dict, Literal, Optional
+from typing import Callable, Dict, Literal, Optional, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -48,7 +52,7 @@ from macf.notify.session import verify_incarnation
 # interface's, one definition for the daemon and every client: a name kept here as well
 # would let the channel look for a socket and a record the daemon never made, and R123's
 # check would then refuse the real daemon.
-from macf.pd.interface import DaemonRecord, channel_socket, check_socket_path, record_path
+from macf.pd.interface import ChannelHello, DaemonRecord, HelloBody, channel_socket, check_socket_path, record_path
 from macf.utils.identity import get_agent_identity
 from macf.utils.peercred import peer_credentials
 
@@ -133,6 +137,16 @@ class NoticeRecord(BaseModel):
         if self.source in DAEMON_POINTERS and self.count is not None:
             raise ValueError(f"a {self.source} notice carries no count")
         return self
+
+
+#: The notice sources this channel takes: exactly those its record accepts, read from the record
+#: itself, so the hello can't declare a source ``parse_record`` would refuse (MIS-0002-R149).
+TAKES = tuple(get_args(NoticeRecord.model_fields["source"].annotation))
+
+
+def hello_line() -> bytes:
+    """The one line this channel writes to its daemon: ``{"hello": {"takes": [...]}}``."""
+    return ChannelHello(hello=HelloBody(takes=list(TAKES))).model_dump_json().encode() + b"\n"
 
 
 def build_event(record: NoticeRecord) -> dict:
@@ -223,6 +237,11 @@ class Channel:
         if not verify_peer(conn, daemon):
             conn.close()
             return None
+        try:
+            conn.sendall(hello_line())
+        except OSError as e:
+            # The daemon closed already, a refusal (R122); what it sent before is still read.
+            print(f"⚠️ MACF: channel could not send its hello to the daemon: {e}", file=sys.stderr)
         return conn
 
     def pump(self, conn: socket.socket) -> int:

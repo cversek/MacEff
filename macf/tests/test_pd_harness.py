@@ -528,7 +528,7 @@ def test_channel_first(tmp_path, isolated_events_log, monkeypatch, capsys):
     import socket
 
     from macf.agent_events_log import read_events
-    from macf.channels.maceff_channel import parse_record
+    from macf.channels.maceff_channel import TAKES, parse_record
     from macf.pd import notifier as nt
     from macf.pd import wake as wk
 
@@ -556,7 +556,7 @@ def test_channel_first(tmp_path, isolated_events_log, monkeypatch, capsys):
     n.waker = wk.Waker(IdlePane(), record_keys=lambda text, kind: None, append=lambda e, d: True)
     ours, theirs = socket.socketpair()
     theirs.settimeout(2)
-    n.attach(ours)
+    n.attach(ours, takes=TAKES)
     (box / "1791990000-msg-1791990000-aaaaaaaaaaaa.amsg").write_text("never read by the notifier")
     n.poll()                                                    # the wake
     assert n.raise_notice("pd_limit_exceeded", "limit-worker-1")   # the notice
