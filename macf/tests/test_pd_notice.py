@@ -1028,7 +1028,7 @@ def test_a_crash_loop_is_one_notice_per_unit_with_its_count(tmp_path, script, ba
     later.boot()
     assert _unit_failed_owed(later) == [("flaky", loops), ("steady", 1)]
     ours, theirs = _pair()
-    later.attach(ours)
+    later.attach(ours, takes=TAKES)
     assert later.flush() == 2
     assert sorted((r.source, r.arrival_id.split(":")[0]) for r in _records(theirs)) == [
         ("pd_unit_failed", "flaky"), ("pd_unit_failed", "steady")]
