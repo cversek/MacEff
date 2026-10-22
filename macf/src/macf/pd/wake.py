@@ -32,6 +32,7 @@ unit's pane through its own tmux server.
 """
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
@@ -393,14 +394,37 @@ class TmuxPane:
             print(f"⚠️ MACF: pd: the session's pane could not be reached: {e}", file=sys.stderr)
             return None
 
+    def _target(self) -> str:
+        """The agent's own pane, else the session.
+
+        ``={agent}:`` is the session's ACTIVE pane. Once someone splits the window and works
+        in the new pane (a watch beside the agent), a wake typed there never reaches the
+        client. The session unit names the pane it created in its pane record, by the
+        pane's process group, which is the pane process's own pid (``session_unit``)."""
+        from macf.pd.session_unit import PANE_RECORD, tmux_dir
+        fallback = f"={self.agent}:"
+        try:
+            record = json.loads((tmux_dir(self.agent, self.base) / PANE_RECORD).read_text())
+            groups = {int(entry[0]) for entry in record}
+        except (OSError, ValueError, TypeError, IndexError):
+            return fallback                       # no record yet: the session, as before
+        out = self._run("list-panes", "-s", "-t", f"={self.agent}", "-F", "#{pane_id} #{pane_pid}")
+        if out is None or out.returncode != 0:
+            return fallback
+        for line in out.stdout.splitlines():
+            fields = line.split()
+            if len(fields) == 2 and fields[1].isdigit() and int(fields[1]) in groups:
+                return fields[0]
+        return fallback
+
     def capture(self) -> Optional[str]:
-        out = self._run("capture-pane", "-p", "-e", "-t", f"={self.agent}:")
+        out = self._run("capture-pane", "-p", "-e", "-t", self._target())
         return out.stdout if out is not None and out.returncode == 0 else None
 
     def type(self, text: str) -> bool:
-        out = self._run("send-keys", "-t", f"={self.agent}:", "-l", text)
+        out = self._run("send-keys", "-t", self._target(), "-l", text)
         return out is not None and out.returncode == 0
 
     def enter(self) -> bool:
-        out = self._run("send-keys", "-t", f"={self.agent}:", "Enter")
+        out = self._run("send-keys", "-t", self._target(), "Enter")
         return out is not None and out.returncode == 0

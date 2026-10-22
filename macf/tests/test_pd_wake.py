@@ -273,6 +273,37 @@ def test_the_wake_reaches_a_session_units_own_pane():
         shutil.rmtree(base, ignore_errors=True)
 
 
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="needs tmux")
+def test_the_wake_reaches_the_units_pane_after_a_split_takes_focus():
+    """A watch split beside the agent becomes the active pane, and ={agent}: would type the
+    wake into it. The pane record names the unit's own pane, and the wake goes there."""
+    import json as _json
+    from macf.pd import session_unit as su
+    base = Path(tempfile.mkdtemp(prefix="pw-", dir="/tmp"))
+    agent = "Resident_1a2b3c"
+    env = {k: v for k, v in os.environ.items() if k != "TMUX"}
+    env["TMUX_TMPDIR"] = str(su._private_dir(su.tmux_dir(agent, base)))
+    got, watch = base / "got.txt", base / "watch.txt"
+    try:
+        made = subprocess.run(["tmux", "-f", "/dev/null", "new-session", "-d", "-P", "-F", "#{pane_pid}",
+                               "-s", agent, f"cat > {got}"], env=env, check=True, capture_output=True, text=True)
+        (su.tmux_dir(agent, base) / su.PANE_RECORD).write_text(_json.dumps([[int(made.stdout.strip()), None]]))
+        subprocess.run(["tmux", "split-window", "-t", agent, f"cat > {watch}"], env=env, check=True)
+        subprocess.run(["tmux", "select-pane", "-t", f"{agent}:0.1"], env=env, check=True)
+        pane = wk.TmuxPane(agent, base)
+        text = wk.wake_text([ID1])
+        assert pane.type(text) and pane.enter()
+        deadline = time.monotonic() + 5
+        while not (got.exists() and got.read_text().strip()) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert got.read_text().strip() == text
+        assert (watch.read_text() if watch.exists() else "") == ""
+        assert "[maceff:wake] mail waiting" in (pane.capture() or ""), "the capture reads the unit pane too"
+    finally:
+        subprocess.run(["tmux", "kill-server"], env=env, capture_output=True)
+        shutil.rmtree(base, ignore_errors=True)
+
+
 # --- rule 14: a wake held too long reaches the operator through the outside watch ----------
 
 def test_a_held_stretch_names_the_agent_and_is_released_when_nothing_waits():
