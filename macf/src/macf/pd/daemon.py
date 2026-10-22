@@ -230,6 +230,7 @@ class Daemon:
         self.core.record_start(record.pid, record.proc_start)
         self._compare_allowlist()
         self.core.boot()
+        self._publish_units()
         self.notifier.boot()
         self._notice_denied_grants()
         self._reassert_pace()
@@ -249,6 +250,24 @@ class Daemon:
         st = os.stat(self.events_path)
         self._events_bound = (st.st_dev, st.st_ino)
         add_append_listener(self.stream.note_own_append)
+
+    def _publish_units(self) -> None:
+        """Publish a summary of this agent's units into its own public tree, for its peers in a
+        shared container (MIS-0002-R62 (agent_MUST_see_shared_container)): names, kinds, limits,
+        restart rules, never a command or environment (``shared_view.summarize``). The
+        declaration is read only at start, so a changed declaration is published by the restart
+        that loads it. A home with no public tree has no peers reading it, and gets none made.
+        Publishing never stops the daemon: a failure is said, and peers read the home as
+        UNPUBLISHED, or see the old summary's age."""
+        from macf.pd import shared_view
+        if not (self.home / "agent" / "public").is_dir():
+            return
+        try:
+            shared_view.publish(self.home, self.core.declaration)
+        except Exception as e:  # noqa: BLE001 - GUARD, not handler: a peer's view must not end the daemon
+            print(f"⚠️ MACF: pd: could not publish this agent's units at "
+                  f"{shared_view.published_path(self.home)} (the daemon goes on; peers see "
+                  f"no summary or an old one, with its age): {e!r}", file=sys.stderr)
 
     def _notice_denied_grants(self) -> None:
         """Owe the agent a notice for each declared grant the last install found denied
