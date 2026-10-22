@@ -369,6 +369,32 @@ def test_a_check_wakes_the_agent_only_when_its_condition_holds_and_keeps_what_it
     assert {d["schedule"]: d["late_s"] for d in log.of(sc.EVENT_DONE)} == {moved: 300.0, quiet: 300.0}
 
 
+def test_a_late_check_whose_policy_is_report_is_reported_and_not_run(tmp_path, monkeypatch):
+    """An entry's missed-run policy is once, skip or report (R25). A late check under "report"
+    says it was missed and runs nothing: the agent hears of it, and no program starts."""
+    import sys
+
+    from macf.pd import scheduler as sc
+    from macf.pd.entries import EVENT_ENTRY_ADDED
+    from macf.pd.interface import CheckArg, CheckTemplate
+    from test_pd_schedule import CARD, Log, at
+    _not_writable(monkeypatch)
+    template = CheckTemplate(command=[sys.executable, "-c", "print('ran')", "<n>"],
+                             wake_when="stdout", timeout_s=10, args={"n": CheckArg(kind="integer")})
+    log, now = Log(), [at("2026-10-19 12:05")]           # five minutes late: past the grace
+    entry_id = new_entry_id()
+    log.append(EVENT_ENTRY_ADDED, {"agent": CARD, "id": entry_id, "when": "2026-10-19T12:00:00+00:00", "zone": "UTC",
+                                   "start": "2026-10-19T11:00:00+00:00", "action": "check", "missed": "report",
+                                   "template": "count", "args": {"n": "1"}, "state": "active"})
+    s, channel = _check_scheduler(tmp_path, log, now, {"count": template})
+    s.tick()
+    assert not s.running, "a reported check starts no run"
+    assert channel.received == [("pd_entry_due", entry_id)]
+    fired = log.of(sc.EVENT_ENTRY_FIRED)
+    assert fired and fired[-1]["notified"] is True and fired[-1]["late_s"] == 300.0
+    assert not (tmp_path / "runs" / f"{entry_id}.out").exists()
+
+
 def test_a_check_whose_program_the_agent_could_rewrite_or_that_changed_since_install_never_runs(tmp_path, monkeypatch):
     """A template whose program is in the agent's home, or one changed since pd install where
     that's checked, isn't started; the agent is told it failed (4.2)."""
