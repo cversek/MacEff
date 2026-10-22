@@ -10,11 +10,13 @@ Rendering, then install and removal as plans: ``install_plan`` and ``uninstall_p
 what would be written and run, and only ``apply_plan`` does it. A LaunchAgent persists on
 the host, so a plan is shown before it is applied.
 """
+import os
 import plistlib
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from macf.pd.interface import launchd_label
+from macf.pd.names import PD_IDENTIFIER
 from macf.utils.atomic import write_text_atomic
 
 _VERBS = ("bootstrap", "bootout", "kickstart", "print")
@@ -43,13 +45,24 @@ def render_pd_launch_agent(card: str, program_argv: List[str], home: str,
     *program_argv* starts the daemon; the plist carries no declaration and no agent
     configuration (MIS-0002-R04 (outer_tier_MUST-NOT_hold_agent_config)), and no
     identity in its environment.
+
+    launchd runs its first element, the interpreter, as ``Program``, with ``maceff_pd`` in
+    its place as ``argv[0]``. macOS has no call that renames a running process, so this is
+    where the daemon gets the name ``ps`` and ``pgrep`` show
+    (MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd)). The kernel's own name, which ``top``
+    shows, stays the interpreter's. A framework-build interpreter is run through its
+    Python.app directly (``framework_app``), since its launcher's re-exec would rename it.
     """
     if not program_argv:
         raise ValueError("program_argv is empty")
+    if not os.path.isabs(program_argv[0]):
+        raise ValueError(f"launchd runs a program by its absolute path, not {program_argv[0]!r}")
     label = pd_label(card)
+    app = framework_app(program_argv[0])
     plist = {
         "Label": label,
-        "ProgramArguments": list(program_argv),
+        "Program": app or program_argv[0],
+        "ProgramArguments": [PD_IDENTIFIER, *program_argv[1:]],
         "RunAtLoad": True,
         "KeepAlive": True,
         "ThrottleInterval": 10,
@@ -64,8 +77,33 @@ def render_pd_launch_agent(card: str, program_argv: List[str], home: str,
         "StandardOutPath": f"{log_dir}/{label}.out.log",
         "StandardErrorPath": f"{log_dir}/{label}.err.log",
     }
+    if app:
+        # What the build's own launcher would have told Python.app: the path it was started
+        # as, so a venv survives the direct start. An internal of CPython's macOS build, which
+        # a test pins, so a release that drops it fails there rather than losing the name.
+        plist["EnvironmentVariables"] = {"__PYVENV_LAUNCHER__": program_argv[0]}
     path = f"{home}/Library/LaunchAgents/{label}.plist"
     return path, plistlib.dumps(plist, fmt=plistlib.FMT_XML, sort_keys=True)
+
+
+def framework_app(interpreter: str) -> Optional[str]:
+    """The Python.app binary a framework-build interpreter re-execs itself through, or None
+    for a plain build.
+
+    A framework build's ``bin/python3`` (Homebrew's, python.org's) is a launcher: it re-execs
+    ``Resources/Python.app/Contents/MacOS/Python``, which names the process, and passes the
+    path it was started as in ``__PYVENV_LAUNCHER__``. Read from the interpreter's resolved
+    path, so a venv's ``python3`` leads to its base build.
+    """
+    real = os.path.realpath(interpreter)
+    bin_dir = os.path.dirname(real)
+    version_dir = os.path.dirname(bin_dir)
+    versions = os.path.dirname(version_dir)
+    if (os.path.basename(bin_dir) != "bin" or os.path.basename(versions) != "Versions"
+            or not os.path.basename(os.path.dirname(versions)).endswith(".framework")):
+        return None
+    app = os.path.join(version_dir, "Resources", "Python.app", "Contents", "MacOS", "Python")
+    return app if os.path.isfile(app) else None
 
 
 def launchctl_argv(verb: str, label: str, uid: int, plist_path: Optional[str] = None) -> List[str]:
