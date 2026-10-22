@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from macf.channels.maceff_channel import TAKES
 from macf.pd import notifier as nt
 from macf.pd import wake as wk
 from macf.utils.input_origin import WAKE_OPENING, opens_with_wake
@@ -219,7 +220,7 @@ def test_wake_through_notifier(tmp_path, isolated_events_log):
     pane = FakePane([screen()])
     n.waker = _waker(pane, []).waker
     ours, theirs = socket.socketpair()
-    n.attach(ours)
+    n.attach(ours, takes=TAKES)
     clock[0] += 3600
     assert not n.wake() and pane.typed == [], "typed a wake while a channel was attached"
     n.detach(ours)
@@ -231,6 +232,28 @@ def test_wake_through_notifier(tmp_path, isolated_events_log):
     assert n.wake() and len(pane.typed) == 1
     assert ID1 in pane.typed[0] and ID2 in pane.typed[0]
     assert not n.owed, "a typed wake left its notices owed, for a channel to deliver again"
+
+
+def test_a_source_no_attached_channel_declared_is_typed(tmp_path, isolated_events_log):
+    """R105 counted per source (MIS-0002-R149): a channel is attached, but its hello left mail
+    out, so for mail there is no channel. After the grace the wake is typed, never held forever,
+    and the channel is sent no mail record."""
+    clock = [1000.0]
+    n = nt.Notifier(_home_with_mail(tmp_path, ID1), {"amail": "agent"}, clock=lambda: clock[0])
+    n.boot()
+    pane = FakePane([screen()])
+    n.waker = _waker(pane, []).waker
+    ours, theirs = socket.socketpair()
+    theirs.settimeout(0.2)
+    n.attach(ours, takes=[s for s in TAKES if s != "amail"])
+    assert n.flush() == 0 and n.owed, "mail went to a channel that didn't declare it"
+    clock[0] += nt.CHANNEL_GRACE_S + 1
+    assert n.wake() and len(pane.typed) == 1 and ID1 in pane.typed[0]
+    assert not n.owed
+    with pytest.raises(socket.timeout):
+        theirs.recv(1)
+    n.detach(ours)
+    theirs.close()
 
 
 # --- the real pane ---------------------------------------------------------------
@@ -363,7 +386,7 @@ def test_a_hold_that_a_channel_ends_is_released(tmp_path, isolated_events_log):
     n.wake()
     assert [e for e, _ in events] == [wk.EVENT_HELD]
     ours, theirs = socket.socketpair()
-    n.attach(ours)
+    n.attach(ours, takes=TAKES)
     n.flush()
     n.wake()
     n.wake()
