@@ -59,7 +59,7 @@ EVENT_DELIVERED = "pd_notice_delivered"
 #: from a store. Each is delivered only where the declaration routes it to the agent
 #: (MIS-0002-R42).
 INTERNAL_SOURCES = frozenset({"pd_limit_exceeded", "pd_unread_mail", "pd_carried", "pd_run_failed",
-                              "pd_schedule_changed", "pd_grant_denied", "pd_entry_due", "pd_duty_due",
+                              "pd_run_missed", "pd_schedule_changed", "pd_grant_denied", "pd_entry_due", "pd_duty_due",
                               "pd_unit_failed"})
 #: What each boot still owes, after reading back: the checkpoint the next boot reads back to
 #: (MIS-0002-R41). Its data lists each owed notice's source, arrival id, count and read time.
@@ -134,11 +134,11 @@ def channel_takes(source: str, arrival_id: str) -> bool:
 
 def subject(source: str, arrival_id: str) -> str:
     """What a daemon-raised notice is about, so that only the newest per thing is owed. A run
-    failure's or schedule change's id is ``<schedule>:<epoch>`` (``scheduler._notice_id``), so
+    failure's, missed spell's or schedule change's id is ``<schedule>:<epoch>`` (``scheduler._notice_id``), so
     it is per schedule; a unit failure's is ``<unit>:<failures>:<epoch>`` (``core._unit_failed_id``),
     so it is per unit; an entry's wake has the entry's id, so it is per entry; any other is
     per source."""
-    if source in ("pd_run_failed", "pd_schedule_changed"):
+    if source in ("pd_run_failed", "pd_run_missed", "pd_schedule_changed"):
         return f"{source}/{arrival_id.rsplit(':', 1)[0]}"
     if source == "pd_unit_failed":
         return f"{source}/{arrival_id.split(':', 1)[0]}"
