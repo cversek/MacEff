@@ -56,3 +56,17 @@ def test_a_context_no_boundary_bounds_reads_tainted():
     """With no session start or compaction in the log, nothing shows the context clean."""
     assert taint([tool("Read")])
     assert taint([])
+
+
+def test_another_sessions_boundary_does_not_end_the_scan():
+    """#744 review: with two sessions on one agent, the other session's compaction once ended the
+    scan and hid what was read before it. Each session is read back to its own boundary, and what
+    either read marks the context, failing closed."""
+    def other(event):
+        return {**event, "data": {**event["data"], "session_id": "t"}}
+    telegram = prompt('<channel source="telegram" chat_id="1">hello</channel>')
+    events = [tool("Read"), other(COMPACTED), telegram, other(tool("WebFetch")), other(START), START]
+    assert taint(events) == ["a message by telegram"]
+    events = [other(tool("Read")), COMPACTED, other(tool("WebFetch")), tool("WebFetch"), other(START)]
+    assert taint(events) == ["a web fetch"]
+    assert taint([tool("Read"), other(COMPACTED), COMPACTED, telegram]) == []
