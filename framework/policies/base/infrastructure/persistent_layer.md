@@ -93,6 +93,10 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - What happens to the units when a daemon dies and the next one starts?
 - Who writes a unit's liveness, and when is a unit overdue?
 - How does a control act say who asked?
+- How do I subscribe to the layer's events, and what does each record carry?
+- What happens when a subscriber falls behind, or reconnects after records it never saw?
+- Which records can a subscriber trust to say what the layer did?
+- Who may subscribe, and how does the operator silence or reroute the stream?
 
 **12 The Daemon and Its Control Socket**
 - How does an agent get exactly one daemon, and where does its identity come from?
@@ -661,11 +665,11 @@ Schedules are declared in the same file, although step 2 of MIS-0002's landing r
 **Taint marks an entry.** When you make an entry, the daemon reads your session's tool events since its start or last compaction. If your log holds more than one session, a fork or a resume, it reads each back to its own start or compaction, since it can't tell which one asked without taking your word for it, and what any of them read marks the entry. A web fetch, a tool that reads GitHub or mail, a Bash call that names a host or a URL, or a message by a channel other than the MacEff channel marks the context. **This is a heuristic, and you should read it as one.** A Bash call can fetch without naming a host. Nothing in the tool events can prove it didn't, and a log with nothing to bound the context reads as marked.
 - An entry made from a marked context records why it's marked, and `pd entry list`, `pd entry show` and `pd agenda` show it.
 
-**Reaching the operator is a wake, not a separate path.** A reminder or a daily brief the operator asked for is a wake entry of yours: it wakes your session at its time, and you report through your own channel to the operator. There is no agent-curated feed to the operator. The automatic notification stream the operator can silence or reroute is the layer's event stream, specified by MIS-0002's revision (R150 to R156), which publishes every event to the subscribers that chose its source. It isn't in the trial build.
+**Reaching the operator is a wake, not a separate path.** A reminder or a daily brief the operator asked for is a wake entry of yours: it wakes your session at its time, and you report through your own channel to the operator. There is no agent-curated feed to the operator. The automatic notification stream the operator can silence or reroute is the layer's event stream (11.4), which publishes every event to the subscribers that chose its source.
 
 **Duties wake you.** The daemon polls your roles once a minute, and a duty's crossing into DUE_SOON or OVERDUE raises `pd_duty_due`, recorded first as `duty_tier_crossed`. A duty that crossed while no daemon ran is announced once at its start, and none twice.
 
-**Not in the trial build:** the event stream, arbitrary commands as checks, the keystroke fallback for entries (the trial needs the MacEff channel), a duty's `at HH:MM` as its own wake, editing and pausing an entry, the two-way calendar, and the planner.
+**Not in the trial build:** arbitrary commands as checks, the keystroke fallback for entries (the trial needs the MacEff channel), a duty's `at HH:MM` as its own wake, editing and pausing an entry, the two-way calendar, and the planner.
 
 ---
 
@@ -727,6 +731,44 @@ Nothing is stored, so the same events read later give the later verdict. **The d
 
 Every start, stop and restart the core performs is a `pd_control` event naming who asked and why [MIS-0002-R52 (control_act_MUST_name_who_asked)]: the operator, the agent's declared wind-down, or the unit's own restart policy. An operator's act needs the process that asked, its user, pid and start time, and the core records it beside the asker, because the asker is a claim and the process is observed. The process is observed from the kernel's report on the control socket's connection (12.3).
 
+### 11.4 The event stream
+
+**What it is.** Every event your persistent layer records is published, as it is recorded, on one event stream [MIS-0002-R150 (layer_MUST_publish_event_stream)]. The stream is a way of reading your event log, not a second copy of it: the log stays the only store. Anything that tells a person, an agent or an app about your layer is a subscriber to the stream. The MacEff channel, the tray, and a bridge to the operator are meant to be subscribers, and nothing keeps a parallel feed. Today the MacEff channel still takes notices on its own socket (1.3), and no bridge to the operator is built: moving them onto the stream is a later step.
+
+**Where it is.** Your primal daemon serves the stream on `<agent>.events.sock`, beside its control and channel sockets, mode 0600 (12.2). It follows its own event log, as the core already does, and sends each new record to the subscribers that asked for its source. "As it records it" means within the daemon's tail interval, about one second: it reads the log on every pass of its loop, a quarter of a second apart, and that is the bound a subscriber may rely on. The daemon polls; it doesn't wait on kqueue or inotify, and nothing signals it from `append_event`.
+
+**Subscribing.** A subscriber connects and, within three seconds, sends one line. The line names the sources it takes (event names, with `*` globs), and optionally the position of the last record it saw and a name it goes by. A connection that sends nothing in time is closed. `macf_tools pd stream subscribe --source 'pd_unit_*' --name watch` does this and prints every line it gets. The daemon answers with a `welcome` line naming where the stream starts for it. Each record then arrives as one JSON line with:
+- its **position**: the log's identity (its inode and a digest of its first line, since rotation rewrites the file in place) and the byte offset just past the record, which is a line boundary;
+- its **source**, **agent** and **time**, as the layer set them;
+- its **origin**;
+- the record itself.
+
+A subscriber receives only the sources it chose [MIS-0002-R151 (subscriber_MUST_receive_chosen_sources)]. A subscriber refused for any reason gets one `refused` line saying why, and the connection closes.
+
+**Nothing is skipped in silence** [MIS-0002-R154 (subscriber_MUST_resume_from_last_record)]. On reconnect with a position, the stream resumes just after it, from the log. If rotation has removed that record, or the position isn't on a line boundary of the log it names, the stream sends one `gap` record saying from where to where records may be missing, then continues. A subscriber is never handed the next record as if nothing were missed. A resume reads at most 8 MB of the log at once, and one from further back gets a `gap` (`backlog`) to where that read starts. A subscriber connected through a rotation goes on without a gap when its last record was kept, which rotation does for the current cycle.
+
+**A slow subscriber never slows the layer** [MIS-0002-R153 (subscriber_MUST-NOT_block_layer)]. Each subscriber has a bounded queue of a thousand records, and sends never block. A subscriber that falls behind loses its own backlog, not the daemon's time. Its next record is a `gap` (`overflow`) from the last record it still held. Each uid may hold eight connections, a hello not yet sent included.
+
+**What a record can claim** [MIS-0002-R155 (stream_record_MUST_name_source)]. `agent` and `time` come from the layer, never from a field a publisher put in the event's data: `agent` is the daemon's own agent, and `time` the record's timestamp in the log, which `append_event` writes.
+- Anything running as your uid can append a line to your log: a shell redirect, or a tool steered by injected text. So a record read back from the log carries `origin: log`, whatever its event name claims.
+- A record the daemon writes itself carries `origin: daemon`. The daemon learns the line in-process as it writes it, and checks that the log holds exactly those bytes at that offset; a copy appended by anything else, even byte for byte, is `origin: log`. Only these can vouch that the layer did what they say.
+- A subscriber that alerts a person, such as an operator bridge, alerts on `origin: daemon` records.
+- This is the same threat model as your own entries (10.6): it stops a confused agent, not a compromised one. The operator's rules below are folded from the log too, so a forged rule line is read like any other.
+
+**Who may subscribe** [MIS-0002-R156 (subscriber_MUST_be_granted_agents)]. The daemon checks the connecting process's uid, as the kernel reports it (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on macOS):
+- **Your own uid** may subscribe to your sources.
+- **Any other uid** needs a grant in the operator's declaration, naming that uid and the sources it may take: `stream_grants: [{"uid": 0, "sources": ["pd_unit_state", "pd_daemon_start"]}]`. A host-wide watch might be granted unit states and notices, but never your tool events. A grant narrows what the subscriber asked for; the `welcome` names what was granted. The socket's mode and the private runtime directory keep every other non-root uid from reaching it at all, so today a grant is how a root watch, or a later deployment that opens the socket, gets in.
+- A subscriber of one daemon sees only that agent's records. Watching several agents means connecting to several daemons, each granting it separately.
+- **A grant separates uids, not agents.** On a host where several agents share one login, every one of them is "your own uid" to every other's daemon, and each may subscribe to the others' streams. Separating agents needs an account per agent, as containers have. The stream can't be more private than the event log it reads, which is mode 0600 to the login.
+
+**The operator can silence or reroute any source or subscriber without a restart** [MIS-0002-R152 (operator_MUST_silence_and_reroute)]. The commands are `macf_tools pd stream silence <source|@subscriber>`, `unsilence <source|@subscriber>`, and `route <source> <subscriber>`, which sends a source only to that subscriber, among those that chose it; `route <source> --clear` takes the route away. A subscriber is named with `@`, by the name its hello gave.
+- Each one is recorded as a `pd_stream_rule` event before it takes effect, and the daemon's rules are what those events fold to, so a rule survives a restart. A rule that can't be recorded isn't set.
+- A silenced source still lands in the log. Only its delivery stops.
+- Setting the mode puts these commands in the client's ask list, as `pd entry add` is, so on a login you share with the operator, approving the prompt is the operator's act. An operator who loosens one to `allow` keeps that choice.
+- Where the operator has an account of its own, as in a container, the declaration names it as `operator_uid`, and the daemon takes the stream's rules only from that uid, refusing your own. That uid is let through the control socket for these rules alone. On a shared login the uid check separates nothing: every agent on that login has the operator's uid, so there the ask prompt is what makes a rule the operator's act.
+
+**What the stream is not for.** Quiet hours, a daily bound, and delivering something exactly once belong to whichever subscriber delivers to a person, not to the layer. The operator route beyond unread mail, and "hold until present", are that subscriber's job (MIS-0002 R42).
+
 ---
 
 ## 12 The Daemon and Its Control Socket
@@ -745,7 +787,7 @@ On Linux the daemon names its own process `maceff_pd` as it starts, so `ps`, `to
 
 ### 12.2 Where the socket is
 
-The daemon listens on Unix sockets only, never on a network port [MIS-0002-R80 (pd_MUST-NOT_listen_on_network)]: the control socket here and, once the notifier lands, the channel socket of 1.3. Both live in the runtime directory, `$XDG_RUNTIME_DIR/maceff_pd/`, or `/tmp/maceff_pd-<uid>/` where that variable is unset, each named for the agent's card, so every path carries `maceff_pd` and the card [MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd)]. The daemon checks the socket path against the platform's length limit before binding, as the adapter does at install (3.1), with a message naming the path and the limit. Without the check, a path that's too long fails at bind with an error that names neither.
+The daemon listens on Unix sockets only, never on a network port [MIS-0002-R80 (pd_MUST-NOT_listen_on_network)]: the control socket here, the channel socket of 1.3, and the event stream's socket (11.4). All three live in the runtime directory, `$XDG_RUNTIME_DIR/maceff_pd/`, or `/tmp/maceff_pd-<uid>/` where that variable is unset, each named for the agent's card, so every path carries `maceff_pd` and the card [MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd)]. The daemon checks the socket path against the platform's length limit before binding, as the adapter does at install (3.1), with a message naming the path and the limit. Without the check, a path that's too long fails at bind with an error that names neither.
 
 **The runtime directory must be private.** The daemon creates it with mode 0700, and refuses to start when an existing one belongs to another user or is open to group or others. Under `/tmp`, another local user could have made the directory first, and every socket in it would then be theirs to replace.
 
@@ -753,7 +795,7 @@ The daemon listens on Unix sockets only, never on a network port [MIS-0002-R80 (
 
 ### 12.3 Who may connect, and what that proves
 
-The control socket accepts a connection only from the daemon's own user, as the kernel reports it for the connection. **That is all the check proves.** On a login that several agents share, or an agent and its operator, the kernel can't tell them apart. So a request names its asker, and the daemon records that claim beside the user, pid and start time it observed [MIS-0002-R52 (control_act_MUST_name_who_asked)]. The claim is an attribution, not an authentication, until each agent runs under its own account, and nothing over the socket gives a claimed operator more than any caller of the same login.
+The control socket accepts a connection only from the daemon's own user, as the kernel reports it for the connection, and from the declaration's `operator_uid` for the event stream's rules alone (11.4). **That is all the check proves.** On a login that several agents share, or an agent and its operator, the kernel can't tell them apart. So a request names its asker, and the daemon records that claim beside the user, pid and start time it observed [MIS-0002-R52 (control_act_MUST_name_who_asked)]. The claim is an attribution, not an authentication, until each agent runs under its own account, and nothing over the socket gives a claimed operator more than any caller of the same login.
 
 An act may claim only the operator or the agent's wind-down. A pace of the keystroke wake (1.9) acts on no unit, and may claim the agent, from its own command line, or the operator. Which asker a request claims isn't checked against the declaration in step 1, and is recorded as any claim is. The restart policy and the harness ask from inside the daemon, so a request that claims either is refused with the reason, and nothing is done.
 
@@ -761,6 +803,7 @@ An act may claim only the operator or the agent's wind-down. A pace of the keyst
 
 - **`status`** returns each declared unit's state, pid, start time and when it entered that state.
 - **`start`, `stop` and `restart`** act on one declared unit. A stop sends SIGTERM to the unit's process group and SIGKILL after its grace period, and it succeeds whatever gate the session enforces [MIS-0002-R48 (outside_stop_MUST_override_gates)]. It is how the operator takes back a session that a loop holds. An asked restart first lets the unit's work in flight drain, up to a timeout it names when it gives up [MIS-0002-R49 (pd_MUST_check_work_in_flight)].
+- **`stream_rule`** silences, unsilences or reroutes a source or a subscriber of the event stream, asked by the operator, recorded first and in force at once (11.4).
 - **A unit the declaration doesn't name is refused.** The daemon never starts, stops or signals another agent's units [MIS-0002-R07 (pd_MUST-NOT_control_other_agents)].
 - **A malformed request, an unknown operation or an unknown field refuses the whole request**, and nothing is done.
 - **A compaction is refused.** The layer never compacts a session on its own initiative [MIS-0002-R51 (layer_MUST-NOT_compact_on_own)]. Compaction on request is still to come (13): it will be accepted only from the operator or the agent's declared wind-down [MIS-0002-R108 (compaction_MUST_be_asked_by_operator_or_wind-down)], and only once the operator is established some other way than a claim (9.3).

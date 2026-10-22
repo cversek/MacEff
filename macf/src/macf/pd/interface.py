@@ -22,7 +22,7 @@ the client itself stores, compared through ``verify_incarnation``.
 """
 import re
 from pathlib import Path
-from typing import Annotated, Dict, List, Literal, Optional, Union, get_args
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union, get_args
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
@@ -35,6 +35,7 @@ from macf.pd.names import (  # re-exported: interface's callers import these fro
     control_socket,
     declaration_path,
     ensure_runtime_dir,
+    events_socket,
     launchd_label,
     pd_id,
     record_path,
@@ -351,6 +352,21 @@ DEFAULT_WAKE_REFRACTORY_S = 600.0
 DEFAULT_WAKE_REFRACTORY_CEILING_S = 1800.0
 
 
+#: A source pattern on the event stream: an event name, with ``*`` and ``?`` globs.
+_STREAM_SOURCE = r"^[A-Za-z0-9_*?\[\]-]{1,200}$"
+#: A subscriber's name on the event stream, as its hello gives it and a rule names it after ``@``.
+STREAM_SUBSCRIBER_NAME = r"^[a-z][a-z0-9_-]{0,47}$"
+
+
+class StreamGrant(_Closed):
+    """A uid other than the agent's own that may subscribe to its event stream, and the sources
+    it may take (MIS-0002-R156 (subscriber_MUST_be_granted_agents); persistent_layer 11.4). Least
+    privilege: a tray or a host-wide watch is granted unit states and notices, not tool events."""
+
+    uid: int = Field(ge=0)
+    sources: List[Annotated[str, Field(pattern=_STREAM_SOURCE)]] = Field(min_length=1)
+
+
 class Declaration(_Closed):
     """Everything an agent declares to its primal daemon. Audited by reading it.
 
@@ -374,6 +390,11 @@ class Declaration(_Closed):
       schedule or quiet window is declared, because a host reads a bare time of day in its
       local time and a container usually in UTC, so the same declaration would act at
       different moments.
+    - ``stream_grants``: the other uids that may subscribe to the event stream, each with the
+      sources it may take; the agent's own uid needs none (persistent_layer 11.4).
+    - ``operator_uid``: where the operator has an account of its own, as in a container, the
+      only uid the daemon takes the event stream's rules from. None: the daemon's own uid, as
+      for every control act.
     """
 
     version: Literal[1]
@@ -404,6 +425,17 @@ class Declaration(_Closed):
     timezone: Optional[str] = None
     #: Commands the agent's ``check`` entries may run, by name (the scheduler design, 4.2).
     check_templates: Dict[str, CheckTemplate] = Field(default_factory=dict)
+    stream_grants: List[StreamGrant] = Field(default_factory=list)
+    operator_uid: Optional[int] = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _one_grant_per_uid(self) -> "Declaration":
+        uids = [g.uid for g in self.stream_grants]
+        dupes = sorted({u for u in uids if uids.count(u) > 1})
+        if dupes:
+            raise ValueError(f"stream_grants names uid {', '.join(map(str, dupes))} more than once; "
+                             f"give each uid one grant listing every source it may take")
+        return self
 
     @model_validator(mode="after")
     def _names_unique(self) -> "Declaration":
@@ -512,6 +544,8 @@ EVENT_UNREAD_MAIL_CLEARED = "pd_unread_mail_cleared"
 #: (MIS-0002-R124). ``findings`` names each difference.
 EVENT_ALLOWLIST_MISMATCH = "pd_allowlist_mismatch"
 EVENT_DAEMON_START = "pd_daemon_start"
+#: An operator's rule for the event stream: what its rules in force fold to (persistent_layer 11.4).
+EVENT_STREAM_RULE = "pd_stream_rule"
 
 
 class Liveness(_Closed):
@@ -616,6 +650,42 @@ class WakePaced(_Closed):
     asked_by: Asker
     peer: Peer
     reason: str = Field(min_length=1)
+
+
+class StreamRule(_Closed):
+    """A rule the operator set for the event stream, written before it takes effect; the
+    daemon's rules in force are what these events fold to, so a rule survives a restart
+    (MIS-0002-R152 (operator_MUST_silence_and_reroute)).
+
+    ``silence`` and ``unsilence`` name a source pattern, or a subscriber as ``@name``; ``route``
+    sends the sources ``target`` matches only to the subscriber ``subscriber`` names, and
+    ``unroute`` takes that route away. A silenced source still lands in the log."""
+
+    agent: str
+    act: Literal["silence", "unsilence", "route", "unroute"]
+    target: str = Field(min_length=1, max_length=200)
+    subscriber: Optional[str] = Field(default=None, pattern=STREAM_SUBSCRIBER_NAME)
+    asked_by: Asker
+    peer: Optional[Peer] = None
+    reason: str = ""
+
+    @model_validator(mode="after")
+    def _well_formed(self) -> "StreamRule":
+        _check_stream_rule(self.act, self.target, self.subscriber)
+        return self
+
+
+def _check_stream_rule(act: str, target: str, subscriber: Optional[str]) -> None:
+    """A rule names a source pattern, or a subscriber where silencing; a route names both."""
+    if target.startswith("@"):
+        if act not in ("silence", "unsilence"):
+            raise ValueError(f"a {act} names a source, not a subscriber ({target!r})")
+        if not re.fullmatch(STREAM_SUBSCRIBER_NAME, target[1:]):
+            raise ValueError(f"{target!r} is not a subscriber name: '@' and a short lowercase word")
+    elif not re.fullmatch(_STREAM_SOURCE, target):
+        raise ValueError(f"{target!r} is not a source: an event name, with * and ? globs")
+    if (act == "route") != (subscriber is not None):
+        raise ValueError("a route names the subscriber it sends the source to, and only a route does")
 
 
 class DaemonStart(_Closed):
@@ -744,8 +814,27 @@ class PaceRequest(_Closed):
         return self
 
 
+class StreamRuleRequest(_Closed):
+    """Silence, unsilence or reroute a source or a subscriber of the event stream, asked by the
+    operator; it takes effect at once and is recorded first (persistent_layer 11.4)."""
+
+    op: Literal["stream_rule"]
+    act: Literal["silence", "unsilence", "route", "unroute"]
+    target: str = Field(min_length=1, max_length=200)
+    subscriber: Optional[str] = Field(default=None, pattern=STREAM_SUBSCRIBER_NAME)
+    asked_by: Asker
+    reason: str = Field(default="", max_length=500)
+
+    @model_validator(mode="after")
+    def _operator_and_well_formed(self) -> "StreamRuleRequest":
+        if self.asked_by.kind != "operator":
+            raise ValueError("only the operator sets the event stream's rules")
+        _check_stream_rule(self.act, self.target, self.subscriber)
+        return self
+
+
 Request = Union[StatusRequest, ActRequest, CompactRequest, PaceRequest, EntryAddRequest,
-                EntryListRequest, EntryRemoveRequest]
+                EntryListRequest, EntryRemoveRequest, StreamRuleRequest]
 
 
 class UnitStatus(_Closed):
@@ -772,6 +861,8 @@ class Response(_Closed):
     entries: Optional[List[dict]] = None
     wake_refractory_s: Optional[float] = None
     wake_window_from: Optional[str] = None
+    #: The event stream's rules in force, answering a stream rule.
+    stream_rules: Optional[Dict[str, Any]] = None
 
 
 _REQUEST = TypeAdapter(Annotated[Request, Field(discriminator="op")])
