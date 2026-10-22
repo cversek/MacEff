@@ -146,9 +146,12 @@ def test_send_keys_happy_path_literal_then_enter(monkeypatch):
     monkeypatch.setattr(sup.subprocess, "run", fake_run)
     rc = sup.send_keys("x", ["/compact"])
     assert rc == 0
+    # The patch catches every subprocess call, the breadcrumb helper's git fallback
+    # included, so only tmux's are the behavior under test (#793).
+    tmux = [c for c in calls if c[:1] == ["tmux"]]
     # First call: literal text with -l and -- guard; second: a bare Enter.
-    assert calls[0] == ["tmux", "send-keys", "-t", "x_59ae6fca", "-l", "--", "/compact"]
-    assert calls[1] == ["tmux", "send-keys", "-t", "x_59ae6fca", "Enter"]
+    assert tmux == [["tmux", "send-keys", "-t", "x_59ae6fca", "-l", "--", "/compact"],
+                    ["tmux", "send-keys", "-t", "x_59ae6fca", "Enter"]]
 
 
 def test_send_keys_no_enter(monkeypatch):
@@ -160,8 +163,9 @@ def test_send_keys_no_enter(monkeypatch):
                         lambda argv, *a, **k: calls.append(argv) or type("R", (), {"returncode": 0})())
     rc = sup.send_keys("x", ["hello world"], enter=False)
     assert rc == 0
-    assert len(calls) == 1  # no Enter press
-    assert calls[0][-3:] == ["-l", "--", "hello world"]
+    tmux = [c for c in calls if c[:1] == ["tmux"]]   # as above (#793)
+    assert len(tmux) == 1  # no Enter press
+    assert tmux[0][-3:] == ["-l", "--", "hello world"]
 
 
 # --- session spec resolution (the resume-latest continuity fix) -----------
