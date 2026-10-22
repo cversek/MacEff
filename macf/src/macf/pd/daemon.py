@@ -26,18 +26,23 @@ from macf.agent_events_log import append_event, read_events
 from macf.notify.session import descends_from, proc_start, verify_incarnation
 from macf.pd.core import POLICY_POINTER, Core, DeclarationRefused, load_declaration
 from macf.pd.interface import (
+    EVENT_CHANNEL_DECLARED,
     EVENT_CONTROL,
     ActRequest,
+    ChannelHello,
     Control,
     DaemonRecord,
     EntryAddRequest,
     EntryListRequest,
     EntryRemoveRequest,
+    EVENT_STREAM_RULE,
     IdentityError,
     PaceRequest,
     Peer,
     Response,
     StatusRequest,
+    StreamRule,
+    StreamRuleRequest,
     WakePaced,
     agent_card,
     channel_socket,
@@ -45,6 +50,7 @@ from macf.pd.interface import (
     control_socket,
     parse_request,
     ensure_runtime_dir,
+    events_socket,
     record_path,
     runtime_dir,
 )
@@ -77,6 +83,13 @@ REQUEST_TIMEOUT_S = 2.0
 
 #: The longest request line read; anything longer is refused, not buffered.
 MAX_REQUEST_BYTES = 64 * 1024
+
+#: How long an attached channel has to send its hello (MIS-0002-R149). One that sends none in
+#: time declares nothing and stays attached; one whose hello is still partial then is dropped.
+HELLO_TIMEOUT_S = 2.0
+
+#: The longest hello read. A channel's hello is a list of source names, far below this.
+MAX_HELLO_BYTES = 8 * 1024
 
 
 class AlreadyRunning(RuntimeError):
@@ -114,8 +127,10 @@ class Daemon:
         self.control_path = control_socket(self.card, self.base)
         self.record_path = record_path(self.card, self.base)
         self.channel_path = channel_socket(self.card, self.base)
+        self.events_path = events_socket(self.card, self.base)
         check_socket_path(self.control_path)
         check_socket_path(self.channel_path)
+        check_socket_path(self.events_path)
         placeholders = {"agent_home": str(self.home), "card": self.card, "runtime_dir": str(self.base)}
         self.core = Core(load_declaration(self.home, self.card), self.card,
                          placeholders=placeholders, **core_options)
@@ -128,9 +143,16 @@ class Daemon:
         self.scheduler = Scheduler(self.core.declaration, self.card, placeholders,
                                    work_dir=self.base / f"{self.record_path.stem}.runs",
                                    check_installed=not rendered_declaration_path(self.home).exists())
+        #: The event stream (persistent_layer 11.4): the log, followed and fanned out.
+        from macf.agent_events_log import get_log_path
+        from macf.pd.stream import EventStream
+        self.stream = EventStream(self.card, get_log_path(), self.core.declaration.stream_grants)
+        self._events_bound: Optional[tuple] = None
         self._listener: Optional[socket.socket] = None
         self._channel_listener: Optional[socket.socket] = None
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound
+        #: Each attached channel still owed its hello: (deadline, peer pid, bytes so far).
+        self._hellos: dict = {}
         self.notifier = Notifier(self.home, self.core.declaration.notice_routes)
         #: The agent's duties, hosted so a duty that falls due wakes it (the scheduler design, 4.4).
         from macf.agent_events_log import append_event, read_events
@@ -200,6 +222,7 @@ class Daemon:
         channel.listen(4)
         channel.setblocking(False)
         self._channel_listener = channel
+        self._bind_stream()
         record = self._record = self._write_record()
         self.core.record_start(record.pid, record.proc_start)
         self._compare_allowlist()
@@ -211,6 +234,18 @@ class Daemon:
             self.unread_mail.boot()
         self.scheduler.boot()
         self.duties.boot()
+
+    def _bind_stream(self) -> None:
+        """Bind the event stream's socket, fold the operator's rules from the log, and learn this
+        process's own appends as it makes them, so they carry ``origin: daemon``."""
+        from macf.agent_events_log import add_append_listener
+        from macf.pd.stream import fold_rules
+        self.stream.rules = fold_rules(read_events(reverse=False, scope="all", only=(EVENT_STREAM_RULE,)),
+                                       self.card)
+        self.stream.bind(self.events_path)
+        st = os.stat(self.events_path)
+        self._events_bound = (st.st_dev, st.st_ino)
+        add_append_listener(self.stream.note_own_append)
 
     def _notice_denied_grants(self) -> None:
         """Owe the agent a notice for each declared grant the last install found denied
@@ -266,7 +301,10 @@ class Daemon:
         the next daemon to adopt unless the stop asked for them too, so a restart through
         the outer tier restarts the daemon alone."""
         sel = self._sel = selectors.DefaultSelector()
-        self.notifier.on_detach = sel.unregister
+        self.notifier.on_detach = self._channel_gone
+        self.stream.on_register = lambda conn: sel.register(conn, selectors.EVENT_READ, "subscriber")
+        self.stream.on_unregister = sel.unregister
+        sel.register(self.stream.listener, selectors.EVENT_READ, "events")
         sel.register(self._listener, selectors.EVENT_READ, "control")
         sel.register(self._channel_listener, selectors.EVENT_READ, "channel")
         sel.register(self._wake_r, selectors.EVENT_READ, "wake")
@@ -279,10 +317,15 @@ class Daemon:
                         self._accept_channel()
                     elif key.data == "attached":
                         self._channel_readable(key.fileobj)
+                    elif key.data == "events":
+                        self.stream.accept()
+                    elif key.data == "subscriber":
+                        self.stream.readable(key.fileobj)
                     else:
                         os.read(self._wake_r, 512)
                 self.core.tick()
                 self.scheduler.tick()
+                self._hellos_due()
                 self.notifier.poll()
                 self.notifier.flush()
                 self.notifier.wake()
@@ -291,17 +334,28 @@ class Daemon:
                 if self.unread_mail is not None:
                     self.unread_mail.tick(self.core.session_active_since())
                 self.duties.tick()
+                self._pump_stream()
                 self._keep_record()
         finally:
             for conn in self.notifier.channels:
                 self.notifier.detach(conn)
             self.notifier.on_detach = None
+            self.stream.on_unregister = None
+            self.stream.close()
             self.scheduler.shutdown()
             sel.close()
             self._sel = None
             if self._stop_units:
                 self.core.shutdown("every unit stopped as asked, with the daemon")
             self._release()
+
+    def _pump_stream(self) -> None:
+        """One pass of the event stream. A failure inside it costs the stream's pass, never the
+        loop that supervises the units (MIS-0002-R153 (subscriber_MUST-NOT_block_layer))."""
+        try:
+            self.stream.pump()
+        except Exception as e:  # noqa: BLE001 - GUARD, not handler: the stream must not end the daemon
+            print(f"⚠️ MACF: pd: the event stream's pass failed (the daemon goes on): {e!r}", file=sys.stderr)
 
     def stop(self, units: bool = False) -> None:
         """Ask ``serve`` to finish, and with ``units`` to stop every unit first; a plain stop,
@@ -377,8 +431,12 @@ class Daemon:
             self._listener.close()
         if self._channel_listener is not None:
             self._channel_listener.close()
+        from macf.agent_events_log import remove_append_listener
+        remove_append_listener(self.stream.note_own_append)
+        self.stream.close()
         for path, still_mine in ((self.control_path, self._socket_is_mine),
                                  (self.channel_path, self._channel_is_mine),
+                                 (self.events_path, self._events_is_mine),
                                  (self.record_path, self._record_is_mine)):
             try:
                 if still_mine():
@@ -391,6 +449,10 @@ class Daemon:
     def _channel_is_mine(self) -> bool:
         st = os.stat(self.channel_path)
         return (st.st_dev, st.st_ino) == self._channel_bound
+
+    def _events_is_mine(self) -> bool:
+        st = os.stat(self.events_path)
+        return (st.st_dev, st.st_ino) == self._events_bound
 
     def _socket_is_mine(self) -> bool:
         st = os.stat(self.control_path)
@@ -427,7 +489,8 @@ class Daemon:
             conn.close()
             return
         conn.setblocking(False)
-        self.notifier.attach(conn)
+        self.notifier.attach(conn)          # declaring nothing until its hello (R149)
+        self._hellos[conn] = (time.monotonic() + HELLO_TIMEOUT_S, peer.pid, b"")
         if self._sel is not None:
             self._sel.register(conn, selectors.EVENT_READ, "attached")
         print(f"📡 MACF: pd: channel attached (pid {peer.pid}); "
@@ -446,17 +509,71 @@ class Daemon:
                 else f"pid {peer.pid} (uid {peer.uid}) is not below the session unit's pid {session[0]}")
 
     def _channel_readable(self, conn: socket.socket) -> None:
-        """A channel never writes, so a readable channel has closed (or broke the protocol)."""
+        """A channel writes one line, its hello, right after it attaches (MIS-0002-R149
+        (pd_MUST_hold_sources_channel_did_not_declare)). A partial hello is kept until its
+        line ends or its time runs out; the read never blocks the loop. After the hello, a
+        readable channel has closed or broken the protocol, and either way it is dropped."""
         try:
-            data = conn.recv(512)
+            data = conn.recv(4096)
         except BlockingIOError:
             return  # noqa: MACEFF003 - a spurious wakeup, not a failure
         except OSError:
             data = b""
-        if data:
-            print("⚠️ MACF: pd: a channel wrote to the daemon, which channels never do; "
-                  "dropping it", file=sys.stderr)
+        pending = self._hellos.get(conn)
+        if pending is None or not data:
+            if data:
+                print("⚠️ MACF: pd: a channel wrote to the daemon after its hello, which channels "
+                      "never do; dropping it", file=sys.stderr)
+            self.notifier.detach(conn)
+            return
+        deadline, pid, got = pending
+        got += data
+        if b"\n" not in got:
+            if len(got) > MAX_HELLO_BYTES:
+                self._drop_hello(conn, f"its hello ran past {MAX_HELLO_BYTES} bytes with no line end")
+            else:
+                self._hellos[conn] = (deadline, pid, got)
+            return
+        line, rest = got.split(b"\n", 1)
+        if rest:
+            self._drop_hello(conn, "it wrote more after its hello")
+            return
+        try:
+            hello = ChannelHello.model_validate_json(line)
+        except ValidationError as e:
+            self._drop_hello(conn, f"its hello is malformed ({e.error_count()} problem(s))")
+            return
+        del self._hellos[conn]
+        takes = sorted(set(hello.hello.takes))
+        self.notifier.declare(conn, takes)
+        append_event(EVENT_CHANNEL_DECLARED, {"agent": self.card, "pid": pid, "takes": takes})
+        print(f"📡 MACF: pd: the channel (pid {pid}) takes {', '.join(takes) or 'nothing'}", file=sys.stderr)
+
+    def _drop_hello(self, conn: socket.socket, why: str) -> None:
+        print(f"⚠️ MACF: pd: dropping a channel: {why} (MIS-0002-R149)", file=sys.stderr)
         self.notifier.detach(conn)
+
+    def _hellos_due(self) -> None:
+        """End each hello wait whose time ran out. A channel that sent nothing declares nothing
+        and stays attached, so it is sent nothing and its notices stay held; one that sent part
+        of a line broke the protocol."""
+        now = time.monotonic()
+        for conn, (deadline, pid, got) in list(self._hellos.items()):
+            if now < deadline:
+                continue
+            if got:
+                self._drop_hello(conn, f"its hello didn't end within {HELLO_TIMEOUT_S:g} s")
+                continue
+            del self._hellos[conn]
+            print(f"⚠️ MACF: pd: the channel (pid {pid}) sent no hello within {HELLO_TIMEOUT_S:g} s; it "
+                  f"declares no source, so every notice is held for one that does (MIS-0002-R149)",
+                  file=sys.stderr)
+
+    def _channel_gone(self, conn: socket.socket) -> None:
+        """The notifier is closing ``conn``: stop watching it, and stop waiting on its hello."""
+        self._hellos.pop(conn, None)
+        if self._sel is not None:
+            self._sel.unregister(conn)
 
     # ------------------------------------------------------------------ requests
 
@@ -493,7 +610,8 @@ class Daemon:
             creds = peer_credentials(conn)
         except OSError as e:
             return Response(ok=False, error=f"the peer cannot be identified: {e}")
-        if creds.uid != os.getuid():
+        operator_uid = self.core.declaration.operator_uid
+        if creds.uid != os.getuid() and creds.uid != operator_uid:
             return Response(ok=False, error="this socket serves only the daemon's own user")
         try:
             line = self._read_line(conn)
@@ -505,6 +623,11 @@ class Daemon:
             request = parse_request(line)
         except ValidationError as e:
             return Response(ok=False, error=f"request refused: {e.errors()[0]['msg']}")
+        if isinstance(request, StreamRuleRequest):
+            return self._stream_rule(request, creds)
+        if creds.uid != os.getuid():
+            return Response(ok=False, error="this socket serves only the daemon's own user, but for the "
+                                            "operator's rules for the event stream")
         if isinstance(request, (EntryAddRequest, EntryListRequest, EntryRemoveRequest)):
             return self._entry_request(request, creds)
         if isinstance(request, StatusRequest):
@@ -584,6 +707,33 @@ class Daemon:
             self.scheduler.add_entry(entry)
         held = fold(read_events(reverse=False, scope="all", only=ENTRY_EVENTS), self.card)
         return Response(ok=True, entries=list(held.values()))
+
+    # ------------------------------------------------------------------ the event stream's rules
+
+    def _stream_rule(self, request: StreamRuleRequest, creds) -> Response:
+        """The operator silences, unsilences or reroutes a source or a subscriber of the event
+        stream (MIS-0002-R152 (operator_MUST_silence_and_reroute)). The rule is recorded as a
+        ``pd_stream_rule`` event before it takes effect, so the next daemon folds it back, and
+        takes effect at once. Where the declaration names the operator's own uid, as in a
+        container, only that uid may set one; elsewhere the client's ask prompt on the command is
+        the operator's act (persistent_layer 11.4)."""
+        operator_uid = self.core.declaration.operator_uid
+        if operator_uid is not None and creds.uid != operator_uid:
+            return Response(ok=False, error=(f"the event stream's rules are taken only from the operator's "
+                                             f"uid {operator_uid}, not uid {creds.uid}"))
+        started = proc_start(creds.pid)
+        if not started:
+            return Response(ok=False, error=(
+                f"the asking process (pid {creds.pid}) has no start time to record, "
+                f"so who asked cannot be named (MIS-0002-R52 (control_act_MUST_name_who_asked))"))
+        rule = StreamRule(agent=self.card, act=request.act, target=request.target,
+                          subscriber=request.subscriber, asked_by=request.asked_by,
+                          peer=Peer(uid=creds.uid, pid=creds.pid, proc_start=started), reason=request.reason)
+        if not append_event(EVENT_STREAM_RULE, rule.model_dump()):
+            return Response(ok=False, error=("the rule could not be recorded, so it is not set: a rule the "
+                                             "next daemon cannot read back would be lost at its restart"))
+        self.stream.rules.apply(rule.act, rule.target, rule.subscriber)
+        return Response(ok=True, stream_rules=self.stream.rules.as_dict())
 
     # ------------------------------------------------------------------ the wake's pace
 

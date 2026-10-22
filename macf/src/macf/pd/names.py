@@ -134,6 +134,11 @@ def channel_socket(card: str, base: Optional[Path] = None) -> Path:
     return (base or runtime_dir()) / f"{pd_id(card)}.channel.sock"
 
 
+def events_socket(card: str, base: Optional[Path] = None) -> Path:
+    """The event stream's socket (persistent_layer 11.4), beside the control and channel sockets."""
+    return (base or runtime_dir()) / f"{pd_id(card)}.events.sock"
+
+
 def record_path(card: str, base: Optional[Path] = None) -> Path:
     return (base or runtime_dir()) / f"{pd_id(card)}.json"
 
