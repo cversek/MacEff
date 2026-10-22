@@ -102,8 +102,10 @@ def test_the_launch_agent_runs_exactly_the_daemon_on_the_home(tmp_path):
     """MIS-0002-R04 (outer_tier_MUST-NOT_hold_agent_config): the agent home is the daemon's
     only argument."""
     home = tmp_path / "home"
+    from macf.platform.launchd import framework_app
     plist = plistlib.loads(adapters.LaunchdAdapter(user_home=tmp_path).render(CARD, home).encode())
-    assert plist["ProgramArguments"] == [sys.executable, "-m", "macf.pd", str(home)]
+    assert plist["Program"] == (framework_app(sys.executable) or sys.executable)
+    assert plist["ProgramArguments"] == ["maceff_pd", "-m", "macf.pd", str(home)]
 
 
 def test_a_socket_path_too_long_stops_the_launchd_install_before_anything_is_written(tmp_path, monkeypatch):
