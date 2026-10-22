@@ -306,6 +306,19 @@ def test_a_check_template_fills_whole_arguments_of_the_declared_kind():
         CheckTemplate(command=["<prog>"], wake_when="stdout", timeout_s=30, args={"prog": CheckArg(kind="integer")})
 
 
+def test_a_check_argument_with_a_brace_is_refused_even_by_a_loose_pattern():
+    """A run renders its command's placeholders after the slots are filled, so a value holding
+    {agent_home} would become a value the pattern never checked. Braces are refused whatever the
+    pattern, and each slot still fills one whole argument of its kind (R143)."""
+    from macf.pd.interface import CheckArg, CheckTemplate
+    t = CheckTemplate(command=["/bin/echo", "<text>"], wake_when="stdout", timeout_s=30,
+                      args={"text": CheckArg(kind="pattern", pattern=r".+")})
+    assert t.argv({"text": "plain"}) == ["/bin/echo", "plain"]
+    for bad in ("{agent_home}", "x}", "{"):
+        with pytest.raises(ValueError):
+            t.argv({"text": bad})
+
+
 def _not_writable(monkeypatch, *writable):
     """The test's interpreter, which the runner's account can usually write, is treated as the
     operator's: only the paths given read as writable by the agent."""

@@ -263,6 +263,10 @@ class CheckArg(_Closed):
     def accepts(self, value: str) -> bool:
         if self.kind == "integer":
             return re.fullmatch(r"-?\d{1,18}", value) is not None
+        # A run renders its command's placeholders ({agent_home}) after the slots are filled,
+        # so a brace in a value would turn a checked value into another (MIS-0002-R143).
+        if "{" in value or "}" in value:
+            return False
         return re.fullmatch(self.pattern, value) is not None
 
 
