@@ -639,9 +639,7 @@ Schedules are declared in the same file, although step 2 of MIS-0002's landing r
 - A daemon that exits 78 (its home can't be used) isn't restarted, and the log says to fix the home and restart the container. One that exits 75 (another daemon already serves the agent) is checked again once a minute, so the container takes over if that one ends.
 - **An agent with no declaration is started exactly as before.** A deployment opts in agent by agent, by writing the declaration.
 
-### 10.6 Your own entries (DRAFT, with the scheduler's trial build)
-
-> **Draft.** This section ships with the trial build of the scheduler and is settled by MIS-0002's scheduler revision. Until that merges, it describes what the trial branch does, not what `main` does.
+### 10.6 Your own entries
 
 **You can schedule for yourself.** Declared schedules (10.4) are the operator's. An *entry* is yours: a timed obligation your primal daemon holds, because it outlives your session and is the only clock running while the session is down.
 - `macf_tools pd entry add <when> "<purpose>" --missed once|skip|report` makes one. Write the purpose so a later you, after a compaction, can act on it cold.
@@ -651,6 +649,8 @@ Schedules are declared in the same file, although step 2 of MIS-0002's landing r
 - **An entry's id is opaque,** `e-` and 12 hex digits, and the event log is its only store: what you hold is what `pd_entry_added` and `pd_entry_removed` fold to.
 
 **When.** An instant (`2026-10-20T06:30`), a time from now (`in 20m`, `in 2h`, `in 3d`), `tomorrow 06:30`, a cron (`cron:*/5 * * * *`) or a recurrence (`rrule:FREQ=WEEKLY;BYDAY=MO`), read in the declaration's timezone. A recurrence can also step in hours or minutes (`rrule:FREQ=MINUTELY;INTERVAL=50`), by elapsed time from its start: a wake every fifty minutes lands inside the hour a prompt cache lasts, so the session reads its context from cache instead of writing it again. A relative time is fixed when the entry is made, so "in 20m" means the same moment after a restart. A firing missed while the daemon was down fires once, for the newest instant, unless its policy is `skip`. A wake owed for longer than the notifier's day is owed again at the next start, so a weekend's wake survives a Monday reboot.
+
+**What a shared login means for all three** [MIS-0002-R136 (shared_login_limits_MUST_be_stated)]. Where you run under the operator's own login, the ask rule on `pd entry add`, revocation, and the check-template rule each stop a confused agent, not a compromised one. A compromised agent can dodge a rule that matches the command as written, read the alert credential, and write programs outside its home, because the operator's account can. None of the three is a boundary there; each is advisory (`capability_boundaries` 3.1). Where you have your own account, all three are held where you can't write, and each is verified by an attempt that fails.
 
 **What an entry does when it falls due:**
 - **wake** (the default): the `pd_entry_due` notice, whose id is the entry's. It's a doorbell; its pointer sends you to `pd entry show <id>`.
