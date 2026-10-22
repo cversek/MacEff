@@ -373,7 +373,163 @@ def check(paths: Iterable[Path], glossary: Optional[Path] = None) -> list[Findin
         elif num:
             seen[num] = f.name
     out.extend(check_citations(files, glossary))
+    for f in files:
+        out.extend(check_named_tests(f))
     return out
+
+
+# A test a requirement names: a path to a .py file, then ::name, or ::Class::name for a method,
+# with any parametrization in brackets, which names the same test.
+TEST_ID_RE = re.compile(r"([-\w./]+\.py)((?:::\w+)+)(?:\[[^\]\s]*\])?")
+DECIDABLE_BRACKET_RE = re.compile(r"^- \*\*(R\d{2,})\*\* \[(?:MUST NOT|SHOULD NOT|MUST|SHOULD|MAY) · decidable: ([^\]]+)\]")
+CONFORMANCE_ROW_RE = re.compile(r"^\| (R\d{2,}) \| decidable \| (.*?) \| (.*?) \|\s*$")
+# Conformance states that say no test is there to find yet (policy mis §3.1, §4).
+EXEMPT_STATES = ("planned", "n/a")
+
+
+def test_ids(text: str) -> set:
+    """The tests a bracket or a Conformance cell names, as 'file::name' or 'file::Class::name'."""
+    return {m.group(1) + m.group(2) for m in TEST_ID_RE.finditer(text)}
+
+
+def checkout_root(mis_file: Path) -> Optional[Path]:
+    """The repository checkout an MIS file belongs to, or None outside one.
+
+    As for the package texts that check_citations reads, the checkout is the directory that holds
+    framework/ (MIS-0001-R03 (MIS_MUST_be_named_by_number) fixes framework/mis), and it is a
+    checkout when it holds the package's tests, which the named test paths are relative to."""
+    root = mis_file.parent.parent.parent  # noqa: MACEFF002 - framework/mis/MIS-*.md, as above
+    return root if (root / "macf" / "tests").is_dir() else None
+
+
+def collected_tests(path: Path):
+    """What pytest's default rules collect from one test file, read from its syntax tree.
+
+    {"functions": {name}, "classes": {class: {method}}, "methods": {method: [class]}}, or, when
+    the file cannot be read or parsed, a string that says why. Functions named test*, and classes named Test* with their
+    test* methods, at any depth of class nesting (named Outer::Inner::test). Nothing is imported
+    or run."""
+    import ast
+    text, unreadable = read_utf8(path)
+    if unreadable:
+        return "is not UTF-8"
+    try:
+        tree = ast.parse(text, filename=str(path))
+    except SyntaxError as e:
+        return f"cannot be parsed (line {e.lineno}: {e.msg})"
+    funcs = (ast.FunctionDef, ast.AsyncFunctionDef)
+    out: dict = {"functions": set(), "classes": {}, "methods": {}}
+    # pytest collects a class's inherited test methods under it too; bases defined in this
+    # file are followed, a base imported from elsewhere is not (its methods read as missing,
+    # the safe direction).
+    top = {n.name: n for n in tree.body if isinstance(n, ast.ClassDef)}
+
+    def own_and_inherited(node, seen: frozenset = frozenset()) -> set:
+        found = {b.name for b in node.body if isinstance(b, funcs) and b.name.startswith("test")}
+        for base in node.bases:
+            if isinstance(base, ast.Name) and base.id in top and base.id not in seen:
+                found |= own_and_inherited(top[base.id], seen | {node.name})
+        return found
+
+    def visit_class(node, prefix: str) -> None:
+        name = f"{prefix}::{node.name}" if prefix else node.name
+        methods = own_and_inherited(node)
+        out["classes"][name] = methods
+        for m in methods:
+            out["methods"].setdefault(m, []).append(name)
+        for b in node.body:
+            if isinstance(b, ast.ClassDef) and b.name.startswith("Test"):
+                visit_class(b, name)
+
+    for node in tree.body:
+        if isinstance(node, funcs) and node.name.startswith("test"):
+            out["functions"].add(node.name)
+        elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            visit_class(node, "")
+    return out
+
+
+def check_named_tests(path: Path) -> list:
+    """R18: the Conformance table lists each decidable requirement with its check, and that check exists.
+
+    Three faults, each a Conformance row that does not list its requirement's real check:
+    - the tests a requirement's bracket names differ from those its Conformance row names;
+    - a row that is not planned or n/a names a test that does not exist in the checkout;
+    - a row names a test method as file::method, without its class (file::Class::method).
+    The existence checks read each named file's syntax tree, so they run only in a checkout of
+    the repository the tests are named in (checkout_root); elsewhere they are skipped, and the
+    CLI says so. A bracket marked (planned), or a row in state planned or n/a, names a test that
+    need not exist yet (policy mis §3.1), so only the comparison applies to it.
+    """
+    text, unreadable = read_utf8(path)
+    if unreadable:  # check_file reported it
+        return []
+    lines = text.splitlines()
+    numbered = read_sections(lines)["numbered"]
+    p = str(path)
+    out: list = []
+    brackets: dict = {}  # requirement ID -> (line, bracket text, label)
+    spec = _body(lines, numbered, "Specification")
+    for offset, line in enumerate(spec["lines"], start=1):
+        m = DECIDABLE_BRACKET_RE.match(line)
+        if m and m.group(1) not in brackets:
+            sm = REQ_SLUG_RE.match(line)
+            label = f"{m.group(1)} ({sm.group(2)})" if sm else m.group(1)
+            brackets[m.group(1)] = (spec["start"] + offset, m.group(2), label)
+    rows: dict = {}  # requirement ID -> (line, how, state)
+    conf = _body(lines, numbered, "Conformance")
+    for offset, line in enumerate(conf["lines"], start=1):
+        m = CONFORMANCE_ROW_RE.match(line)
+        if m and m.group(1) not in rows:
+            rows[m.group(1)] = (conf["start"] + offset, m.group(2), m.group(3).strip())
+
+    root = checkout_root(path)
+    cache: dict = {}
+    for rid, (bline, bracket, label) in brackets.items():
+        if rid not in rows:  # check_file reports the missing row (R18)
+            continue
+        rline, how, state = rows[rid]
+        named, listed = test_ids(bracket), test_ids(how)
+        if named != listed:
+            add = sorted(listed - named)
+            drop = sorted(named - listed)
+            detail = "; ".join(x for x in (f"only the bracket names {drop}" if drop else "",
+                                           f"only the Conformance row (line {rline}) names {add}" if add else "") if x)
+            out.append(Finding(path=p, line=bline, rule="R18",
+                               message=f"{label}: the bracket and the Conformance row name different tests; {detail}"))
+        exempt = "(planned)" in bracket or state.lower().startswith(EXEMPT_STATES)
+        if root is None or exempt:
+            continue
+        for tid in sorted(named | listed):
+            where = rline if tid in listed else bline
+            fault = _test_fault(root, tid, cache)
+            if fault:
+                out.append(Finding(path=p, line=where, rule="R18",
+                                   message=f"{label}: the Conformance state is '{state}', but {tid} {fault}"))
+    return out
+
+
+def _test_fault(root: Path, tid: str, cache: dict) -> str:
+    """Why a named test is not a test pytest collects under root, or '' when it is."""
+    file, *parts = tid.split("::")
+    if file not in cache:
+        f = root / file
+        cache[file] = collected_tests(f) if f.is_file() else "does not exist"
+    got = cache[file]
+    if isinstance(got, str):
+        return f"names a file that {got} ({file})"
+    *classes, name = parts
+    if not classes:
+        if name in got["functions"]:
+            return ""
+        owners = got["methods"].get(name)
+        if owners:
+            return f"is a method of {' and '.join(owners)}; name it {file}::{owners[0]}::{name}"
+        return "does not exist"
+    cls = "::".join(classes)
+    if cls not in got["classes"]:
+        return f"does not exist: {file} has no test class {cls}"
+    return "" if name in got["classes"][cls] else f"does not exist: class {cls} has no test {name}"
 
 
 def check_citations(files: list, glossary: Optional[Path] = None) -> list:
