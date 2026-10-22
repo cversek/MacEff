@@ -26,8 +26,10 @@ from macf.agent_events_log import append_event, read_events
 from macf.notify.session import descends_from, proc_start, verify_incarnation
 from macf.pd.core import POLICY_POINTER, Core, DeclarationRefused, load_declaration
 from macf.pd.interface import (
+    EVENT_CHANNEL_DECLARED,
     EVENT_CONTROL,
     ActRequest,
+    ChannelHello,
     Control,
     DaemonRecord,
     EntryAddRequest,
@@ -77,6 +79,13 @@ REQUEST_TIMEOUT_S = 2.0
 
 #: The longest request line read; anything longer is refused, not buffered.
 MAX_REQUEST_BYTES = 64 * 1024
+
+#: How long an attached channel has to send its hello (MIS-0002-R149). One that sends none in
+#: time declares nothing and stays attached; one whose hello is still partial then is dropped.
+HELLO_TIMEOUT_S = 2.0
+
+#: The longest hello read. A channel's hello is a list of source names, far below this.
+MAX_HELLO_BYTES = 8 * 1024
 
 
 class AlreadyRunning(RuntimeError):
@@ -131,6 +140,8 @@ class Daemon:
         self._listener: Optional[socket.socket] = None
         self._channel_listener: Optional[socket.socket] = None
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound
+        #: Each attached channel still owed its hello: (deadline, peer pid, bytes so far).
+        self._hellos: dict = {}
         self.notifier = Notifier(self.home, self.core.declaration.notice_routes)
         #: The agent's duties, hosted so a duty that falls due wakes it (the scheduler design, 4.4).
         from macf.agent_events_log import append_event, read_events
@@ -266,7 +277,7 @@ class Daemon:
         the next daemon to adopt unless the stop asked for them too, so a restart through
         the outer tier restarts the daemon alone."""
         sel = self._sel = selectors.DefaultSelector()
-        self.notifier.on_detach = sel.unregister
+        self.notifier.on_detach = self._channel_gone
         sel.register(self._listener, selectors.EVENT_READ, "control")
         sel.register(self._channel_listener, selectors.EVENT_READ, "channel")
         sel.register(self._wake_r, selectors.EVENT_READ, "wake")
@@ -283,6 +294,7 @@ class Daemon:
                         os.read(self._wake_r, 512)
                 self.core.tick()
                 self.scheduler.tick()
+                self._hellos_due()
                 self.notifier.poll()
                 self.notifier.flush()
                 self.notifier.wake()
@@ -427,7 +439,8 @@ class Daemon:
             conn.close()
             return
         conn.setblocking(False)
-        self.notifier.attach(conn)
+        self.notifier.attach(conn)          # declaring nothing until its hello (R149)
+        self._hellos[conn] = (time.monotonic() + HELLO_TIMEOUT_S, peer.pid, b"")
         if self._sel is not None:
             self._sel.register(conn, selectors.EVENT_READ, "attached")
         print(f"📡 MACF: pd: channel attached (pid {peer.pid}); "
@@ -446,17 +459,71 @@ class Daemon:
                 else f"pid {peer.pid} (uid {peer.uid}) is not below the session unit's pid {session[0]}")
 
     def _channel_readable(self, conn: socket.socket) -> None:
-        """A channel never writes, so a readable channel has closed (or broke the protocol)."""
+        """A channel writes one line, its hello, right after it attaches (MIS-0002-R149
+        (pd_MUST_hold_sources_channel_did_not_declare)). A partial hello is kept until its
+        line ends or its time runs out; the read never blocks the loop. After the hello, a
+        readable channel has closed or broken the protocol, and either way it is dropped."""
         try:
-            data = conn.recv(512)
+            data = conn.recv(4096)
         except BlockingIOError:
             return  # noqa: MACEFF003 - a spurious wakeup, not a failure
         except OSError:
             data = b""
-        if data:
-            print("⚠️ MACF: pd: a channel wrote to the daemon, which channels never do; "
-                  "dropping it", file=sys.stderr)
+        pending = self._hellos.get(conn)
+        if pending is None or not data:
+            if data:
+                print("⚠️ MACF: pd: a channel wrote to the daemon after its hello, which channels "
+                      "never do; dropping it", file=sys.stderr)
+            self.notifier.detach(conn)
+            return
+        deadline, pid, got = pending
+        got += data
+        if b"\n" not in got:
+            if len(got) > MAX_HELLO_BYTES:
+                self._drop_hello(conn, f"its hello ran past {MAX_HELLO_BYTES} bytes with no line end")
+            else:
+                self._hellos[conn] = (deadline, pid, got)
+            return
+        line, rest = got.split(b"\n", 1)
+        if rest:
+            self._drop_hello(conn, "it wrote more after its hello")
+            return
+        try:
+            hello = ChannelHello.model_validate_json(line)
+        except ValidationError as e:
+            self._drop_hello(conn, f"its hello is malformed ({e.error_count()} problem(s))")
+            return
+        del self._hellos[conn]
+        takes = sorted(set(hello.hello.takes))
+        self.notifier.declare(conn, takes)
+        append_event(EVENT_CHANNEL_DECLARED, {"agent": self.card, "pid": pid, "takes": takes})
+        print(f"📡 MACF: pd: the channel (pid {pid}) takes {', '.join(takes) or 'nothing'}", file=sys.stderr)
+
+    def _drop_hello(self, conn: socket.socket, why: str) -> None:
+        print(f"⚠️ MACF: pd: dropping a channel: {why} (MIS-0002-R149)", file=sys.stderr)
         self.notifier.detach(conn)
+
+    def _hellos_due(self) -> None:
+        """End each hello wait whose time ran out. A channel that sent nothing declares nothing
+        and stays attached, so it is sent nothing and its notices stay held; one that sent part
+        of a line broke the protocol."""
+        now = time.monotonic()
+        for conn, (deadline, pid, got) in list(self._hellos.items()):
+            if now < deadline:
+                continue
+            if got:
+                self._drop_hello(conn, f"its hello didn't end within {HELLO_TIMEOUT_S:g} s")
+                continue
+            del self._hellos[conn]
+            print(f"⚠️ MACF: pd: the channel (pid {pid}) sent no hello within {HELLO_TIMEOUT_S:g} s; it "
+                  f"declares no source, so every notice is held for one that does (MIS-0002-R149)",
+                  file=sys.stderr)
+
+    def _channel_gone(self, conn: socket.socket) -> None:
+        """The notifier is closing ``conn``: stop watching it, and stop waiting on its hello."""
+        self._hellos.pop(conn, None)
+        if self._sel is not None:
+            self._sel.unregister(conn)
 
     # ------------------------------------------------------------------ requests
 

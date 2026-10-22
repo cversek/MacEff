@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import pytest
 
 from macf.agent_events_log import read_events
-from macf.channels.maceff_channel import build_event, parse_record
+from macf.channels.maceff_channel import TAKES, build_event, parse_record
 from macf.notify.session import proc_start
 from macf.pd import notifier as nt
 from channel_receiver import ChannelReceiver
@@ -74,7 +74,7 @@ def test_source_named(tmp_path, isolated_events_log):
     _mail(home, "m1")
     n.poll()
     ours, theirs = _pair()
-    n.attach(ours)
+    n.attach(ours, takes=TAKES)
     assert n.flush() == 1
     (record,) = _records(theirs)
     assert record.source == "amail"
@@ -92,7 +92,7 @@ def test_three_times(tmp_path, isolated_events_log):
     n.poll()
     clock[0] = 1300.0
     ours, theirs = _pair()
-    n.attach(ours)
+    n.attach(ours, takes=TAKES)
     n.flush()
     (record,) = _records(theirs)
     assert (record.read_at, record.sent_at) == (1000.0, 1300.0)
@@ -118,7 +118,7 @@ def test_held_while_down(tmp_path, isolated_events_log):
     second.boot()
     assert len(second.owed) == 2, "the held notice and the one for mail waiting at start"
     ours, theirs = _pair()
-    second.attach(ours)
+    second.attach(ours, takes=TAKES)
     assert second.flush() == 2
     assert [r.count for r in _records(theirs)] == [1, 2]
 
@@ -173,7 +173,7 @@ def test_each_route_reaches_its_audience_and_no_other(tmp_path, isolated_events_
     n.raise_notice("pd_unread_mail", "unread-mail-1")
     append_event(EVENT_UNREAD_MAIL, {"agent": "Tester@abc123", "count": 1, "reason": "1 message(s) unread"})
     ours, theirs = _pair()
-    n.attach(ours)
+    n.attach(ours, takes=TAKES)
     n.flush()
     to_agent = sorted(r.source for r in _records(theirs))
     assert to_agent == sorted(s for s, r in routes.items() if r in ("agent", "both"))
@@ -199,7 +199,7 @@ def test_nothing_is_sent_for_no_change(tmp_path, isolated_events_log):
     n = nt.Notifier(home, {"amail": "agent"})
     n.boot()
     ours, theirs = _pair()
-    n.attach(ours)
+    n.attach(ours, takes=TAKES)
     n.flush()
     _records(theirs)
     for _ in range(5):
@@ -215,7 +215,7 @@ def test_a_channel_that_went_away_keeps_the_notice_owed(tmp_path, isolated_event
     n.poll()
     ours, theirs = _pair()
     theirs.close()
-    n.attach(ours)
+    n.attach(ours, takes=TAKES)
     assert n.flush() == 0 and len(n.owed) == 1 and not n.channels
 
 
@@ -229,10 +229,13 @@ def _declare_routes(home):
     path.write_text(json.dumps(decl))
 
 
-def _connect(daemon):
+def _connect(daemon, takes=None):
+    """A channel's connection to the running daemon; with ``takes``, it sends that hello."""
     conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     conn.settimeout(3)
     conn.connect(str(daemon.channel_path))
+    if takes is not None:
+        conn.sendall(json.dumps({"hello": {"takes": list(takes)}}).encode() + b"\n")
     return conn
 
 
@@ -251,13 +254,136 @@ def test_peer_lineage_checked_by_the_daemon(tmp_path, base, run_daemon, isolated
 
     me = (os.getpid(), proc_start(os.getpid()))              # this test stands in for the session
     monkeypatch.setattr(daemon.core, "session_incarnation", lambda: me)
-    conn = _connect(daemon)
+    conn = _connect(daemon, takes=TAKES)
     (record,) = _records(conn)
     assert record.source == "amail" and record.count == 1
     deadline = time.monotonic() + 3
     while daemon.notifier.owed and time.monotonic() < deadline:
         time.sleep(0.05)
     assert not daemon.notifier.owed
+
+
+# ---- R149: the channel declares its sources at attach; the rest is held ---------------
+
+ENTRY_ID = "e-0123456789ab"
+
+
+def _owe_an_entry(home):
+    """Mail in the box and an entry's notice owed in the log, both read back at the daemon's boot,
+    so nothing is raised from the test's thread while the serve loop runs."""
+    from macf.agent_events_log import append_event
+    _declare_routes(home)
+    _mail(home, "m1")
+    append_event(nt.EVENT_DETECTED, {"source": "pd_entry_due", "arrival_id": ENTRY_ID, "count": None,
+                                     "store": "the event log", "notifier": nt.NOTIFIER})
+
+
+def _session_is_this_test(daemon, monkeypatch):
+    me = (os.getpid(), proc_start(os.getpid()))
+    monkeypatch.setattr(daemon.core, "session_incarnation", lambda: me)
+
+
+def _until(condition, timeout=3.0):
+    deadline = time.monotonic() + timeout
+    while not condition() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return condition()
+
+
+def _entry_owed(daemon):
+    return ENTRY_ID in daemon.notifier.owed
+
+
+def test_a_source_the_attached_channel_did_not_declare_stays_held(tmp_path, base, run_daemon,
+                                                                 isolated_events_log, monkeypatch):
+    """MIS-0002-R149: a channel whose hello leaves out ``pd_entry_due`` is sent the mail it
+    declared and not the entry's notice, which stays owed, never logged delivered; a second
+    channel that declares it then receives it. The daemon records what each channel declared."""
+    home = make_home(tmp_path, [])
+    _owe_an_entry(home)
+    daemon = run_daemon(home, base)
+    _session_is_this_test(daemon, monkeypatch)
+    partial = [s for s in TAKES if s != "pd_entry_due"]
+    old = _connect(daemon, takes=partial)
+    assert [r.source for r in _records(old)] == ["amail"]
+    time.sleep(0.3)                                       # a notice sent in error has time to show
+    assert _entry_owed(daemon), "an undeclared source's notice was not held"
+    assert not [d for d in _logged(nt.EVENT_DELIVERED) if d["arrival_id"] == ENTRY_ID]
+
+    new = _connect(daemon, takes=TAKES)
+    assert [(r.source, r.arrival_id) for r in _records(new)] == [("pd_entry_due", ENTRY_ID)]
+    assert _until(lambda: not _entry_owed(daemon))
+    declared = _logged("pd_channel_declared")
+    assert [sorted(d["takes"]) for d in declared] == [sorted(partial), sorted(TAKES)]
+    old.close()
+    new.close()
+
+
+def test_a_channel_that_sends_no_hello_is_sent_nothing(tmp_path, base, run_daemon, isolated_events_log,
+                                                       monkeypatch):
+    """A channel that sends no hello declares nothing: it stays attached, past its hello's time,
+    and is sent nothing, so every notice stays owed for a channel that declares it."""
+    from macf.pd import daemon as dm
+    monkeypatch.setattr(dm, "HELLO_TIMEOUT_S", 0.3)
+    home = make_home(tmp_path, [])
+    _owe_an_entry(home)
+    daemon = run_daemon(home, base)
+    _session_is_this_test(daemon, monkeypatch)
+    silent = _connect(daemon)
+    assert _until(lambda: daemon.notifier.channels)
+    silent.settimeout(1.0)
+    with pytest.raises(socket.timeout):
+        silent.recv(1)                                    # neither a record nor a close
+    assert daemon.notifier.channels, "a channel with no hello was dropped"
+    assert len(daemon.notifier.owed) == 2
+    assert not _logged(nt.EVENT_DELIVERED) and not _logged("pd_channel_declared")
+    silent.close()
+
+
+@pytest.mark.parametrize("hello", [
+    b"not json\n",
+    b'{"hello": {"takes": "amail"}}\n',                       # not a list
+    b'{"hello": {"takes": ["amail"], "also": 1}}\n',          # an extra field
+    b'{"hello": {"takes": ["amail; rm -rf ~"]}}\n',           # not a source's name
+    b'{"hello": {"takes": ["amail"]}}\n{"more": 1}\n',        # a write after the hello
+    b'{"hello": {"takes": ["am',                              # never finished, then its time runs out
+])
+def test_a_malformed_hello_detaches_the_channel(tmp_path, base, run_daemon, isolated_events_log, monkeypatch,
+                                                hello):
+    """A malformed hello, an unfinished one, or a write after it breaks the protocol: the daemon
+    drops the channel, and what was owed stays owed."""
+    from macf.pd import daemon as dm
+    monkeypatch.setattr(dm, "HELLO_TIMEOUT_S", 0.3)
+    home = make_home(tmp_path, [])
+    _owe_an_entry(home)
+    daemon = run_daemon(home, base)
+    _session_is_this_test(daemon, monkeypatch)
+    conn = _connect(daemon)
+    conn.sendall(hello)
+    assert conn.recv(1) == b"", "a channel that broke the protocol was kept"
+    assert _until(lambda: not daemon.notifier.channels)
+    assert len(daemon.notifier.owed) == 2
+    conn.close()
+
+
+def test_the_maceff_channel_declares_every_source_its_record_takes(tmp_path, base, run_daemon,
+                                                                   isolated_events_log, monkeypatch):
+    """The real channel, against the real daemon: its hello declares exactly the sources its
+    record accepts, so an entry's notice reaches it."""
+    import typing
+
+    from macf.channels.maceff_channel import Channel, NoticeRecord
+    home = make_home(tmp_path, [])
+    _owe_an_entry(home)
+    daemon = run_daemon(home, base)
+    _session_is_this_test(daemon, monkeypatch)
+    conn = Channel(daemon.card, base=base, out=None).connect_once()
+    assert conn is not None
+    conn.settimeout(3)
+    assert sorted(r.source for r in _records(conn)) == ["amail", "pd_entry_due"]
+    (declared,) = _logged("pd_channel_declared")
+    assert set(declared["takes"]) == set(typing.get_args(NoticeRecord.model_fields["source"].annotation))
+    conn.close()
 
 
 def test_daemon_releases_the_channel_socket(tmp_path, base, isolated_events_log):
@@ -286,7 +412,7 @@ def test_a_unit_past_its_limit_is_a_notice_held_and_delivered(tmp_path, isolated
     second.boot()
     assert list(second.owed) == ["limit-worker-1", "limit-worker-2"]   # both held across the restart
     ours, theirs = _pair()
-    second.attach(ours)
+    second.attach(ours, takes=TAKES)
     assert second.flush() == 2
     record = _records(theirs)[-1]
     assert record.source == "pd_limit_exceeded" and record.count is None
@@ -510,7 +636,7 @@ def test_the_unread_mail_notice_is_held_and_delivered_to_the_agent(tmp_path, iso
     notifier.boot()
     assert notifier.raise_notice("pd_unread_mail", "unread-mail-1") is True
     ours, theirs = _pair()
-    notifier.attach(ours)
+    notifier.attach(ours, takes=TAKES)
     assert notifier.flush() == 1
     [record] = _records(theirs)
     assert record.source == "pd_unread_mail"
@@ -720,7 +846,7 @@ def test_a_unit_measured_past_its_limit_reaches_the_channel(make_core, script, t
     core.tick()
     assert [o.source for o in notifier.owed.values()] == ["pd_limit_exceeded"]
     ours, theirs = _pair()
-    notifier.attach(ours)
+    notifier.attach(ours, takes=TAKES)
     assert notifier.flush() == 1
     [record] = _records(theirs)
     assert record.source == "pd_limit_exceeded"
