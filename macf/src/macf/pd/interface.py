@@ -263,6 +263,10 @@ class CheckArg(_Closed):
     def accepts(self, value: str) -> bool:
         if self.kind == "integer":
             return re.fullmatch(r"-?\d{1,18}", value) is not None
+        # A run renders its command's placeholders ({agent_home}) after the slots are filled,
+        # so a brace in a value would turn a checked value into another (MIS-0002-R143).
+        if "{" in value or "}" in value:
+            return False
         return re.fullmatch(self.pattern, value) is not None
 
 
@@ -516,6 +520,9 @@ EVENT_UNDER_LIMIT = "pd_unit_back_under_limit"
 #: The session's MacEff channel went dark, and came back (MIS-0002-R115).
 EVENT_CHANNEL_DARK = "pd_channel_dark"
 EVENT_CHANNEL_BACK = "pd_channel_back"
+#: An attached MacEff channel said which notice sources it takes (MIS-0002-R149). ``takes``
+#: lists them; a channel that sent no hello declares nothing and has no such event.
+EVENT_CHANNEL_DECLARED = "pd_channel_declared"
 #: Mail sat in the agent's pickup box past its declared threshold, and the box was then
 #: emptied (MIS-0002-R55). One of each per unread spell.
 EVENT_UNREAD_MAIL = "pd_unread_mail"
@@ -658,7 +665,11 @@ class DaemonStart(_Closed):
 #            the daemon's own user. The operator's command line and the tray connect here
 #            (MIS-0002-R48 (outside_stop_MUST_override_gates), MIS-0002-R70
 #            (tray_MUST_act_through_pd)).
-#   channel  the daemon writes closed notice records, one per line, and reads nothing.
+#   channel  the daemon writes closed notice records, one per line. The channel writes
+#            one line only, its hello, right after it attaches (``ChannelHello``): the
+#            notice sources it takes, so the daemon holds the rest for a channel that takes
+#            them (MIS-0002-R149 (pd_MUST_hold_sources_channel_did_not_declare)). Anything
+#            else a channel writes breaks the protocol, and the daemon drops it.
 #            The peer must descend from the agent's live session
 #            (MIS-0002-R122 (pd_MUST_check_channel_peer_lineage)). The record shape is the
 #            channel's own (``macf.channels.maceff_channel.NoticeRecord``, #545).
@@ -673,6 +684,25 @@ class DaemonRecord(_Closed):
     pid: int = Field(gt=1)
     proc_start: str = Field(min_length=1)
     version: Literal[1] = 1
+
+
+#: A notice source as a hello names it: the names the channel's records use.
+_SOURCE_NAME = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
+
+
+class HelloBody(_Closed):
+    """The sources a channel takes. A source this daemon doesn't know is declared all the
+    same: a newer channel may take one, and declaring it holds nothing."""
+
+    takes: List[_SOURCE_NAME] = Field(max_length=64)
+
+
+class ChannelHello(_Closed):
+    """The one line a MacEff channel writes, ``{"hello": {"takes": [...]}}``, right after it
+    attaches and has checked its peer (MIS-0002-R149). A channel that sends none declares
+    nothing, so the daemon sends it nothing and holds every notice for one that declares."""
+
+    hello: HelloBody
 
 
 class StatusRequest(_Closed):
