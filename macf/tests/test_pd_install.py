@@ -102,8 +102,9 @@ def test_the_launch_agent_runs_exactly_the_daemon_on_the_home(tmp_path):
     """MIS-0002-R04 (outer_tier_MUST-NOT_hold_agent_config): the agent home is the daemon's
     only argument."""
     home = tmp_path / "home"
+    from macf.platform.launchd import framework_app
     plist = plistlib.loads(adapters.LaunchdAdapter(user_home=tmp_path).render(CARD, home).encode())
-    assert plist["Program"] == sys.executable
+    assert plist["Program"] == (framework_app(sys.executable) or sys.executable)
     assert plist["ProgramArguments"] == ["maceff_pd", "-m", "macf.pd", str(home)]
 
 

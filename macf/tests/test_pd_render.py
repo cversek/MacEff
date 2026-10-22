@@ -127,23 +127,43 @@ class TestEveryNameCarriesTheIdentifier:
             child.terminate()
             child.wait(timeout=30)
 
+    def test_a_framework_build_is_started_through_its_python_app(self, tmp_path):
+        """A framework build's launcher would re-exec Python.app and rename the process, so
+        the plist starts Python.app itself, and passes the venv's interpreter as the launcher
+        would, in ``__PYVENV_LAUNCHER__``. A plain build gets neither."""
+        version = tmp_path / "Python.framework" / "Versions" / "3.99"
+        (version / "bin").mkdir(parents=True)
+        (version / "bin" / "python3.99").write_text("")
+        app = version / "Resources" / "Python.app" / "Contents" / "MacOS" / "Python"
+        app.parent.mkdir(parents=True)
+        app.write_text("")
+        venv_python = tmp_path / "venv" / "bin" / "python3"
+        venv_python.parent.mkdir(parents=True)
+        venv_python.symlink_to(version / "bin" / "python3.99")
+        _, plist = _plist(program_argv=[str(venv_python), "-m", "macf.pd", "/Users/someone/agent"])
+        assert plist["Program"] == str(app.resolve())
+        assert plist["ProgramArguments"] == ["maceff_pd", "-m", "macf.pd", "/Users/someone/agent"]
+        assert plist["EnvironmentVariables"] == {"__PYVENV_LAUNCHER__": str(venv_python)}
+        _, plain = _plist()
+        assert plain["Program"] == ARGV[0] and "EnvironmentVariables" not in plain
+
     @pytest.mark.skipif(sys.platform != "darwin", reason="ps lists a process by its argv[0] on macOS")
-    def test_the_interpreter_started_as_the_launch_agent_says_is_listed_as_the_row_states(self, tmp_path):
-        """The daemon's own interpreter, exec'd as the plist says. A plain build keeps the
-        argv[0] and is listed as maceff_pd. A framework build's launcher re-execs its
-        Python.app, which then names the process; R06's row states that exception. Either
-        way the interpreter still finds its own prefix, so a venv keeps working."""
+    def test_the_daemons_interpreter_started_as_the_launch_agent_says_is_listed_as_maceff_pd(self, tmp_path):
+        """The daemon's own interpreter, started as launchd would start the plist: ``Program``,
+        ``ProgramArguments`` and ``EnvironmentVariables``. It is listed as maceff_pd, whether
+        it is a plain build or a framework one, and it still finds its own prefix, so a venv
+        keeps working. A Python release that drops ``__PYVENV_LAUNCHER__`` fails here."""
         _, plist = _plist(program_argv=[sys.executable, "-m", "macf.pd", str(tmp_path)])
+        assert ("EnvironmentVariables" in plist) == bool(sysconfig.get_config_var("PYTHONFRAMEWORK"))
         child = subprocess.Popen([plist["ProgramArguments"][0], "-c",
                                   "import sys, time; print(sys.prefix, flush=True); time.sleep(30)"],
-                                 executable=plist["Program"], stdout=subprocess.PIPE, text=True)
+                                 executable=plist["Program"], env={**os.environ, **plist.get("EnvironmentVariables", {})},
+                                 stdout=subprocess.PIPE, text=True)
         try:
             assert child.stdout.readline().strip() == sys.prefix
-            listed = _listed_name(child.pid)
-            if sysconfig.get_config_var("PYTHONFRAMEWORK"):
-                assert listed.endswith("/Python.app/Contents/MacOS/Python"), listed
-            else:
-                assert listed == "maceff_pd"
+            assert _listed_name(child.pid) == "maceff_pd"
+            assert str(child.pid) in subprocess.run(["pgrep", "maceff_pd"], capture_output=True,
+                                                    text=True).stdout.split()
         finally:
             child.terminate()
             child.wait(timeout=30)
