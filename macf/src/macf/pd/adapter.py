@@ -98,11 +98,12 @@ class LaunchdAdapter:
         return plist.decode("utf-8")
 
     def install(self, card: str, agent_home: Path, force: bool = False) -> Path:
-        from macf.pd.interface import channel_socket, control_socket
+        from macf.pd.interface import channel_socket, control_socket, events_socket
         from macf.platform import launchd
         argv, log_dir = _program(agent_home), self._log_dir(agent_home)
         steps = launchd.install_plan(card, argv, self._home, log_dir, self._uid,
-                                     [str(control_socket(card)), str(channel_socket(card))])
+                                     [str(control_socket(card)), str(channel_socket(card)),
+                                      str(events_socket(card))])
         launchd.apply_plan(steps, run=self._run, force=force)
         return Path(launchd.render_pd_launch_agent(card, argv, self._home, log_dir)[0])
 
@@ -160,12 +161,12 @@ class SystemdAdapter:
         return self._unit(card, agent_home)[1]
 
     def install(self, card: str, agent_home: Path, force: bool = False) -> Path:
-        from macf.pd.interface import channel_socket, check_socket_path, control_socket
+        from macf.pd.interface import channel_socket, check_socket_path, control_socket, events_socket
         from macf.platform import systemd
         # Every socket the daemon will bind is checked before anything is written, as the
         # LaunchAgent's plan does, so a path too long stops the install with its reason
         # rather than the daemon failing at bind (MIS-0002-R129 (adapter_MUST_check_socket_path_length)).
-        for sock in (control_socket(card), channel_socket(card)):
+        for sock in (control_socket(card), channel_socket(card), events_socket(card)):
             check_socket_path(sock)
         path, text = self._unit(card, agent_home)
         path = Path(path)

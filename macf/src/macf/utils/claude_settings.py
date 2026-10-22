@@ -263,6 +263,10 @@ _PERMANENT_ASK = [
 # 10.6; the repo owner's ruling on #744).
 _DEFAULT_ASK = [
     "Bash(macf_tools pd entry add:*)",
+    # The event stream's rules: approving the prompt is the operator's act (persistent_layer 11.4).
+    "Bash(macf_tools pd stream silence:*)",
+    "Bash(macf_tools pd stream unsilence:*)",
+    "Bash(macf_tools pd stream route:*)",
 ]
 
 # Permissions that must always be in 'allow': the agent can always de-escalate,

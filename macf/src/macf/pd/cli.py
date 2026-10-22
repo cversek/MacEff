@@ -96,6 +96,28 @@ def add_pd_parser(sub) -> None:
     wake.add_argument("--asked-by", choices=("agent", "operator"), default="agent",
                       help="who paces: the agent itself (default), or the operator")
     wake.set_defaults(func=cmd_pd_wake)
+    stream = pd_sub.add_parser(
+        "stream", help="the layer's event stream: subscribe to it, or silence and reroute it (persistent_layer 11.4)")
+    stream_sub = stream.add_subparsers(dest="stream_cmd")
+    sub_p = stream_sub.add_parser("subscribe", help="print the stream's records, one JSON line each, until Ctrl+C")
+    sub_p.add_argument("--source", action="append", default=None, metavar="EVENT",
+                       help="an event name to take, with * globs; repeat it (default: every source)")
+    sub_p.add_argument("--position", default=None, metavar="LOG:OFFSET",
+                       help="resume just after the record that carried this position")
+    sub_p.add_argument("--name", default=None, help="the name this subscriber goes by, for silence and route")
+    sub_p.set_defaults(func=cmd_pd_stream_subscribe)
+    for act, helptext in (("silence", "stop delivering a source, or anything to a subscriber (@name); it still lands in the log"),
+                          ("unsilence", "deliver a source or a subscriber (@name) again")):
+        rule = stream_sub.add_parser(act, help=helptext)
+        rule.add_argument("target", help="an event name with * globs, or @name for a subscriber")
+        rule.add_argument("--reason", default="", help="why; recorded with the rule")
+        rule.set_defaults(func=cmd_pd_stream_rule, act=act)
+    route = stream_sub.add_parser("route", help="send a source only to one subscriber, or --clear that route")
+    route.add_argument("target", metavar="source", help="an event name, with * globs")
+    route.add_argument("subscriber", nargs="?", default=None, help="the subscriber's name, with or without @")
+    route.add_argument("--clear", action="store_true", help="take the source's route away")
+    route.add_argument("--reason", default="", help="why; recorded with the rule")
+    route.set_defaults(func=cmd_pd_stream_rule, act="route")
 
 
 def cmd_pd_alive(args: argparse.Namespace) -> int:
@@ -109,6 +131,67 @@ def cmd_pd_alive(args: argparse.Namespace) -> int:
         return 1
     pid = args.pid or os.getppid()
     return 0 if liveness.emit(found.card, found.unit, found.interval_s, args.in_flight, pid=pid) else 1
+
+
+def cmd_pd_stream_subscribe(args: argparse.Namespace) -> int:
+    """0 when the stream ends or on Ctrl+C; 1 when it refused or could not be reached."""
+    from macf.pd.interface import events_socket
+    from macf.pd.stream import subscribe
+    _, card = _this_agent()
+    position = None
+    if args.position:
+        log, sep, offset = args.position.rpartition(":")
+        if not sep or not log or not offset.isdigit():
+            print("maceff_pd: --position is LOG:OFFSET, as a record's position names them", file=sys.stderr)
+            return 1
+        position = {"log": log, "offset": int(offset)}
+    try:
+        conn = subscribe(events_socket(card), args.source or ["*"], position=position, name=args.name)
+    except OSError as e:
+        print(f"maceff_pd: {card}: the event stream can't be reached: {e}", file=sys.stderr)
+        return 1
+    try:
+        for line in conn.makefile("rb"):
+            sys.stdout.write(line.decode("utf-8", errors="replace"))
+            sys.stdout.flush()
+            if line.startswith(b'{"type": "refused"'):
+                return 1
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        conn.close()
+    return 0
+
+
+def cmd_pd_stream_rule(args: argparse.Namespace) -> int:
+    """0 when the rule is recorded and in force; 1 when the daemon refused it or couldn't be reached."""
+    from macf.pd.client import DaemonUnavailable, ask
+    _, card = _this_agent()
+    act, subscriber = args.act, None
+    if act == "route":
+        if getattr(args, "clear", False):
+            act = "unroute"
+        elif not args.subscriber:
+            print("maceff_pd: a route names the subscriber it sends the source to, or --clear", file=sys.stderr)
+            return 1
+        else:
+            subscriber = args.subscriber.lstrip("@")
+    request = {"op": "stream_rule", "act": act, "target": args.target, "asked_by": {"kind": "operator"},
+               "reason": args.reason}
+    if subscriber is not None:
+        request["subscriber"] = subscriber
+    try:
+        reply = ask(card, request)
+    except DaemonUnavailable as e:
+        print(f"maceff_pd: {card}: {e}", file=sys.stderr)
+        return 1
+    if not reply.ok:
+        print(f"maceff_pd: {card}: refused: {reply.error}", file=sys.stderr)
+        return 1
+    rules = reply.stream_rules or {}
+    print(f"{card}: silenced {', '.join(rules.get('silenced') or []) or 'nothing'}; routes "
+          f"{', '.join(f'{k} -> @{v}' for k, v in (rules.get('routes') or {}).items()) or 'none'}")
+    return 0
 
 
 def _seconds(text: str) -> float:

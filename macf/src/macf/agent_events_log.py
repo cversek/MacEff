@@ -160,6 +160,32 @@ def elide_large_values(payload, threshold=ELIDE_THRESHOLD_BYTES,
     return payload
 
 
+#: Called after each append this process makes, with the log's path, the byte offset the line
+#: starts at, and the line's bytes with its newline. The primal daemon's event stream listens,
+#: so a record the daemon wrote itself carries ``origin: daemon`` while a line anything else
+#: appended carries ``origin: log`` (persistent_layer 11.4). Nothing reads the line back to learn it.
+_APPEND_LISTENERS: List[Callable[[Path, int, bytes], None]] = []
+
+
+def add_append_listener(listener: Callable[[Path, int, bytes], None]) -> None:
+    if listener not in _APPEND_LISTENERS:
+        _APPEND_LISTENERS.append(listener)
+
+
+def remove_append_listener(listener: Callable[[Path, int, bytes], None]) -> None:
+    if listener in _APPEND_LISTENERS:
+        _APPEND_LISTENERS.remove(listener)
+
+
+def _tell_listeners(log_path: Path, start: int, line: str) -> None:
+    raw = (line + "\n").encode("utf-8")
+    for listener in list(_APPEND_LISTENERS):
+        try:
+            listener(log_path, start, raw)
+        except Exception as e:  # noqa: BLE001 - GUARD, not handler: a listener never fails an append
+            print(f"⚠️ MACF: an event-log listener failed (the append stands): {e!r}", file=sys.stderr)
+
+
 def append_event(
     event: str,
     data: dict,
@@ -212,6 +238,8 @@ def append_event(
             finally:
                 # Release lock
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        if _APPEND_LISTENERS:
+            _tell_listeners(log_path, size_before, line)
 
         # Set permissions on first write
         if log_path.stat().st_size == len(line) + 1:
