@@ -34,8 +34,8 @@ def _link_remedy(ca_type: str) -> str:
     """How an orphan of this type joins the web. A duty is a JSON record with a
     wiki_links field, governed by the roles policy; everything else is markdown."""
     if ca_type == "duties":
-        return ("add concepts to the record's wiki_links field (role duty add --wiki-links, or edit "
-                "the JSON); see the roles policy on knowledge web participation for what a duty links")
+        return ("macf_tools role duty edit <id> --wiki-links <concepts>; see the roles policy on "
+                "knowledge web participation for what a duty links")
     if ca_type == "tasks":
         return ("macf_tools knowledge link task:<id> <concept>; see the task_management policy on "
                 "knowledge web participation for what a task links")

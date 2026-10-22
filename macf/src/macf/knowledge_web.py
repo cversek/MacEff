@@ -259,7 +259,8 @@ def iter_web_files(agent_home: Path) -> Iterator[Tuple[str, Path, Path]]:
 # artifact-producing location). An experiment that vendors a JavaScript bundle
 # brings thousands: on one agent's tree, 7,700 of the 8,300 directories the web
 # walked, twice per `knowledge status`, for no participating file.
-_TOOL_DIRS = frozenset({"node_modules", "__pycache__", ".git", ".venv"})
+_TOOL_DIRS = frozenset({"node_modules", "__pycache__", ".git", ".venv",
+                        ".pytest_cache", ".mypy_cache", ".ruff_cache"})
 
 
 def _files_under(root: Path, pattern: str) -> List[Path]:
