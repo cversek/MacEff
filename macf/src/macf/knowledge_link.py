@@ -8,8 +8,8 @@ forms the graph prints and applies the change in that target's own shape.
 
 Concepts are normalized the one way the web normalizes them, and adding a
 concept that is already there changes nothing. Role duties are records the
-roles subsystem owns and are declared with their links; they are refused here
-with a pointer to that CLI rather than edited behind its back.
+roles subsystem owns; they are refused here with a pointer to `role duty edit
+--wiki-links`, which changes them on the record, rather than edited behind its back.
 """
 
 from __future__ import annotations
@@ -60,8 +60,8 @@ def resolve_target(ref: str) -> Tuple[str, str]:
     if re.fullmatch(r"\d+", ref):
         raise LinkError(f"'{ref}' could be an idea or a task; say idea:{ref} or task:{ref}")
     if ref.startswith("duties:"):
-        raise LinkError("a duty's links are declared with the duty (macf_tools role duty add "
-                        "--wiki-links); the roles subsystem owns duty records")
+        raise LinkError("a duty's links live on its record, which the roles subsystem owns: "
+                        "macf_tools role duty edit <id> --wiki-links <concepts> (it replaces the list)")
     path = Path(ref).expanduser()
     if path.is_file():
         if path.suffix != ".md":
