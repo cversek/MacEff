@@ -12,6 +12,12 @@ says nothing about it.
 - **Holding** is the log. A detection with no ``pd_notice_delivered`` after it is still
   owed, and a daemon that restarts reads that back, so nothing is kept outside the log
   [MIS-0002-R41 (pd_MUST_hold_notices_while_down), MIS-0002-R16 (layer_MUST-NOT_keep_second_ledger)].
+  Each boot appends one ``pd_notices_owed`` checkpoint listing what is still owed, and the next
+  boot reads back only as far as it, so a notice is held whatever its age while the read-back
+  stays bounded by the time since the last start. A daemon-raised notice is owed once per
+  thing: a newer one from the same source (the same schedule, for a run failure; the same
+  entry, for an entry's wake) replaces the older. Each points only to the log, so nothing is
+  lost, and a crash loop through a weekend down comes back as one notice, not hundreds.
 - **Delivery** is one closed record per notice on the channel socket, to a channel whose
   process descends from the session unit (the daemon checks that before attaching it),
   and only to a channel whose hello declared the notice's source. A notice no attached
@@ -53,12 +59,19 @@ EVENT_DELIVERED = "pd_notice_delivered"
 #: (MIS-0002-R42).
 INTERNAL_SOURCES = frozenset({"pd_limit_exceeded", "pd_unread_mail", "pd_carried", "pd_run_failed",
                               "pd_schedule_changed", "pd_grant_denied", "pd_entry_due", "pd_duty_due"})
+#: What each boot still owes, after reading back: the checkpoint the next boot reads back to
+#: (MIS-0002-R41). Its data lists each owed notice's source, arrival id, count and read time.
+EVENT_NOTICES_OWED = "pd_notices_owed"
 #: Who wrote a detection: the daemon's notifier, as against any other poller of a store.
 NOTIFIER = "pd"
 
-#: How far back a restarted daemon looks for notices it still owes. Older ones were
-#: either delivered, or describe mail the agent has long since read or been told of.
+#: How far back a daemon looks for notices it still owes in a log with no ``pd_notices_owed``
+#: checkpoint yet: the first start after checkpoints came in. Every later start reads back to
+#: the newest checkpoint instead, whatever its age.
 HOLD_MAX_S = 24 * 3600
+#: A daemon's start, as the core records it. Past the read-back above, a start found before any
+#: checkpoint is one from before checkpoints came in, and the scan for one stops there.
+_DAEMON_START = "pd_daemon_start"
 
 #: A message id inside a pickup box's file name, ``<epoch>-<id>[-<local>].amsg``.
 _MESSAGE_IN_NAME = re.compile(r"msg-\d{10}-[0-9a-f]{12}")
@@ -117,9 +130,25 @@ def channel_takes(source: str, arrival_id: str) -> bool:
     return True
 
 
+def subject(source: str, arrival_id: str) -> str:
+    """What a daemon-raised notice is about, so that only the newest per thing is owed. A run
+    failure's or schedule change's id is ``<schedule>:<epoch>`` (``scheduler._notice_id``), so
+    it is per schedule; an entry's wake has the entry's id, so it is per entry; any other is
+    per source."""
+    if source in ("pd_run_failed", "pd_schedule_changed"):
+        return f"{source}/{arrival_id.rsplit(':', 1)[0]}"
+    if source == "pd_entry_due":
+        return f"{source}/{arrival_id}"
+    return source
+
+
 def burst_id(source: str, names: Iterable[str]) -> str:
     """The arrival id ``StoreSource`` gives a burst of new names, for a set read at start."""
     return f"{source}-" + hashlib.sha256("\0".join(sorted(names)).encode()).hexdigest()[:16]
+
+
+def _count(value) -> Optional[int]:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
 class Notifier:
@@ -131,7 +160,8 @@ class Notifier:
                  events: Optional[Callable[[], Iterable[dict]]] = None):
         self._append, self._clock = append, clock
         self._events = events or (lambda: read_events(reverse=True, scope="all",
-                                                      only=(EVENT_DETECTED, EVENT_DELIVERED)))
+                                                      only=(EVENT_DETECTED, EVENT_DELIVERED,
+                                                            EVENT_NOTICES_OWED, _DAEMON_START)))
         self.owed: "OrderedDict[str, Owed]" = OrderedDict()
         #: The keystroke fallback for a session with no channel (``pd.wake``), or None.
         self.waker = None
@@ -157,29 +187,61 @@ class Notifier:
     # ------------------------------------------------------------------ intake
 
     def boot(self) -> None:
-        """Read back what is still owed, then start each source from what its store holds
-        now, giving one notice for that if any of it was never announced."""
+        """Read back what is still owed, record it as this boot's checkpoint, then start each
+        source from what its store holds now, giving one notice for that if any of it was
+        never announced."""
         now = self._clock()
         delivered, detected = set(), OrderedDict()
+        checkpoint = None
         for event in self._events():
             ts = event.get("timestamp") or 0
-            if now - ts > HOLD_MAX_S:
-                break
+            kind = event.get("event")
+            if kind == _DAEMON_START:
+                if now - ts > HOLD_MAX_S:
+                    break                        # a start from before checkpoints: no older one
+                continue
             data = event.get("data") or {}
             if not isinstance(data, dict) or data.get("notifier") != NOTIFIER:
                 continue
+            if kind == EVENT_NOTICES_OWED:
+                checkpoint = data.get("owed")
+                break                            # the newest checkpoint: no need to read further
             aid = data.get("arrival_id")
             if not isinstance(aid, str):
                 continue
-            if event.get("event") == EVENT_DELIVERED:
+            if kind == EVENT_DELIVERED:
                 delivered.add(aid)
-            elif (aid not in delivered and aid not in detected
-                  and (data.get("source") in SOURCES or data.get("source") in INTERNAL_SOURCES)):
-                count = data.get("count")
-                count = count if isinstance(count, int) and not isinstance(count, bool) and count >= 0 else None
-                detected[aid] = Owed(data["source"], aid, count, float(ts))
+            elif aid not in delivered and aid not in detected and self._known(data.get("source")):
+                detected[aid] = Owed(data["source"], aid, _count(data.get("count")), float(ts))
+        if checkpoint is None:
+            # No checkpoint yet: the one-day read-back, once (HOLD_MAX_S).
+            detected = OrderedDict((a, o) for a, o in detected.items() if now - o.read_at <= HOLD_MAX_S)
+        else:
+            # Newest first, as the scan read: the checkpoint's notices are older than any after it.
+            for item in reversed(checkpoint if isinstance(checkpoint, list) else []):
+                aid = item.get("arrival_id") if isinstance(item, dict) else None
+                if (isinstance(aid, str) and aid not in delivered and aid not in detected
+                        and self._known(item.get("source"))):
+                    read_at = item.get("read_at")
+                    detected[aid] = Owed(item["source"], aid, _count(item.get("count")),
+                                         float(read_at) if isinstance(read_at, (int, float)) else now)
+        seen = set()
+        for aid, owed in list(detected.items()):     # newest first: an older one of the same thing goes
+            if owed.source in INTERNAL_SOURCES:
+                key = subject(owed.source, aid)
+                if key in seen:
+                    del detected[aid]
+                seen.add(key)
+        raised = [o for a, o in self.owed.items() if a not in detected]   # raised before this boot
+        self.owed.clear()
         for aid in reversed(list(detected)):     # read newest first; owe oldest first
             self.owed[aid] = detected[aid]
+        for owed in raised:
+            self._owe(owed)
+        self._append(EVENT_NOTICES_OWED, {"owed": [{"source": o.source, "arrival_id": o.arrival_id,
+                                                    "count": o.count, "read_at": o.read_at}
+                                                   for o in self.owed.values()],
+                                          "notifier": NOTIFIER})
         known = set(detected) | delivered
         for source in self.sources:
             current = source.start()
@@ -187,6 +249,10 @@ class Notifier:
                 continue                         # unreadable: the source says so, and polls again
             if current and burst_id(source.name, current) not in known:
                 self._detect(source.name, burst_id(source.name, current), len(current), source.store_dir)
+
+    @staticmethod
+    def _known(source) -> bool:
+        return source in SOURCES or source in INTERNAL_SOURCES
 
     def poll(self) -> None:
         for source in self.sources:
@@ -214,7 +280,16 @@ class Notifier:
         self._append(EVENT_DETECTED, {"source": source, "arrival_id": arrival_id, "count": count,
                                       "store": str(store) if store else "the event log",
                                       "notifier": NOTIFIER})
-        self.owed[arrival_id] = Owed(source, arrival_id, count, now)
+        self._owe(Owed(source, arrival_id, count, now))
+
+    def _owe(self, owed: Owed) -> None:
+        """Owe a notice. A daemon-raised one replaces any older one owed about the same thing."""
+        if owed.source in INTERNAL_SOURCES:
+            key = subject(owed.source, owed.arrival_id)
+            for aid in [a for a, o in self.owed.items()
+                        if a != owed.arrival_id and o.source in INTERNAL_SOURCES and subject(o.source, a) == key]:
+                del self.owed[aid]
+        self.owed[owed.arrival_id] = owed
 
     # ------------------------------------------------------------------ delivery
 

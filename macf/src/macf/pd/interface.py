@@ -299,7 +299,8 @@ class CheckTemplate(_Closed):
 
 class Schedule(_Closed):
     """A schedule, for step 2 (MIS-0002-R24, MIS-0002-R29 (schedule_MUST_declare_target)).
-    Declared now so the format does not change under the steps that come later.
+    Declared now so the format does not change under the steps that come later. ``target`` is
+    ``isolated`` or the declaring agent's own card; the declaration refuses any other card.
     ``timeout_s`` is required (MIS-0002-R36 (run_MUST_have_wall-clock_limit)). ``restarts_unit``
     marks a schedule whose act restarts a unit, a run a downtime never replays
     (MIS-0002-R27 (scheduler_MUST-NOT_replay_restart_runs))."""
@@ -460,6 +461,17 @@ class Declaration(_Closed):
         if self.unread_mail_threshold_s is not None and UNREAD_MAIL_SOURCE not in self.notice_routes:
             raise ValueError(f"unread_mail_threshold_s is declared, so notice_routes must route "
                              f"{UNREAD_MAIL_SOURCE!r}: to 'agent', 'operator' or 'both'")
+        return self
+
+    @model_validator(mode="after")
+    def _schedules_target_isolated_or_own_session(self) -> "Declaration":
+        # A schedule targets an isolated session or its own agent's live session, never another
+        # agent's (MIS-0002-R29 (schedule_MUST_declare_target)). A foreign card is refused here,
+        # at load, rather than accepted and never run.
+        for s in self.schedules:
+            if s.target not in ("isolated", self.agent):
+                raise ValueError(f"schedule {s.name!r} targets {s.target!r}, but a schedule may target "
+                                 f"only 'isolated' or this declaration's own agent, {self.agent!r}")
         return self
 
     @model_validator(mode="after")

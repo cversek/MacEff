@@ -236,18 +236,35 @@ def test_schedules_name_their_timezone():
 
 def test_target_declared():
     """MIS-0002-R29 (schedule_MUST_declare_target): each schedule names its target, an
-    isolated session or the live session of a named agent. A schedule without one, or with
-    an empty one, is refused when the declaration is read."""
+    isolated session or its own agent's live session. A schedule without one, or with an
+    empty one, is refused when the declaration is read; so is one naming any other card."""
     from pydantic import ValidationError
-    from macf.pd.interface import CommandRun, Schedule
+    from macf.pd.interface import CommandRun, Declaration, Schedule
     base = dict(name="check", cron="*/5 * * * *", missed_run=policy("skip"), timeout_s=30.0,
                 run=CommandRun(command=["/usr/bin/true"], wake_when="exit_code"))
     with pytest.raises(ValidationError, match="target"):
         Schedule(**base)
     with pytest.raises(ValidationError, match="target"):
         Schedule(**base, target="")
-    assert Schedule(**base, target="isolated").target == "isolated"
-    assert Schedule(**base, target="Tester@abc123").target == "Tester@abc123"
+    for target in ("isolated", "Tester@abc123"):
+        declared = Declaration(version=1, agent="Tester@abc123", timezone="UTC",
+                               schedules=[Schedule(**base, target=target)])
+        assert declared.schedules[0].target == target
+
+
+def test_a_schedule_targeting_another_agent_is_refused_at_load():
+    """MIS-0002-R29 (schedule_MUST_declare_target): a target that is neither ``isolated`` nor
+    the declaring agent's own card is refused at load, and the error names the target and the
+    two values allowed."""
+    from pydantic import ValidationError
+    from macf.pd.interface import CommandRun, Declaration, Schedule
+    foreign = Schedule(name="check", cron="*/5 * * * *", missed_run=policy("skip"), timeout_s=30.0,
+                       target="Other@def456", run=CommandRun(command=["/usr/bin/true"], wake_when="exit_code"))
+    with pytest.raises(ValidationError) as refused:
+        Declaration(version=1, agent="Tester@abc123", timezone="UTC", schedules=[foreign])
+    said = str(refused.value)
+    assert "'Other@def456'" in said and "'isolated'" in said and "'Tester@abc123'" in said
+
 
 import json  # noqa: E402
 import os  # noqa: E402
@@ -544,11 +561,11 @@ def test_missed_firings_are_read_back_from_the_event_log(tmp_path, isolated_even
 
 
 def test_a_prompt_run_it_cannot_start_is_said_not_run_once(tmp_path, monkeypatch):
-    """A prompt run into a named live session, and any prompt run where no client is on the
+    """A prompt run into the agent's own live session, and any prompt run where no client is on the
     daemon's PATH, is said not run once, with why, and never started."""
     monkeypatch.setattr(sc.shutil, "which", lambda name, path=None: None)
     log, now = Log(), [at("2026-10-14 12:00")]
-    named = Schedule(name="digest", cron="0 * * * *", missed_run=policy("skip"), target="Other@def456",
+    named = Schedule(name="digest", cron="0 * * * *", missed_run=policy("skip"), target=CARD,
                      run=PromptRun(prompt_file="p.md"), timeout_s=60)
     isolated = Schedule(name="sweep", cron="0 * * * *", missed_run=policy("skip"), target="isolated",
                         run=PromptRun(prompt_file="p.md"), timeout_s=60)
@@ -556,7 +573,7 @@ def test_a_prompt_run_it_cannot_start_is_said_not_run_once(tmp_path, monkeypatch
     now[0] = at("2026-10-14 13:00")
     s.tick()
     said = {d["schedule"]: d["reason"] for d in log.of(sc.EVENT_NOT_RUN)}
-    assert "named live session" in said["digest"] and "no Claude Code client" in said["sweep"]
+    assert "own live session" in said["digest"] and "no Claude Code client" in said["sweep"]
     assert len(log.of(sc.EVENT_NOT_RUN)) == 2 and not log.of(sc.EVENT_STARTED)
 
 
