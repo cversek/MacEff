@@ -745,7 +745,7 @@ On Linux the daemon names its own process `maceff_pd` as it starts, so `ps`, `to
 
 ### 12.2 Where the socket is
 
-The daemon listens on Unix sockets only, never on a network port [MIS-0002-R80 (pd_MUST-NOT_listen_on_network)]: the control socket here and, once the notifier lands, the channel socket of 1.3. Both live in the runtime directory, `$XDG_RUNTIME_DIR/maceff_pd/`, or `/tmp/maceff_pd-<uid>/` where that variable is unset, each named for the agent's card, so every path carries `maceff_pd` and the card [MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd)]. The daemon checks the socket path against the platform's length limit before binding, as the adapter does at install (3.1), with a message naming the path and the limit. Without the check, a path that's too long fails at bind with an error that names neither.
+The daemon listens on Unix sockets only, never on a network port [MIS-0002-R80 (pd_MUST-NOT_listen_on_network)]: the control socket here and the channel socket of 1.3. Both live in the runtime directory, `$XDG_RUNTIME_DIR/maceff_pd/`, or `/tmp/maceff_pd-<uid>/` where that variable is unset, each named for the agent's card, so every path carries `maceff_pd` and the card [MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd)]. The daemon checks the socket path against the platform's length limit before binding, as the adapter does at install (3.1), with a message naming the path and the limit. Without the check, a path that's too long fails at bind with an error that names neither.
 
 **The runtime directory must be private.** The daemon creates it with mode 0700, and refuses to start when an existing one belongs to another user or is open to group or others. Under `/tmp`, another local user could have made the directory first, and every socket in it would then be theirs to replace.
 
@@ -785,7 +785,7 @@ Specified in MIS-0002 and arriving with their landing steps, each in the pull re
 - **The rest of the primal daemon:** compaction on request, once the operator is established some other way than a claim on the socket (9.3, 12.3); and a command-line act that stops every unit, with the question of which asker a command line claims (12.1) (MIS-0002 §6.1 to §6.4, §6.7).
 - **The rest of the notifier** (1.8):
   - the refusal at load of a declaration that doesn't route `pd_carried` to the agent, once the deployed declarations route it, so that the notice of what a restart, recreate or compaction carried, changed and lost always reaches the agent (11.1) [MIS-0002-R47 (pd_MUST_report_carried_changed_lost)];
-  - the operator's routes for sources other than unread mail, and `held_until_present`, which a declaration may name but nothing serves yet (1.11);
+  - the operator's routes for sources other than unread mail, and `held_until_present`, which a declaration may not name until the event stream serves them (1.8);
   - sources besides mail (MIS-0002 §6.6).
 - **The end of R107's transitional rule** [MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)] (1.4): until an agent declares `operator_channels`, every channel but the MacEff channel counts as the operator's.
 - **Observation** (5): messages from an onlooker into the observed session, an optional feature that nobody has built. Wherever one is built, its source comes from the transport and the onlooker's card from the invitation [MIS-0002-R95 (onlooker_message_MUST_carry_transport_source)] [MIS-0002-R116 (onlooker_card_MUST_come_from_invitation)].
