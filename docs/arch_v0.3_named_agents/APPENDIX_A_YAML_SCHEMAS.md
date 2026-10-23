@@ -62,6 +62,8 @@ defaults:  # Optional
 | `assigned_projects` | list[string] | `[]` | List of assigned project names |
 | `consciousness_artifacts` | ConsciousnessArtifactsConfig | `null` | Consciousness artifact configuration |
 | `hooks` | dict | `null` | Hook configuration (enabled list, etc.) |
+| `primal_daemon` | dict | `null` | The agent's primal daemon declaration, without `agent` or `version`; rendered by start-up, owned by root (persistent_layer 10.1) |
+| `calling_card` | string | `null` | The name the agent's daemon goes by, `^[A-Za-z][A-Za-z0-9]{0,47}$`. Required with `primal_daemon`. Written into the home's `.maceff/config.json` at every start; a different card already there is refused, and that agent gets no daemon |
 
 ### SubagentSpec Fields
 
@@ -118,6 +120,9 @@ agents:
     # Optional: this agent's primal daemon, the body of a declaration without agent or version.
     # Start-up renders it owned by root to /etc/maceff/pd/pa_manny/declaration.json, which the
     # daemon reads; the agent can't change it (persistent_layer 10.1, MIS-0002-R33).
+    # calling_card is required with it: the name the daemon goes by. Start-up writes it into
+    # the home's .maceff/config.json at every start, and refuses to overwrite a different one.
+    calling_card: Manny1
     primal_daemon:
       units:
         - name: session
