@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from macf.pd import adapter as adapters
 from macf.pd import interface, shared_view as sv
+from test_primal_daemon import base, run_daemon, script  # noqa: F401 - fixtures
 
 GIB = 2 ** 30
 
@@ -133,6 +134,91 @@ def test_every_agent_gets_its_publishing_point_at_init():
     assert "create_pd_view_dir" in calls
 
 
+def _published_home(tmp_path, units):
+    """A daemon's home, as the container makes it: with a public tree for its peers to read."""
+    from test_primal_daemon import make_home
+    home = make_home(tmp_path, units)
+    (home / "agent" / "public").mkdir(parents=True)
+    return home
+
+
+def test_a_started_daemon_publishes_its_units_for_its_peers(tmp_path, script, base, run_daemon):
+    """MIS-0002-R62 through the publisher, not the reader: a real daemon start writes the agent's
+    units.json into its own agent/public/pd/, and the view of the homes sees it. Review on #552
+    found nothing outside a test called publish(), so every home read UNPUBLISHED."""
+    from test_primal_daemon import CARD, make_unit
+    worker = make_unit("worker", script, {})
+    home = _published_home(tmp_path, [worker])
+    assert not sv.published_path(home).exists()
+    run_daemon(home, base)
+    path = sv.published_path(home)
+    assert path.exists(), "the daemon started and published nothing"
+    text = path.read_text()
+    assert str(script) not in text and "MACF_EVENTS_LOG_PATH" not in text   # no command, no environment
+    [view] = sv.read_agents(home.parent)
+    assert view.status == "PUBLISHED" and view.units.agent == CARD
+    assert [u.name for u in view.units.units] == ["worker"]
+
+
+def test_a_restarted_daemon_publishes_the_declaration_it_reloaded(tmp_path, script, base, run_daemon):
+    """The declaration is read only when the daemon starts, so a changed declaration is
+    reloaded by a restart, and the restart publishes it: the summary names the new unit and is
+    stamped by the second start, not left as the first daemon wrote it."""
+    from macf.pd.interface import Declaration, declaration_path
+    from test_primal_daemon import CARD, make_unit
+    worker = make_unit("worker", script, {})
+    home = _published_home(tmp_path, [worker])
+    first = run_daemon(home, base)
+    stamped = sv.read_agent(home).units.published_at
+    first.stop(units=True)
+    assert _wait(lambda: not first.control_path.exists())
+    declaration_path(home).write_text(Declaration(
+        version=1, agent=CARD, units=[worker, make_unit("helper", script, {})]).model_dump_json())
+    time.sleep(0.01)
+    run_daemon(home, base)
+    view = sv.read_agent(home)
+    assert [u.name for u in view.units.units] == ["worker", "helper"]
+    assert view.units.published_at > stamped
+
+
+def test_a_summary_that_cannot_be_published_never_stops_the_daemon(tmp_path, script, base, run_daemon,
+                                                                   monkeypatch, capsys):
+    """Publishing is for the peers: a failure is said on the daemon's error stream and the
+    daemon starts all the same."""
+    from test_primal_daemon import make_unit
+
+    def refuse(*a, **k):
+        raise PermissionError("agent/public/pd is not writable")
+    monkeypatch.setattr(sv, "publish", refuse)
+    daemon = run_daemon(_published_home(tmp_path, [make_unit("worker", script, {})]), base)
+    assert daemon.control_path.exists()
+    assert "could not publish this agent's units" in capsys.readouterr().err
+
+
+def _wait(until, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if until():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_the_view_prints_each_summarys_age(tmp_path):
+    """A summary outlives the daemon that wrote it, so the view says how old each one is: one
+    left by a stopped daemon days ago doesn't read as current."""
+    homes = tmp_path / "home"
+    for user, card, at in (("pa_manny", "Manny@b82044", 1000.0), ("pa_manny2", "Manny2@78e0aa", 1000.0 - 3 * 86400)):
+        (homes / user / "agent" / "public").mkdir(parents=True)
+        sv.publish(homes / user, _declaration(agent=card), now=at)
+    text = sv.render(sv.read_agents(homes), sv.read_budget(_cgroup(tmp_path)), now=1045.0)
+    assert "Manny@b82044: summary published 45s ago" in text
+    assert "Manny2@78e0aa: summary published 3d ago" in text
+    # A stamp ahead of the reader's clock is said as such, never shown as a negative age.
+    assert "Manny@b82044: summary stamped 75s ahead of this clock" in sv.render(
+        sv.read_agents(homes), sv.Budget(), now=925.0)
+
+
 def test_grants_declared():
     """MIS-0002-R63 (unit_MUST_declare_privacy_grants): each unit carries the grants it states,
     a unit that states none needs none, and a grant outside the closed list refuses the
@@ -207,7 +293,12 @@ def test_renderings_hold_only_the_agent_home(tmp_path):
     unit = adapters.SystemdAdapter(user_home=tmp_path).render(CARD_T, home)
     for text in (launch, unit):
         assert "macf.pd" in text and str(home) in text
-    assert "EnvironmentVariables" not in launch
+    # The one variable a LaunchAgent may carry is interpreter plumbing, never agent
+    # configuration: a framework-build Python's venv path, as its own launcher passes it.
+    import plistlib
+    import sys
+    env = plistlib.loads(launch.encode()).get("EnvironmentVariables", {})
+    assert env in ({}, {"__PYVENV_LAUNCHER__": sys.executable}), env
     assert not any(line.startswith("Environment=") for line in unit.splitlines())
 
 

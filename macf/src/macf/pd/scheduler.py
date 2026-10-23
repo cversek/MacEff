@@ -16,6 +16,8 @@ it needs after a restart is in the agent's event log, and nothing else is kept
   [MIS-0002-R25 (missed-run_policy_MUST_be_listed)]. There is no default policy
   [MIS-0002-R110 (scheduler_MUST-NOT_default_missed-run_policy)], and a missed run whose act
   restarts a unit is never replayed [MIS-0002-R27 (scheduler_MUST-NOT_replay_restart_runs)].
+  Under ``report_only`` the record is joined by the ``pd_run_missed`` notice, once per spell,
+  so the agent hears of the firings no one ran; under ``skip`` nothing is raised.
 
 A run still in flight when the daemon restarted is ended and recorded as abandoned, its
 process group stopped if it is still that run, so no lease outlives the daemon that held it
@@ -35,7 +37,7 @@ from that, so nothing a run grants itself outlives it
 file: no user, project or local settings, no MCP server. Anything else that would prompt is
 denied at once instead (``dontAsk``, no prompt answerer), so a run never waits on a person. A
 run that was denied fails, and raises the ``pd_run_failed`` notice
-[MIS-0002-R32 (run_MUST_fail_on_prompt)]. A prompt run into a named live session isn't run yet,
+[MIS-0002-R32 (run_MUST_fail_on_prompt)]. A prompt run into the agent's own live session isn't run yet,
 and that is said once.
 The schedules are read when the daemon starts and never from a run, so a run cannot change
 them [MIS-0002-R33 (run_MUST-NOT_change_schedules)]. Across a restart, a container's
@@ -90,6 +92,8 @@ STDOUT_PEEK = 4096
 RESULT_MAX = 4 * 1024 * 1024
 #: The notice a prompt run that met a permission prompt raises (MIS-0002-R32).
 NOTICE_RUN_FAILED = "pd_run_failed"
+#: The notice a ``report_only`` schedule's missed spell raises, once per spell (MIS-0002-R25).
+NOTICE_RUN_MISSED = "pd_run_missed"
 #: Each schedule's digest as ``pd install`` took it, the record a host's daemon checks (R33).
 EVENT_INSTALLED = "pd_declaration_installed"
 #: Where a check template's digest sits among the schedules' (the scheduler design, 4.2).
@@ -340,7 +344,7 @@ class Scheduler:
         if isinstance(s.run, CommandRun):
             return ""
         if s.target != "isolated":
-            return "a prompt run into a named live session is not run yet"
+            return "a prompt run into the agent's own live session is not run yet"
         path, where = self._client_path()
         if self.client is None:
             self.client = shutil.which("claude", path=path)
@@ -395,10 +399,9 @@ class Scheduler:
     def _load_entries(self) -> None:
         """The entries the log folds to, and the instant each last fired for (R16)."""
         from macf.pd.entries import ENTRY_EVENTS, fold
-        from macf.pd.notifier import EVENT_DELIVERED, HOLD_MAX_S
+        from macf.pd.notifier import HOLD_MAX_S, SETTLED
         read = self.events or (lambda: read_events(reverse=True, scope="all",
-                                                   only=(*ENTRY_EVENTS, EVENT_ENTRY_FIRED,
-                                                         EVENT_DELIVERED)))
+                                                   only=(*ENTRY_EVENTS, EVENT_ENTRY_FIRED, *SETTLED)))
         rows = list(read())                      # newest first
         self.entries = fold(reversed(rows), self.card)
         newest: Dict[str, str] = {}              # each entry's newest firing or delivery
@@ -410,11 +413,14 @@ class Scheduler:
                 if fired is not None:
                     self.entry_fired.setdefault(data.get("id"), fired)
                 newest.setdefault(data.get("id"), "fired" if data.get("notified", True) else "quiet")
-            elif kind == EVENT_DELIVERED and data.get("source") == NOTICE_ENTRY_DUE:
+            elif kind in SETTLED and data.get("source") == NOTICE_ENTRY_DUE:
+                # Delivered, or kept from the session by the operator's rules: either way not owed
+                # again past a day (MIS-0002-R152).
                 newest.setdefault(data.get("arrival_id"), "delivered")
-        # A notice still owed is held by the notifier for a day (its own read-back); one owed
-        # longer would be dropped there, so it is owed again here: a wake owed over a weekend
-        # must not vanish at a Monday restart (the scheduler design, 4.1).
+        # A notice still owed is held by the notifier through its pd_notices_owed checkpoint,
+        # whatever its age. The first start after checkpoints came in reads back only a day, so a
+        # wake owed longer is owed again here, under its own id, which the notifier owes once: a
+        # wake owed over a weekend must not vanish at a Monday restart (the scheduler design, 4.1).
         for entry_id, last in sorted(newest.items()):
             fired = self.entry_fired.get(entry_id)
             if (last == "fired" and entry_id in self.entries and fired is not None
@@ -482,8 +488,10 @@ class Scheduler:
         # hears of it: "skip" records it and says nothing (the scheduler design, 3.5).
         late = (now - due).total_seconds() > ENTRY_GRACE_S
         quiet = late and entry.get("missed") == "skip"
+        # "report" says it was missed and does nothing else (R25): a late check is reported, not run.
+        report_only = late and entry.get("missed") == "report"
         self.entry_fired[entry_id] = due
-        if entry.get("action") == "check":
+        if entry.get("action") == "check" and not report_only:
             # A check wakes nobody by firing: its run does, when its condition holds (4.2).
             self._say(EVENT_ENTRY_FIRED, {"id": entry_id, "for": _iso(due), "missed": missed, "notified": False,
                                           "late_s": round((now - due).total_seconds(), 1)})
@@ -522,6 +530,12 @@ class Scheduler:
                                      "first": _iso(plan.first_missed) if plan.first_missed else None,
                                      "last": _iso(plan.last_missed) if plan.last_missed else None,
                                      "policy": s.missed_run.kind})
+            # report_only runs none of the missed firings and tells the agent, once per spell:
+            # the guard above is the one that records the spell. Its id is the schedule's name
+            # and the last missed firing, both the daemon's own.
+            if s.missed_run.kind == "report_only" and plan.last_missed is not None \
+                    and self.on_notice is not None:
+                self.on_notice(NOTICE_RUN_MISSED, _notice_id(s.name, plan.last_missed))
         if plan.run_at is not None and plan.run_at > now and self.deferred.get(s.name) != plan.scheduled_for:
             self.deferred[s.name] = plan.scheduled_for
             self._say(EVENT_DEFERRED, {"schedule": s.name, "scheduled_for": _iso(plan.scheduled_for),

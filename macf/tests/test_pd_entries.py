@@ -166,22 +166,25 @@ def test_a_skip_entry_records_a_missed_firing_and_says_nothing(tmp_path):
 
 def test_a_wake_owed_longer_than_a_day_is_owed_again_at_a_restart(tmp_path):
     """The notifier holds an owed notice for a day. An entry fired two days ago and never
-    delivered is owed again when the daemon restarts; one delivered since, or fired within the
-    day (the notifier's own read-back holds it), is not (the scheduler design, 4.1)."""
+    delivered is owed again when the daemon restarts; one delivered since, one the operator's
+    rules kept from the session since (MIS-0002-R152), or one fired within the day (the
+    notifier's own read-back holds it), is not (the scheduler design, 4.1)."""
     from channel_receiver import ChannelReceiver
     from macf.pd import scheduler as sc
     from macf.pd.entries import EVENT_ENTRY_ADDED
-    from macf.pd.notifier import EVENT_DELIVERED
+    from macf.pd.notifier import EVENT_DELIVERED, EVENT_SILENCED
     from test_pd_schedule import CARD, Log, at, make_scheduler
     log, now = Log(), [at("2026-10-19 12:00")]
-    owed, delivered, recent = new_entry_id(), new_entry_id(), new_entry_id()
+    owed, delivered, recent, silenced = new_entry_id(), new_entry_id(), new_entry_id(), new_entry_id()
     for entry_id, when, fired in ((owed, "2026-10-17T09:00:00+00:00", "2026-10-17T09:00:00+00:00"),
                                   (delivered, "2026-10-17T09:30:00+00:00", "2026-10-17T09:30:00+00:00"),
-                                  (recent, "2026-10-19T08:00:00+00:00", "2026-10-19T08:00:00+00:00")):
+                                  (recent, "2026-10-19T08:00:00+00:00", "2026-10-19T08:00:00+00:00"),
+                                  (silenced, "2026-10-17T10:00:00+00:00", "2026-10-17T10:00:00+00:00")):
         log.append(EVENT_ENTRY_ADDED, {"agent": CARD, "id": entry_id, "when": when, "zone": "UTC",
                                        "start": "2026-10-16T08:00:00+00:00", "action": "wake", "missed": "once"})
         log.append(sc.EVENT_ENTRY_FIRED, {"agent": CARD, "id": entry_id, "for": fired, "missed": 0, "notified": True})
     log.append(EVENT_DELIVERED, {"source": "pd_entry_due", "arrival_id": delivered, "via": "channel", "notifier": "pd"})
+    log.append(EVENT_SILENCED, {"source": "pd_entry_due", "arrival_id": silenced, "notifier": "pd"})
     channel = ChannelReceiver(tmp_path / "agent")
     make_scheduler(tmp_path, [], log, now, on_notice=channel)
     assert channel.received == [("pd_entry_due", owed)]
@@ -306,6 +309,19 @@ def test_a_check_template_fills_whole_arguments_of_the_declared_kind():
         CheckTemplate(command=["<prog>"], wake_when="stdout", timeout_s=30, args={"prog": CheckArg(kind="integer")})
 
 
+def test_a_check_argument_with_a_brace_is_refused_even_by_a_loose_pattern():
+    """A run renders its command's placeholders after the slots are filled, so a value holding
+    {agent_home} would become a value the pattern never checked. Braces are refused whatever the
+    pattern, and each slot still fills one whole argument of its kind (R143)."""
+    from macf.pd.interface import CheckArg, CheckTemplate
+    t = CheckTemplate(command=["/bin/echo", "<text>"], wake_when="stdout", timeout_s=30,
+                      args={"text": CheckArg(kind="pattern", pattern=r".+")})
+    assert t.argv({"text": "plain"}) == ["/bin/echo", "plain"]
+    for bad in ("{agent_home}", "x}", "{"):
+        with pytest.raises(ValueError):
+            t.argv({"text": bad})
+
+
 def _not_writable(monkeypatch, *writable):
     """The test's interpreter, which the runner's account can usually write, is treated as the
     operator's: only the paths given read as writable by the agent."""
@@ -356,6 +372,32 @@ def test_a_check_wakes_the_agent_only_when_its_condition_holds_and_keeps_what_it
     assert {d["schedule"]: d["late_s"] for d in log.of(sc.EVENT_DONE)} == {moved: 300.0, quiet: 300.0}
 
 
+def test_a_late_check_whose_policy_is_report_is_reported_and_not_run(tmp_path, monkeypatch):
+    """An entry's missed-run policy is once, skip or report (R25). A late check under "report"
+    says it was missed and runs nothing: the agent hears of it, and no program starts."""
+    import sys
+
+    from macf.pd import scheduler as sc
+    from macf.pd.entries import EVENT_ENTRY_ADDED
+    from macf.pd.interface import CheckArg, CheckTemplate
+    from test_pd_schedule import CARD, Log, at
+    _not_writable(monkeypatch)
+    template = CheckTemplate(command=[sys.executable, "-c", "print('ran')", "<n>"],
+                             wake_when="stdout", timeout_s=10, args={"n": CheckArg(kind="integer")})
+    log, now = Log(), [at("2026-10-19 12:05")]           # five minutes late: past the grace
+    entry_id = new_entry_id()
+    log.append(EVENT_ENTRY_ADDED, {"agent": CARD, "id": entry_id, "when": "2026-10-19T12:00:00+00:00", "zone": "UTC",
+                                   "start": "2026-10-19T11:00:00+00:00", "action": "check", "missed": "report",
+                                   "template": "count", "args": {"n": "1"}, "state": "active"})
+    s, channel = _check_scheduler(tmp_path, log, now, {"count": template})
+    s.tick()
+    assert not s.running, "a reported check starts no run"
+    assert channel.received == [("pd_entry_due", entry_id)]
+    fired = log.of(sc.EVENT_ENTRY_FIRED)
+    assert fired and fired[-1]["notified"] is True and fired[-1]["late_s"] == 300.0
+    assert not (tmp_path / "runs" / f"{entry_id}.out").exists()
+
+
 def test_a_check_whose_program_the_agent_could_rewrite_or_that_changed_since_install_never_runs(tmp_path, monkeypatch):
     """A template whose program is in the agent's home, or one changed since pd install where
     that's checked, isn't started; the agent is told it failed (4.2)."""
@@ -392,7 +434,8 @@ def test_a_check_whose_program_the_agent_could_rewrite_or_that_changed_since_ins
 def test_the_daemon_checks_a_check_entry_against_its_template_when_it_is_made(
         tmp_path, base, run_daemon, isolated_events_log, monkeypatch):
     """An unknown template, or arguments that don't fit, are refused when the entry is made. A
-    check from a marked context waits even as a one-shot, since it runs a command (4.2, 5.3)."""
+    check from a marked context is made marked, as any entry is: marking is provenance, and the
+    operator's consent is the ask prompt on pd entry add (4.2, 5.3, as ruled on #744)."""
     import os
     import sys
 
@@ -530,5 +573,260 @@ def test_pd_entry_add_starts_in_ask_and_an_operator_who_loosens_it_keeps_that(tm
     loosened["permissions"]["allow"].append(rule)
     settings.write_text(json.dumps(loosened))
     cs.ensure_mode_safety_permissions()
+    after = json.loads(settings.read_text())["permissions"]
+    assert rule not in after["ask"] and rule in after["allow"]
+
+
+def _live_session_daemon(tmp_path, base, run_daemon, monkeypatch, home=None):
+    """A daemon whose live session is this test's process, so an entry request is taken."""
+    import os
+
+    from macf.notify.session import proc_start
+    from test_primal_daemon import make_home
+    daemon = run_daemon(home or make_home(tmp_path, []), base)
+    me = (os.getpid(), proc_start(os.getpid()))
+    monkeypatch.setattr(daemon.core, "session_incarnation", lambda: me)
+    return daemon
+
+
+def _entry_events():
+    from macf.agent_events_log import read_events
+    from macf.pd.entries import ENTRY_EVENTS
+    return list(read_events(reverse=False, scope="all", only=ENTRY_EVENTS))
+
+
+def test_an_entry_request_without_a_missed_run_policy_is_refused_at_the_socket(
+        tmp_path, base, run_daemon, isolated_events_log, monkeypatch):
+    """MIS-0002-R24 (schedule_MUST_declare_missed-run_policy), the entry half: from the live
+    session, an entry_add that names no missed-run policy is refused at the daemon's socket,
+    never given a default, and nothing is recorded. The same request naming one is made."""
+    from test_primal_daemon import ask
+    daemon = _live_session_daemon(tmp_path, base, run_daemon, monkeypatch)
+    add = {"op": "entry_add", "when": "in 20m", "purpose": "check the pace", "action": "wake"}
+    refused = ask(daemon, add)
+    assert not refused["ok"] and "Field required" in refused["error"]
+    assert _entry_events() == [] and ask(daemon, {"op": "entry_list"})["entries"] == []
+    made = ask(daemon, {**add, "missed": "skip"})
+    assert made["ok"] and [e["missed"] for e in made["entries"]] == ["skip"]
+
+
+@pytest.mark.parametrize("permission", [
+    {"permissions": {"allow": ["Bash"]}},
+    {"allowed_tools": ["Bash(gh pr merge:*)"]},
+    {"permission_mode": "bypassPermissions"},
+])
+def test_an_entry_request_carrying_a_permission_is_refused_at_the_socket(
+        tmp_path, base, run_daemon, isolated_events_log, monkeypatch, permission):
+    """MIS-0002-R31 (schedule_MUST_settle_permission_at_creation), the entry half: an entry
+    carries no permission of its own. From the live session, an entry_add with a permission
+    field, of any spelling, is refused at the daemon's socket and nothing is recorded."""
+    from test_primal_daemon import ask
+    daemon = _live_session_daemon(tmp_path, base, run_daemon, monkeypatch)
+    add = {"op": "entry_add", "when": "in 20m", "purpose": "p", "action": "wake", "missed": "once"}
+    refused = ask(daemon, {**add, **permission})
+    assert not refused["ok"] and "request refused" in refused["error"]
+    assert _entry_events() == []
+    assert ask(daemon, add)["ok"]                         # the same entry, with no permission, is made
+
+
+def test_an_entry_whose_missed_run_policy_is_not_listed_is_refused_at_the_socket(
+        tmp_path, base, run_daemon, isolated_events_log, monkeypatch):
+    """MIS-0002-R25 (missed-run_policy_MUST_be_listed), the entry half: from the live session,
+    an entry_add whose missed-run policy is anything but once, skip or report, a schedule's
+    policy name, a near spelling or an empty one among them, is refused at the daemon's socket
+    and nothing is recorded. Each of the three listed values is made."""
+    from macf.pd.entries import EVENT_ENTRY_ADDED
+    from test_primal_daemon import ask
+    daemon = _live_session_daemon(tmp_path, base, run_daemon, monkeypatch)
+    add = {"op": "entry_add", "when": "in 20m", "purpose": "p", "action": "wake"}
+    for missed in ("run_once", "catch_up", "", "Once", "skip ", "report_only", "window", None):
+        refused = ask(daemon, {**add, "missed": missed})
+        assert not refused["ok"] and "request refused" in refused["error"], missed
+    assert _entry_events() == [] and ask(daemon, {"op": "entry_list"})["entries"] == []
+    for missed in ("once", "skip", "report"):
+        assert ask(daemon, {**add, "missed": missed})["ok"], missed
+    assert [e["data"]["missed"] for e in _entry_events() if e["event"] == EVENT_ENTRY_ADDED] == ["once", "skip", "report"]
+
+
+def test_an_entry_that_fired_late_says_how_late_where_its_notice_points(
+        tmp_path, base, run_daemon, isolated_events_log, monkeypatch, capsys):
+    """MIS-0002-R34 (late_run_MUST_state_lateness), the entry half: an entry the daemon fires
+    three hours late raises pd_entry_due, received through the MacEff channel's own record, and
+    the command its pointer names, run with the notice's id, states the firing's instant and how
+    late it fired. The lateness is read from the pd_entry_fired event, the log's only record."""
+    import re
+    import shlex
+    from datetime import timedelta
+
+    from macf.agent_events_log import append_event
+    from macf.channels.maceff_channel import DAEMON_POINTERS, TAKES
+    from macf.cli import _build_parser
+    from macf.pd import cli, client
+    from macf.pd import scheduler as sc
+    from macf.pd.entries import EVENT_ENTRY_ADDED
+    from test_pd_notice import _connect, _records
+    from test_primal_daemon import CARD, make_home, wait_for
+    home = make_home(tmp_path, [])
+    entry_id = new_entry_id()
+    due = (datetime.now(UTC) - timedelta(hours=3, minutes=5)).replace(microsecond=0)
+    append_event(EVENT_ENTRY_ADDED, {"agent": CARD, "id": entry_id, "when": due.isoformat(), "zone": "UTC",
+                                     "start": (due - timedelta(hours=1)).isoformat(), "first": due.isoformat(),
+                                     "purpose": "the weekly audit is due", "action": "wake", "missed": "once"})
+    daemon = _live_session_daemon(tmp_path, base, run_daemon, monkeypatch, home=home)
+    assert wait_for(lambda: any(e["event"] == sc.EVENT_ENTRY_FIRED for e in _fired_events()))
+    conn = _connect(daemon, takes=TAKES)
+    [record] = [r for r in _records(conn) if r.source == "pd_entry_due"]
+    conn.close()
+    assert record.arrival_id == entry_id
+
+    command = re.search(r"`(macf_tools pd entry show <id>)`", DAEMON_POINTERS["pd_entry_due"]).group(1)
+    real_ask = client.ask
+    monkeypatch.setattr(client, "ask", lambda card, request, **kw: real_ask(card, request, base=base, **kw))
+    monkeypatch.setattr(cli, "_this_agent", lambda: (home, CARD))
+    args = _build_parser().parse_args(shlex.split(command.replace("<id>", record.arrival_id))[1:])
+    capsys.readouterr()
+    assert args.func(args) == 0
+    out = capsys.readouterr().out
+    assert "the weekly audit is due" in out
+    assert f"for {due.isoformat()}, fired 3h 5m late" in out, out
+
+
+def test_the_last_firing_reads_on_time_within_the_grace_and_says_what_it_stood_for():
+    """How entry show words a firing: on time within the scheduler's grace, late in days, hours
+    and minutes past it, with the firings a late one stood for; an entry never fired says so."""
+    from macf.pd.cli import _last_fired
+    assert _last_fired(None) == "not yet"
+    assert _last_fired({"for": "T", "late_s": 59.0, "missed": 0, "notified": True}) == "for T, on time"
+    assert _last_fired({"for": "T", "late_s": 10800.0, "missed": 3, "notified": True}) == (
+        "for T, fired 3h 0m late, standing for 3 earlier firing(s) missed")
+    assert _last_fired({"for": "T", "late_s": 90000.0, "missed": 0, "notified": False}) == (
+        "for T, fired 1d 1h 0m late; no wake was sent")
+    assert "not recorded" in _last_fired({"for": "T", "late_s": None})
+
+
+def _fired_events():
+    from macf.agent_events_log import read_events
+    from macf.pd import scheduler as sc
+    return list(read_events(reverse=False, scope="all", only=(sc.EVENT_ENTRY_FIRED,)))
+
+
+def test_entry_add_and_remove_are_events_and_a_restarted_scheduler_holds_their_fold(
+        tmp_path, base, run_daemon, isolated_events_log, monkeypatch):
+    """MIS-0002-R131 (entry_MUST_be_events): each add and each remove asked at the daemon's
+    socket is an event in the agent's log, and a daemon restarted from that log holds, in its
+    scheduler, exactly the entries those events fold to."""
+    from macf.pd.entries import EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED, fold
+    from test_primal_daemon import CARD, ask, make_home, wait_for
+    home = make_home(tmp_path, [])
+    first = _live_session_daemon(tmp_path, base, run_daemon, monkeypatch, home=home)
+    add = {"op": "entry_add", "when": "cron:0 9 * * *", "purpose": "p", "action": "wake", "missed": "once"}
+    a = ask(first, add)["entries"][-1]["id"]
+    b = ask(first, {**add, "purpose": "kept"})["entries"][-1]["id"]
+    assert ask(first, {"op": "entry_remove", "id": a})["ok"]
+    events = _entry_events()
+    assert [(e["event"], e["data"]["id"]) for e in events] == [
+        (EVENT_ENTRY_ADDED, a), (EVENT_ENTRY_ADDED, b), (EVENT_ENTRY_REMOVED, a)]
+    folded = fold(events, CARD)
+    assert list(folded) == [b]
+
+    first.stop()
+    assert wait_for(lambda: not first.record_path.exists())
+    second = run_daemon(home, base)
+    assert set(second.scheduler.entries) == set(folded) == {b}
+    assert second.scheduler.entries[b]["purpose"] == "kept"
+    assert [e["id"] for e in ask(second, {"op": "entry_list"})["entries"]] == [b]
+
+
+def test_a_check_runs_its_template_with_no_shell(tmp_path, monkeypatch):
+    """MIS-0002-R143 (check_MUST_run_operator_template): the scheduler executes the template's
+    argv directly, with no shell between, so shell syntax a filled argument carries reaches the
+    program as one literal argument and runs nothing."""
+    import shutil
+
+    from macf.pd.entries import EVENT_ENTRY_ADDED
+    from macf.pd.interface import CheckArg, CheckTemplate
+    from test_pd_schedule import CARD, Log, at, finish
+    _not_writable(monkeypatch)
+    planted = tmp_path / "planted"
+    word = f"x; touch {planted} $(touch {planted}) | cat"
+    echo = shutil.which("echo", path="/usr/bin:/bin")
+    template = CheckTemplate(command=[echo, "<word>"],
+                             wake_when="stdout", timeout_s=10, args={"word": CheckArg(kind="pattern", pattern=r"[^\n]+")})
+    log, now = Log(), [at("2026-10-19 12:00")]
+    entry_id = new_entry_id()
+    log.append(EVENT_ENTRY_ADDED, {"agent": CARD, "id": entry_id, "when": "2026-10-19T12:00:00+00:00", "zone": "UTC",
+                                   "start": "2026-10-19T11:00:00+00:00", "action": "check", "missed": "once",
+                                   "template": "echo", "args": {"word": word}, "state": "active"})
+    s, channel = _check_scheduler(tmp_path, log, now, {"echo": template})
+    s.tick()
+    finish(s)
+    assert channel.received == [("pd_entry_due", entry_id)]
+    assert (tmp_path / "runs" / f"{entry_id}.out").read_text() == word + "\n"
+    assert not planted.exists()
+
+
+def test_pd_agenda_lists_both_tiers_each_marked(tmp_path, monkeypatch, capsys):
+    """MIS-0002-R145 (agenda_MUST_list_both_tiers): pd agenda, the command, prints the declared
+    schedules and the agent's own entries in one list, each line marked with its tier, and an
+    entry made from a tainted context marked so."""
+    import argparse
+
+    from macf.pd import cli, client, core
+    from macf.pd.interface import CommandRun, Declaration, MissedRunPolicy, Response, Schedule
+    decl = Declaration(version=1, agent="Tester@abc123", timezone="UTC", notice_routes={"pd_run_failed": "agent"},
+                       schedules=[Schedule(name="sweep", cron="0 13 * * *", missed_run=MissedRunPolicy(kind="skip"),
+                                           target="isolated", run=CommandRun(command=["true"], wake_when="exit_code"),
+                                           timeout_s=60)])
+    entries = [{"id": "e-0123456789ab", "when": "cron:0 9 * * *", "zone": "UTC", "start": "2026-10-19T08:00:00+00:00",
+                "first": "2026-10-19T09:00:00+00:00", "purpose": "check the pace", "marked": ["a web fetch"]}]
+    sent = []
+    monkeypatch.setattr(cli, "_this_agent", lambda: (tmp_path, "Tester@abc123"))
+    monkeypatch.setattr(core, "load_declaration", lambda home, card: decl)
+    monkeypatch.setattr(client, "ask", lambda card, request, **kw: sent.append(request) or Response(ok=True, entries=entries))
+    parser = argparse.ArgumentParser()
+    cli.add_pd_parser(parser.add_subparsers(dest="cmd"))
+    args = parser.parse_args(["pd", "agenda"])
+    assert args.func(args) == 0 and sent == [{"op": "entry_list"}]
+    lines = capsys.readouterr().out.splitlines()
+    tiers = {line.split()[1]: line for line in lines}
+    assert set(tiers) == {"declared", "entry"} and len(lines) == 2
+    assert "sweep" in tiers["declared"] and "0 13 * * *" in tiers["declared"]
+    assert "e-0123456789ab" in tiers["entry"] and "[marked] check the pace" in tiers["entry"]
+
+
+def test_setting_the_mode_puts_pd_entry_add_in_ask_unless_the_operator_allowed_it(tmp_path, monkeypatch, capsys):
+    """MIS-0002-R146 (entry_add_MUST_start_in_ask): macf_tools mode set, the command, puts
+    pd entry add in the client's ask list; once the operator has moved it to allow, a later
+    mode set leaves it there."""
+    import argparse
+    import json
+
+    from macf import cli as macf_cli
+    from macf import modes
+    from macf.transcript_monitor import daemon as tm
+    from macf.utils import paths
+    rule = "Bash(macf_tools pd entry add:*)"
+    project = tmp_path / "project"
+    (project / ".claude").mkdir(parents=True)
+    settings = project / ".claude" / "settings.local.json"
+    settings.write_text(json.dumps({"permissions": {}}))
+    (tmp_path / "home" / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))       # the client's global settings, here
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
+    monkeypatch.setattr(paths, "find_project_root", lambda: project)
+    monkeypatch.setattr(modes, "set_auto_mode", lambda **kw: (True, "AUTO_MODE set"))
+    monkeypatch.setattr(macf_cli, "get_current_session_id", lambda: "s")
+    monkeypatch.setattr(tm, "is_running", lambda: True)
+
+    def mode_set():
+        return macf_cli.cmd_mode_set(argparse.Namespace(mode="AUTO_MODE", auth_token="t"))
+    assert mode_set() == 0
+    permissions = json.loads(settings.read_text())["permissions"]
+    assert rule in permissions["ask"] and rule not in permissions.get("allow", [])
+    loosened = json.loads(settings.read_text())
+    loosened["permissions"]["ask"].remove(rule)
+    loosened["permissions"]["allow"].append(rule)
+    settings.write_text(json.dumps(loosened))
+    assert mode_set() == 0
     after = json.loads(settings.read_text())["permissions"]
     assert rule not in after["ask"] and rule in after["allow"]

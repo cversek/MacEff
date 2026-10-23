@@ -275,3 +275,134 @@ def test_main_starts_the_access_path_before_the_daemons_and_both_before_any_opti
     assert {"sshd", "primal daemons", "policy index", "search service"} <= set(order), order
     optional = min(order.index("policy index"), order.index("search service"))
     assert order.index("sshd") < order.index("primal daemons") < optional, order
+
+
+# ---- an agent's calling card, declared in agents.yaml and written to its home (persistent_layer 10.1) ----
+
+def _carded(tmp_path, monkeypatch, cards, configs=None):
+    """Homes for agents declaring *cards* (username -> card or None), each with an identity file
+    and, from *configs*, an existing config.json (username -> (dict, mode)). Uses the real
+    ``agent_card``, so a rendering names exactly what the home now holds."""
+    import os
+    start = _start()
+    monkeypatch.setattr(start, "HOME_ROOT", tmp_path / "home")
+    monkeypatch.setattr(start, "account_ids", lambda name: (os.getuid(), os.getgid()))
+    for i, user in enumerate(cards):
+        home = tmp_path / "home" / user
+        (home / ".maceff").mkdir(parents=True)
+        (home / ".maceff_primary_agent.id").write_text(f"{i}a2b3c\n")
+        if user in (configs or {}):
+            data, mode = configs[user]
+            (home / ".maceff" / "config.json").write_text(json.dumps(data))
+            (home / ".maceff" / "config.json").chmod(mode)
+    chowned = []
+    cfg = SimpleNamespace(services={}, agents={
+        u: SimpleNamespace(username=u, calling_card=card,
+                           primal_daemon={"units": [{**UNIT, "account": u}]}) for u, card in cards.items()})
+    done = start.render_pd_declarations(cfg, root=tmp_path / "etc",
+                                        chown=lambda p, u, g: chowned.append((Path(p).name, u, g)))
+    return SimpleNamespace(start=start, done=done, chowned=chowned,
+                           config=lambda user: tmp_path / "home" / user / ".maceff" / "config.json",
+                           rendered=lambda user: tmp_path / "etc" / user / "declaration.json")
+
+
+def test_a_declared_card_is_written_into_a_home_without_one_and_the_daemon_renders_under_it(
+        tmp_path, monkeypatch):
+    """Guards the gap that kept every container agent's daemon from rendering: a home with no
+    config.json gets one holding just the declared card, the agent's own, mode 0600, and the
+    declaration names the card the daemon will read from that home."""
+    import os
+    r = _carded(tmp_path, monkeypatch, {"pa_manny": "Manny1"})
+    config = r.config("pa_manny")
+    assert json.loads(config.read_text()) == {"agent_identity": {"calling_card": "Manny1"}}
+    assert oct(config.stat().st_mode)[-3:] == "600"
+    assert ("config.json.tmp", os.getuid(), os.getgid()) in r.chowned
+    assert r.done == ["pa_manny"]
+    assert json.loads(r.rendered("pa_manny").read_text())["agent"] == "Manny1@0a2b3c"
+
+
+def test_writing_the_card_keeps_every_other_key_and_the_files_owner_and_mode(tmp_path, monkeypatch):
+    """The home's config.json carries the task store and the rest of the agent's identity, which
+    nobody can reconstruct: the card is added beside them, and the file keeps its owner and mode
+    (a mode other than 0600 here, so keeping it can't be mistaken for the default)."""
+    import os
+    existing = {"task_store": {"mode": "home", "path": "agent/public/tasks"},
+                "agent_identity": {"display_name": "Manny MacEff"}}
+    r = _carded(tmp_path, monkeypatch, {"pa_manny": "Manny1"}, {"pa_manny": (existing, 0o640)})
+    config = r.config("pa_manny")
+    assert json.loads(config.read_text()) == {
+        "task_store": {"mode": "home", "path": "agent/public/tasks"},
+        "agent_identity": {"display_name": "Manny MacEff", "calling_card": "Manny1"}}
+    assert oct(config.stat().st_mode)[-3:] == "640"
+    st = config.stat()
+    assert ("config.json.tmp", st.st_uid, st.st_gid) in r.chowned
+    assert r.done == ["pa_manny"]
+
+
+def test_a_home_already_holding_the_card_is_left_untouched(tmp_path, monkeypatch):
+    """At every start after the first the card is already there: the file isn't rewritten, so
+    its inode and contents stay exactly as they were, and the daemon still renders."""
+    existing = {"agent_identity": {"calling_card": "Manny1"}, "z": 1}
+    home_config = tmp_path / "home" / "pa_manny" / ".maceff" / "config.json"
+    start = _start()
+    monkeypatch.setattr(start, "HOME_ROOT", tmp_path / "home")
+    home_config.parent.mkdir(parents=True)
+    home_config.write_text(json.dumps(existing))
+    before = (home_config.stat().st_ino, home_config.read_text())
+    assert start.write_agent_card("pa_manny", "Manny1", tmp_path / "home" / "pa_manny",
+                                  chown=lambda *a: None) is False
+    assert (home_config.stat().st_ino, home_config.read_text()) == before
+    home_config.unlink()
+    r = _carded(tmp_path / "again", monkeypatch, {"pa_manny": "Manny1"}, {"pa_manny": (existing, 0o600)})
+    assert not any(name == "config.json.tmp" for name, *_ in r.chowned) and r.done == ["pa_manny"]
+
+
+def test_a_different_card_in_the_home_is_refused_and_costs_only_that_agent(tmp_path, monkeypatch, capsys):
+    """An agent's card keys its daemon's sockets and unit names, so a card in the home that differs
+    from agents.yaml is never overwritten. The conflict is logged by name with both values, and
+    that agent alone gets no rendering (its old one goes), while the next agent still renders.
+    A differing moniker counts the same, since the daemon reads it when no card is set."""
+    for user in ("pa_clash", "pa_moniker"):
+        stale = tmp_path / user / "etc" / user / "declaration.json"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("{}")
+    held = {"pa_clash": {"agent_identity": {"calling_card": "OldName"}},
+            "pa_moniker": {"agent_identity": {"moniker": "OldName"}}}
+    for user, data in held.items():
+        r = _carded(tmp_path / user, monkeypatch, {user: "NewName", "pa_fine": "Fine"}, {user: (data, 0o600)})
+        assert r.done == ["pa_fine"]
+        assert json.loads(r.config(user).read_text()) == data
+        assert not r.rendered(user).exists() and r.rendered("pa_fine").exists()
+        err = capsys.readouterr().err
+        assert user in err and "'OldName'" in err and "'NewName'" in err
+
+
+def test_a_home_whose_moniker_is_the_declared_name_takes_the_card_and_renders(tmp_path, monkeypatch):
+    """A moniker is the card's name without the id fragment, the shape agent init leaves (review
+    of #805). agents.yaml declares the same bare name, so a home holding that moniker agrees with
+    it: the card is written beside it, every other key stays, and the agent renders."""
+    user = "pa_tester"
+    data = {"agent_identity": {"moniker": "Tester", "type": "primary_agent"}}
+    r = _carded(tmp_path / user, monkeypatch, {user: "Tester"}, {user: (data, 0o600)})
+    assert r.done == [user]
+    assert json.loads(r.config(user).read_text()) == {
+        "agent_identity": {"moniker": "Tester", "type": "primary_agent", "calling_card": "Tester"}}
+    assert r.rendered(user).exists()
+
+
+def test_an_agent_without_a_calling_card_gets_nothing_written(tmp_path, monkeypatch):
+    """A card is written only where agents.yaml declares one: an agent without it keeps its home
+    as it was, with no config.json created and an existing one unchanged."""
+    start = _start()
+    monkeypatch.setattr(start, "HOME_ROOT", tmp_path / "home")
+    monkeypatch.setattr(start, "write_agent_card", lambda *a, **k: (_ for _ in ()).throw(AssertionError(a)))
+    bare, kept = tmp_path / "home" / "pa_bare", tmp_path / "home" / "pa_kept"
+    (bare / ".maceff").mkdir(parents=True)
+    (kept / ".maceff").mkdir(parents=True)
+    (kept / ".maceff" / "config.json").write_text('{"agent_identity": {"calling_card": "Kept"}}')
+    cfg = SimpleNamespace(services={}, agents={
+        "bare": SimpleNamespace(username="pa_bare", calling_card=None, primal_daemon=None),
+        "kept": SimpleNamespace(username="pa_kept", primal_daemon=None)})
+    assert start.write_agent_cards(cfg) == {}
+    assert not (bare / ".maceff" / "config.json").exists()
+    assert (kept / ".maceff" / "config.json").read_text() == '{"agent_identity": {"calling_card": "Kept"}}'

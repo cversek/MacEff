@@ -77,7 +77,8 @@ def add_pd_parser(sub) -> None:
     remove = entry_sub.add_parser("remove", help="remove an entry; the agent or the operator may, since it only stops work")
     remove.add_argument("id", help="the entry's id, e- and 12 hex digits")
     remove.set_defaults(func=cmd_pd_entry_remove)
-    show = entry_sub.add_parser("show", help="one entry in full: its purpose, time, state and why it was marked")
+    show = entry_sub.add_parser("show", help="one entry in full: its purpose, time, state, why it was marked, "
+                                             "and when it last fired and how late")
     show.add_argument("id", help="the entry's id, e- and 12 hex digits")
     show.set_defaults(func=cmd_pd_entry_show)
     lst = entry_sub.add_parser("list", help="the entries you hold")
@@ -96,6 +97,30 @@ def add_pd_parser(sub) -> None:
     wake.add_argument("--asked-by", choices=("agent", "operator"), default="agent",
                       help="who paces: the agent itself (default), or the operator")
     wake.set_defaults(func=cmd_pd_wake)
+    stream = pd_sub.add_parser(
+        "stream", help="the layer's event stream: subscribe to it, or silence and reroute it (persistent_layer 11.4)")
+    stream_sub = stream.add_subparsers(dest="stream_cmd")
+    sub_p = stream_sub.add_parser("subscribe", help="print the stream's records, one JSON line each, until Ctrl+C")
+    sub_p.add_argument("--source", action="append", default=None, metavar="EVENT",
+                       help="an event name to take, with * globs; repeat it (default: every source)")
+    sub_p.add_argument("--position", default=None, metavar="LOG:OFFSET",
+                       help="resume just after the record that carried this position")
+    sub_p.add_argument("--name", default=None, help="the name this subscriber goes by, for silence and route")
+    sub_p.set_defaults(func=cmd_pd_stream_subscribe)
+    for act, helptext in (("silence", "stop delivering a source, or anything to a subscriber (@name); it still lands in the log"),
+                          ("unsilence", "deliver a source or a subscriber (@name) again")):
+        rule = stream_sub.add_parser(act, help=helptext)
+        rule.add_argument("target", help="an event name or notice source with * globs, or @name for a "
+                                         "subscriber (@channel: the agent's own session)")
+        rule.add_argument("--reason", default="", help="why; recorded with the rule")
+        rule.set_defaults(func=cmd_pd_stream_rule, act=act)
+    route = stream_sub.add_parser("route", help="send a source only to one subscriber, or --clear that route")
+    route.add_argument("target", metavar="source", help="an event name or notice source, with * globs; "
+                                                        "routed elsewhere, it no longer reaches the session")
+    route.add_argument("subscriber", nargs="?", default=None, help="the subscriber's name, with or without @")
+    route.add_argument("--clear", action="store_true", help="take the source's route away")
+    route.add_argument("--reason", default="", help="why; recorded with the rule")
+    route.set_defaults(func=cmd_pd_stream_rule, act="route")
 
 
 def cmd_pd_alive(args: argparse.Namespace) -> int:
@@ -109,6 +134,67 @@ def cmd_pd_alive(args: argparse.Namespace) -> int:
         return 1
     pid = args.pid or os.getppid()
     return 0 if liveness.emit(found.card, found.unit, found.interval_s, args.in_flight, pid=pid) else 1
+
+
+def cmd_pd_stream_subscribe(args: argparse.Namespace) -> int:
+    """0 when the stream ends or on Ctrl+C; 1 when it refused or could not be reached."""
+    from macf.pd.interface import events_socket
+    from macf.pd.stream import subscribe
+    _, card = _this_agent()
+    position = None
+    if args.position:
+        log, sep, offset = args.position.rpartition(":")
+        if not sep or not log or not offset.isdigit():
+            print("maceff_pd: --position is LOG:OFFSET, as a record's position names them", file=sys.stderr)
+            return 1
+        position = {"log": log, "offset": int(offset)}
+    try:
+        conn = subscribe(events_socket(card), args.source or ["*"], position=position, name=args.name)
+    except OSError as e:
+        print(f"maceff_pd: {card}: the event stream can't be reached: {e}", file=sys.stderr)
+        return 1
+    try:
+        for line in conn.makefile("rb"):
+            sys.stdout.write(line.decode("utf-8", errors="replace"))
+            sys.stdout.flush()
+            if line.startswith(b'{"type": "refused"'):
+                return 1
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        conn.close()
+    return 0
+
+
+def cmd_pd_stream_rule(args: argparse.Namespace) -> int:
+    """0 when the rule is recorded and in force; 1 when the daemon refused it or couldn't be reached."""
+    from macf.pd.client import DaemonUnavailable, ask
+    _, card = _this_agent()
+    act, subscriber = args.act, None
+    if act == "route":
+        if getattr(args, "clear", False):
+            act = "unroute"
+        elif not args.subscriber:
+            print("maceff_pd: a route names the subscriber it sends the source to, or --clear", file=sys.stderr)
+            return 1
+        else:
+            subscriber = args.subscriber.lstrip("@")
+    request = {"op": "stream_rule", "act": act, "target": args.target, "asked_by": {"kind": "operator"},
+               "reason": args.reason}
+    if subscriber is not None:
+        request["subscriber"] = subscriber
+    try:
+        reply = ask(card, request)
+    except DaemonUnavailable as e:
+        print(f"maceff_pd: {card}: {e}", file=sys.stderr)
+        return 1
+    if not reply.ok:
+        print(f"maceff_pd: {card}: refused: {reply.error}", file=sys.stderr)
+        return 1
+    rules = reply.stream_rules or {}
+    print(f"{card}: silenced {', '.join(rules.get('silenced') or []) or 'nothing'}; routes "
+          f"{', '.join(f'{k} -> @{v}' for k, v in (rules.get('routes') or {}).items()) or 'none'}")
+    return 0
 
 
 def _seconds(text: str) -> float:
@@ -273,7 +359,38 @@ def cmd_pd_entry_show(args: argparse.Namespace) -> int:
         if entry.get(key) not in (None, "", []):
             value = "; ".join(entry[key]) if isinstance(entry[key], list) else entry[key]
             print(f"{key + ':':13} {value}")
+    print(f"{'last fired:':13} {_last_fired(entry.get('last_fired'))}")
     return 0
+
+
+def _late_text(late_s) -> str:
+    """How late a firing was, readably: "on time" within the scheduler's grace."""
+    from macf.pd.scheduler import ENTRY_GRACE_S
+    if late_s is None:
+        return "its lateness was not recorded"
+    if late_s <= ENTRY_GRACE_S:
+        return "on time"
+    minutes = int(late_s // 60)
+    days, hours, mins = minutes // 1440, minutes % 1440 // 60, minutes % 60
+    if days:
+        return f"fired {days}d {hours}h {mins}m late"
+    if hours:
+        return f"fired {hours}h {mins}m late"
+    return f"fired {mins}m late"
+
+
+def _last_fired(fired) -> str:
+    """An entry's newest firing as one line: the instant it was due, how late it fired, and the
+    firings it stood for, so the record a pd_entry_due notice points to says how late the wake
+    is (MIS-0002-R34 (late_run_MUST_state_lateness))."""
+    if not fired:
+        return "not yet"
+    text = f"for {fired.get('for')}, {_late_text(fired.get('late_s'))}"
+    if fired.get("missed"):
+        text += f", standing for {fired['missed']} earlier firing(s) missed"
+    if fired.get("notified") is False:
+        text += "; no wake was sent"
+    return text
 
 
 def cmd_pd_entry_remove(args: argparse.Namespace) -> int:
