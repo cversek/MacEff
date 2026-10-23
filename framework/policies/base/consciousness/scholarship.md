@@ -664,7 +664,7 @@ Four rules follow:
 
 #### 3.5.5 Opting a Folder Out
 
-Some folders under `agent/private` or `agent/public` hold material that is not an artifact: an archive of old scratch work, a dump of raw notes kept for reference, files copied in from elsewhere. Such a folder can leave the web by holding an empty file named `.not-in-knowledge-web` at its top level. The walk then skips the whole folder, for the agent's own trees and each subagent's alike, so none of its files becomes a node or an orphan.
+Some folders under `agent/private` or `agent/public` hold material that is not an artifact: an archive of old scratch work, a dump of raw notes kept for reference, files copied in from elsewhere. Such a folder can leave the web by holding an empty file named `.not-in-knowledge-web` at its top level, when the folder is a type folder: a direct child of `agent/private` or `agent/public` (or of a subagent's), or the task store wherever its configuration puts it. The walk then skips the whole folder, for the agent's own trees and each subagent's alike, so none of its files becomes a node or an orphan. A marker deeper down, in a subfolder of a type folder, has no effect: that subfolder's files are still walked. To take such material out, move it into a type folder of its own and mark that.
 
 **The exclusion is never silent.** `macf_tools knowledge doctor` names every folder the marker removes, as a note such as `private/scratchpad_archive: out of the web by its marker`, and `macf_tools knowledge status --json` lists the same folders under `opted_out`. A reader of the web's health always sees what the web does not hold.
 

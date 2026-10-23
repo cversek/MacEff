@@ -92,3 +92,57 @@ def test_status_json_lists_the_excluded_folders(home, capsys):
     assert cmd_knowledge_status(Namespace(json_output=True)) == 0
     status = json.loads(capsys.readouterr().out)
     assert status["opted_out"] == ["private/scratchpad_archive"]
+
+
+@pytest.fixture
+def moved_store(tmp_path, monkeypatch):
+    """An agent home whose task store the task_store config moved out of the
+    agent tree, to taskstore/, holding one task record."""
+    monkeypatch.delenv("MACF_TASKS_DIR", raising=False)
+    monkeypatch.delenv("MACF_TASK_STORE_DIR", raising=False)
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path))
+    from macf.utils.paths import find_agent_home
+    find_agent_home.cache_clear()
+    (tmp_path / ".maceff").mkdir()
+    (tmp_path / ".maceff" / "config.json").write_text(
+        json.dumps({"task_store": {"mode": "home", "path": "taskstore"}}))
+    store = tmp_path / "taskstore"
+    store.mkdir()
+    (store / "1.json").write_text(json.dumps({"id": "1", "subject": "a task"}))
+    _mk(tmp_path, "private/learnings/2026-01-01_kept.md", LINKED)
+    yield store
+    find_agent_home.cache_clear()
+
+
+def test_a_moved_task_store_with_the_marker_is_excluded_and_announced(moved_store, capsys):
+    """A store moved by config and marked leaves the walk, and the doctor and
+    status say so: the exclusion is announced wherever the store lives."""
+    home = moved_store.parent
+    (moved_store / OPT_OUT_MARKER).write_text("")
+    assert not [p for _t, _r, p in iter_web_files(home) if p.parent == moved_store]
+    dx = examine(home, kg=EMPTY_KG)
+    notes = [f.subject for f in dx.findings if f.check == OPTED_OUT_CHECK]
+    assert notes == [f"{moved_store}: out of the web by its marker"]
+    assert dx.chart.vitals["opted_out"] == 1
+    from macf.cli import cmd_knowledge_status
+    assert cmd_knowledge_status(Namespace(json_output=True)) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["opted_out"] == [str(moved_store)]
+
+
+def test_a_moved_task_store_without_the_marker_is_walked(moved_store):
+    home = moved_store.parent
+    walked = [(t, p) for t, _r, p in iter_web_files(home) if p.parent == moved_store]
+    assert walked == [("tasks", moved_store / "1.json")]
+    dx = examine(home, kg=EMPTY_KG)
+    assert not [f for f in dx.findings if f.check == OPTED_OUT_CHECK]
+    assert dx.chart.vitals["opted_out"] == 0
+
+
+def test_a_marker_below_a_type_folder_has_no_effect(tmp_path):
+    """The marker works on a type folder only (scholarship policy): a marked
+    subfolder of one is still walked, as the policy says."""
+    dump = _mk(tmp_path, "private/notes/old_dump/dump.md")
+    _opt_out(tmp_path, "private/notes/old_dump")
+    assert dump in {p for _t, _r, p in iter_web_files(tmp_path)}
+    assert not [f for f in examine(tmp_path, kg=EMPTY_KG).findings if f.check == OPTED_OUT_CHECK]

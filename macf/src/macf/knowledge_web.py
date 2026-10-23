@@ -106,12 +106,13 @@ def _agent_parents(agent_home: Path) -> List[Path]:
 def excluded_type_roots(agent_home: Path) -> List[Tuple[str, Path]]:
     """The (name, folder) pairs taken out of the web by the opt-out marker.
 
-    Discovered over the same folders ``_type_roots`` walks. The doctor and
+    Read from the same resolution ``_type_roots`` uses (``_resolve_roots``),
+    including the task store wherever config or the environment moved it, so
+    every folder the walk drops is a folder this lists. The doctor and
     ``knowledge status`` report these, so an exclusion is always visible to
     whoever reads the web's health.
     """
-    parents = _agent_parents(agent_home) + _subagent_parents(agent_home)
-    return [(name, d) for name, d, out in _type_folders(parents) if out]
+    return _resolve_roots(agent_home)[1]
 
 
 def _type_roots(agent_home: Path) -> List[Tuple[str, Path]]:
@@ -125,12 +126,28 @@ def _type_roots(agent_home: Path) -> List[Tuple[str, Path]]:
     into a private web) and the reverse is forbidden — a policy must never
     link a concept that resolves only in some agent's private tree.
     """
-    roots: List[Tuple[str, Path]] = [
-        (name, d) for name, d, out in _type_folders(_agent_parents(agent_home)) if not out]
+    return _resolve_roots(agent_home)[0]
+
+
+def _resolve_roots(agent_home: Path) -> Tuple[List[Tuple[str, Path]], List[Tuple[str, Path]]]:
+    """(walked, excluded): the ONE resolution of where the web looks.
+
+    Both ``_type_roots`` and ``excluded_type_roots`` read from here, so a
+    folder the marker drops from the walk cannot fail to be announced
+    (scholarship policy: the exclusion is announced).
+    """
+    roots: List[Tuple[str, Path]] = []
+    excluded: List[Tuple[str, Path]] = []
+
+    def sort(folders: Iterator[Tuple[str, Path, bool]]) -> None:
+        for name, d, out in folders:
+            (excluded if out else roots).append((name, d))
+
+    sort(_type_folders(_agent_parents(agent_home)))
     personal = agent_home / "agent" / "policies" / "personal"
     if personal.exists():
         roots.append(("personal_policies", personal))
-    roots.extend((name, d) for name, d, out in _type_folders(_subagent_parents(agent_home)) if not out)
+    sort(_type_folders(_subagent_parents(agent_home)))
     try:
         from .utils.manifest import get_framework_policies_path
         pol = get_framework_policies_path()
@@ -146,18 +163,20 @@ def _type_roots(agent_home: Path) -> List[Tuple[str, Path]]:
     # The task store participates wherever it is configured to live. It sits
     # under the agent tree by default, but MACF_TASK_STORE_DIR or the
     # task_store config can move it, and a moved store must not silently drop
-    # out of the web while task links are still being written into it.
+    # out of the web while task links are still being written into it. A moved
+    # store carrying the marker is excluded, and listed as excluded, like any
+    # other marked folder.
     try:
         from .task.reader import TaskReader
         store = TaskReader._resolve_home_store()
     except (OSError, ImportError, ValueError) as e:
         print(f"⚠️ MACF: task store not resolved for the web: {e}", file=sys.stderr)
         store = None
-    if store is not None and store.is_dir() and not _opted_out(store):
-        known = {r.resolve() for _, r in roots}
+    if store is not None and store.is_dir():
+        known = {r.resolve() for _, r in roots + excluded}
         if store.resolve() not in known:
-            roots.append(("tasks", store))
-    return roots
+            (excluded if _opted_out(store) else roots).append(("tasks", store))
+    return roots, excluded
 
 
 def iter_web_files(agent_home: Path) -> Iterator[Tuple[str, Path, Path]]:
