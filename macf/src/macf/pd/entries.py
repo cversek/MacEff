@@ -59,6 +59,25 @@ def fold(events: Iterable[dict], card: str) -> Dict[str, dict]:
     return held
 
 
+#: The fields of an entry's newest pd_entry_fired that its views carry as ``last_fired``.
+LAST_FIRED_FIELDS = ("for", "late_s", "missed", "notified")
+
+
+def with_last_firing(held: Dict[str, dict], events: Iterable[dict], card: str, fired_event: str) -> list:
+    """The entries held, each carrying ``last_fired`` from its newest *fired_event* (the
+    scheduler's pd_entry_fired) in *events*, read oldest first: the instant it fired for and how late it fired, so the record a
+    pd_entry_due notice points to says how late the wake is (MIS-0002-R34
+    (late_run_MUST_state_lateness)). Read from the log, which stays the only store."""
+    last: Dict[str, dict] = {}
+    for event in events:
+        data = event.get("data") if isinstance(event, dict) else None
+        if (event.get("event") == fired_event and isinstance(data, dict) and data.get("agent") == card
+                and data.get("id") in held):
+            last[data["id"]] = {k: data.get(k) for k in LAST_FIRED_FIELDS}
+    return [{**entry, "last_fired": last[entry_id]} if entry_id in last else entry
+            for entry_id, entry in held.items()]
+
+
 class OneShot:
     """A single instant. It fires once, and an entry ends after it."""
 

@@ -77,7 +77,8 @@ def add_pd_parser(sub) -> None:
     remove = entry_sub.add_parser("remove", help="remove an entry; the agent or the operator may, since it only stops work")
     remove.add_argument("id", help="the entry's id, e- and 12 hex digits")
     remove.set_defaults(func=cmd_pd_entry_remove)
-    show = entry_sub.add_parser("show", help="one entry in full: its purpose, time, state and why it was marked")
+    show = entry_sub.add_parser("show", help="one entry in full: its purpose, time, state, why it was marked, "
+                                             "and when it last fired and how late")
     show.add_argument("id", help="the entry's id, e- and 12 hex digits")
     show.set_defaults(func=cmd_pd_entry_show)
     lst = entry_sub.add_parser("list", help="the entries you hold")
@@ -109,11 +110,13 @@ def add_pd_parser(sub) -> None:
     for act, helptext in (("silence", "stop delivering a source, or anything to a subscriber (@name); it still lands in the log"),
                           ("unsilence", "deliver a source or a subscriber (@name) again")):
         rule = stream_sub.add_parser(act, help=helptext)
-        rule.add_argument("target", help="an event name with * globs, or @name for a subscriber")
+        rule.add_argument("target", help="an event name or notice source with * globs, or @name for a "
+                                         "subscriber (@channel: the agent's own session)")
         rule.add_argument("--reason", default="", help="why; recorded with the rule")
         rule.set_defaults(func=cmd_pd_stream_rule, act=act)
     route = stream_sub.add_parser("route", help="send a source only to one subscriber, or --clear that route")
-    route.add_argument("target", metavar="source", help="an event name, with * globs")
+    route.add_argument("target", metavar="source", help="an event name or notice source, with * globs; "
+                                                        "routed elsewhere, it no longer reaches the session")
     route.add_argument("subscriber", nargs="?", default=None, help="the subscriber's name, with or without @")
     route.add_argument("--clear", action="store_true", help="take the source's route away")
     route.add_argument("--reason", default="", help="why; recorded with the rule")
@@ -356,7 +359,38 @@ def cmd_pd_entry_show(args: argparse.Namespace) -> int:
         if entry.get(key) not in (None, "", []):
             value = "; ".join(entry[key]) if isinstance(entry[key], list) else entry[key]
             print(f"{key + ':':13} {value}")
+    print(f"{'last fired:':13} {_last_fired(entry.get('last_fired'))}")
     return 0
+
+
+def _late_text(late_s) -> str:
+    """How late a firing was, readably: "on time" within the scheduler's grace."""
+    from macf.pd.scheduler import ENTRY_GRACE_S
+    if late_s is None:
+        return "its lateness was not recorded"
+    if late_s <= ENTRY_GRACE_S:
+        return "on time"
+    minutes = int(late_s // 60)
+    days, hours, mins = minutes // 1440, minutes % 1440 // 60, minutes % 60
+    if days:
+        return f"fired {days}d {hours}h {mins}m late"
+    if hours:
+        return f"fired {hours}h {mins}m late"
+    return f"fired {mins}m late"
+
+
+def _last_fired(fired) -> str:
+    """An entry's newest firing as one line: the instant it was due, how late it fired, and the
+    firings it stood for, so the record a pd_entry_due notice points to says how late the wake
+    is (MIS-0002-R34 (late_run_MUST_state_lateness))."""
+    if not fired:
+        return "not yet"
+    text = f"for {fired.get('for')}, {_late_text(fired.get('late_s'))}"
+    if fired.get("missed"):
+        text += f", standing for {fired['missed']} earlier firing(s) missed"
+    if fired.get("notified") is False:
+        text += "; no wake was sent"
+    return text
 
 
 def cmd_pd_entry_remove(args: argparse.Namespace) -> int:

@@ -34,6 +34,14 @@ says nothing about it.
 Routing follows the declaration's ``notice_routes`` [MIS-0002-R42
 (notice_source_MUST_be_routed)]. This module delivers the agent's share, ``agent`` and
 the agent half of ``both``. A source routed only to the operator is not polled here.
+
+- **The operator's rules.** The session is a named subscriber in the event stream's rules,
+  ``@channel``. Before a notice is written to a channel, or a keystroke wake typed for mail,
+  the notifier asks the daemon's rules in force, live, whether the notice's source is
+  delivered to ``channel``. Where it isn't (the source silenced, ``@channel`` silenced, or the
+  source routed to another subscriber), the notice is recorded as ``pd_notice_silenced`` and is
+  no longer owed: a restart reads that back as settled, and unsilencing delivers only what
+  arrives after it [MIS-0002-R152 (operator_MUST_silence_and_reroute)].
 """
 from __future__ import annotations
 
@@ -49,12 +57,17 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 
 from macf.agent_events_log import append_event, read_events
+from macf.pd.interface import CHANNEL_SUBSCRIBER
 from macf.transcript_monitor.sources import StoreSource, agent_store_source
 
 #: The detection a source's poll produces, as the monitor names it.
 EVENT_DETECTED = "store_arrival_detected"
 #: One notice written to a channel.
 EVENT_DELIVERED = "pd_notice_delivered"
+#: One notice the operator's rules kept from the session: recorded, and so no longer owed.
+EVENT_SILENCED = "pd_notice_silenced"
+#: What settles an owed notice: it was delivered, or the rules kept it from the session.
+SETTLED = (EVENT_DELIVERED, EVENT_SILENCED)
 #: Notices the daemon raises itself, about the agent's own units or its unread mail, not read
 #: from a store. Each is delivered only where the declaration routes it to the agent
 #: (MIS-0002-R42).
@@ -162,11 +175,16 @@ class Notifier:
     def __init__(self, agent_home: Path, routes: Dict[str, str], *,
                  append: Callable[[str, dict], bool] = append_event,
                  clock: Callable[[], float] = time.time,
-                 events: Optional[Callable[[], Iterable[dict]]] = None):
+                 events: Optional[Callable[[], Iterable[dict]]] = None,
+                 rules: Optional[Callable[[], object]] = None):
         self._append, self._clock = append, clock
         self._events = events or (lambda: read_events(reverse=True, scope="all",
-                                                      only=(EVENT_DETECTED, EVENT_DELIVERED,
+                                                      only=(EVENT_DETECTED, *SETTLED,
                                                             EVENT_NOTICES_OWED, _DAEMON_START)))
+        #: The operator's rules in force, asked at each delivery: a callable, so a rule set at
+        #: runtime through the control socket is seen at once (the stream's ``Rules``). None:
+        #: no rules, every notice goes to the session.
+        self._rules = rules
         self.owed: "OrderedDict[str, Owed]" = OrderedDict()
         #: The keystroke fallback for a session with no channel (``pd.wake``), or None.
         self.waker = None
@@ -214,7 +232,7 @@ class Notifier:
             aid = data.get("arrival_id")
             if not isinstance(aid, str):
                 continue
-            if kind == EVENT_DELIVERED:
+            if kind in SETTLED:
                 delivered.add(aid)
             elif aid not in delivered and aid not in detected and self._known(data.get("source")):
                 detected[aid] = Owed(data["source"], aid, _count(data.get("count")), float(ts))
@@ -347,6 +365,9 @@ class Notifier:
         turn is seen starting or the look gives up. Returns whether a wake was typed now."""
         if self.waker is None:
             return False
+        # A typed wake is delivery to the session too: what the rules keep from @channel is
+        # settled here before the wake can name it (MIS-0002-R152).
+        self.drop_silenced()
         if self.declared("amail"):
             # A channel took over: the notices a held wake waited on are its to deliver, so
             # the hold ends here rather than staying open for the outside watch to alert on.
@@ -371,9 +392,32 @@ class Notifier:
             del self.owed[owed.arrival_id]
         return True
 
+    def to_session(self, source: str) -> bool:
+        """Whether the operator's rules in force deliver ``source`` to the session, ``@channel``."""
+        rules = self._rules() if self._rules is not None else None
+        return rules is None or rules.delivers(source, CHANNEL_SUBSCRIBER)
+
+    def drop_silenced(self) -> int:
+        """Settle every owed notice the rules keep from the session: record it, then owe it no
+        more (MIS-0002-R152). One whose record can't be written stays owed, unsent, so a restart
+        never owes again what was silenced, nor forgets what wasn't recorded. Returns how many."""
+        dropped = 0
+        for aid, owed in list(self.owed.items()):
+            if self.to_session(owed.source):
+                continue
+            if self._append(EVENT_SILENCED, {"source": owed.source, "arrival_id": aid,
+                                             "read_at": owed.read_at, "silenced_at": self._clock(),
+                                             "notifier": NOTIFIER}) is False:
+                continue
+            del self.owed[aid]
+            dropped += 1
+        return dropped
+
     def flush(self) -> int:
         """Write every owed notice to the newest channel that declared its source; return how
-        many went. A notice no attached channel declared stays owed (MIS-0002-R149)."""
+        many went. A notice no attached channel declared stays owed (MIS-0002-R149); one the
+        operator's rules keep from the session is settled, not written (MIS-0002-R152)."""
+        self.drop_silenced()
         sent = 0
         for aid, owed in list(self.owed.items()):
             if self._send(aid, owed):
@@ -382,7 +426,10 @@ class Notifier:
 
     def _send(self, aid: str, owed: Owed) -> bool:
         """Write one owed notice to the newest channel that declared its source, trying the
-        next if one went away. Returns whether it went."""
+        next if one went away. Returns whether it went. A notice the rules keep from the session
+        is never written, whoever calls."""
+        if not self.to_session(owed.source):
+            return False
         while True:
             conn = next((c for c in self._channels if owed.source in self._takes.get(c, ())), None)
             if conn is None:

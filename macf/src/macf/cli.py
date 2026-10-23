@@ -601,7 +601,13 @@ def cmd_mis_check(args: argparse.Namespace) -> int:
     findings = mis.check(paths, glossary)
     for f in findings:
         print(f)
-    n = len(mis.mis_files(paths))
+    files = mis.mis_files(paths)
+    outside = sorted({str(f.parent) for f in files if mis.checkout_root(f) is None})
+    if outside:
+        print(f"ℹ️ no repository checkout holds {', '.join(outside)}, so the tests that decidable requirements "
+              "name were not looked up there; only bracket against Conformance row was compared "
+              "(MIS-0001-R18 (conformance_MUST_list_every_req))")
+    n = len(files)
     gl = f", glossary {glossary}" if glossary else (", no glossary found, so MIS-0001-R20 (glossary_MUST-NOT_repeat_terms) and "
           "MIS-0001-R21 (terms_MUST_reach_glossary) were not checked")
     print(f"{'❌' if findings else '✅'} {n} MIS file(s){gl}: {len(findings)} finding(s)")

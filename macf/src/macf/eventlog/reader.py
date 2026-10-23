@@ -45,6 +45,7 @@ SUMMARY: Dict[str, Union[Tuple[str, ...], Callable[[dict], str]]] = {
     "pd_carried": lambda d: f"{d.get('occasion', '?')}: " + ", ".join(
         f"{k} {len(d[k]) if isinstance(d.get(k), list) else '?'}" for k in ("carried", "changed", "lost")),
     "pd_notice_delivered": ("source", "via", "arrival_id"),
+    "pd_notice_silenced": ("source", "arrival_id"),
     "store_arrival_detected": ("source", "count"),
     "tool_call_started": ("tool", "file_path"),
     "tool_call_completed": ("tool", "success"),
