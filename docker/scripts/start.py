@@ -17,6 +17,7 @@ import json
 import hashlib
 import shlex
 import shutil
+import stat
 import subprocess
 import pwd
 import grp
@@ -203,6 +204,86 @@ def write_service_identity(name: str, card_name: str, ids, home: Path, *, chown=
         chown(tmp, 0, 0)
         os.chmod(tmp, 0o644)
         tmp.replace(path)
+
+
+class AgentIdentityConflict(Exception):
+    """An agent's home already names it differently from agents.yaml, or can't be read."""
+
+
+def write_agent_card(username: str, card_name: str, home: Path, *, chown=os.chown) -> bool:
+    """Write the calling card agents.yaml declares for an agent into its home, as
+    ``agent_identity.calling_card`` in ``.maceff/config.json``, where its primal daemon reads it
+    (``pd.names.agent_card``). Every other key stays, and so do the file's owner and mode. A file
+    that doesn't exist is created as the agent's, mode 0600, holding just that key. Returns True
+    when it wrote, False when the home already held this card.
+
+    A different card already in the home is not overwritten: the card is the agent's identity,
+    and its daemon's sockets and unit names are keyed by it, so a silent rename would strand them.
+    That, and a config.json that can't be read, raise ``AgentIdentityConflict`` naming both
+    values, and the caller withholds that agent's daemon.
+
+    The home is the agent's to write, so nothing here follows a link it could plant: a symlinked
+    ``.maceff`` or ``config.json`` is refused, and the temporary file is created afresh, never
+    opened through whatever already has its name."""
+    dot = home / '.maceff'
+    path = dot / 'config.json'
+    if dot.is_symlink() or path.is_symlink():
+        raise AgentIdentityConflict(f"{path} or its directory is a symlink; left as it is")
+    if path.exists():
+        try:
+            config = json.loads(path.read_text())
+        except (OSError, ValueError) as e:
+            raise AgentIdentityConflict(f"{path} can't be read ({e}); left as it is") from e
+        identity = config.get('agent_identity') if isinstance(config, dict) else None
+        if not isinstance(config, dict) or not isinstance(identity or {}, dict):
+            raise AgentIdentityConflict(f"{path} isn't a config with an agent_identity table; left as it is")
+        identity = identity or {}
+        for key in ('calling_card', 'moniker'):
+            held = identity.get(key)
+            if isinstance(held, str) and held.strip() and held.strip() != card_name:
+                raise AgentIdentityConflict(
+                    f"identity conflict: {path} holds {key} {held.strip()!r}, agents.yaml declares "
+                    f"calling_card {card_name!r}; not overwritten")
+        if isinstance(identity.get('calling_card'), str) and identity['calling_card'].strip() == card_name:
+            return False
+        config['agent_identity'] = {**identity, 'calling_card': card_name}
+        st = path.stat()
+        uid, gid, mode = st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode)
+    else:
+        uid, gid = account_ids(username)
+        if not dot.exists():
+            dot.mkdir(mode=0o755)
+            chown(dot, uid, gid)
+        config, mode = {'agent_identity': {'calling_card': card_name}}, 0o600
+    tmp = dot / 'config.json.tmp'
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w') as f:
+        f.write(json.dumps(config, indent=2) + '\n')
+    chown(tmp, uid, gid)
+    os.chmod(tmp, mode)
+    tmp.replace(path)
+    return True
+
+
+def write_agent_cards(agents_config: AgentsConfig, *, chown=os.chown) -> Dict[str, str]:
+    """Write every declared agent calling card into its agent's home (``write_agent_card``), at
+    every start, before any declaration renders. An agent that declares none gets nothing
+    written. Returns, by account, why each refused agent's identity wasn't settled: one agent's
+    conflict costs that agent its daemon, never the others'."""
+    refused = {}
+    for spec in agents_config.agents.values():
+        card_name = getattr(spec, 'calling_card', None)
+        if card_name is None:
+            continue
+        home = HOME_ROOT / spec.username
+        try:
+            if write_agent_card(spec.username, card_name, home, chown=chown):
+                log(f"calling card of {spec.username}: {card_name} written to {home / '.maceff' / 'config.json'}")
+        except (AgentIdentityConflict, OSError, KeyError) as e:
+            refused[spec.username] = str(e)
+            log(f"calling card of {spec.username}: refused; its daemon won't be rendered or started. {e}")
+    return refused
 
 
 def daemon_accounts(agents_config: AgentsConfig) -> List[tuple]:
@@ -2638,7 +2719,9 @@ def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] 
     the agent could write is one a run could change before a daemon restart; this one it can't
     (MIS-0002-R33 (run_MUST-NOT_change_schedules)). An agent that declares none has any earlier
     rendering removed. A service that declares one gets its identity written into its home
-    first (``write_service_identity``). Returns the accounts rendered for."""
+    first (``write_service_identity``), and so does every agent that declares a calling card
+    (``write_agent_cards``); an agent whose home holds a different card is not rendered for.
+    Returns the accounts rendered for."""
     from macf.pd import names as pd_names
     from macf.pd.interface import Declaration
     root = Path(root or pd_names.RENDERED_DECLARATIONS)
@@ -2646,6 +2729,7 @@ def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] 
     chown(root, 0, 0)
     os.chmod(root, 0o755)
     rendered = []
+    refused = write_agent_cards(agents_config, chown=chown)
     for account, body, home, card_name in daemon_accounts(agents_config):
         target_dir = root / account
         target = target_dir / 'declaration.json'
@@ -2657,6 +2741,8 @@ def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] 
             continue
         tmp = target_dir / '.declaration.json.tmp'
         try:
+            if account in refused:
+                raise OSError(f"its calling card was refused ({refused[account]})")
             try:
                 if card_name is not None:
                     write_service_identity(account, card_name, agents_config.ids, home, chown=chown)
