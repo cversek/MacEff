@@ -377,6 +377,19 @@ def test_a_different_card_in_the_home_is_refused_and_costs_only_that_agent(tmp_p
         assert user in err and "'OldName'" in err and "'NewName'" in err
 
 
+def test_a_home_whose_moniker_is_the_declared_name_takes_the_card_and_renders(tmp_path, monkeypatch):
+    """A moniker is the card's name without the id fragment, the shape agent init leaves (review
+    of #805). agents.yaml declares the same bare name, so a home holding that moniker agrees with
+    it: the card is written beside it, every other key stays, and the agent renders."""
+    user = "pa_tester"
+    data = {"agent_identity": {"moniker": "Tester", "type": "primary_agent"}}
+    r = _carded(tmp_path / user, monkeypatch, {user: "Tester"}, {user: (data, 0o600)})
+    assert r.done == [user]
+    assert json.loads(r.config(user).read_text()) == {
+        "agent_identity": {"moniker": "Tester", "type": "primary_agent", "calling_card": "Tester"}}
+    assert r.rendered(user).exists()
+
+
 def test_an_agent_without_a_calling_card_gets_nothing_written(tmp_path, monkeypatch):
     """A card is written only where agents.yaml declares one: an agent without it keeps its home
     as it was, with no config.json created and an existing one unchanged."""
