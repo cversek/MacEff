@@ -606,9 +606,9 @@ def _decide(query: str, hits: List[RosterEntry], tier: int) -> MatchResult:
 def match(entries: Sequence[RosterEntry], query: str) -> MatchResult:
     """Resolve *query* against *entries*, by tiers; the first tier with any hit decides.
 
-    1. an exact card, session identifier, or uuid prefix (with or without ``@``);
-    2. an exact moniker, ignoring case;
-    3. a unique prefix of a moniker or display name, ignoring case.
+    1. an exact card, session identifier, or uuid (with or without ``@``);
+    2. an exact moniker or display name, ignoring case;
+    3. a prefix of a moniker or display name, ignoring case.
 
     An alias (a deployment key such as ``lumen``, or an account) is matched with tier 3:
     exactly, and counted beside the prefix hits. So it resolves only when nothing else
@@ -629,7 +629,8 @@ def match(entries: Sequence[RosterEntry], query: str) -> MatchResult:
     tier1 = [e for e in named if e.card == q or e.identifier == q or (e.uuid and e.uuid == bare)]
     if tier1:
         return _decide(q, tier1, 1)
-    tier2 = [e for e in named if (e.moniker or "").casefold() == folded]
+    tier2 = [e for e in named
+             if any((n or "").casefold() == folded for n in (e.moniker, e.display_name))]
     if tier2:
         return _decide(q, tier2, 2)
     by_prefix = [e for e in named

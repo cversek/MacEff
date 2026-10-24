@@ -1,7 +1,7 @@
 """Matching a name to an agent, and saying when it names several (roadmap Phase 2).
 
-Tiers, the first with any hit deciding: exact card, identifier or uuid; exact moniker
-ignoring case; unique prefix of a moniker or display name. A deployment key or account
+Tiers, the first with any hit deciding: exact card, identifier or uuid; exact moniker or
+display name ignoring case; unique prefix of a moniker or display name. A deployment key or account
 alias never wins on its own while it is also a prefix of other agents.
 """
 import io
@@ -131,3 +131,15 @@ def test_the_roster_built_from_homes_resolves_the_same_way(tmp_path):
     assert match(entries, "lumen").kind == SEVERAL and len(match(entries, "lumen").entries) == 4
     assert match(entries, "pa_lumen3").entry.moniker == "Lumen3MacEff"
     assert match(entries, "0a1b2c").entry.moniker == "Lumen3MacEff"
+
+
+def test_an_exact_display_name_is_picked_even_when_it_starts_another():
+    """A display name that is a prefix of another's could never be picked on its own while
+    display names matched only by prefix (Ira on #806)."""
+    def seat(moniker, uuid, shown):
+        return RosterEntry(card=f"{moniker}@{uuid}", moniker=moniker, uuid=uuid, account=moniker.lower(),
+                           display_name=shown, session_kind="daemon", state="running",
+                           home=f"/home/{moniker.lower()}")
+    pair = [seat("Alpha", "111111", "Lab"), seat("Beta", "222222", "Lab Two")]
+    r = match(pair, "lab")
+    assert (r.kind, r.tier, r.entry.moniker) == (ONE, 2, "Alpha")

@@ -184,6 +184,38 @@ def plan_attach_for_home(home, *, read_only: bool = False, control: bool = False
                        tmux_tmpdir=str(tmux_dir(session_identifier(card), base)), **probes)
 
 
+def plan_attach_for_card(card: str, *, read_only: bool = False, control: bool = False,
+                         ask: Optional[Callable] = None, base=None, **probes) -> AttachPlan:
+    """How to attach to the session of the agent with ``card``, from its daemon alone.
+
+    For an agent whose home isn't known here (a second agent on one login, whose home the
+    roster can't place), so its declaration can't name the session unit. The daemon's
+    status still says which processes are its units, and the session is the live unit
+    whose process parents a pane on the card's own tmux server (R100): found by descent
+    from the daemon's own pid, never by a name.
+    """
+    from ..pd.client import DaemonUnavailable
+    from ..pd.session_unit import tmux_dir
+    from .identity import session_identifier
+    if ask is None:
+        from ..pd.client import ask
+
+    try:
+        response = ask(card, {"op": "status"}).model_dump()
+    except DaemonUnavailable as e:
+        return AttachPlan(NONE, reason=f"the primal daemon did not answer: {e}")
+    tmpdir = str(tmux_dir(session_identifier(card), base))
+    reasons = []
+    for unit in response.get("units") or []:
+        plan = plan_attach(response, unit.get("unit"), read_only=read_only, control=control,
+                           tmux_tmpdir=tmpdir, **probes)
+        if plan.kind != NONE:
+            return plan
+        reasons.append(f"{unit.get('unit')}: {plan.reason}")
+    return AttachPlan(NONE, reason="no unit of the primal daemon hosts a session here ("
+                                   + ("; ".join(reasons) or "it reports no units") + ")")
+
+
 def window_commands(plan: AttachPlan, card: str) -> List[List[str]]:
     """The tmux commands that name the attached window by ``card`` and keep that name.
 

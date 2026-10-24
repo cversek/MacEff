@@ -61,3 +61,30 @@ def test_no_session_unit_falls_to_the_legacy_session_by_exact_name():
     missing = decide(_entry(session_kind="legacy"), REMOTES, control=False, read_only=False,
                      **_local(None, has=False))
     assert missing.exit_code == 1 and "No tmux session 'Lumen2MacEff_3f9a1c'" in missing.message
+
+
+def test_a_daemon_with_no_home_known_resolves_from_the_daemon_alone():
+    """A second agent on one login: no home row, so no declaration; the daemon still
+    resolves it (R100), never a fallback to the name (Ira on #806)."""
+    asked = []
+
+    def by_card(card, **kw):
+        asked.append(card)
+        return AttachPlan(TMUX, ["env", "TMUX_TMPDIR=/rt/L.tmux", "tmux", "attach", "-t", "=L_3f9a1c", "-d"])
+
+    d = decide(_entry(home=None, reasons={"home": "no home row"}), REMOTES, control=False,
+               read_only=False, plan_for_card=by_card, **_local(None, has=False))
+    assert asked == ["Lumen2MacEff@3f9a1c"] and d.argv[-2:] == ["=L_3f9a1c", "-d"]
+
+
+def test_a_slug_no_row_carries_still_attaches_by_its_exact_name(monkeypatch):
+    from macf.utils import attach_dispatch as ad
+    d = ad.legacy_by_slug("Other_aabbcc", control=False, read_only=False,
+                          has_session=lambda target, env: target == "=Other_aabbcc",
+                          environment=lambda agent: {"X": "1"})
+    assert d.argv == ["tmux", "attach", "-t", "=Other_aabbcc", "-d"]
+    assert d.before[0][-1] == "Other@aabbcc"
+    monkeypatch.setattr(ad.sys, "platform", "darwin")
+    gone = ad.legacy_by_slug("Other_aabbcc", control=False, read_only=False,
+                             has_session=lambda target, env: False, environment=lambda agent: None)
+    assert gone.exit_code == 1 and "systemctl" not in gone.message

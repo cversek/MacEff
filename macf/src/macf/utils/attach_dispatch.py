@@ -15,6 +15,7 @@ attached: falling back to a name there is exactly what R100 forbids (persistent_
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
@@ -44,10 +45,11 @@ def _tmux_legacy(agent: str, card: str, *, control: bool, read_only: bool,
     target = f"={agent}"
     env = environment(agent) or dict(os.environ)
     if not has_session(target, env):
-        return Decision(exit_code=1, message=(
-            f"No tmux session '{agent}' on this host.\n"
-            f"   start it:  maceff_{agent.rpartition('_')[0].lower()}_harness_launch\n"
-            f"   or:        systemctl --user start cc-harness-{agent}.service"))
+        hint = (f"No tmux session '{agent}' on this host.\n"
+                f"   start it:  maceff_{agent.rpartition('_')[0].lower()}_harness_launch")
+        if sys.platform.startswith("linux"):
+            hint += f"\n   or:        systemctl --user start cc-harness-{agent}.service"
+        return Decision(exit_code=1, message=hint)
     # -CC hands the session to iTerm2 as native windows: the client owns the alternate
     # screen, so only control mode gives native scrollback, selection and find on macOS.
     # -d evicts other clients, whose different geometries fragment the redraw; read-only
@@ -57,18 +59,33 @@ def _tmux_legacy(agent: str, card: str, *, control: bool, read_only: bool,
     return Decision(argv=argv, env=env, before=window_commands(AttachPlan(TMUX, argv), card))
 
 
+def legacy_by_slug(slug: str, *, control: bool, read_only: bool,
+                   has_session: Callable[[str, Dict[str, str]], bool],
+                   environment: Callable[[str], Optional[Dict[str, str]]]) -> Decision:
+    """``--agent <slug>`` for an agent no roster row carries a card for: the session by its
+    exact name, as attach always did for a slug."""
+    from .identity import calling_card_from_identifier
+    return _tmux_legacy(slug, calling_card_from_identifier(slug), control=control,
+                        read_only=read_only, has_session=has_session, environment=environment)
+
+
 def decide_local(entry: RosterEntry, *, control: bool, read_only: bool,
                  plan_for_home: Callable[..., Optional[AttachPlan]],
                  has_session: Callable[[str, Dict[str, str]], bool],
-                 environment: Callable[[str], Optional[Dict[str, str]]]) -> Decision:
+                 environment: Callable[[str], Optional[Dict[str, str]]],
+                 plan_for_card: Optional[Callable[..., AttachPlan]] = None) -> Decision:
     """Attach to ``entry`` on this endpoint: from its daemon, or its legacy session."""
+    plan = None
     if entry.home:
         plan = plan_for_home(Path(entry.home), read_only=read_only, control=control)
-        if plan is not None:
-            if plan.kind == NONE:
-                return Decision(exit_code=1, message=(
-                    f"{entry.card}: nothing attachable hosts its session ({plan.reason})"))
-            return Decision(argv=plan.argv, before=window_commands(plan, entry.card or ""))
+    elif entry.session_kind == "daemon" and entry.card and plan_for_card is not None:
+        # A daemon with no home known here: resolved from the daemon alone, never by name.
+        plan = plan_for_card(entry.card, read_only=read_only, control=control)
+    if plan is not None:
+        if plan.kind == NONE:
+            return Decision(exit_code=1, message=(
+                f"{entry.card}: nothing attachable hosts its session ({plan.reason})"))
+        return Decision(argv=plan.argv, before=window_commands(plan, entry.card or ""))
     if not entry.identifier:
         return Decision(exit_code=1, message=f"{entry.account}: no card, so no session to name")
     return _tmux_legacy(entry.identifier, entry.card or "", control=control, read_only=read_only,

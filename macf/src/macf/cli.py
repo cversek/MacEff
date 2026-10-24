@@ -1796,8 +1796,8 @@ def cmd_harness_attach(args: argparse.Namespace) -> int:
     (persistent_layer 4.1, 4.5). The decision is utils/attach_dispatch.py's.
     """
     from .pd.session_unit import client_environment
-    from .utils.attach import plan_attach_for_home
-    from .utils.attach_dispatch import by_card, decide
+    from .utils.attach import plan_attach_for_card, plan_attach_for_home
+    from .utils.attach_dispatch import by_card, decide, legacy_by_slug
     from .utils.remotes import CONNECT_TIMEOUT_S, RemotesRefused, load_remotes
     from .utils.roster import gather, local_roster, remote_fetchers, resolve
 
@@ -1827,9 +1827,17 @@ def cmd_harness_attach(args: argparse.Namespace) -> int:
         if legacy_slug and not name and not card:
             from .utils.identity import calling_card_from_identifier
             card = calling_card_from_identifier(legacy_slug)
+        decision = None
         if card:
             entry = by_card(local, card)
-            if entry is None:
+            if entry is None and legacy_slug and not name:
+                # A slug names a session as it always did, for an agent whose card no
+                # roster row carries (one whose card comes only from a global id).
+                decision = legacy_by_slug(legacy_slug, control=bool(remotes.control if getattr(
+                    args, "control", None) is None else args.control),
+                    read_only=getattr(args, "read_only", False), has_session=has_session,
+                    environment=client_environment)
+            elif entry is None:
                 print(f"No agent here has the card {card!r} (macf_tools harness list).",
                       file=sys.stderr)
                 return 1
@@ -1840,10 +1848,11 @@ def cmd_harness_attach(args: argparse.Namespace) -> int:
             entry, code = resolve(name, entries)
             if entry is None:
                 return code
-        decision = decide(entry, remotes, control=getattr(args, "control", None),
-                          read_only=getattr(args, "read_only", False),
-                          plan_for_home=plan_attach_for_home, has_session=has_session,
-                          environment=client_environment)
+        if decision is None:
+            decision = decide(entry, remotes, control=getattr(args, "control", None),
+                              read_only=getattr(args, "read_only", False),
+                              plan_for_home=plan_attach_for_home, plan_for_card=plan_attach_for_card,
+                              has_session=has_session, environment=client_environment)
         if decision.exit_code is not None:
             print(decision.message, file=sys.stderr)
             return decision.exit_code

@@ -72,3 +72,19 @@ def test_the_window_is_named_by_card_unless_the_attach_is_read_only():
     watching = argv[:-1] + ["-r"]
     assert window_commands(AttachPlan(TMUX, watching), CARD) == []
     assert window_commands(AttachPlan(NONE, reason="none"), CARD) == []
+
+
+def test_without_a_home_the_session_is_the_unit_that_parents_a_pane_on_the_cards_server(tmp_path):
+    from macf.utils.attach import plan_attach_for_card
+
+    def ask(card, request):
+        return _answer([{"unit": "mail", "state": "running", "pid": 300, "proc_start": "x"},
+                        {"unit": "seat", "state": "running", "pid": 500, "proc_start": "x"}])
+
+    plan = plan_attach_for_card(CARD, ask=ask, base=tmp_path, **_probes())
+    assert plan.kind == TMUX and plan.argv[-3:] == ["-t", "=Resident_1a2b3c", "-d"]
+
+    def silent(card, request):
+        raise DaemonUnavailable("no usable daemon record")
+
+    assert plan_attach_for_card(CARD, ask=silent, base=tmp_path, **_probes()).kind == NONE

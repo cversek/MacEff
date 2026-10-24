@@ -363,7 +363,7 @@ Claude Code can run a session in the background under its own daemon (`claude --
 4. A daemon that does not answer resolves nothing; there is no fallback to a name. The legacy harness's session is used only for an agent whose declaration has no session unit.
 5. Attach names the attached window by the agent's calling card, with `automatic-rename` and `allow-rename` off, so a program in the session can't retitle it. A read-only attach (`--read-only`) changes nothing in the session it watches.
 
-The session unit is the declaration's one unit of kind `session`, whatever its name.
+The session unit is the declaration's one unit of kind `session`, whatever its name. For an agent whose home isn't known here, such as a second agent on one login, the declaration can't be read, and the session is the live unit whose process parents a pane on the card's own tmux server, which is still the daemon's answer and not a name.
 
 The operator may attach to any session without an invitation [MIS-0002-R81 (operator_MAY_attach_without_invitation)]. An onlooker is never given a keyboard.
 
@@ -377,7 +377,7 @@ The operator may attach to any session without an invitation [MIS-0002-R81 (oper
 
 **`macf_tools harness attach <name>` takes a short name and resolves it to one agent**, or says that the name means several, or none. With no name it attaches to the agent of the home it runs in. The name is matched against the roster (4.4) in three tiers, and the first tier with any hit decides:
 1. an exact calling card, session identifier or uuid, with or without the `@` (`Lumen2MacEff@3f9a1c`, `Lumen2MacEff_3f9a1c`, `3f9a1c`, `@3f9a1c`). A shorter piece of a uuid is not exact;
-2. an exact moniker, ignoring case;
+2. an exact moniker or display name, ignoring case;
 3. a prefix of a moniker or a display name, ignoring case (`lumen2`). Names match by their start, not anywhere inside.
 
 A deployment's key for an agent, its account, and the account without `pa_` or `sa_` are aliases. **An alias counts only alongside the prefix hits**, so it resolves on its own only when nothing else starts with it: `lumen` lists every Lumen seat instead of quietly choosing the one whose key it is.
@@ -388,7 +388,7 @@ A deployment's key for an agent, its account, and the account without `pa_` or `
 | several | a numbered list (card, place, account, session kind, state), then a prompt, where a number, or a name that matches one of them, picks it | the list, then exit 2 |
 | none | the nearest names, then exit 1 | the same |
 
-Lists go to standard output, so a script can read the uuids, and each list shows them so the next call can be exact. `--card <card>` attaches to exactly that card on this endpoint, which is what a remote hand-off names (4.5). `--agent <slug>` still names a session identifier.
+Lists go to standard output, so a script can read the uuids, and each list shows them so the next call can be exact. `--card <card>` attaches to exactly that card on this endpoint, which is what a remote hand-off names (4.5). `--agent <slug>` still names a session identifier, and attaches to that session by its exact name when no roster row carries the card.
 
 ### 4.4 The roster: who you can attach to
 
@@ -422,6 +422,7 @@ A file that can't be used is refused whole, naming what is wrong. `--control` an
 - **The roster of each remote** is one non-interactive `ssh -o BatchMode=yes` running the remote's `harness list --json --local`, all remotes at once, each bounded by a timeout (5 seconds for listing and attaching). `--local` keeps a remote with remotes of its own from asking them in turn. A remote that would prompt for a password, or whose host key you haven't accepted, answers "unreachable" rather than hanging.
 - **A remote that doesn't answer is said, never dropped.** The listing names it with the reason and exits 1. A remote whose macf has no `harness list` is reported as too old, with the plain `ssh -t … harness attach` to type instead. A remote a version ahead still lists: fields this macf doesn't know are dropped.
 - **The attach is handed off.** For an agent on a remote, `harness attach` runs `ssh -t` of the remote's own `harness attach --card <card>`, logging in as the seat's account where `login` is `seat`. Only the card crosses the wire. The remote resolves the session from its own daemon (4.1), so no socket path, pid or session name travels.
+- **Nothing a remote says becomes an ssh option.** Each account and card in a remote's roster must be a legitimate name (an account matches `^[a-z_][a-z0-9_-]{0,31}$`), or the roster is refused whole. ssh is always given `-l <login>` and `--` before the host.
 - **macf reads no credential.** ssh uses your own keys, agent and `~/.ssh/config`.
 - **What a deployment must provide** for a seat to be reachable by name: a macf with `harness list`, and your key in each seat's `authorized_keys`.
 
