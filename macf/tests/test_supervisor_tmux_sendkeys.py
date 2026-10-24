@@ -168,6 +168,67 @@ def test_send_keys_no_enter(monkeypatch):
     assert tmux[0][-3:] == ["-l", "--", "hello world"]
 
 
+def _tmux_server(tmp_path, monkeypatch):
+    """A private tmux server for one test: its own TMUX_TMPDIR, killed afterwards. The
+    socket directory is a short one under /tmp, since pytest's tmp_path makes a socket path
+    longer than macOS allows (104 characters), and tmux would not start there."""
+    import shutil
+    import subprocess
+    import tempfile
+    if not shutil.which("tmux"):
+        pytest.skip("tmux not installed")
+    sock = tempfile.mkdtemp(prefix="tmux-", dir="/tmp")
+    monkeypatch.setenv("TMUX_TMPDIR", sock)
+    import atexit
+    atexit.register(shutil.rmtree, sock, True)
+    monkeypatch.delenv("TMUX", raising=False)
+    return subprocess
+
+
+def test_send_keys_reaches_the_supervisor_pane_after_a_split(tmp_path, monkeypatch):
+    """A split beside the agent takes focus, and -t <session> would type into it. The keys
+    must still reach the pane whose process is the supervisor (an inject into a watch pane
+    left an agent unable to compact)."""
+    import time
+    sp = _tmux_server(tmp_path, monkeypatch)
+    out0, out1 = tmp_path / "agent.txt", tmp_path / "watch.txt"
+    try:
+        r = sp.run(["tmux", "new-session", "-d", "-P", "-F", "#{pane_pid}", "-s", "agent",
+                    f"cat > {out0}"], capture_output=True, text=True, check=True)
+        supervisor_pid = int(r.stdout.strip())
+        sp.run(["tmux", "split-window", "-t", "agent", f"cat > {out1}"], check=True)
+        sp.run(["tmux", "select-pane", "-t", "agent:0.1"], check=True)
+        monkeypatch.setattr(sup, "_find_supervisor", lambda t: {
+            "name": "agent", "tmux_session": "agent", "supervisor_pid": supervisor_pid})
+        assert sup.send_keys("agent", ["/compact"]) == 0
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and "/compact" not in (out0.read_text() if out0.exists() else ""):
+            time.sleep(0.05)
+        assert out0.read_text().strip() == "/compact"
+        assert (out1.read_text() if out1.exists() else "") == ""
+        assert "/compact" in sup.capture_pane("agent")
+        # press_enter is what the compaction follow-up uses after typing its prompt.
+        assert sup.press_enter("agent") == 0
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and out0.read_text().count("\n") < 2:
+            time.sleep(0.05)
+        assert out0.read_text() == "/compact\n\n", "the Enter lands in the supervisor's pane"
+        assert (out1.read_text() if out1.exists() else "") == ""
+    finally:
+        sp.run(["tmux", "kill-server"], capture_output=True)
+
+
+def test_pane_of_falls_back_to_the_session_when_no_pane_is_the_supervisor(tmp_path, monkeypatch):
+    sp = _tmux_server(tmp_path, monkeypatch)
+    try:
+        sp.run(["tmux", "new-session", "-d", "-s", "agent", "sleep 30"], check=True)
+        data = {"name": "agent", "tmux_session": "agent", "supervisor_pid": 999999999}
+        assert sup._pane_of(data) == "agent"
+        assert sup._pane_of({"tmux_session": "%7"}) == "%7"
+    finally:
+        sp.run(["tmux", "kill-server"], capture_output=True)
+
+
 # --- session spec resolution (the resume-latest continuity fix) -----------
 
 def test_resolve_spec_none_does_not_pin():
