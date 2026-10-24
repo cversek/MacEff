@@ -35,7 +35,8 @@ def test_a_task_notice_or_a_peer_message_is_not_the_operator():
     assert detect_user_activity(_user(PEER_MESSAGE, {"kind": "peer", "from": "bridge:x"})) is None
 
 
-def test_the_operators_typing_and_channels_still_count():
+def test_the_operators_typing_and_channels_still_count(operator_channels):
+    operator_channels("plugin:telegram:telegram")
     assert detect_user_activity(_user("do your recovery", {"kind": "human"})).data["source"] == "direct"
     assert detect_user_activity(_user("/compact")).data["source"] == "direct"
     channel = detect_user_activity(
