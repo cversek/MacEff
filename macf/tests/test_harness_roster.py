@@ -342,3 +342,33 @@ def test_a_pipe_in_place_of_the_identity_file_neither_hangs_nor_passes(tmp_path,
     assert got, "the listing hung on a named pipe in place of the identity file"
     seat = next(e for e in got[0].entries if e.account == "pa_lumen3")
     assert seat.card is None and "not the deployment's file" in seat.reasons["card"]
+
+
+@pytest.mark.parametrize("kind", ["directory", "fifo", "link", "hard link", "seat's own file"])
+def test_nothing_a_seat_can_put_in_the_identity_slot_breaks_the_listing(tmp_path, monkeypatch, kind):
+    """Every kind of thing a seat can make in its own home without root, in place of the
+    identity file: the listing returns, every other seat keeps its card, and this one has
+    none, with the reason (Ira on #809: a directory raised and took the whole roster down)."""
+    import threading
+    f = build(tmp_path, published=False)
+    home = f.homes / "pa_lumen3"
+    (home / ".maceff" / "config.json").unlink()
+    slot = home / ".maceff_primary_agent.id"
+    slot.unlink()
+    if kind == "seat's own file":
+        slot.write_text("0a1b2c\n")              # the seat's, not root's: DEPLOYMENT_UID stays 0
+    else:
+        monkeypatch.setattr(roster, "DEPLOYMENT_UID", os.getuid())
+        {"directory": slot.mkdir, "fifo": lambda: os.mkfifo(slot),
+         "link": lambda: slot.symlink_to(f.homes / "pa_lumen2" / ".maceff_primary_agent.id"),
+         "hard link": lambda: os.link(f.homes / "pa_lumen2" / ".maceff_primary_agent.id", slot)}[kind]()
+    f.agents_yaml.write_text(f.agents_yaml.read_text().replace(
+        "    username: pa_lumen3\n", "    username: pa_lumen3\n    calling_card: Lumen3MacEff\n"))
+    got = []
+    t = threading.Thread(target=lambda: got.append(f.roster()), daemon=True)
+    t.start()
+    t.join(5)
+    assert got, f"the listing did not return with a {kind} in the identity slot"
+    seat = next(e for e in got[0].entries if e.account == "pa_lumen3")
+    assert seat.card is None and "agents.yaml declares 'Lumen3MacEff'" in seat.reasons["card"]
+    assert sum(1 for e in got[0].entries if e.card) == len(SEATS) - 1

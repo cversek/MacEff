@@ -434,10 +434,15 @@ def _declared_card(home: Optional[str], name: str) -> Tuple[Optional[str], str]:
         if e.errno == errno.ELOOP:
             return None, f"agents.yaml declares {name!r}, but {path} is a link, not the deployment's file"
         return None, f"agents.yaml declares {name!r}, but {path} can't be read: {e.strerror or type(e).__name__}"
+    # Checked on the raw descriptor, before anything wraps it: a directory opens too, and a
+    # file object refuses it with an error of its own before any check could run.
+    st = os.fstat(fd)
+    # One link only: a hard link to another seat's root-owned file is a regular file of
+    # root's too, and the kernel's protected_hardlinks is a setting, not a guarantee.
+    if not stat_mod.S_ISREG(st.st_mode) or st.st_uid != DEPLOYMENT_UID or st.st_nlink != 1:
+        os.close(fd)
+        return None, f"agents.yaml declares {name!r}, but {path} is not the deployment's file (not root's)"
     with os.fdopen(fd) as fh:
-        st = os.fstat(fh.fileno())
-        if not stat_mod.S_ISREG(st.st_mode) or st.st_uid != DEPLOYMENT_UID:
-            return None, f"agents.yaml declares {name!r}, but {path} is not the deployment's file (not root's)"
         try:
             uuid = fh.read().strip()[:6]
         except (OSError, UnicodeDecodeError) as e:
