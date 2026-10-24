@@ -35,6 +35,8 @@ from ..utils.input_origin import (
     HARNESS_ORIGIN_KINDS,
     entry_text,
     opening_channel_source,
+    opens_with_command_row,
+    opens_with_local_command_output,
     opens_with_harness_notice,
     opens_with_wake,
     operator_channel,
@@ -119,7 +121,8 @@ def detect_user_activity(entry: dict) -> Optional[Detection]:
     written without one is read by how its text opens. A wake is not the
     operator either (MIS-0002-R106): its keys are recorded as typed, so its
     opening is read before the origin record. Nor are keys the framework typed,
-    which their sender recorded in the event log before sending them.
+    which their sender recorded in the event log before sending them, nor the
+    output row the client writes after a slash command it ran.
     """
     if entry.get("type") != "user":
         return None
@@ -141,7 +144,13 @@ def detect_user_activity(entry: dict) -> Optional[Detection]:
         return None
     if kind is None and opens_with_harness_notice(entry_text(content)):
         return None
-    if kind != "channel" and typed_by_framework(typed_text(content), consumer=_keys_consumer()):
+    if kind != "channel" and opens_with_local_command_output(entry_text(content)):
+        return None
+    # A slash command arrives as two rows, the typed text and the client's command row, so
+    # the command row pairs with the framework's record under its own tally, as the
+    # compaction-ask detector's does. One shared tally let the second row read as typing.
+    consumer = _keys_consumer() + (":command" if opens_with_command_row(entry_text(content)) else "")
+    if kind != "channel" and typed_by_framework(typed_text(content), consumer=consumer):
         return None
 
     source = "direct"

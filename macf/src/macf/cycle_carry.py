@@ -54,6 +54,15 @@ CARRY_MARKER_EVENT = "state_carried"
 
 TIMER_EVENT_TYPES = frozenset({"scope_timer_set", "scope_timer_cleared", "scope_cleared"})
 
+#: USER_REMOTE is set by an event but cleared by the operator typing at the CLI, which
+#: writes no mode_change (``modes.detection._detect_user_remote``). Its terminal event is
+#: therefore not its terminal value: the carry reads the activity too, and a USER_REMOTE
+#: the operator has typed since is not carried. Carried anyway, it came back at every
+#: compaction with a fresh timestamp, and the CLI typing that had ended it was on the far
+#: side of the boundary, where a cycle-scoped read can't see it.
+CLI_CLEARED_MODES = frozenset({"USER_REMOTE"})
+ACTIVITY_EVENT = "user_activity_detected"
+
 #: The roles package's focus event (``macf.roles.focus.EVENT``), named here so the
 #: carry does not import the roles package.
 FOCUS_EVENT = "role_focus_change"
@@ -168,7 +177,8 @@ def _read_window(extra: frozenset = frozenset()) -> Tuple[List[dict], bool]:
     """
     from .task.scope import SCOPE_EVENT_TYPES
     relevant = (CARRIED_EVENT_TYPES | SCOPE_EVENT_TYPES | TIMER_EVENT_TYPES | {FOCUS_EVENT}
-                | {OCCURRENCE_EVENT, "duty_added", "duty_serviced"} | OBSERVE_EVENTS | extra)
+                | {OCCURRENCE_EVENT, "duty_added", "duty_serviced"} | OBSERVE_EVENTS
+                | {ACTIVITY_EVENT} | extra)
 
     collected: List[dict] = []
     boundaries_seen = 0
@@ -201,12 +211,22 @@ def _terminal_modes(window: List[dict]) -> List[dict]:
     The order matters as much as the fold. Readers take the most recent
     ``mode_change`` of any key, so emitting AUTO_MODE after a later MANUAL_MODE
     would hand back an authority the operator had withdrawn.
+
+    A mode in ``CLI_CLEARED_MODES`` has no terminal event once the operator types
+    at the CLI after it, so it carries nothing, as a disabled one would.
     """
+    from .modes.detection import _CLI_ACTIVITY_SOURCES
     terminal: Dict[str, int] = {}
     for position, event in enumerate(window):
-        if event.get("event") not in CARRIED_EVENT_TYPES:
+        kind, data = event.get("event"), event.get("data") or {}
+        if kind == ACTIVITY_EVENT:
+            if data.get("source") in _CLI_ACTIVITY_SOURCES:
+                for key in CLI_CLEARED_MODES:
+                    terminal.pop(key, None)    # the operator is back at the CLI
             continue
-        key = (event.get("data") or {}).get(CARRY_KEY_FIELD)
+        if kind not in CARRIED_EVENT_TYPES:
+            continue
+        key = data.get(CARRY_KEY_FIELD)
         if key:
             terminal[key] = position
     return [window[p] for p in sorted(terminal.values())]
