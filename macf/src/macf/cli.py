@@ -1615,7 +1615,8 @@ def cmd_statusline(args: argparse.Namespace) -> int:
             environment=data["environment"],
             tokens_used=data["tokens_used"],
             tokens_total=data["tokens_total"],
-            cl=data["cl"]
+            cl=data["cl"],
+            modes=data.get("modes", ""),
         )
 
         print(statusline)
