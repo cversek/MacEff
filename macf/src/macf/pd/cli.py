@@ -442,7 +442,9 @@ def cmd_pd_entry_pause(args: argparse.Namespace) -> int:
     if args.pause_op == "entry_pause":
         print(f"entry {args.id} paused; it fires again only after pd entry resume")
     else:
-        print(f"entry {args.id} resumed; next {_next(entry) if entry else 'unknown'}")
+        skipped = entry.get("skipped_in_pause") or 0
+        print(f"entry {args.id} resumed; next {_next(entry) if entry else 'unknown'}"
+              + (f"; {skipped} firing(s) fell in the pause and are not made up" if skipped else ""))
     return 0
 
 

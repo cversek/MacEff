@@ -423,7 +423,9 @@ class Scheduler:
         # wake owed over a weekend must not vanish at a Monday restart (the scheduler design, 4.1).
         for entry_id, last in sorted(newest.items()):
             fired = self.entry_fired.get(entry_id)
+            # A paused entry wakes no one, not even with a wake owed from before its pause.
             if (last == "fired" and entry_id in self.entries and fired is not None
+                    and not self.entries[entry_id].get("paused_at")
                     and (self.boot_at - fired).total_seconds() > HOLD_MAX_S and self.on_notice is not None):
                 self.on_notice(NOTICE_ENTRY_DUE, entry_id)
 
