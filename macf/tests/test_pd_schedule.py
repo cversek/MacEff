@@ -118,6 +118,28 @@ def test_no_replayed_restart():
     assert (plan.run_at, plan.missed) == (None, 3)
 
 
+@pytest.mark.parametrize("kind, window", [("skip", None), ("run_once", None),
+                                          ("run_once_in_window", ("09:00", "10:00")), ("report_only", None)])
+def test_the_scheduler_replays_no_restart_after_downtime(tmp_path, kind, window):
+    """R27 through the scheduler itself, under every policy on the closed list: a schedule
+    whose act restarts a unit, missed while no daemon ran, starts nothing when the daemon
+    boots. The control, the same schedule without restarts_unit under run_once, does run, so
+    the refusal is R27's and not a scheduler that runs nothing."""
+    def booted(restarts, policy_kind, policy_window):
+        log, now = Log(), [at("2026-10-10 09:20")]
+        sched = Schedule(name="bounce", cron="0 * * * *", missed_run=policy(policy_kind, policy_window),
+                         target="isolated", timeout_s=30.0, restarts_unit=restarts,
+                         run=CommandRun(command=["/usr/bin/true"], wake_when="exit_code"))
+        for event in (sc.EVENT_STARTED, sc.EVENT_DONE):
+            log.append(event, {"agent": CARD, "schedule": "bounce", "scheduled_for": "2026-10-10T06:00:00+00:00"})
+        s = make_scheduler(tmp_path, [sched], log, now)
+        s.tick()
+        finish(s)
+        return [d for d in log.of(sc.EVENT_STARTED) if d.get("scheduled_for") != "2026-10-10T06:00:00+00:00"]
+    assert booted(True, kind, window) == []
+    assert booted(False, "run_once", None), "the control didn't run, so the refusal above proves nothing"
+
+
 def test_due_run_states_its_lateness():
     """A run that comes due while the daemon is up runs now and carries how late it is (R34);
     a new schedule owes nothing from before it was declared."""
@@ -214,18 +236,35 @@ def test_schedules_name_their_timezone():
 
 def test_target_declared():
     """MIS-0002-R29 (schedule_MUST_declare_target): each schedule names its target, an
-    isolated session or the live session of a named agent. A schedule without one, or with
-    an empty one, is refused when the declaration is read."""
+    isolated session or its own agent's live session. A schedule without one, or with an
+    empty one, is refused when the declaration is read; so is one naming any other card."""
     from pydantic import ValidationError
-    from macf.pd.interface import CommandRun, Schedule
+    from macf.pd.interface import CommandRun, Declaration, Schedule
     base = dict(name="check", cron="*/5 * * * *", missed_run=policy("skip"), timeout_s=30.0,
                 run=CommandRun(command=["/usr/bin/true"], wake_when="exit_code"))
     with pytest.raises(ValidationError, match="target"):
         Schedule(**base)
     with pytest.raises(ValidationError, match="target"):
         Schedule(**base, target="")
-    assert Schedule(**base, target="isolated").target == "isolated"
-    assert Schedule(**base, target="Tester@abc123").target == "Tester@abc123"
+    for target in ("isolated", "Tester@abc123"):
+        declared = Declaration(version=1, agent="Tester@abc123", timezone="UTC",
+                               schedules=[Schedule(**base, target=target)])
+        assert declared.schedules[0].target == target
+
+
+def test_a_schedule_targeting_another_agent_is_refused_at_load():
+    """MIS-0002-R29 (schedule_MUST_declare_target): a target that is neither ``isolated`` nor
+    the declaring agent's own card is refused at load, and the error names the target and the
+    two values allowed."""
+    from pydantic import ValidationError
+    from macf.pd.interface import CommandRun, Declaration, Schedule
+    foreign = Schedule(name="check", cron="*/5 * * * *", missed_run=policy("skip"), timeout_s=30.0,
+                       target="Other@def456", run=CommandRun(command=["/usr/bin/true"], wake_when="exit_code"))
+    with pytest.raises(ValidationError) as refused:
+        Declaration(version=1, agent="Tester@abc123", timezone="UTC", schedules=[foreign])
+    said = str(refused.value)
+    assert "'Other@def456'" in said and "'isolated'" in said and "'Tester@abc123'" in said
+
 
 import json  # noqa: E402
 import os  # noqa: E402
@@ -313,6 +352,19 @@ def test_late_run_says_so(tmp_path):
     s.tick()
     assert log.of(sc.EVENT_STARTED)[0]["late_s"] == 150.0
     finish(s)
+
+    # The record a notice points to states it too. A failed run's notice, received through the
+    # channel's own record, points to pd_run_done, so that record carries how late the run began.
+    log, now = Log(), [at("2026-10-14 12:00")]
+    channel = ChannelReceiver(tmp_path / "agent")
+    s = make_scheduler(tmp_path, [command_schedule(["/bin/sh", "-c", "exit 3"], name="fails")],
+                       log, now, on_notice=channel)
+    now[0] = at("2026-10-14 12:07:30")
+    s.tick()
+    finish(s)
+    assert [source for source, _ in channel.received] == ["pd_run_failed"]
+    done = log.of(sc.EVENT_DONE)[0]
+    assert done["schedule"] == "fails" and done["late_s"] == 150.0, done
 
 
 def test_wall_clock_cap(tmp_path):
@@ -488,6 +540,43 @@ def test_missed_runs_are_reported_once(tmp_path):
     assert len(log.of(sc.EVENT_MISSED)) == 1, "the restart recorded the same missed firings again"
 
 
+@pytest.mark.parametrize("kind", ["report_only", "skip"])
+def test_report_only_tells_the_agent_of_a_missed_spell(tmp_path, kind):
+    """R25, ruled on #552: report_only runs none of a downtime's missed firings and raises the
+    pd_run_missed notice, once per spell, through the channel's own record; skip raises none.
+    The id is the schedule's name and the last missed firing, and only the newest is owed."""
+    log, now = Log(), [at("2026-10-14 12:00")]
+    make_scheduler(tmp_path, [command_schedule(["/usr/bin/true"], kind=kind)], log, now)
+    log.append(sc.EVENT_STARTED, {"agent": CARD, "schedule": "check", "scheduled_for": "2026-10-14T12:00:00+00:00"})
+    log.append(sc.EVENT_DONE, {"agent": CARD, "schedule": "check", "scheduled_for": "2026-10-14T12:00:00+00:00"})
+    channel = ChannelReceiver(tmp_path / "agent")
+    now[0] = at("2026-10-14 13:02")                             # the daemon was down an hour
+    s = make_scheduler(tmp_path, [command_schedule(["/usr/bin/true"], kind=kind)], log, now, on_notice=channel)
+    for _ in range(3):
+        s.tick()
+    assert len(log.of(sc.EVENT_STARTED)) == 1, f"{kind} ran a missed firing"
+    assert [d["policy"] for d in log.of(sc.EVENT_MISSED)] == [kind]
+    first = ("pd_run_missed", f"check:{int(at('2026-10-14 13:00').timestamp())}")
+    assert channel.received == ([first] if kind == "report_only" else [])
+    now[0] = at("2026-10-14 13:03")                             # restarted before 13:05's firing
+    make_scheduler(tmp_path, [command_schedule(["/usr/bin/true"], kind=kind)], log, now,
+                   on_notice=channel).tick()
+    assert channel.received == ([first] if kind == "report_only" else []), "one spell, told twice"
+    now[0] = at("2026-10-14 15:02")                             # down again: a newer spell
+    make_scheduler(tmp_path, [command_schedule(["/usr/bin/true"], kind=kind)], log, now,
+                   on_notice=channel).tick()
+    second = ("pd_run_missed", f"check:{int(at('2026-10-14 15:00').timestamp())}")
+    assert channel.received == ([first, second] if kind == "report_only" else [])
+    assert len(log.of(sc.EVENT_STARTED)) == 1
+
+    # Unrouted, it goes to the agent, and an unread older spell gives way to the newer one.
+    from macf.pd import notifier as nt
+    owed = nt.Notifier(tmp_path / "agent", {}, append=lambda event, data: True, events=lambda: [])
+    for notice in (first, second, ("pd_run_missed", "digest:1792600030")):
+        assert owed.raise_notice(*notice) is True
+    assert list(owed.owed) == [second[1], "digest:1792600030"]
+
+
 def test_missed_firings_are_read_back_from_the_event_log(tmp_path, isolated_events_log):
     """#738 through the daemon's own reader of the event log, not a list handed to it: a
     daemon and the same daemon restarted before the next firing record the downtime once.
@@ -509,11 +598,11 @@ def test_missed_firings_are_read_back_from_the_event_log(tmp_path, isolated_even
 
 
 def test_a_prompt_run_it_cannot_start_is_said_not_run_once(tmp_path, monkeypatch):
-    """A prompt run into a named live session, and any prompt run where no client is on the
+    """A prompt run into the agent's own live session, and any prompt run where no client is on the
     daemon's PATH, is said not run once, with why, and never started."""
     monkeypatch.setattr(sc.shutil, "which", lambda name, path=None: None)
     log, now = Log(), [at("2026-10-14 12:00")]
-    named = Schedule(name="digest", cron="0 * * * *", missed_run=policy("skip"), target="Other@def456",
+    named = Schedule(name="digest", cron="0 * * * *", missed_run=policy("skip"), target=CARD,
                      run=PromptRun(prompt_file="p.md"), timeout_s=60)
     isolated = Schedule(name="sweep", cron="0 * * * *", missed_run=policy("skip"), target="isolated",
                         run=PromptRun(prompt_file="p.md"), timeout_s=60)
@@ -521,7 +610,7 @@ def test_a_prompt_run_it_cannot_start_is_said_not_run_once(tmp_path, monkeypatch
     now[0] = at("2026-10-14 13:00")
     s.tick()
     said = {d["schedule"]: d["reason"] for d in log.of(sc.EVENT_NOT_RUN)}
-    assert "named live session" in said["digest"] and "no Claude Code client" in said["sweep"]
+    assert "own live session" in said["digest"] and "no Claude Code client" in said["sweep"]
     assert len(log.of(sc.EVENT_NOT_RUN)) == 2 and not log.of(sc.EVENT_STARTED)
 
 
@@ -758,18 +847,18 @@ def test_prompt_fails_run(tmp_path):
 
 
 def test_an_isolated_prompt_run_routes_its_failure_notice():
-    """R32's notice must reach someone: a declaration with an isolated prompt run is refused at
-    load unless it routes pd_run_failed where the notice is delivered, to the agent."""
+    """R32's notice must reach someone: unrouted, pd_run_failed goes to the agent by default, and
+    a route that reaches nobody is refused at load (the ruling of 2026-10-21)."""
     from pydantic import ValidationError
-    with pytest.raises(ValidationError, match="pd_run_failed"):
-        Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()])
-    for nobody in ("operator", "held_until_present"):    # routes no daemon notice is delivered on yet
-        with pytest.raises(ValidationError, match="'agent' or 'both'"):
+    Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()])
+    Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()],
+                notice_routes={"pd_run_failed": "agent"})
+    Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()],
+                notice_routes={"pd_run_failed": "both"})            # half served: the agent hears it
+    for nobody in ("operator", "held_until_present"):
+        with pytest.raises(ValidationError, match="route it to 'agent'"):
             Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()],
                         notice_routes={"pd_run_failed": nobody})
-    for heard in ("agent", "both"):
-        Declaration(version=1, agent=CARD, timezone="UTC", schedules=[_prompt_schedule()],
-                    notice_routes={"pd_run_failed": heard})
 
 
 def test_the_client_is_found_on_the_session_units_path(tmp_path, monkeypatch):

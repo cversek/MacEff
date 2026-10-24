@@ -55,6 +55,19 @@ class StubDaemon:
     def _serve(self):
         conn, _ = self.server.accept()
         with conn:
+            # Read the channel's hello first, as the daemon does (R149). Closing with it still
+            # unread makes the kernel reset the connection, and the channel's read can then
+            # fail before it reaches the lines already sent.
+            conn.settimeout(2)
+            try:
+                hello = b""
+                while not hello.endswith(b"\n"):
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    hello += chunk
+            except OSError:
+                pass  # a channel that sent no hello, or hung up, is what some tests are about
             try:
                 for line in self.lines:
                     conn.sendall((line + "\n").encode())

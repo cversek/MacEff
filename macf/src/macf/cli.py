@@ -124,6 +124,15 @@ def _format_time_ago(file_path: Path) -> str:
         print(f"⚠️ MACF: file age calculation failed: {e}", file=sys.stderr)
         return "unknown"
 
+def _task_id_list(value: str) -> list:
+    """One ``--blocked-by`` value: a task ID, or a comma list of them, each without its ``#``.
+
+    The option takes one value per flag and may repeat, so a positional after it stays
+    positional. With ``nargs="+"`` it swallowed the phase title that followed it
+    (cversek/MacEff#688)."""
+    return [v.strip().lstrip("#") for v in value.split(",") if v.strip().lstrip("#")]
+
+
 def _parse_task_id_arg(arg: str):
     """Parse a task ID CLI argument into the form TaskReader.read_task expects.
 
@@ -592,7 +601,13 @@ def cmd_mis_check(args: argparse.Namespace) -> int:
     findings = mis.check(paths, glossary)
     for f in findings:
         print(f)
-    n = len(mis.mis_files(paths))
+    files = mis.mis_files(paths)
+    outside = sorted({str(f.parent) for f in files if mis.checkout_root(f) is None})
+    if outside:
+        print(f"ℹ️ no repository checkout holds {', '.join(outside)}, so the tests that decidable requirements "
+              "name were not looked up there; only bracket against Conformance row was compared "
+              "(MIS-0001-R18 (conformance_MUST_list_every_req))")
+    n = len(files)
     gl = f", glossary {glossary}" if glossary else (", no glossary found, so MIS-0001-R20 (glossary_MUST-NOT_repeat_terms) and "
           "MIS-0001-R21 (terms_MUST_reach_glossary) were not checked")
     print(f"{'❌' if findings else '✅'} {n} MIS file(s){gl}: {len(findings)} finding(s)")
@@ -1441,10 +1456,13 @@ def _claude_launcher() -> tuple:
 
 def cmd_claude_config_idle_compaction(args: argparse.Namespace) -> int:
     """Report or set the client's idle compaction for this agent (MIS-0002-R126)."""
-    from .utils.claude_settings import idle_compaction_status, set_idle_compaction
+    from .utils.claude_settings import idle_compaction_status, session_project_root, set_idle_compaction
+    # The session's project, wherever this runs: the settings the client reads at the
+    # session's start are that project's, not those of the directory a shell is in (#722).
+    root, source = session_project_root()
     if args.action == "status":
-        status = idle_compaction_status()
-        print(f"idle compaction: {status['state']} ({status['settings_path']})")
+        status = idle_compaction_status(root)
+        print(f"idle compaction: {status['state']} ({status['settings_path']}, from {source})")
         try:
             path, version = _claude_launcher()
             print(f"   client the next start runs: {path} ({version or 'version unknown'})")
@@ -1454,11 +1472,11 @@ def cmd_claude_config_idle_compaction(args: argparse.Namespace) -> int:
         return 0
     try:
         path, version = _claude_launcher()
-        result = set_idle_compaction(args.action == "on", client_version=version)
+        result = set_idle_compaction(args.action == "on", client_version=version, project_root=root)
     except (OSError, subprocess.SubprocessError, ValueError) as e:
         print(f"❌ {e}", file=sys.stderr)
         return 1
-    print(f"   client checked: {path} ({version})")
+    print(f"   client checked: {path} ({version}); the session's project, from {source}")
     if result["changed"]:
         from .agent_events_log import append_event
         append_event("harness_setting_changed", {"setting": "idleCompaction",
@@ -1768,58 +1786,130 @@ def cmd_harness_install(args: argparse.Namespace) -> int:
 
 
 def cmd_harness_attach(args: argparse.Namespace) -> int:
-    """Attach this terminal to the agent's supervised session.
+    """Attach this terminal to an agent's session, named by a short name, here or remote.
 
-    Exists so that no remote shell has to hardcode a session name. A helper on
-    another machine held the OLD name after the session was renamed, and broke
-    with "no sessions" -- a fourth hand-maintained copy of harness knowledge, on
-    a host the generator cannot reach. `ssh host -t macf_tools harness attach`
-    resolves the name where the name is defined, so a rename cannot strand it.
+    Exists so that no shell has to hardcode a session name, port, account or socket
+    directory: a helper on another machine held the OLD name after a session was renamed,
+    and broke with "no sessions". The name is matched against every agent this endpoint
+    and its declared remotes list (utils/roster.py); an agent on a remote is handed off
+    to that remote's own ``harness attach --card``, which resolves it from its own daemon
+    (persistent_layer 4.1, 4.5). The decision is utils/attach_dispatch.py's.
     """
-    from .utils.harness import resolve_agent
-    from .utils.identity import calling_card_from_identifier
+    from .pd.session_unit import client_environment
+    from .utils.attach import plan_attach_for_card, plan_attach_for_home
+    from .utils.attach_dispatch import by_card, decide, legacy_by_slug
+    from .utils.remotes import CONNECT_TIMEOUT_S, RemotesRefused, load_remotes
+    from .utils.roster import gather, local_roster, remote_fetchers, resolve
+
+    def has_session(target, env):
+        return subprocess.run(["tmux", "has-session", "-t", target],
+                              capture_output=True, env=env).returncode == 0
 
     try:
-        agent, source = resolve_agent(getattr(args, "agent", None))
-        if source == "ambiguous":
-            print("Several harnesses are installed here; name one with --agent:",
-                  file=sys.stderr)
-            for a in agent:
-                print(f"   {a}  ({calling_card_from_identifier(a)})", file=sys.stderr)
+        try:
+            remotes = load_remotes()
+        except RemotesRefused as e:
+            print(f"⚠️ MACF: {e}", file=sys.stderr)
             return 1
-
-        # "=" forces an exact match; tmux resolves targets by prefix, so a bare
-        # name would happily attach to "<agent>-stale-ssh".
-        target = f"={agent}"
-        # A session the primal daemon runs as its session unit lives on the unit's own
-        # tmux server, reached through TMUX_TMPDIR (pd.session_unit); otherwise the
-        # legacy harness's session on the default server.
-        from .pd.session_unit import client_environment
-        env = client_environment(agent) or dict(os.environ)
-        if subprocess.run(["tmux", "has-session", "-t", target],
-                          capture_output=True, env=env).returncode != 0:
-            print(f"No tmux session '{agent}' on this host.", file=sys.stderr)
-            print(f"   start it:  {'maceff_' + agent.rpartition('_')[0].lower() + '_harness_launch'}",
-                  file=sys.stderr)
-            print(f"   or:        systemctl --user start cc-harness-{agent}.service",
-                  file=sys.stderr)
-            return 1
-
-        # -CC hands the session to iTerm2 as native windows. It matters more
-        # than it looks: the client owns the alternate screen, so under a plain
-        # attach there is no tmux-level scrollback at all -- control mode is
-        # what restores native scrollback, selection and find on macOS.
-        cmd = ["tmux"]
-        if getattr(args, "control", False):
-            cmd.append("-CC")
-        cmd += ["attach", "-t", target]
-        # -d evicts other clients: two clients of different geometries is the
-        # cause of the fragmented redraws. Read-only observers skip it.
-        cmd.append("-r" if getattr(args, "read_only", False) else "-d")
-        os.execvpe("tmux", cmd, env)
+        local = local_roster(probe=None).entries
+        name, card = getattr(args, "name", None), getattr(args, "card", None)
+        legacy_slug = getattr(args, "agent", None)
+        if not name and not card and not legacy_slug:
+            # No name: this home's own agent, as before.
+            from .pd.names import IdentityError, agent_card
+            from .utils.paths import find_agent_home
+            try:
+                card = agent_card(find_agent_home())
+            except (IdentityError, OSError, ValueError) as e:
+                print(f"Name an agent (macf_tools harness list shows who is here): {e}",
+                      file=sys.stderr)
+                return 1
+        if legacy_slug and not name and not card:
+            from .utils.identity import calling_card_from_identifier
+            card = calling_card_from_identifier(legacy_slug)
+        decision = None
+        if card:
+            entry = by_card(local, card)
+            if entry is None and legacy_slug and not name:
+                # A slug names a session as it always did, for an agent whose card no
+                # roster row carries (one whose card comes only from a global id).
+                decision = legacy_by_slug(legacy_slug, control=bool(remotes.control if getattr(
+                    args, "control", None) is None else args.control),
+                    read_only=getattr(args, "read_only", False), has_session=has_session,
+                    environment=client_environment)
+            elif entry is None:
+                print(f"No agent here has the card {card!r} (macf_tools harness list).",
+                      file=sys.stderr)
+                return 1
+        else:
+            entries, unanswered = gather(local, remote_fetchers(), timeout=CONNECT_TIMEOUT_S)
+            for missing in unanswered:
+                print(f"⚠️ MACF: not asked: {missing}", file=sys.stderr)
+            entry, code = resolve(name, entries)
+            if entry is None:
+                return code
+        if decision is None:
+            decision = decide(entry, remotes, control=getattr(args, "control", None),
+                              read_only=getattr(args, "read_only", False),
+                              plan_for_home=plan_attach_for_home, plan_for_card=plan_attach_for_card,
+                              has_session=has_session, environment=client_environment)
+        if decision.exit_code is not None:
+            print(decision.message, file=sys.stderr)
+            return decision.exit_code
+        env = decision.env or dict(os.environ)
+        for command in decision.before:
+            # Naming the window is a courtesy: a tmux that refuses it still attaches.
+            subprocess.run(command, capture_output=True, env=env)
+        os.execvpe(decision.argv[0], decision.argv, env)
     except Exception as e:
         print(f"Error attaching to harness: {e}", file=sys.stderr)
         return 1
+
+
+def cmd_harness_list(args: argparse.Namespace) -> int:
+    """List every agent this endpoint can attach to, read only (utils/roster.py).
+
+    Exit 0 when the listing is complete. An unreadable home is listed, with why, and
+    still counts as listed; exit 1 means a source could not be read at all (the homes
+    directory, the runtime directory), which stderr names, so what is shown is partial.
+    """
+    from .utils.remotes import CONNECT_TIMEOUT_S
+    from .utils.roster import gather, local_roster, remote_fetchers, render_table
+
+    roster = local_roster()
+    entries, problems = roster.entries, list(roster.problems)
+    if not getattr(args, "local", False):
+        # Each declared remote's own listing, beside this endpoint's; one that doesn't
+        # answer is named below and makes the listing incomplete, never silently shorter.
+        entries, unanswered = gather(entries, remote_fetchers(problems), timeout=CONNECT_TIMEOUT_S)
+        problems += unanswered
+    if getattr(args, "json", False):
+        print(json.dumps([e.model_dump(mode="json") for e in entries], indent=2))
+    else:
+        print(render_table(entries))
+    for problem in problems:
+        print(f"⚠️ MACF: harness list is incomplete: {problem}", file=sys.stderr)
+    return 0 if not problems else 1
+
+
+def cmd_completion(args: argparse.Namespace) -> int:
+    """Print the shell completion script, or (hidden) the agent names a word completes to."""
+    if getattr(args, "candidates", False):
+        from .utils.completion import candidate_lines
+        from .utils.roster import completion_candidates, gather, local_roster, remote_fetchers
+        # Names only: completion has no use for states, and probing each would cost a
+        # tmux call per agent on every TAB.
+        local = local_roster(probe=None).entries
+        entries, _unanswered = gather(local, remote_fetchers(), timeout=args.remote_timeout)
+        for line in candidate_lines(completion_candidates(entries, args.prefix or ""), args.describe):
+            print(line)
+        return 0
+    if not getattr(args, "shell", None):
+        print("usage: macf_tools completion {bash,zsh}", file=sys.stderr)
+        return 2
+    from .utils.completion import render
+    print(render(args.shell, _build_parser()), end="")
+    return 0
 
 
 def cmd_harness_unit(args: argparse.Namespace) -> int:
@@ -4200,45 +4290,16 @@ def cmd_events_show(args: argparse.Namespace) -> int:
 
 
 def cmd_events_history(args: argparse.Namespace) -> int:
-    """Display recent events from log."""
+    """The newest events, one readable line each, oldest first: ``events query --limit N``
+    with no filter (the same formatter, `macf.eventlog.reader`)."""
     from .agent_events_log import read_events
+    from .eventlog.reader import format_line, select
 
-    try:
-        limit = getattr(args, 'limit', 10)
-
-        print(f"Recent Events (last {limit})")
-        print("=" * 50)
-
-        events = list(read_events(limit=limit, reverse=True))
-
-        if not events:
-            print("No events found")
-            return 0
-
-        for event in events:
-            timestamp = event.get('timestamp', 0)
-            event_type = event.get('event', 'unknown')
-            breadcrumb = event.get('breadcrumb', 'N/A')
-
-            # Format timestamp
-            dt = datetime.fromtimestamp(timestamp, tz=_pick_tz())
-            time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
-
-            print(f"[{time_str}] {event_type}")
-            print(f"  Breadcrumb: {breadcrumb}")
-
-            # Show key data fields
-            data = event.get('data', {})
-            if data:
-                for key, value in data.items():
-                    print(f"  {key}: {value}")
-            print()
-
-        return 0
-
-    except Exception as e:
-        print(f"Error reading event history: {e}")
-        return 1
+    tz = _pick_tz()
+    today = datetime.now(tz=tz).date()
+    for event in select(read_events(limit=None, reverse=True), limit=getattr(args, "limit", 10) or 10):
+        print(format_line(event, tz, today))
+    return 0
 
 
 def cmd_events_analyze(args: argparse.Namespace) -> int:
@@ -4316,96 +4377,83 @@ def cmd_events_analyze(args: argparse.Namespace) -> int:
 
 
 def cmd_events_query(args: argparse.Namespace) -> int:
-    """Query events with filters."""
-    from .agent_events_log import query_events
+    """Read the event log as lines a person can follow (`macf.eventlog.reader`).
 
+    One line per event; ``--verbose`` prints every field, and ``--json`` one JSON line per event
+    for scripts. ``--event`` repeats and takes globs; ``--after`` and ``--before`` take 30m, 2h,
+    09:00, an ISO time or an epoch; ``--follow`` keeps printing new events until Ctrl+C. A query
+    with no bound reads the current cycle, and one bounded by time or a breadcrumb reads the whole
+    log, newest first, stopping where its bound says (``coding_standards`` §6.3, §6.4)."""
+    import json as _json
+    from .agent_events_log import _matches_filter, get_log_path, query_scope_for, read_events
+    from .eventlog.reader import follow, format_line, format_verbose, matches, parse_when, select
+
+    tz = _pick_tz()
     try:
-        # Build filter dict from args
-        filters = {}
+        after = parse_when(args.after, tz=tz) if getattr(args, "after", None) else None
+        before = parse_when(args.before, tz=tz) if getattr(args, "before", None) else None
+    except ValueError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 2
 
-        # Event type filter
-        if hasattr(args, 'event') and args.event:
-            filters['event_type'] = args.event
+    crumbs = {}
+    for key, attr in (("c", "cycle"), ("g", "git_hash"), ("s", "session"), ("p", "prompt")):
+        value = getattr(args, attr, None)
+        if value:
+            crumbs[key] = int(value) if key == "c" else value
+    filters = {"breadcrumb": crumbs} if crumbs else {}
+    if after is not None:
+        filters["since"] = after
+    if before is not None:
+        filters["until"] = before          # any time bound reads the whole log, not this cycle
+    command = getattr(args, "command", None)
 
-        # Breadcrumb filters
-        breadcrumb_filters = {}
+    def keep(event: dict) -> bool:
+        if crumbs and not _matches_filter(event, {"breadcrumb": crumbs}):
+            return False
+        if command:
+            data = event.get("data") or {}
+            argv = data.get("argv") if isinstance(data, dict) else None
+            if event.get("event") != "cli_command_invoked" or command not in " ".join(map(str, argv or [])):
+                return False
+        return True
 
-        if hasattr(args, 'cycle') and args.cycle:
-            breadcrumb_filters['c'] = int(args.cycle)
+    patterns = list(getattr(args, "event", None) or [])
+    today = datetime.now(tz=tz).date()
+    as_json, verbose = getattr(args, "json_output", False), getattr(args, "verbose", False)
 
-        if hasattr(args, 'git_hash') and args.git_hash:
-            breadcrumb_filters['g'] = args.git_hash
+    def show(event: dict) -> None:
+        if as_json:
+            print(_json.dumps(event, default=str))
+        elif verbose:
+            print(format_verbose(event, tz, today))
+        else:
+            print(format_line(event, tz, today), flush=True)
 
-        if hasattr(args, 'session') and args.session:
-            breadcrumb_filters['s'] = args.session
+    # Where --follow starts, taken before the scan, so an event written while it runs is
+    # printed by one or the other, never lost between them.
+    log_path = get_log_path()
+    follow_from = os.path.getsize(log_path) if os.path.exists(log_path) else 0
+    events = select(read_events(limit=None, reverse=True, scope=query_scope_for(filters)),
+                    after=after, before=before, patterns=patterns,
+                    limit=getattr(args, "limit", None), keep=keep)
+    for event in events:
+        show(event)
+    if not events and not getattr(args, "follow", False):
+        print("no matching events", file=sys.stderr)
+    if getattr(args, "follow", False):
+        def keep_new(event: dict) -> bool:
+            stamp = event.get("timestamp")
+            if before is not None and isinstance(stamp, (int, float)) and stamp > before:
+                return False
+            return (not patterns or matches(str(event.get("event", "")), patterns)) and keep(event)
 
-        if hasattr(args, 'prompt') and args.prompt:
-            breadcrumb_filters['p'] = args.prompt
-
-        if breadcrumb_filters:
-            filters['breadcrumb'] = breadcrumb_filters
-
-        # Timestamp filters
-        if hasattr(args, 'after') and args.after:
-            filters['since'] = float(args.after)
-
-        if hasattr(args, 'before') and args.before:
-            filters['until'] = float(args.before)
-
-        # Execute query
-        results = query_events(filters)
-
-        # Post-filter by command if specified (for cli_command_invoked events)
-        command_filter = getattr(args, 'command', None)
-        if command_filter:
-            filtered = []
-            for event in results:
-                if event.get('event') == 'cli_command_invoked':
-                    argv = event.get('data', {}).get('argv', [])
-                    cmd_str = ' '.join(argv)
-                    if command_filter in cmd_str:
-                        filtered.append(event)
-            results = filtered
-
-        print(f"Query Results: {len(results)} events")
-        print("=" * 50)
-
-        if not results:
-            print("No matching events found")
+        try:
+            for event in follow(log_path, keep_new, start=follow_from):
+                show(event)
+        except KeyboardInterrupt:
             return 0
-
-        verbose = getattr(args, 'verbose', False)
-
-        for event in results:
-            timestamp = event.get('timestamp', 0)
-            event_type = event.get('event', 'unknown')
-            breadcrumb = event.get('breadcrumb', 'N/A')
-            data = event.get('data', {})
-
-            # Format timestamp
-            dt = datetime.fromtimestamp(timestamp, tz=_pick_tz())
-            time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
-
-            print(f"[{time_str}] {event_type}")
-            print(f"  Breadcrumb: {breadcrumb}")
-
-            # Show command details for cli_command_invoked
-            if event_type == 'cli_command_invoked' and 'argv' in data:
-                argv = data.get('argv', [])
-                print(f"  Command: {' '.join(argv)}")
-
-            # Verbose mode: show all data
-            if verbose and data:
-                import json
-                print(f"  Data: {json.dumps(data, indent=4)}")
-
-            print()
-
-        return 0
-
-    except Exception as e:
-        print(f"Error querying events: {e}")
-        return 1
+    return 0
 
 
 def cmd_events_query_set(args: argparse.Namespace) -> int:
@@ -6038,6 +6086,8 @@ def cmd_task_metadata_set(args: argparse.Namespace) -> int:
                 task_type=new_mtmd.task_type,
                 title=title_for_recompose,
                 parent_id=new_mtmd.parent_id,
+                plan_ca_ref=new_mtmd.plan_ca_ref,
+                custom=new_mtmd.custom or None,
             )
             updates["subject"] = new_subject
 
@@ -8344,7 +8394,12 @@ def cmd_task_note(args: argparse.Namespace) -> int:
 
 
 def cmd_task_block(args: argparse.Namespace) -> int:
-    """Add blocking relationship: task blocks another task."""
+    """Add blocking relationship: task blocks another task.
+
+    Written as the forward edge, on the blocked task's ``blockedBy``: the one ``task start``
+    enforces and ``task get`` shows from both ends (``dependents_of`` derives the inverse).
+    Writing ``blocks`` on the blocking task instead left the blocked task showing no
+    blocker and starting freely (cversek/MacEff#688)."""
     from .task import TaskReader, update_task_file
     from .utils.breadcrumbs import get_breadcrumb
 
@@ -8367,15 +8422,12 @@ def cmd_task_block(args: argparse.Namespace) -> int:
         print(f"❌ Target task #{target_id} not found")
         return 1
 
-    # Get current blocks array
-    current_blocks = task.blocks or []
-    if str(target_id) in current_blocks or target_id in current_blocks:
+    current = target.blocked_by or []
+    if str(task_id) in [str(b).lstrip("#") for b in current]:
         print(f"⚠️  Task #{task_id} already blocks #{target_id}")
         return 0
 
-    # Add to blocks
-    new_blocks = current_blocks + [str(target_id)]
-    update_task_file(task_id, {"blocks": new_blocks})
+    update_task_file(target_id, {"blockedBy": current + [str(task_id)]})
 
     print(f"✅ Task #{task_id} now blocks #{target_id}")
     print(f"   Breadcrumb: {get_breadcrumb()}")
@@ -8383,7 +8435,8 @@ def cmd_task_block(args: argparse.Namespace) -> int:
 
 
 def cmd_task_unblock(args: argparse.Namespace) -> int:
-    """Remove blocking relationship."""
+    """Remove blocking relationship: the forward edge on the blocked task, and the ``blocks``
+    entry the command used to write on the blocking task, if one is still there."""
     from .task import TaskReader, update_task_file
     from .utils.breadcrumbs import get_breadcrumb
 
@@ -8400,15 +8453,18 @@ def cmd_task_unblock(args: argparse.Namespace) -> int:
         print(f"❌ Task #{task_id} not found")
         return 1
 
-    current_blocks = task.blocks or []
-    # Check both str and int forms
-    if str(target_id) not in current_blocks and target_id not in current_blocks:
+    target = reader.read_task(target_id)
+    current = (target.blocked_by or []) if target else []
+    edge = str(task_id) in [str(b).lstrip("#") for b in current]
+    stale = str(target_id) in [str(b) for b in (task.blocks or [])]
+    if not edge and not stale:
         print(f"⚠️  Task #{task_id} does not block #{target_id}")
         return 0
 
-    # Remove from blocks
-    new_blocks = [b for b in current_blocks if str(b) != str(target_id)]
-    update_task_file(task_id, {"blocks": new_blocks})
+    if edge:
+        update_task_file(target_id, {"blockedBy": [b for b in current if str(b).lstrip("#") != str(task_id)]})
+    if stale:
+        update_task_file(task_id, {"blocks": [b for b in task.blocks if str(b) != str(target_id)]})
 
     print(f"✅ Task #{task_id} no longer blocks #{target_id}")
     print(f"   Breadcrumb: {get_breadcrumb()}")
@@ -8543,8 +8599,13 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
     result = set_scope(expanded, parent_expanded=len(expanded) > len(raw_ids),
                        expanded_from=raw_ids[0] if len(raw_ids) == 1 else None)
 
+    for _done in result.get("skipped_completed", []):
+        print(f"⚠️  Task #{_done} is done (completed or archived), so it was not scoped")
+    if not result["success"] and not result["tasks_scoped"]:
+        print("❌ No open tasks to scope")
+        return 1
     if result["success"]:
-        print(f"✅ Scoped {len(expanded)} task(s):")
+        print(f"✅ Scoped {len(result['tasks_scoped'])} task(s):")
         for _pid in _kept_paused:
             # Re-listing a paused task does not answer what it waits on; unpause is explicit.
             print(f"   ⏸️  #{_pid} stays paused (macf_tools task scope unpause {_pid} to resume it)")
@@ -8559,7 +8620,7 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
             marker = "📌" if is_parent else "  └─"
             print(f"   {marker} #{tid} {subject}")
         if result["parent_expanded"]:
-            print(f"   (parent #{result['expanded_from']} expanded to {len(expanded) - len(raw_ids)} children)")
+            print(f"   (parent #{result['expanded_from']} expanded to {len([t for t in result['tasks_scoped'] if t not in raw_ids])} children)")
         print(f"   Breadcrumb: {get_breadcrumb()}")
 
         # Show full scope state after adding
@@ -12253,12 +12314,27 @@ def _build_parser() -> argparse.ArgumentParser:
 
     harness_attach = harness_sub.add_parser(
         "attach", help="attach this terminal to the agent's supervised session")
-    harness_attach.add_argument("--agent", help="agent slug (default: resolved from identity)")
-    harness_attach.add_argument("--control", action="store_true",
-                                help="attach in tmux control mode (-CC), for iTerm2 on macOS")
+    harness_attach.add_argument("name", nargs="?",
+                                help="a card, uuid, moniker or unique prefix, here or on a declared "
+                                     "remote (default: this home's own agent)")
+    harness_attach.add_argument("--card", help="exactly this calling card, on this endpoint "
+                                               "(what a remote hand-off names)")
+    harness_attach.add_argument("--agent", help="session slug, as before (Moniker_uuid)")
+    harness_attach.add_argument("--control", action=argparse.BooleanOptionalAction, default=None,
+                                help="tmux control mode (-CC), for iTerm2 on macOS "
+                                     "(default: the remotes declaration's control)")
     harness_attach.add_argument("--read-only", action="store_true",
                                 help="observe without evicting other clients or taking the keyboard")
     harness_attach.set_defaults(func=cmd_harness_attach)
+
+    harness_list = harness_sub.add_parser(
+        "list", help="list every agent this endpoint can attach to: card, account, session "
+                     "kind and state, with a reason wherever one is unknown (read-only)")
+    harness_list.add_argument("--json", action="store_true",
+                              help="a list of objects, one per agent or unreadable home")
+    harness_list.add_argument("--local", action="store_true",
+                              help="this endpoint only, without asking the declared remotes")
+    harness_list.set_defaults(func=cmd_harness_list)
 
     harness_status = harness_sub.add_parser("status", help="show harness unit and session state")
     harness_status.add_argument("--agent", help="agent slug")
@@ -12436,22 +12512,30 @@ def _build_parser() -> argparse.ArgumentParser:
     show_parser.set_defaults(func=cmd_events_show)
 
     # events history
-    history_parser = events_sub.add_parser("history", help="show recent events")
+    history_parser = events_sub.add_parser("history", help="the newest events, one readable line each")
     history_parser.add_argument("--limit", type=int, default=10,
                                help="number of events to show (default: 10)")
     history_parser.set_defaults(func=cmd_events_history)
 
     # events query
-    query_parser = events_sub.add_parser("query", help="query events with filters")
-    query_parser.add_argument("--event", help="filter by event type")
+    query_parser = events_sub.add_parser(
+        "query", help="read the event log: one line per event, filtered by name, time and breadcrumb")
+    query_parser.add_argument("--event", action="append", metavar="NAME",
+                              help="an event name or glob (pd_wake_*); repeat for several")
     query_parser.add_argument("--cycle", help="filter by cycle number")
     query_parser.add_argument("--git-hash", help="filter by git hash")
     query_parser.add_argument("--session", help="filter by session ID")
     query_parser.add_argument("--prompt", help="filter by prompt UUID")
-    query_parser.add_argument("--after", help="events after timestamp")
-    query_parser.add_argument("--before", help="events before timestamp")
+    query_parser.add_argument("--after", metavar="WHEN",
+                              help="events after a time: 30m, 2h, 7d, 09:00, an ISO time or an epoch")
+    query_parser.add_argument("--before", metavar="WHEN", help="events before a time, in the same forms")
+    query_parser.add_argument("--limit", type=int, metavar="N", help="only the newest N matching events")
+    query_parser.add_argument("--follow", "-f", action="store_true",
+                              help="keep printing matching events as they arrive, until Ctrl+C")
     query_parser.add_argument("--command", help="filter cli_command_invoked by command (e.g., 'policy read')")
-    query_parser.add_argument("--verbose", "-v", action="store_true", help="show full event data")
+    query_parser.add_argument("--verbose", "-v", action="store_true", help="every field of each event")
+    query_parser.add_argument("--json", dest="json_output", action="store_true",
+                              help="one JSON line per event, for scripts")
     query_parser.set_defaults(func=cmd_events_query)
 
     # events query-set
@@ -12720,8 +12804,10 @@ def _build_parser() -> argparse.ArgumentParser:
     phase_plan_group = task_create_phase_parser.add_mutually_exclusive_group(required=True)
     phase_plan_group.add_argument("--plan", dest="plan", help="inline plan description")
     phase_plan_group.add_argument("--plan-ca-ref", dest="plan_ca_ref", help="path to plan CA")
-    task_create_phase_parser.add_argument("--blocked-by", dest="blocked_by", nargs="+",
-                                          help="task IDs that block this phase (e.g., #50 51)")
+    task_create_phase_parser.add_argument("--blocked-by", dest="blocked_by", action="extend",
+                                          type=_task_id_list, metavar="ID[,ID...]",
+                                          help="a task that blocks this phase; repeat the flag or give "
+                                               "a comma list (e.g., --blocked-by 50,51)")
     task_create_phase_parser.add_argument("--json", dest="json", action="store_true",
                                           help="output as JSON")
     task_create_phase_parser.set_defaults(func=cmd_task_create_phase)
@@ -13780,6 +13866,18 @@ def _build_parser() -> argparse.ArgumentParser:
     shell_parser = sub.add_parser("shell", help="shell integration (tab completion)")
     shell_sub = shell_parser.add_subparsers(dest="shell_cmd")
     shell_sub.add_parser("setup", help="print tab completion setup instructions").set_defaults(func=cmd_shell_setup)
+
+    # ── completion ───────────────────────────────────────────────────────
+    completion_parser = sub.add_parser(
+        "completion", help="print a shell completion script: source <(macf_tools completion bash)")
+    completion_parser.add_argument("shell", nargs="?", choices=["bash", "zsh"],
+                                   help="the shell to print the script for")
+    # Hidden: what the printed script calls for `harness attach <TAB>`.
+    completion_parser.add_argument("--candidates", action="store_true", help=argparse.SUPPRESS)
+    completion_parser.add_argument("--prefix", default="", help=argparse.SUPPRESS)
+    completion_parser.add_argument("--describe", action="store_true", help=argparse.SUPPRESS)
+    completion_parser.add_argument("--remote-timeout", type=float, default=1.0, help=argparse.SUPPRESS)
+    completion_parser.set_defaults(func=cmd_completion)
 
     return p
 

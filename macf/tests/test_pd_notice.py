@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import pytest
 
 from macf.agent_events_log import read_events
-from macf.channels.maceff_channel import build_event, parse_record
+from macf.channels.maceff_channel import TAKES, build_event, parse_record
 from macf.notify.session import proc_start
 from macf.pd import notifier as nt
 from channel_receiver import ChannelReceiver
@@ -74,7 +74,7 @@ def test_source_named(tmp_path, isolated_events_log):
     _mail(home, "m1")
     n.poll()
     ours, theirs = _pair()
-    n.attach(ours)
+    n.attach(ours, takes=TAKES)
     assert n.flush() == 1
     (record,) = _records(theirs)
     assert record.source == "amail"
@@ -92,7 +92,7 @@ def test_three_times(tmp_path, isolated_events_log):
     n.poll()
     clock[0] = 1300.0
     ours, theirs = _pair()
-    n.attach(ours)
+    n.attach(ours, takes=TAKES)
     n.flush()
     (record,) = _records(theirs)
     assert (record.read_at, record.sent_at) == (1000.0, 1300.0)
@@ -118,7 +118,7 @@ def test_held_while_down(tmp_path, isolated_events_log):
     second.boot()
     assert len(second.owed) == 2, "the held notice and the one for mail waiting at start"
     ours, theirs = _pair()
-    second.attach(ours)
+    second.attach(ours, takes=TAKES)
     assert second.flush() == 2
     assert [r.count for r in _records(theirs)] == [1, 2]
 
@@ -137,6 +137,61 @@ def test_routing_declared(tmp_path, isolated_events_log, capsys):
     assert "'weather' is declared but this daemon has no poller" in capsys.readouterr().err
 
 
+def _operator_heard(home, log, routes):
+    """The operator's share, as the outside watch serves it: the watch's findings about this
+    home's mail, read from the agent's own event log (*log*) under *routes*."""
+    import shutil
+    from macf.pd import watch
+    from macf.pd.interface import Declaration, declaration_path
+    declaration_path(home).write_text(Declaration(
+        version=1, agent="Tester@abc123", unread_mail_threshold_s=600,
+        notice_routes=routes).model_dump_json())
+    if log.exists():
+        shutil.copy(log, home / ".maceff" / "agent_events_log.jsonl")
+    return [f.verdict for f in watch.check_home(home, time.time(), probe=None) if f.subject == "mail"]
+
+
+@pytest.mark.parametrize("route", ["agent", "operator", "both"])
+def test_each_route_reaches_its_audience_and_no_other(tmp_path, isolated_events_log, route):
+    """R42: a source routed to the agent, or to both, reaches the agent's channel, a store's
+    source and one the daemon raises alike; a source routed to the operator alone does not.
+    The operator's share, the outside watch's alert, is given where the route is the
+    operator's or both, and not where it is the agent's alone. Only unread mail may be routed
+    to the operator alone (the repo owner's ruling of 2026-10-21), so in that case the other
+    sources go to the agent and unread mail must reach the operator and not the agent."""
+    from macf.agent_events_log import append_event
+    from macf.pd.interface import EVENT_UNREAD_MAIL
+    home = make_home(tmp_path, [])
+    _box(home)
+    others = "agent" if route == "operator" else route
+    routes = {"amail": others, "pd_limit_exceeded": others, "pd_unread_mail": route}
+    n = nt.Notifier(home, routes)
+    n.boot()
+    _mail(home, "m1")
+    n.poll()
+    n.raise_notice("pd_limit_exceeded", "limit-worker-1")
+    n.raise_notice("pd_unread_mail", "unread-mail-1")
+    append_event(EVENT_UNREAD_MAIL, {"agent": "Tester@abc123", "count": 1, "reason": "1 message(s) unread"})
+    ours, theirs = _pair()
+    n.attach(ours, takes=TAKES)
+    n.flush()
+    to_agent = sorted(r.source for r in _records(theirs))
+    assert to_agent == sorted(s for s, r in routes.items() if r in ("agent", "both"))
+    to_operator = _operator_heard(home, isolated_events_log, routes)
+    assert to_operator == (["UNREAD"] if route in ("operator", "both") else [])
+
+
+def test_a_route_outside_the_declared_ones_is_refused_at_load():
+    """R42: a declaration names one of the routes for each source it routes, and a source the
+    daemon must notice on (unread mail past a threshold) cannot be left unrouted."""
+    from macf.pd.interface import Declaration
+    with pytest.raises(ValueError):
+        Declaration(version=1, agent="Tester@abc123", notice_routes={"amail": "nobody"})
+    with pytest.raises(ValueError, match="pd_unread_mail"):
+        Declaration(version=1, agent="Tester@abc123", unread_mail_threshold_s=600,
+                    notice_routes={"amail": "agent"})
+
+
 def test_nothing_is_sent_for_no_change(tmp_path, isolated_events_log):
     """Polls that find nothing new produce nothing to send (R46)."""
     home = _home(tmp_path)
@@ -144,7 +199,7 @@ def test_nothing_is_sent_for_no_change(tmp_path, isolated_events_log):
     n = nt.Notifier(home, {"amail": "agent"})
     n.boot()
     ours, theirs = _pair()
-    n.attach(ours)
+    n.attach(ours, takes=TAKES)
     n.flush()
     _records(theirs)
     for _ in range(5):
@@ -160,7 +215,7 @@ def test_a_channel_that_went_away_keeps_the_notice_owed(tmp_path, isolated_event
     n.poll()
     ours, theirs = _pair()
     theirs.close()
-    n.attach(ours)
+    n.attach(ours, takes=TAKES)
     assert n.flush() == 0 and len(n.owed) == 1 and not n.channels
 
 
@@ -174,10 +229,13 @@ def _declare_routes(home):
     path.write_text(json.dumps(decl))
 
 
-def _connect(daemon):
+def _connect(daemon, takes=None):
+    """A channel's connection to the running daemon; with ``takes``, it sends that hello."""
     conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     conn.settimeout(3)
     conn.connect(str(daemon.channel_path))
+    if takes is not None:
+        conn.sendall(json.dumps({"hello": {"takes": list(takes)}}).encode() + b"\n")
     return conn
 
 
@@ -196,13 +254,136 @@ def test_peer_lineage_checked_by_the_daemon(tmp_path, base, run_daemon, isolated
 
     me = (os.getpid(), proc_start(os.getpid()))              # this test stands in for the session
     monkeypatch.setattr(daemon.core, "session_incarnation", lambda: me)
-    conn = _connect(daemon)
+    conn = _connect(daemon, takes=TAKES)
     (record,) = _records(conn)
     assert record.source == "amail" and record.count == 1
     deadline = time.monotonic() + 3
     while daemon.notifier.owed and time.monotonic() < deadline:
         time.sleep(0.05)
     assert not daemon.notifier.owed
+
+
+# ---- R149: the channel declares its sources at attach; the rest is held ---------------
+
+ENTRY_ID = "e-0123456789ab"
+
+
+def _owe_an_entry(home):
+    """Mail in the box and an entry's notice owed in the log, both read back at the daemon's boot,
+    so nothing is raised from the test's thread while the serve loop runs."""
+    from macf.agent_events_log import append_event
+    _declare_routes(home)
+    _mail(home, "m1")
+    append_event(nt.EVENT_DETECTED, {"source": "pd_entry_due", "arrival_id": ENTRY_ID, "count": None,
+                                     "store": "the event log", "notifier": nt.NOTIFIER})
+
+
+def _session_is_this_test(daemon, monkeypatch):
+    me = (os.getpid(), proc_start(os.getpid()))
+    monkeypatch.setattr(daemon.core, "session_incarnation", lambda: me)
+
+
+def _until(condition, timeout=3.0):
+    deadline = time.monotonic() + timeout
+    while not condition() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return condition()
+
+
+def _entry_owed(daemon):
+    return ENTRY_ID in daemon.notifier.owed
+
+
+def test_a_source_the_attached_channel_did_not_declare_stays_held(tmp_path, base, run_daemon,
+                                                                 isolated_events_log, monkeypatch):
+    """MIS-0002-R149: a channel whose hello leaves out ``pd_entry_due`` is sent the mail it
+    declared and not the entry's notice, which stays owed, never logged delivered; a second
+    channel that declares it then receives it. The daemon records what each channel declared."""
+    home = make_home(tmp_path, [])
+    _owe_an_entry(home)
+    daemon = run_daemon(home, base)
+    _session_is_this_test(daemon, monkeypatch)
+    partial = [s for s in TAKES if s != "pd_entry_due"]
+    old = _connect(daemon, takes=partial)
+    assert [r.source for r in _records(old)] == ["amail"]
+    time.sleep(0.3)                                       # a notice sent in error has time to show
+    assert _entry_owed(daemon), "an undeclared source's notice was not held"
+    assert not [d for d in _logged(nt.EVENT_DELIVERED) if d["arrival_id"] == ENTRY_ID]
+
+    new = _connect(daemon, takes=TAKES)
+    assert [(r.source, r.arrival_id) for r in _records(new)] == [("pd_entry_due", ENTRY_ID)]
+    assert _until(lambda: not _entry_owed(daemon))
+    declared = _logged("pd_channel_declared")
+    assert [sorted(d["takes"]) for d in declared] == [sorted(partial), sorted(TAKES)]
+    old.close()
+    new.close()
+
+
+def test_a_channel_that_sends_no_hello_is_sent_nothing(tmp_path, base, run_daemon, isolated_events_log,
+                                                       monkeypatch):
+    """A channel that sends no hello declares nothing: it stays attached, past its hello's time,
+    and is sent nothing, so every notice stays owed for a channel that declares it."""
+    from macf.pd import daemon as dm
+    monkeypatch.setattr(dm, "HELLO_TIMEOUT_S", 0.3)
+    home = make_home(tmp_path, [])
+    _owe_an_entry(home)
+    daemon = run_daemon(home, base)
+    _session_is_this_test(daemon, monkeypatch)
+    silent = _connect(daemon)
+    assert _until(lambda: daemon.notifier.channels)
+    silent.settimeout(1.0)
+    with pytest.raises(socket.timeout):
+        silent.recv(1)                                    # neither a record nor a close
+    assert daemon.notifier.channels, "a channel with no hello was dropped"
+    assert len(daemon.notifier.owed) == 2
+    assert not _logged(nt.EVENT_DELIVERED) and not _logged("pd_channel_declared")
+    silent.close()
+
+
+@pytest.mark.parametrize("hello", [
+    b"not json\n",
+    b'{"hello": {"takes": "amail"}}\n',                       # not a list
+    b'{"hello": {"takes": ["amail"], "also": 1}}\n',          # an extra field
+    b'{"hello": {"takes": ["amail; rm -rf ~"]}}\n',           # not a source's name
+    b'{"hello": {"takes": ["amail"]}}\n{"more": 1}\n',        # a write after the hello
+    b'{"hello": {"takes": ["am',                              # never finished, then its time runs out
+])
+def test_a_malformed_hello_detaches_the_channel(tmp_path, base, run_daemon, isolated_events_log, monkeypatch,
+                                                hello):
+    """A malformed hello, an unfinished one, or a write after it breaks the protocol: the daemon
+    drops the channel, and what was owed stays owed."""
+    from macf.pd import daemon as dm
+    monkeypatch.setattr(dm, "HELLO_TIMEOUT_S", 0.3)
+    home = make_home(tmp_path, [])
+    _owe_an_entry(home)
+    daemon = run_daemon(home, base)
+    _session_is_this_test(daemon, monkeypatch)
+    conn = _connect(daemon)
+    conn.sendall(hello)
+    assert conn.recv(1) == b"", "a channel that broke the protocol was kept"
+    assert _until(lambda: not daemon.notifier.channels)
+    assert len(daemon.notifier.owed) == 2
+    conn.close()
+
+
+def test_the_maceff_channel_declares_every_source_its_record_takes(tmp_path, base, run_daemon,
+                                                                   isolated_events_log, monkeypatch):
+    """The real channel, against the real daemon: its hello declares exactly the sources its
+    record accepts, so an entry's notice reaches it."""
+    import typing
+
+    from macf.channels.maceff_channel import Channel, NoticeRecord
+    home = make_home(tmp_path, [])
+    _owe_an_entry(home)
+    daemon = run_daemon(home, base)
+    _session_is_this_test(daemon, monkeypatch)
+    conn = Channel(daemon.card, base=base, out=None).connect_once()
+    assert conn is not None
+    conn.settimeout(3)
+    assert sorted(r.source for r in _records(conn)) == ["amail", "pd_entry_due"]
+    (declared,) = _logged("pd_channel_declared")
+    assert set(declared["takes"]) == set(typing.get_args(NoticeRecord.model_fields["source"].annotation))
+    conn.close()
 
 
 def test_daemon_releases_the_channel_socket(tmp_path, base, isolated_events_log):
@@ -216,28 +397,101 @@ def test_daemon_releases_the_channel_socket(tmp_path, base, isolated_events_log)
 
 
 def test_a_unit_past_its_limit_is_a_notice_held_and_delivered(tmp_path, isolated_events_log):
-    """MIS-0002-R60: the daemon's own over-limit notice is owed only where the declaration
-    routes it to the agent (R42), held through a restart like mail's (R41), and arrives on
-    the channel as the never-masked pd_limit_exceeded notice."""
+    """MIS-0002-R60: the daemon's own over-limit notice is owed to the agent, by its declared
+    route or, unrouted, by default (R42, the ruling of 2026-10-21), held through a restart like
+    mail's (R41), and arrives on the channel as the never-masked pd_limit_exceeded notice. A
+    newer one from the same source replaces the older: each points only to the log."""
     home = _home(tmp_path)
     unrouted = nt.Notifier(home, {"amail": "agent"})
-    assert unrouted.raise_notice("pd_limit_exceeded", "limit-worker-1") is False
-    assert not unrouted.owed
+    assert unrouted.raise_notice("pd_limit_exceeded", "limit-worker-1") is True
+    assert list(unrouted.owed)
     first = nt.Notifier(home, {"pd_limit_exceeded": "agent"})
     first.boot()
     assert first.raise_notice("pd_limit_exceeded", "limit-worker-2") is True
     assert first.flush() == 0                                # no channel: held
     second = nt.Notifier(home, {"pd_limit_exceeded": "agent"})   # the restarted daemon's
     second.boot()
-    assert list(second.owed) == ["limit-worker-2"]
+    assert list(second.owed) == ["limit-worker-2"]           # the newest, held across the restart
     ours, theirs = _pair()
-    second.attach(ours)
+    second.attach(ours, takes=TAKES)
     assert second.flush() == 1
-    [record] = _records(theirs)
+    record = _records(theirs)[-1]
     assert record.source == "pd_limit_exceeded" and record.count is None
     assert "macf-daemon" in build_event(record)["params"]["content"]
     with pytest.raises(ValueError):
         second.raise_notice("amail", "not-raised-by-the-daemon")
+
+
+def test_a_notice_owed_past_a_day_is_held_by_the_checkpoint(tmp_path, isolated_events_log):
+    """MIS-0002-R41 (pd_MUST_hold_notices_while_down): a notice is held until the session
+    starts, whatever its age. Each boot records what it still owes as a pd_notices_owed
+    checkpoint, and the next boot reads back to it, so a notice detected, then a daemon start
+    more than a day later, still owes the notice and delivers it."""
+    clock = [time.time()]
+    home = _home(tmp_path)
+    first = nt.Notifier(home, {"pd_run_failed": "agent"}, clock=lambda: clock[0])
+    first.boot()
+    assert first.raise_notice("pd_run_failed", "nightly:1792600000") is True
+    restarted = nt.Notifier(home, {"pd_run_failed": "agent"}, clock=lambda: clock[0])
+    restarted.boot()                                     # the checkpoint holds it
+    [checkpoint] = _logged(nt.EVENT_NOTICES_OWED)[-1:]
+    assert [o["arrival_id"] for o in checkpoint["owed"]] == ["nightly:1792600000"]
+    assert checkpoint["notifier"] == nt.NOTIFIER
+    clock[0] += 2 * nt.HOLD_MAX_S                        # down for two days
+    late = nt.Notifier(home, {"pd_run_failed": "agent"}, clock=lambda: clock[0])
+    late.boot()
+    assert list(late.owed) == ["nightly:1792600000"], "a notice older than a day was dropped"
+    ours, theirs = _pair()
+    late.attach(ours, takes=TAKES)
+    assert late.flush() == 1
+    assert [r.arrival_id for r in _records(theirs)] == ["nightly:1792600000"]
+    again = nt.Notifier(home, {"pd_run_failed": "agent"}, clock=lambda: clock[0])
+    again.boot()
+    assert not again.owed                                # delivered after the checkpoint: owed no more
+
+
+def test_a_boot_reads_back_no_further_than_the_newest_checkpoint(tmp_path, isolated_events_log):
+    """MIS-0002-R41: the checkpoint exists so a boot's scan stays short on a log of millions of
+    events. A boot reads back to the newest pd_notices_owed and stops, so the records before it
+    are never read again, however many there are."""
+    home = _home(tmp_path)
+    first = nt.Notifier(home, {"pd_run_failed": "agent"})
+    first.boot()
+    for i in range(200):                                 # all before the next boot's checkpoint
+        first.raise_notice("pd_run_failed", f"job{i}:1792600000")
+    nt.Notifier(home, {"pd_run_failed": "agent"}).boot()
+    read = []
+
+    def counted():
+        for event in read_events(reverse=True, scope="all",
+                                 only=(nt.EVENT_DETECTED, nt.EVENT_DELIVERED, nt.EVENT_NOTICES_OWED)):
+            read.append(event)
+            yield event
+
+    late = nt.Notifier(home, {"pd_run_failed": "agent"}, events=counted)
+    late.boot()
+    assert len(read) == 1, f"the boot read {len(read)} records, not just the newest checkpoint"
+    assert read[0]["event"] == nt.EVENT_NOTICES_OWED
+    assert len(late.owed) == 200                         # and what is owed came from that checkpoint
+
+
+def test_a_crash_loop_while_down_is_one_notice_per_schedule(tmp_path, isolated_events_log):
+    """MIS-0002-R41: only the newest daemon-raised notice per thing is owed, per schedule for
+    run failures, so many failures of one schedule while the session is down come back as one
+    notice, and a second schedule's failure as its own."""
+    home = _home(tmp_path)
+    first = nt.Notifier(home, {"pd_run_failed": "agent"})
+    first.boot()
+    for i in range(50):
+        first.raise_notice("pd_run_failed", f"nightly:{1792600000 + 60 * i}")
+    first.raise_notice("pd_run_failed", "digest:1792600030")
+    assert list(first.owed) == ["nightly:1792602940", "digest:1792600030"]
+    second = nt.Notifier(home, {"pd_run_failed": "agent"})   # and so after a restart
+    second.boot()
+    assert sorted(second.owed) == ["digest:1792600030", "nightly:1792602940"]
+    ours, theirs = _pair()
+    second.attach(ours, takes=TAKES)
+    assert second.flush() == 2
 
 
 # ---------------------------------------------------------------- unread mail (MIS-0002-R55)
@@ -314,6 +568,34 @@ def test_unread_mail_notice(tmp_path):
     tracker.tick(0.0)
     assert len(notices) == 2
     assert [e for e, _ in said].count(EVENT_UNREAD_MAIL) == 2
+
+
+@pytest.mark.parametrize("route", ["agent", "operator", "both"])
+def test_unread_mail_reaches_the_routes_declared_for_it(tmp_path, base, run_daemon, isolated_events_log,
+                                                        route):
+    """R55, end to end: a running daemon with a threshold notices mail left unread, and the
+    notice reaches the routes declared for it and no other. The agent's share is the notice
+    owed on its channel; the operator's is the outside watch's alert, read from the same log."""
+    from macf.pd.interface import Declaration, EVENT_UNREAD_MAIL, declaration_path
+    home = make_home(tmp_path, [])
+    routes = {"pd_unread_mail": route}
+    declaration_path(home).write_text(Declaration(
+        version=1, agent="Tester@abc123", unread_mail_threshold_s=0.2,
+        notice_routes=routes).model_dump_json())
+    _mail(home, "waiting")
+    daemon = run_daemon(home, base)
+    to_agent = route in ("agent", "both")
+    deadline = time.time() + 5
+    while time.time() < deadline and not (
+            list(read_events(only=(EVENT_UNREAD_MAIL,)))
+            and (not to_agent or any(o.source == "pd_unread_mail" for o in daemon.notifier.owed.values()))):
+        time.sleep(0.1)                                   # the serve loop ticks on its own
+    time.sleep(0.3)                                       # a notice owed in error has time to show
+    [event] = list(read_events(only=(EVENT_UNREAD_MAIL,)))
+    assert event["data"]["agent"] == "Tester@abc123"
+    assert any(o.source == "pd_unread_mail" for o in daemon.notifier.owed.values()) == to_agent
+    to_operator = _operator_heard(home, isolated_events_log, routes)
+    assert to_operator == (["UNREAD"] if route in ("operator", "both") else [])
 
 
 def test_unread_mail_counts_only_the_time_the_session_ran(tmp_path):
@@ -427,7 +709,7 @@ def test_the_unread_mail_notice_is_held_and_delivered_to_the_agent(tmp_path, iso
     notifier.boot()
     assert notifier.raise_notice("pd_unread_mail", "unread-mail-1") is True
     ours, theirs = _pair()
-    notifier.attach(ours)
+    notifier.attach(ours, takes=TAKES)
     assert notifier.flush() == 1
     [record] = _records(theirs)
     assert record.source == "pd_unread_mail"
@@ -515,7 +797,9 @@ def test_after_restart_notice(make_core, script, tmp_path):
     assert drive(second, lambda: carried_events()[-1]["after"] == "the session unit restarted")
     assert carried_events()[-1]["changed"] == ["survives"] and owed().count("pd_carried") == 3
     # Each id names its occasion, so a daemon restart and a session restart in one second differ.
-    assert [i.split("-")[1] for _, i in channel.received] == ["daemon", "compaction", "session"]
+    assert [i.split("-")[1] for s, i in channel.received if s == "pd_carried"] == ["daemon", "compaction", "session"]
+    # Killed outright, the session failed, which is its own notice beside the report.
+    assert ("pd_unit_failed", "survives:1") in [(s, i.rsplit(":", 1)[0]) for s, i in channel.received]
 
 
 def test_a_session_restart_is_reported(make_core, script):
@@ -538,11 +822,33 @@ def test_a_session_restart_is_reported(make_core, script):
     assert owed[0] == "pd_carried"
 
 
-@pytest.mark.parametrize("route, warned", [(None, True), ("operator", True), ("held_until_present", True),
-                                           ("agent", False), ("both", False)])
-def test_an_unheard_carried_notice_is_warned_at_start(tmp_path, capsys, route, warned):
-    """R47's notice is delivered on the agent's routes only, so a daemon with a session unit warns
-    at start unless pd_carried is routed to 'agent' or 'both'."""
+@pytest.mark.parametrize("route", ["operator", "held_until_present"])
+def test_a_route_that_reaches_nobody_is_refused_at_load(route):
+    """R42 and R47, the repo owner's ruling of 2026-10-21 (option A): a declaration may name only
+    routes something serves. The operator's route serves unread mail alone, by the outside watch;
+    holding until present is served nowhere yet. Anything else is refused, naming the route that
+    works, instead of being accepted and dropped."""
+    from pydantic import ValidationError
+    from macf.pd import interface
+    with pytest.raises(ValidationError, match="route it to 'agent'"):
+        interface.Declaration(version=1, agent="Tester@abc123", notice_routes={"pd_carried": route})
+    interface.Declaration(version=1, agent="Tester@abc123", notice_routes={"pd_carried": "agent"})
+    if route != "held_until_present":
+        interface.Declaration(version=1, agent="Tester@abc123", notice_routes={"pd_unread_mail": route})
+
+
+def test_both_keeps_its_agent_half_and_the_rest_is_said(tmp_path, isolated_events_log):
+    """CTB on #552: a source routed to `both` is half served, so it loads, its notice reaches the
+    agent, and the daemon names it as reaching the agent only. Unread mail's `both` is whole."""
+    from macf.pd import interface
+    d = interface.Declaration(version=1, agent="Tester@abc123",
+                              notice_routes={"pd_run_failed": "both", "pd_unread_mail": "both"})
+    assert d.half_served_routes() == ["pd_run_failed"]
+    assert nt.Notifier(_home(tmp_path), d.notice_routes).raise_notice("pd_run_failed", "run-1") is True
+
+
+def test_a_half_served_both_is_said_at_start(tmp_path, capsys):
+    """The daemon names a source routed to `both` whose operator half nothing serves, once, at start."""
     import shutil
     import tempfile
     from pathlib import Path
@@ -552,18 +858,75 @@ def test_an_unheard_carried_notice_is_warned_at_start(tmp_path, capsys, route, w
     (home / ".maceff" / "pd").mkdir(parents=True)
     (home / ".maceff_primary_agent.id").write_text("abc123def4567890\n")
     (home / ".maceff" / "config.json").write_text('{"agent_identity": {"moniker": "Tester"}}')
-    session = interface.Unit(name="session", kind="session", command=["/usr/bin/true"],
-                             account=__import__("pwd").getpwuid(os.getuid()).pw_name,
-                             restart="always", liveness_interval_s=10, memory_limit_mb=64)
     interface.declaration_path(home).write_text(interface.Declaration(
-        version=1, agent="Tester@abc123", units=[session],
-        notice_routes={"pd_carried": route} if route else {}).model_dump_json())
+        version=1, agent="Tester@abc123", notice_routes={"pd_run_failed": "both"}).model_dump_json())
     base = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))
     try:
         Daemon(home, base=base)
     finally:
         shutil.rmtree(base, ignore_errors=True)
-    assert ("doesn't route 'pd_carried'" in capsys.readouterr().err) == warned
+    assert "routes pd_run_failed to 'both', and only the agent's half is served" in capsys.readouterr().err
+
+
+def test_an_unrouted_carried_notice_reaches_the_agent(tmp_path, isolated_events_log):
+    """R47: a declaration rendered with no routes, as the containers' are, still tells the session
+    what was carried, changed and lost; the notice goes to the agent by default."""
+    notifier = nt.Notifier(_home(tmp_path), {})
+    assert notifier.raise_notice("pd_carried", "carried-1") is True
+    assert list(notifier.owed)
+
+
+def test_the_daemon_wires_its_core_and_scheduler_notices_to_its_notifier(tmp_path):
+    """R60's subject is the primal daemon: the core's over-limit notice reaches the channel only
+    because the daemon connects the core to its notifier. Review on #770 planted that wiring away
+    and every other test passed, since they wire it by hand."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+    from macf.pd import interface
+    from macf.pd.daemon import Daemon
+    home = tmp_path / "home"
+    (home / ".maceff" / "pd").mkdir(parents=True)
+    (home / ".maceff_primary_agent.id").write_text("abc123def4567890\n")
+    (home / ".maceff" / "config.json").write_text('{"agent_identity": {"moniker": "Tester"}}')
+    interface.declaration_path(home).write_text(
+        interface.Declaration(version=1, agent="Tester@abc123").model_dump_json())
+    base = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))
+    try:
+        daemon = Daemon(home, base=base)
+        assert daemon.core.on_notice == daemon.notifier.raise_notice
+        assert daemon.scheduler.on_notice == daemon.notifier.raise_notice
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_a_unit_measured_past_its_limit_reaches_the_channel(make_core, script, tmp_path, monkeypatch,
+                                                            isolated_events_log):
+    """MIS-0002-R60 (pd_MUST_notice_limit_exceeded): the core's own memory reading, not a
+    notice raised by hand, owes the notice. A running unit read under its declared limit owes
+    nothing; read over it, the core raises pd_limit_exceeded into the notifier, wired as the
+    daemon wires it, and the record goes out on the channel."""
+    from macf.pd import core as pd_core
+    used = [10.0]                                                   # the unit's limit is 64 MB
+    monkeypatch.setattr(pd_core, "tree_rss_mb", lambda pid: used[0])
+    notifier = nt.Notifier(_home(tmp_path), {"pd_limit_exceeded": "agent"})
+    notifier.boot()
+    core = make_core([make_unit("worker", script, {})], memory_check_s=0.0)
+    core.on_notice = notifier.raise_notice
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    core.tick()
+    assert not notifier.owed, "a unit under its limit owed a notice"
+    used[0] = 80.0
+    core.tick()
+    assert [o.source for o in notifier.owed.values()] == ["pd_limit_exceeded"]
+    ours, theirs = _pair()
+    notifier.attach(ours, takes=TAKES)
+    assert notifier.flush() == 1
+    [record] = _records(theirs)
+    assert record.source == "pd_limit_exceeded"
+    [over] = [e["data"] for e in read_events(reverse=False, scope="all", only=(pd_core.EVENT_OVER_LIMIT,))]
+    assert (over["unit"], over["used_mb"], over["limit_mb"]) == ("worker", 80.0, 64)
 
 
 def test_a_compaction_no_daemon_saw_is_reported_at_the_next_start(make_core, script):
@@ -625,3 +988,78 @@ def test_a_session_with_no_operator_channels_is_warned_at_start(tmp_path, capsys
     finally:
         shutil.rmtree(base, ignore_errors=True)
     assert ("lists no operator_channels" in capsys.readouterr().err) == warned
+
+
+from test_primal_daemon import ask, wait_for  # noqa: E402 - helpers
+
+
+def _unit_failed_owed(notifier):
+    """Each owed pd_unit_failed notice as (unit, failures in a row), from its id."""
+    return sorted((o.arrival_id.split(":")[0], int(o.arrival_id.split(":")[1]))
+                  for o in notifier.owed.values() if o.source == "pd_unit_failed")
+
+
+def test_a_failed_unit_raises_a_notice_through_the_channel(make_core, script, tmp_path, capsys):
+    """A unit that misses its liveness is failed and restarted as before, and the agent is owed
+    the pd_unit_failed notice, which arrives through the MacEff channel's own record. Its id
+    names the unit and its failures in a row. A unit that stops as it asked to, or exits with its
+    success code, has not failed and raises none. The pointer's command shows the failure."""
+    import re
+    import shlex
+
+    from macf.channels.maceff_channel import DAEMON_POINTERS
+    from macf.cli import _build_parser
+    channel = ChannelReceiver(tmp_path)
+    core = make_core([
+        make_unit("stale", script, {"alive_for": 1.0}, interval=0.5),
+        make_unit("done", script, {"exit_after": 0.1, "code": 78}, interval=0.5, restart="always"),
+        make_unit("clean", script, {"exit_after": 0.1}, interval=0.5),
+    ])
+    core.on_notice = channel
+    core.boot()
+    assert drive(core, lambda: channel.received, timeout=10)
+    [(source, notice_id)] = channel.received
+    unit, failures, at = notice_id.split(":")
+    assert (source, unit, failures) == ("pd_unit_failed", "stale", "1") and int(at) > 0
+    assert "liveness stale" in [d for d in _logged("pd_unit_state")
+                                if d["unit"] == "stale" and d["state"] == "failed"][-1]["reason"]
+    assert drive(core, lambda: core.pid("stale") is not None and core.state("stale") == "starting")
+    assert core.state("done") == "stopped" and core.state("clean") == "stopped"
+    assert [s for s, _ in channel.received] == ["pd_unit_failed"]      # neither stop raised one
+
+    command = re.search(r"`(macf_tools events query[^`]*)`", DAEMON_POINTERS["pd_unit_failed"]).group(1)
+    args = _build_parser().parse_args(shlex.split(command)[1:])
+    capsys.readouterr()
+    assert args.func(args) == 0
+    assert "liveness stale" in capsys.readouterr().out
+
+
+def test_a_crash_loop_is_one_notice_per_unit_with_its_count(tmp_path, script, base, run_daemon):
+    """A real daemon whose unit fails again and again, with no session to deliver to, owes one
+    pd_unit_failed notice for that unit, the newest, carrying its failures in a row; a second
+    unit's single failure is its own notice. The event log keeps every failure, and a daemon
+    that starts later owes the same two notices and delivers them through the channel's record.
+    The loop itself is left to the restart policy: it keeps restarting until it is stopped."""
+    flaky = make_unit("flaky", script, {"exit_after": 0.05, "code": 1}, interval=0.5)
+    steady = make_unit("steady", script, {"crash_once": str(tmp_path / "crashed")}, interval=0.5)
+    daemon = run_daemon(make_home(tmp_path, [flaky, steady]), base)
+    assert wait_for(lambda: daemon.core.failures("flaky") >= 4, timeout=10)
+    reply = ask(daemon, {"op": "stop", "unit": "flaky", "reason": "the loop has been seen",
+                         "asked_by": {"kind": "operator", "card": "Operator@000000"}})
+    assert reply["ok"]
+    assert wait_for(lambda: daemon.core.state("flaky") == "stopped")
+    loops = max(int(d["arrival_id"].split(":")[1]) for d in _logged(nt.EVENT_DETECTED)
+                if d["source"] == "pd_unit_failed" and d["arrival_id"].startswith("flaky:"))
+    assert loops >= 4
+    raised = [d for d in _logged(nt.EVENT_DETECTED) if d["source"] == "pd_unit_failed"]
+    assert len(raised) == loops + 1                                 # every failure is in the log
+    assert _unit_failed_owed(daemon.notifier) == [("flaky", loops), ("steady", 1)]
+
+    later = nt.Notifier(daemon.home, {})                            # unrouted: to the agent
+    later.boot()
+    assert _unit_failed_owed(later) == [("flaky", loops), ("steady", 1)]
+    ours, theirs = _pair()
+    later.attach(ours, takes=TAKES)
+    assert later.flush() == 2
+    assert sorted((r.source, r.arrival_id.split(":")[0]) for r in _records(theirs)) == [
+        ("pd_unit_failed", "flaky"), ("pd_unit_failed", "steady")]
