@@ -39,6 +39,10 @@ def _link_remedy(ca_type: str) -> str:
     if ca_type == "tasks":
         return ("macf_tools knowledge link task:<id> <concept>; see the task_management policy on "
                 "knowledge web participation for what a task links")
+    if ca_type == "amail":
+        return ("macf_tools knowledge link <message path> <concept>, which writes the message's "
+                ".wiki-links sidecar under amail/.links and never edits it; see the amail policy on knowledge web "
+                "participation for what mail links")
     return (f"add a ## Wiki-Links section (or macf_tools knowledge link <path> <concept>); see the "
             f"{ca_type} policy on knowledge web participation "
             f"for what this type should link")
@@ -109,7 +113,9 @@ def examine(agent_home: Optional[Path] = None,
         orphans_by_type.setdefault(ca_type, []).append(path)
         # Distinguish "never linked" from "wrote links that do not count".
         # The second is a different mistake and deserves a different remedy.
-        if _RAW_LINK.search(content):
+        # An HTML message's links are only ever in its sidecar, so any [[..]]
+        # in its bytes is text, not a link written wrongly.
+        if path.suffix != ".html" and _RAW_LINK.search(content):
             mention_only.append(path)
 
     for ca_type, paths in sorted(orphans_by_type.items()):
@@ -153,9 +159,30 @@ def examine(agent_home: Optional[Path] = None,
                         if is_mention_only else _link_remedy(ca_type)),
             ))
 
+    # ---- sidecars the web does not read ------------------------------------
+    # A mail message's links are read only from amail/.links. A sidecar-named
+    # file anywhere else under amail is ignored, and named here, because one
+    # inside a received thread may have come in a bundle its sender built.
+    from .knowledge_web import SIDECAR_ROOT, _type_roots, stray_sidecars
+    for ca_type, root in _type_roots(agent_home):
+        if ca_type != "amail":
+            continue
+        for f in stray_sidecars(root):
+            findings.append(Finding(
+                check="stray mail sidecars",
+                severity=Severity.NOTE,
+                subject=f"amail: {f.relative_to(root)}",
+                detail=(f"a sidecar outside {SIDECAR_ROOT}, so the web ignores it; "
+                        "if it sits in a received thread, its sender may have written it"),
+                remedy=("read it before trusting any of it; to link the message, use macf_tools "
+                        "knowledge link on the message, which writes under " + SIDECAR_ROOT),
+            ))
+
     # ---- normalization drift in source text --------------------------------
     drift: Dict[str, set] = {}
     for _ca_type, _root, path in iter_web_files(agent_home):
+        if path.suffix == ".html":
+            continue    # an HTML message is never read for links (amail policy)
         try:
             content = path.read_text(errors="replace")
         except OSError:
