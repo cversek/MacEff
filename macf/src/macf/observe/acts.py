@@ -32,6 +32,10 @@ EVENT_INVITE = "pd_observe_invite"
 EVENT_PAUSE = "pd_observe_pause"
 EVENT_RESUME = "pd_observe_resume"
 EVENT_END = "pd_observe_end"
+#: Not an act: the operator fetched an invitation's secret, once, to relay it (persistent_layer
+#: 11.5). It records who fetched it and when, never the secret, so a second ask can say when the
+#: first was answered.
+EVENT_SECRET_FETCHED = "pd_observe_secret_fetched"
 
 ACTIVE = "active"
 PAUSED = "paused"
