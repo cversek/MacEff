@@ -909,6 +909,8 @@ class Response(_Closed):
     wake_window_from: Optional[str] = None
     #: The event stream's rules in force, answering a stream rule.
     stream_rules: Optional[Dict[str, Any]] = None
+    #: The build of macf the daemon runs, answering a status (MacEff #816).
+    build: Optional[str] = None
 
 
 _REQUEST = TypeAdapter(Annotated[Request, Field(discriminator="op")])

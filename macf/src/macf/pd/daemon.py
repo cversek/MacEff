@@ -182,6 +182,10 @@ class Daemon:
                                       self.notifier.raise_notice) if threshold else None
         #: Where the keystroke wake's window in force came from, for a status or a pace to say.
         self._wake_from = "the declaration"
+        #: The build this daemon started from, said in every status (MacEff #816). Read once:
+        #: the code it runs can't change under it, only the checkout beside it.
+        from macf.pd.build import build_id
+        self._build = build_id()
         if any(u.kind == "session" for u in self.core.declaration.units):
             # The keystroke fallback types into the session unit's own pane (pd.session_unit),
             # recording each wake first so it never reads as the operator (MIS-0002-R105).
@@ -653,7 +657,9 @@ class Daemon:
         if isinstance(request, (EntryAddRequest, EntryListRequest, EntryRemoveRequest)):
             return self._entry_request(request, creds)
         if isinstance(request, StatusRequest):
-            return Response(ok=True, units=self.core.statuses(), **self._wake_window())
+            from macf.pd.build import build_id
+            return Response(ok=True, units=self.core.statuses(), build=self._build or build_id(),
+                            **self._wake_window())
         if isinstance(request, PaceRequest):
             return self._pace(request, creds)
         if isinstance(request, ActRequest):
