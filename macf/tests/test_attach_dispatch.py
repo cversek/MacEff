@@ -26,8 +26,8 @@ def _local(plan=None, has=True, **kw):
 
 def test_a_remote_agent_is_handed_off_by_card_as_its_seat():
     d = decide(_entry(endpoint="seats"), REMOTES, control=None, read_only=False, **_local())
-    assert d.argv[:5] == ["ssh", "-t", "-p", "2224", "pa_two@box"]
-    assert shlex.split(d.argv[5])[3:] == ["--card", "Lumen2MacEff@3f9a1c", "--control"]
+    assert d.argv[:8] == ["ssh", "-t", "-l", "pa_two", "-p", "2224", "--", "box"]
+    assert shlex.split(d.argv[8])[3:] == ["--card", "Lumen2MacEff@3f9a1c", "--control"]
     gone = decide(_entry(endpoint="elsewhere"), REMOTES, control=None, read_only=False, **_local())
     assert gone.exit_code == 1 and "elsewhere" in gone.message
 

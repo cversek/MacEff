@@ -16,6 +16,12 @@ The remote resolves the session from its own daemon (MIS-0002-R100), so no socke
 pid or session name ever crosses the wire, and the laptop holds no knowledge that a
 restart on the remote could make stale.
 
+**Nothing a remote says becomes an ssh option.** A roster is data from the machine where
+the agents live, and its ``account`` names the login for a seat's hand-off. Each account
+and card is checked against what it can legitimately be when the roster is read, and
+again when the hand-off is built; ssh is always given ``-l <login>`` and ``--`` before
+the host, so no value can reach ssh's option parsing even if a check is loosened later.
+
 **No credential passes through macf.** ssh uses the operator's own keys, agent and
 ``~/.ssh/config``; macf reads none of them and stores nothing. A roster is asked for with
 ``BatchMode``, so a remote that would prompt for a password answers "unreachable" instead
@@ -25,13 +31,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 from pathlib import Path
 from typing import Callable, List, Optional
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from .roster import RosterEntry
 
@@ -40,6 +47,22 @@ SEAT = "seat"
 
 #: Seconds ssh may take to connect when asking for a roster (completion's deadline is the caller's).
 CONNECT_TIMEOUT_S = 5
+
+#: A POSIX account name: what a login can legitimately be. Never begins with ``-``.
+ACCOUNT = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+
+#: A calling card (``Moniker@uuid``), or a bare moniker: letters, digits, ``_ . -``, never
+#: beginning with ``-``.
+CARD = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}(@[0-9a-f]{6})?$")
+
+#: A host name or address for ssh: never beginning with ``-``.
+HOST = re.compile(r"^[A-Za-z0-9_.:\[\]%-]+$")
+
+
+def _checked(value: Optional[str], pattern: "re.Pattern", what: str) -> Optional[str]:
+    if value is not None and (not pattern.match(value) or value.startswith("-")):
+        raise ValueError(f"{what} {value!r} is not a legitimate {what}")
+    return value
 
 
 class RemotesRefused(ValueError):
@@ -67,6 +90,16 @@ class Remote(BaseModel):
     macf_tools: str = "macf_tools"
     #: iTerm2 control mode for this remote; unset follows the file's ``control``.
     control: Optional[bool] = None
+
+    @field_validator("host")
+    @classmethod
+    def _host(cls, v: str) -> str:
+        return _checked(v, HOST, "host")
+
+    @field_validator("login", "list_login")
+    @classmethod
+    def _login(cls, v: Optional[str]) -> Optional[str]:
+        return v if v == SEAT else _checked(v, ACCOUNT, "login")
 
     @model_validator(mode="after")
     def _seat_needs_a_lister(self):
@@ -115,7 +148,10 @@ def load_remotes(path: Optional[Path] = None) -> RemotesConfig:
 
 
 def _destination(remote: Remote, login: str) -> List[str]:
-    return (["-p", str(remote.port)] if remote.port else []) + [f"{login}@{remote.host}"]
+    """``-l login [-p port] -- host``: the login and host as values, after which ssh reads
+    no more options."""
+    _checked(login, ACCOUNT, "login")
+    return ["-l", login] + (["-p", str(remote.port)] if remote.port else []) + ["--", remote.host]
 
 
 def roster_argv(remote: Remote, connect_timeout: float = CONNECT_TIMEOUT_S) -> List[str]:
@@ -145,10 +181,19 @@ def parse_roster(remote: Remote, stdout: str) -> List[RosterEntry]:
     # the model's own rule (unknown is never empty) still holds for the fields it keeps.
     known = set(RosterEntry.model_fields)
     try:
-        return [RosterEntry.model_validate({**{k: v for k, v in o.items() if k in known},
-                                            "endpoint": remote.name}) for o in objects]
+        entries = [RosterEntry.model_validate({**{k: v for k, v in o.items() if k in known},
+                                               "endpoint": remote.name}) for o in objects]
     except (AttributeError, ValidationError) as e:
         raise RuntimeError(f"{remote.name}: the roster could not be read: {e}") from e
+    # A name that isn't a legitimate account or card is refused with the whole roster: a
+    # remote that serves one can't be believed about the rest.
+    for e in entries:
+        try:
+            _checked(e.account, ACCOUNT, "account")
+            _checked(e.card, CARD, "card")
+        except ValueError as bad:
+            raise RuntimeError(f"{remote.name}: the roster is refused: {bad}") from None
+    return entries
 
 
 def fetch_roster(remote: Remote, timeout: float, *, run: Callable = subprocess.run) -> List[RosterEntry]:
@@ -196,6 +241,7 @@ def handoff_argv(remote: Remote, entry: RosterEntry, *, control: Optional[bool] 
         if not entry.account:
             raise ValueError(f"{remote.name}: {entry.card} has no account to log in as")
         login = entry.account
+    _checked(entry.card, CARD, "card")
     if control is None:
         control = remote.control if remote.control is not None else default_control
     remote_cmd = [remote.macf_tools, "harness", "attach", "--card", entry.card,
