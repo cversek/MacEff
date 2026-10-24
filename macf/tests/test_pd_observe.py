@@ -616,3 +616,16 @@ def test_presence_is_unknown_when_the_daemon_is_not_alive():
     inv, log = _invited()
     assert presence.call_line(presence.from_events(log, daemon_alive=False)) == "presence: unknown"
     assert presence.call_line(presence.from_events([], daemon_alive=True)) == ""
+
+
+def test_only_the_record_path_takes_an_act():
+    """R90 stays true when an entry point arrives: nothing outside macf/observe calls the act
+    builders directly, so a command has to take its acts through observe.record, which writes
+    each one to the observed agent's own log (CTB on #811)."""
+    import re
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[1] / "src" / "macf"
+    call = re.compile(r"\bacts\.(invite|pause|resume|end|expired)\(")
+    offenders = [str(p.relative_to(src)) for p in src.rglob("*.py")
+                 if "observe" not in p.relative_to(src).parts and call.search(p.read_text())]
+    assert offenders == []
