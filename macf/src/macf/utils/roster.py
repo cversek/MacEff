@@ -33,6 +33,7 @@ from __future__ import annotations
 import difflib
 import functools
 import os
+import re
 import pwd
 import subprocess
 import sys
@@ -406,6 +407,13 @@ def _merge(first: RosterEntry, second: RosterEntry) -> RosterEntry:
     return RosterEntry(**data)
 
 
+#: The six hex characters a card's uuid suffix must be.
+_UUID6 = re.compile(r"^[0-9a-f]{6}$")
+
+#: Who writes a seat's identity file in a deployment: root, at provisioning.
+DEPLOYMENT_UID = 0
+
+
 def _declared_card(home: Optional[str], name: str) -> Tuple[Optional[str], str]:
     """``name@uuid`` from the deployment's declared card and the home's identity file, which
     the deployment writes world-readable; or None and why it couldn't be made."""
@@ -413,10 +421,14 @@ def _declared_card(home: Optional[str], name: str) -> Tuple[Optional[str], str]:
         return None, f"agents.yaml declares {name!r}, but the home isn't known"
     path = Path(home) / ".maceff_primary_agent.id"
     try:
+        # The deployment writes it root-owned; a seat owns its home and could put its own
+        # file there, so only root's is the deployment's word.
+        if path.stat().st_uid != DEPLOYMENT_UID:
+            return None, f"agents.yaml declares {name!r}, but {path} is not the deployment's file (not root's)"
         uuid = path.read_text().strip()[:6]
     except OSError as e:
         return None, f"agents.yaml declares {name!r}, but {path} can't be read: {e.strerror or type(e).__name__}"
-    if len(uuid) != 6:
+    if not _UUID6.match(uuid):
         return None, f"agents.yaml declares {name!r}, but {path} holds no uuid"
     return f"{name}@{uuid}", ""
 
@@ -533,9 +545,11 @@ def local_roster(*, homes: Path = HOMES, runtime: Optional[Path] = None,
     for home in candidates:
         e = _home_entry(home, own_uid, probe, legacy,
                         account_of or (lambda _home, owner: _account_name(owner)), peers)
-        if e is not None and not peers and e.card is None:
-            # On a host a home is a login's, not a seat's: one that names no agent is just a
-            # home with a public tree, and listing it as an unknown agent is noise.
+        if (e is not None and not peers and e.card is None
+                and not os.path.lexists(home / ".maceff" / "config.json")):
+            # On a host a home is a login's, not a seat's: one with no agent config names no
+            # agent, and listing it as an unknown agent is noise. A config that is there but
+            # can't be read is an agent we can't see, and stays a row with the reason.
             continue
         if e is not None:
             add(e)

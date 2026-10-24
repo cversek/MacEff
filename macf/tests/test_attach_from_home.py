@@ -115,3 +115,23 @@ def test_a_missing_sidecar_is_quiet_where_it_is_ordinary(tmp_path, monkeypatch, 
     assert capsys.readouterr().err == ""
     assert session.read_session_info(999999) is None
     assert "unreadable" in capsys.readouterr().err
+
+
+def test_another_accounts_server_beside_ours_is_passed_over(tmp_path, monkeypatch):
+    """Only this account's session-unit servers are searched: another's is no keyboard of
+    ours, whatever its panes descend from (CTB on #809)."""
+    from macf.utils import attach
+    (tmp_path / "Resident_1a2b3c.tmux").mkdir()
+    (tmp_path / "theirs.tmux").mkdir()
+    import os
+    monkeypatch.setattr(os, "getuid", lambda: 4242)       # our own directories now read as another's
+    resp = {"ok": True, "units": [{"unit": "seat", "state": "running", "pid": 500, "proc_start": "x"}]}
+    chains = {500: [500, 1], 700: [700, 600, 500]}
+
+    def panes(env=None):
+        return {700: "theirs"} if env and env.get("TMUX_TMPDIR", "").endswith("/theirs.tmux") else {}
+
+    plan = attach.plan_attach(resp, "seat", read_info=lambda pid: None, verify=lambda pid, s: True,
+                              ancestors=lambda pid: chains.get(pid, [pid]), tmux_panes=panes,
+                              tmux_tmpdir=str(tmp_path / "Resident_1a2b3c.tmux"))
+    assert plan.kind != TMUX
