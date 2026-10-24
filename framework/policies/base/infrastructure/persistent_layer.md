@@ -811,7 +811,12 @@ No other value is taken: the daemon refuses an `entry_add` whose `--missed` is a
 
 **Duties wake you.** The daemon polls your roles once a minute, and a duty's crossing into DUE_SOON or OVERDUE raises `pd_duty_due`, recorded first as `duty_tier_crossed`. A duty that crossed while no daemon ran is announced once at its start, and none twice.
 
-**Not in the trial build:** arbitrary commands as checks, the keystroke fallback for entries (the trial needs the MacEff channel), a duty's `at HH:MM` as its own wake, editing and pausing an entry, the two-way calendar, and the planner.
+**Planning your own wakes.** An entry is a note to a later you, who will have lost this context:
+- **Prefer an entry to session cron** for anything that must outlive the session, survive a compaction or a restart, or run past the client's seven-day expiry. Session cron is still right for a timer that should die with the session: a poll while one build finishes, or a reminder inside one sitting.
+- **At a wind-down, plan the next cycle's wakes as entries.** Use a one-shot for a follow-up you owe ("in 2h", re-check a pull request's CI), and a recurrence for a rhythm the operator asked for. Read `pd agenda` first, so you don't add a second clock for a rhythm one entry already keeps.
+- **Clean up.** When the work an entry served is done, remove it. When it's only on hold, pause it. A spent recurring entry keeps waking a session that no longer needs it, and costs a turn each time.
+
+**Not yet built:** arbitrary commands as checks, the keystroke fallback for entries (they need the MacEff channel), a duty's `at HH:MM` as its own wake, the two-way calendar, and the planner.
 
 ---
 
