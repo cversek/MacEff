@@ -15,9 +15,10 @@ from typing import Optional
 _UNKNOWN_OP = re.compile(r"Input tag '([A-Za-z0-9_]+)' found using 'op' does not match any of the expected tags")
 
 #: What to do about it, said with the refusal (persistent_layer 6.2).
-UPDATE_HINT = ("update it: `macf_tools pd install --force`, then restart the daemon's unit. A restart "
-               "carries its running units, so the session keeps running; only what loads with the session, "
-               "such as the MacEff channel, needs a session restart")
+UPDATE_HINT = ("to run this command's build, `macf_tools pd install --force` points the daemon's unit at "
+               "this command's macf; a daemon pinned to its own checkout advances that checkout instead. Then "
+               "restart the daemon's unit. A restart carries its running units, so the session keeps running; "
+               "only what loads with the session, such as the MacEff channel, needs a session restart")
 
 
 def build_id(package_dir: Optional[Path] = None) -> str:

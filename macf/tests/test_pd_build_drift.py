@@ -29,16 +29,32 @@ def test_a_verb_the_daemon_does_not_know_reads_as_a_daemon_older_than_its_cli(tm
     assert "pd install --force" in reply.error and "Input tag" not in reply.error
 
 
-def test_a_running_daemon_reports_its_build_in_status(tmp_path, base, run_daemon):
+def test_a_running_daemon_reports_its_build_on_its_own_request(tmp_path, base, run_daemon):
     daemon = run_daemon(make_home(tmp_path, []), base)
-    reply = ask(daemon, {"op": "status"})
-    assert reply["ok"] and reply["build"].startswith("macf ")
-    assert reply["build"] == build.build_id()
+    reply = ask(daemon, {"op": "build"})
+    assert reply["ok"] and reply["build"] == build.build_id()
+
+
+def test_an_older_cli_still_reads_this_daemons_status(tmp_path, base, run_daemon):
+    """Ira's review on #820: a CLI from before this change reads replies strictly, so a status
+    carrying a field it doesn't know would stop pd status, the command meant to explain the
+    drift. The status reply carries nothing new, and from here on a reply ignores what it
+    doesn't know."""
+    from pydantic import ConfigDict, ValidationError
+    daemon = run_daemon(make_home(tmp_path, []), base)
+    line = json.dumps(ask(daemon, {"op": "status"}))
+    fields = {k: (v.annotation, v.default) for k, v in Response.model_fields.items() if k != "build"}
+    from pydantic import create_model
+    OlderResponse = create_model("OlderResponse", __config__=ConfigDict(extra="forbid"), **fields)
+    assert OlderResponse.model_validate_json(line).ok             # what a CLI out there does
+    with pytest.raises(ValidationError):
+        OlderResponse.model_validate_json('{"ok": true, "build": "macf 9"}')
+    assert Response.model_validate_json('{"ok": true, "some_later_field": 1}').ok
 
 
 @pytest.mark.parametrize("daemon_build, says", [
     ("", "doesn't say which build it runs"),
-    ("macf 0.6.0 at 0badc0de", "the daemon runs macf 0.6.0 at 0badc0de, and this command"),
+    ("macf 0.6.0 at 0badc0de", "run different builds: the daemon macf 0.6.0 at 0badc0de, this command"),
     (None, "the same as this command"),
 ])
 def test_pd_status_says_when_the_daemon_and_the_cli_drift(monkeypatch, capsys, daemon_build, says):
@@ -52,3 +68,10 @@ def test_pd_status_says_when_the_daemon_and_the_cli_drift(monkeypatch, capsys, d
     args = parser.parse_args(["pd", "status"])
     assert args.func(args) == 0
     assert says in capsys.readouterr().out
+
+
+def test_status_asks_the_daemon_for_its_build_separately(tmp_path, base, run_daemon):
+    home = make_home(tmp_path, [])
+    daemon = run_daemon(home, base)
+    report = client.status(home, daemon.card, base=base)
+    assert report.source == "daemon" and report.daemon_build == build.build_id() == report.cli_build

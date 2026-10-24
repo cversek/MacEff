@@ -173,7 +173,17 @@ def _units(home: Path, card: str, *, base: Optional[Path] = None,
     from macf.pd.build import build_id
     return StatusReport(card=card, source="daemon", why="its record and its socket agree",
                         units=[u.model_dump() for u in reply.units or []],
-                        daemon_build=reply.build or "", cli_build=build_id())
+                        daemon_build=_daemon_build(card, base), cli_build=build_id())
+
+
+def _daemon_build(card: str, base) -> str:
+    """The daemon's build, asked separately from its status, or "" when it doesn't know the
+    request, which only a daemon older than this command doesn't (MacEff #816)."""
+    try:
+        reply = ask(card, {"op": "build"}, base=base)
+    except DaemonUnavailable:
+        return ""
+    return (reply.build or "") if reply.ok else ""
 
 
 def _schedule_events(declaration: Declaration, card: str) -> List[dict]:

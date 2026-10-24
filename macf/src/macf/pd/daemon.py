@@ -41,6 +41,7 @@ from macf.pd.interface import (
     Peer,
     Response,
     StatusRequest,
+    BuildRequest,
     StreamRule,
     StreamRuleRequest,
     WakePaced,
@@ -657,9 +658,9 @@ class Daemon:
         if isinstance(request, (EntryAddRequest, EntryListRequest, EntryRemoveRequest)):
             return self._entry_request(request, creds)
         if isinstance(request, StatusRequest):
-            from macf.pd.build import build_id
-            return Response(ok=True, units=self.core.statuses(), build=self._build or build_id(),
-                            **self._wake_window())
+            return Response(ok=True, units=self.core.statuses(), **self._wake_window())
+        if isinstance(request, BuildRequest):
+            return Response(ok=True, build=self._build)
         if isinstance(request, PaceRequest):
             return self._pace(request, creds)
         if isinstance(request, ActRequest):

@@ -294,7 +294,9 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
             print(f"  ⚠️ the daemon doesn't say which build it runs, so it is older than this command "
                   f"({report.cli_build}); {UPDATE_HINT}")
         elif report.daemon_build != report.cli_build:
-            print(f"  ⚠️ the daemon runs {report.daemon_build}, and this command {report.cli_build}; {UPDATE_HINT}")
+            # "Differ", not "older": two checkouts give no order, and the daemon may be the newer.
+            print(f"  ⚠️ the daemon and this command run different builds: the daemon {report.daemon_build}, "
+                  f"this command {report.cli_build}. If this command's is the one you mean, {UPDATE_HINT}")
         else:
             print(f"  build: {report.daemon_build}, the same as this command")
     for unit in report.units:
