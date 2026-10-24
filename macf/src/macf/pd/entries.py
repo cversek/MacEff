@@ -66,14 +66,16 @@ def fold(events: Iterable[dict], card: str) -> Dict[str, dict]:
         elif entry_id not in held:
             continue  # an edit, pause or resume of an entry not held changes nothing
         elif kind == EVENT_ENTRY_CHANGED:
-            # The edit carries the entry's whole new form; a pause outlives it.
-            held[entry_id] = {**data, **({"paused_at": held[entry_id]["paused_at"]}
-                                         if held[entry_id].get("paused_at") else {})}
+            # The edit carries the entry's whole new form. A pause outlives it, and so does a
+            # resume: an edit that keeps the start must not bring back what the pause covered.
+            kept = {k: held[entry_id][k] for k in ("paused_at", "resumed_at", "skipped_in_pause")
+                    if held[entry_id].get(k)}
+            held[entry_id] = {**data, **kept}
         elif kind == EVENT_ENTRY_PAUSED:
             held[entry_id] = {**held[entry_id], "paused_at": data.get("at")}
         elif kind == EVENT_ENTRY_RESUMED:
             entry = {k: v for k, v in held[entry_id].items() if k != "paused_at"}
-            held[entry_id] = {**entry, "resumed_at": data.get("at")}
+            held[entry_id] = {**entry, "resumed_at": data.get("at"), "skipped_in_pause": data.get("skipped", 0)}
     return held
 
 
@@ -120,6 +122,16 @@ def when_of(entry: dict) -> When:
         return OneShot(datetime.fromisoformat(entry["when"]))
     except ValueError:
         return parse_when(entry["when"], tz, start, start=start)
+
+
+def firings_between(entry: dict, after: datetime, until: datetime, cap: int = 10000) -> int:
+    """How many of ``entry``'s instants fall strictly after ``after`` (and its start) and at or
+    before ``until``: the firings a pause covered, which a resume says rather than fires."""
+    when = when_of(entry)
+    t, n = max(after, datetime.fromisoformat(entry["start"])), 0
+    while n < cap and (t := when.next_after(t)) is not None and t <= until:
+        n += 1
+    return n
 
 
 def next_fire(entry: dict, now: datetime) -> Optional[datetime]:

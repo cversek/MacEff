@@ -711,6 +711,13 @@ class Daemon:
                 return Response(ok=False, error=f"entry {request.id} is already {'paused' if pausing else 'running'}")
             record = {"agent": self.card, "id": request.id, "at": datetime.now(timezone.utc).isoformat(),
                       "by_pid": creds.pid, "from_session": not why}
+            if not pausing:
+                # How many firings fell in the pause: none is fired late, whatever the entry's
+                # missed policy, since a pause is a choice, not a miss. The count is said instead.
+                from macf.pd.entries import firings_between
+                record["skipped"] = firings_between(held[request.id],
+                                                    datetime.fromisoformat(held[request.id]["paused_at"]),
+                                                    datetime.fromisoformat(record["at"]))
             if not append_event(EVENT_ENTRY_PAUSED if pausing else EVENT_ENTRY_RESUMED, record):
                 return Response(ok=False, error="the change could not be recorded in the event log")
             self.scheduler.entries[request.id] = fold(
