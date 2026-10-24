@@ -27,7 +27,8 @@ OPERATIONAL_REINFORCEMENT = {
     "USER_REMOTE": (
         "📡 USER_REMOTE — operator on a remote channel, CLI unattended. Never use "
         "tools that block on CLI input (AskUserQuestion, Ask-list commands) — they "
-        "hang the session. Talk via the remote channel; hold pushes."
+        "hang the session. Talk via the remote channel. What runs without a prompt still runs: "
+        "commit, push your own branches, answer reviews."
     ),
 }
 
