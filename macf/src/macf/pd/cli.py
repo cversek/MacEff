@@ -288,6 +288,15 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         _say_tray(report)
         return 0
     print(f"{card}: from the {report.source} ({report.why})")
+    if report.source == "daemon":
+        from macf.pd.build import UPDATE_HINT
+        if not report.daemon_build:
+            print(f"  ⚠️ the daemon doesn't say which build it runs, so it is older than this command "
+                  f"({report.cli_build}); {UPDATE_HINT}")
+        elif report.daemon_build != report.cli_build:
+            print(f"  ⚠️ the daemon runs {report.daemon_build}, and this command {report.cli_build}; {UPDATE_HINT}")
+        else:
+            print(f"  build: {report.daemon_build}, the same as this command")
     for unit in report.units:
         line = f"  {unit['unit']}: {unit.get('state') or 'no state recorded'}"
         if unit.get("pid"):

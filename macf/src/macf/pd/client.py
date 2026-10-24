@@ -72,9 +72,16 @@ def ask(card: str, request: dict, *, base: Optional[Path] = None,
         except OSError as e:
             raise DaemonUnavailable(f"the daemon did not answer: {e}") from e
     try:
-        return Response.model_validate_json(reply)
+        response = Response.model_validate_json(reply)
     except ValidationError as e:
         raise DaemonUnavailable(f"the daemon's reply could not be read: {e}") from e
+    from macf.pd.build import UPDATE_HINT, unknown_verb
+    verb = None if response.ok else unknown_verb(response.error)
+    if verb:
+        # The daemon is older than this command, which its parser's message doesn't say (#816).
+        return Response(ok=False, error=f"this daemon is older than this command: it doesn't know "
+                                        f"the request '{verb}'; {UPDATE_HINT}")
+    return response
 
 
 def _read_line(conn: socket.socket) -> bytes:
@@ -110,6 +117,10 @@ class StatusReport:
     tray: str = ""
     schedules: List[dict] = field(default_factory=list)
     runs: str = ""
+    #: The build the daemon runs ("" when it doesn't say, being older than build reporting), and
+    #: the build this command runs, so a reader sees when they drift (MacEff #816).
+    daemon_build: str = ""
+    cli_build: str = ""
 
 
 def status(home: Path, card: str, *, base: Optional[Path] = None,
@@ -159,8 +170,10 @@ def _units(home: Path, card: str, *, base: Optional[Path] = None,
                             units=units)
     if not reply.ok:
         return StatusReport(card=card, source="daemon", why=f"the daemon refused: {reply.error}")
+    from macf.pd.build import build_id
     return StatusReport(card=card, source="daemon", why="its record and its socket agree",
-                        units=[u.model_dump() for u in reply.units or []])
+                        units=[u.model_dump() for u in reply.units or []],
+                        daemon_build=reply.build or "", cli_build=build_id())
 
 
 def _schedule_events(declaration: Declaration, card: str) -> List[dict]:
