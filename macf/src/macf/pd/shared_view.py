@@ -34,7 +34,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Callable, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -130,19 +130,56 @@ def read_agent(home: Path) -> AgentView:
     return AgentView(home=str(home), status="PUBLISHED", units=units)
 
 
-def read_agents(homes: Path = HOMES) -> List[AgentView]:
+def _account_home(account: str) -> Optional[Path]:
+    import pwd
+    try:
+        return Path(pwd.getpwnam(account).pw_dir)
+    except KeyError:
+        return None  # noqa: MACEFF003 - an account the deployment declared and then removed has no home to read
+
+
+def declared_homes(rendered: Optional[Path] = None,
+                   home_of: Callable[[str], Optional[Path]] = _account_home) -> List[Path]:
+    """The homes of the primal daemons the deployment declares: one per account directory under
+    the rendered root, which root writes and no agent can (``names.rendered_declaration_path``).
+    It is the deployment's own word on which daemons exist, so a service account's daemon, whose
+    home is outside ``/home``, is counted with the agents' (MIS-0002-R62)."""
+    from macf.pd.names import RENDERED_DECLARATIONS
+    root = Path(rendered) if rendered is not None else RENDERED_DECLARATIONS
+    try:
+        accounts = sorted(p.name for p in root.iterdir() if (p / "declaration.json").exists())
+    except OSError:
+        return []
+    return [h for h in (home_of(a) for a in accounts) if h is not None]
+
+
+def read_agents(homes: Path = HOMES, rendered: Optional[Path] = None,
+                home_of: Callable[[str], Optional[Path]] = _account_home) -> List[AgentView]:
     """Every home with a public tree, in name order. A home that can't be looked into is
     listed as UNREADABLE with the reason, never taken for a home without an agent.
 
     Asked home by home, with ``os.stat``: ``Path.is_dir`` raises on a permission error
     (Python 3.10), and one such home inside a single ``try`` emptied the whole view.
+
+    The deployment's declared daemons come first, wherever their homes are, and one that has
+    published nothing reads "declared, no summary published" rather than vanishing. The
+    ``/home`` scan follows, for seats with no declaration yet.
     """
+    views: List[AgentView] = []
+    seen = set()
+    for home in declared_homes(rendered, home_of):
+        view = read_agent(home)
+        if view.status == "UNPUBLISHED":
+            view = AgentView(home=str(home), status="UNPUBLISHED", detail="declared, no summary published")
+        views.append(view)
+        seen.add(str(home))
     try:
         candidates = sorted(Path(homes).iterdir())
     except OSError:
-        return []
-    views = []
+        return views
     for home in candidates:
+        if str(home) in seen:
+            continue
         try:
             is_tree = stat.S_ISDIR(os.stat(home / "agent" / "public").st_mode)
         except (FileNotFoundError, NotADirectoryError):
