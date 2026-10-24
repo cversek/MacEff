@@ -214,7 +214,8 @@ def test_only_the_opening_tag_is_read():
     assert channel_tag.opening_tag("text first <channel source=\"x\">") is None
 
 
-def test_a_maceff_notice_is_not_the_operators_activity(monkeypatch):
+def test_a_maceff_notice_is_not_the_operators_activity(monkeypatch, operator_channels):
+    operator_channels("plugin:telegram:telegram")
     # MIS-0002-R106 (wake_MUST-NOT_count_as_operator_activity): the slice this channel needs.
     seen = []
     monkeypatch.setattr("macf.agent_events_log.append_event", lambda name, data: seen.append((name, data)))
@@ -224,7 +225,8 @@ def test_a_maceff_notice_is_not_the_operators_activity(monkeypatch):
     assert hook.record_user_activity_from_payload(_notice_prompt(source="plugin:telegram:telegram")) is True
 
 
-def test_the_transcript_monitor_does_not_count_a_maceff_notice_either():
+def test_the_transcript_monitor_does_not_count_a_maceff_notice_either(operator_channels):
+    operator_channels("plugin:telegram:telegram")
     # The other producer of the operator's activity, delivered and queued. Both ask
     # input_origin.from_maceff_channel, so the two cannot disagree about a notice.
     from macf.transcript_monitor.daemon import detect_mid_turn_enqueue, detect_user_activity

@@ -186,7 +186,8 @@ class TestUserActivityFromPayload:
         assert events[0]["data"]["detector"] == "user_prompt_submit_hook"
         assert events[0]["data"]["source"] == "direct"
 
-    def test_channel_prompt_is_tagged_as_channel(self, mock_dependencies, isolated_events_log):
+    def test_channel_prompt_is_tagged_as_channel(self, mock_dependencies, isolated_events_log, operator_channels):
+        operator_channels("plugin:x:x")
         import json
         from macf.hooks.handle_user_prompt_submit import run
 
