@@ -363,7 +363,7 @@ Claude Code can run a session in the background under its own daemon (`claude --
 4. A daemon that does not answer resolves nothing; there is no fallback to a name. The legacy harness's session is used only for an agent whose declaration has no session unit.
 5. Attach names the attached window by the agent's calling card, with `automatic-rename` and `allow-rename` off, so a program in the session can't retitle it. A read-only attach (`--read-only`) changes nothing in the session it watches.
 
-The session unit is the declaration's one unit of kind `session`, whatever its name. For an agent whose home isn't known here, such as a second agent on one login, the declaration can't be read, and the session is the live unit whose process parents a pane on the card's own tmux server, which is still the daemon's answer and not a name.
+The session unit is the declaration's one unit of kind `session`, whatever its name. For an agent whose home isn't known here, such as a second agent on one login, the declaration can't be read, and the session is the live unit whose process parents a pane on the card's own tmux server, which is still the daemon's answer and not a name. The card's own server is asked first, then this account's other session-unit servers beside it, since a unit declared with a different `--agent` names its server after that; the pane is found by descent from the daemon's pid either way.
 
 The operator may attach to any session without an invitation [MIS-0002-R81 (operator_MAY_attach_without_invitation)]. An onlooker is never given a keyboard.
 
@@ -392,10 +392,10 @@ Lists go to standard output, so a script can read the uuids, and each list shows
 
 ### 4.4 The roster: who you can attach to
 
-**`macf_tools harness list` lists every agent you can attach to, here and on your declared remotes (4.5); `--json` prints the same as objects, and `--local` lists this endpoint alone.** Each entry carries the card, moniker, uuid, account, display name, session kind (`daemon` for a session unit, `legacy` for the old harness), state (`running`, `stopped` or `unknown`) and the place it is on. The command is read-only. It exits 0 when the listing is complete, and 1 when a source could not be read or a remote did not answer, naming which on the error stream.
+**`macf_tools harness list` lists every agent you can attach to, here and on your declared remotes (4.5); `--json` prints the same as objects, and `--local` lists this endpoint alone.** Each entry carries the card, moniker, uuid, account, display name, session kind (`daemon` for a session unit, `legacy` for the old harness), state (`running`, `stopped` or `unknown`) and the place it is on. The table shows one line per agent; under a row whose card is unknown it says why, since that agent can't be named, and `--verbose` adds the reason for every unknown field and each row's detail. The command is read-only. It exits 0 when the listing is complete, and 1 when a source could not be read or a remote did not answer, naming which on the error stream.
 
-- **On a host**, the agents come from the daemon records in your runtime directory, the installed legacy harness units, and the homes your own account owns. Other people's homes on the host are not listed at all.
-- **In a container** (where `/etc/maceff/agents.yaml` declares the accounts), they come from each home's published units summary (8), or from the card in a home that has no summary. A seat's home that can't be read is listed, with the reason.
+- **On a host**, the agents come from the daemon records in your runtime directory, the installed legacy harness units, and the homes your own account owns. Other people's homes on the host are not listed at all, and neither is a home of yours that names no agent.
+- **In a container** (where `/etc/maceff/agents.yaml` declares the accounts), they come from each home's published units summary (8), or from the card in a home that has no summary. A seat's home is private to its account, so for a peer the card comes from the deployment instead: the account's `calling_card` in `agents.yaml` and the home's identity file, which the deployment writes world-readable. A seat's home that can't be read is listed, with the reason.
 - **A card comes from the agent's home or its daemon, never from an environment variable** [MIS-0002-R02 (pd_MUST-NOT_take_identity_from_env)].
 - **Unknown is never empty.** Every unknown field carries why it is unknown. A peer's state is `unknown`, because a peer's daemon answers only its own account.
 

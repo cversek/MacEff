@@ -144,8 +144,9 @@ def _account_name(uid: int) -> str:
         return str(uid)
 
 
-def _deployment_names(agents_yaml: Path) -> Tuple[Dict[str, Tuple[str, Optional[str]]], str]:
-    """Each account's ``agents.yaml`` key and display name, or nothing and the reason.
+def _deployment_names(agents_yaml: Path) -> Tuple[Dict[str, Tuple[str, Optional[str], Optional[str]]], str]:
+    """Each account's ``agents.yaml`` key, display name and declared calling card, or nothing
+    and the reason.
 
     Read as plain YAML, not through ``AgentsConfig``: that model refuses any file it does
     not fully understand, which is right for provisioning and wrong for a listing that only
@@ -167,7 +168,9 @@ def _deployment_names(agents_yaml: Path) -> Tuple[Dict[str, Tuple[str, Optional[
     for key, spec in agents.items():
         if isinstance(spec, dict) and isinstance(spec.get("username"), str):
             shown = spec.get("display_name")
-            names[spec["username"]] = (str(key), shown if isinstance(shown, str) and shown.strip() else None)
+            card = spec.get("calling_card")
+            names[spec["username"]] = (str(key), shown if isinstance(shown, str) and shown.strip() else None,
+                                       card if isinstance(card, str) and card.strip() else None)
     return names, ""
 
 
@@ -296,7 +299,18 @@ def probe_local(ident: str, has_legacy_unit: bool,
     from ..pd.session_unit import client_environment
     env = client_environment(ident, base)
     if env is not None:
-        return _tmux_state("daemon", ident, env)
+        found = _tmux_state("daemon", ident, env)
+        if found.state == "running":
+            return found
+    # The daemon's own answer: its session unit attachable from its status, whatever its
+    # server is named (a unit declared with another --agent names its server after that).
+    from .attach import NONE as _NONE, plan_attach_for_card
+    from .identity import calling_card_from_identifier
+    plan = plan_attach_for_card(calling_card_from_identifier(ident), base=base)
+    if plan.kind != _NONE:
+        return Probed(kind="daemon", state="running")
+    if env is not None:
+        return found
     if has_legacy_unit:
         plain = {k: v for k, v in os.environ.items() if k not in ("TMUX", "TMUX_TMPDIR")}
         return _tmux_state("legacy", ident, plain)
@@ -392,7 +406,22 @@ def _merge(first: RosterEntry, second: RosterEntry) -> RosterEntry:
     return RosterEntry(**data)
 
 
-def _with_deployment_names(entry: RosterEntry, names: Dict[str, Tuple[str, Optional[str]]],
+def _declared_card(home: Optional[str], name: str) -> Tuple[Optional[str], str]:
+    """``name@uuid`` from the deployment's declared card and the home's identity file, which
+    the deployment writes world-readable; or None and why it couldn't be made."""
+    if not home:
+        return None, f"agents.yaml declares {name!r}, but the home isn't known"
+    path = Path(home) / ".maceff_primary_agent.id"
+    try:
+        uuid = path.read_text().strip()[:6]
+    except OSError as e:
+        return None, f"agents.yaml declares {name!r}, but {path} can't be read: {e.strerror or type(e).__name__}"
+    if len(uuid) != 6:
+        return None, f"agents.yaml declares {name!r}, but {path} holds no uuid"
+    return f"{name}@{uuid}", ""
+
+
+def _with_deployment_names(entry: RosterEntry, names: Dict[str, Tuple[str, Optional[str], Optional[str]]],
                            why: str) -> RosterEntry:
     data = entry.model_dump()
     aliases = list(data["aliases"])
@@ -403,8 +432,18 @@ def _with_deployment_names(entry: RosterEntry, names: Dict[str, Tuple[str, Optio
                 aliases.append(entry.account[len(prefix):])
     found = names.get(entry.account or "")
     if found:
-        key, shown = found
+        key, shown, declared = found
         aliases.insert(0, key)
+        card, unmade = _declared_card(entry.home, declared) if declared and not entry.card else (None, "")
+        if unmade:
+            data["reasons"]["card"] = f"{data['reasons'].get('card', 'no card')}; {unmade}"
+        if card:
+            # A peer's home is private, so its card is read from the deployment that declares
+            # it (agents.yaml, root-owned) and its identity file: never from an environment.
+            data["card"] = card
+            data["moniker"], data["uuid"] = card_parts(card)
+            for f in ("card", "moniker", "uuid"):
+                data["reasons"].pop(f, None)
         if shown:
             data["display_name"] = shown
             data["reasons"].pop("display_name", None)
@@ -494,6 +533,10 @@ def local_roster(*, homes: Path = HOMES, runtime: Optional[Path] = None,
     for home in candidates:
         e = _home_entry(home, own_uid, probe, legacy,
                         account_of or (lambda _home, owner: _account_name(owner)), peers)
+        if e is not None and not peers and e.card is None:
+            # On a host a home is a login's, not a seat's: one that names no agent is just a
+            # home with a public tree, and listing it as an unknown agent is noise.
+            continue
         if e is not None:
             add(e)
 
@@ -756,17 +799,24 @@ def completion_candidates(entries: Sequence[RosterEntry], prefix: str = "") -> L
 _COLUMNS = ("CARD", "ENDPOINT", "ACCOUNT", "KIND", "STATE", "DISPLAY NAME")
 
 
-def render_table(entries: Sequence[RosterEntry]) -> str:
-    """``harness list``'s table: one row per agent, and under each row the reason for every
-    field it leaves unknown, fields that share a reason on one line."""
+def render_table(entries: Sequence[RosterEntry], verbose: bool = False) -> str:
+    """``harness list``'s table: one row per agent. Under a row whose card is unknown, why,
+    since that row can't be attached to by name. ``verbose`` adds the reason for every field
+    left unknown, fields that share a reason on one line, and each row's detail."""
     if not entries:
         return "No agents on this endpoint."
     rows = [_COLUMNS] + [(e.card or "?", e.endpoint, e.account or "?", e.session_kind or "?",
                           e.state, e.display_name or "-") for e in entries]
     widths = [max(len(r[i]) for r in rows) for i in range(len(_COLUMNS))]
     lines = ["  ".join(c.ljust(w) for c, w in zip(rows[0], widths, strict=True)).rstrip()]
+    quiet = 0
     for e, row in zip(entries, rows[1:], strict=True):
         lines.append("  ".join(c.ljust(w) for c, w in zip(row, widths, strict=True)).rstrip())
+        if not verbose:
+            if e.card is None and e.reasons.get("card"):
+                lines.append(f"    card unknown: {e.reasons['card']}")
+            quiet += bool(e.reasons or e.detail)
+            continue
         grouped: Dict[str, List[str]] = {}
         for f, why in e.reasons.items():
             grouped.setdefault(why, []).append(f)
@@ -774,4 +824,6 @@ def render_table(entries: Sequence[RosterEntry]) -> str:
             lines.append(f"    {', '.join(fields)} unknown: {why}")
         if e.detail:
             lines.append(f"    {e.detail}")
+    if quiet:
+        lines.append("(--verbose says why each unknown field is unknown)")
     return "\n".join(lines)

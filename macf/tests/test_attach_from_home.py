@@ -88,3 +88,30 @@ def test_without_a_home_the_session_is_the_unit_that_parents_a_pane_on_the_cards
         raise DaemonUnavailable("no usable daemon record")
 
     assert plan_attach_for_card(CARD, ask=silent, base=tmp_path, **_probes()).kind == NONE
+
+
+def test_a_server_named_after_another_agent_flag_is_still_found_by_descent(tmp_path):
+    """A unit declared with --agent of another name puts its server under that name; the
+    card's own directory is empty, and the session is found beside it, by descent."""
+    from macf.utils.attach import plan_attach
+    (tmp_path / "Resident_1a2b3c.tmux").mkdir()
+    (tmp_path / "resident.tmux").mkdir()
+    resp = {"ok": True, "units": [{"unit": "seat", "state": "running", "pid": 500, "proc_start": "x"}]}
+    chains = {500: [500, 1], 700: [700, 600, 500]}
+
+    def panes(env=None):
+        return {700: "resident"} if env and env.get("TMUX_TMPDIR", "").endswith("/resident.tmux") else {}
+
+    plan = plan_attach(resp, "seat", read_info=lambda pid: None, verify=lambda pid, s: True,
+                       ancestors=lambda pid: chains.get(pid, [pid]), tmux_panes=panes,
+                       tmux_tmpdir=str(tmp_path / "Resident_1a2b3c.tmux"))
+    assert plan.kind == TMUX and plan.argv[:2] == ["env", f"TMUX_TMPDIR={tmp_path / 'resident.tmux'}"]
+
+
+def test_a_missing_sidecar_is_quiet_where_it_is_ordinary(tmp_path, monkeypatch, capsys):
+    from macf.notify import session
+    monkeypatch.setattr(session, "sessions_dir", lambda: tmp_path)
+    assert session.read_session_info(999999, missing_ok=True) is None
+    assert capsys.readouterr().err == ""
+    assert session.read_session_info(999999) is None
+    assert "unreadable" in capsys.readouterr().err
