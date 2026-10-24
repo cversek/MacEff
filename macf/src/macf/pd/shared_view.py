@@ -29,6 +29,7 @@ published again, through a restart of the daemon.
 import argparse
 import json
 import os
+import stat
 import sys
 import tempfile
 import time
@@ -130,12 +131,29 @@ def read_agent(home: Path) -> AgentView:
 
 
 def read_agents(homes: Path = HOMES) -> List[AgentView]:
-    """Every home with a public tree, in name order."""
+    """Every home with a public tree, in name order. A home that can't be looked into is
+    listed as UNREADABLE with the reason, never taken for a home without an agent.
+
+    Asked home by home, with ``os.stat``: ``Path.is_dir`` raises on a permission error
+    (Python 3.10), and one such home inside a single ``try`` emptied the whole view.
+    """
     try:
-        candidates = sorted(p for p in Path(homes).iterdir() if (p / "agent" / "public").is_dir())
+        candidates = sorted(Path(homes).iterdir())
     except OSError:
         return []
-    return [read_agent(h) for h in candidates]
+    views = []
+    for home in candidates:
+        try:
+            is_tree = stat.S_ISDIR(os.stat(home / "agent" / "public").st_mode)
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError as e:
+            views.append(AgentView(home=str(home), status="UNREADABLE",
+                                   detail=e.strerror or type(e).__name__))
+            continue
+        if is_tree:
+            views.append(read_agent(home))
+    return views
 
 
 class Budget(BaseModel):
