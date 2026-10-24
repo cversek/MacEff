@@ -97,6 +97,21 @@ def test_every_agents_units_are_seen_and_none_controlled(tmp_path):
     assert not any(hasattr(sv, act) for act in ("stop", "start", "restart", "act", "control"))
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a home whatever its mode")
+def test_a_home_that_cannot_be_looked_into_is_unreadable_and_the_rest_still_listed(tmp_path):
+    """One locked home emptied the whole view: is_dir raised inside the one try."""
+    homes = tmp_path / "home"
+    for user in ("pa_first", "pa_locked", "pa_second"):
+        (homes / user / "agent" / "public").mkdir(parents=True)
+    (homes / "pa_locked").chmod(0)
+    try:
+        views = sv.read_agents(homes)
+    finally:
+        (homes / "pa_locked").chmod(0o755)
+    assert [(Path(v.home).name, v.status) for v in views] == [
+        ("pa_first", "UNPUBLISHED"), ("pa_locked", "UNREADABLE"), ("pa_second", "UNPUBLISHED")]
+
+
 def test_a_summary_that_does_not_parse_is_unreadable_never_empty(tmp_path):
     home = tmp_path / "pa_x"
     path = sv.published_path(home)
