@@ -143,3 +143,58 @@ def readout_line(plan: AttachPlan) -> str:
     if plan.kind == NONE:
         return f"Attach:       nothing attachable hosts this session ({plan.reason})"
     return f"Attach:       {' '.join(plan.argv)}  ({plan.reason})"
+
+
+def plan_attach_for_home(home, *, read_only: bool = False, control: bool = False,
+                         ask: Optional[Callable] = None, load: Optional[Callable] = None,
+                         card_of: Optional[Callable] = None, base=None,
+                         **probes) -> Optional[AttachPlan]:
+    """How to attach to the session of the agent whose home is ``home``, from its daemon.
+
+    The card comes from the home's own files and the session unit from the agent's
+    declaration (the one unit of kind ``session``); the daemon's status says which process
+    that unit is (R100). None means the agent declares no session unit, so any session it
+    has is the legacy harness's; a declared one that can't be resolved is a plan of kind
+    ``none`` with the reason, never a guess by name (persistent_layer 4.1).
+    """
+    from ..pd.client import DaemonUnavailable
+    from ..pd.core import DeclarationRefused
+    from ..pd.session_unit import tmux_dir
+    from .identity import session_identifier
+    if card_of is None:
+        from ..pd.names import agent_card as card_of
+    if load is None:
+        from ..pd.core import load_declaration as load
+    if ask is None:
+        from ..pd.client import ask
+
+    try:
+        card = card_of(home)
+        declaration = load(home, card)
+    except (DeclarationRefused, OSError, ValueError) as e:
+        return AttachPlan(NONE, reason=f"the agent's declaration can't be read: {e}")
+    session = next((u for u in declaration.units if u.kind == "session"), None)
+    if session is None:
+        return None
+    try:
+        response = ask(card, {"op": "status"}).model_dump()
+    except DaemonUnavailable as e:
+        return AttachPlan(NONE, reason=f"the primal daemon did not answer: {e}")
+    return plan_attach(response, session.name, read_only=read_only, control=control,
+                       tmux_tmpdir=str(tmux_dir(session_identifier(card), base)), **probes)
+
+
+def window_commands(plan: AttachPlan, card: str) -> List[List[str]]:
+    """The tmux commands that name the attached window by ``card`` and keep that name.
+
+    Run before the attach, on the same server the attach reaches. A read-only plan gets
+    none: an onlooker changes nothing in the session it watches.
+    """
+    if plan.kind != TMUX or "-r" in plan.argv:
+        return []
+    tmux_at = plan.argv.index("tmux")
+    prefix = plan.argv[:tmux_at + 1]
+    target = plan.argv[plan.argv.index("-t") + 1] + ":"
+    return [prefix + ["rename-window", "-t", target, card],
+            prefix + ["set-window-option", "-t", target, "automatic-rename", "off"],
+            prefix + ["set-window-option", "-t", target, "allow-rename", "off"]]
