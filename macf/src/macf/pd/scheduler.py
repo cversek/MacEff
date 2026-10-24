@@ -470,6 +470,8 @@ class Scheduler:
         the daemon was down. The firing is recorded before the notice is raised (R26)."""
         from macf.pd.entries import OneShot, parse_when
         entry = self.entries[entry_id]
+        if entry.get("paused_at"):
+            return
         tz = timezone.utc if entry.get("zone") in (None, "UTC") else ZoneInfo(entry["zone"])
         start = _when(entry.get("start"))
         try:
@@ -477,8 +479,11 @@ class Scheduler:
         except ValueError:
             when = parse_when(entry["when"], tz, start, start=start)
         # Strictly after the start: a recurrence counts its start as its first occurrence, and an
-        # entry's start is the moment it was made, so firing it would wake on creation.
-        due = when.next_after(self.entry_fired.get(entry_id) or start)
+        # entry's start is the moment it was made (or edited), so firing it would wake on
+        # creation. Strictly after a resume too, so the instants a pause covered aren't fired late.
+        base = max((t for t in (self.entry_fired.get(entry_id), start, _when(entry.get("resumed_at")))
+                    if t is not None), default=None)
+        due = when.next_after(base)
         if due is None or due > now:
             return
         missed = 0

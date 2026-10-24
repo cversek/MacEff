@@ -843,6 +843,33 @@ class EntryRemoveRequest(_Closed):
     id: str = Field(pattern=r"^e-[0-9a-f]{12}$")
 
 
+class EntryEditRequest(_Closed):
+    """Change an entry the agent holds: its time, its purpose or its missed-run policy, keeping
+    its id. Like making one, it is taken only from the agent's live session, and the operator's
+    consent is the ask prompt on the command (persistent_layer 10.6)."""
+
+    op: Literal["entry_edit"]
+    id: str = Field(pattern=r"^e-[0-9a-f]{12}$")
+    when: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    purpose: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    missed: Optional[Literal["once", "skip", "report"]] = None
+
+    @model_validator(mode="after")
+    def _changes_something(self) -> "EntryEditRequest":
+        if self.when is None and self.purpose is None and self.missed is None:
+            raise ValueError("an edit names at least one of when, purpose or missed")
+        return self
+
+
+class EntryPauseRequest(_Closed):
+    """Pause or resume an entry the agent holds. A pause only stops work, so, like a removal,
+    anyone with the daemon's uid may ask. A resume starts firings again, so, like making an entry,
+    it is taken only from the agent's live session."""
+
+    op: Literal["entry_pause", "entry_resume"]
+    id: str = Field(pattern=r"^e-[0-9a-f]{12}$")
+
+
 class PaceRequest(_Closed):
     """How long the keystroke wake rests after each wake, or None to go back to the declared
     window. The agent paces itself, or the operator paces it; it acts on no unit. No pace goes
@@ -880,7 +907,8 @@ class StreamRuleRequest(_Closed):
 
 
 Request = Union[StatusRequest, ActRequest, CompactRequest, PaceRequest, EntryAddRequest,
-                EntryListRequest, EntryRemoveRequest, StreamRuleRequest]
+                EntryListRequest, EntryRemoveRequest, EntryEditRequest, EntryPauseRequest,
+                StreamRuleRequest]
 
 
 class UnitStatus(_Closed):

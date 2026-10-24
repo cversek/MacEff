@@ -33,7 +33,14 @@ _UNITS = {"m": "minutes", "h": "hours", "d": "days"}
 #: what these events fold to.
 EVENT_ENTRY_ADDED = "pd_entry_added"
 EVENT_ENTRY_REMOVED = "pd_entry_removed"
-ENTRY_EVENTS = (EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED)
+#: An entry edited (its whole new form, under the same id), paused, and resumed. A pause stops
+#: its firings without forgetting it; a resume starts them again from the moment of resuming,
+#: so the instants that passed while it was paused are not fired late.
+EVENT_ENTRY_CHANGED = "pd_entry_changed"
+EVENT_ENTRY_PAUSED = "pd_entry_paused"
+EVENT_ENTRY_RESUMED = "pd_entry_resumed"
+ENTRY_EVENTS = (EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED, EVENT_ENTRY_CHANGED, EVENT_ENTRY_PAUSED,
+                EVENT_ENTRY_RESUMED)
 
 
 def new_entry_id() -> str:
@@ -56,6 +63,17 @@ def fold(events: Iterable[dict], card: str) -> Dict[str, dict]:
             held[entry_id] = data
         elif kind == EVENT_ENTRY_REMOVED:
             held.pop(entry_id, None)
+        elif entry_id not in held:
+            continue  # an edit, pause or resume of an entry not held changes nothing
+        elif kind == EVENT_ENTRY_CHANGED:
+            # The edit carries the entry's whole new form; a pause outlives it.
+            held[entry_id] = {**data, **({"paused_at": held[entry_id]["paused_at"]}
+                                         if held[entry_id].get("paused_at") else {})}
+        elif kind == EVENT_ENTRY_PAUSED:
+            held[entry_id] = {**held[entry_id], "paused_at": data.get("at")}
+        elif kind == EVENT_ENTRY_RESUMED:
+            entry = {k: v for k, v in held[entry_id].items() if k != "paused_at"}
+            held[entry_id] = {**entry, "resumed_at": data.get("at")}
     return held
 
 
@@ -105,7 +123,9 @@ def when_of(entry: dict) -> When:
 
 
 def next_fire(entry: dict, now: datetime) -> Optional[datetime]:
-    """When ``entry`` next fires after ``now``, or None when it never will."""
+    """When ``entry`` next fires after ``now``, or None when it never will, or is paused."""
+    if entry.get("paused_at"):
+        return None
     return when_of(entry).next_after(now)
 
 
