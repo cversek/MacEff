@@ -16,6 +16,12 @@ from macf.utils.completion import candidate_lines, command_tree, render_bash, re
 from macf.utils.roster import completion_candidates, gather
 from roster_seats import seats
 
+
+@pytest.fixture(autouse=True)
+def no_real_remotes(tmp_path, monkeypatch):
+    """Candidates read the user's declared remotes; a test must never reach a real one."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "no-config"))
+
 CARDS = ["LumenMacEff@a1b2c3", "Lumen2MacEff@d4e5f6", "Lumen3MacEff@0a1b2c", "Lumen4MacEff@3c4d5e"]
 
 

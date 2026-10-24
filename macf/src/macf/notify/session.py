@@ -333,13 +333,19 @@ class SessionInfo:
     tmux: Optional[str] = None
 
 
-def read_session_info(pid: int) -> Optional[SessionInfo]:
-    """Read the sidecar. Returns None with a stated reason, never a partial."""
+def read_session_info(pid: int, missing_ok: bool = False) -> Optional[SessionInfo]:
+    """Read the sidecar. Returns None with a stated reason, never a partial. ``missing_ok``
+    keeps quiet about a sidecar that doesn't exist, which is ordinary for a session the
+    client's own daemon doesn't host (one under tmux)."""
     path = sessions_dir() / f"{pid}.json"
     try:
         with open(path) as fh:
             data = json.load(fh)
-    except (FileNotFoundError, PermissionError, OSError) as e:
+    except FileNotFoundError as e:
+        if not missing_ok:
+            print(f"⚠️ MACF: session sidecar unreadable for pid {pid}: {e}", file=sys.stderr)
+        return None
+    except (PermissionError, OSError) as e:
         print(f"⚠️ MACF: session sidecar unreadable for pid {pid}: {e}", file=sys.stderr)
         return None
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
