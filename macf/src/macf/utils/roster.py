@@ -32,8 +32,10 @@ from __future__ import annotations
 
 import difflib
 import functools
+import errno
 import os
 import re
+import stat as stat_mod
 import pwd
 import subprocess
 import sys
@@ -420,14 +422,24 @@ def _declared_card(home: Optional[str], name: str) -> Tuple[Optional[str], str]:
     if not home:
         return None, f"agents.yaml declares {name!r}, but the home isn't known"
     path = Path(home) / ".maceff_primary_agent.id"
+    # The deployment writes it root-owned; a seat owns its home and could put its own file,
+    # or a link to another seat's, in its place. So only a regular file that root owns is the
+    # deployment's word: opened without following a link, and checked on the open descriptor,
+    # so nothing can be swapped in between the check and the read.
     try:
-        # The deployment writes it root-owned; a seat owns its home and could put its own
-        # file there, so only root's is the deployment's word.
-        if path.stat().st_uid != DEPLOYMENT_UID:
-            return None, f"agents.yaml declares {name!r}, but {path} is not the deployment's file (not root's)"
-        uuid = path.read_text().strip()[:6]
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError as e:
+        if e.errno == errno.ELOOP:
+            return None, f"agents.yaml declares {name!r}, but {path} is a link, not the deployment's file"
         return None, f"agents.yaml declares {name!r}, but {path} can't be read: {e.strerror or type(e).__name__}"
+    with os.fdopen(fd) as fh:
+        st = os.fstat(fh.fileno())
+        if not stat_mod.S_ISREG(st.st_mode) or st.st_uid != DEPLOYMENT_UID:
+            return None, f"agents.yaml declares {name!r}, but {path} is not the deployment's file (not root's)"
+        try:
+            uuid = fh.read().strip()[:6]
+        except (OSError, UnicodeDecodeError) as e:
+            return None, f"agents.yaml declares {name!r}, but {path} can't be read: {e}"
     if not _UUID6.match(uuid):
         return None, f"agents.yaml declares {name!r}, but {path} holds no uuid"
     return f"{name}@{uuid}", ""

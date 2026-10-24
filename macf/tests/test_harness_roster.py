@@ -306,3 +306,18 @@ def test_a_daemon_session_whose_server_has_another_name_reads_running(tmp_path, 
                         lambda card, **kw: attach.AttachPlan(attach.TMUX, ["tmux", "attach"]))
     got = roster.probe_local("Lumen2MacEff_d4e5f6", False, base=tmp_path)
     assert (got.kind, got.state) == ("daemon", "running")
+
+
+def test_a_link_in_place_of_the_identity_file_is_not_the_deployments(tmp_path, monkeypatch):
+    """A seat could link its identity file to another seat's, root-owned and holding a real
+    uuid, and borrow that uuid; a link is refused before it is followed (CTB on #809)."""
+    monkeypatch.setattr(roster, "DEPLOYMENT_UID", os.getuid())    # so the target passes as root's
+    f = build(tmp_path, published=False)
+    home = f.homes / "pa_lumen3"
+    (home / ".maceff" / "config.json").unlink()
+    (home / ".maceff_primary_agent.id").unlink()
+    (home / ".maceff_primary_agent.id").symlink_to(f.homes / "pa_lumen2" / ".maceff_primary_agent.id")
+    f.agents_yaml.write_text(f.agents_yaml.read_text().replace(
+        "    username: pa_lumen3\n", "    username: pa_lumen3\n    calling_card: Lumen3MacEff\n"))
+    seat = next(e for e in f.roster().entries if e.account == "pa_lumen3")
+    assert seat.card is None and "is a link" in seat.reasons["card"]
