@@ -680,3 +680,26 @@ def test_an_undeclared_daemon_with_no_public_tree_makes_none(tmp_path, script, b
     plain = make_home(tmp_path / "plain", [make_unit("worker", script, {})])
     run_daemon(plain, base)
     assert not sv.published_path(plain).exists() and not (plain / "agent" / "public").exists()
+
+
+def test_one_declared_account_the_reader_cannot_look_into_costs_only_itself(tmp_path):
+    """Ira's probe on #819: three rendered accounts, one at mode 0. Asked inside one try, the
+    permission error emptied the declared list and the broker vanished again. Each account is
+    asked on its own: the unreadable one is listed with its reason, and the others still count."""
+    import os
+    if os.geteuid() == 0:
+        pytest.skip("root reads a mode-0 directory")
+    rendered, homes = tmp_path / "rendered", tmp_path / "home"
+    for account in ("svc_broker", "pa_seat", "pa_shut"):
+        (rendered / account).mkdir(parents=True)
+        (rendered / account / "declaration.json").write_text("{}")
+    homes.mkdir()
+    home_of = {a: tmp_path / "homes" / a for a in ("svc_broker", "pa_seat", "pa_shut")}.get
+    (rendered / "pa_shut").chmod(0)
+    try:
+        views = {Path(v.home).name: v for v in sv.read_agents(homes, rendered=rendered, home_of=home_of)}
+    finally:
+        (rendered / "pa_shut").chmod(0o755)
+    assert set(views) == {"svc_broker", "pa_seat", "pa_shut"}
+    assert views["pa_shut"].status == "UNREADABLE" and "pa_shut" in views["pa_shut"].detail
+    assert views["svc_broker"].detail == "declared, no summary published"

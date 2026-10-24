@@ -34,7 +34,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable, List, Literal, Optional
+from typing import Callable, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -139,18 +139,39 @@ def _account_home(account: str) -> Optional[Path]:
 
 
 def declared_homes(rendered: Optional[Path] = None,
-                   home_of: Callable[[str], Optional[Path]] = _account_home) -> List[Path]:
+                   home_of: Callable[[str], Optional[Path]] = _account_home) -> List[Union[Path, AgentView]]:
     """The homes of the primal daemons the deployment declares: one per account directory under
     the rendered root, which root writes and no agent can (``names.rendered_declaration_path``).
     It is the deployment's own word on which daemons exist, so a service account's daemon, whose
-    home is outside ``/home``, is counted with the agents' (MIS-0002-R62)."""
+    home is outside ``/home``, is counted with the agents' (MIS-0002-R62).
+
+    Each account is asked on its own, with ``os.stat``. ``Path.exists`` raises on a permission
+    error (Python 3.10), so one account directory a reader can't look into, asked inside one
+    ``try`` with the rest, emptied the whole list, the shape #808 fixed for ``/home``. Such an
+    account is returned as an UNREADABLE view naming it, never dropped."""
     from macf.pd.names import RENDERED_DECLARATIONS
     root = Path(rendered) if rendered is not None else RENDERED_DECLARATIONS
     try:
-        accounts = sorted(p.name for p in root.iterdir() if (p / "declaration.json").exists())
-    except OSError:
-        return []
-    return [h for h in (home_of(a) for a in accounts) if h is not None]
+        entries = sorted(root.iterdir())
+    except FileNotFoundError:
+        return []                      # nothing rendered: no deployment declares daemons here
+    except OSError as e:
+        return [AgentView(home=str(root), status="UNREADABLE",
+                          detail=f"the deployment's declarations can't be listed: {e.strerror or e}")]
+    out: List[Union[Path, AgentView]] = []
+    for entry in entries:
+        try:
+            os.stat(entry / "declaration.json")
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            out.append(AgentView(home=str(entry), status="UNREADABLE",
+                                 detail=f"declared account {entry.name}: {e.strerror or e}"))
+            continue
+        home = home_of(entry.name)
+        if home is not None:
+            out.append(home)
+    return out
 
 
 def read_agents(homes: Path = HOMES, rendered: Optional[Path] = None,
@@ -168,6 +189,9 @@ def read_agents(homes: Path = HOMES, rendered: Optional[Path] = None,
     views: List[AgentView] = []
     seen = set()
     for home in declared_homes(rendered, home_of):
+        if isinstance(home, AgentView):
+            views.append(home)
+            continue
         view = read_agent(home)
         if view.status == "UNPUBLISHED":
             view = AgentView(home=str(home), status="UNPUBLISHED", detail="declared, no summary published")
