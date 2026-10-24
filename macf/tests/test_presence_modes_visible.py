@@ -2,6 +2,7 @@
 USER_REMOTE (the repo owner, 2026-10-24: "I haven't seen the USER_IDLE work mode show up ... If I
 am IDLE and I send you a Telegram message -> the hooks should switch to USER_REMOTE mode")."""
 import json
+import pytest
 
 from macf.agent_events_log import append_event
 from macf.hooks import handle_user_prompt_submit as hook
@@ -65,3 +66,18 @@ def test_typing_at_the_cli_clears_user_remote_entered_this_way(isolated_events_l
     assert _detect_user_remote("")
     append_event("user_activity_detected", {"source": "direct", "detector": "test"})
     assert not _detect_user_remote("")
+
+
+@pytest.mark.parametrize("presence", ["USER_REMOTE", "QUIET_MODE"])
+def test_a_presence_change_never_reads_as_leaving_auto_mode(isolated_events_log, presence):
+    """Found when the operator's Telegram message entered USER_REMOTE on its own: the AUTO_MODE
+    reader took the newest mode_change of any mode, and read the USER_REMOTE event as
+    MANUAL_MODE while AUTO_MODE stood. A later MANUAL_MODE still withdraws it."""
+    from macf.agent_events_log import append_event
+    from macf.event_queries import get_auto_mode_from_events
+    append_event("mode_change", {"mode": "AUTO_MODE", "enabled": True})
+    append_event("mode_change", {"mode": presence, "enabled": True})
+    assert get_auto_mode_from_events("s")[0] is True
+    append_event("mode_change", {"mode": "MANUAL_MODE", "enabled": True})
+    append_event("mode_change", {"mode": presence, "enabled": False})
+    assert get_auto_mode_from_events("s")[0] is False
