@@ -22,11 +22,7 @@ UPDATE_HINT = ("update it: `macf_tools pd install --force`, then restart the dae
 
 def build_id(package_dir: Optional[Path] = None) -> str:
     """``macf <version>``, with the commit when the package runs from a git checkout."""
-    try:
-        from importlib.metadata import version
-        ver = version("macf")
-    except Exception:  # noqa: BLE001 - an unknown version is still a build to name
-        ver = "unknown"
+    from macf._version import VERSION as ver   # the one version lookup (test_version_resolution)
     if package_dir is None:
         import macf
         package_dir = Path(macf.__file__).resolve().parent
