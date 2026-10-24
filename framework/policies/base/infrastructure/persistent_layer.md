@@ -45,6 +45,10 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 **4 Attach**
 - How does attach find the session to attach to?
 - What does the readout say when nothing can attach?
+- How do I attach by a short name, and what happens when it names several agents?
+- How do I list who I can attach to, and what does an unknown field mean?
+- How do I attach from my laptop to an agent on another machine or in a container?
+- How do I set up tab completion for agent names?
 
 **5 Observation**
 - Who may watch a session, and how does an onlooker get in?
@@ -356,15 +360,86 @@ Claude Code can run a session in the background under its own daemon (`claude --
 1. Attach takes the session unit's pid from the daemon's status, and checks it against the recorded start time, so a recycled pid is refused.
 2. A session hosted by Claude Code's daemon attaches with `claude attach <id>`.
 3. A session under tmux attaches to its pane's session by exact name (`=name`).
-4. A daemon that does not answer resolves nothing; there is no fallback to a name.
+4. A daemon that does not answer resolves nothing; there is no fallback to a name. The legacy harness's session is used only for an agent whose declaration has no session unit.
+5. Attach names the attached window by the agent's calling card, with `automatic-rename` and `allow-rename` off, so a program in the session can't retitle it. A read-only attach (`--read-only`) changes nothing in the session it watches.
+
+The session unit is the declaration's one unit of kind `session`, whatever its name. For an agent whose home isn't known here, such as a second agent on one login, the declaration can't be read, and the session is the live unit whose process parents a pane on the card's own tmux server, which is still the daemon's answer and not a name.
 
 The operator may attach to any session without an invitation [MIS-0002-R81 (operator_MAY_attach_without_invitation)]. An onlooker is never given a keyboard.
 
-**From the operator's side of a container**, the command also needs the way in (`ssh -t` or `docker exec -it -u <agent>`). The plan will add it once the daemon's status says where the daemon runs; until then it does not.
+**From another machine**, attach by name hands off to the remote's own attach over ssh (4.5). The remote resolves the session from its own daemon, so this section holds wherever the session runs.
 
 ### 4.2 When nothing can attach
 
 **Where nothing attachable hosts the session, the readout says so, with the reason** [MIS-0002-R101 (readout_MUST_say_nothing_attachable)]: a stopped or undeclared unit, a pid that changed, or a session in a plain terminal that neither tmux nor Claude Code's daemon hosts.
+
+### 4.3 Attach by name
+
+**`macf_tools harness attach <name>` takes a short name and resolves it to one agent**, or says that the name means several, or none. With no name it attaches to the agent of the home it runs in. The name is matched against the roster (4.4) in three tiers, and the first tier with any hit decides:
+1. an exact calling card, session identifier or uuid, with or without the `@` (`Lumen2MacEff@3f9a1c`, `Lumen2MacEff_3f9a1c`, `3f9a1c`, `@3f9a1c`). A shorter piece of a uuid is not exact;
+2. an exact moniker or display name, ignoring case;
+3. a prefix of a moniker or a display name, ignoring case (`lumen2`). Names match by their start, not anywhere inside.
+
+A deployment's key for an agent, its account, and the account without `pa_` or `sa_` are aliases. **An alias counts only alongside the prefix hits**, so it resolves on its own only when nothing else starts with it: `lumen` lists every Lumen seat instead of quietly choosing the one whose key it is.
+
+| what the name matches | on a terminal | not on a terminal |
+|---|---|---|
+| one agent | attaches | attaches |
+| several | a numbered list (card, place, account, session kind, state), then a prompt, where a number, or a name that matches one of them, picks it | the list, then exit 2 |
+| none | the nearest names, then exit 1 | the same |
+
+Lists go to standard output, so a script can read the uuids, and each list shows them so the next call can be exact. `--card <card>` attaches to exactly that card on this endpoint, which is what a remote hand-off names (4.5). `--agent <slug>` still names a session identifier, and attaches to that session by its exact name when no roster row carries the card.
+
+### 4.4 The roster: who you can attach to
+
+**`macf_tools harness list` lists every agent you can attach to, here and on your declared remotes (4.5); `--json` prints the same as objects, and `--local` lists this endpoint alone.** Each entry carries the card, moniker, uuid, account, display name, session kind (`daemon` for a session unit, `legacy` for the old harness), state (`running`, `stopped` or `unknown`) and the place it is on. The command is read-only. It exits 0 when the listing is complete, and 1 when a source could not be read or a remote did not answer, naming which on the error stream.
+
+- **On a host**, the agents come from the daemon records in your runtime directory, the installed legacy harness units, and the homes your own account owns. Other people's homes on the host are not listed at all.
+- **In a container** (where `/etc/maceff/agents.yaml` declares the accounts), they come from each home's published units summary (8), or from the card in a home that has no summary. A seat's home that can't be read is listed, with the reason.
+- **A card comes from the agent's home or its daemon, never from an environment variable** [MIS-0002-R02 (pd_MUST-NOT_take_identity_from_env)].
+- **Unknown is never empty.** Every unknown field carries why it is unknown. A peer's state is `unknown`, because a peer's daemon answers only its own account.
+
+### 4.5 Remotes: attaching from another machine
+
+**You declare the places you attach to once, in your own config**: `$XDG_CONFIG_HOME/maceff/remotes.yaml`, else `~/.config/maceff/remotes.yaml`. It is never in an agent's home, because which machines a person reaches is that person's configuration.
+
+```yaml
+control: true               # iTerm2 control mode (tmux -CC) by default
+remotes:
+  - name: lab               # a host where you log in as yourself
+    host: lab.example
+    login: me
+    macf_tools: /opt/macf/bin/macf_tools    # where a non-login shell's PATH lacks it
+  - name: seats             # a container whose seats are reached as their own accounts
+    host: lab.example
+    port: 2224
+    login: seat
+    list_login: pa_first    # any one seat: it reads every home's public summary (8)
+```
+
+A file that can't be used is refused whole, naming what is wrong. `--control` and `--no-control` on `harness attach` override the declared `control`, which a remote's own entry may also set.
+
+- **The roster of each remote** is one non-interactive `ssh -o BatchMode=yes` running the remote's `harness list --json --local`, all remotes at once, each bounded by a timeout (5 seconds for listing and attaching). `--local` keeps a remote with remotes of its own from asking them in turn. A remote that would prompt for a password, or whose host key you haven't accepted, answers "unreachable" rather than hanging.
+- **A remote that doesn't answer is said, never dropped.** The listing names it with the reason and exits 1. A remote whose macf has no `harness list` is reported as too old, with the plain `ssh -t … harness attach` to type instead. A remote a version ahead still lists: fields this macf doesn't know are dropped.
+- **The attach is handed off.** For an agent on a remote, `harness attach` runs `ssh -t` of the remote's own `harness attach --card <card>`, logging in as the seat's account where `login` is `seat`. Only the card crosses the wire. The remote resolves the session from its own daemon (4.1), so no socket path, pid or session name travels.
+- **Nothing a remote says becomes an ssh option.** Each account and card in a remote's roster must be a legitimate name (an account matches `^[a-z_][a-z0-9_-]{0,31}$`), or the roster is refused whole. ssh is always given `-l <login>` and `--` before the host.
+- **macf reads no credential.** ssh uses your own keys, agent and `~/.ssh/config`.
+- **What a deployment must provide** for a seat to be reachable by name: a macf with `harness list`, and your key in each seat's `authorized_keys`.
+
+For speed, let ssh reuse one connection per remote:
+
+```
+Host lab.example
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%r@%h:%p
+    ControlPersist 10m
+```
+
+### 4.6 Completion
+
+**`macf_tools completion zsh` or `macf_tools completion bash` prints a completion script.** In zsh, after `compinit`, add `source <(macf_tools completion zsh)` to `~/.zshrc`. macOS's own bash 3.2 can't source a process substitution, so there save the script to a file and source the file.
+
+Commands and flags complete from a table taken from the parser when the script is printed. `harness attach <TAB>` offers cards, monikers and uuids from this endpoint and every remote, each remote bounded by a one-second timeout. A remote that doesn't answer in time adds nothing and costs no more than that second. zsh shows each name's place beside it.
 
 ---
 
@@ -435,7 +510,7 @@ The operator may attach to any session without an invitation [MIS-0002-R81 (oper
 
 - **The chain is primal daemon → wrapper → tmux server → `claude`.** The wrapper runs the agent's own tmux server in the foreground (`tmux -D`) as its child. It creates the agent's session there, running the harness child script, which runs `claude -c` with the declared channels. Only then does it turn the server's `exit-empty` on. From that point the session's end is the server's end, and the server's end is the unit's exit.
 
-- **The session's window is named after the agent's calling card,** or after the session's name where that isn't the card's, and so is the title of a terminal attached to it. The server holds only that session, so it doesn't let the client set its own title, which is its version and names nobody. A tmux too old to have `allow-set-title` says so at the unit's start; there the client can still set the pane's own title, and the window and terminal title still name the agent. Harness commands run in an agent's home name that agent from its calling card, even where a shell exports `MACEFF_AGENT_NAME` for the host's resident agent; the variable names the session only where no card resolves, or for an agent with no identity file of its own.
+- **The session's window is named after the agent's calling card,** or after the session's name where that isn't the card's, and so is the title of a terminal attached to it. The server holds only that session, so it doesn't let the client set its own title, which is its version and names nobody. It also turns `allow-rename` off after the agent's own tmux config (`~/.tmux-<id>.conf`) is read, so a program's rename escape can't retitle the window either. A tmux too old to have `allow-set-title` says so at the unit's start; there the client can still set the pane's own title, and the window and terminal title still name the agent. Harness commands run in an agent's home name that agent from its calling card, even where a shell exports `MACEFF_AGENT_NAME` for the host's resident agent; the variable names the session only where no card resolves, or for an agent with no identity file of its own.
 
 - **An outside stop reaches the session too** [MIS-0002-R48 (outside_stop_MUST_override_gates)]. tmux runs each pane in a process group of its own, so the daemon's stop of the unit's group reaches `claude` only through the server's hangup. The wrapper records the pane's process group when it creates the session, and once the server has gone it sends that group SIGTERM, then SIGKILL after 10 seconds. It records the group's leader's start time too, and before each signal confirms the group is still the session's: a group number is free again once its members have gone, and a leader under that number with another start is someone else's group, which is left alone. It returns only when the group is gone, so a restart never starts a second session beside one that outlived its unit. So **a session unit's `stop_grace_s` must exceed those 10 seconds**: otherwise the daemon's SIGKILL reaches the wrapper first, and nothing is left to stop the session. A wrapper killed outright can't do this, so each wrapper names its pane groups, with their leaders' start times, in a file in its private tmux directory (`pane_groups.json`). The next wrapper, finding no server on the socket, ends any group still running from that file before it starts a session, under the same start check. One window is left: the wrapper names a group once the pane has started its own session, which it waits up to 2 seconds for, so a wrapper killed outright within those seconds leaves that session unnamed, and an operator ends it by hand.
 - **Restarts belong to the daemon alone.** There is no auto-restart loop inside the pane. When `claude` exits, the unit exits, and the daemon restarts it under the unit's declared policy and backoff. Every restart is then an event naming who acted. **A session unit's restart is `always`, and a declaration that says otherwise is refused by name**: the wrapper exits 0 however `claude` ends, so under `on-failure` or `never` an ended session would stay down.

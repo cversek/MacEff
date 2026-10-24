@@ -1786,58 +1786,130 @@ def cmd_harness_install(args: argparse.Namespace) -> int:
 
 
 def cmd_harness_attach(args: argparse.Namespace) -> int:
-    """Attach this terminal to the agent's supervised session.
+    """Attach this terminal to an agent's session, named by a short name, here or remote.
 
-    Exists so that no remote shell has to hardcode a session name. A helper on
-    another machine held the OLD name after the session was renamed, and broke
-    with "no sessions" -- a fourth hand-maintained copy of harness knowledge, on
-    a host the generator cannot reach. `ssh host -t macf_tools harness attach`
-    resolves the name where the name is defined, so a rename cannot strand it.
+    Exists so that no shell has to hardcode a session name, port, account or socket
+    directory: a helper on another machine held the OLD name after a session was renamed,
+    and broke with "no sessions". The name is matched against every agent this endpoint
+    and its declared remotes list (utils/roster.py); an agent on a remote is handed off
+    to that remote's own ``harness attach --card``, which resolves it from its own daemon
+    (persistent_layer 4.1, 4.5). The decision is utils/attach_dispatch.py's.
     """
-    from .utils.harness import resolve_agent
-    from .utils.identity import calling_card_from_identifier
+    from .pd.session_unit import client_environment
+    from .utils.attach import plan_attach_for_card, plan_attach_for_home
+    from .utils.attach_dispatch import by_card, decide, legacy_by_slug
+    from .utils.remotes import CONNECT_TIMEOUT_S, RemotesRefused, load_remotes
+    from .utils.roster import gather, local_roster, remote_fetchers, resolve
+
+    def has_session(target, env):
+        return subprocess.run(["tmux", "has-session", "-t", target],
+                              capture_output=True, env=env).returncode == 0
 
     try:
-        agent, source = resolve_agent(getattr(args, "agent", None))
-        if source == "ambiguous":
-            print("Several harnesses are installed here; name one with --agent:",
-                  file=sys.stderr)
-            for a in agent:
-                print(f"   {a}  ({calling_card_from_identifier(a)})", file=sys.stderr)
+        try:
+            remotes = load_remotes()
+        except RemotesRefused as e:
+            print(f"⚠️ MACF: {e}", file=sys.stderr)
             return 1
-
-        # "=" forces an exact match; tmux resolves targets by prefix, so a bare
-        # name would happily attach to "<agent>-stale-ssh".
-        target = f"={agent}"
-        # A session the primal daemon runs as its session unit lives on the unit's own
-        # tmux server, reached through TMUX_TMPDIR (pd.session_unit); otherwise the
-        # legacy harness's session on the default server.
-        from .pd.session_unit import client_environment
-        env = client_environment(agent) or dict(os.environ)
-        if subprocess.run(["tmux", "has-session", "-t", target],
-                          capture_output=True, env=env).returncode != 0:
-            print(f"No tmux session '{agent}' on this host.", file=sys.stderr)
-            print(f"   start it:  {'maceff_' + agent.rpartition('_')[0].lower() + '_harness_launch'}",
-                  file=sys.stderr)
-            print(f"   or:        systemctl --user start cc-harness-{agent}.service",
-                  file=sys.stderr)
-            return 1
-
-        # -CC hands the session to iTerm2 as native windows. It matters more
-        # than it looks: the client owns the alternate screen, so under a plain
-        # attach there is no tmux-level scrollback at all -- control mode is
-        # what restores native scrollback, selection and find on macOS.
-        cmd = ["tmux"]
-        if getattr(args, "control", False):
-            cmd.append("-CC")
-        cmd += ["attach", "-t", target]
-        # -d evicts other clients: two clients of different geometries is the
-        # cause of the fragmented redraws. Read-only observers skip it.
-        cmd.append("-r" if getattr(args, "read_only", False) else "-d")
-        os.execvpe("tmux", cmd, env)
+        local = local_roster(probe=None).entries
+        name, card = getattr(args, "name", None), getattr(args, "card", None)
+        legacy_slug = getattr(args, "agent", None)
+        if not name and not card and not legacy_slug:
+            # No name: this home's own agent, as before.
+            from .pd.names import IdentityError, agent_card
+            from .utils.paths import find_agent_home
+            try:
+                card = agent_card(find_agent_home())
+            except (IdentityError, OSError, ValueError) as e:
+                print(f"Name an agent (macf_tools harness list shows who is here): {e}",
+                      file=sys.stderr)
+                return 1
+        if legacy_slug and not name and not card:
+            from .utils.identity import calling_card_from_identifier
+            card = calling_card_from_identifier(legacy_slug)
+        decision = None
+        if card:
+            entry = by_card(local, card)
+            if entry is None and legacy_slug and not name:
+                # A slug names a session as it always did, for an agent whose card no
+                # roster row carries (one whose card comes only from a global id).
+                decision = legacy_by_slug(legacy_slug, control=bool(remotes.control if getattr(
+                    args, "control", None) is None else args.control),
+                    read_only=getattr(args, "read_only", False), has_session=has_session,
+                    environment=client_environment)
+            elif entry is None:
+                print(f"No agent here has the card {card!r} (macf_tools harness list).",
+                      file=sys.stderr)
+                return 1
+        else:
+            entries, unanswered = gather(local, remote_fetchers(), timeout=CONNECT_TIMEOUT_S)
+            for missing in unanswered:
+                print(f"⚠️ MACF: not asked: {missing}", file=sys.stderr)
+            entry, code = resolve(name, entries)
+            if entry is None:
+                return code
+        if decision is None:
+            decision = decide(entry, remotes, control=getattr(args, "control", None),
+                              read_only=getattr(args, "read_only", False),
+                              plan_for_home=plan_attach_for_home, plan_for_card=plan_attach_for_card,
+                              has_session=has_session, environment=client_environment)
+        if decision.exit_code is not None:
+            print(decision.message, file=sys.stderr)
+            return decision.exit_code
+        env = decision.env or dict(os.environ)
+        for command in decision.before:
+            # Naming the window is a courtesy: a tmux that refuses it still attaches.
+            subprocess.run(command, capture_output=True, env=env)
+        os.execvpe(decision.argv[0], decision.argv, env)
     except Exception as e:
         print(f"Error attaching to harness: {e}", file=sys.stderr)
         return 1
+
+
+def cmd_harness_list(args: argparse.Namespace) -> int:
+    """List every agent this endpoint can attach to, read only (utils/roster.py).
+
+    Exit 0 when the listing is complete. An unreadable home is listed, with why, and
+    still counts as listed; exit 1 means a source could not be read at all (the homes
+    directory, the runtime directory), which stderr names, so what is shown is partial.
+    """
+    from .utils.remotes import CONNECT_TIMEOUT_S
+    from .utils.roster import gather, local_roster, remote_fetchers, render_table
+
+    roster = local_roster()
+    entries, problems = roster.entries, list(roster.problems)
+    if not getattr(args, "local", False):
+        # Each declared remote's own listing, beside this endpoint's; one that doesn't
+        # answer is named below and makes the listing incomplete, never silently shorter.
+        entries, unanswered = gather(entries, remote_fetchers(problems), timeout=CONNECT_TIMEOUT_S)
+        problems += unanswered
+    if getattr(args, "json", False):
+        print(json.dumps([e.model_dump(mode="json") for e in entries], indent=2))
+    else:
+        print(render_table(entries))
+    for problem in problems:
+        print(f"⚠️ MACF: harness list is incomplete: {problem}", file=sys.stderr)
+    return 0 if not problems else 1
+
+
+def cmd_completion(args: argparse.Namespace) -> int:
+    """Print the shell completion script, or (hidden) the agent names a word completes to."""
+    if getattr(args, "candidates", False):
+        from .utils.completion import candidate_lines
+        from .utils.roster import completion_candidates, gather, local_roster, remote_fetchers
+        # Names only: completion has no use for states, and probing each would cost a
+        # tmux call per agent on every TAB.
+        local = local_roster(probe=None).entries
+        entries, _unanswered = gather(local, remote_fetchers(), timeout=args.remote_timeout)
+        for line in candidate_lines(completion_candidates(entries, args.prefix or ""), args.describe):
+            print(line)
+        return 0
+    if not getattr(args, "shell", None):
+        print("usage: macf_tools completion {bash,zsh}", file=sys.stderr)
+        return 2
+    from .utils.completion import render
+    print(render(args.shell, _build_parser()), end="")
+    return 0
 
 
 def cmd_harness_unit(args: argparse.Namespace) -> int:
@@ -12242,12 +12314,27 @@ def _build_parser() -> argparse.ArgumentParser:
 
     harness_attach = harness_sub.add_parser(
         "attach", help="attach this terminal to the agent's supervised session")
-    harness_attach.add_argument("--agent", help="agent slug (default: resolved from identity)")
-    harness_attach.add_argument("--control", action="store_true",
-                                help="attach in tmux control mode (-CC), for iTerm2 on macOS")
+    harness_attach.add_argument("name", nargs="?",
+                                help="a card, uuid, moniker or unique prefix, here or on a declared "
+                                     "remote (default: this home's own agent)")
+    harness_attach.add_argument("--card", help="exactly this calling card, on this endpoint "
+                                               "(what a remote hand-off names)")
+    harness_attach.add_argument("--agent", help="session slug, as before (Moniker_uuid)")
+    harness_attach.add_argument("--control", action=argparse.BooleanOptionalAction, default=None,
+                                help="tmux control mode (-CC), for iTerm2 on macOS "
+                                     "(default: the remotes declaration's control)")
     harness_attach.add_argument("--read-only", action="store_true",
                                 help="observe without evicting other clients or taking the keyboard")
     harness_attach.set_defaults(func=cmd_harness_attach)
+
+    harness_list = harness_sub.add_parser(
+        "list", help="list every agent this endpoint can attach to: card, account, session "
+                     "kind and state, with a reason wherever one is unknown (read-only)")
+    harness_list.add_argument("--json", action="store_true",
+                              help="a list of objects, one per agent or unreadable home")
+    harness_list.add_argument("--local", action="store_true",
+                              help="this endpoint only, without asking the declared remotes")
+    harness_list.set_defaults(func=cmd_harness_list)
 
     harness_status = harness_sub.add_parser("status", help="show harness unit and session state")
     harness_status.add_argument("--agent", help="agent slug")
@@ -13779,6 +13866,18 @@ def _build_parser() -> argparse.ArgumentParser:
     shell_parser = sub.add_parser("shell", help="shell integration (tab completion)")
     shell_sub = shell_parser.add_subparsers(dest="shell_cmd")
     shell_sub.add_parser("setup", help="print tab completion setup instructions").set_defaults(func=cmd_shell_setup)
+
+    # ── completion ───────────────────────────────────────────────────────
+    completion_parser = sub.add_parser(
+        "completion", help="print a shell completion script: source <(macf_tools completion bash)")
+    completion_parser.add_argument("shell", nargs="?", choices=["bash", "zsh"],
+                                   help="the shell to print the script for")
+    # Hidden: what the printed script calls for `harness attach <TAB>`.
+    completion_parser.add_argument("--candidates", action="store_true", help=argparse.SUPPRESS)
+    completion_parser.add_argument("--prefix", default="", help=argparse.SUPPRESS)
+    completion_parser.add_argument("--describe", action="store_true", help=argparse.SUPPRESS)
+    completion_parser.add_argument("--remote-timeout", type=float, default=1.0, help=argparse.SUPPRESS)
+    completion_parser.set_defaults(func=cmd_completion)
 
     return p
 
