@@ -81,6 +81,15 @@ def _session_unit(response: Optional[dict], unit: str) -> tuple:
     return None, f"the primal daemon reports no unit named {unit!r}"
 
 
+def _owned(path) -> bool:
+    """A directory this account owns: another account's server is no keyboard of ours."""
+    import os
+    try:
+        return path.is_dir() and path.stat().st_uid == os.getuid()
+    except OSError:
+        return False
+
+
 def plan_attach(response: Optional[dict], session_unit: str, *,
                 read_info: Optional[Callable] = None,
                 verify: Optional[Callable] = None,
@@ -95,7 +104,7 @@ def plan_attach(response: Optional[dict], session_unit: str, *,
     """
     if read_info is None or verify is None:
         from ..notify.session import read_session_info, verify_incarnation
-        read_info = read_info or read_session_info
+        read_info = read_info or (lambda pid: read_session_info(pid, missing_ok=True))
         verify = verify or verify_incarnation
 
     status, why = _session_unit(response, session_unit)
@@ -126,14 +135,22 @@ def plan_attach(response: Optional[dict], session_unit: str, *,
         # parents its own tmux server, so the session's pane descends from the unit
         # rather than the other way round, on the server under ``tmux_tmpdir``.
         import os
-        env = {**os.environ, "TMUX_TMPDIR": tmux_tmpdir}
-        env.pop("TMUX", None)
-        for pane, name in tmux_panes(env).items():
-            if pid in ancestors(pane):
-                argv = (["env", f"TMUX_TMPDIR={tmux_tmpdir}", "tmux"] + (["-CC"] if control else [])
-                        + ["attach", "-t", f"={name}", "-r" if read_only else "-d"])
-                return AttachPlan(TMUX, argv, reason=f"the session unit runs tmux session {name!r} "
-                                                     f"on its own server")
+        from pathlib import Path
+        # The card's own server first; then this account's other session-unit servers beside
+        # it, for a unit declared with another --agent, which names its server after that.
+        # Either way the pane is found by descent from the daemon's pid, never by a name.
+        here = Path(tmux_tmpdir)
+        servers = [here] + sorted(d for d in here.parent.glob("*.tmux")
+                                  if d != here and _owned(d))
+        for server in servers:
+            env = {**os.environ, "TMUX_TMPDIR": str(server)}
+            env.pop("TMUX", None)
+            for pane, name in tmux_panes(env).items():
+                if pid in ancestors(pane):
+                    argv = (["env", f"TMUX_TMPDIR={server}", "tmux"] + (["-CC"] if control else [])
+                            + ["attach", "-t", f"={name}", "-r" if read_only else "-d"])
+                    return AttachPlan(TMUX, argv, reason=f"the session unit runs tmux session {name!r} "
+                                                         f"on its own server")
     return AttachPlan(NONE, reason=f"pid {pid} runs in a plain terminal, "
                                    f"not hosted by the client's daemon and not under tmux")
 
