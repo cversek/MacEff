@@ -101,14 +101,42 @@ def test_onlooker_needs_invitation():
     assert acts.admit("SomeoneElse@abcdef", inv.secret, state, now=1500.0) is None
 
 
-def test_observation_events():
-    """R90: invite, pause, resume and end are each an event; the log, folded, is the state."""
-    inv, log = _invited()
-    log.append(acts.pause(THEM, acts.fold(log), at=1300))
-    log.append(acts.resume(THEM, acts.fold(log), at=1400))
-    log.append(acts.end(THEM, "observed", acts.fold(log)))
+def test_observation_events(isolated_events_log):
+    """R90: invite, pause, resume and end, taken through ``record``, are each an event in
+    the agent's own event log file, read back from that file; the file, folded, is the
+    state, and each act is checked against what the file already holds."""
+    from macf.observe import record
+
+    def on_disk():
+        rows = [_json.loads(line) for line in isolated_events_log.read_text().splitlines()]
+        return [r for r in rows if r["event"] in record.ACT_EVENTS]
+
+    inv = record.invite(ME, THEM, 1200, container_of=_host)
+    record.pause(THEM, at=1300)
+    with pytest.raises(acts.ActRefused):      # the pause is read back from the file
+        record.pause(THEM, at=1350)
+    record.resume(THEM, at=1400)
+    record.end(THEM, "observed")
+    log = on_disk()
     assert [e["event"] for e in log] == [acts.EVENT_INVITE, acts.EVENT_PAUSE, acts.EVENT_RESUME, acts.EVENT_END]
-    assert acts.fold(log)[THEM].status == acts.ENDED
+    assert inv.secret not in isolated_events_log.read_text()
+    state = acts.fold(log)
+    assert state[THEM].status == acts.ENDED and state[THEM].pauses == ((1300, 1400),)
+    assert record.current() == state
+
+    # A lease's end is taken the same way, and lands in the same file.
+    record.invite(ME, THEM, 1500, container_of=_host, lease_until=2000.0, now=1000.0)
+    assert record.sweep(now=1999.0) == []
+    assert [e["data"]["ended_by"] for e in record.sweep(now=2000.0)] == ["lease"]
+    assert on_disk()[-1]["event"] == acts.EVENT_END and record.current()[THEM].ended_by == "lease"
+
+
+def test_an_act_the_log_did_not_take_is_not_taken(monkeypatch):
+    """R90: an invitation whose event could not be written hands out no secret."""
+    from macf.observe import record
+    monkeypatch.setattr(record, "append_event", lambda event, data: False)
+    with pytest.raises(record.RecordFailed):
+        record.invite(ME, THEM, 0, container_of=_host)
 
 
 def test_the_log_never_holds_the_secret():
@@ -588,3 +616,16 @@ def test_presence_is_unknown_when_the_daemon_is_not_alive():
     inv, log = _invited()
     assert presence.call_line(presence.from_events(log, daemon_alive=False)) == "presence: unknown"
     assert presence.call_line(presence.from_events([], daemon_alive=True)) == ""
+
+
+def test_only_the_record_path_takes_an_act():
+    """R90 stays true when an entry point arrives: nothing outside macf/observe calls the act
+    builders directly, so a command has to take its acts through observe.record, which writes
+    each one to the observed agent's own log (CTB on #811)."""
+    import re
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[1] / "src" / "macf"
+    call = re.compile(r"\bacts\.(invite|pause|resume|end|expired)\(")
+    offenders = [str(p.relative_to(src)) for p in src.rglob("*.py")
+                 if "observe" not in p.relative_to(src).parts and call.search(p.read_text())]
+    assert offenders == []
