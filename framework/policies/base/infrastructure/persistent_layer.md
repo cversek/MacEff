@@ -456,7 +456,7 @@ Commands and flags complete from a table taken from the parser when the script i
 **Ending.**
 - The observed agent or the onlooker may end an observation at any time [MIS-0002-R86 (either_party_MAY_end_observation)], and the operator may end any [MIS-0002-R87 (operator_MAY_end_observation)].
 - Who is ending is established from the transport the request arrived on, never from a field in it, or an onlooker could end an observation as the operator.
-- An invitation may carry a lease [MIS-0002-R88 (invitation_MAY_carry_lease)]. When it runs out, the log records the same ending event a party's ending records [MIS-0002-R89 (lease_end_MUST_match_party_end)]. A lapsed lease is refused at admission even before its end is logged, because the lease ends the invitation itself.
+- An invitation may carry a lease [MIS-0002-R88 (invitation_MAY_carry_lease)]. When it runs out, the log records the same ending event a party's ending records, with `ended_by` set to `lease` [MIS-0002-R89 (lease_end_MUST_match_party_end)]. Your primal daemon writes that ending: about every 30 seconds it sweeps your log for leases that have run out, through the same record path every observation act takes [MIS-0002-R90 (observation_acts_MUST_be_events)]. With no daemon running, the ending is written the next time one does. A lapsed lease is refused at admission even before its end is logged, because the lease ends the invitation itself.
 
 ### 5.2 The stream
 
