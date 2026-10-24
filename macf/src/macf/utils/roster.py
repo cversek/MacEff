@@ -427,7 +427,9 @@ def _declared_card(home: Optional[str], name: str) -> Tuple[Optional[str], str]:
     # deployment's word: opened without following a link, and checked on the open descriptor,
     # so nothing can be swapped in between the check and the read.
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        # O_NONBLOCK: a named pipe put there opens at once, and fails the regular-file check,
+        # instead of waiting for a writer and hanging the whole listing.
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     except OSError as e:
         if e.errno == errno.ELOOP:
             return None, f"agents.yaml declares {name!r}, but {path} is a link, not the deployment's file"

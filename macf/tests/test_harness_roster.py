@@ -321,3 +321,24 @@ def test_a_link_in_place_of_the_identity_file_is_not_the_deployments(tmp_path, m
         "    username: pa_lumen3\n", "    username: pa_lumen3\n    calling_card: Lumen3MacEff\n"))
     seat = next(e for e in f.roster().entries if e.account == "pa_lumen3")
     assert seat.card is None and "is a link" in seat.reasons["card"]
+
+
+def test_a_pipe_in_place_of_the_identity_file_neither_hangs_nor_passes(tmp_path, monkeypatch):
+    """A seat could put a named pipe where its identity file was: opening it must not wait for
+    a writer (that hangs every peer's listing), and it is not a regular file (CTB on #809)."""
+    import threading
+    monkeypatch.setattr(roster, "DEPLOYMENT_UID", os.getuid())
+    f = build(tmp_path, published=False)
+    home = f.homes / "pa_lumen3"
+    (home / ".maceff" / "config.json").unlink()
+    (home / ".maceff_primary_agent.id").unlink()
+    os.mkfifo(home / ".maceff_primary_agent.id")
+    f.agents_yaml.write_text(f.agents_yaml.read_text().replace(
+        "    username: pa_lumen3\n", "    username: pa_lumen3\n    calling_card: Lumen3MacEff\n"))
+    got = []
+    t = threading.Thread(target=lambda: got.append(f.roster()), daemon=True)
+    t.start()
+    t.join(5)
+    assert got, "the listing hung on a named pipe in place of the identity file"
+    seat = next(e for e in got[0].entries if e.account == "pa_lumen3")
+    assert seat.card is None and "not the deployment's file" in seat.reasons["card"]
