@@ -584,8 +584,11 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
         # Typed after a draft, the command is sent with it as one prompt and the client
         # never runs it: a follower's unsent text once turned /compact into plain text.
         print(f"[inject] The input box already holds text ({draft[:60]!r}), so {cmd} typed "
-              f"now would be sent with it as one prompt and not run. Clear the box, then "
-              f"run this again.", file=sys.stderr)
+              f"now would be sent with it as one prompt and not run. If that text is the "
+              f"framework's own (a wake, a mail clock line, a recovery prompt) and not a "
+              f"person's draft, clear it with: macf_tools inject clear-input --expect "
+              f"{shlex.quote(_opening(draft))}  then run this again. A person's draft is "
+              f"theirs: ask them (autonomous_operation 5.5).", file=sys.stderr)
         return 1
     rc = send_keys(own, [cmd], enter=True, kind="inject")
     if rc == 0:
@@ -606,6 +609,114 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
         if then and command.lstrip("/") == "compact":
             _start_compact_followup(own, then)
     return rc
+
+
+#: Ctrl-U presses clear_own_input makes at most. Each erases one screen row of the box, or the
+#: line break before the cursor when the row is already empty, so a box needs about two
+#: presses per line it holds.
+CLEAR_MAX_PRESSES = 40
+#: Seconds between a press and the readback that judges it.
+CLEAR_SPACING_S = 0.3
+#: Presses in a row that may leave the box unchanged before clearing gives up.
+CLEAR_STALL = 3
+
+
+def _squash(text: str) -> str:
+    """*text* with every run of whitespace made one space: the screen joins a wrapped line's
+    rows with a space, so the box reads the same text differently at different widths."""
+    return " ".join(text.split())
+
+
+def _opening(text: str, words: int = 3) -> str:
+    """The first few words of *text*, which is what --expect is asked to name."""
+    return " ".join(text.split()[:words])
+
+
+def _is_subsequence(part: str, whole: str) -> bool:
+    """Whether *part* is *whole* with characters only taken away, in order."""
+    rest = iter(whole)
+    return all(ch in rest for ch in part)
+
+
+def clear_own_input(expect: str, max_presses: int = CLEAR_MAX_PRESSES,
+                    spacing_s: float = CLEAR_SPACING_S, sleep=None) -> int:
+    """Empty this agent's own input box of text it recognizes, one Ctrl-U at a time.
+
+    The box is read before every press and the clearing stops at the first thing that is not
+    the expected text shrinking: a box that doesn't start with *expect*, text that grows or
+    changes (someone typing), a box that stops shrinking, or the screen becoming unreadable.
+    Only Ctrl-U is pressed. It edits the box and nothing else: never Escape, which interrupts a
+    running turn or opens the rewind menu on an empty box, and never Enter. Returns 0 when the
+    box is empty, and 1 with the reason otherwise.
+    """
+    sleep = sleep or time.sleep
+    if not expect.strip():
+        print("[inject] clear-input needs --expect: the opening words of the text you mean "
+              "to clear, so text you have not read is never cleared.", file=sys.stderr)
+        return 1
+    own = own_pane_target()
+    if not own:
+        print("[inject] Could not find this agent's own pane, so there is no box to clear. "
+              "clear-input acts only on the caller's own pane.", file=sys.stderr)
+        return 1
+    start = _draft_in_box(own)
+    if start is None:
+        print("[inject] The screen shows no input box (a dialog, or it can't be read), so "
+              "nothing was pressed.", file=sys.stderr)
+        return 1
+    if not start:
+        print("[inject] The input box is already empty.")
+        return 0
+    original = _squash(start)
+    if not original.startswith(_squash(expect)):
+        print(f"[inject] The input box does not start with {expect!r}, so nothing was "
+              f"pressed. It holds: {start[:120]!r}", file=sys.stderr)
+        return 1
+    session = (_resolve_pane_target(own) or {}).get("tmux_session")
+    if not session or not _tmux_available():
+        print("[inject] This pane has no tmux session to press keys in.", file=sys.stderr)
+        return 1
+    _record_keys_sent("C-u", "clear_input", session)
+    seen, stalled, presses = original, 0, 0
+    while presses < max_presses:
+        if subprocess.run(["tmux", "send-keys", "-t", session, "C-u"]).returncode != 0:
+            print("[inject] tmux send-keys failed; the box was left as it is.", file=sys.stderr)
+            return 1
+        presses += 1
+        sleep(spacing_s)
+        now = _draft_in_box(own)
+        if now is None:
+            print(f"[inject] The input box went off screen after {presses} press(es); "
+                  f"stopped.", file=sys.stderr)
+            return 1
+        now = _squash(now)
+        if not now:
+            _record_box_cleared(start, presses, session)
+            print(f"[inject] Cleared the input box in {presses} press(es): {start[:120]!r}")
+            return 0
+        if not _is_subsequence(now, seen):
+            print(f"[inject] The box gained text while clearing ({now[:120]!r}), so someone "
+                  f"may be typing; stopped after {presses} press(es).", file=sys.stderr)
+            return 1
+        stalled = stalled + 1 if now == seen else 0
+        if stalled >= CLEAR_STALL:
+            print(f"[inject] The box stopped shrinking after {presses} press(es); it still "
+                  f"holds {now[:120]!r}.", file=sys.stderr)
+            return 1
+        seen = now
+    print(f"[inject] The box still holds {seen[:120]!r} after {max_presses} presses; stopped.",
+          file=sys.stderr)
+    return 1
+
+
+def _record_box_cleared(text: str, presses: int, tmux_session: str) -> None:
+    """Record what clear_own_input removed, so cleared text can always be found again."""
+    try:
+        from .agent_events_log import append_event
+        append_event("box_cleared", {"text": text, "presses": presses,
+                                     "tmux_session": tmux_session})
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: could not record the cleared text: {e}", file=sys.stderr)
 
 
 def _unsent_feedback_drafts() -> list:

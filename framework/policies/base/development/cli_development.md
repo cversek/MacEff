@@ -447,6 +447,11 @@ Error: ENOENT  ❌
 3. **Suggest resolution**: "Create file X" or "Use --flag to specify Y"
 4. **Provide escape hatch**: Link to docs, suggest alternative command
 
+This is the constitutional principle **Error messages teach their resolution**
+(`core_principles` 5.4), applied to CLIs. A refusal names the command that resolves
+it, and says when that command is the right one. When the only resolution is something
+the reader can't do, the missing capability is the defect, not the message.
+
 **Examples**:
 ```bash
 # Good: Actionable error
