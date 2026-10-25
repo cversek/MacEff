@@ -657,6 +657,55 @@ def cmd_permissions_history(args: argparse.Namespace) -> int:
     return 0
 
 
+def _session_rules():
+    """The rules in force for this session: its starting directory is the project, as the client reads it."""
+    from pathlib import Path
+    from macf import permission_watch as pw
+    project = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    return pw.rules_in_force(project, Path.home())
+
+
+def cmd_permissions_list(args: argparse.Namespace) -> int:
+    """The permission rules in force, each with the file it comes from (autonomous_operation 5.5)."""
+    rules = [r for r in _session_rules() if args.kind is None or r[0] == args.kind]
+    if args.json:
+        print(json.dumps([{"kind": k, "rule": r, "file": str(f)} for k, r, f in rules], indent=2))
+        return 0
+    if not rules:
+        print("no rule of that kind is in force" if args.kind else "no permission rules are in force")
+        return 0
+    for kind in ("deny", "ask", "allow"):
+        of_kind = [(r, f) for k, r, f in rules if k == kind]
+        if not of_kind:
+            continue
+        print({"deny": "DENY (refused, never asked)", "ask": "ASK (stops at a dialog: never run these unattended)",
+               "allow": "ALLOW (runs without a dialog)"}[kind])
+        for rule, f in of_kind:
+            print(f"  {rule:<48} {f}")
+    return 0
+
+
+def cmd_permissions_check(args: argparse.Namespace) -> int:
+    """Whether a command would stop at a dialog, and which part of it: exit 0 when it runs
+    without one by the rules, 1 when a rule asks, 2 when a rule denies it."""
+    from macf import permission_watch as pw
+    rules = _session_rules()
+    v = pw.decide(args.tool, {"command": args.command, "file_path": args.command}, rules)
+    kind, rule, f = v.kind, v.rule, v.source
+    verdict = {"deny": f"DENIED by {rule}, from {f}",
+               "ask": f"PROMPTS: {rule}, from {f}. Unattended, this waits until someone answers",
+               "allow": f"runs: allowed by {rule}, from {f}",
+               "unlisted": ("no rule matches it, so the permission mode decides: default mode asks, and auto mode "
+                            "can still ask about a command it judges risky, a chained one most of all. Unattended, "
+                            "run one plain command per call")}[kind]
+    print(verdict)
+    if args.tool == "Bash" and kind in ("ask", "deny"):
+        for seg, part in pw.segment_decisions(args.command, rules):
+            if part.kind in ("ask", "deny"):
+                print(f"  this part: {seg[:120]}  ({part.kind}: {part.rule})")
+    return {"deny": 2, "ask": 1}.get(kind, 0)
+
+
 def cmd_permissions_watch(args: argparse.Namespace) -> int:
     """One watch pass; meant for a timer OUTSIDE the watched session.
 
@@ -1886,7 +1935,7 @@ def cmd_harness_list(args: argparse.Namespace) -> int:
     if getattr(args, "json", False):
         print(json.dumps([e.model_dump(mode="json") for e in entries], indent=2))
     else:
-        print(render_table(entries))
+        print(render_table(entries, verbose=getattr(args, "verbose", False)))
     for problem in problems:
         print(f"⚠️ MACF: harness list is incomplete: {problem}", file=sys.stderr)
     return 0 if not problems else 1
@@ -11818,6 +11867,12 @@ def cmd_knowledge_status(args: argparse.Namespace) -> int:
         "acute": counts.get(Severity.ACUTE, 0), "chronic": counts.get(Severity.CHRONIC, 0),
         "gaps": len(detect_web_gaps(kg)),
     }
+    # Folders the opt-out marker takes out of the web: named, never only counted.
+    # The doctor above reports them as notes; status carries the same list.
+    from .knowledge_doctor import excluded_folders
+    from .utils.paths import find_agent_home
+    home = find_agent_home()
+    status["opted_out"] = excluded_folders(home) if home else []
     if getattr(args, "json_output", False):
         print(json.dumps(status, indent=2))
     else:
@@ -12104,6 +12159,22 @@ def _build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--include-questions", action="store_true", help="also list question dialogs (AskUserQuestion, ExitPlanMode)")
     pp.add_argument("--json", action="store_true")
     pp.set_defaults(func=cmd_permissions_history)
+    pp = perm_sub.add_parser(
+        "list", aliases=["rules"],
+        help="the permission rules in force for this session, deny, ask and allow, each with its settings "
+             "file: what would stop at a dialog before you run it",
+    )
+    pp.add_argument("--kind", choices=("deny", "ask", "allow"), default=None, help="only rules of this kind")
+    pp.add_argument("--json", action="store_true")
+    pp.set_defaults(func=cmd_permissions_list)
+    pp = perm_sub.add_parser(
+        "check",
+        help="would this command stop at a dialog? Names the rule and the part of a chain that matches it; "
+             "exit 0 runs, 1 asks, 2 denied",
+    )
+    pp.add_argument("command", help="the command, quoted whole, as you would run it")
+    pp.add_argument("--tool", default="Bash", help="the tool the call is for (default Bash)")
+    pp.set_defaults(func=cmd_permissions_check)
 
     # New consciousness commands
     list_parser = sub.add_parser("list", help="list consciousness artifacts")
@@ -12332,6 +12403,8 @@ def _build_parser() -> argparse.ArgumentParser:
                      "kind and state, with a reason wherever one is unknown (read-only)")
     harness_list.add_argument("--json", action="store_true",
                               help="a list of objects, one per agent or unreadable home")
+    harness_list.add_argument("--verbose", "-v", action="store_true",
+                              help="say why each unknown field is unknown, and each row's detail")
     harness_list.add_argument("--local", action="store_true",
                               help="this endpoint only, without asking the declared remotes")
     harness_list.set_defaults(func=cmd_harness_list)

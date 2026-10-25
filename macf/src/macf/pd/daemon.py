@@ -175,6 +175,12 @@ class Daemon:
             print(f"⚠️ MACF: pd: notice_routes routes {', '.join(half)} to 'both', and only the agent's half "
                   f"is served: the operator hears unread mail alone today, so the rest reach the agent only "
                   f"(MIS-0002-R42)", file=sys.stderr)
+        if any(u.kind == "session" for u in self.core.declaration.units) \
+                and self.core.declaration.operator_channels is None:
+            # R107 ends the rule that counted every channel while none was declared.
+            print("⚠️ MACF: pd: the declaration lists no operator_channels, so no channel message counts "
+                  "as the operator's activity (MIS-0002-R107); list the operator's channels, or [] for none",
+                  file=sys.stderr)
         connect_s = self.core.declaration.channel_connect_s
         #: Where a channel is expected, whether it is dark (R115); the outside watch tells the operator.
         self.dark_channel = DarkChannel(self.card, connect_s) if connect_s else None
@@ -258,11 +264,15 @@ class Daemon:
         shared container (MIS-0002-R62 (agent_MUST_see_shared_container)): names, kinds, limits,
         restart rules, never a command or environment (``shared_view.summarize``). The
         declaration is read only at start, so a changed declaration is published by the restart
-        that loads it. A home with no public tree has no peers reading it, and gets none made.
+        that loads it. A home with no public tree gets none made, unless the deployment declares
+        its daemon: peers list declared daemons, so a service account publishes too.
         Publishing never stops the daemon: a failure is said, and peers read the home as
         UNPUBLISHED, or see the old summary's age."""
         from macf.pd import shared_view
-        if not (self.home / "agent" / "public").is_dir():
+        # A daemon the deployment declares publishes even with no public tree, since its peers
+        # list it from the declaration and would otherwise read it as unpublished: a service
+        # account's home, the mail broker's among them, has none (MIS-0002-R62).
+        if not (self.home / "agent" / "public").is_dir() and not self._deployment_declares():
             return
         try:
             shared_view.publish(self.home, self.core.declaration)
@@ -270,6 +280,11 @@ class Daemon:
             print(f"⚠️ MACF: pd: could not publish this agent's units at "
                   f"{shared_view.published_path(self.home)} (the daemon goes on; peers see "
                   f"no summary or an old one, with its age): {e!r}", file=sys.stderr)
+
+    def _deployment_declares(self) -> bool:
+        """Whether this daemon's declaration is one the deployment rendered, as in a container."""
+        from macf.pd.names import rendered_declaration_path
+        return os.path.lexists(rendered_declaration_path(self.home))
 
     def _notice_denied_grants(self) -> None:
         """Owe the agent a notice for each declared grant the last install found denied
