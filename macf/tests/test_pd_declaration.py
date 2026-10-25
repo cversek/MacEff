@@ -640,3 +640,66 @@ def test_periodic_clock_is_schedule(tmp_path, monkeypatch):
     start.start_amail_services(cfg)
     assert launched["popen"] == []
 
+
+
+def test_a_declared_daemon_outside_home_is_listed_once_and_seen_when_it_publishes(tmp_path):
+    """MIS-0002-R62, the head maintainer's judgment on #552: the view lists the deployment's
+    declared daemons from root's rendered declarations, so a service account whose home is
+    outside /home counts. One that published nothing reads declared, not absent, and a declared
+    home that is also under /home is listed once."""
+    rendered, homes, broker = tmp_path / "rendered", tmp_path / "home", tmp_path / "var" / "broker"
+    for account in ("svc_broker", "pa_seat"):
+        (rendered / account).mkdir(parents=True)
+        (rendered / account / "declaration.json").write_text("{}")
+    (homes / "pa_seat" / "agent" / "public").mkdir(parents=True)
+    broker.mkdir(parents=True)
+    home_of = {"svc_broker": broker, "pa_seat": homes / "pa_seat"}.get
+    views = sv.read_agents(homes, rendered=rendered, home_of=home_of)
+    assert sorted((Path(v.home).name, v.status) for v in views) == [("broker", "UNPUBLISHED"), ("pa_seat", "UNPUBLISHED")]
+    assert all(v.detail == "declared, no summary published" for v in views)
+    sv.publish(broker, _declaration(agent="Broker@ab12cd", units=[_unit("broker", memory=256)]), now=1.0)
+    seen = {Path(v.home).name: v for v in sv.read_agents(homes, rendered=rendered, home_of=home_of)}
+    assert seen["broker"].status == "PUBLISHED" and seen["broker"].units.agent == "Broker@ab12cd"
+
+
+def test_a_declared_daemon_with_no_public_tree_still_publishes(tmp_path, script, base, run_daemon, monkeypatch):
+    """The mail broker's home has no agent/public tree, so its daemon published nothing and its
+    units were invisible to every seat beside it. A daemon the deployment declares publishes
+    anyway; one it doesn't still makes no tree."""
+    from macf.pd.daemon import Daemon
+    from test_primal_daemon import make_home, make_unit
+    monkeypatch.setattr(Daemon, "_deployment_declares", lambda self: True)
+    declared = make_home(tmp_path / "declared", [make_unit("worker", script, {})])
+    assert not (declared / "agent" / "public").exists()
+    run_daemon(declared, base)
+    assert sv.published_path(declared).exists(), "a declared daemon with no public tree published nothing"
+
+
+def test_an_undeclared_daemon_with_no_public_tree_makes_none(tmp_path, script, base, run_daemon):
+    from test_primal_daemon import make_home, make_unit
+    plain = make_home(tmp_path / "plain", [make_unit("worker", script, {})])
+    run_daemon(plain, base)
+    assert not sv.published_path(plain).exists() and not (plain / "agent" / "public").exists()
+
+
+def test_one_declared_account_the_reader_cannot_look_into_costs_only_itself(tmp_path):
+    """Ira's probe on #819: three rendered accounts, one at mode 0. Asked inside one try, the
+    permission error emptied the declared list and the broker vanished again. Each account is
+    asked on its own: the unreadable one is listed with its reason, and the others still count."""
+    import os
+    if os.geteuid() == 0:
+        pytest.skip("root reads a mode-0 directory")
+    rendered, homes = tmp_path / "rendered", tmp_path / "home"
+    for account in ("svc_broker", "pa_seat", "pa_shut"):
+        (rendered / account).mkdir(parents=True)
+        (rendered / account / "declaration.json").write_text("{}")
+    homes.mkdir()
+    home_of = {a: tmp_path / "homes" / a for a in ("svc_broker", "pa_seat", "pa_shut")}.get
+    (rendered / "pa_shut").chmod(0)
+    try:
+        views = {Path(v.home).name: v for v in sv.read_agents(homes, rendered=rendered, home_of=home_of)}
+    finally:
+        (rendered / "pa_shut").chmod(0o755)
+    assert set(views) == {"svc_broker", "pa_seat", "pa_shut"}
+    assert views["pa_shut"].status == "UNREADABLE" and "pa_shut" in views["pa_shut"].detail
+    assert views["svc_broker"].detail == "declared, no summary published"

@@ -34,7 +34,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Callable, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -130,19 +130,80 @@ def read_agent(home: Path) -> AgentView:
     return AgentView(home=str(home), status="PUBLISHED", units=units)
 
 
-def read_agents(homes: Path = HOMES) -> List[AgentView]:
+def _account_home(account: str) -> Optional[Path]:
+    import pwd
+    try:
+        return Path(pwd.getpwnam(account).pw_dir)
+    except KeyError:
+        return None  # noqa: MACEFF003 - an account the deployment declared and then removed has no home to read
+
+
+def declared_homes(rendered: Optional[Path] = None,
+                   home_of: Callable[[str], Optional[Path]] = _account_home) -> List[Union[Path, AgentView]]:
+    """The homes of the primal daemons the deployment declares: one per account directory under
+    the rendered root, which root writes and no agent can (``names.rendered_declaration_path``).
+    It is the deployment's own word on which daemons exist, so a service account's daemon, whose
+    home is outside ``/home``, is counted with the agents' (MIS-0002-R62).
+
+    Each account is asked on its own, with ``os.stat``. ``Path.exists`` raises on a permission
+    error (Python 3.10), so one account directory a reader can't look into, asked inside one
+    ``try`` with the rest, emptied the whole list, the shape #808 fixed for ``/home``. Such an
+    account is returned as an UNREADABLE view naming it, never dropped."""
+    from macf.pd.names import RENDERED_DECLARATIONS
+    root = Path(rendered) if rendered is not None else RENDERED_DECLARATIONS
+    try:
+        entries = sorted(root.iterdir())
+    except FileNotFoundError:
+        return []                      # nothing rendered: no deployment declares daemons here
+    except OSError as e:
+        return [AgentView(home=str(root), status="UNREADABLE",
+                          detail=f"the deployment's declarations can't be listed: {e.strerror or e}")]
+    out: List[Union[Path, AgentView]] = []
+    for entry in entries:
+        try:
+            os.stat(entry / "declaration.json")
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            out.append(AgentView(home=str(entry), status="UNREADABLE",
+                                 detail=f"declared account {entry.name}: {e.strerror or e}"))
+            continue
+        home = home_of(entry.name)
+        if home is not None:
+            out.append(home)
+    return out
+
+
+def read_agents(homes: Path = HOMES, rendered: Optional[Path] = None,
+                home_of: Callable[[str], Optional[Path]] = _account_home) -> List[AgentView]:
     """Every home with a public tree, in name order. A home that can't be looked into is
     listed as UNREADABLE with the reason, never taken for a home without an agent.
 
     Asked home by home, with ``os.stat``: ``Path.is_dir`` raises on a permission error
     (Python 3.10), and one such home inside a single ``try`` emptied the whole view.
+
+    The deployment's declared daemons come first, wherever their homes are, and one that has
+    published nothing reads "declared, no summary published" rather than vanishing. The
+    ``/home`` scan follows, for seats with no declaration yet.
     """
+    views: List[AgentView] = []
+    seen = set()
+    for home in declared_homes(rendered, home_of):
+        if isinstance(home, AgentView):
+            views.append(home)
+            continue
+        view = read_agent(home)
+        if view.status == "UNPUBLISHED":
+            view = AgentView(home=str(home), status="UNPUBLISHED", detail="declared, no summary published")
+        views.append(view)
+        seen.add(str(home))
     try:
         candidates = sorted(Path(homes).iterdir())
     except OSError:
-        return []
-    views = []
+        return views
     for home in candidates:
+        if str(home) in seen:
+            continue
         try:
             is_tree = stat.S_ISDIR(os.stat(home / "agent" / "public").st_mode)
         except (FileNotFoundError, NotADirectoryError):
