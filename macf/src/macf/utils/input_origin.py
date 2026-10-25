@@ -185,6 +185,42 @@ def typed_by_framework(text: str, now: Optional[float] = None, *, consumer: str 
     return kind
 
 
+#: How far back a box's text is looked for among the framework's keystrokes. Unsent text
+#: sits in a box for as long as nobody submits it (half a day, on Oct 24), so this is far
+#: wider than the window in which a keystroke names its arrival.
+BOX_TEXT_WINDOW_SECONDS = 24 * 60 * 60
+
+
+def framework_typed_box_text(box: str, now: Optional[float] = None) -> Optional[str]:
+    """The kind of the framework keystroke that typed ``box``, the text an input box holds, or
+    None when no keystroke in the window accounts for it.
+
+    The box's text counts as the framework's when it is the start of a ``keys_sent`` record's
+    text, with every run of whitespace made one space: the screen joins a wrapped line's rows
+    with a space, and Ctrl-U removes text from the end. Text a person added before or after
+    the framework's keys is no record's start, so it is never the framework's. Nothing is
+    taken: this only looks.
+    """
+    wanted = " ".join(box.split())
+    if not wanted:
+        return None
+    from macf.agent_events_log import read_events
+    cutoff = (time.time() if now is None else now) - BOX_TEXT_WINDOW_SECONDS
+    # A box keeps its text across a compaction, so the whole log is read back to the cutoff.
+    for event in read_events(reverse=True, scope="all", only=[KEYS_SENT_EVENT]):
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        if event.get("event") != KEYS_SENT_EVENT:
+            continue
+        data = event.get("data") or {}
+        if data.get("kind") == "clear_input":
+            continue                     # the Ctrl-U a clearing records types no text
+        if " ".join(str(data.get("text", "")).split()).startswith(wanted):
+            return str(data.get("kind") or "keys")
+    return None
+
+
 def from_maceff_channel(source: Optional[str]) -> bool:
     """True when a channel source, from an origin record or an opening tag, is the MacEff channel.
 

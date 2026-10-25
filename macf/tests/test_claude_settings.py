@@ -420,4 +420,14 @@ class TestAnAgentCanAlwaysCompactItself:
         ensure_mode_safety_permissions(project_root=tmp_path)
 
         allow = json.loads((tmp_path / ".claude" / "settings.local.json").read_text())["permissions"]["allow"]
-        assert not [e for e in allow if e.startswith("Bash(macf_tools inject") and e != "Bash(macf_tools inject compact)"]
+        assert sorted(e for e in allow if e.startswith("Bash(macf_tools inject")) == [
+            "Bash(macf_tools inject clear-input:*)", "Bash(macf_tools inject compact)"]
+
+    def test_clearing_the_box_is_allowed_since_compact_refuses_a_full_one(self, tmp_path):
+        from macf.utils.claude_settings import ensure_mode_safety_permissions
+        (tmp_path / ".claude").mkdir()
+
+        ensure_mode_safety_permissions(project_root=tmp_path)
+
+        allow = json.loads((tmp_path / ".claude" / "settings.local.json").read_text())["permissions"]["allow"]
+        assert "Bash(macf_tools inject clear-input:*)" in allow

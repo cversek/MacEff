@@ -11528,7 +11528,13 @@ def _cmd_inject(args):
     directing the agent to compact itself.
     """
     from .compact_followup import DEFAULT_TEXT
-    from .supervisor import send_slash_to_self
+    from .supervisor import clear_own_input, send_slash_to_self
+    if args.command == "clear-input":
+        if getattr(args, "target", ""):
+            print("[inject] clear-input acts only on this agent's own pane; --target is "
+                  "refused.", file=sys.stderr)
+            return 1
+        return clear_own_input(getattr(args, "expect", "") or "")
     then = None if getattr(args, "no_then", False) else (getattr(args, "then", None) or DEFAULT_TEXT)
     return send_slash_to_self(args.command, target=getattr(args, "target", "") or "", then=then)
 
@@ -13536,7 +13542,12 @@ def _build_parser() -> argparse.ArgumentParser:
     inject_parser = sub.add_parser(
         "inject",
         help="queue a slash command into this agent's own CC pane (e.g. inject compact)")
-    inject_parser.add_argument("command", help="slash command without the slash, e.g. 'compact'")
+    inject_parser.add_argument("command", help="slash command without the slash, e.g. 'compact'; "
+                                                "or 'clear-input' to empty this pane's input box "
+                                                "of framework text (with --expect)")
+    inject_parser.add_argument("--expect", default="", metavar="OPENING",
+                               help="for clear-input: the opening words of the text to clear; "
+                                    "nothing is pressed unless the box starts with them")
     inject_parser.add_argument("--target", default="",
                                help="supervisor name/pid to target directly "
                                     "(default: self-resolve from this session id)")
