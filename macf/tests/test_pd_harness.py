@@ -854,3 +854,105 @@ def test_a_stop_ends_the_hold(tmp_path, monkeypatch):
     del terminal.clients[4242]
     core.tick()
     assert core.state("session") == "stopped" and not marker.exists()
+
+
+def test_a_respawn_is_held_beside_a_hand_started_client_and_issued_after(tmp_path, monkeypatch):
+    """claude respawn starts a client on the conversation as surely as the unit's own start: a
+    session the client hosted before is not respawned while someone has resumed it by hand in
+    the project directory, and is respawned on a later look once that client has gone."""
+    from macf.pd import core as core_module
+    monkeypatch.delenv("MACEFF_PROJECT_DIR", raising=False)
+    monkeypatch.setattr(core_module, "CLIENT_RECHECK_S", 0.0)
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    client = _Client(home)
+    terminal = _Terminal({})
+    try:
+        hosted = client.host("3d52b89a-dddd")
+        terminal.clients[hosted.pid] = home                    # the hosted worker is a client here too
+        core = _core(home, client, marker, clients=terminal, ancestors=lambda pid: {pid, 1})
+        core.boot()
+        assert core.state("session") == "running" and core.pid("session") == hosted.pid
+        del terminal.clients[hosted.pid]
+        terminal.clients[4242] = home                          # resumed by hand meanwhile
+        core.restart("session", _policy(), "test restart")
+        assert _settle(core, lambda: core.state("session") == "failed")
+        core.tick()
+        core.tick()
+        assert [c[1] for c in client.calls] == ["stop"], "no respawn beside the hand-started client"
+        reason = _unit_reasons()[-1]
+        assert reason.startswith("not started:") and "pid 4242" in reason and "harness cutover" in reason
+        del terminal.clients[4242]                             # the person quit it
+        assert _settle(core, lambda: core.state("session") == "running")
+        assert [c[1] for c in client.calls] == ["stop", "respawn"]
+        assert core.pid("session") == client.sessions["3d52b89a-dddd"].pid and not marker.exists()
+    finally:
+        client.close()
+
+
+def test_the_hosted_worker_being_respawned_is_not_a_hand_started_client(tmp_path, monkeypatch):
+    """At the respawn, the client's own live worker for that session sits in the project
+    directory; it is the unit's own, by pid and start time, and doesn't hold the respawn."""
+    monkeypatch.delenv("MACEFF_PROJECT_DIR", raising=False)
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    client = _Client(home)
+    try:
+        worker = client.host("3d52b89a-eeee")
+        terminal = _Terminal({worker.pid: home})
+        core = _core(home, client, marker, clients=terminal, ancestors=lambda pid: {pid, 1})
+        core._units["session"].client_session = "3d52b89a-eeee"   # hosted before, as a restart finds it
+        core.boot()
+        assert [c[1] for c in client.calls] == ["respawn"], _unit_reasons()
+        assert core.state("session") == "running" and not marker.exists()
+    finally:
+        client.close()
+
+
+def test_clients_that_cannot_be_listed_hold_the_session_unit(tmp_path, monkeypatch):
+    """Fail closed: when the process listing fails, whether a hand-started client runs is
+    unknown, so the unit is held, says why, and starts once a listing works and finds none."""
+    from macf.pd import core as core_module
+    monkeypatch.delenv("MACEFF_PROJECT_DIR", raising=False)
+    monkeypatch.setattr(core_module, "CLIENT_RECHECK_S", 0.0)
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    broken = [True]
+
+    def clients(directory):
+        if broken[0]:
+            raise OSError("ps: not found")
+        return []
+
+    core = _core(home, _Client(home), marker, clients=clients, ancestors=lambda pid: {pid, 1})
+    core.boot()
+    core.tick()
+    assert core.state("session") == "failed" and not marker.exists()
+    reason = _unit_reasons()[-1]
+    assert reason.startswith("not started:") and "process listing failed" in reason and "ps: not found" in reason
+    broken[0] = False
+    assert _settle(core, marker.exists), "started once the listing works and finds none"
+    core.shutdown("the test is over")
+
+
+def test_a_client_below_the_daemon_is_its_own_when_the_units_start_is_unknown(tmp_path, monkeypatch):
+    """A unit process whose start time can't be read never lands in the unit's own record, so
+    a client below it is recognised only by descending from the daemon itself."""
+    import os
+
+    from macf.pd import core as core_module
+    monkeypatch.delenv("MACEFF_PROJECT_DIR", raising=False)
+    monkeypatch.setattr(core_module, "proc_start", lambda pid: None)
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    terminal = _Terminal({})
+    core = _core(home, _Client(home), marker, clients=terminal,
+                 ancestors=lambda pid: {pid, 99999, os.getpid(), 1})   # below the unit's process, below the daemon
+    core.boot()
+    assert _settle(core, marker.exists)
+    assert core._units["session"].own == [], "the start was unknown, so nothing is recorded"
+    marker.unlink()
+    terminal.clients[4242] = home                              # the unit's own client
+    assert _settle(core, marker.exists), "restarted: its own client below the daemon doesn't hold it"
+    assert not any("started by hand" in reason for reason in _unit_reasons())
+    core.shutdown("the test is over")

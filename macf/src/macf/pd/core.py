@@ -451,8 +451,17 @@ class _Runner:
     stop_pending: Optional[str] = None  # the stopped transition's reason, recorded once the remnant ends
     incarnations: int = 0               # processes this daemon started or adopted for it (R47)
     own: List[tuple] = field(default_factory=list)  # (pid, proc_start) of each process started or adopted for it
-    held_by: Optional[List[int]] = None  # a session unit not started: the hand-started clients beside it
+    held_by: Optional[List[int]] = None  # a session unit not started: the hand-started clients beside it ([] when they couldn't be listed)
     held_check_at: float = 0.0          # monotonic: when a held session unit looks again
+
+
+@dataclass
+class _ClientScan:
+    """What a look for hand-started clients found: the directory looked in (None: nowhere to
+    look), the foreign pids (None: the listing failed), and why it failed."""
+    where: Optional[Path]
+    pids: Optional[List[int]]
+    error: Optional[str]
 
 
 class _LogTail:
@@ -1174,6 +1183,12 @@ class Core:
         if r.client_session:
             if not self._find_client(r):
                 return True
+            # The respawn starts a client on this conversation as surely as the unit's own
+            # start, so the hand-started guard stands here too, before the verb is issued. The
+            # hosted worker(s) being decided on are a client in that directory and the unit's
+            # own, so they don't count; one resumed by hand meanwhile does (persistent_layer 6.2).
+            if self._held_by_hand_started(r, self._hosted_workers(r.client_session)):
+                return True
             out = self._client(client_command("start", r.client_session, claude=r.client_binary))
             if out.returncode != 0:
                 print(f"⚠️ MACF: pd: the client could not respawn session {r.client_session[:8]} "
@@ -1248,43 +1263,72 @@ class Core:
                                   args=argparse.Namespace(project_dir=None), card=self.card)
         return agent_stack.project_dir(ctx)
 
-    def _foreign_clients(self, r: _Runner) -> tuple:
-        """(project directory, pids) of live Claude Code clients there that no unit of this
-        daemon holds: not below this daemon, and not below a process this unit ran or adopted
-        that is still the one recorded, by pid and start time. A client found by the unit's own
-        adoption is its own; one started by hand in a terminal is nobody's."""
+    def _hosted_workers(self, session_id: str) -> List[tuple]:
+        """(pid, proc_start) of the client's live workers for *session_id*, the ones a respawn
+        is being decided on; the start is None where it can't be read. An unreadable readout
+        gives none, so a live worker then counts as a client like any other and holds the unit."""
+        try:
+            hosted = self._hosted()
+        except OSError as e:
+            print(f"⚠️ MACF: pd: what the client hosts is unreadable ({e}); no hosted worker of session "
+                  f"{session_id[:8]} is counted as the unit's own", file=sys.stderr)
+            return []
+        return [(h.pid, proc_start(h.pid)) for h in hosted if h.session_id == session_id]
+
+    def _foreign_clients(self, r: _Runner, also_own: List[tuple] = ()) -> "_ClientScan":
+        """The project directory, and the pids of live Claude Code clients there that no unit of
+        this daemon holds: not below this daemon, not below a process this unit ran or adopted
+        that is still the one recorded, by pid and start time, and not below a process in
+        *also_own* (pid and start time, or the pid alone where its start is None). A client found
+        by the unit's own adoption is its own; one started by hand in a terminal is nobody's.
+        When the clients can't be listed, pids is None and error says why: unknown, never none."""
         where = self._session_project_dir(r)
         if where is None:
-            return None, []
+            return _ClientScan(where=None, pids=[], error=None)
         try:
             pids = self._clients(where)
         except OSError as e:
-            print(f"⚠️ MACF: pd: the clients in {where} can't be listed ({e}); starting the session "
-                  f"unit without that check", file=sys.stderr)
-            return where, []
-        own = {os.getpid()} | {pid for pid, start in r.own if self._probe(pid, start)}
-        return where, [pid for pid in pids if not (set(self._ancestors(pid)) & own)]
+            print(f"⚠️ MACF: pd: the clients in {where} can't be listed ({e}); holding the session "
+                  f"unit until they can be", file=sys.stderr)
+            return _ClientScan(where=where, pids=None, error=str(e) or type(e).__name__)
+        own = ({os.getpid()} | {pid for pid, start in r.own if self._probe(pid, start)}
+               | {pid for pid, start in also_own if not start or self._probe(pid, start)})
+        return _ClientScan(where=where, pids=[pid for pid in pids if not (set(self._ancestors(pid)) & own)],
+                           error=None)
 
-    def _held_by_hand_started(self, r: _Runner) -> bool:
+    def _held_by_hand_started(self, r: _Runner, also_own: List[tuple] = ()) -> bool:
         """Whether a hand-started client keeps the session unit from starting now (persistent_layer
         6.2): a session unit beside it would be a second client on one conversation. Held, the
         unit reads failed, saying which pid and pointing at harness cutover, without counting a
-        failure, and the pass looks again until the client has gone."""
-        where, foreign = self._foreign_clients(r)
-        if not foreign:
+        failure, and the pass looks again until the client has gone. Clients that can't be
+        listed hold it too, failing closed: the unit reads failed naming that the process
+        listing failed, and starts once a listing works and finds none. *also_own*: processes
+        that count as the unit's own at this start (``_foreign_clients``)."""
+        scan = self._foreign_clients(r, also_own)
+        where, foreign, error = scan.where, scan.pids, scan.error
+        if foreign is not None and not foreign:
             if r.held_by is not None:
-                r.held_by = None
-                self._control("start", r, POLICY, f"the hand-started client in {where} has ended")
+                was_unlisted, r.held_by = r.held_by == [], None
+                self._control("start", r, POLICY,
+                              f"the clients in {where} can be listed again, and none runs by hand"
+                              if was_unlisted else f"the hand-started client in {where} has ended")
             return False
         r.proc, r.pid, r.proc_start = None, None, None
         r.held_check_at = self._clock() + CLIENT_RECHECK_S
-        if foreign != r.held_by:
-            r.held_by = foreign
-            self._transition(r, "failed", (
-                f"not started: a Claude Code client started by hand runs in {where} (pid "
-                f"{', '.join(map(str, foreign))}), held by no unit, and the session unit beside it "
-                f"would be a second client on one conversation; end that session, or move it with "
-                f"macf_tools harness cutover. The unit starts once it has gone"))
+        key = [] if foreign is None else foreign
+        if key != r.held_by:
+            r.held_by = key
+            if foreign is None:
+                why = (f"not started: the process listing failed, so the Claude Code clients in {where} "
+                       f"can't be listed ({error}), and the session unit beside one started by hand "
+                       f"would be a second client on one conversation. The unit starts once the "
+                       f"listing works and finds none")
+            else:
+                why = (f"not started: a Claude Code client started by hand runs in {where} (pid "
+                       f"{', '.join(map(str, foreign))}), held by no unit, and the session unit beside it "
+                       f"would be a second client on one conversation; end that session, or move it with "
+                       f"macf_tools harness cutover. The unit starts once it has gone")
+            self._transition(r, "failed", why)
         return True
 
     def _spawn(self, r: _Runner) -> None:
