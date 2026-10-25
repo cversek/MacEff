@@ -16,6 +16,17 @@ from macf.utils.claude_settings import (
 )
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _own_home(tmp_path_factory, monkeypatch):
+    """Every test here gets an empty home and no CLAUDE_CONFIG_DIR, so the toggle never reads
+    the real user's settings: a maintainer's own Ask rules joined the deny list on review."""
+    monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+
+
 def _seed(tmp_path, settings):
     d = tmp_path / ".claude"
     d.mkdir(parents=True, exist_ok=True)

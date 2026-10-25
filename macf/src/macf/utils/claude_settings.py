@@ -543,7 +543,8 @@ def toggle_auto_mode_ask_permissions(enable_auto: bool, project_root: Optional[P
 _USER_REMOTE_EXTRA_DENY = ["AskUserQuestion"]
 
 
-def toggle_user_remote_deny_permissions(enable_remote: bool, project_root: Optional[Path] = None) -> Optional[dict]:
+def toggle_user_remote_deny_permissions(enable_remote: bool, project_root: Optional[Path] = None,
+                                        home: Optional[Path] = None) -> Optional[dict]:
     """Deny CLI-blocking tools while USER_REMOTE is active; restore on exit (#143).
 
     While the operator is reachable only remotely, a permission PROMPT hangs the
@@ -581,7 +582,7 @@ def toggle_user_remote_deny_permissions(enable_remote: bool, project_root: Optio
             # among them; a deny written here wins over an ask from any of them.
             from macf.permission_watch import ask_rules
             from .paths import find_project_root
-            elsewhere = [r for r in ask_rules(str(project_root or find_project_root()), Path.home())
+            elsewhere = [r for r in ask_rules(str(project_root or find_project_root()), home or Path.home())
                          if r not in ask_list]
             for entry in list(ask_list) + elsewhere + _USER_REMOTE_EXTRA_DENY:
                 if entry in stash:
