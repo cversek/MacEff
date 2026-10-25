@@ -41,6 +41,8 @@ DRIFT = "found, with drift"
 SKIPPED = "skipped"
 REFUSED = "refused"
 PLANNED = "planned"
+#: Under --plan: what a step found it would do, having checked and changed nothing.
+WOULD = "would do"
 
 #: (step, what it does, the flag that skips it)
 STEPS: List[Tuple[str, str, str]] = [
@@ -97,6 +99,8 @@ class Context:
     staged: Optional[Path] = None
     #: The declaration the harness and daemon steps act on (default or existing).
     declaration: Optional[Dict] = None
+    #: --plan: every step checks what it finds and reports what it would do, changing nothing.
+    dry_run: bool = False
     notes: List[str] = field(default_factory=list)
 
 
@@ -288,14 +292,21 @@ def client_processes() -> List[Tuple[int, str]]:
     return sorted(set(walk) | set(_clients_from_sidecars()))
 
 
+def clients_here(ctx: Context) -> List[int]:
+    """The pids of live clients whose working directory is the agent's project directory."""
+    here = project_dir(ctx).resolve()
+    return sorted({pid for pid, cwd in client_processes() if Path(cwd).resolve() == here})
+
+
+def _describe_clients(ctx: Context, pids: List[int]) -> str:
+    return f"a Claude Code client already runs in {project_dir(ctx).resolve()} (pid {', '.join(map(str, pids))})"
+
+
 def live_client_here(ctx: Context) -> Optional[str]:
     """A live client whose working directory is the agent's project directory: the session a
     session unit would resume in the same place, so a second client on the same transcript."""
-    here = project_dir(ctx).resolve()
-    pids = sorted({pid for pid, cwd in client_processes() if Path(cwd).resolve() == here})
-    if not pids:
-        return None
-    return f"a Claude Code client already runs in {here} (pid {', '.join(map(str, pids))})"
+    pids = clients_here(ctx)
+    return _describe_clients(ctx, pids) if pids else None
 
 
 def legacy_harness_live(ctx: Context) -> Optional[str]:
@@ -358,6 +369,8 @@ def step_task_store(ctx: Context) -> Result:
         config = {}
     if store.is_dir() and (config.get("task_store") or {}).get("mode") == "home":
         return Result("task-store", ALREADY, str(store))
+    if ctx.dry_run:
+        return Result("task-store", WOULD, f"create {store} and point the config at it")
     from macf.cli import cmd_task_store_init
     rc, text = _captured(lambda: cmd_task_store_init(argparse.Namespace(home=str(ctx.home))))
     if rc != 0:
@@ -404,6 +417,14 @@ def step_declaration(ctx: Context) -> Result:
             ctx.staged = target
             ctx.declaration = json.loads(target.read_text())
             return Result("declaration", ALREADY, f"staged at {target} for macf_tools harness cutover ({live})")
+    if ctx.dry_run:
+        ctx.declaration = default
+        units = ", ".join(u["name"] for u in default["units"])
+        if live:
+            ctx.staged = target
+            return Result("declaration", WOULD, f"stage the default declaration ({units}) at {target}, not "
+                                                f"install it: {live}")
+        return Result("declaration", WOULD, f"write the default declaration at {target}: units {units}")
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(target.name + ".tmp")
     tmp.write_text(json.dumps(default, indent=2) + "\n")
@@ -449,6 +470,8 @@ def step_harness(ctx: Context) -> Result:
     rc, _ = _captured(lambda: cmd_harness_install(ns(True)))
     if rc == 0:
         return Result("harness", ALREADY, f"channels {' '.join(channels)}")
+    if ctx.dry_run:
+        return Result("harness", WOULD, f"install the child script and settings with channels {' '.join(channels)}")
     rc, text = _captured(lambda: cmd_harness_install(ns(False)))
     if rc != 0:
         return Result("harness", REFUSED, text.replace("Error: ", "").strip() or f"exit {rc}")
@@ -482,6 +505,10 @@ def step_channel(ctx: Context) -> Result:
     except FileNotFoundError as e:
         return Result("channel", REFUSED, str(e))
     commands = []
+    if ctx.dry_run:
+        todo = ([f"add the marketplace {source}"] if MARKETPLACE not in known else []) + \
+            ([f"install {CHANNEL_PLUGIN_ID}"] if CHANNEL_PLUGIN_ID not in installed else [])
+        return Result("channel", WOULD, "; ".join(todo))
     if MARKETPLACE not in known:
         commands.append([claude, "plugin", "marketplace", "add", str(source)])
     if CHANNEL_PLUGIN_ID not in installed:
@@ -500,6 +527,14 @@ def step_channel(ctx: Context) -> Result:
 def step_permissions(ctx: Context) -> Result:
     from macf.utils.claude_settings import ensure_mode_safety_permissions
     root = project_dir(ctx)
+    if ctx.dry_run:
+        missing = _missing_permissions(root)
+        where = root / ".claude" / "settings.local.json"
+        if missing is None:
+            return Result("permissions", REFUSED, f"{where} can't be read")
+        if not missing:
+            return Result("permissions", ALREADY, str(where))
+        return Result("permissions", WOULD, f"add {len(missing)} entr{'y' if len(missing) == 1 else 'ies'} to {where}")
     try:
         (root / ".claude").mkdir(parents=True, exist_ok=True)
     except OSError as e:
@@ -516,6 +551,51 @@ def step_permissions(ctx: Context) -> Result:
     return Result("permissions", DONE, f"{added} entr{'y' if added == 1 else 'ies'} added to {where}")
 
 
+def _missing_permissions(root: Path) -> Optional[List[str]]:
+    """The entries ensure_mode_safety_permissions would add, by its own lists, without writing."""
+    from macf.utils import claude_settings as cs
+    try:
+        settings, _path = cs._read_settings(root)
+    except (OSError, ValueError):
+        return None  # noqa: MACEFF003 - None is "can't read"; the caller refuses the step, naming the file
+    perms = settings.get("permissions") or {}
+    deny, ask, allow = (perms.get(k) or [] for k in ("deny", "ask", "allow"))
+    return ([e for e in cs._PERMANENT_DENY if e not in deny] + [e for e in cs._PERMANENT_ASK if e not in ask]
+            + [e for e in cs._PERMANENT_ALLOW if e not in allow]
+            + [e for e in cs._DEFAULT_ASK if e not in ask and e not in allow])
+
+
+def _declares_session(declaration: Optional[Dict]) -> bool:
+    return any(u.get("kind") == "session" for u in (declaration or {}).get("units") or [])
+
+
+def daemon_session_pid(ctx: Context, declaration: Optional[Dict]) -> Optional[int]:
+    """The pid of this agent's session unit, as its running daemon confirms it, or None: no
+    daemon answers, or it doesn't report the declared session unit up with a pid."""
+    names = [u.get("name") for u in (declaration or {}).get("units") or [] if u.get("kind") == "session"]
+    if not names or not ctx.card:
+        return None
+    from macf.pd.client import status
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            report = status(ctx.home, ctx.card)
+    except Exception:  # noqa: BLE001 - a readout that fails confirms nothing
+        return None  # noqa: MACEFF003 - unconfirmed, so the live-session guard keeps blocking
+    if report.source != "daemon":
+        return None
+    for unit in report.units:
+        if unit.get("unit") == names[0] and unit.get("state") in ("running", "waiting_on_a_person") \
+                and unit.get("pid"):
+            return int(unit["pid"])
+    return None
+
+
+def ancestors(pid: int) -> set:
+    """*pid* and its ancestors (``supervisor.ancestor_pids``)."""
+    from macf.supervisor import ancestor_pids
+    return ancestor_pids(pid)
+
+
 def step_daemon(ctx: Context) -> Result:
     if ctx.in_container:
         return Result("daemon", SKIPPED, "in a container, the container's start step starts the daemon")
@@ -529,14 +609,41 @@ def step_daemon(ctx: Context) -> Result:
         return Result("daemon", REFUSED, ctx.card_error)
     from macf.pd.names import declaration_path
     from macf.utils.paths import find_agent_home
-    if not declaration_path(ctx.home).exists():
-        return Result("daemon", REFUSED, f"no declaration at {declaration_path(ctx.home)}")
+    path = declaration_path(ctx.home)
+    if path.exists():
+        try:
+            declaration = json.loads(path.read_text())
+        except (OSError, ValueError) as e:
+            return Result("daemon", REFUSED, f"{path} can't be read: {e}")
+    elif ctx.dry_run and ctx.declaration is not None:
+        declaration = ctx.declaration     # the one the declaration step would write
+    else:
+        return Result("daemon", REFUSED, f"no declaration at {path}")
+    # Whatever the declaration step found, new, existing or drifted: a session unit started beside
+    # a session already running would be a second client on one conversation (6.2, 6.3).
+    # A client below this agent's own confirmed session unit is that unit's session, not a
+    # second one.
+    if _declares_session(declaration):
+        unit_pid = daemon_session_pid(ctx, declaration)
+        pids = clients_here(ctx)
+        ours = [p for p in pids if unit_pid is not None and unit_pid in ancestors(p)]
+        foreign = [p for p in pids if p not in ours]
+        live = _systemd_harness_live(ctx) or _launchd_harness_live(ctx) or \
+            (_describe_clients(ctx, foreign) if foreign else None)
+        if live:
+            return Result("daemon", SKIPPED, f"pd install not run: {live}. Its session unit would be a "
+                                             f"second client on one conversation; stop that session "
+                                             f"deliberately, then run macf_tools harness cutover")
+        if ours:
+            return Result("daemon", ALREADY, f"pd install; the session runs as its daemon's unit (pid {unit_pid})")
     resolved = Path(find_agent_home()).resolve()
     if resolved != ctx.home.resolve():
         return Result("daemon", REFUSED, f"pd install acts on the agent home {resolved}, not {ctx.home}; "
                                          f"run agent init from that agent's home")
     if pd_unit_current(ctx.card, ctx.home):
         return Result("daemon", ALREADY, "the service manager's unit is installed as rendered")
+    if ctx.dry_run:
+        return Result("daemon", WOULD, "pd install: put the daemon under the service manager")
     from macf.pd.cli import cmd_pd_install
     rc, text = _captured(lambda: cmd_pd_install(argparse.Namespace(plan=False, force=False)))
     if rc != 0:
@@ -565,8 +672,8 @@ def print_plan(ctx: Context, header: str = "agent init will:") -> None:
         print(f"  {i}. {step}: {what}{skip}")
 
 
-def report(results: List[Result]) -> None:
-    print("\nagent init:")
+def report(results: List[Result], header: str = "agent init:") -> None:
+    print(f"\n{header}")
     for r in results:
         lines = (r.detail or "").splitlines() or [""]
         print(f"  {r.step}: {r.status}" + (f": {lines[0]}" if lines[0] else ""))
@@ -580,14 +687,17 @@ def run_stack(args: argparse.Namespace, home: Path, *, in_container: bool,
     1 when any step refused, else 0. A preamble the operator aborted stops the run there."""
     ctx = Context(home=Path(home), login_home=Path(login_home or Path.home()),
                   in_container=in_container, args=args)
-    if getattr(args, "plan", False):
-        print_plan(ctx, "agent init would (--plan, nothing changed):")
-        return 0, [Result(step, PLANNED) for step, _w, _f in STEPS]
-    print_plan(ctx)
+    plan = getattr(args, "plan", False)
+    ctx.dry_run = plan
+    if not plan:   # under --plan the findings are the plan
+        print_plan(ctx)
     results: List[Result] = []
     for step, _what, flag in STEPS:
         if getattr(args, flag, False):
             results.append(Result(step, SKIPPED, f"--{flag.replace('_', '-')}"))
+            continue
+        if plan and step == "preamble":
+            results.append(Result(step, PLANNED, "reconcile CLAUDE.md (checked when run, since it may ask first)"))
             continue
         try:
             result = preamble() if step == "preamble" else RUNNERS[step](ctx)
@@ -597,5 +707,5 @@ def run_stack(args: argparse.Namespace, home: Path, *, in_container: bool,
         if step == "preamble" and result.status == "aborted":
             print("Aborted.")
             return 0, results
-    report(results)
+    report(results, "agent init --plan (nothing changed):" if plan else "agent init:")
     return (1 if any(r.status == REFUSED for r in results) else 0), results
