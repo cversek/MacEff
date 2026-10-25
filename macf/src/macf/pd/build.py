@@ -32,9 +32,25 @@ def build_id(package_dir: Optional[Path] = None) -> str:
         out = subprocess.run(["git", "-C", str(here), "rev-parse", "--short=8", "HEAD"],
                              capture_output=True, text=True, timeout=2)
         commit = out.stdout.strip() if out.returncode == 0 else ""
+        if commit:
+            # Uncommitted edits make a different build on the same commit, common on a
+            # maintainer's host: a daemon started before more edits must not read as the same.
+            dirty = subprocess.run(["git", "-C", str(here), "status", "--porcelain", "--untracked-files=no", "--", "."],
+                                   capture_output=True, text=True, timeout=2)
+            if dirty.returncode == 0 and dirty.stdout.strip():
+                commit += "-dirty"
     except (OSError, subprocess.SubprocessError):
         commit = ""
+    # The version alone is the same on every commit since a bump, so the commit is what
+    # tells two builds apart (MacEff #816).
     return f"macf {ver} at {commit}" if commit else f"macf {ver}"
+
+
+def known_ops() -> frozenset:
+    """Every request op this command's own interface knows."""
+    from typing import get_args
+    from macf.pd.interface import Request
+    return frozenset(a for m in get_args(Request) for a in get_args(m.model_fields["op"].annotation))
 
 
 def unknown_verb(error: Optional[str]) -> Optional[str]:

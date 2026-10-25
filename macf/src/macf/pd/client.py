@@ -75,12 +75,16 @@ def ask(card: str, request: dict, *, base: Optional[Path] = None,
         response = Response.model_validate_json(reply)
     except ValidationError as e:
         raise DaemonUnavailable(f"the daemon's reply could not be read: {e}") from e
-    from macf.pd.build import UPDATE_HINT, unknown_verb
+    from macf.pd.build import UPDATE_HINT, known_ops, unknown_verb
     verb = None if response.ok else unknown_verb(response.error)
-    if verb:
+    if verb and verb in known_ops():
         # The daemon is older than this command, which its parser's message doesn't say (#816).
         return Response(ok=False, error=f"this daemon is older than this command: it doesn't know "
                                         f"the request '{verb}'; {UPDATE_HINT}")
+    if verb:
+        # Neither side knows it: the fault is this command's, and updating the daemon won't help.
+        return Response(ok=False, error=f"this command sent a request no daemon knows, '{verb}': "
+                                        f"a defect in this command, not an old daemon")
     return response
 
 

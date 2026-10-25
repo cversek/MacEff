@@ -23,10 +23,16 @@ def test_a_verb_the_daemon_does_not_know_reads_as_a_daemon_older_than_its_cli(tm
     assert build.unknown_verb(_parser_refusal()) == "no_such_verb_yet"
     assert build.unknown_verb("no entry e-0123456789ab is held") is None
     daemon = run_daemon(make_home(tmp_path, []), base)
-    reply = client.ask(daemon.card, {"op": "no_such_verb_yet"}, base=base)
+    import pytest as _pt
+    with _pt.MonkeyPatch.context() as mp:                # an op this command knows, the daemon not
+        mp.setattr(build, "known_ops", lambda: frozenset({"no_such_verb_yet"}))
+        reply = client.ask(daemon.card, {"op": "no_such_verb_yet"}, base=base)
     assert not reply.ok
     assert reply.error.startswith("this daemon is older than this command: it doesn't know the request 'no_such_verb_yet'")
     assert "pd install --force" in reply.error and "Input tag" not in reply.error
+    # An op neither side knows is this command's defect, and no update of the daemon is advised.
+    bad = client.ask(daemon.card, {"op": "no_such_verb_yet"}, base=base)
+    assert "a defect in this command" in bad.error and "pd install" not in bad.error
 
 
 def test_a_running_daemon_reports_its_build_on_its_own_request(tmp_path, base, run_daemon):
@@ -75,3 +81,25 @@ def test_status_asks_the_daemon_for_its_build_separately(tmp_path, base, run_dae
     daemon = run_daemon(home, base)
     report = client.status(home, daemon.card, base=base)
     assert report.source == "daemon" and report.daemon_build == build.build_id() == report.cli_build
+
+
+def test_two_commits_of_one_version_are_two_builds_and_edits_say_dirty(tmp_path):
+    """The head maintainer's review on #820: the version is the same on every commit since a
+    bump, so only the commit tells a pinned daemon from today's CLI, the case that prompted
+    #816. Uncommitted edits make another build again."""
+    import subprocess
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True)
+    git("init", "-q")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "one")
+    (repo / "f.py").write_text("x = 1\n")
+    git("add", "f.py")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "two")
+    second = build.build_id(repo)
+    git("checkout", "-q", "HEAD~1")
+    first = build.build_id(repo)
+    assert first != second and first.split(" at ")[0] == second.split(" at ")[0]
+    git("checkout", "-q", "-")
+    (repo / "f.py").write_text("x = 2\n")
+    assert build.build_id(repo) == second + "-dirty"
