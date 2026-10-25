@@ -348,6 +348,11 @@ def carry_state_forward(current_cycle: Optional[int] = None) -> List[str]:
     # know are malformed; a shape nobody thought of fails its own family here, so the marker
     # is still written and the session-start hook keeps its recovery output.
     try:
+        # A lease that ran out before the boundary is ended first, through the one path that
+        # takes an act (R90), folded from the window: the current cycle no longer holds it, so
+        # the daemon's sweep never would, and the log would keep it open forever (R89).
+        from .observe import record as observe_record
+        observe_record.sweep(time.time(), events=window)
         observations = _open_observations(window, time.time())
         if observations:
             ok = True
