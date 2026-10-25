@@ -144,6 +144,16 @@ def unit_python() -> Path:
     return unversioned if unversioned.exists() else python
 
 
+def session_runtime_dir(platform: Optional[str] = None, environ=None) -> Optional[str]:
+    """The ``XDG_RUNTIME_DIR`` the default session unit declares: on Linux the caller's own,
+    the value ``harness cutover`` checks the staged declaration against (it reads the same
+    environment variable); on macOS none, since macOS sets none and the unit and its clients
+    then agree on the per-user fallback under /tmp."""
+    if not (platform or sys.platform).startswith("linux"):
+        return None
+    return (os.environ if environ is None else environ).get("XDG_RUNTIME_DIR") or None
+
+
 def default_declaration(ctx: Context) -> Dict:
     from macf.pd import default_declaration as dd
     python = unit_python()
@@ -162,7 +172,7 @@ def default_declaration(ctx: Context) -> Dict:
         project_dir=project_dir(ctx),
         path_dirs=[str(python.parent), str(ctx.login_home / ".local" / "bin"),
                    str(Path(claude).parent) if claude else "", "/usr/local/bin", "/usr/bin", "/bin"],
-        mail=dd.mail_configured(ctx.home), telegram=telegram)
+        mail=dd.mail_configured(ctx.home), telegram=telegram, runtime_dir=session_runtime_dir())
 
 
 def _validate(declaration: Dict) -> Optional[str]:
@@ -292,10 +302,15 @@ def client_processes() -> List[Tuple[int, str]]:
     return sorted(set(walk) | set(_clients_from_sidecars()))
 
 
+def clients_in(directory: Path) -> List[int]:
+    """The pids of live clients of this account whose working directory is *directory*."""
+    here = Path(directory).resolve()
+    return sorted({pid for pid, cwd in client_processes() if Path(cwd).resolve() == here})
+
+
 def clients_here(ctx: Context) -> List[int]:
     """The pids of live clients whose working directory is the agent's project directory."""
-    here = project_dir(ctx).resolve()
-    return sorted({pid for pid, cwd in client_processes() if Path(cwd).resolve() == here})
+    return clients_in(project_dir(ctx))
 
 
 def _describe_clients(ctx: Context, pids: List[int]) -> str:
@@ -601,7 +616,8 @@ def step_daemon(ctx: Context) -> Result:
         return Result("daemon", SKIPPED, "in a container, the container's start step starts the daemon")
     if ctx.staged:
         return Result("daemon", SKIPPED, f"the declaration is staged at {ctx.staged}; "
-                                         f"macf_tools harness cutover installs it and restarts the daemon")
+                                         f"macf_tools harness cutover installs it, and the daemon too "
+                                         f"(pd install) where none is installed")
     missing = service_manager_missing()
     if missing:
         return Result("daemon", SKIPPED, f"{missing}; pd install has nothing to install into here")
@@ -630,6 +646,10 @@ def step_daemon(ctx: Context) -> Result:
         foreign = [p for p in pids if p not in ours]
         live = _systemd_harness_live(ctx) or _launchd_harness_live(ctx) or \
             (_describe_clients(ctx, foreign) if foreign else None)
+        # The daemon itself never starts a session unit beside such a session (persistent_layer
+        # 6.2); this skip stays because installing it now would arm a session that starts on its
+        # own the moment the person quits theirs, which is a move nobody chose. harness cutover
+        # makes that move deliberately, and installs the daemon itself where none is.
         if live:
             return Result("daemon", SKIPPED, f"pd install not run: {live}. Its session unit would be a "
                                              f"second client on one conversation; stop that session "

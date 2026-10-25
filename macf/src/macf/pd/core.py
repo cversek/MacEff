@@ -25,7 +25,7 @@ import signal
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -450,6 +450,18 @@ class _Runner:
     start_after_remnant: bool = False   # a start waits for the remnant to end
     stop_pending: Optional[str] = None  # the stopped transition's reason, recorded once the remnant ends
     incarnations: int = 0               # processes this daemon started or adopted for it (R47)
+    own: List[tuple] = field(default_factory=list)  # (pid, proc_start) of each process started or adopted for it
+    held_by: Optional[List[int]] = None  # a session unit not started: the hand-started clients beside it ([] when they couldn't be listed)
+    held_check_at: float = 0.0          # monotonic: when a held session unit looks again
+
+
+@dataclass
+class _ClientScan:
+    """What a look for hand-started clients found: the directory looked in (None: nowhere to
+    look), the foreign pids (None: the listing failed), and why it failed."""
+    where: Optional[Path]
+    pids: Optional[List[int]]
+    error: Optional[str]
 
 
 class _LogTail:
@@ -524,6 +536,20 @@ def _harness_hosted_sessions() -> list:
 #: hung CLI holds a pd status or an operator's stop for at most this long.
 CLIENT_TIMEOUT_S = 10.0
 
+#: How often a session unit a hand-started client holds looks again for that client.
+CLIENT_RECHECK_S = 5.0
+
+
+def _clients_in(directory: Path) -> List[int]:
+    from macf.agent_stack import clients_in
+    return clients_in(directory)
+
+
+def _ancestors(pid: int) -> set:
+    from macf.supervisor import ancestor_pids
+    return ancestor_pids(pid)
+
+
 #: How long a respawn the client accepted may take to show its worker in the readout,
 #: checked on each pass, before the session unit is decided afresh.
 RESPAWN_WAIT_S = 30.0
@@ -562,6 +588,8 @@ class Core:
         hosted: Optional[Callable[[], list]] = None,
         client: Optional[Callable[[List[str]], "subprocess.CompletedProcess"]] = None,
         dialogs: Optional[Callable[[str], Callable[[], Optional[str]]]] = None,
+        clients: Optional[Callable[[Path], List[int]]] = None,
+        ancestors: Optional[Callable[[int], set]] = None,
     ):
         self.declaration = declaration
         self.card = card
@@ -582,6 +610,10 @@ class Core:
         # What an adopted session waits on a person for, read by session id from the event
         # log, since such a session writes no liveness to carry it (MIS-0002-R21). A seam too.
         self._dialogs = dialogs or _session_dialogs
+        # The live Claude Code clients in a directory, and a pid's ancestry: what keeps a
+        # session unit from starting beside a session started by hand. Seams for tests.
+        self._clients = clients or _clients_in
+        self._ancestors = ancestors or _ancestors
         self._dialog_readers: Dict[str, Callable[[], Optional[str]]] = {}
         self._units: Dict[str, _Runner] = {
             u.name: _Runner(spec=u, since=wall()) for u in declaration.units
@@ -749,6 +781,7 @@ class Core:
                 continue
             r = self._units[name]
             r.proc, r.pid, r.proc_start = _Adopted(pid, start, self._probe), pid, start
+            r.own.append((pid, start))
             r.over_limit, r.memory_checked_at = False, self._clock()   # its own memory, first read one check after it starts (R60)
             r.started_at = self._clock()
             # Its first liveness under this daemon is judged from the adoption, as a start is,
@@ -782,6 +815,7 @@ class Core:
         r.drain = None
         r.then_start = False
         r.held_restart = None  # a stop also ends a restart a quiet window was holding
+        r.held_by = None       # and a session unit held beside a hand-started client
         if r.proc is not None:
             self._signal_stop(r, f"stopped as asked: {reason}")
         elif r.remnant is not None:
@@ -934,6 +968,14 @@ class Core:
                     r.drain = None
                     self._begin_restart(
                         r, f"{reason} (work in flight did not drain in {self._drain_timeout:g} s)")
+            return
+        if r.held_by is not None:
+            # Held beside a hand-started client: look again every CLIENT_RECHECK_S, and start
+            # once it has gone. A stop asked meanwhile ends the hold.
+            if not r.want_up:
+                r.held_by = None
+            elif now >= r.held_check_at:
+                self._spawn(r)
             return
         if r.want_up and r.restart_at is not None and now >= r.restart_at:
             if r.spec.kind == "session" and quiet_window_at(self.declaration, self._wall()) is not None:
@@ -1141,6 +1183,12 @@ class Core:
         if r.client_session:
             if not self._find_client(r):
                 return True
+            # The respawn starts a client on this conversation as surely as the unit's own
+            # start, so the hand-started guard stands here too, before the verb is issued. The
+            # hosted worker(s) being decided on are a client in that directory and the unit's
+            # own, so they don't count; one resumed by hand meanwhile does (persistent_layer 6.2).
+            if self._held_by_hand_started(r, self._hosted_workers(r.client_session)):
+                return True
             out = self._client(client_command("start", r.client_session, claude=r.client_binary))
             if out.returncode != 0:
                 print(f"⚠️ MACF: pd: the client could not respawn session {r.client_session[:8]} "
@@ -1182,6 +1230,7 @@ class Core:
         if not start:
             return False   # the worker ended between the readout and now: start the unit as usual
         r.proc, r.pid, r.proc_start = _Adopted(decision.pid, start, self._probe), decision.pid, start
+        r.own.append((decision.pid, start))
         r.over_limit, r.memory_checked_at = False, self._clock()   # its own memory, first read one check after it starts (R60)
         r.client_session = decision.session_id
         r.started_at = self._clock()
@@ -1191,6 +1240,95 @@ class Core:
         self._transition(r, "running", f"adopted: {decision.reason} (session {decision.session_id[:8]}, "
                                        f"pid {decision.pid})")
         r.since = start_epoch(start) or r.since
+        return True
+
+    def _session_project_dir(self, r: _Runner) -> Optional[Path]:
+        """Where the session unit's client runs: its rendered ``--project-dir``, else the
+        harness's recorded choice for the agent home, as ``agent init`` reads it, else the
+        home. None when no agent home is known, and then nothing is looked for."""
+        try:
+            command = [render(a, self._placeholders) for a in r.spec.command]
+        except KeyError as e:
+            print(f"⚠️ MACF: pd: the session unit's command names an unknown placeholder ({e}); "
+                  "no project directory to look in for a hand-started client", file=sys.stderr)
+            return None
+        if "--project-dir" in command[:-1]:
+            return Path(command[command.index("--project-dir") + 1])
+        home = self._placeholders.get("agent_home")
+        if not home:
+            return None
+        import argparse
+        from macf import agent_stack
+        ctx = agent_stack.Context(home=Path(home), login_home=Path.home(), in_container=False,
+                                  args=argparse.Namespace(project_dir=None), card=self.card)
+        return agent_stack.project_dir(ctx)
+
+    def _hosted_workers(self, session_id: str) -> List[tuple]:
+        """(pid, proc_start) of the client's live workers for *session_id*, the ones a respawn
+        is being decided on; the start is None where it can't be read. An unreadable readout
+        gives none, so a live worker then counts as a client like any other and holds the unit."""
+        try:
+            hosted = self._hosted()
+        except OSError as e:
+            print(f"⚠️ MACF: pd: what the client hosts is unreadable ({e}); no hosted worker of session "
+                  f"{session_id[:8]} is counted as the unit's own", file=sys.stderr)
+            return []
+        return [(h.pid, proc_start(h.pid)) for h in hosted if h.session_id == session_id]
+
+    def _foreign_clients(self, r: _Runner, also_own: List[tuple] = ()) -> "_ClientScan":
+        """The project directory, and the pids of live Claude Code clients there that no unit of
+        this daemon holds: not below this daemon, not below a process this unit ran or adopted
+        that is still the one recorded, by pid and start time, and not below a process in
+        *also_own* (pid and start time, or the pid alone where its start is None). A client found
+        by the unit's own adoption is its own; one started by hand in a terminal is nobody's.
+        When the clients can't be listed, pids is None and error says why: unknown, never none."""
+        where = self._session_project_dir(r)
+        if where is None:
+            return _ClientScan(where=None, pids=[], error=None)
+        try:
+            pids = self._clients(where)
+        except OSError as e:
+            print(f"⚠️ MACF: pd: the clients in {where} can't be listed ({e}); holding the session "
+                  f"unit until they can be", file=sys.stderr)
+            return _ClientScan(where=where, pids=None, error=str(e) or type(e).__name__)
+        own = ({os.getpid()} | {pid for pid, start in r.own if self._probe(pid, start)}
+               | {pid for pid, start in also_own if not start or self._probe(pid, start)})
+        return _ClientScan(where=where, pids=[pid for pid in pids if not (set(self._ancestors(pid)) & own)],
+                           error=None)
+
+    def _held_by_hand_started(self, r: _Runner, also_own: List[tuple] = ()) -> bool:
+        """Whether a hand-started client keeps the session unit from starting now (persistent_layer
+        6.2): a session unit beside it would be a second client on one conversation. Held, the
+        unit reads failed, saying which pid and pointing at harness cutover, without counting a
+        failure, and the pass looks again until the client has gone. Clients that can't be
+        listed hold it too, failing closed: the unit reads failed naming that the process
+        listing failed, and starts once a listing works and finds none. *also_own*: processes
+        that count as the unit's own at this start (``_foreign_clients``)."""
+        scan = self._foreign_clients(r, also_own)
+        where, foreign, error = scan.where, scan.pids, scan.error
+        if foreign is not None and not foreign:
+            if r.held_by is not None:
+                was_unlisted, r.held_by = r.held_by == [], None
+                self._control("start", r, POLICY,
+                              f"the clients in {where} can be listed again, and none runs by hand"
+                              if was_unlisted else f"the hand-started client in {where} has ended")
+            return False
+        r.proc, r.pid, r.proc_start = None, None, None
+        r.held_check_at = self._clock() + CLIENT_RECHECK_S
+        key = [] if foreign is None else foreign
+        if key != r.held_by:
+            r.held_by = key
+            if foreign is None:
+                why = (f"not started: the process listing failed, so the Claude Code clients in {where} "
+                       f"can't be listed ({error}), and the session unit beside one started by hand "
+                       f"would be a second client on one conversation. The unit starts once the "
+                       f"listing works and finds none")
+            else:
+                why = (f"not started: a Claude Code client started by hand runs in {where} (pid "
+                       f"{', '.join(map(str, foreign))}), held by no unit, and the session unit beside it "
+                       f"would be a second client on one conversation; end that session, or move it with "
+                       f"macf_tools harness cutover. The unit starts once it has gone")
+            self._transition(r, "failed", why)
         return True
 
     def _spawn(self, r: _Runner) -> None:
@@ -1207,6 +1345,8 @@ class Core:
             r.start_after_remnant = True
             return
         if self._from_client(r):
+            return
+        if r.spec.kind == "session" and self._held_by_hand_started(r):
             return
         try:
             command = [render(a, self._placeholders) for a in r.spec.command]
@@ -1239,6 +1379,8 @@ class Core:
             return
         r.proc, r.pid = proc, proc.pid
         r.proc_start = proc_start(proc.pid)
+        if r.proc_start:
+            r.own.append((proc.pid, r.proc_start))
         r.over_limit, r.memory_checked_at = False, self._clock()   # its own memory, first read one check after it starts (R60)
         r.started_at = self._clock()
         r.alive_at, r.alive_interval_s, r.in_flight = None, None, None
@@ -1411,6 +1553,7 @@ class Core:
             if start:
                 r.awaiting_respawn = None
                 r.proc, r.pid, r.proc_start = _Adopted(listed[0].pid, start, self._probe), listed[0].pid, start
+                r.own.append((listed[0].pid, start))
                 self._signal_stop(r, "stopped as asked while its respawn was in flight")
             elif now >= r.awaiting_respawn:
                 r.awaiting_respawn = None
