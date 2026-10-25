@@ -263,6 +263,9 @@ _PERMANENT_ASK = [
 # 10.6; the repo owner's ruling on #744).
 _DEFAULT_ASK = [
     "Bash(macf_tools pd entry add:*)",
+    # An edit or a resume makes an entry fire as nothing consented to before, so it asks as add does.
+    "Bash(macf_tools pd entry edit:*)",
+    "Bash(macf_tools pd entry resume:*)",
     # The event stream's rules: approving the prompt is the operator's act (persistent_layer 11.4).
     "Bash(macf_tools pd stream silence:*)",
     "Bash(macf_tools pd stream unsilence:*)",

@@ -423,7 +423,9 @@ class Scheduler:
         # wake owed over a weekend must not vanish at a Monday restart (the scheduler design, 4.1).
         for entry_id, last in sorted(newest.items()):
             fired = self.entry_fired.get(entry_id)
+            # A paused entry wakes no one, not even with a wake owed from before its pause.
             if (last == "fired" and entry_id in self.entries and fired is not None
+                    and not self.entries[entry_id].get("paused_at")
                     and (self.boot_at - fired).total_seconds() > HOLD_MAX_S and self.on_notice is not None):
                 self.on_notice(NOTICE_ENTRY_DUE, entry_id)
 
@@ -470,6 +472,8 @@ class Scheduler:
         the daemon was down. The firing is recorded before the notice is raised (R26)."""
         from macf.pd.entries import OneShot, parse_when
         entry = self.entries[entry_id]
+        if entry.get("paused_at"):
+            return
         tz = timezone.utc if entry.get("zone") in (None, "UTC") else ZoneInfo(entry["zone"])
         start = _when(entry.get("start"))
         try:
@@ -477,8 +481,11 @@ class Scheduler:
         except ValueError:
             when = parse_when(entry["when"], tz, start, start=start)
         # Strictly after the start: a recurrence counts its start as its first occurrence, and an
-        # entry's start is the moment it was made, so firing it would wake on creation.
-        due = when.next_after(self.entry_fired.get(entry_id) or start)
+        # entry's start is the moment it was made (or edited), so firing it would wake on
+        # creation. Strictly after a resume too, so the instants a pause covered aren't fired late.
+        base = max((t for t in (self.entry_fired.get(entry_id), start, _when(entry.get("resumed_at")))
+                    if t is not None), default=None)
+        due = when.next_after(base)
         if due is None or due > now:
             return
         missed = 0
