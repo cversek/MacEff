@@ -215,8 +215,8 @@ def declared_operator_channels(agent_home: Optional[Path] = None) -> Optional[Fr
     try:
         mtime = path.stat().st_mtime_ns
     except OSError as e:
-        print(f"⚠️ MACF: the declaration at {path} can't be read, so every channel but the "
-              f"MacEff channel counts as the operator's: {e}", file=sys.stderr)
+        print(f"⚠️ MACF: the declaration at {path} can't be read, so no channel counts as the "
+              f"operator's: {e}", file=sys.stderr)
         return None
     cached = _DECLARED.get(path)
     if cached is not None and cached[0] == mtime:
@@ -224,8 +224,8 @@ def declared_operator_channels(agent_home: Optional[Path] = None) -> Optional[Fr
     try:
         listed = Declaration.model_validate_json(path.read_text()).operator_channels
     except (OSError, ValueError) as e:
-        print(f"⚠️ MACF: the declaration at {path} can't be read, so every channel but the "
-              f"MacEff channel counts as the operator's: {e}", file=sys.stderr)
+        print(f"⚠️ MACF: the declaration at {path} can't be read, so no channel counts as the "
+              f"operator's: {e}", file=sys.stderr)
         listed = None
     names = frozenset(listed) if listed is not None else None
     _DECLARED[path] = (mtime, names)
@@ -237,13 +237,11 @@ def operator_channel(source: Optional[str], agent_home: Optional[Path] = None) -
     (MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)).
 
     The MacEff channel never does. Otherwise the exact name must be one the agent's
-    declaration lists in ``operator_channels``. Until the agent declares that list, every
-    other channel counts, an unnamed one included: the transitional rule ``mode_system``
-    states, which keeps an agent that hasn't declared counted as it always was.
+    declaration lists in ``operator_channels``. An agent that lists none, or has no
+    declaration, has no operator channel: a wrong "absent" makes it more careful than it had
+    to be, and a wrong "present" lets it act as if someone were there.
     """
     if from_maceff_channel(source):
         return False
     declared = declared_operator_channels(agent_home)
-    if declared is None:
-        return True
-    return bool(source) and source in declared
+    return bool(source) and declared is not None and source in declared

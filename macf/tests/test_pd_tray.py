@@ -14,11 +14,66 @@ def _resp(*pairs):
     return {"ok": True, "units": [{"unit": u, "state": s, "since": 0.0} for u, s in pairs]}
 
 
-def test_icon_per_card():
-    """One entry per calling card, in card order, each with its own status."""
-    st = union([entry("IraMacEff@ee9a78", _resp(("session", "running"))),
-                entry("ClaudeTheBuilder@6c888f", _resp(("session", "running"), ("broker", "stopped")))])
-    assert [e.card for e in st.entries] == ["ClaudeTheBuilder@6c888f", "IraMacEff@ee9a78"]
+def _agent_home(root, dirname, name, uuid):
+    """An agent home holding the two files ``agent_card`` reads, and nothing else."""
+    home = root / dirname
+    (home / ".maceff").mkdir(parents=True)
+    (home / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": name}}))
+    (home / ".maceff_primary_agent.id").write_text(uuid + "\n")
+    return home
+
+
+def test_icon_per_card(tmp_path, monkeypatch):
+    """MIS-0002-R69: one icon over every installed agent, an entry per agent keyed by the
+    calling card in that agent's own identity file.
+
+    Two homes are installed through LaunchAgents whose labels, home directory names and
+    the environment all name something else, so a key taken from any of them misses. The
+    controller runs its real discovery with the interface's real card resolver and socket
+    paths; only the sockets and the peer check, which need live daemons, are faked.
+    """
+    import plistlib
+    from macf.tray.controller import Controller, installed_homes
+    from macf.pd.interface import control_socket
+
+    homes_root = tmp_path / "homes"
+    first = _agent_home(homes_root, "alpha_dir", "Resident", "1a2b3c4d-0000-0000-0000-000000000000")
+    second = _agent_home(homes_root, "beta_dir", "Keeper", "4d5e6f70-0000-0000-0000-000000000000")
+    agents_dir = tmp_path / "LaunchAgents"
+    agents_dir.mkdir()
+    for label, home in (("maceff_pd.Decoy_000001", first), ("maceff_pd.Decoy_000002", second)):
+        (agents_dir / f"{label}.plist").write_bytes(plistlib.dumps(
+            {"Label": label, "ProgramArguments": ["/usr/bin/python3", "-m", "macf.pd", str(home)]}))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    monkeypatch.setenv("MACEFF_AGENT_NAME", "EnvDecoy")
+
+    answers = {control_socket("Resident@1a2b3c"): _resp(("session", "running")),
+               control_socket("Keeper@4d5e6f"): _resp(("session", "running"), ("broker", "stopped"))}
+    asked = []
+
+    def connect(path):
+        if path not in answers:
+            raise ConnectionRefusedError(f"no daemon at {path}")
+        asked.append(path)
+        return _FakeSock(answers[path])
+
+    ctl = Controller(homes=lambda: installed_homes(agents_dir),
+                     peer_check=lambda sock, record: None, connect=connect)
+    st = ctl.poll()
+
+    assert ctl.errors == []
+    assert sorted(ctl.agents) == ["Keeper@4d5e6f", "Resident@1a2b3c"]
+    assert [e.card for e in st.entries] == ["Keeper@4d5e6f", "Resident@1a2b3c"]
+    assert [e.status for e in st.entries] == ["running", "running"]
+    assert sorted(asked) == sorted(answers)          # each agent's own socket, from its card
+    assert st.icon == "running" and not st.alerting  # one icon over both
+
+
+def test_union_keys_entries_by_card_in_card_order():
+    """The model half: one entry per calling card, in card order, each with its own status."""
+    st = union([entry("Resident@1a2b3c", _resp(("session", "running"))),
+                entry("Keeper@4d5e6f", _resp(("session", "running"), ("broker", "stopped")))])
+    assert [e.card for e in st.entries] == ["Keeper@4d5e6f", "Resident@1a2b3c"]
     assert [e.status for e in st.entries] == ["running", "running"]
     assert st.icon == "running" and not st.alerting
 
@@ -193,12 +248,12 @@ def test_discovery_problems_are_said_not_guessed():
 def test_installed_homes_come_from_the_launch_agents(tmp_path):
     import plistlib
     from macf.tray.controller import installed_homes
-    (tmp_path / "maceff_pd.IraMacEff_ee9a78.plist").write_bytes(plistlib.dumps(
-        {"Label": "maceff_pd.IraMacEff_ee9a78",
-         "ProgramArguments": ["/usr/bin/python3", "-m", "macf.pd", "/Users/x/IRA"]}))
+    (tmp_path / "maceff_pd.Resident_1a2b3c.plist").write_bytes(plistlib.dumps(
+        {"Label": "maceff_pd.Resident_1a2b3c",
+         "ProgramArguments": ["/usr/bin/python3", "-m", "macf.pd", "/Users/x/agent_home"]}))
     (tmp_path / "maceff_pd.Odd_000000.plist").write_bytes(plistlib.dumps({"ProgramArguments": ["x"]}))
     (tmp_path / "com.other.plist").write_bytes(plistlib.dumps({"ProgramArguments": ["/usr/bin/python3", "-m", "macf.pd", "/no"]}))
-    assert [str(h) for h in installed_homes(tmp_path)] == ["/Users/x/IRA"]
+    assert [str(h) for h in installed_homes(tmp_path)] == ["/Users/x/agent_home"]
 
 
 def test_two_homes_claiming_one_card_both_show_failed_and_take_no_acts():

@@ -77,6 +77,21 @@ def add_pd_parser(sub) -> None:
     remove = entry_sub.add_parser("remove", help="remove an entry; the agent or the operator may, since it only stops work")
     remove.add_argument("id", help="the entry's id, e- and 12 hex digits")
     remove.set_defaults(func=cmd_pd_entry_remove)
+    edit = entry_sub.add_parser("edit", help="change an entry's time, purpose or missed policy, keeping its id; "
+                                             "from your live session, like add")
+    edit.add_argument("id", help="the entry's id, e- and 12 hex digits")
+    edit.add_argument("--when", default=None, help="a new time, in any shape add takes; its clock starts again now")
+    edit.add_argument("--purpose", default=None, help="a new purpose")
+    edit.add_argument("--missed", choices=("once", "skip", "report"), default=None, help="a new missed-run policy")
+    edit.set_defaults(func=cmd_pd_entry_edit)
+    pause = entry_sub.add_parser("pause", help="stop an entry firing without removing it; the agent or the "
+                                               "operator may, since it only stops work")
+    pause.add_argument("id", help="the entry's id, e- and 12 hex digits")
+    pause.set_defaults(func=cmd_pd_entry_pause, pause_op="entry_pause")
+    resume = entry_sub.add_parser("resume", help="let a paused entry fire again, from now: the firings it "
+                                                 "missed while paused are not made up; from your live session")
+    resume.add_argument("id", help="the entry's id, e- and 12 hex digits")
+    resume.set_defaults(func=cmd_pd_entry_pause, pause_op="entry_resume")
     show = entry_sub.add_parser("show", help="one entry in full: its purpose, time, state, why it was marked, "
                                              "and when it last fired and how late")
     show.add_argument("id", help="the entry's id, e- and 12 hex digits")
@@ -288,6 +303,17 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         _say_tray(report)
         return 0
     print(f"{card}: from the {report.source} ({report.why})")
+    if report.source == "daemon":
+        from macf.pd.build import UPDATE_HINT
+        if not report.daemon_build:
+            print(f"  ⚠️ the daemon doesn't say which build it runs, so it is older than this command "
+                  f"({report.cli_build}); {UPDATE_HINT}")
+        elif report.daemon_build != report.cli_build:
+            # "Differ", not "older": two checkouts give no order, and the daemon may be the newer.
+            print(f"  ⚠️ the daemon and this command run different builds: the daemon {report.daemon_build}, "
+                  f"this command {report.cli_build}. If this command's is the one you mean, {UPDATE_HINT}")
+        else:
+            print(f"  build: {report.daemon_build}, the same as this command")
     for unit in report.units:
         line = f"  {unit['unit']}: {unit.get('state') or 'no state recorded'}"
         if unit.get("pid"):
@@ -355,7 +381,8 @@ def cmd_pd_entry_show(args: argparse.Namespace) -> int:
     if entry is None:
         print(f"⚠️ MACF: pd: no entry {args.id} is held", file=sys.stderr)
         return 1
-    for key in ("id", "agent", "action", "purpose", "when", "zone", "first", "missed", "marked", "start"):
+    for key in ("id", "agent", "action", "purpose", "when", "zone", "first", "missed", "marked", "start",
+                "edited_at", "paused_at", "resumed_at"):
         if entry.get(key) not in (None, "", []):
             value = "; ".join(entry[key]) if isinstance(entry[key], list) else entry[key]
             print(f"{key + ':':13} {value}")
@@ -401,6 +428,37 @@ def cmd_pd_entry_remove(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_pd_entry_edit(args: argparse.Namespace) -> int:
+    request = {"op": "entry_edit", "id": args.id}
+    request.update({k: v for k, v in (("when", args.when), ("purpose", args.purpose), ("missed", args.missed))
+                    if v is not None})
+    if len(request) == 2:
+        print("⚠️ MACF: pd: an edit names at least one of --when, --purpose or --missed", file=sys.stderr)
+        return 2
+    reply = _ask_entries(request)
+    if reply is None:
+        return 1
+    entry = next((e for e in reply.entries or [] if e.get("id") == args.id), {})
+    print(f"entry {args.id} edited; next {_next(entry) if entry else 'unknown'}")
+    if entry.get("marked"):
+        print(f"it is marked: this context read untrusted input ({'; '.join(entry['marked'])})")
+    return 0
+
+
+def cmd_pd_entry_pause(args: argparse.Namespace) -> int:
+    reply = _ask_entries({"op": args.pause_op, "id": args.id})
+    if reply is None:
+        return 1
+    entry = next((e for e in reply.entries or [] if e.get("id") == args.id), {})
+    if args.pause_op == "entry_pause":
+        print(f"entry {args.id} paused; it fires again only after pd entry resume")
+    else:
+        skipped = entry.get("skipped_in_pause") or 0
+        print(f"entry {args.id} resumed; next {_next(entry) if entry else 'unknown'}"
+              + (f"; {skipped} firing(s) fell in the pause and are not made up" if skipped else ""))
+    return 0
+
+
 def cmd_pd_entry_list(args: argparse.Namespace) -> int:
     reply = _ask_entries({"op": "entry_list"})
     if reply is None:
@@ -429,9 +487,9 @@ def _next(entry: dict, now=None) -> str:
 
 
 def _state(entry: dict) -> str:
-    """What an entry's line says before its purpose: marked, when it was made from a context that
-    read untrusted input (the scheduler design, 5.3)."""
-    return "[marked] " if entry.get("marked") else ""
+    """What an entry's line says before its purpose: paused, and marked, when it was made from a
+    context that read untrusted input (the scheduler design, 5.3)."""
+    return ("[paused] " if entry.get("paused_at") else "") + ("[marked] " if entry.get("marked") else "")
 
 
 def agenda_lines(declaration, entries, now) -> list:
