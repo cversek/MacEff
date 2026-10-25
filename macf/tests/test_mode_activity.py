@@ -132,6 +132,7 @@ def test_wake_is_not_operator_activity(isolated_events_log):
 def test_source_from_origin_or_opening_tag(isolated_events_log):
     """MIS-0002-R121: a channel event's source comes from its origin record, and
     from the tag that opens its text only where there is no record."""
+    _telegram_is_the_operators()
     from_record = detect_user_activity(
         _user(TELEGRAM, {"kind": "channel", "server": "plugin:telegram:telegram"})).data
     assert (from_record["source"], from_record["channel_server"]) == ("channel", "plugin:telegram:telegram")
@@ -213,6 +214,7 @@ RECORDED_KEYS = {
 @pytest.mark.parametrize("door, prompt, entries, hook, monitor", DOORS)
 def test_every_door_is_counted_as_audited(isolated_events_log, monkeypatch, tmp_path,
                                           door, prompt, entries, hook, monitor):
+    _telegram_is_the_operators()
     if door in RECORDED_KEYS:
         text, kind = RECORDED_KEYS[door]
         append_event(KEYS_SENT_EVENT, {"text": text, "kind": kind, "tmux_session": "s"})
@@ -253,10 +255,26 @@ def test_a_held_copy_counts_after_the_wait(monkeypatch, tmp_path):
 
 def test_a_queued_channel_message_takes_its_server_from_the_delivery(monkeypatch, tmp_path):
     """MIS-0002-R121: where the delivery carries a record, the record names the source."""
+    _telegram_is_the_operators()
     delivered = _user(TELEGRAM, {"kind": "channel", "server": "plugin:telegram:operator"}, isMeta=True)
     run = _Monitor(monkeypatch, tmp_path).feed(_queued(TELEGRAM), delivered)
     assert [(d["source"], d["channel_server"]) for _, d in run.emitted] == [("channel", "plugin:telegram:operator")]
 
+
+
+def test_a_delivered_queued_copy_counts_only_by_its_declared_server(monkeypatch, tmp_path):
+    """MIS-0002-R107 and R106 on the queued path: when the delivery's record names the channel,
+    that name is what counts, so an undeclared server and the MacEff channel are not the
+    operator, even when the queued copy itself named a declared one (found in review)."""
+    _declare(_declared(["plugin:telegram:telegram"]))
+
+    def emitted(server):
+        delivered = _user(TELEGRAM, {"kind": "channel", "server": server}, isMeta=True)
+        run = _Monitor(monkeypatch, tmp_path).feed(_queued(TELEGRAM), delivered)
+        return [(d["source"], d["channel_server"]) for _, d in run.emitted]
+    assert emitted("plugin:discord:discord") == []
+    assert emitted("plugin:maceff-channel:maceff") == []
+    assert emitted("plugin:telegram:telegram") == [("channel", "plugin:telegram:telegram")]
 
 ACTIVITY_DETECTORS = {"detect_user_activity", "detect_permission_denial",
                       "detect_dialog_answer", "detect_mid_turn_enqueue"}
@@ -308,15 +326,30 @@ def test_a_recorded_keystroke_pairs_with_one_arrival(isolated_events_log):
     append_event(KEYS_SENT_EVENT, {"text": "/compact", "kind": "inject", "tmux_session": "s"})
     assert [_hook_records(isolated_events_log, "/compact") for _ in range(2)] == [[], ["direct"]]
 
-    delivered = _user(COMPACT_ENTRY, {"kind": "human"})
+    typed, command = _user("/compact", {"kind": "human"}), _user(COMPACT_ENTRY, {"kind": "human"})
     assert _monitor_records(_queued("/compact"))[0] == []
-    assert _monitor_records(delivered)[0] == []
+    assert [_monitor_records(row)[0] for row in (typed, command)] == [[], []]
     assert _monitor_records(_queued("/compact"))[0] == ["mid_turn_enqueue"]
-    assert _monitor_records(delivered)[0] == ["direct"]
+    assert [_monitor_records(row)[0] for row in (typed, command)] == [["direct"], ["direct"]]
 
     for _ in range(2):
         append_event(KEYS_SENT_EVENT, {"text": "/maceff:resume", "kind": "post-start", "tmux_session": "s"})
     assert [_hook_records(isolated_events_log, "/maceff:resume") for _ in range(3)] == [[], [], ["direct"]]
+
+
+COMPACT_OUTPUT = "<local-command-stdout>\x1b[2mCompacted PreCompact [python pre_compact.py] completed</local-command-stdout>"
+
+
+def test_an_injected_slash_command_records_nothing_from_any_of_its_rows(isolated_events_log):
+    """The client writes a slash command as three rows: the typed text, its command row a
+    few milliseconds later, and the command's output when it finishes. A compaction the
+    framework typed read as the operator twice, from the command row and the output row,
+    which cleared USER_IDLE at every self-compaction. The operator's own /compact still
+    counts, from the rows they typed, and the output row is never anyone's typing."""
+    append_event(KEYS_SENT_EVENT, {"text": "/compact", "kind": "inject", "tmux_session": "s"})
+    rows = [_user("/compact"), _user(COMPACT_ENTRY), _user(COMPACT_OUTPUT)]
+    assert [_monitor_records(row)[0] for row in rows] == [[], [], []]
+    assert [_monitor_records(row)[0] for row in rows] == [["direct"], ["direct"], []]
 
 
 def test_an_operators_compact_after_an_injected_one_is_their_ask(isolated_events_log):
@@ -347,6 +380,12 @@ def _declare(text):
     input_origin._DECLARED.clear()
 
 
+def _telegram_is_the_operators():
+    """These tests are about how a channel's source is read: the agent declares the Telegram
+    channels as the operator's, which R107 now requires before any channel counts."""
+    _declare(_declared(["plugin:telegram:telegram", "plugin:telegram:operator"]))
+
+
 def _declared(channels=None):
     decl = {"version": 1, "agent": "Resident@1a2b3c"}
     if channels is not None:
@@ -356,8 +395,8 @@ def _declared(channels=None):
 
 def test_channels_told_apart_by_name(isolated_events_log, capsys):
     """MIS-0002-R107: each producer counts a channel as the operator's only by an exact
-    name the declaration lists. Until the agent lists any, every channel but the MacEff
-    channel counts, as it did before there was a list."""
+    name the declaration lists. An agent that lists none, or has no declaration, has no
+    operator channel; the transitional rule that counted every channel then has ended."""
     from macf.utils.input_origin import opening_channel_source
 
     def counted(prompt):
@@ -368,9 +407,9 @@ def test_channels_told_apart_by_name(isolated_events_log, capsys):
     yes = {"hook": ["channel"], "delivered": ["channel"], "queued": ["channel"]}
     no = {"hook": [], "delivered": [], "queued": []}
 
-    assert [counted(p) for p in (TELEGRAM, DISCORD, MACEFF_NOTICE)] == [yes, yes, no]   # no declaration
+    assert [counted(p) for p in (TELEGRAM, DISCORD, MACEFF_NOTICE)] == [no, no, no]      # no declaration
     _declare(_declared())                                                                 # the list absent
-    assert [counted(p) for p in (TELEGRAM, DISCORD, MACEFF_NOTICE)] == [yes, yes, no]
+    assert [counted(p) for p in (TELEGRAM, DISCORD, MACEFF_NOTICE)] == [no, no, no]
     _declare(_declared(["plugin:telegram:telegram"]))
     assert [counted(p) for p in (TELEGRAM, DISCORD, MACEFF_NOTICE)] == [yes, no, no]
     _declare(_declared([]))                                                               # declared: none
@@ -379,5 +418,5 @@ def test_channels_told_apart_by_name(isolated_events_log, capsys):
     assert counted(TELEGRAM) == no
 
     _declare("{not a declaration")
-    assert counted(DISCORD) == yes
+    assert counted(DISCORD) == no
     assert "can't be read" in capsys.readouterr().err
