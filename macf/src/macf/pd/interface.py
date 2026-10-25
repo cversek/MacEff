@@ -783,6 +783,15 @@ class StatusRequest(_Closed):
     op: Literal["status"]
 
 
+class BuildRequest(_Closed):
+    """Which build of macf the daemon runs (MacEff #816). Its own request, not a field of the
+    status reply: a CLI older than this one reads replies strictly, and a status carrying a field
+    it doesn't know would stop the command meant to explain the drift. Only a CLI that knows the
+    build asks for it, and a daemon that doesn't know this request is older than one that does."""
+
+    op: Literal["build"]
+
+
 class ActRequest(_Closed):
     """Start, stop or restart one unit. A stop from outside a session succeeds whatever
     gate the session enforces (MIS-0002-R48)."""
@@ -843,6 +852,33 @@ class EntryRemoveRequest(_Closed):
     id: str = Field(pattern=r"^e-[0-9a-f]{12}$")
 
 
+class EntryEditRequest(_Closed):
+    """Change an entry the agent holds: its time, its purpose or its missed-run policy, keeping
+    its id. Like making one, it is taken only from the agent's live session, and the operator's
+    consent is the ask prompt on the command (persistent_layer 10.6)."""
+
+    op: Literal["entry_edit"]
+    id: str = Field(pattern=r"^e-[0-9a-f]{12}$")
+    when: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    purpose: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    missed: Optional[Literal["once", "skip", "report"]] = None
+
+    @model_validator(mode="after")
+    def _changes_something(self) -> "EntryEditRequest":
+        if self.when is None and self.purpose is None and self.missed is None:
+            raise ValueError("an edit names at least one of when, purpose or missed")
+        return self
+
+
+class EntryPauseRequest(_Closed):
+    """Pause or resume an entry the agent holds. A pause only stops work, so, like a removal,
+    anyone with the daemon's uid may ask. A resume starts firings again, so, like making an entry,
+    it is taken only from the agent's live session."""
+
+    op: Literal["entry_pause", "entry_resume"]
+    id: str = Field(pattern=r"^e-[0-9a-f]{12}$")
+
+
 class PaceRequest(_Closed):
     """How long the keystroke wake rests after each wake, or None to go back to the declared
     window. The agent paces itself, or the operator paces it; it acts on no unit. No pace goes
@@ -879,8 +915,9 @@ class StreamRuleRequest(_Closed):
         return self
 
 
-Request = Union[StatusRequest, ActRequest, CompactRequest, PaceRequest, EntryAddRequest,
-                EntryListRequest, EntryRemoveRequest, StreamRuleRequest]
+Request = Union[StatusRequest, BuildRequest, ActRequest, CompactRequest, PaceRequest, EntryAddRequest,
+                EntryListRequest, EntryRemoveRequest, EntryEditRequest, EntryPauseRequest,
+                StreamRuleRequest]
 
 
 class UnitStatus(_Closed):
@@ -899,7 +936,13 @@ class UnitStatus(_Closed):
 
 class Response(_Closed):
     """``wake_refractory_s`` and ``wake_window_from`` answer a status or a pace where a session
-    unit has a keystroke wake: the window in force, and where it came from."""
+    unit has a keystroke wake: the window in force, and where it came from.
+
+    A reply ignores fields it doesn't know, where a request refuses them. The daemon and the CLI
+    can run different builds (MacEff #816), so a newer daemon's reply must never stop an older
+    CLI from reading it. A request stays closed: the daemon acts on it."""
+
+    model_config = ConfigDict(extra="ignore")
 
     ok: bool
     error: Optional[str] = None
@@ -909,6 +952,8 @@ class Response(_Closed):
     wake_window_from: Optional[str] = None
     #: The event stream's rules in force, answering a stream rule.
     stream_rules: Optional[Dict[str, Any]] = None
+    #: The build of macf the daemon runs, answering a build request (MacEff #816).
+    build: Optional[str] = None
 
 
 _REQUEST = TypeAdapter(Annotated[Request, Field(discriminator="op")])
