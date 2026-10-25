@@ -29,7 +29,15 @@ def test_the_status_line_leads_with_the_modes():
     assert format_statusline("A@abc123", None, "Host", 1000, 1_000_000, 90).startswith("A@abc123")
 
 
+def _telegram_is_the_operators():
+    """The agent declares Telegram as the operator's channel: since R107 (#768) a channel counts
+    as the operator only when the declaration lists it."""
+    from test_mode_activity import _declare, _declared
+    _declare(_declared(["plugin:telegram:telegram"]))
+
+
 def test_a_channel_message_while_away_from_the_cli_enters_user_remote(isolated_events_log, monkeypatch):
+    _telegram_is_the_operators()
     denies = _denies(monkeypatch)
     recorded = hook.record_user_activity_from_payload(CHANNEL)
     assert hook.maybe_enter_user_remote(CHANNEL, recorded) is True
@@ -59,6 +67,7 @@ def test_a_maceff_notice_never_enters_user_remote(isolated_events_log, monkeypat
 
 
 def test_typing_at_the_cli_clears_user_remote_entered_this_way(isolated_events_log, monkeypatch):
+    _telegram_is_the_operators()
     _denies(monkeypatch)
     monkeypatch.setattr("macf.utils.claude_settings.restore_user_remote_deny_if_active", lambda: {"restored": []})
     hook.maybe_enter_user_remote(CHANNEL, hook.record_user_activity_from_payload(CHANNEL))
