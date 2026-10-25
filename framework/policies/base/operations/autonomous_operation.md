@@ -77,6 +77,7 @@ Applies to all Primary Agents (PA) and Subagents (SA) capable of extended autono
 - What does `macf_tools permissions watch` send, when, and when does it stop?
 - Which dialogs has this agent met, how long did each wait, and which ask rule matches it?
 - What did measuring one day of dialogs show about which commands raise them, and why is a rule built from remembered prompts not enough?
+- When must I not open a question to the operator, even though no rule refuses it, and what do I do instead?
 
 **6 Available Skills**
 - What skills support autonomous operation?
@@ -689,6 +690,20 @@ when nobody can answer.
   so the asking part waits for the operator. It takes effect without a restart, unlike
   the USER_REMOTE deny list. It can't foresee what no rule explains, which is why the
   watch below stays.
+- **A question to the operator is a dialog too, and no rule refuses it.** `AskUserQuestion`
+  holds the whole session until someone answers, like a permission dialog, but no Ask rule
+  names it, so the unattended refusal above can't catch it. So:
+  - never open one while USER_IDLE or USER_REMOTE is on (`mode_system`);
+  - when the operator may be about to step away, don't open one either: late at night, or
+    just after a short reply, the mode still reads attended, but the dialog outlasts them.
+    Ask on their remote channel in one line answerable in a word, or take the conservative
+    default a later review can correct, and say which you took in a task note.
+
+  Keep the dialog for a decision that truly can't go on without them, asked while they are
+  plainly at the keyboard. The operator ruled this on 2026-10-25, after a question opened
+  two minutes after their one-word reply held a session for ten minutes: "You need to avoid
+  AskUserQuestion when USER_IDLE is active", and "It should be in the autonomous operation
+  policy too".
 
 **Why the watch lives outside.** The PermissionRequest hook tells the operator
 once, when the dialog opens (a Telegram preview of the command, where Telegram
