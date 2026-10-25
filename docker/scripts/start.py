@@ -2723,6 +2723,7 @@ def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] 
     (``write_agent_cards``); an agent whose home holds a different card is not rendered for.
     Returns the accounts rendered for."""
     from macf.pd import names as pd_names
+    from macf.models.agent_spec import with_schedule_targets
     from macf.pd.interface import Declaration
     root = Path(root or pd_names.RENDERED_DECLARATIONS)
     root.mkdir(mode=0o755, parents=True, exist_ok=True)
@@ -2749,7 +2750,7 @@ def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] 
                 card = pd_names.agent_card(home)
             except (pd_names.IdentityError, KeyError) as e:
                 raise OSError(f"its calling card can't be read ({e})") from e
-            declaration = Declaration(version=1, agent=card, **body)
+            declaration = Declaration(version=1, agent=card, **with_schedule_targets(body, card))
             target_dir.mkdir(mode=0o755, exist_ok=True)
             chown(target_dir, 0, 0)
             os.chmod(target_dir, 0o755)

@@ -363,8 +363,27 @@ def declaration_body(value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]
                     f"declare it in schedules, with its missed-run policy, so each run is recorded "
                     f"(MIS-0002-R54 (periodic_mail_clock_MUST_be_schedule))")
     from macf.pd.interface import Declaration
-    Declaration(version=1, agent="placeholder@000000", **value)
+    Declaration(version=1, agent="placeholder@000000",
+                **with_schedule_targets(value, "placeholder@000000"))
     return value
+
+
+#: The schedule target that names the declaring agent's own session in agents.yaml. The card
+#: carries an id the file can't know, so the container fills it in when it renders the
+#: declaration (``with_schedule_targets``), the way it fills in ``agent`` itself.
+OWN_CARD_TARGET = "{card}"
+
+
+def with_schedule_targets(body: dict, card: str) -> dict:
+    """*body* with every schedule target of ``{card}`` replaced by *card*. A target naming a
+    literal card is left alone, so the declaration's own check still refuses a foreign one
+    (MIS-0002-R29 (schedule_MUST_declare_target))."""
+    schedules = body.get('schedules')
+    if not schedules:
+        return body
+    return {**body, 'schedules': [
+        {**s, 'target': card} if isinstance(s, dict) and s.get('target') == OWN_CARD_TARGET else s
+        for s in schedules]}
 
 
 class AgentSpec(BaseModel):
