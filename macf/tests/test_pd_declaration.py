@@ -703,3 +703,17 @@ def test_one_declared_account_the_reader_cannot_look_into_costs_only_itself(tmp_
     assert set(views) == {"svc_broker", "pa_seat", "pa_shut"}
     assert views["pa_shut"].status == "UNREADABLE" and "pa_shut" in views["pa_shut"].detail
     assert views["svc_broker"].detail == "declared, no summary published"
+
+
+def test_agents_yaml_accepts_a_schedule_aimed_at_its_own_card_and_refuses_a_literal_one():
+    """agents.yaml validates a body against a placeholder agent, so only {card} can name the
+    seat's own session there; a literal card is refused, since the file can't prove it is this
+    seat's (MIS-0002-R29 (schedule_MUST_declare_target))."""
+    import pytest
+    from macf.models.agent_spec import declaration_body as _validate_primal_daemon
+    schedule = {"name": "sweep", "cron": "47 9 * * *", "missed_run": {"kind": "run_once"},
+                "timeout_s": 900, "run": {"command": ["/usr/bin/true"], "wake_when": "exit_code"}}
+    body = {"timezone": "UTC", "units": [], "schedules": [dict(schedule, target="{card}")]}
+    assert _validate_primal_daemon(body) is body
+    with pytest.raises(ValueError, match="may target only"):
+        _validate_primal_daemon({**body, "schedules": [dict(schedule, target="Someone@abcdef")]})

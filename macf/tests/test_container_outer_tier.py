@@ -406,3 +406,18 @@ def test_an_agent_without_a_calling_card_gets_nothing_written(tmp_path, monkeypa
     assert start.write_agent_cards(cfg) == {}
     assert not (bare / ".maceff" / "config.json").exists()
     assert (kept / ".maceff" / "config.json").read_text() == '{"agent_identity": {"calling_card": "Kept"}}'
+
+
+OWN_SCHEDULE = {"name": "sweep", "cron": "47 9 * * *", "missed_run": {"kind": "run_once"},
+                "target": "{card}", "timeout_s": 900,
+                "run": {"command": ["/usr/bin/true"], "wake_when": "exit_code"}}
+
+
+def test_a_schedule_targeting_its_own_card_is_rendered_with_the_agents_card(tmp_path, monkeypatch):
+    """R29: a seat's schedule wakes its own session. agents.yaml can't know the card's id, so it
+    writes {card}, and the rendering puts the card there, as it does for ``agent``."""
+    r = _rendering(tmp_path, monkeypatch, {"units": [UNIT], "timezone": "UTC",
+                                            "schedules": [OWN_SCHEDULE]})
+    data = json.loads((tmp_path / "etc" / "pa_a" / "declaration.json").read_text())
+    assert r.done == ["pa_a"]
+    assert data["schedules"][0]["target"] == "Resident@1a2b3c"
