@@ -1,0 +1,3 @@
+### Fixed
+
+- **A lapsed observation lease is now recorded as ended** (`macf/src/macf/pd/daemon.py`, MIS-0002 R89). `observe.record.sweep` writes the ending a lapsed lease owes, but nothing called it, so an agent's log could say an observation was open after its lease ran out. The primal daemon now sweeps about every 30 seconds, through the one record path every observation act takes. A sweep that fails is reported and retried, and never stops the daemon. A stream already refused a lapsed lease at admission; this fixes the record. Tested through a running daemon: a lapsed lease is ended once with `ended_by` set to `lease`, and a running one is left open. Removing the call fails the first test.

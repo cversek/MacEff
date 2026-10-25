@@ -215,3 +215,23 @@ def test_a_lease_that_is_not_a_time_costs_only_its_own_invitation(isolated_event
     assert "observation" in carry_state_forward(current_cycle=2)
     assert set(fold(_this_cycle())) == {WATCHER, OTHER}
     assert "lease_until must be a time" in capsys.readouterr().err
+
+
+def test_a_lease_that_ran_out_before_the_boundary_is_ended_by_the_carry(isolated_events_log):
+    """The head maintainer's review on #817: a lease that lapses and then meets a compaction
+    before the daemon's next sweep was left open forever, since the carry dropped it and the
+    sweep reads only the new cycle. The carry now writes the lease's ending on the way out,
+    with no daemon running, so the log read across cycles says it ended (MIS-0002-R89)."""
+    now = time.time()
+    _write(isolated_events_log, [
+        _invite(100, lease_until=now - 5),
+        _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+    ])
+    carry_state_forward(current_cycle=2)
+
+    ends = [e["data"] for e in read_events(reverse=False, scope="all") if e["event"] == EVENT_END]
+    assert [(d["onlooker"], d["ended_by"]) for d in ends] == [(WATCHER, "lease")]
+    assert fold(read_events(reverse=False, scope="all"))[WATCHER].status == "ended"
+    append_event(CYCLE_BOUNDARY_EVENT, {"cycle": 3})    # the next compaction owes nothing more
+    carry_state_forward(current_cycle=3)
+    assert len([e for e in read_events(reverse=False, scope="all") if e["event"] == EVENT_END]) == 1

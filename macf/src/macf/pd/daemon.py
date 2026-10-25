@@ -76,6 +76,11 @@ TICK_S = 0.25
 #: taken. An hour keeps the record far inside that window at no measurable cost.
 RECORD_REFRESH_S = 3600.0
 
+#: How often the daemon records the ending owed for an observation whose lease ran out
+#: (MIS-0002-R89 (lease_end_MUST_match_party_end)). The sweep folds the agent's log, so it runs on
+#: its own beat rather than every tick; a stream refuses a lapsed lease at once regardless (acts.admit).
+OBSERVE_SWEEP_S = 30.0
+
 #: The notice a denied grant raises (MIS-0002-R65); the channel names its pointer.
 GRANT_NOTICE_SOURCE = "pd_grant_denied"
 
@@ -190,6 +195,8 @@ class Daemon:
                                       self.notifier.raise_notice) if threshold else None
         #: Where the keystroke wake's window in force came from, for a status or a pace to say.
         self._wake_from = "the declaration"
+        #: When the observation sweep last ran (monotonic); it runs on its first tick.
+        self._observe_swept = float("-inf")
         if any(u.kind == "session" for u in self.core.declaration.units):
             # The keystroke fallback types into the session unit's own pane (pd.session_unit),
             # recording each wake first so it never reads as the operator (MIS-0002-R105).
@@ -373,6 +380,7 @@ class Daemon:
                 if self.unread_mail is not None:
                     self.unread_mail.tick(self.core.session_active_since())
                 self.duties.tick()
+                self._sweep_observations()
                 self._pump_stream()
                 self._keep_record()
         finally:
@@ -694,6 +702,23 @@ class Daemon:
                 return Response(ok=False, error=str(e.args[0]))
             return Response(ok=True, units=self.core.statuses())
         return Response(ok=False, error="compaction is not available in step 1")
+
+    def _sweep_observations(self) -> None:
+        """Record the ending owed for each observation whose lease has run out, so the agent's log
+        never says an observation is open after its lease ended (MIS-0002-R89). It writes through
+        ``observe.record``, the one path that takes an observation act (R90), to this agent's own
+        log, which the daemon already appends to as the agent. A sweep that fails is said and
+        tried again on the next beat; it never stops the daemon's loop."""
+        now = time.monotonic()
+        if now - self._observe_swept < OBSERVE_SWEEP_S:
+            return
+        self._observe_swept = now
+        from macf.observe import record
+        try:
+            record.sweep(time.time())
+        except (OSError, ValueError, TypeError) as e:
+            print(f"⚠️ MACF: pd: a lapsed observation lease could not be recorded ({e}); "
+                  f"tried again in {OBSERVE_SWEEP_S:.0f} s", file=sys.stderr)
 
     def _entry_request(self, request, creds) -> Response:
         """An agent's request about its own entries, taken only from its live session. A
