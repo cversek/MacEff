@@ -617,6 +617,40 @@ The test for **R106** is the head maintainer's (P25): set USER_REMOTE, type a wa
   - The glossary said the notifier masks notices, which 1.2 says isn't applied. The glossary now agrees with 1.2.
 - **Result:** the governed tasks succeeded cold on the landed policy, and every gap is fixed or recorded (Q15).
 
+**Use trial (MIS-0001-R59, R60).** Judged by the repo owner, the MIS's first user. The Secretary records the evidence; the verdict on each row is the judge's, quoted where given. The scheduler's trial week ran from 2026-10-19 23:20 EDT, the first entry fired on this host, and the repo owner closed it on 2026-10-24 at 4.4 days, by MQI, verbatim: "I'l leaning toward close now but observe in background and we will reopen if needed. maybe we can collect a loose-ends list that won't block finalization but be more of an alpha/beta phase testing observation period". Observation has continued since, on main's code.
+
+*Each capability the Motivation names (section 2):*
+
+| Capability | Shown in use? | Evidence | Verdict |
+|---|---|---|---|
+| A scheduler agents use for their own wakes | shown | One host agent's own entries (a 50-minute check-in, an hourly issue check, the morning and evening briefs) fired 301 times from 2026-10-19 to 2026-10-25 and reached the live session as MacEff channel notices; zero session-cron turns since 2026-10-19 22:29 (trial report, day 1 measures) | pending |
+| Recurring work outlives its session | shown | The same entries kept firing across compactions and session restarts in cycles 84 to 93; each restart and compaction is recorded as `pd_carried` with what was carried | pending |
+| A dated duty has a host | shown | The weekly audit duty crossed into DUE_SOON at 2026-10-21 00:00; the daemon recorded `duty_tier_crossed` and its notice reached the session 36 s later | pending |
+| Long-lived helpers are supervised, not forked from short-lived parents | shown on one host; container seats at their window | Since #831, the transcript monitor and the search service are declared units with memory limits and liveness. On one host agent's daemon both have run since 2026-10-25 15:46 EDT, and `pd status` reports each beside the session. The two container seats move at their window the same evening. The macOS seats follow once the cutover has a launchd path (loose ends, below) | pending |
+| Liveness says whose it is | shown | `pd status` reports each unit from its own daemon ("its record and its socket agree"); the shared view stamps each unit with its agent's card (R62's live check, #552 comment 6400761918) | pending |
+| A waiting prompt is told to someone | to be shown | The permission watch runs every five minutes on the host; no unattended wait has occurred since it was installed, so a staged wait is the evidence | pending |
+| An expired login reads as a failure | to be shown | The outside watch alerts on an authentication failure; no login has expired since, so a staged one is the evidence | pending |
+| Mail reaches the agent, not only the store | shown | Mail to a host agent arrives as `amail` notices from its daemon into the live session; a container seat's daemon detected mail at arrival on 2026-10-25 (`store_arrival_detected`) | pending |
+| A recreated container brings its agents back | shown | At the 2026-10-24 container recreate, the container's start step started the second seat's daemon and the mail broker's daemon from their declarations; both ran without a person relaunching them | pending |
+
+*Each landing step's operational criterion (section 12):*
+
+| Step | Criterion | Evidence | Verdict |
+|---|---|---|---|
+| 1 | The daemon, declarations, events, health and outside control on Linux; the mail brokers as its first units; the outside watch | A host agent's daemon has supervised its session, mail broker and units since 2026-10-11 under the user service manager; the outside watch runs as a timer | pending |
+| 2 | A use trial: scheduled wakes reporting to the repo owner over the agent's own channel, the agent's own check-in, one duty, another agent's entries, a week with the repo owner as first user and judge | Briefs, check-in and duty as above; the week closed early by the repo owner's ruling, quoted above; another agent's entries: the host-side maintainer moved its daemon to main at the repo owner's word and replaced its session-cron check-in with its own recurring entry, first due 2026-10-25 20:34Z (#552 comment 6402314212); its fired counts are recorded here when reported | pending |
+| 3 | Containers: start order, limits, the shared view and budget; mail clocks as schedules | Two container seats and the mail broker run under their daemons, the legacy mail clock retired in that container (2026-10-25); R62 met live | pending |
+| 4 | macOS: the LaunchAgent rendering, privacy grants, adopting the harness's supervisor | The host-side maintainer's daemon runs as its rendered LaunchAgent. At its move to main (`launchctl kickstart -k`), the new daemon adopted the running session with the session's and the client's pids unchanged, and recorded `pd_carried` (#552 comment 6402314212). The head maintainer's macOS seat ran `agent init`, whose guard found its hand-started session and skipped `pd install` (#552 comment 6402982789). Privacy grants: to be recorded from the host-side maintainer | pending |
+| 5 | The tray | to be recorded from the host-side maintainer, or ruled an observation-period item | pending |
+| 6 | The `hypervisor` rename, with the glossary | Landed in code and glossary; R76 passing | pending |
+| 7 | Observation and attach | The repo owner attached to container seats by name from a laptop on 2026-10-24 (`harness attach`) | pending |
+
+*Loose ends for the observation period.* The repo owner asked on 2026-10-24 for "a loose-ends list that won't block finalization but be more of an alpha/beta phase testing observation period". None of these blocks Final unless a judge says otherwise:
+- **Staged evidence:** no unattended permission wait and no expired login has happened since their watches were installed. The first real one of each is recorded when it happens, or a staged one if a judge asks for it.
+- **The macOS cutover:** `harness cutover` covers systemd hosts only, so a macOS seat can't yet move from a hand-started session onto its session unit by the documented route. A launchd path is in review (#552 comment 6403013880).
+- **First-use findings from the host-side maintainer** (#552 comment 6402314212): `pd entry add` doesn't state the purpose's 500-character limit; an add whose write succeeded but whose answer timed out reports failure, which invites a duplicate; and settings that predate the default ask rule raise no consent prompt, so the operator's word is the consent there until `agent init`'s permissions step has run.
+- **`agent init` unattended:** the preamble step refuses on a non-interactive input instead of reporting itself skipped. A fix is in review with the launchd path.
+
 ## 12 Landing Plan
 
 The normative text lands in a new policy, `framework/policies/base/infrastructure/persistent_layer.md`, beside `service_supervision` and `notification_delivery`, which gain cross-references. Each landing pull request carries its policy text and its code together (MIS-0001-R29 (landing_MUST_ship_text_with_capability)), and each landed rule cites its requirement here (MIS-0001-R30 (policy_rule_MUST_cite_requirement)). The terms in section 5 enter `framework/glossary.md` with the decision, and the retired words move to its `## Retired` section, each with its users quoted (MIS-0001-R50 (retirement_MUST_quote_users)).
