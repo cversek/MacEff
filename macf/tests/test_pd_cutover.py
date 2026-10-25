@@ -375,7 +375,8 @@ def test_run_on_macos_writes_and_bootstraps_a_one_shot_job(tmp_path):
     from macf.pd.cutover import arm_launchd
     run, calls = _launchctl()
     plist, log = arm_launchd(AGENT, CARD, tmp_path, staged_path(tmp_path), "/usr/bin/python3", UID,
-                             "20261025-120000", environ={"PYTHONPATH": "/src"}, run=run)
+                             "20261025-120000", environ={"PYTHONPATH": "/src", "PATH": "/opt/homebrew/bin:/usr/bin",
+                                                         "HOME": "/Users/r"}, run=run)
     label = "maceff_pd.Resident_1a2b3c.cutover"
     here = declaration_path(tmp_path).parent
     assert plist == here / f"{label}.plist" and log == here / "cutover-20261025-120000.log"
@@ -386,7 +387,9 @@ def test_run_on_macos_writes_and_bootstraps_a_one_shot_job(tmp_path):
     argv = job["ProgramArguments"]
     assert argv[:3] == ["/usr/bin/python3", "-m", "macf.cli"] and "--execute" in argv
     assert argv[argv.index("--job-plist") + 1] == str(plist), "the job knows its own plist to remove"
-    assert job["EnvironmentVariables"] == {"PYTHONPATH": "/src"}
+    assert job["EnvironmentVariables"] == {"PYTHONPATH": "/src", "PATH": "/opt/homebrew/bin:/usr/bin",
+                                           "HOME": "/Users/r", "MACEFF_AGENT_HOME_DIR": str(tmp_path)}, \
+        "the job runs in the environment the plan was checked in, not launchd's bare one"
     assert calls[-1] == ["launchctl", "bootstrap", f"gui/{UID}", str(plist)]
 
 
@@ -703,3 +706,40 @@ def test_a_daemon_installed_but_silent_still_stops_the_plan(tmp_path):
                                                      daemon_installed=lambda: True), runtime=RUNTIME)
     assert not plan.ready
     assert not any("pd install" in s.what for s in plan.steps)
+
+
+def test_the_launchd_job_gets_a_path_even_from_a_bare_caller(tmp_path):
+    from macf.pd.cutover import job_environment
+    env = job_environment(tmp_path, {})
+    assert env["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin" and env["MACEFF_AGENT_HOME_DIR"] == str(tmp_path)
+    assert "PYTHONPATH" not in env and env["HOME"]
+
+
+def test_a_probe_whose_program_is_missing_says_so(tmp_path, monkeypatch):
+    import pytest
+    from macf.pd import cutover
+
+    def no_program(argv, **kw):
+        raise FileNotFoundError(2, "No such file or directory", argv[0])
+    probes = cutover.host_probes(tmp_path, CARD)
+    monkeypatch.setattr(cutover.subprocess, "run", no_program)
+    with pytest.raises(cutover.ProbeUnavailable, match="tmux isn't on PATH"):
+        probes.default_session(AGENT)
+
+
+def test_a_plan_that_cant_be_built_changes_nothing_and_the_job_removes_itself(tmp_path, monkeypatch, capsys):
+    from macf import cli
+    from macf.pd import cutover
+
+    def unbuildable(*a, **k):
+        raise cutover.ProbeUnavailable("tmux isn't on PATH (/usr/bin:/bin), so the plan can't be checked")
+    removed, ran = [], []
+    monkeypatch.setattr(cutover, "build_plan", unbuildable)
+    monkeypatch.setattr(cutover, "run_command", lambda c: ran.append(c) or 0)
+    monkeypatch.setattr(cutover, "remove_own_job", lambda plist, label, uid, log, spawn=None: removed.append(plist))
+    plist = tmp_path / "job.plist"
+    assert cli.cmd_harness_cutover(_cutover_args(tmp_path, "--execute", "--job-plist", str(plist))) == 1
+    assert removed == [plist] and ran == [], "the job removes itself; nothing of the move runs"
+    assert "tmux isn't on PATH" in capsys.readouterr().err
+    assert cli.cmd_harness_cutover(_cutover_args(tmp_path)) == 1, "the plan alone says it and exits 1"
+    assert removed == [plist], "outside the job there is no job to remove"

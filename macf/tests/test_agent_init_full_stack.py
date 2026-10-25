@@ -603,6 +603,18 @@ def test_update_never_writes_a_missing_declaration(stack):
     assert not declaration_path(stack.home).exists()
 
 
+def test_update_with_no_daemon_installed_installs_nothing(stack):
+    """--update brings an installed daemon current and never installs one: with the declaration
+    in place but no unit installed, the daemon step reports nothing to bring current."""
+    _installed_stack(stack)
+    stack.unit["unit"] = False
+    for flags in (("--update",), ("--plan", "--update")):
+        _rc, results = _run(stack, *flags)
+        daemon = _by_step(results)["daemon"]
+        assert daemon.status == SKIPPED and "nothing to bring current" in daemon.detail, flags
+        assert stack.installs == [] and stack.restarts == [], flags
+
+
 def test_update_in_a_container_changes_nothing(stack):
     rc, results = _run(stack, "--update", in_container=True)
     assert rc == 0 and len(results) == 1 and results[0].status == SKIPPED
