@@ -513,14 +513,14 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R59 | decidable | macf/tests/test_pd_interface.py::test_a_unit_missing_a_required_field_is_refused | passing |
 | R60 | decidable | macf/tests/test_pd_notice.py::test_a_unit_measured_past_its_limit_reaches_the_channel and macf/tests/test_pd_notice.py::test_the_daemon_wires_its_core_and_scheduler_notices_to_its_notifier and macf/tests/test_pd_notice.py::test_a_unit_past_its_limit_is_a_notice_held_and_delivered | passing |
 | R61 | decidable | macf/tests/test_pd_watch.py::test_limits_checked_after_recreate | passing |
-| R62 | judgment | the head maintainer, at review of the container landing | pending |
+| R62 | judgment | the head maintainer, at review of the container landing | pending: ruled by the head maintainer on 2026-10-24 (#552, comment 6392777756) to be judged live, in a multi-seat container after the rebuild that moves its pin past a4a4814c; met if the mail broker's units show to a seat |
 | R63 | decidable | macf/tests/test_pd_declaration.py::test_grants_declared | passing |
 | R64 | decidable | macf/tests/test_pd_install.py::test_grants_tested_at_install | passing |
 | R65 | decidable | macf/tests/test_primal_daemon.py::test_denied_grant_notice | passing |
 | R66 | decidable | macf/tests/test_pd_harness.py::test_adopts_harness_supervisor | passing |
 | R67 | judgment | the operator | standing |
 | R68 | decidable | macf/tests/test_pd_render.py::test_runs_without_tray | passing |
-| R69 | decidable | macf/tests/test_pd_tray.py::test_icon_per_card | planned (the icon's key is not read from the agent's identity file) |
+| R69 | decidable | macf/tests/test_pd_tray.py::test_icon_per_card | passing |
 | R70 | decidable | macf/tests/test_pd_tray.py::test_acts_through_pd and macf/tests/test_pd_tray.py::test_an_act_goes_only_to_that_agents_daemon | passing |
 | R71 | judgment | the head maintainer, at review of the tray | standing |
 | R72 | decidable | macf/tests/test_pd_tray.py::test_waiting_icon | passing |
@@ -541,7 +541,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R87 | decidable | macf/tests/test_pd_observe.py::test_operator_ends | passing |
 | R88 | decidable | macf/tests/test_pd_observe.py::test_lease_ends_invitation | passing |
 | R89 | decidable | macf/tests/test_pd_observe.py::test_lease_end_same_event | passing |
-| R90 | decidable | macf/tests/test_pd_observe.py::test_observation_events | planned (events are checked in memory, not in the observed agent's own event log) |
+| R90 | decidable | macf/tests/test_pd_observe.py::test_observation_events | passing |
 | R91 | decidable | macf/tests/test_pd_observe.py::test_presence_on_call_line and macf/tests/test_pre_tool_use_presence.py::test_a_live_daemon_shows_who_watches | passing |
 | R92 | decidable | macf/tests/test_pd_observe.py::test_pause_resume | passing |
 | R93 | decidable | macf/tests/test_pd_observe.py::test_pause_shown | passing |
@@ -586,9 +586,9 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R132 | decidable | macf/tests/test_pd_entries.py::test_a_due_entry_fires_once_through_the_channel_even_across_a_restart | passing |
 | R133 | decidable | macf/tests/test_pd_entries.py::test_an_entry_from_a_tainted_context_is_marked | passing |
 | R146 | decidable | macf/tests/test_pd_entries.py::test_setting_the_mode_puts_pd_entry_add_in_ask_unless_the_operator_allowed_it and macf/tests/test_pd_entries.py::test_pd_entry_add_starts_in_ask_and_an_operator_who_loosens_it_keeps_that | passing |
-| R134 | judgment | the operator, at the verdict on each use trial | pending |
+| R134 | judgment | the operator, at the verdict on each use trial | recorded: met, by the repo owner on 2026-10-24 for the scheduler's use trial (#552): woken agents acted on marked entries only within standing rules |
 | R135 | decidable | macf/tests/test_pd_entries.py::test_an_entry_is_removed_by_the_agent_or_the_operator_and_stops and macf/tests/test_pd_entry_edit_pause.py::test_edit_and_resume_come_only_from_the_live_session_and_pause_from_anyone | passing |
-| R136 | judgment | the operator, at review of the persistent_layer policy | pending |
+| R136 | judgment | the operator, at review of the persistent_layer policy | recorded: met, by the repo owner on 2026-10-24 (#552): persistent_layer 10.6 states the shared-login limits |
 | R149 | decidable | macf/tests/test_pd_notice.py::test_a_source_the_attached_channel_did_not_declare_stays_held and macf/tests/test_pd_notice.py::test_a_channel_that_sends_no_hello_is_sent_nothing and macf/tests/test_pd_notice.py::test_the_maceff_channel_declares_every_source_its_record_takes | passing |
 | R150 | decidable | macf/tests/test_pd_event_stream.py::test_each_event_is_published_as_it_is_recorded | passing |
 | R151 | decidable | macf/tests/test_pd_event_stream.py::test_a_subscriber_takes_only_the_sources_it_chose | passing |
@@ -794,6 +794,7 @@ Objections recorded:
   - **R135** (entry_MUST_be_revocable_by_operator) is remove or pause, the acts that only stop work. Both name #814's test beside their own and read passing.
   - **R42** (notice_source_MUST_be_routed) is scoped to what is served and tested, and moves to passing. What it gave up is recorded as a departure under MIS-0001-R36, and goes to a successor MIS.
   - persistent_layer 2 and 10.6 change in the same pull request (mis 8.1).
+- 2026-10-24: conformance sweep 8, editorial (mis 8.1), by the Secretary. The repo owner recorded two judgments on #552: R134 met for the scheduler's use trial, since woken agents acted on marked entries only within standing rules, and R136 met, since persistent_layer 10.6 states what the ask rule, revocation and the template rule are worth on a shared login. R69 (tray_MUST_show_icon_per_agent) moves to passing with #810: its test now reads each icon's key from the agent's own identity file. R90 (observation_acts_MUST_be_events) moves to passing with #811: its test reads the acts back from the observed agent's own event log file, not from memory. R62 (agent_MUST_see_shared_container) stays pending: its fix (#819) merged, and the head maintainer ruled that R62 is judged by looking, not from the tests. A multi-seat container still runs code from before #819, so the judgment waits for that container's rebuild, and it is met if the mail broker's units show to a seat (#552, comment 6392777756). This sweep goes up with R62 pending, at that ruling.
 
 ## Wiki-Links
 
