@@ -577,7 +577,13 @@ def toggle_user_remote_deny_permissions(enable_remote: bool, project_root: Optio
             # Exactly what would prompt: every Ask entry the deployment holds now, its own
             # additions included, and AskUserQuestion. A command the settings already let run
             # without a prompt can't hang the CLI, so it keeps running (mode_system, USER_REMOTE).
-            for entry in list(ask_list) + _USER_REMOTE_EXTRA_DENY:
+            # Every file the client reads can hold an Ask rule, the user's own settings first
+            # among them; a deny written here wins over an ask from any of them.
+            from macf.permission_watch import ask_rules
+            from .paths import find_project_root
+            elsewhere = [r for r in ask_rules(str(project_root or find_project_root()), Path.home())
+                         if r not in ask_list]
+            for entry in list(ask_list) + elsewhere + _USER_REMOTE_EXTRA_DENY:
                 if entry in stash:
                     continue
                 # Record where the entry lived, and whether this switch denied it, so the exit

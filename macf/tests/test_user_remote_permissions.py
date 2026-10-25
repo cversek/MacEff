@@ -127,3 +127,21 @@ def test_leaving_remote_never_lifts_a_deny_the_operator_set(tmp_path):
     assert set(_load(tmp_path)["permissions"]["deny"]) == {"AskUserQuestion", "Bash(rm -r:*)"}
     toggle_user_remote_deny_permissions(False, project_root=tmp_path)
     assert _load(tmp_path)["permissions"]["deny"] == ["AskUserQuestion"]
+
+
+def test_an_ask_rule_in_the_users_own_settings_is_denied_while_remote(tmp_path, monkeypatch):
+    """The head maintainer's review on #821: an Ask rule in any settings file prompts, and the
+    user's own file is where an operator keeps theirs. One read only the local file, so those
+    still hung the CLI while remote. The local deny now holds them, and leaving remote lifts
+    only what it added."""
+    conf = tmp_path / "userconf"
+    conf.mkdir()
+    (conf / "settings.json").write_text(json.dumps({"permissions": {"ask": ["Bash(macf_tools task grant-delete:*)"]}}))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(conf))
+    _seed(tmp_path, {"permissions": {"ask": ["Bash(rm -r:*)"], "allow": [], "deny": []}})
+    toggle_user_remote_deny_permissions(True, project_root=tmp_path)
+    deny = _load(tmp_path)["permissions"]["deny"]
+    assert {"Bash(macf_tools task grant-delete:*)", "Bash(rm -r:*)", "AskUserQuestion"} <= set(deny)
+    toggle_user_remote_deny_permissions(False, project_root=tmp_path)
+    perms = _load(tmp_path)["permissions"]
+    assert perms["deny"] == [] and perms["ask"] == ["Bash(rm -r:*)"]   # the user's own rule stays in their file
