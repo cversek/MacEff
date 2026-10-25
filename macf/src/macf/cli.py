@@ -1935,7 +1935,7 @@ def cmd_harness_list(args: argparse.Namespace) -> int:
     if getattr(args, "json", False):
         print(json.dumps([e.model_dump(mode="json") for e in entries], indent=2))
     else:
-        print(render_table(entries))
+        print(render_table(entries, verbose=getattr(args, "verbose", False)))
     for problem in problems:
         print(f"⚠️ MACF: harness list is incomplete: {problem}", file=sys.stderr)
     return 0 if not problems else 1
@@ -11867,6 +11867,12 @@ def cmd_knowledge_status(args: argparse.Namespace) -> int:
         "acute": counts.get(Severity.ACUTE, 0), "chronic": counts.get(Severity.CHRONIC, 0),
         "gaps": len(detect_web_gaps(kg)),
     }
+    # Folders the opt-out marker takes out of the web: named, never only counted.
+    # The doctor above reports them as notes; status carries the same list.
+    from .knowledge_doctor import excluded_folders
+    from .utils.paths import find_agent_home
+    home = find_agent_home()
+    status["opted_out"] = excluded_folders(home) if home else []
     if getattr(args, "json_output", False):
         print(json.dumps(status, indent=2))
     else:
@@ -12397,6 +12403,8 @@ def _build_parser() -> argparse.ArgumentParser:
                      "kind and state, with a reason wherever one is unknown (read-only)")
     harness_list.add_argument("--json", action="store_true",
                               help="a list of objects, one per agent or unreadable home")
+    harness_list.add_argument("--verbose", "-v", action="store_true",
+                              help="say why each unknown field is unknown, and each row's detail")
     harness_list.add_argument("--local", action="store_true",
                               help="this endpoint only, without asking the declared remotes")
     harness_list.set_defaults(func=cmd_harness_list)
