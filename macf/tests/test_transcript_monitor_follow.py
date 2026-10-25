@@ -278,3 +278,81 @@ def test_a_declaration_without_the_monitor_declares_none(isolated_agent_home):
     assert declared_monitor_unit(isolated_agent_home) is None          # no declaration at all
     _declare_monitor(isolated_agent_home)
     assert declared_monitor_unit(isolated_agent_home) == "monitor"
+
+
+def _another_start(pid):
+    """A start time one tick (or second) away from *pid*'s real one: a different incarnation."""
+    from macf.notify.session import proc_start_from_key, proc_start_key
+    return proc_start_from_key(proc_start_key(proc_start(pid)) + 1)
+
+
+def test_a_resume_on_the_same_transcript_under_a_new_process_moves_to_the_new_owner(tmp_path, monkeypatch, quiet):
+    a = _transcript(tmp_path, "a")
+    _announce(a, os.getpid())
+    runs = []
+
+    def fake_run(self, start_from_end=True):
+        runs.append(self.owner)
+        if len(runs) == 1:
+            _announce(a, os.getppid())          # resumed: same conversation, new client process
+            self.on_pass()
+        else:
+            follower.stop("test done")
+
+    monkeypatch.setattr(daemon.TranscriptMonitor, "run", fake_run)
+    follower = daemon.Follower(0.01, environ={}, sleep=lambda s: follower.stop("no session"))
+    follower.run()
+    assert runs == [os.getpid(), os.getppid()]
+
+
+def test_no_session_beat_for_a_wrapper_whose_start_does_not_match(tmp_path, isolated_agent_home):
+    wrapper = os.getppid()
+    session = daemon.AnnouncedSession("s", tmp_path / "s.jsonl", os.getpid(), proc_start(os.getpid()),
+                                      {"unit": "session", "interval_s": 60, "pid": wrapper,
+                                       "proc_start": _another_start(wrapper)})
+    assert session.session_env({lv.ENV_HOME: str(isolated_agent_home)}) == {}
+
+
+def test_a_partly_written_announcement_is_read_once_it_is_whole(tmp_path):
+    log = tmp_path / "events.jsonl"
+    log.write_text("")
+    tail = daemon._AnnouncementTail(log)
+    line = json.dumps({"event": daemon.EVENT_SESSION_ANNOUNCED,
+                       "data": {"session_id": "s", "transcript": str(tmp_path / "s.jsonl"), "owner": 42}})
+    half = len(line) // 2
+    with open(log, "a") as f:
+        f.write(line[:half])
+    assert tail.poll() is None
+    with open(log, "a") as f:
+        f.write(line[half:] + "\n")
+    got = tail.poll()
+    assert got is not None and got.owner == 42
+
+
+def test_a_partial_line_after_a_whole_one_is_kept_for_the_next_poll(tmp_path):
+    """A poll that finds one whole announcement and the start of another takes the first and
+    keeps its place before the second, so the second is read once it is whole."""
+    log = tmp_path / "events.jsonl"
+    log.write_text("")
+    tail = daemon._AnnouncementTail(log)
+
+    def line(owner):
+        return json.dumps({"event": daemon.EVENT_SESSION_ANNOUNCED,
+                           "data": {"session_id": f"s{owner}", "transcript": str(tmp_path / f"s{owner}.jsonl"),
+                                    "owner": owner}})
+
+    second = line(43)
+    with open(log, "a") as f:
+        f.write(line(42) + "\n" + second[:len(second) // 2])
+    first = tail.poll()
+    assert first is not None and first.owner == 42
+    with open(log, "a") as f:
+        f.write(second[len(second) // 2:] + "\n")
+    got = tail.poll()
+    assert got is not None and got.owner == 43
+
+
+def test_a_recycled_client_pid_is_not_live(tmp_path):
+    me = os.getpid()
+    assert daemon.AnnouncedSession("s", tmp_path / "s.jsonl", me, proc_start(me)).live()
+    assert not daemon.AnnouncedSession("s", tmp_path / "s.jsonl", me, _another_start(me)).live()
