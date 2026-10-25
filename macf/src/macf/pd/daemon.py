@@ -43,6 +43,7 @@ from macf.pd.interface import (
     Peer,
     Response,
     StatusRequest,
+    BuildRequest,
     StreamRule,
     StreamRuleRequest,
     WakePaced,
@@ -195,6 +196,10 @@ class Daemon:
                                       self.notifier.raise_notice) if threshold else None
         #: Where the keystroke wake's window in force came from, for a status or a pace to say.
         self._wake_from = "the declaration"
+        #: The build this daemon started from, said in every status (MacEff #816). Read once:
+        #: the code it runs can't change under it, only the checkout beside it.
+        from macf.pd.build import build_id
+        self._build = build_id()
         #: When the observation sweep last ran (monotonic); it runs on its first tick.
         self._observe_swept = float("-inf")
         if any(u.kind == "session" for u in self.core.declaration.units):
@@ -680,6 +685,8 @@ class Daemon:
             return self._entry_request(request, creds)
         if isinstance(request, StatusRequest):
             return Response(ok=True, units=self.core.statuses(), **self._wake_window())
+        if isinstance(request, BuildRequest):
+            return Response(ok=True, build=self._build)
         if isinstance(request, PaceRequest):
             return self._pace(request, creds)
         if isinstance(request, ActRequest):
