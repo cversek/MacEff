@@ -503,7 +503,10 @@ def test_a_silenced_source_never_reaches_the_session_and_is_not_owed(mail_home, 
     _mail(mail_home, "m1")
     assert _until(lambda: _logged(nt.EVENT_SILENCED)), "the silenced notice was not recorded"
     assert [d["arrival_id"] for d in _logged(nt.EVENT_SILENCED)] == [burst_id("amail", ["m1.amsg"])]
-    assert not daemon.notifier.owed, "a silenced notice stayed owed"
+    # The daemon records the silence, then owes the notice no more (drop_silenced), on its own
+    # thread: the record can appear a moment before the owed entry goes, and a slow runner once
+    # read that moment. Wait for the second step, as for the first.
+    assert _until(lambda: not daemon.notifier.owed), "a silenced notice stayed owed"
     assert stream_rule(daemon, "unsilence", "amail")["ok"]
     assert _received(conn, TAIL_BOUND_S) == b"", "a silenced notice reached the session"
     assert not _logged(nt.EVENT_DELIVERED)
@@ -547,7 +550,7 @@ def test_a_source_routed_elsewhere_leaves_the_session_and_others_reach_it(mail_h
     conn = _channel(daemon, monkeypatch)
     assert [r.source for r in _records_in(_received(conn, 2 * TAIL_BOUND_S))] == ["amail"]
     assert [d["source"] for d in _logged(nt.EVENT_SILENCED)] == ["pd_entry_due"]
-    assert not daemon.notifier.owed
+    assert _until(lambda: not daemon.notifier.owed)
 
 
 def test_a_forged_carried_line_reaches_the_session_as_no_text(mail_home, base, daemons, monkeypatch):
