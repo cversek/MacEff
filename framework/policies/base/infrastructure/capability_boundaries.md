@@ -408,6 +408,8 @@ text, never text from a message or a file, only into an idle, empty input box, a
 nothing at all if a prompt already started after the compaction. `inject` itself
 refuses to type after text already in the box, since the two would go as one prompt. `--no-then` turns it off.
 
+**`inject exit` refuses while a feedback draft waits.** Under a session unit, `inject exit` is how an agent restarts its own session: the client exits, and the daemon starts the unit again (`persistent_layer` §6.2). But while the client holds an unsent feedback draft, it answers `/exit` with a dialog (review and send, or discard) instead of exiting. A restart asked that way once sat in the dialog for six minutes, until the operator pressed a key. The draft is the operator's to send or discard, so `inject` neither types into the dialog nor touches the file. It refuses, names each draft, and asks for the operator. A restart is needed only for what loads with the session, such as the MacEff channel. A daemon restart carries the session unit untouched.
+
 **Sent mid-turn, it QUEUES and fires when the turn yields.** So an agent invoking
 it is scheduling its own discontinuity, not triggering one mid-thought. Anything
 that must survive should be durable before the call, for the same reason a frame

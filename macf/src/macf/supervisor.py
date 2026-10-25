@@ -542,6 +542,18 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
     raises into the caller.
     """
     cmd = "/" + command.lstrip("/")
+    if cmd in ("/exit", "/quit"):
+        drafts = _unsent_feedback_drafts()
+        if drafts:
+            # With a draft waiting, the client answers /exit with a dialog (review and send,
+            # or discard) instead of exiting, so the restart this asks for would sit there
+            # until someone presses a key. The draft is the operator's, so it is named, not
+            # discarded.
+            print(f"[inject] The client holds {len(drafts)} unsent feedback draft(s), so {cmd} "
+                  f"would stop on its review-or-discard dialog instead of exiting: "
+                  f"{', '.join(str(d) for d in drafts)}. Ask the operator to send or discard "
+                  f"it (/feedback), then run this again.", file=sys.stderr)
+            return 1
     if target:
         if then:
             # The follower reads THIS agent's event log, so it can only follow its own pane.
@@ -594,6 +606,12 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
         if then and command.lstrip("/") == "compact":
             _start_compact_followup(own, then)
     return rc
+
+
+def _unsent_feedback_drafts() -> list:
+    """The feedback drafts the client holds unsent, oldest name first; empty when there are none."""
+    base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    return sorted((base / "feedback" / "drafts").glob("*.json"))
 
 
 def _draft_in_box(target: str) -> Optional[str]:
