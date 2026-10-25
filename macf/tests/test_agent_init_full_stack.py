@@ -394,3 +394,117 @@ def test_no_remote_control_leaves_the_child_and_settings_unchanged(tmp_path):
     named = _params(tmp_path, remote_control="seat-one")
     save_settings(named)
     assert load_settings(_params(tmp_path)).remote_control == "seat-one"
+
+
+# ---------------------------------------------------------------------------
+# The preamble step, unattended: skipped and the flag named, never an EOFError refusal
+# ---------------------------------------------------------------------------
+
+class _Stdin:
+    """A stdin that is, or isn't, a terminal."""
+    def __init__(self, tty):
+        self.tty = tty
+
+    def isatty(self):
+        return self.tty
+
+
+@pytest.fixture
+def preamble(stack, tmp_path, monkeypatch):
+    """The real preamble step against the stack's home, with a template of its own."""
+    from macf import cli
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "PA_PREAMBLE.md").write_text("<!-- MACEFF_PA_PREAMBLE_v9.9_START -->\npreamble\n"
+                                              "<!-- MACEFF_PA_PREAMBLE_v9.9_END -->\n")
+    monkeypatch.setenv("MACEFF_TEMPLATES_DIR", str(templates))
+    monkeypatch.chdir(stack.home)
+    config = SimpleNamespace(agent_name="Tester")
+
+    def step(*flags):
+        args = _build_parser().parse_args(["agent", "init", *flags])
+        return cli._agent_init_preamble(args, stack.home, config)
+    return step
+
+
+def _no_input(*a, **k):
+    raise AssertionError("prompted with nobody to answer")
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_a_preamble_with_no_terminal_is_skipped_naming_yes(preamble, stack, monkeypatch, existing):
+    claude_md = stack.home / "CLAUDE.md"
+    if existing:
+        claude_md.write_text("# my own notes\n")
+    monkeypatch.setattr("sys.stdin", _Stdin(False))
+    monkeypatch.setattr("builtins.input", _no_input)
+    result = preamble()
+    assert result.status == SKIPPED, result
+    assert "not interactive" in result.detail and "--yes" in result.detail
+    assert (claude_md.read_text() == "# my own notes\n") if existing else not claude_md.exists()
+
+
+def test_a_preamble_prompt_that_meets_eof_is_skipped(preamble, stack, monkeypatch):
+    def eof(*a, **k):
+        raise EOFError
+    monkeypatch.setattr("sys.stdin", _Stdin(True))
+    monkeypatch.setattr("builtins.input", eof)
+    result = preamble()
+    assert result.status == SKIPPED and "--yes" in result.detail
+    assert not (stack.home / "CLAUDE.md").exists()
+
+
+def test_yes_accepts_the_preamble_unattended(preamble, stack, monkeypatch):
+    monkeypatch.setattr("sys.stdin", _Stdin(False))
+    monkeypatch.setattr("builtins.input", _no_input)
+    result = preamble("--yes")
+    assert result.status == DONE, result
+    assert "MACEFF_PA_PREAMBLE_v9.9_START" in (stack.home / "CLAUDE.md").read_text()
+
+
+def test_a_person_who_says_no_still_aborts(preamble, stack, monkeypatch):
+    monkeypatch.setattr("sys.stdin", _Stdin(True))
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "n")
+    assert preamble().status == "aborted"
+
+
+def test_an_unattended_run_reports_the_preamble_skipped_and_goes_on(preamble, stack, monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdin", _Stdin(False))
+    monkeypatch.setattr("builtins.input", _no_input)
+    args = _build_parser().parse_args(["agent", "init"])
+    rc, results = run_stack(args, stack.home, in_container=False, preamble=preamble)
+    assert rc == 0, results
+    assert results[0].status == SKIPPED and len(results) == len(STEPS)
+    assert "preamble: skipped: not interactive" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# The default session unit's XDG_RUNTIME_DIR: what harness cutover checks for
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_the_default_session_unit_declares_the_runtime_dir_the_cutover_expects(stack, monkeypatch, platform):
+    from macf.pd import cutover
+    from macf.pd.names import declaration_path
+    # Set on both: on macOS a variable a shell happens to export is still not declared, since
+    # the cutover there reads the clients' fallback under /tmp.
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/4242")
+    ctx = agent_stack.Context(home=stack.home, login_home=stack.home, in_container=False, args=_args())
+    agent_stack.resolve_card(ctx)
+    with monkeypatch.context() as m:     # sys.platform back before anything else reads it
+        m.setattr(agent_stack.sys, "platform", platform)
+        declaration = agent_stack.default_declaration(ctx)
+    session = next(u for u in declaration["units"] if u.get("kind") == "session")
+    others = [u for u in declaration["units"] if u.get("kind") != "session"]
+    if platform == "linux":
+        assert session["environment"]["XDG_RUNTIME_DIR"] == "/run/user/4242"
+    else:
+        assert "XDG_RUNTIME_DIR" not in session["environment"]
+    assert not any("XDG_RUNTIME_DIR" in u["environment"] for u in others), "the session unit's alone"
+    staged = declaration_path(stack.home).with_name("declaration.json.cutover")
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    staged.write_text(json.dumps(declaration))
+    runtime = "/run/user/4242" if platform == "linux" else None
+    check = cutover._staged_check(staged, ctx.card, runtime,
+                                  "systemd" if platform == "linux" else "launchd")
+    assert check.ok, check.detail

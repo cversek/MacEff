@@ -94,8 +94,12 @@ def _placeheld(path: Path, agent_home: Path) -> str:
 
 def build(card: str, *, agent_home: Path, login_home: Path, account: str, python: Path,
           project_dir: Path, path_dirs: Sequence[str], mail: bool,
-          telegram: Optional[Tuple[str, str]]) -> Dict[str, Any]:
-    """The default declaration for *card*, as the JSON object written to disk."""
+          telegram: Optional[Tuple[str, str]], runtime_dir: Optional[str] = None) -> Dict[str, Any]:
+    """The default declaration for *card*, as the JSON object written to disk.
+
+    *runtime_dir* is the ``XDG_RUNTIME_DIR`` the session unit declares, so its tmux server is
+    where attach, harness status and the cutover look for it (persistent_layer 6.3). The
+    caller passes it on Linux and not on macOS, which sets none."""
     path = ":".join(dict.fromkeys(d for d in path_dirs if d))
     env = {"PATH": path, "HOME": str(login_home), "MACEFF_AGENT_HOME_DIR": "{agent_home}"}
     py = str(python)
@@ -104,7 +108,8 @@ def build(card: str, *, agent_home: Path, login_home: Path, account: str, python
          "command": [py, "-m", "macf.cli", "harness", "unit", "--home", "{agent_home}",
                      "--project-dir", _placeheld(project_dir, agent_home)],
          "account": account, "restart": "always", "liveness_interval_s": 120,
-         "memory_limit_mb": 16384, "stop_grace_s": SESSION_STOP_GRACE_S, "environment": dict(env)},
+         "memory_limit_mb": 16384, "stop_grace_s": SESSION_STOP_GRACE_S,
+         "environment": {**env, **({"XDG_RUNTIME_DIR": runtime_dir} if runtime_dir else {})}},
         {"name": "monitor", "command": [py, "-m", MONITOR_MODULE, "--follow"],
          # persistent_layer 6.4: measured 15-40 MB per monitor; 128 MB reports a leak early.
          "account": account, "restart": "always", "liveness_interval_s": 30,

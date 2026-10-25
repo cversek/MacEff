@@ -19,7 +19,7 @@ from macf.pd.interface import launchd_label
 from macf.pd.names import PD_IDENTIFIER
 from macf.utils.atomic import write_text_atomic
 
-_VERBS = ("bootstrap", "bootout", "kickstart", "print")
+_VERBS = ("bootstrap", "bootout", "kickstart", "print", "enable", "disable")
 
 #: launchctl's exit status for a boot-out of a service the domain does not have, measured on
 #: macOS 15 as "Boot-out failed: 3: No such process". Removal's goal is met, so it goes on.
@@ -109,7 +109,9 @@ def framework_app(interpreter: str) -> Optional[str]:
 def launchctl_argv(verb: str, label: str, uid: int, plist_path: Optional[str] = None) -> List[str]:
     """The launchctl command for *verb* on this user's GUI domain.
 
-    Only the domain-target verbs are offered; the legacy load/unload are not.
+    Only the domain-target verbs are offered; the legacy load/unload are not. ``disable``
+    keeps a job from loading at the next login and ``enable`` lifts that, so a job booted out
+    and disabled is stopped the way systemd's ``disable --now`` stops a unit.
     """
     if verb not in _VERBS:
         raise ValueError(f"unsupported launchctl verb {verb!r}; use one of {', '.join(_VERBS)}")
@@ -287,6 +289,39 @@ def parse_print(output: str) -> AgentStatus:
     pid = int(fields["pid"]) if fields.get("pid", "").isdigit() else None
     return AgentStatus(loaded=True, running=fields.get("state") == "running", pid=pid,
                        last_exit=fields.get("last exit code"))
+
+
+# ---------------------------------------------------------------------------
+# The cutover job: one run of harness cutover, outside the session it ends
+# ---------------------------------------------------------------------------
+
+def cutover_label(card: str) -> str:
+    """The label of the one-shot job that moves one agent's session onto its daemon:
+    ``maceff_pd.<id>.cutover``. One per agent, so two moves can't overlap."""
+    return pd_label(card) + ".cutover"
+
+
+def render_cutover_job(card: str, program_argv: List[str], log_path: str,
+                       environment: Optional[dict] = None) -> bytes:
+    """A one-shot LaunchAgent that runs ``harness cutover --execute`` once, in the user's GUI
+    session and outside the session the move ends, the launchd counterpart of the transient
+    systemd unit. ``RunAtLoad`` starts it when it is bootstrapped; there is no ``KeepAlive``,
+    so launchd never runs it again, and the job removes its own plist when it finishes.
+    Everything it prints goes to *log_path*."""
+    if not program_argv or not os.path.isabs(program_argv[0]):
+        raise ValueError(f"launchd runs a program by its absolute path, not {program_argv[:1]!r}")
+    plist = {
+        "Label": cutover_label(card),
+        "ProgramArguments": list(program_argv),
+        "RunAtLoad": True,
+        "KeepAlive": False,
+        "LimitLoadToSessionType": "Aqua",
+        "StandardOutPath": log_path,
+        "StandardErrorPath": log_path,
+    }
+    if environment:
+        plist["EnvironmentVariables"] = dict(environment)
+    return plistlib.dumps(plist, fmt=plistlib.FMT_XML, sort_keys=True)
 
 
 # ---------------------------------------------------------------------------
