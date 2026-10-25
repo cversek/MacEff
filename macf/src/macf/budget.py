@@ -297,14 +297,20 @@ def status(now: Optional[float] = None) -> dict:
         hour = [p for p in window if p[0] >= now - 3600]
         left = _hours_to(l["resets_at"], now)
         r_hour, r_window, r_ewma = _rate(hour), _rate(window), ewma_rate(window)
-        pace = r_hour if r_hour is not None else r_window
+        # The projection runs the smoothed rate over every hour still to come. The last hour alone is
+        # a reading, not a pace: one quiet hour after a busy night once projected zero growth over
+        # the 79 hours left, and the number was quoted as if it were the week's outlook.
+        pace = r_ewma if r_ewma is not None else r_window
         row = {"label": label(l), "kind": l["kind"], "percent": l["percent"], "resets_at": l["resets_at"],
                "hours_left": round(left, 2) if left is not None else None,
                "rate_last_hour": round(r_hour, 2) if r_hour is not None else None,
                "rate_window": round(r_window, 2) if r_window is not None else None,
                "rate_ewma": round(r_ewma, 3) if r_ewma is not None else None,
                "projected_at_reset": (round(min(100.0, l["percent"] + pace * left), 1)
-                                      if pace is not None and left is not None and l["percent"] is not None else None)}
+                                      if pace is not None and left is not None and l["percent"] is not None else None),
+               # the even pace: the rate that lands exactly on 100% at the reset
+               "pace_even": (round(max(0.0, 100.0 - l["percent"]) / left, 2)
+                             if left and left > 0 and l["percent"] is not None else None)}
         burn_here = mode["mode"] == "burn" and (mode.get("scope") or "week") in (row["label"], l["scope"])
         if burn_here and left and left > 0 and l["percent"] is not None:
             by_h = _hours_to(mode["by"], now) if mode.get("by") else left
@@ -344,7 +350,9 @@ def format_status(st: dict, brief: bool = False) -> str:
         if r.get("rate_ewma") is not None:
             bits.append(f"{format_rate(r['rate_ewma'])}%/h smoothed")
         if r["projected_at_reset"] is not None:
-            bits.append(f"at this pace {r['projected_at_reset']:g}% at reset")
+            bits.append(f"at the smoothed pace {r['projected_at_reset']:g}% at reset")
+        if r.get("pace_even") is not None:
+            bits.append(f"{r['pace_even']:g}%/h lands on 100% at reset")
         if "pace_needed" in r:
             bits.append(f"needs {r['pace_needed']:+g}%/h for the target")
         if bits:

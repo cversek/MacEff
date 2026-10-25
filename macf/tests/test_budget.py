@@ -34,6 +34,15 @@ def reply_at(session_pct, week_pct, scoped_pct):
     return r
 
 
+def reply_ahead(session_pct, week_pct, scoped_pct, hours=80):
+    """A reply whose weekly windows reset `hours` after T0, so a projection has hours to run."""
+    from datetime import datetime, timezone
+    r = reply_at(session_pct, week_pct, scoped_pct)
+    at = datetime.fromtimestamp(T0 + hours * 3600, tz=timezone.utc).isoformat()
+    r["limits"][1]["resets_at"] = r["limits"][2]["resets_at"] = at
+    return r
+
+
 @pytest.fixture
 def log(isolated_events_log):
     return isolated_events_log
@@ -104,13 +113,31 @@ def test_status_rate_and_projection(log, monkeypatch):
     """Two samples an hour apart in the same window give the burn rate and the projection to the reset."""
     clock = {"t": T0}
     monkeypatch.setattr(budget.time, "time", lambda: clock["t"])  # one clock for budget and the events log
-    budget.sample(fetch=lambda: reply_at(10, 70, 74), fresh=True)
+    budget.sample(fetch=lambda: reply_ahead(10, 70, 74), fresh=True)
     clock["t"] = T0 + 3600
-    budget.sample(fetch=lambda: reply_at(20, 72, 78), fresh=True)
+    budget.sample(fetch=lambda: reply_ahead(20, 72, 78), fresh=True)
     st = budget.status()
     week = next(r for r in st["limits"] if r["label"] == "week")
     assert week["rate_window"] == pytest.approx(2.0)
-    assert week["projected_at_reset"] is not None and week["projected_at_reset"] >= 72
+    left = week["hours_left"]
+    assert week["projected_at_reset"] == pytest.approx(min(100.0, 72 + week["rate_ewma"] * left), abs=0.1)
+    assert week["pace_even"] == pytest.approx((100 - 72) / left, abs=0.01)
+
+
+def test_a_quiet_last_hour_does_not_project_zero_growth(log, monkeypatch):
+    """Found on 2026-10-25: after a busy night, one hour with no new percent made the projection
+    equal the current percent, 79 hours before the reset. The projection runs the smoothed rate,
+    so a flat hour lowers it without zeroing it."""
+    clock = {"t": T0}
+    monkeypatch.setattr(budget.time, "time", lambda: clock["t"])
+    for i, week_pct in enumerate([70, 72, 74, 74]):   # two busy hours, then a flat one
+        clock["t"] = T0 + 3600 * i
+        budget.sample(fetch=lambda w=week_pct: reply_ahead(10, w, 60), fresh=True)
+    week = next(r for r in budget.status()["limits"] if r["label"] == "week")
+    assert week["rate_last_hour"] == pytest.approx(0.0)
+    assert week["rate_ewma"] > 0
+    assert week["projected_at_reset"] > 74
+    assert "smoothed pace" in budget.format_status(budget.status())
 
 
 def test_burn_mode_reports_the_pace_needed(log, monkeypatch):

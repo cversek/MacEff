@@ -1,0 +1,3 @@
+### Fixed
+
+- **`budget status` projects with the smoothed rate, and says the even pace** (`budget.py`): the projection to the reset used the last hour's rate whenever it had one, so one quiet hour after a busy night projected no growth at all over the 79 hours left, and the line read "at this pace 61% at reset" while the smoothed rate put the week near 74%. It now runs the smoothed rate (the window's average before there is one), says so ("at the smoothed pace"), and adds the rate that lands exactly on 100% at the reset. The old test passed on a zero projection and on a reset already in the past; the tests now pin the projection's value, the even pace, and a flat last hour after real burn, which fails with the old rule.
