@@ -68,6 +68,11 @@ def end(onlooker: str, ended_by: str) -> dict:
     return _append(acts.end(onlooker, ended_by, current()))
 
 
-def sweep(now: float) -> List[dict]:
-    """Record the ending owed for each lease that has run out by ``now`` (MIS-0002-R89)."""
-    return [_append(ev) for ev in acts.expired(current(), now)]
+def sweep(now: float, events: Optional[List[dict]] = None) -> List[dict]:
+    """Record the ending owed for each lease that has run out by ``now`` (MIS-0002-R89).
+
+    The state is the current cycle's, unless ``events`` is given: the compaction carry passes
+    the window it folds, the cycle just closed, since by then the boundary is written and the
+    current cycle no longer holds the invitation whose ending is owed."""
+    state = acts.fold(events) if events is not None else current()
+    return [_append(ev) for ev in acts.expired(state, now)]
