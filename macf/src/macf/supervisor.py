@@ -583,12 +583,16 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
     if draft:
         # Typed after a draft, the command is sent with it as one prompt and the client
         # never runs it: a follower's unsent text once turned /compact into plain text.
-        print(f"[inject] The input box already holds text ({draft[:60]!r}), so {cmd} typed "
-              f"now would be sent with it as one prompt and not run. If that text is the "
-              f"framework's own (a wake, a mail clock line, a recovery prompt) and not a "
-              f"person's draft, clear it with: macf_tools inject clear-input --expect "
-              f"{shlex.quote(_opening(draft))}  then run this again. A person's draft is "
-              f"theirs: ask them (autonomous_operation 5.5).", file=sys.stderr)
+        held = (f"[inject] The input box already holds text ({draft[:60]!r}), so {cmd} typed "
+                f"now would be sent with it as one prompt and not run.")
+        if _framework_typed(draft):
+            print(f"{held} The framework typed that text, so clear it with: macf_tools inject "
+                  f"clear-input --expect {shlex.quote(_opening(draft))}  then run this again.",
+                  file=sys.stderr)
+        else:
+            print(f"{held} No framework keystroke on record typed it, so it is a person's "
+                  f"draft: ask them to send or clear it (autonomous_operation 5.4), then run "
+                  f"this again.", file=sys.stderr)
         return 1
     rc = send_keys(own, [cmd], enter=True, kind="inject")
     if rc == 0:
@@ -642,7 +646,9 @@ def clear_own_input(expect: str, max_presses: int = CLEAR_MAX_PRESSES,
                     spacing_s: float = CLEAR_SPACING_S, sleep=None) -> int:
     """Empty this agent's own input box of text it recognizes, one Ctrl-U at a time.
 
-    The box is read before every press and the clearing stops at the first thing that is not
+    Only text the framework typed is cleared: the box's text must be the start of a keys_sent
+    record, so a person's draft is refused whatever *expect* says. The box is read before every
+    press and the clearing stops at the first thing that is not
     the expected text shrinking: a box that doesn't start with *expect*, text that grows or
     changes (someone typing), a box that stops shrinking, or the screen becoming unreadable.
     Only Ctrl-U is pressed. It edits the box and nothing else: never Escape, which interrupts a
@@ -671,6 +677,13 @@ def clear_own_input(expect: str, max_presses: int = CLEAR_MAX_PRESSES,
     if not original.startswith(_squash(expect)):
         print(f"[inject] The input box does not start with {expect!r}, so nothing was "
               f"pressed. It holds: {start[:120]!r}", file=sys.stderr)
+        return 1
+    if not _framework_typed(start):
+        # --expect says what the agent means to clear; whose text it is comes from the
+        # framework's own record of what it typed, never from the agent asking.
+        print(f"[inject] No framework keystroke on record typed {start[:120]!r}, so it is a "
+              f"person's draft and nothing was pressed. Ask them to send or clear it "
+              f"(autonomous_operation 5.4).", file=sys.stderr)
         return 1
     session = (_resolve_pane_target(own) or {}).get("tmux_session")
     if not session or not _tmux_available():
@@ -707,6 +720,12 @@ def clear_own_input(expect: str, max_presses: int = CLEAR_MAX_PRESSES,
     print(f"[inject] The box still holds {seen[:120]!r} after {max_presses} presses; stopped.",
           file=sys.stderr)
     return 1
+
+
+def _framework_typed(box: str) -> Optional[str]:
+    """The kind of framework keystroke that typed *box*'s text, or None for a person's draft."""
+    from .utils.input_origin import framework_typed_box_text
+    return framework_typed_box_text(box)
 
 
 def _record_box_cleared(text: str, presses: int, tmux_session: str) -> None:

@@ -657,9 +657,15 @@ The CL15 condition and the reflection sizes (5k tokens on a 1M window, 2k on 200
   - three presses in a row change nothing;
   - the box leaves the screen.
 - **What it records.** The keys are recorded as `keys_sent` before they are pressed, and what was removed is recorded as `box_cleared`.
-- **What it may clear.** Only text the framework typed and the agent recognizes: a wake, a mail clock line, a recovery prompt. A person's draft is theirs, so ask them about it, and never clear it. That is why `--expect` makes the agent say what it is clearing: text it has not read is never cleared.
+- **What it may clear: only text the framework typed, by construction.** Before pressing anything, it checks the box's text against the framework's own record of its keystrokes.
+  - Every framework keystroke is written as a `keys_sent` event before it is typed: a wake, a recovery prompt, an `inject`.
+  - The box counts as the framework's only when its text is the start of one of those records from the last 24 hours, with whitespace ignored, since wrapping and Ctrl-U change it.
+  - Text with no record, or a record with a person's words added before or after it, is a person's draft. The command refuses it and presses nothing. A person's draft is theirs: ask them to send or clear it.
+  - `--expect` stays as the agent's own statement of what it means to clear, but the record is the authority, never the agent's judgment.
+  - `inject compact`'s refusal follows the same record. For framework text it names the clearing command with its `--expect`. For anything else it says to ask the person, and names no command.
+  - A sender that types without writing `keys_sent` makes text the framework can't vouch for. One example is a deployment's legacy mail clock script; another is a person running `tmux send-keys`. The command refuses that text, and the deployment retires or fixes the sender.
 
-Like `inject compact`, it is always allowed (`Bash(macf_tools inject clear-input:*)` in the mode-safety permissions), since an agent that can't empty its box can't compact either. `--then TEXT` replaces the prompt; `--no-then` turns it off, for an operator who will be at the keyboard when the compaction ends.
+Like `inject compact`, it is always allowed (`Bash(macf_tools inject clear-input:*)` in the mode-safety permissions). An agent that can't empty its box can't compact either, and the record check means the command can only remove the framework's own words. `--then TEXT` replaces the prompt; `--no-then` turns it off, for an operator who will be at the keyboard when the compaction ends.
 
 Do NOT try to trigger compaction artificially by consuming tokens with filler. Recovery reads the checkpoint and reflection from disk, and the task notes carry the rest.
 

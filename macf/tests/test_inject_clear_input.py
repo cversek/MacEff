@@ -16,7 +16,7 @@ from macf import supervisor
 MAIL = "MAIL CLOCK: 1 new amail pair(s) in your pickup box (1 waiting)."
 
 
-def _clear(boxes, expect="MAIL CLOCK:", **kw):
+def _clear(boxes, expect="MAIL CLOCK:", typed_by="wake", **kw):
     """Run clear_own_input against a pane whose box reads *boxes* in turn, the first before
     any press and one after each; returns the exit status, the keys pressed and what was
     recorded as cleared."""
@@ -30,6 +30,7 @@ def _clear(boxes, expect="MAIL CLOCK:", **kw):
          patch.object(supervisor, "_resolve_pane_target", return_value={"tmux_session": "s"}), \
          patch.object(supervisor, "_tmux_available", return_value=True), \
          patch.object(supervisor, "_draft_in_box", side_effect=list(boxes)), \
+         patch.object(supervisor, "_framework_typed", return_value=typed_by), \
          patch.object(supervisor, "_record_keys_sent"), \
          patch.object(supervisor, "_record_box_cleared",
                       side_effect=lambda text, n, s: cleared.append((text, n))), \
@@ -78,15 +79,60 @@ def test_no_expected_text_presses_nothing(capsys):
     assert "--expect" in capsys.readouterr().err
 
 
-def test_inject_compact_refusal_names_the_clearing_command(capsys):
+def test_a_draft_no_framework_keystroke_typed_is_refused_even_with_the_right_words(capsys):
+    """Whose text it is comes from the framework's record, never from the agent asking."""
+    r = _clear([MAIL, ""], typed_by=None)
+    assert r.rc == 1 and r.presses == [] and r.cleared == []
+    assert "person's draft" in capsys.readouterr().err
+
+
+def _compact_refusal(typed_by):
     with patch.object(supervisor, "own_pane_target", return_value="seat"), \
          patch.object(supervisor, "_draft_in_box", return_value=MAIL), \
+         patch.object(supervisor, "_framework_typed", return_value=typed_by), \
          patch.object(supervisor, "send_keys", return_value=0) as send:
         assert supervisor.send_slash_to_self("compact", then=None) == 1
     send.assert_not_called()
+
+
+def test_inject_compact_refusal_names_the_clearing_command_for_framework_text(capsys):
+    _compact_refusal("wake")
+    assert "macf_tools inject clear-input --expect 'MAIL CLOCK: 1'" in capsys.readouterr().err
+
+
+def test_inject_compact_refusal_says_ask_them_for_a_persons_draft(capsys):
+    _compact_refusal(None)
     err = capsys.readouterr().err
-    assert "macf_tools inject clear-input --expect 'MAIL CLOCK: 1'" in err
-    assert "person's draft" in err
+    assert "clear-input" not in err and "ask them" in err
+
+
+def _keys_sent(*records):
+    """Events as read_events yields them, newest first, from (age_s, text, kind) tuples."""
+    now = 1_000_000.0
+    return now, [{"timestamp": now - age, "event": "keys_sent", "data": {"text": text, "kind": kind}}
+                 for age, text, kind in records]
+
+
+def test_box_text_the_framework_typed_is_found_across_wraps_and_partial_clears():
+    from macf.utils import input_origin
+    now, events = _keys_sent((3600, "MAIL CLOCK: 1 new amail pair(s)\nRead EACH", "send-keys"))
+    with patch("macf.agent_events_log.read_events", return_value=iter(events)):
+        assert input_origin.framework_typed_box_text("MAIL CLOCK: 1  new amail", now=now) == "send-keys"
+
+
+def test_text_a_person_added_or_typed_is_not_the_frameworks():
+    from macf.utils import input_origin
+    now, events = _keys_sent((60, "[maceff:wake] mail waiting", "wake"), (30, "C-u", "clear_input"))
+    for box in ("hi [maceff:wake] mail waiting", "dear operator", "C-u"):
+        with patch("macf.agent_events_log.read_events", return_value=iter(events)):
+            assert input_origin.framework_typed_box_text(box, now=now) is None
+
+
+def test_a_keystroke_older_than_the_window_does_not_count():
+    from macf.utils import input_origin
+    now, events = _keys_sent((input_origin.BOX_TEXT_WINDOW_SECONDS + 60, MAIL, "send-keys"))
+    with patch("macf.agent_events_log.read_events", return_value=iter(events)):
+        assert input_origin.framework_typed_box_text(MAIL, now=now) is None
 
 
 def test_clear_input_refuses_another_pane(capsys):

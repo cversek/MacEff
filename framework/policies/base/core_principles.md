@@ -575,9 +575,13 @@ to guess the fix, and a guess is how a workaround starts.
    known, or which policy section to read. "Clear the box and run this again" is not
    enough when the reader has no way to clear the box. In that case the message has
    named a resolution that doesn't exist, and the missing capability is the defect.
-2. **Say when it applies.** When the resolution is right only in some cases, the
-   message says which. For example: clear the text if the framework typed it, but if
-   it is a person's draft, ask them.
+2. **Say when it applies, and check it rather than ask the reader to judge it.** When
+   the resolution is right only in some cases, the message offers it only in those
+   cases, decided from a record the reader doesn't control. In every other case it
+   names what to do instead. For example, the framework clears text from an input box
+   only when its own record shows it typed that text. For any other text it says to
+   ask the person. A message that hands the reader a resolution and asks them to judge
+   whether it applies is a convention, not a guard.
 3. **Keep the message current with the capability.** A new way to resolve a refusal
    ships with an update to every message that should name it, in the same change.
 
