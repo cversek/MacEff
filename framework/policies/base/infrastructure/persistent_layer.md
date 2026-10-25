@@ -64,6 +64,7 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - How does my Claude Code session itself run as a unit of my primal daemon, and how do I attach to it?
 - What reports a session's liveness, given that an idle session has no work loop?
 - How is a session moved from the legacy harness onto its daemon, and what shows the plan before anything changes?
+- Why do the transcript monitor and the search service run as units of a daemon, how are they declared, and what stops the old ad-hoc starts from doubling them?
 
 **7 The Outside Watch**
 - What checks a primal daemon from outside the agents, and what does it read?
@@ -521,7 +522,7 @@ Commands and flags complete from a table taken from the parser when the script i
 - **End the legacy session before the unit starts.** A transcript monitor stands down when an older one already serves the transcript. The legacy session's monitor carries no session variables, so it writes no liveness for the unit, and the unit reads failed after three intervals. Only an interpreter running the monitor counts as one: a wrapper such as `timeout` that carries a monitor's arguments in its own isn't taken for it.
 - **The declaration states the session's whole environment** (R12, R13). The wrapper adds only the context window, the terminal type, and the proxy attachment, which it probes as the legacy start script does. A declared project directory that is missing starts nothing, because `claude -c` would resume a different conversation anywhere else.
 
-**A session's liveness comes from its transcript monitor** [MIS-0002-R14 (unit_MUST_emit_liveness_events)], as the operator decided on 2026-10-12. An idle session has no work loop. The monitor's loop reads the transcript and confirms the client process on every pass, so its beat means both are running. The wrapper hands the session `MACF_PD_SESSION_UNIT`, `MACF_PD_SESSION_LIVENESS_S` and `MACF_PD_SESSION_PID`, the last naming the wrapper, the process the daemon started. The monitor beats once per pass for that pid (11.2), and stops beating when its client ends. **Each beat also says when the session waits on a permission dialog** [MIS-0002-R21 (pd_MUST_report_waiting_on_person)]: the monitor reads the agent's event log for its own session, by the rule `macf_tools permissions pending` uses, where the newest deciding event is either a `permission_requested` or progress (a tool starting or finishing, a prompt, a session start or end, a compaction). The client can't say it waits while it waits, and the monitor runs outside it. The beat's `waiting_on` names the tool and the time the dialog opened, never the command, because it reaches `pd status`. The beat doesn't wait out its interval to say so: between beats it asks every few seconds whether what the session waits on has changed, and beats at once when it has, so a dialog that opens, and one that's answered, reach the daemon within seconds. The core moves the unit to waiting on a person and back, and never restarts it for the wait [MIS-0002-R22 (layer_MUST-NOT_restart_waiting_unit)]. A log that can't be read keeps the last answer, since reporting "not waiting" then would end a wait nobody answered. A defect in reading it does the same and is warned of by name, because an exception that escaped would end the beat, and the core would fail the live session for stale liveness and restart it. A denial writes no event of its own, so the session reads as waiting until its next prompt, tool call or end; a denial with a reply arrives as a prompt and ends the wait at once. Only a person answers the dialog; nothing in the layer does. The wrapper removes its own `MACF_PD_UNIT` and `MACF_PD_LIVENESS_S` from the session's environment: under names of their own, the variables can't be taken by any other process the session starts as its own unit's.
+**A session's liveness comes from its transcript monitor** [MIS-0002-R14 (unit_MUST_emit_liveness_events)], as the operator decided on 2026-10-12. An idle session has no work loop. The monitor's loop reads the transcript and confirms the client process on every pass, so its beat means both are running. The wrapper hands the session `MACF_PD_SESSION_UNIT`, `MACF_PD_SESSION_LIVENESS_S` and `MACF_PD_SESSION_PID`, the last naming the wrapper, the process the daemon started. The monitor beats once per pass for that pid (11.2), and stops beating when its client ends. Where the monitor is the daemon's own unit (6.4), it isn't the session's child, so it takes the same identity from the session's announcement instead of its environment, and beats the same way. **Each beat also says when the session waits on a permission dialog** [MIS-0002-R21 (pd_MUST_report_waiting_on_person)]: the monitor reads the agent's event log for its own session, by the rule `macf_tools permissions pending` uses, where the newest deciding event is either a `permission_requested` or progress (a tool starting or finishing, a prompt, a session start or end, a compaction). The client can't say it waits while it waits, and the monitor runs outside it. The beat's `waiting_on` names the tool and the time the dialog opened, never the command, because it reaches `pd status`. The beat doesn't wait out its interval to say so: between beats it asks every few seconds whether what the session waits on has changed, and beats at once when it has, so a dialog that opens, and one that's answered, reach the daemon within seconds. The core moves the unit to waiting on a person and back, and never restarts it for the wait [MIS-0002-R22 (layer_MUST-NOT_restart_waiting_unit)]. A log that can't be read keeps the last answer, since reporting "not waiting" then would end a wait nobody answered. A defect in reading it does the same and is warned of by name, because an exception that escaped would end the beat, and the core would fail the live session for stale liveness and restart it. A denial writes no event of its own, so the session reads as waiting until its next prompt, tool call or end; a denial with a reply arrives as a prompt and ends the wait at once. Only a person answers the dialog; nothing in the layer does. The wrapper removes its own `MACF_PD_UNIT` and `MACF_PD_LIVENESS_S` from the session's environment: under names of their own, the variables can't be taken by any other process the session starts as its own unit's.
 
 **Each beat also says when the session can't authenticate** [MIS-0002-R19 (auth_failure_MUST_read_failed)]. Claude Code writes a failed login into the transcript as an assistant entry marked as an API error, with the error `authentication_failed` ("Login expired", or the API's 401). The monitor reads it as the line arrives, and the beat's `auth_failed` carries what the client said until a later reply shows that a request went through. While it does, the core reads the session failed, with that text as the reason. It doesn't stop or restart the session:
 - **A restart can't log in.** A person has to run `/login`.
@@ -546,6 +547,32 @@ It exits 0 when every check holds and 1 otherwise. A session already running as 
 **`--run` carries the plan out, from outside the session.** It refuses unless every check holds. Then it starts the move as a transient user unit, `maceff-cutover-<agent>`, which is no part of the session it stops, and prints the `tail -f` line for its log under `~/.maceff/logs/`, to follow from any terminal or a phone. The unit runs the printed steps exactly, in order, then waits up to 300 s for the daemon to report the session unit running. **The first failing command, or a session unit that isn't running in time, rolls the move back:** the undo of every step it reached runs, last step first, each command tried whatever came before. Ending a session that was already gone isn't a failure. What `--run` changes is your session, so on a seat it runs in an operator's window, with the operator's word for that move.
 
 ---
+
+### 6.4 The transcript monitor and the search service as units
+
+**On an agent with a primal daemon, the transcript monitor and the search service run as declared units, never forked ad hoc** [MIS-0002-R12 (pd_MUST_start_units_itself)], [MIS-0002-R59 (unit_MUST_declare_memory_limit)]. Both were started by whatever ran first: a session-start hook, a task command, a mode switch, a container's start step. Each start detached into a session of its own, so nothing supervised it, nothing counted its memory, and nothing restarted it. A monitor once grew to 5 GB over three days on one deployment, and containers with several agents forked another copy at every session start (MIS-0002 section 2). The repo owner ruled on 2026-10-25 that both come under each daemon. As units they get what every unit gets (10.2): a restart policy, a liveness promise the core holds them to (11.2), a watched memory limit, a stop that reaches their whole process group, and a line in `pd status` and in a shared container's view (8).
+
+- **The monitor unit runs `python -m macf.transcript_monitor --follow`**, as the agent's own account, in the foreground. It follows the agent's live session instead of one fixed transcript:
+  - Every SessionStart writes `transcript_monitor_session_announced` to the agent's event log, with the session's id and transcript, the client's pid and start time, and, under a session unit, the unit's wrapper pid and start time. The hook is the only process that knows all of these first-hand, and it runs at every start, resume, clear and compaction.
+  - The follower reads those announcements and moves to a new session only when the transcript or the client changes, so a compaction that re-announces the same session doesn't restart it. When the client exits, the follower keeps running, beating for its own unit, and waits for the next announcement.
+  - Its detectors and events are the per-session monitor's, unchanged: one polling loop serves both.
+  - **It keeps the session's liveness beat** (6.2). While the session it follows runs as the daemon's session unit, it beats for that unit's wrapper, from the identity the announcement carries, and only while the wrapper's start time still matches.
+  - **A per-session monitor already running is not doubled.** While an older monitor still serves the announced transcript, as on the day an agent moves onto the unit, the follower beats only for its own unit, and takes over when that monitor ends.
+- **The search service runs `python -m macf.search_service.daemon --unit`**, in the foreground, without forking. It beats from the start, including while its model loads, so a slow cold start isn't failed for missing liveness. One copy serves a host or a container, as before. It is declared on one daemon there: the host agent's own, and in a container the daemon of the account the container's start step used to start it as. Its declaration, its measured 2048 MB limit and its operation are in `search_service` 2.1.
+- **When either is declared, nothing else starts it.** The session-start hook announces the session instead of starting a monitor; task commands and the AUTO_MODE switch leave the monitor to the unit; the container's start step leaves the search service to its unit and says which unit runs it. `macf_tools transcript-monitor start` and `macf_tools search-service start` refuse, naming the unit, and point to `macf_tools pd status`, which is where to look. The check reads the declaration the daemon itself reads, and matches a unit whose command runs `macf.transcript_monitor` or `macf.search_service`. An agent with no daemon, or a daemon that declares neither, keeps the old starts exactly as they were.
+- **Declare them like this** (agents.yaml form, inside an agent's `primal_daemon`):
+
+```yaml
+        - name: monitor
+          kind: service
+          command: ["/opt/maceff-venv/bin/python", "-m", "macf.transcript_monitor", "--follow"]
+          account: <the agent's login>
+          restart: always
+          liveness_interval_s: 30
+          memory_limit_mb: 128
+```
+
+  The monitor's limit comes from measurement: on one host, five per-session monitors held 15 to 40 MB each after one to twelve days, and the import alone is 38 MB. 128 MB leaves about three times the headroom and still reports a leak like the 5 GB one early.
 
 ## 7 The Outside Watch
 
@@ -666,13 +693,13 @@ A declaration with one unit:
   "agent": "ExampleAgent@abc123",
   "units": [
     {
-      "name": "transcript-monitor",
-      "command": ["/usr/local/bin/macf_tools", "transcript-monitor", "start"],
+      "name": "monitor",
+      "command": ["/usr/bin/python3", "-m", "macf.transcript_monitor", "--follow"],
       "account": "example",
       "environment": {"MACEFF_AGENT_HOME_DIR": "{agent_home}"},
       "restart": "always",
       "liveness_interval_s": 30,
-      "memory_limit_mb": 256
+      "memory_limit_mb": 128
     }
   ]
 }
