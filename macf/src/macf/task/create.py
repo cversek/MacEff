@@ -1809,10 +1809,13 @@ def _verify_tm_running() -> bool:
     just-started); False on import/OS errors or if start_daemon fails.
     """
     try:
+        from ..pd.monitor_unit import declared_monitor_unit
         from ..transcript_monitor.daemon import is_running as tm_is_running, start_daemon as tm_start
     except (ImportError, OSError):
         return False
     try:
+        if declared_monitor_unit() is not None:
+            return True  # a primal daemon unit runs it: 'macf_tools pd status' shows its state
         if tm_is_running():
             return True
         # Auto-start: matches cli.py:3008-3013 pattern at AUTO_MODE entry
