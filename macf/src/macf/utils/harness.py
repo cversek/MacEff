@@ -78,6 +78,11 @@ class HarnessParams:
     # than a launch from the project, and neither reports a substitution.
     # None keeps the previous behaviour (inherit the caller's cwd).
     project_dir: Optional[Path] = None
+    # The session's Remote Control name, handed to the client as
+    # `--remote-control NAME`. Under a primal daemon's session unit the child is
+    # run with no arguments, so a name the legacy start script passed through
+    # "$@" is lost unless it is recorded here. None renders nothing.
+    remote_control: Optional[str] = None
     proxy_port: int = DEFAULT_PROXY_PORT
     context_window: int = DEFAULT_CONTEXT_WINDOW
     term: str = "xterm-256color"
@@ -257,6 +262,7 @@ def load_settings(p: HarnessParams) -> HarnessParams:
         channels=p.channels or tuple(data.get("channels") or ()),
         shell_prefix=p.shell_prefix or data.get("shell_prefix"),
         project_dir=p.project_dir or (Path(data["project_dir"]) if data.get("project_dir") else None),
+        remote_control=p.remote_control or data.get("remote_control") or None,
     )
 
 
@@ -266,7 +272,8 @@ def save_settings(p: HarnessParams) -> None:
     p.settings_path.parent.mkdir(parents=True, exist_ok=True)
     p.settings_path.write_text(json.dumps(
         {"agent": p.agent, "channels": list(p.channels), "shell_prefix": p.shell_prefix,
-         "project_dir": str(p.project_dir) if p.project_dir else None},
+         "project_dir": str(p.project_dir) if p.project_dir else None,
+         **({"remote_control": p.remote_control} if p.remote_control else {})},
         indent=2) + "\n")
 
 
@@ -554,6 +561,9 @@ def render_child(p: HarnessParams) -> str:
     # comma, two channels would reach the client as one malformed entry, and the
     # operator's own channel would go down with the new one.
     channels = f" --channels {' '.join(shlex.quote(c) for c in p.channels)}" if p.channels else ""
+    # Before the variadic --channels, which would swallow it as a channel (see the
+    # argument-order note at the exec below).
+    remote = f" --remote-control {shlex.quote(p.remote_control)}" if p.remote_control else ""
     return f"""#!/bin/bash
 # MacEff harness child wrapper — generated, do not hand-edit.
 # Regenerate with: macf_tools harness generate --agent {p.agent}
@@ -650,7 +660,7 @@ else
   PROMPT="Session resumed by the harness. Summarize where things stand and await instructions."
 fi
 
-exec claude -c "$PROMPT" "$@"{channels}
+exec claude -c "$PROMPT" "$@"{remote}{channels}
 """
 
 

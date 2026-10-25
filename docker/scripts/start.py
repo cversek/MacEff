@@ -915,9 +915,24 @@ fi
 # Marketplace sources the provisioner may add on a fresh home. A channel naming
 # a marketplace not listed here is skipped with a warning rather than guessed
 # at -- provisioning must not invent a source for third-party code.
+def _packaged_maceff_marketplace() -> Optional[str]:
+    """The ``maceff`` marketplace shipped inside the installed macf package, as a local
+    directory source, or None when this macf has none. Local, so the MacEff channel
+    installs offline and from whatever macf the container runs."""
+    try:
+        from macf.channels.marketplace import packaged_marketplace
+        return str(packaged_marketplace())
+    except (ImportError, OSError) as e:
+        log(f"maceff marketplace: not available from the installed macf ({e})")
+        return None
+
+
 KNOWN_MARKETPLACE_SOURCES = {
     'claude-plugins-official': 'anthropics/claude-plugins-official',
 }
+_maceff_source = _packaged_maceff_marketplace()
+if _maceff_source:
+    KNOWN_MARKETPLACE_SOURCES['maceff'] = _maceff_source
 
 
 def ensure_channel_plugins(username: str, channels: Optional[List[str]]) -> None:
@@ -959,7 +974,7 @@ def ensure_channel_plugins(username: str, channels: Optional[List[str]]) -> None
                     f"has no known source; skipping (add it to "
                     f"KNOWN_MARKETPLACE_SOURCES or pre-configure the home)")
                 continue
-            as_user(f'claude plugin marketplace add {source}')
+            as_user(f'claude plugin marketplace add {shlex.quote(source)}')
         else:
             as_user(f'claude plugin marketplace update {marketplace}')
 
