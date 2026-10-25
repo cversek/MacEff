@@ -172,7 +172,8 @@ def _supervision_block(environ=None, ask=None) -> str:
         home = Path(env["MACEFF_AGENT_HOME_DIR"]) if env.get("MACEFF_AGENT_HOME_DIR") else find_agent_home()
         if not declaration_path(home).is_file():
             return ""
-        unit = primal_daemon_unit(get_agent_identity(), environ=env, ask=ask)
+        from ..pd.names import agent_card
+        unit = primal_daemon_unit(agent_card(home), environ=env, ask=ask)
     except Exception as e:  # noqa: BLE001 - GUARD: a readout must not break session start
         emit_warning(Warning(source="session_start", kind="supervision_unread",
                              detail=f"could not tell whether the daemon supervises this session: {e}"))
