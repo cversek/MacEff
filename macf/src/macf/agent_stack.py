@@ -173,10 +173,8 @@ def _validate(declaration: Dict) -> Optional[str]:
     return None
 
 
-def legacy_harness_live(ctx: Context) -> Optional[str]:
-    """Why a legacy harness session may be running for this agent, or None. A session unit
-    started beside it would be a second session on the same conversation (persistent_layer
-    6.2, 6.3)."""
+def _systemd_harness_live(ctx: Context) -> Optional[str]:
+    """The legacy harness's systemd user unit, when it is active."""
     from macf.pd.names import pd_id
     unit = f"cc-harness-{pd_id(ctx.card)}.service"
     if not (ctx.login_home / ".config" / "systemd" / "user" / unit).exists():
@@ -190,6 +188,122 @@ def legacy_harness_live(ctx: Context) -> Optional[str]:
         return f"{unit} is installed and its state can't be read: {e}"
     state = out.stdout.strip()
     return f"{unit} is {state}" if state in ("active", "activating", "reloading") else None
+
+
+def _launchd_harness_live(ctx: Context, platform: Optional[str] = None) -> Optional[str]:
+    """macOS: a harness LaunchAgent for this card that launchd runs, the launchd counterpart
+    of the systemd unit. Matched by its plist's name, which names the harness and the card's
+    id; one launchd can't be asked about counts as live, since the cost of a wrong "no" is a
+    second session."""
+    if (platform or sys.platform) != "darwin":
+        return None
+    from macf.pd.names import pd_id
+    agents = ctx.login_home / "Library" / "LaunchAgents"
+    try:
+        plists = sorted(p for p in agents.glob("*.plist")
+                        if "harness" in p.name and pd_id(ctx.card) in p.name)
+    except OSError as e:
+        # A wrong "no" starts a second session on one conversation, so an unreadable
+        # directory counts as a running session, as an unanswered launchctl does.
+        return f"{agents} can't be read ({e}), so a harness LaunchAgent can't be ruled out"
+    for plist in plists:
+        label = plist.name[:-len(".plist")]
+        if shutil.which("launchctl") is None:
+            return f"the harness LaunchAgent {label} is installed, and without launchctl it can't be told whether it runs"
+        from macf.platform import launchd
+        try:
+            out = subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/{label}"],
+                                 capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError) as e:
+            return f"the harness LaunchAgent {label} is installed and its state can't be read: {e}"
+        status = launchd.parse_print(out.stdout + out.stderr)
+        if status.running:
+            return f"the harness LaunchAgent {label} is running" + (f" (pid {status.pid})" if status.pid else "")
+    return None
+
+
+def _is_claude(argv: List[str]) -> bool:
+    """Whether a command line is a Claude Code client: the ``claude`` executable, or a
+    JavaScript runtime running the client's script."""
+    if not argv:
+        return False
+    if Path(argv[0]).name == "claude":
+        return True
+    return Path(argv[0]).name in ("node", "bun") and any(
+        Path(a).name == "claude" or ("claude-code" in a and a.endswith("cli.js")) for a in argv[1:3])
+
+
+def _clients_from_proc(proc: Path = Path("/proc")) -> List[Tuple[int, str]]:
+    """(pid, cwd) of every Claude Code client this account owns, from procfs."""
+    me, found = os.getuid(), []
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            if entry.lstat().st_uid != me:
+                continue
+            argv = [a.decode(errors="replace") for a in (entry / "cmdline").read_bytes().split(b"\0") if a]
+            if not _is_claude(argv):
+                continue
+            found.append((int(entry.name), os.readlink(entry / "cwd")))
+        except (OSError, ValueError):
+            continue  # it ended while we looked, or is not ours to read
+    return found
+
+
+def _clients_from_ps() -> List[Tuple[int, str]]:
+    """(pid, cwd) of every Claude Code client this account owns, from ps and lsof (macOS)."""
+    env = {**os.environ, "LC_ALL": "C"}
+    try:
+        out = subprocess.run(["ps", "-U", str(os.getuid()), "-ww", "-o", "pid=,args="],
+                             capture_output=True, text=True, timeout=10, env=env).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    found = []
+    for line in out.splitlines():
+        fields = line.split()
+        if len(fields) < 2 or not fields[0].isdigit() or not _is_claude(fields[1:]):
+            continue
+        try:
+            cwd = subprocess.run(["lsof", "-a", "-p", fields[0], "-d", "cwd", "-Fn"],
+                                 capture_output=True, text=True, timeout=10, env=env).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        names = [ln[1:] for ln in cwd.splitlines() if ln.startswith("n")]
+        if names:
+            found.append((int(fields[0]), names[0]))
+    return found
+
+
+def _clients_from_sidecars() -> List[Tuple[int, str]]:
+    """(pid, cwd) of every live session the client's own sidecars name (~/.claude/sessions)."""
+    from macf.notify.session import live_sessions
+    with contextlib.redirect_stderr(io.StringIO()):
+        return [(s.pid, s.cwd) for s in live_sessions() if s.cwd]
+
+
+def client_processes() -> List[Tuple[int, str]]:
+    """(pid, cwd) of every live Claude Code client of this account, whatever started it."""
+    walk = _clients_from_proc() if Path("/proc/self/cmdline").exists() else _clients_from_ps()
+    return sorted(set(walk) | set(_clients_from_sidecars()))
+
+
+def live_client_here(ctx: Context) -> Optional[str]:
+    """A live client whose working directory is the agent's project directory: the session a
+    session unit would resume in the same place, so a second client on the same transcript."""
+    here = project_dir(ctx).resolve()
+    pids = sorted({pid for pid, cwd in client_processes() if Path(cwd).resolve() == here})
+    if not pids:
+        return None
+    return f"a Claude Code client already runs in {here} (pid {', '.join(map(str, pids))})"
+
+
+def legacy_harness_live(ctx: Context) -> Optional[str]:
+    """Why a session for this agent may already be running outside its daemon, or None: the
+    legacy harness's systemd unit, its LaunchAgent on macOS, or any live client in the
+    project directory, however it was started. A session unit started beside any of them
+    would be a second client on one conversation (persistent_layer 6.2, 6.3)."""
+    return _systemd_harness_live(ctx) or _launchd_harness_live(ctx) or live_client_here(ctx)
 
 
 def service_manager_missing() -> Optional[str]:
@@ -297,8 +411,9 @@ def step_declaration(ctx: Context) -> Result:
     ctx.declaration = default
     if live:
         ctx.staged = target
-        return Result("declaration", DONE, f"staged at {target}, not installed: {live}, and a session "
-                                           f"unit beside it would be a second session. Move with "
+        return Result("declaration", DONE, f"staged at {target}, not installed: {live}. A session "
+                                           f"unit beside it would be a second client on one "
+                                           f"conversation; stop that session deliberately, then run "
                                            f"macf_tools harness cutover")
     return Result("declaration", DONE, f"{target}: units {', '.join(u['name'] for u in default['units'])}")
 

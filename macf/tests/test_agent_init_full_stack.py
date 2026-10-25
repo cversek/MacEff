@@ -19,6 +19,8 @@ from macf.cli import _build_parser
 from macf.pd.interface import Declaration
 
 REPO = Path(__file__).resolve().parents[2]
+#: The real live-session check, before the fixture stubs it out.
+REAL_LIVE_CHECK = agent_stack.legacy_harness_live
 CARD = "Tester@abc123"
 
 
@@ -187,6 +189,61 @@ def test_a_container_leaves_the_declaration_harness_and_daemon_to_its_start_step
     assert {steps[s].status for s in ("declaration", "harness", "daemon")} == {SKIPPED}
     assert not (stack.home / ".maceff" / "pd" / "declaration.json").exists()
     assert stack.installs == []
+
+
+def _with_clients(monkeypatch, clients):
+    """The real live-session check, over a mocked process table and no sidecars."""
+    monkeypatch.setattr(agent_stack, "legacy_harness_live", REAL_LIVE_CHECK)
+    monkeypatch.setattr(agent_stack, "_clients_from_proc", lambda *a: list(clients))
+    monkeypatch.setattr(agent_stack, "_clients_from_ps", lambda: list(clients))
+    monkeypatch.setattr(agent_stack, "_clients_from_sidecars", list)
+
+
+def test_a_hand_started_client_in_the_project_dir_stages_the_declaration(stack, monkeypatch):
+    # No systemd unit, no tmux, no supervisor: a plain claude -c in the agent's directory.
+    _with_clients(monkeypatch, [(4242, str(stack.home))])
+    _rc, results = _run(stack)
+    steps = _by_step(results)
+    pd = stack.home / ".maceff" / "pd"
+    assert not (pd / "declaration.json").exists() and (pd / "declaration.json.cutover").exists()
+    assert "pid 4242" in steps["declaration"].detail and "harness cutover" in steps["declaration"].detail
+    assert steps["daemon"].status == SKIPPED and stack.installs == []
+
+
+def test_a_client_in_another_directory_does_not_block(stack, monkeypatch, tmp_path):
+    elsewhere = tmp_path / "other-project"
+    elsewhere.mkdir()
+    _with_clients(monkeypatch, [(4242, str(elsewhere))])
+    _rc, results = _run(stack)
+    assert (stack.home / ".maceff" / "pd" / "declaration.json").exists()
+    assert _by_step(results)["daemon"].status == DONE
+
+
+def test_the_proc_walk_finds_this_accounts_claude_and_its_cwd(tmp_path):
+    proc = tmp_path / "proc"
+    for pid, argv, cwd in ((101, b"/home/x/.local/bin/claude\0-c\0", tmp_path),
+                           (102, b"/usr/bin/python3\0-m\0macf.cli\0", tmp_path),
+                           (103, b"node\0/opt/lib/node_modules/@anthropic-ai/claude-code/cli.js\0", tmp_path)):
+        (proc / str(pid)).mkdir(parents=True)
+        (proc / str(pid) / "cmdline").write_bytes(argv)
+        (proc / str(pid) / "cwd").symlink_to(cwd)
+    assert sorted(agent_stack._clients_from_proc(proc)) == [(101, str(tmp_path)), (103, str(tmp_path))]
+
+
+def test_a_running_harness_launch_agent_counts_as_live_on_macos(stack, monkeypatch):
+    agents = stack.home / "Library" / "LaunchAgents"
+    agents.mkdir(parents=True)
+    (agents / "cc-harness-Tester_abc123.plist").write_text("<plist/>")
+    real_which = agent_stack.shutil.which
+    monkeypatch.setattr(agent_stack.shutil, "which",
+                        lambda name: "/bin/launchctl" if name == "launchctl" else real_which(name))
+    monkeypatch.setattr(agent_stack.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(
+        argv, 0, "gui/501/cc-harness-Tester_abc123 = {\n\tstate = running\n\tpid = 777\n}\n", ""))
+    ctx = agent_stack.Context(home=stack.home, login_home=stack.home, in_container=False,
+                              args=_args(), card=CARD)
+    said = agent_stack._launchd_harness_live(ctx, platform="darwin")
+    assert said and "cc-harness-Tester_abc123" in said and "pid 777" in said
+    assert agent_stack._launchd_harness_live(ctx, platform="linux") is None
 
 
 # --- the packaged marketplace ------------------------------------------------------------------
