@@ -276,10 +276,13 @@ _DEFAULT_ASK = [
 # and can always compact itself. The injected /compact passes every Stop gate
 # once (stop_bypass), so under the client's auto mode the only thing that could
 # stop it is a refusal of the command itself (GH #479). Exact, not a wildcard:
-# `inject` takes any slash command.
+# `inject` takes any slash command. inject compact refuses while the input box
+# holds text, so clearing the box is allowed too; clear-input presses only
+# Ctrl-U, in the caller's own pane, and only when the box starts with --expect.
 _PERMANENT_ALLOW = [
     "Bash(macf_tools mode set MANUAL_MODE:*)",
     "Bash(macf_tools inject compact)",
+    "Bash(macf_tools inject clear-input:*)",
 ]
 
 # Operations that are NEVER legitimate in normal development (permanent deny)

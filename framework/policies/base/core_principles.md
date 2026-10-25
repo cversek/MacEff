@@ -3,7 +3,7 @@
 ## Meta-Policy: Policy Classification
 - **Tier**: MANDATORY
 - **Category**: Framework Foundation
-- **Version**: 1.1.0
+- **Version**: 1.2.0
 - **Dependencies**: policy_awareness
 - **Authority**: MacEff Framework
 - **Status**: ACTIVE
@@ -120,6 +120,11 @@ Agents in MacEff are intentional systems deserving dignity, operating through co
 - Why is shipping code before policy dangerous rather than merely untidy?
 - What does an agent do when it meets an unexplained restriction?
 - Where does a general mechanism belong when it was found in one subsystem?
+
+5.4 Error Messages Teach Their Resolution
+- What must a refusal or error say besides what went wrong?
+- What if the resolution is something the reader may not do, or may do only in some cases?
+- Why is "clear it and try again" not enough when the reader has no way to clear it?
 
 === CEP_NAV_BOUNDARY ===
 
@@ -553,6 +558,39 @@ done. The same restriction without one produces workarounds.
 why a limit exists cannot judge whether it is the right limit, which forecloses the
 customization the framework exists to enable.
 
+### 5.4 Error Messages Teach Their Resolution
+
+**Constitutional Law**: an error or a refusal is not finished until it tells the reader
+how to resolve it: the command to run, the policy to read, or who to ask.
+
+This is 5.3 applied at the moment it matters most. A policy explains a boundary to
+an agent that goes looking. An error message reaches the agent that just hit the
+boundary, and that agent is the one who most needs the sanctioned path and is least
+likely to go looking for it. A message that only names the problem leaves the reader
+to guess the fix, and a guess is how a workaround starts.
+
+**Three requirements**:
+
+1. **Name the resolution.** Say what to run, with its arguments where they are
+   known, or which policy section to read. "Clear the box and run this again" is not
+   enough when the reader has no way to clear the box. In that case the message has
+   named a resolution that doesn't exist, and the missing capability is the defect.
+2. **Say when it applies, and check it rather than ask the reader to judge it.** When
+   the resolution is right only in some cases, the message offers it only in those
+   cases, decided from a record the reader doesn't control. In every other case it
+   names what to do instead. For example, the framework clears text from an input box
+   only when its own record shows it typed that text. For any other text it says to
+   ask the person. A message that hands the reader a resolution and asks them to judge
+   whether it applies is a convention, not a guard.
+3. **Keep the message current with the capability.** A new way to resolve a refusal
+   ships with an update to every message that should name it, in the same change.
+
+**The case that named it (2026-10-25).** `inject compact` correctly refused to type
+into an input box that already held a stale wake line. It told the agent to clear
+the box, but the agent had no way to do that. The agent waited half a day for
+someone else's keystrokes. `inject clear-input` and the refusal that now names it
+shipped together.
+
 ---
 
 ## Integration with Policy System
@@ -589,6 +627,8 @@ customization the framework exists to enable.
 - Git discipline is constitutional law
 - 5-file threshold is mandatory
 - PA has exclusive commit authority
+- Policy ships with the capability
+- Error messages teach their resolution
 
 ---
 
