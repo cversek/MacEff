@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from macf import agent_stack
-from macf.agent_stack import ALREADY, DONE, DRIFT, PLANNED, SKIPPED, STEPS, Result, run_stack
+from macf.agent_stack import ALREADY, DONE, DRIFT, PLANNED, SKIPPED, STEPS, WOULD, Result, run_stack
 from macf.cli import _build_parser
 from macf.pd.interface import Declaration
 
@@ -67,6 +67,11 @@ def stack(tmp_path, monkeypatch):
                         lambda name: "/fake/bin/claude" if name == "claude" else real_which(name))
     monkeypatch.setattr(agent_stack.subprocess, "run", fake_claude)
     monkeypatch.setattr(agent_stack, "legacy_harness_live", lambda ctx: None)
+    # No live session and no daemon unless a test says so: nothing reads the real host.
+    for source in ("_clients_from_proc", "_clients_from_ps", "_clients_from_sidecars"):
+        monkeypatch.setattr(agent_stack, source, lambda *a: [])
+    monkeypatch.setattr(agent_stack, "_systemd_harness_live", lambda ctx: None)
+    monkeypatch.setattr(agent_stack, "daemon_session_pid", lambda ctx, d: None)
     monkeypatch.setattr(agent_stack, "service_manager_missing", lambda: None)
     monkeypatch.setattr(agent_stack, "pd_unit_current", lambda card, h: installed["unit"])
     monkeypatch.setattr("macf.pd.cli.cmd_pd_install", fake_pd_install)
@@ -92,7 +97,8 @@ def test_plan_lists_every_step_and_changes_nothing(stack, capsys):
     assert rc == 0
     for step, _what, _flag in STEPS:
         assert f"{step}:" in out
-    assert [r.status for r in results] == [PLANNED] * len(STEPS)
+    assert results[0].status == PLANNED
+    assert {r.status for r in results[1:]} == {WOULD}, results   # each checked, none acted
     assert {s for s, _w, _f in STEPS} >= {"preamble", "task-store", "declaration", "harness",
                                           "channel", "permissions", "daemon"}
     assert not (stack.home / ".maceff" / "pd").exists() and stack.claude == [] and stack.installs == []
@@ -244,6 +250,86 @@ def test_a_running_harness_launch_agent_counts_as_live_on_macos(stack, monkeypat
     said = agent_stack._launchd_harness_live(ctx, platform="darwin")
     assert said and "cc-harness-Tester_abc123" in said and "pid 777" in said
     assert agent_stack._launchd_harness_live(ctx, platform="linux") is None
+
+
+def _snapshot(root):
+    return {str(p.relative_to(root)): (p.read_bytes() if p.is_file() else None)
+            for p in sorted(root.rglob("*"))}
+
+
+def _write_partial_declaration(stack):
+    path = stack.home / ".maceff" / "pd" / "declaration.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"version": 1, "agent": CARD, "units": [
+        {"name": "session", "kind": "session", "command": ["/bin/true"], "account": "x",
+         "restart": "always", "liveness_interval_s": 60, "memory_limit_mb": 10}]}))
+    return path
+
+
+def test_an_existing_declaration_with_a_live_client_never_reaches_pd_install(stack, monkeypatch):
+    _write_partial_declaration(stack)
+    _with_clients(monkeypatch, [(5151, str(stack.home))])
+    _rc, results = _run(stack)
+    steps = _by_step(results)
+    assert steps["declaration"].status == DRIFT              # the declaration step had nothing to stage
+    assert steps["daemon"].status == SKIPPED
+    assert "pid 5151" in steps["daemon"].detail and "harness cutover" in steps["daemon"].detail
+    assert stack.installs == []
+
+
+def test_plan_reports_what_an_existing_declaration_lacks(stack, capsys):
+    _write_partial_declaration(stack)
+    _rc, results = _run(stack, "--plan")
+    detail = _by_step(results)["declaration"].detail
+    assert "no monitor unit" in detail and "no search unit" in detail
+    assert "no monitor unit" in capsys.readouterr().out
+
+
+def test_plan_says_a_live_client_would_stop_the_daemon_step(stack, monkeypatch, capsys):
+    _write_partial_declaration(stack)
+    _with_clients(monkeypatch, [(5151, str(stack.home))])
+    _rc, results = _run(stack, "--plan")
+    daemon = _by_step(results)["daemon"]
+    assert daemon.status == SKIPPED and "pid 5151" in daemon.detail
+    assert "pid 5151" in capsys.readouterr().out
+
+
+def test_plan_writes_nothing(stack):
+    _write_partial_declaration(stack)
+    before = _snapshot(stack.home)
+    _run(stack, "--plan")
+    assert _snapshot(stack.home) == before
+    assert stack.claude == [] and stack.installs == []
+
+
+def test_a_client_below_the_confirmed_session_unit_is_that_unit(stack, monkeypatch):
+    _write_partial_declaration(stack)
+    _with_clients(monkeypatch, [(5151, str(stack.home))])
+    monkeypatch.setattr(agent_stack, "daemon_session_pid", lambda ctx, d: 900)
+    monkeypatch.setattr(agent_stack, "ancestors", lambda pid: {pid, 901, 900, 1})
+    _rc, results = _run(stack)
+    daemon = _by_step(results)["daemon"]
+    assert daemon.status == ALREADY and "pid 900" in daemon.detail
+    assert stack.installs == []
+    _rc, results = _run(stack, "--plan")
+    assert _by_step(results)["daemon"].status == ALREADY
+
+
+def test_a_client_not_below_the_session_unit_still_blocks(stack, monkeypatch):
+    _write_partial_declaration(stack)
+    _with_clients(monkeypatch, [(5151, str(stack.home))])
+    monkeypatch.setattr(agent_stack, "daemon_session_pid", lambda ctx, d: 900)
+    monkeypatch.setattr(agent_stack, "ancestors", lambda pid: {pid, 77, 1})
+    _rc, results = _run(stack)
+    daemon = _by_step(results)["daemon"]
+    assert daemon.status == SKIPPED and "pid 5151" in daemon.detail
+    assert stack.installs == []
+
+
+def test_plan_prints_findings_not_the_static_list(stack, capsys):
+    _run(stack, "--plan")
+    out = capsys.readouterr().out
+    assert "1. preamble" not in out and "agent init --plan" in out
 
 
 # --- the packaged marketplace ------------------------------------------------------------------
