@@ -1692,6 +1692,9 @@ def _harness_params(args: argparse.Namespace):
     project_dir = getattr(args, "project_dir", None) or os.environ.get("MACEFF_PROJECT_DIR")
     if project_dir:
         p = replace(p, project_dir=Path(project_dir))
+    remote_control = getattr(args, "remote_control", None)
+    if remote_control:
+        p = replace(p, remote_control=remote_control)
     # Fill anything not given from what the last install recorded. Without this
     # a flagless `install --check` renders different artifacts and reports drift
     # that is not there — and acting on that report with --force would strip the
@@ -2684,11 +2687,17 @@ def other_claude_md_in_load_path(reconciled_path):
 
 
 def cmd_agent_init(args: argparse.Namespace) -> int:
-    """Initialize agent with preamble injection (idempotent)."""
+    """Initialize the agent: its PA preamble and its whole persistent-layer stack (idempotent).
+
+    The steps, their order and their flags are ``macf.agent_stack``'s; the preamble step is
+    ``_agent_init_preamble`` below, the behavior agent init always had.
+    """
+    from . import agent_stack
     try:
         # Detect PA home directory
         config = ConsciousnessConfig()
-        if config._is_container():
+        in_container = config._is_container()
+        if in_container:
             # In container: use detected home
             pa_home = Path.home()
         else:
@@ -2703,7 +2712,19 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
             except (OSError, IOError) as e:
                 print(f"⚠️ MACF: agent home detection failed: {e}", file=sys.stderr)
                 pa_home = Path.cwd()
+        rc, _results = agent_stack.run_stack(
+            args, Path(pa_home), in_container=in_container,
+            preamble=lambda: _agent_init_preamble(args, Path(pa_home), config))
+        return rc
+    except Exception as e:
+        print(f"Error during agent initialization: {e}")
+        return 1
 
+
+def _agent_init_preamble(args: argparse.Namespace, pa_home: Path, config):
+    """The preamble step: CLAUDE.md, the personal policy manifest and the agent's id."""
+    from .agent_stack import ALREADY, DONE, REFUSED, Result
+    if True:
         claude_md_path = pa_home / "CLAUDE.md"
 
         # Determine preamble template path (portable)
@@ -2742,7 +2763,7 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
             print("Expected locations:")
             for loc in template_locations:
                 print(f"  - {loc}")
-            return 1
+            return Result("preamble", REFUSED, "PA_PREAMBLE.md template not found")
 
         # Read preamble template
         preamble_content = preamble_template_path.read_text()
@@ -2795,24 +2816,30 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
                 print(f"🧹 Removing {len(stale_versions)} stale preamble block(s): "
                       f"{', '.join('v' + v for v in stale_versions)}")
 
-            # Confirmation prompt for modifying existing file
-            print(f"\n{action_desc} CLAUDE.md:")
-            print(f"  📄 {claude_md_path}")
-            if not getattr(args, 'yes', False):
-                response = input("\nProceed? [y/N]: ").strip().lower()
-                if response != 'y':
-                    print("Aborted.")
-                    return 0
-
             # Append: user + boundary + preamble
             new_content = user_content + "\n\n" + UPGRADE_BOUNDARY + "\n\n" + preamble_content
-            claude_md_path.write_text(new_content)
+            if new_content == existing_content:
+                # Already current: no prompt and no write, so a second run is a no-op.
+                status = ALREADY
+                print(f"✓ PA Preamble already current in {claude_md_path}")
+            else:
+                status = DONE
+                # Confirmation prompt for modifying existing file
+                print(f"\n{action_desc} CLAUDE.md:")
+                print(f"  📄 {claude_md_path}")
+                if not getattr(args, 'yes', False):
+                    response = input("\nProceed? [y/N]: ").strip().lower()
+                    if response != 'y':
+                        return Result("preamble", "aborted")
+                claude_md_path.write_text(new_content)
             # Say which of the two things happened. "appended" asserted the
             # DANGEROUS outcome -- an operator reading it has been told the thing
             # they should check for has occurred, when in fact the old block was
             # replaced in place. A message that describes a different operation
             # than the one performed is worse than no message.
-            if _replacing:
+            if status == ALREADY:
+                pass
+            elif _replacing:
                 print("✅ PA Preamble replaced in place (one managed block, now current)")
             else:
                 print("✅ PA Preamble added below the upgrade boundary")
@@ -2839,9 +2866,9 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
             if not getattr(args, 'yes', False):
                 response = input("\nProceed? [y/N]: ").strip().lower()
                 if response != 'y':
-                    print("Aborted.")
-                    return 0
+                    return Result("preamble", "aborted")
             claude_md_path.write_text(preamble_content)
+            status = DONE
             print(f"✅ CLAUDE.md created successfully")
 
         # Create personal policy directory structure (PA only)
@@ -2869,13 +2896,7 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
 
         print(f"\n📍 PA Home: {pa_home}")
         print(f"📍 Personal Policies: {personal_policies_dir}")
-        print(f"\nAgent initialization complete!")
-
-        return 0
-
-    except Exception as e:
-        print(f"Error during agent initialization: {e}")
-        return 1
+        return Result("preamble", status, str(claude_md_path))
 
 
 def cmd_agent_init_auth_token(args: argparse.Namespace) -> int:
@@ -12256,7 +12277,9 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_parser = sub.add_parser("agent", help="agent initialization and management")
     agent_sub = agent_parser.add_subparsers(dest="agent_cmd")
 
-    agent_init_parser = agent_sub.add_parser("init", help="initialize agent with PA preamble")
+    agent_init_parser = agent_sub.add_parser(
+        "init", help="initialize the agent: its PA preamble and its persistent-layer stack (task store, "
+                     "primal daemon declaration, harness, MacEff channel, permissions, pd install)")
     agent_init_parser.add_argument("-y", "--yes", action="store_true", help="skip confirmation prompt")
     agent_init_parser.add_argument(
         "--mint-fresh-id", action="store_true",
@@ -12264,6 +12287,8 @@ def _build_parser() -> argparse.ArgumentParser:
              "scope (default is to transfer the existing identity, preserving "
              "the calling card)",
     )
+    from .agent_stack import add_arguments as _agent_stack_arguments
+    _agent_stack_arguments(agent_init_parser)
     agent_init_parser.set_defaults(func=cmd_agent_init)
 
     # AUTO_MODE auth token bootstrap (host / non-Docker installs) — #115
@@ -12364,6 +12389,9 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_generate.add_argument("--project-dir", metavar="DIR",
                                  help="directory the supervised session starts in; decides which "
                                       "conversation 'claude -c' resumes (default: MACEFF_PROJECT_DIR)")
+    harness_generate.add_argument("--remote-control", metavar="NAME",
+                                 help="Remote Control name the session's client is started with "
+                                      "(rendered as --remote-control NAME; default: none)")
     harness_generate.add_argument("--shell-prefix", metavar="NAME",
                                  help="short handle for the generated shell functions (default: the moniker half of the Calling Card)")
     harness_generate.add_argument(
@@ -12381,6 +12409,9 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_install.add_argument("--project-dir", metavar="DIR",
                                  help="directory the supervised session starts in; decides which "
                                       "conversation 'claude -c' resumes (default: MACEFF_PROJECT_DIR)")
+    harness_install.add_argument("--remote-control", metavar="NAME",
+                                 help="Remote Control name the session's client is started with "
+                                      "(rendered as --remote-control NAME; default: none)")
     harness_install.add_argument("--shell-prefix", metavar="NAME",
                                  help="short handle for the generated shell functions (default: the moniker half of the Calling Card)")
     harness_install.add_argument("--watchdog", action="store_true",

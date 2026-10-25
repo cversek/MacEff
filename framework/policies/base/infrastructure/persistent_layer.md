@@ -64,6 +64,7 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - How does my Claude Code session itself run as a unit of my primal daemon, and how do I attach to it?
 - What reports a session's liveness, given that an idle session has no work loop?
 - How is a session moved from the legacy harness onto its daemon, and what shows the plan before anything changes?
+- What does `macf_tools agent init` install, in what order, and what does it never overwrite?
 
 **7 The Outside Watch**
 - What checks a primal daemon from outside the agents, and what does it read?
@@ -183,7 +184,7 @@ The channel is one-way. It offers no tools, so a session has no reply path throu
 
 ### 1.7 Installing and loading it
 
-The channel ships as a Claude Code plugin, `maceff-channel`, from the marketplace in the MacEff repository [MIS-0002-R125 (channel_MUST_ship_as_plugin)]. A plugin is required because Claude Code's organization allowlist admits plugins only. Its command, `maceff-channel`, is installed with `macf`.
+The channel ships as a Claude Code plugin, `maceff-channel`, from the `maceff` marketplace, which ships inside the installed `macf` package (`macf.channels.marketplace.packaged_marketplace()`), so a container or a fresh host installs it with no repository checkout and no network [MIS-0002-R125 (channel_MUST_ship_as_plugin)]. The repository's root marketplace points at the same plugin directory. A plugin is required because Claude Code's organization allowlist admits plugins only. Its command, `maceff-channel`, is installed with `macf`.
 
 A channel not on Claude Code's allowlist loads only under the development flag, which asks a person to confirm at every start. So a deployment loads it through an organization allowlist or an official listing where it can [MIS-0002-R119 (channel_SHOULD_load_without_development_flag)]. A restart the primal daemon performs never waits on that confirmation; such a restart comes up on the keystroke fallback until a person starts the session with the channel. Where a deployment sets an organization allowlist, the list replaces Claude Code's default list, so it must also name the operator's own channels, or they stop loading after the next unattended restart.
 
@@ -546,6 +547,32 @@ It exits 0 when every check holds and 1 otherwise. A session already running as 
 **`--run` carries the plan out, from outside the session.** It refuses unless every check holds. Then it starts the move as a transient user unit, `maceff-cutover-<agent>`, which is no part of the session it stops, and prints the `tail -f` line for its log under `~/.maceff/logs/`, to follow from any terminal or a phone. The unit runs the printed steps exactly, in order, then waits up to 300 s for the daemon to report the session unit running. **The first failing command, or a session unit that isn't running in time, rolls the move back:** the undo of every step it reached runs, last step first, each command tried whatever came before. Ending a session that was already gone isn't a failure. What `--run` changes is your session, so on a seat it runs in an operator's window, with the operator's word for that move.
 
 ---
+
+### 6.5 Installing the stack: `macf_tools agent init`
+
+**`macf_tools agent init` installs an agent's whole persistent layer, not only its preamble.** The repo owner asked on 2026-10-25 for one command that leaves an agent on a working primal daemon. Until then a host agent got there only through a series of manual commands, and a container's start step left out the MacEff channel plugin, so no daemon notice reached its seats' sessions.
+
+- **It prints its plan, then reports each step:** done, already done, found with drift, skipped (with why) or refused (with why). It exits 1 if any step was refused. `--plan` prints the plan and changes nothing. A second run reports every step as already done.
+- **The steps, in this order:**
+  1. the PA preamble in CLAUDE.md;
+  2. the task store, if absent;
+  3. a default declaration, if none exists, at the path the daemon reads (10.1). It declares:
+     - a session unit in the agent's project directory;
+     - the monitor and search units (6.4);
+     - the MacEff channel in `allowlisted_channels`, with Telegram as an operator channel only if the agent already uses Telegram;
+     - the mail route only if the agent's mail is configured.
+
+     It is checked against the daemon's own model before it is written;
+  4. the harness, with the channels the declaration allows;
+  5. the MacEff channel plugin, from the packaged marketplace (1.7);
+  6. the mode-safety permissions;
+  7. `pd install`, last, because the daemon starts the session unit as soon as it runs, so everything that unit needs must already be in place.
+- **It never overwrites a declaration.** An existing one is compared with the default, and what it lacks is reported: units, by kind or by the module they run; allowlisted channels; and notice routes. The drift is the report, and changing the declaration is the agent's or the operator's act.
+- **It won't start a second session on one conversation.** If the legacy harness unit is still active, the declaration goes to `declaration.json.cutover` and `pd install` is skipped with a pointer to `harness cutover` (6.3).
+- **Each step can be skipped by a flag:** `--no-preamble`, `--no-task-store`, `--no-declaration`, `--no-harness`, `--no-channel`, `--no-permissions` and `--no-daemon`. `--project-dir` names the session's directory, and `--telegram` or `--no-telegram` overrides the guess.
+- **In a container, the container's start step installs the rest.** There, `agent init` writes no home declaration, since one in the home fails that step (10.1); it reports drift against the rendered declaration instead. The harness and daemon steps skip, saying so. The start step installs the MacEff channel from the packaged marketplace for every agent whose `claude_config.channels` names `plugin:maceff-channel@maceff`. **So a container agent on a daemon lists that channel in agents.yaml**, or no notice reaches its session.
+- **Missing tools are said, not guessed around.** With no service manager, the daemon step skips and says why. With no `claude` on PATH, the channel step is refused and says why.
+- **One search service serves a host.** On a host with several agents, keep the search unit in one agent's declaration and remove it from the others'. A second copy can't bind the port: it exits 1 and restarts with backoff.
 
 ## 7 The Outside Watch
 

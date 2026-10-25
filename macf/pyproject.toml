@@ -87,3 +87,11 @@ maceff-channel = "macf.channels.maceff_channel:main"
 # they are named here (an editable install reads them from the tree either way).
 [tool.setuptools.package-data]
 "macf.tray" = ["glyphs/*.svg", "glyphs/*.png"]
+# The maceff plugin marketplace, so an installed macf can install the MacEff channel from a
+# local directory (macf.channels.marketplace). Dot-directories are named outright: a wildcard
+# never matches them.
+"macf.channels" = [
+    "maceff_marketplace/.claude-plugin/marketplace.json",
+    "maceff_marketplace/plugins/maceff-channel/.mcp.json",
+    "maceff_marketplace/plugins/maceff-channel/.claude-plugin/plugin.json",
+]
