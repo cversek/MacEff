@@ -54,11 +54,13 @@ def stack(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     installs = []
-    installed = {"unit": False}
+    installed = {"unit": False, "stale": False}
+    build = {"drift": None}
+    restarts = []
 
     def fake_pd_install(args):
         installs.append(args)
-        installed["unit"] = True
+        installed["unit"], installed["stale"] = True, False
         print("Tester@abc123: installed")
         return 0
 
@@ -73,9 +75,13 @@ def stack(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_stack, "_systemd_harness_live", lambda ctx: None)
     monkeypatch.setattr(agent_stack, "daemon_session_pid", lambda ctx, d: None)
     monkeypatch.setattr(agent_stack, "service_manager_missing", lambda: None)
-    monkeypatch.setattr(agent_stack, "pd_unit_current", lambda card, h: installed["unit"])
+    monkeypatch.setattr(agent_stack, "pd_unit_current", lambda card, h: installed["unit"] and not installed["stale"])
+    monkeypatch.setattr(agent_stack, "pd_unit_installed", lambda card, h: installed["unit"])
+    monkeypatch.setattr(agent_stack, "daemon_build_drift", lambda ctx: build["drift"])
+    monkeypatch.setattr(agent_stack, "daemon_restart", lambda card: restarts.append(card))
     monkeypatch.setattr("macf.pd.cli.cmd_pd_install", fake_pd_install)
-    return SimpleNamespace(home=home, claude=claude_calls, installs=installs)
+    return SimpleNamespace(home=home, claude=claude_calls, installs=installs, unit=installed, build=build,
+                           restarts=restarts)
 
 
 def _run(stack, *flags, preamble_status=DONE, in_container=False):
@@ -307,6 +313,7 @@ def test_a_client_below_the_confirmed_session_unit_is_that_unit(stack, monkeypat
     _with_clients(monkeypatch, [(5151, str(stack.home))])
     monkeypatch.setattr(agent_stack, "daemon_session_pid", lambda ctx, d: 900)
     monkeypatch.setattr(agent_stack, "ancestors", lambda pid: {pid, 901, 900, 1})
+    stack.unit["unit"] = True              # a daemon running its session unit is installed
     _rc, results = _run(stack)
     daemon = _by_step(results)["daemon"]
     assert daemon.status == ALREADY and "pid 900" in daemon.detail
@@ -508,3 +515,137 @@ def test_the_default_session_unit_declares_the_runtime_dir_the_cutover_expects(s
     check = cutover._staged_check(staged, ctx.card, runtime,
                                   "systemd" if platform == "linux" else "launchd")
     assert check.ok, check.detail
+
+
+# ---------------------------------------------------------------------------
+# A daemon that isn't current: warned of, and brought current only by --update
+# ---------------------------------------------------------------------------
+
+#: The real build readout, before the fixture stubs it out.
+REAL_BUILD_DRIFT = agent_stack.daemon_build_drift
+
+
+def _installed_stack(stack):
+    """A first init done: the daemon's unit installed, the channel installed."""
+    rc, _ = _run(stack)
+    assert rc == 0 and stack.unit["unit"]
+    stack.installs.clear()
+    stack.claude.clear()
+    return stack
+
+
+def test_a_stale_unit_is_warned_of_with_the_fix_and_nothing_changes(stack):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    for flags in ((), ("--plan",)):
+        rc, results = _run(stack, *flags)
+        daemon = _by_step(results)["daemon"]
+        assert rc == 0 and daemon.status == DRIFT, daemon
+        assert "differs from what this macf renders" in daemon.detail
+        assert "agent init --update" in daemon.detail
+    assert stack.installs == [] and stack.restarts == []
+
+
+def test_a_daemon_on_another_build_is_warned_of_with_the_fix(stack):
+    _installed_stack(stack)
+    stack.build["drift"] = "the running daemon runs macf 1.0 at aaaa, this command macf 1.0 at bbbb"
+    rc, results = _run(stack)
+    daemon = _by_step(results)["daemon"]
+    assert daemon.status == DRIFT and "at aaaa" in daemon.detail and "agent init --update" in daemon.detail
+    assert stack.installs == [] and stack.restarts == []
+
+
+def test_a_current_daemon_is_not_warned_of(stack):
+    _installed_stack(stack)
+    rc, results = _run(stack)
+    daemon = _by_step(results)["daemon"]
+    assert daemon.status == ALREADY and "runs this build" in daemon.detail and "--update" not in daemon.detail
+
+
+def test_update_reinstalls_restarts_once_and_refreshes_the_channel_only(stack):
+    from macf.pd.names import declaration_path
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    stack.build["drift"] = "the running daemon runs macf 1.0 at aaaa, this command macf 1.0 at bbbb"
+    declaration = declaration_path(stack.home)
+    before = declaration.read_bytes()
+    called = []
+    rc, results = run_stack(_args("--update"), stack.home, in_container=False,
+                            preamble=lambda: called.append("preamble") or Result("preamble", DONE))
+    steps = _by_step(results)
+    assert rc == 0, results
+    assert steps["daemon"].status == DONE, steps["daemon"]
+    assert [a.force for a in stack.installs] == [True], "the unit reinstalled as rendered now, once"
+    assert stack.restarts == [CARD], "the daemon restarted once; nothing else restarted"
+    assert any(c[1:3] == ["plugin", "update"] for c in stack.claude)
+    assert any(c[1:4] == ["plugin", "marketplace", "update"] for c in stack.claude)
+    assert declaration.read_bytes() == before, "the declaration is never rewritten"
+    assert called == [], "the preamble isn't touched"
+    for step in ("preamble", "task-store", "harness", "permissions"):
+        assert steps[step].status == SKIPPED and "--update" in steps[step].detail, step
+
+
+def test_update_on_a_current_daemon_restarts_nothing(stack):
+    _installed_stack(stack)
+    _rc, results = _run(stack, "--update")
+    assert _by_step(results)["daemon"].status == ALREADY
+    assert stack.installs == [] and stack.restarts == []
+
+
+def test_update_never_writes_a_missing_declaration(stack):
+    from macf.pd.names import declaration_path
+    _rc, results = _run(stack, "--update")
+    assert _by_step(results)["declaration"].status == SKIPPED
+    assert not declaration_path(stack.home).exists()
+
+
+def test_update_in_a_container_changes_nothing(stack):
+    rc, results = _run(stack, "--update", in_container=True)
+    assert rc == 0 and len(results) == 1 and results[0].status == SKIPPED
+    assert "container's start step" in results[0].detail
+    assert stack.claude == [] and stack.installs == [] and stack.restarts == []
+
+
+def test_plan_with_update_changes_nothing(stack):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    before = _snapshot(stack.home)
+    _rc, results = _run(stack, "--plan", "--update")
+    assert _by_step(results)["daemon"].status == WOULD
+    assert _by_step(results)["channel"].status == WOULD
+    assert _snapshot(stack.home) == before
+    assert stack.claude == [] and stack.installs == [] and stack.restarts == []
+
+
+def test_the_build_drift_is_read_as_pd_status_reads_it(stack, monkeypatch):
+    def report(source, daemon_build, cli_build="macf 1.0 at bbbb"):
+        monkeypatch.setattr("macf.pd.client.status",
+                            lambda home, card: SimpleNamespace(source=source, daemon_build=daemon_build,
+                                                               cli_build=cli_build))
+    ctx = agent_stack.Context(home=stack.home, login_home=stack.home, in_container=False, args=_args())
+    agent_stack.resolve_card(ctx)
+    report("daemon", "macf 1.0 at aaaa")
+    assert "aaaa" in REAL_BUILD_DRIFT(ctx) and "bbbb" in REAL_BUILD_DRIFT(ctx)
+    report("daemon", "macf 1.0 at bbbb")
+    assert REAL_BUILD_DRIFT(ctx) is None
+    report("daemon", "")
+    assert "older" in REAL_BUILD_DRIFT(ctx)
+    report("event log", "")
+    assert REAL_BUILD_DRIFT(ctx) is None, "no daemon answering, nothing to compare"
+
+
+def test_the_systemd_adapter_restarts_the_daemons_unit_and_reads_its_file(tmp_path):
+    from macf.pd.adapter import SystemdAdapter
+    calls = []
+
+    def run(argv):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    tier = SystemdAdapter(user_home=tmp_path, run=run)
+    tier.restart(CARD)
+    assert calls == [["systemctl", "--user", "restart", "maceff_pd-Tester_abc123.service"]]
+    assert tier.installed(CARD, tmp_path) is None
+    unit = tmp_path / ".config" / "systemd" / "user" / "maceff_pd-Tester_abc123.service"
+    unit.parent.mkdir(parents=True)
+    unit.write_text("old")
+    assert tier.installed(CARD, tmp_path) == "old" != tier.render(CARD, tmp_path)
