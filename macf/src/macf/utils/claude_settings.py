@@ -546,13 +546,17 @@ def toggle_auto_mode_ask_permissions(enable_auto: bool, project_root: Optional[P
 _USER_REMOTE_EXTRA_DENY = ["AskUserQuestion"]
 
 
-def toggle_user_remote_deny_permissions(enable_remote: bool, project_root: Optional[Path] = None) -> Optional[dict]:
+def toggle_user_remote_deny_permissions(enable_remote: bool, project_root: Optional[Path] = None,
+                                        home: Optional[Path] = None) -> Optional[dict]:
     """Deny CLI-blocking tools while USER_REMOTE is active; restore on exit (#143).
 
     While the operator is reachable only remotely, a permission PROMPT hangs the
     unattended CLI. Moving the Ask-list commands (and AskUserQuestion) into the
     deny list makes an attempt fail immediately — the agent routes around it —
-    instead of stranding the session until someone physically returns. On exit
+    instead of stranding the session until someone physically returns. Only what
+    the Ask list holds at the switch moves: a command the settings already let run
+    is no hang, and denying it too stopped the agent's own pushes while it worked
+    unattended, the work the operator wants done while away. On exit
     (USER_PRESENT, or an auto-clear when the operator returns to the CLI) the
     entries are restored to whichever list they came from.
 
@@ -570,28 +574,41 @@ def toggle_user_remote_deny_permissions(enable_remote: bool, project_root: Optio
         deny_list = permissions.setdefault('deny', [])
         stash = settings.setdefault('_macf_user_remote_denied', {})
 
-        targets = list(_AUTO_MODE_ASK) + _USER_REMOTE_EXTRA_DENY
         denied = []
         restored = []
 
         if enable_remote:
-            for entry in targets:
-                # Record where the entry lived so exit can restore it faithfully.
+            # Exactly what would prompt: every Ask entry the deployment holds now, its own
+            # additions included, and AskUserQuestion. A command the settings already let run
+            # without a prompt can't hang the CLI, so it keeps running (mode_system, USER_REMOTE).
+            # Every file the client reads can hold an Ask rule, the user's own settings first
+            # among them; a deny written here wins over an ask from any of them.
+            from macf.permission_watch import ask_rules
+            from .paths import find_project_root
+            elsewhere = [r for r in ask_rules(str(project_root or find_project_root()), home or Path.home())
+                         if r not in ask_list]
+            for entry in list(ask_list) + elsewhere + _USER_REMOTE_EXTRA_DENY:
+                if entry in stash:
+                    continue
+                # Record where the entry lived, and whether this switch denied it, so the exit
+                # restores exactly that and never lifts a deny the operator set.
                 was_in_ask = entry in ask_list
                 if was_in_ask:
                     ask_list.remove(entry)
-                if entry not in deny_list:
+                added = entry not in deny_list
+                if added:
                     deny_list.append(entry)
                     denied.append(entry)
-                stash[entry] = {"from_ask": was_in_ask}
+                stash[entry] = {"from_ask": was_in_ask, "added": added}
         else:
-            for entry in targets:
-                if entry in deny_list:
+            for entry, info in list(stash.items()):
+                # A stash written before "added" was recorded put every entry in deny itself.
+                if info.get("added", True) and entry in deny_list:
                     deny_list.remove(entry)
                     restored.append(entry)
-                info = stash.pop(entry, None)
-                if info and info.get("from_ask") and entry not in ask_list:
+                if info.get("from_ask") and entry not in ask_list:
                     ask_list.append(entry)
+                del stash[entry]
             if not stash:
                 settings.pop('_macf_user_remote_denied', None)
 
