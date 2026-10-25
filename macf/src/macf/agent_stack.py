@@ -769,6 +769,10 @@ def step_daemon(ctx: Context) -> Result:
         return _daemon_currency(ctx, installed)
     if pd_unit_current(ctx.card, ctx.home) or pd_unit_installed(ctx.card, ctx.home):
         return _daemon_currency(ctx, "the service manager's unit is installed")
+    if getattr(ctx.args, "update", False):
+        # --update brings an installed daemon current; it never installs one (6.5).
+        return Result("daemon", SKIPPED, "no daemon installed, so nothing to bring current; run agent init "
+                                         "without --update to install one")
     if ctx.dry_run:
         return Result("daemon", WOULD, "pd install: put the daemon under the service manager")
     from macf.pd.cli import cmd_pd_install
