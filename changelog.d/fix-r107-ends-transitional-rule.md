@@ -1,0 +1,3 @@
+### Changed
+
+- **No channel counts as the operator until the agent declares `operator_channels`** (`macf/utils/input_origin.py`, `pd/daemon.py`, policies `mode_system` and `persistent_layer`; MIS-0002-R107). The transitional rule that counted every channel but the MacEff channel while none was declared has ended, as R107 requires. The primal daemon warns at start when a declaration with a session unit lists none. **A deployment should declare its operator channels** (for example `["plugin:telegram:telegram"]`, or `[]` for none) before taking this version, or channel messages stop counting as the operator's activity.

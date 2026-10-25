@@ -466,7 +466,8 @@ def _as_delivered(twin: dict, queued: Detection) -> Optional[Detection]:
     """What a queued copy was, by the record on the entry that delivered it.
 
     A queued copy carries no provenance; its delivery does (MIS-0002-R121).
-    A channel event takes its server from that record. A prompt the client
+    A channel event takes its server from that record, and counts only when that server is
+    one the declaration lists as the operator's (MIS-0002-R107). A prompt the client
     fired itself, a scheduled one or a notice, is not the operator, and None
     says so. Anything else stands as read from the queued copy.
     """
@@ -474,8 +475,11 @@ def _as_delivered(twin: dict, queued: Detection) -> Optional[Detection]:
     origin = record.get("origin")
     kind = origin.get("kind") if isinstance(origin, dict) else None
     if kind == "channel":
+        server = origin.get("server", "")
+        if not operator_channel(server):
+            return None   # the delivery names the channel, and R107 counts it only by a declared name
         return Detection(queued.event_name, {**queued.data, "source": "channel",
-                                             "channel_server": origin.get("server", "")})
+                                             "channel_server": server})
     if (record.get("turnOrigin") in _NOT_OPERATOR_TURN_ORIGINS
             or kind in HARNESS_ORIGIN_KINDS
             or record.get("commandMode") == "task-notification"):
