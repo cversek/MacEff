@@ -783,6 +783,15 @@ class StatusRequest(_Closed):
     op: Literal["status"]
 
 
+class BuildRequest(_Closed):
+    """Which build of macf the daemon runs (MacEff #816). Its own request, not a field of the
+    status reply: a CLI older than this one reads replies strictly, and a status carrying a field
+    it doesn't know would stop the command meant to explain the drift. Only a CLI that knows the
+    build asks for it, and a daemon that doesn't know this request is older than one that does."""
+
+    op: Literal["build"]
+
+
 class ActRequest(_Closed):
     """Start, stop or restart one unit. A stop from outside a session succeeds whatever
     gate the session enforces (MIS-0002-R48)."""
@@ -906,7 +915,7 @@ class StreamRuleRequest(_Closed):
         return self
 
 
-Request = Union[StatusRequest, ActRequest, CompactRequest, PaceRequest, EntryAddRequest,
+Request = Union[StatusRequest, BuildRequest, ActRequest, CompactRequest, PaceRequest, EntryAddRequest,
                 EntryListRequest, EntryRemoveRequest, EntryEditRequest, EntryPauseRequest,
                 StreamRuleRequest]
 
@@ -927,7 +936,13 @@ class UnitStatus(_Closed):
 
 class Response(_Closed):
     """``wake_refractory_s`` and ``wake_window_from`` answer a status or a pace where a session
-    unit has a keystroke wake: the window in force, and where it came from."""
+    unit has a keystroke wake: the window in force, and where it came from.
+
+    A reply ignores fields it doesn't know, where a request refuses them. The daemon and the CLI
+    can run different builds (MacEff #816), so a newer daemon's reply must never stop an older
+    CLI from reading it. A request stays closed: the daemon acts on it."""
+
+    model_config = ConfigDict(extra="ignore")
 
     ok: bool
     error: Optional[str] = None
@@ -937,6 +952,8 @@ class Response(_Closed):
     wake_window_from: Optional[str] = None
     #: The event stream's rules in force, answering a stream rule.
     stream_rules: Optional[Dict[str, Any]] = None
+    #: The build of macf the daemon runs, answering a build request (MacEff #816).
+    build: Optional[str] = None
 
 
 _REQUEST = TypeAdapter(Annotated[Request, Field(discriminator="op")])
