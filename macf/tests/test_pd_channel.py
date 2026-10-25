@@ -383,3 +383,30 @@ def test_the_channel_names_its_daemon_by_the_homes_card_not_the_environment(tmp_
     (tmp_path / ".maceff_primary_agent.id").write_text("78e0aa00-0000-0000-0000-000000000000\n")
     env = {"MACEFF_AGENT_HOME_DIR": str(tmp_path), "MACEFF_AGENT_NAME": "seat2"}
     assert channel_card(env) == "Seat2@78e0aa"
+
+
+def test_main_starts_the_channel_with_the_homes_card(tmp_path, monkeypatch):
+    """The line that picks the card the channel looks for is main(): the seat that never got
+    a notice failed exactly there, so main() itself is pinned, not only channel_card."""
+    from macf.channels import maceff_channel
+    (tmp_path / ".maceff").mkdir()
+    (tmp_path / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": "Seat2"}}))
+    (tmp_path / ".maceff_primary_agent.id").write_text("78e0aa00-0000-0000-0000-000000000000\n")
+    # The seat's shape: the identity file is home-wide (HOME is the agent home), which is
+    # where get_agent_identity() lets MACEFF_AGENT_NAME win.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path))
+    monkeypatch.setenv("MACEFF_AGENT_NAME", "seat2")
+    from macf.utils.identity import get_agent_identity
+    assert get_agent_identity() == "seat2@78e0aa", "the fixture must reproduce the seat's mismatch"
+    started = []
+
+    class _Recorded:
+        def __init__(self, card, *a, **k):
+            started.append(card)
+
+        def serve(self):
+            pass
+    monkeypatch.setattr(maceff_channel, "Channel", _Recorded)
+    assert maceff_channel.main() == 0
+    assert started == ["Seat2@78e0aa"]
