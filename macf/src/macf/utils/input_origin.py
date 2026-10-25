@@ -48,6 +48,15 @@ HARNESS_NOTICE_OPENINGS = (
 )
 
 
+# What the client writes after a slash command it runs itself: the command's output, as
+# a row of its own. It is the client speaking, so it is never anyone's typing.
+LOCAL_COMMAND_OUTPUT_OPENINGS = ("<local-command-stdout>", "<local-command-stderr>")
+
+# How the client records a slash command it ran, as a second row beside the typed text,
+# a few milliseconds later. One keystroke, two rows, so each takes its own arrival.
+COMMAND_ROW_OPENING = "<command-name>"
+
+
 # A wake carries only the persistent layer's own words and message identifiers
 # (MIS-0002-R77), and it opens with these. Keys typed into the session's input
 # box are recorded as typing whoever typed them, so the opening is what tells a
@@ -104,6 +113,16 @@ def opening_channel_source(text: str) -> Optional[str]:
 def opens_with_harness_notice(text: str) -> bool:
     """True when ``text`` opens the way the client opens input it delivers itself."""
     return text.lstrip().startswith(HARNESS_NOTICE_OPENINGS)
+
+
+def opens_with_local_command_output(text: str) -> bool:
+    """True when ``text`` is the output the client writes for a slash command it ran."""
+    return text.lstrip().startswith(LOCAL_COMMAND_OUTPUT_OPENINGS)
+
+
+def opens_with_command_row(text: str) -> bool:
+    """True when ``text`` is the client's record of a slash command, beside the typed row."""
+    return text.lstrip().startswith(COMMAND_ROW_OPENING)
 
 
 def opens_with_wake(text: str) -> bool:

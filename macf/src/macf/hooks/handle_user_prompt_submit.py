@@ -142,6 +142,37 @@ def maybe_restore_user_remote(prompt: str, recorded: bool) -> bool:
     return True
 
 
+def maybe_enter_user_remote(prompt: str, recorded: bool) -> bool:
+    """Enter USER_REMOTE when the operator writes from their own channel while away from the
+    CLI: a prompt that counted as activity (so from a channel the declaration lists as the
+    operator's, never the MacEff channel, a wake or framework-typed keys), with no message typed
+    at the CLI inside the idle window. The operator is present but the CLI is unattended, which
+    is what USER_REMOTE means, so it is entered as ``mode set USER_REMOTE`` would: the event,
+    then the Ask-list flipped to Deny. Their next message at the CLI clears it, as before.
+    Returns whether it was entered."""
+    if not recorded or opening_channel_source(prompt) is None:
+        return False
+    try:
+        import time
+
+        from macf.config import resolve_setting
+        from macf.modes.detection import _CLI_ACTIVITY_SOURCES, _detect_user_remote, _had_user_activity_since
+        if _detect_user_remote(""):
+            return False
+        idle_mins, _ = resolve_setting("MACF_USER_IDLE_TIMEOUT_MINS", "session.user_idle_timeout_mins", 10, coerce=int)
+        if _had_user_activity_since(time.time() - idle_mins * 60, sources=_CLI_ACTIVITY_SOURCES):
+            return False   # typed at the CLI just now: the operator is here, writing from both
+        from macf.agent_events_log import append_event
+        append_event("mode_change", {"mode": "USER_REMOTE", "enabled": True,
+                                     "source": "auto_on_operator_channel_while_away"})
+        from macf.utils.claude_settings import toggle_user_remote_deny_permissions
+        toggle_user_remote_deny_permissions(True)
+        return True
+    except Exception as e:  # noqa: BLE001 - a failed switch is reported, never fatal to the prompt
+        emit_warning(Warning(source="user_prompt_submit", kind="user_remote_auto_enter_failed", detail=str(e)))
+        return False
+
+
 def record_user_activity_from_payload(prompt: str, transcript_path: Optional[str] = None) -> bool:
     """Record user activity when *this* invocation carries a typed prompt.
 
@@ -300,6 +331,9 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # or a channel message is not the operator at the keyboard, and lifting the
         # deny for it ended remote mode for an operator still away.
         maybe_restore_user_remote(prompt, recorded)
+        # USER_REMOTE auto-enter: a message from the operator's own channel while nothing was
+        # typed at the CLI inside the idle window means they are present, but not at the CLI.
+        maybe_enter_user_remote(prompt, recorded)
 
         # Start Development Drive tracking with current UUID and prompt preview
         # Note: start_dev_drv() emits dev_drv_started event internally

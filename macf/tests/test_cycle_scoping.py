@@ -115,6 +115,27 @@ class TestCarryForward:
 
         assert sorted(carried) == ["AUTO_MODE", "USER_REMOTE"]
 
+    @pytest.mark.parametrize("source, carried", [
+        ("direct", False),             # the operator typed at the CLI: they are back
+        ("mid_turn_enqueue", False),   # typed during a turn, the same
+        ("channel", True),             # a Telegram message: still remote
+    ])
+    def test_a_user_remote_ended_by_typing_is_not_carried(self, isolated_events_log, source, carried):
+        """USER_REMOTE ends when the operator types at the CLI, with no mode_change. The
+        carry re-asserted its last event anyway, with a fresh timestamp, and the typing
+        that had ended it stayed on the far side of the boundary: the mode came back at
+        every compaction. AUTO_MODE beside it carries either way."""
+        _write(isolated_events_log, [
+            _ev("mode_change", 100, mode="AUTO_MODE", enabled=True, cycle=1),
+            _ev("mode_change", 101, mode="USER_REMOTE", enabled=True, cycle=1),
+            _ev("user_activity_detected", 150, source=source),
+            _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
+        ])
+
+        assert ("USER_REMOTE" in carry_state_forward(current_cycle=2)) is carried
+        from macf.modes.detection import _detect_user_remote
+        assert _detect_user_remote("") is carried
+
     def test_a_carried_assertion_is_distinguishable_and_keeps_its_origin(self, isolated_events_log):
         """Provenance is the point. An authorisation granted in cycle 1 and
         carried into cycle 2 must not read as granted in cycle 2 — that is
