@@ -53,7 +53,6 @@ from macf.notify.session import verify_incarnation
 # would let the channel look for a socket and a record the daemon never made, and R123's
 # check would then refuse the real daemon.
 from macf.pd.interface import ChannelHello, DaemonRecord, HelloBody, channel_socket, check_socket_path, record_path
-from macf.utils.identity import get_agent_identity
 from macf.utils.peercred import peer_credentials
 
 #: Reconnect back-off bounds, in seconds. A daemon that is down is retried for the life
@@ -324,8 +323,20 @@ class Channel:
             self.handle(message)
 
 
+def channel_card(environ=None) -> str:
+    """The card this channel names its daemon by, read from the agent's home the way the
+    daemon reads its own (``pd.names.agent_card``), never from ``MACEFF_AGENT_NAME``. A seat
+    whose variable spelled its name differently from its card looked for a socket its
+    daemon never made, and retried for good while every notice stayed owed (MIS-0002-R02)."""
+    from macf.pd.names import agent_card
+    from macf.utils.paths import find_agent_home
+    env = os.environ if environ is None else environ
+    home = env.get("MACEFF_AGENT_HOME_DIR")
+    return agent_card(Path(home) if home else find_agent_home())
+
+
 def main() -> int:
-    Channel(get_agent_identity()).serve()
+    Channel(channel_card()).serve()
     return 0
 
 
