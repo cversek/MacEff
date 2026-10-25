@@ -326,15 +326,30 @@ def test_a_recorded_keystroke_pairs_with_one_arrival(isolated_events_log):
     append_event(KEYS_SENT_EVENT, {"text": "/compact", "kind": "inject", "tmux_session": "s"})
     assert [_hook_records(isolated_events_log, "/compact") for _ in range(2)] == [[], ["direct"]]
 
-    delivered = _user(COMPACT_ENTRY, {"kind": "human"})
+    typed, command = _user("/compact", {"kind": "human"}), _user(COMPACT_ENTRY, {"kind": "human"})
     assert _monitor_records(_queued("/compact"))[0] == []
-    assert _monitor_records(delivered)[0] == []
+    assert [_monitor_records(row)[0] for row in (typed, command)] == [[], []]
     assert _monitor_records(_queued("/compact"))[0] == ["mid_turn_enqueue"]
-    assert _monitor_records(delivered)[0] == ["direct"]
+    assert [_monitor_records(row)[0] for row in (typed, command)] == [["direct"], ["direct"]]
 
     for _ in range(2):
         append_event(KEYS_SENT_EVENT, {"text": "/maceff:resume", "kind": "post-start", "tmux_session": "s"})
     assert [_hook_records(isolated_events_log, "/maceff:resume") for _ in range(3)] == [[], [], ["direct"]]
+
+
+COMPACT_OUTPUT = "<local-command-stdout>\x1b[2mCompacted PreCompact [python pre_compact.py] completed</local-command-stdout>"
+
+
+def test_an_injected_slash_command_records_nothing_from_any_of_its_rows(isolated_events_log):
+    """The client writes a slash command as three rows: the typed text, its command row a
+    few milliseconds later, and the command's output when it finishes. A compaction the
+    framework typed read as the operator twice, from the command row and the output row,
+    which cleared USER_IDLE at every self-compaction. The operator's own /compact still
+    counts, from the rows they typed, and the output row is never anyone's typing."""
+    append_event(KEYS_SENT_EVENT, {"text": "/compact", "kind": "inject", "tmux_session": "s"})
+    rows = [_user("/compact"), _user(COMPACT_ENTRY), _user(COMPACT_OUTPUT)]
+    assert [_monitor_records(row)[0] for row in rows] == [[], [], []]
+    assert [_monitor_records(row)[0] for row in rows] == [["direct"], ["direct"], []]
 
 
 def test_an_operators_compact_after_an_injected_one_is_their_ask(isolated_events_log):
