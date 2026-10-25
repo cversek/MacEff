@@ -112,7 +112,7 @@ class LaunchdAdapter:
         argv, log_dir = _program(agent_home), self._log_dir(agent_home)
         steps = launchd.install_plan(card, argv, self._home, log_dir, self._uid,
                                      [str(control_socket(card)), str(channel_socket(card)),
-                                      str(events_socket(card))])
+                                      str(events_socket(card))], reload=force)
         launchd.apply_plan(steps, run=self._run, force=force)
         return Path(launchd.render_pd_launch_agent(card, argv, self._home, log_dir)[0])
 
@@ -120,10 +120,10 @@ class LaunchdAdapter:
         from macf.platform import launchd
         launchd.apply_plan(launchd.uninstall_plan(card, self._home, self._uid), run=self._run)
 
-    # MACOS-HALF: the two verbs agent init --update uses, written to the launchd semantics
-    # pd install already relies on (3.1) but not run on a Mac in this change. The macOS
-    # maintainer owns verifying them, and the reinstall before them: install(force=True)
-    # bootstraps a plist whose service is already loaded, which launchd may refuse.
+    #: A forced install boots the loaded job out and bootstraps the new plist, which starts
+    #: the daemon afresh, so agent init --update doesn't restart it a second time.
+    install_restarts = True
+
     def installed(self, card: str, agent_home: Path) -> Optional[str]:
         from macf.platform import launchd
         path, _ = launchd.render_pd_launch_agent(card, _program(agent_home), self._home,

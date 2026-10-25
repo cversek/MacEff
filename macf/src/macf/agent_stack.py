@@ -89,6 +89,10 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
                              "daemon's unit as rendered now, restart the daemon onto this macf (its units, "
                              "the session among them, carry across), and refresh the MacEff channel plugin; "
                              "never rewrites a declaration or restarts the session")
+    parser.add_argument("--repoint", action="store_true",
+                        help="with --update: let the daemon's unit move to the interpreter running this "
+                             "command when the installed unit names another (a daemon pinned to its own "
+                             "venv or checkout is otherwise left on it, and the step refuses)")
 
 
 @dataclass
@@ -393,6 +397,50 @@ def daemon_restart(card: str) -> None:
     restart(card)
 
 
+def install_restarts() -> bool:
+    """Whether this platform's forced install already restarts the daemon (launchd boots the
+    job out and bootstraps it), so --update mustn't restart it again."""
+    return bool(getattr(_adapter(), "install_restarts", False))
+
+
+def unit_program(text: Optional[str]) -> Optional[str]:
+    """The program an installed unit runs: a LaunchAgent's ``Program`` (or the first of its
+    ``ProgramArguments``), a systemd unit's first ``ExecStart`` word. None if it can't be read."""
+    import plistlib
+    import shlex
+    if not text:
+        return None
+    try:
+        plist = plistlib.loads(text.encode("utf-8"))
+    except Exception:  # noqa: BLE001 - not a plist; read it as a systemd unit below
+        plist = None
+    if isinstance(plist, dict):
+        args = plist.get("ProgramArguments") or []
+        return plist.get("Program") or (args[0] if args else None)
+    for line in text.splitlines():
+        if line.startswith("ExecStart="):
+            words = shlex.split(line[len("ExecStart="):])
+            return words[0] if words else None
+    return None
+
+
+def program_change(ctx: Context) -> Optional[Tuple[str, str]]:
+    """(installed, rendered) when the installed unit runs another program than this command
+    would render, None when they agree or either can't be read. The rendered program is the
+    interpreter running agent init, so on a login where several macf installs sit on PATH, a
+    daemon pinned to its own venv would otherwise be moved by whichever one ran."""
+    tier = _adapter()
+    installed = getattr(tier, "installed", None)
+    if installed is None:
+        return None
+    try:
+        was = unit_program(installed(ctx.card, ctx.home))
+        now = unit_program(tier.render(ctx.card, ctx.home))
+    except (OSError, ValueError):
+        return None  # noqa: MACEFF003 - unreadable is no finding; the currency checks still run
+    return (was, now) if was and now and was != now else None
+
+
 def daemon_build_drift(ctx: Context) -> Optional[str]:
     """How the running daemon's build differs from this command's, as ``pd status`` reads it,
     or None when they match or no daemon answers to say."""
@@ -417,6 +465,9 @@ def currency_findings(ctx: Context) -> List[str]:
     found = []
     if not pd_unit_current(ctx.card, ctx.home):
         found.append("the installed unit differs from what this macf renders now")
+    moved = program_change(ctx)
+    if moved:
+        found.append(f"the installed unit runs {moved[0]}; this command would render {moved[1]}")
     drift = daemon_build_drift(ctx)
     if drift:
         found.append(drift)
@@ -435,6 +486,13 @@ def _daemon_currency(ctx: Context, installed: str) -> Result:
         return Result("daemon", DRIFT, f"{installed}, but it isn't current:\n{lines}\n"
                                        f"{UPDATE_FIX} reinstalls the unit and restarts the daemon onto this "
                                        f"build; its units, the session among them, carry across")
+    moved = program_change(ctx)
+    if moved and not getattr(ctx.args, "repoint", False):
+        # The daemon may be pinned on purpose to its own venv or checkout; moving it to
+        # whichever macf ran this command is the operator's choice, not a side effect.
+        return Result("daemon", REFUSED, f"the installed unit runs {moved[0]}, and this command would point "
+                                         f"it at {moved[1]}. Run agent init --update with {moved[0]} to "
+                                         f"keep the daemon where it is, or add --repoint to move it")
     if ctx.dry_run:
         return Result("daemon", WOULD, f"reinstall the unit as rendered now and restart the daemon onto this "
                                        f"build, its units carrying across:\n{lines}")
@@ -442,10 +500,11 @@ def _daemon_currency(ctx: Context, installed: str) -> Result:
     rc, text = _captured(lambda: cmd_pd_install(argparse.Namespace(plan=False, force=True)))
     if rc != 0:
         return Result("daemon", REFUSED, "pd install --force: " + (text.replace("maceff_pd: ", "").strip() or f"exit {rc}"))
-    try:
-        daemon_restart(ctx.card)
-    except (OSError, RuntimeError) as e:
-        return Result("daemon", REFUSED, f"the unit was reinstalled, but the daemon wasn't restarted: {e}")
+    if not install_restarts():
+        try:
+            daemon_restart(ctx.card)
+        except (OSError, RuntimeError) as e:
+            return Result("daemon", REFUSED, f"the unit was reinstalled, but the daemon wasn't restarted: {e}")
     return Result("daemon", DONE, "unit reinstalled as rendered now, daemon restarted onto this build; its units "
                                   "carry across, the session among them")
 

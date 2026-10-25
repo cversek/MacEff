@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from macf import agent_stack
-from macf.agent_stack import ALREADY, DONE, DRIFT, PLANNED, SKIPPED, STEPS, WOULD, Result, run_stack
+from macf.agent_stack import ALREADY, DONE, DRIFT, PLANNED, REFUSED, SKIPPED, STEPS, WOULD, Result, run_stack
 from macf.cli import _build_parser
 from macf.pd.interface import Declaration
 
@@ -79,9 +79,13 @@ def stack(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_stack, "pd_unit_installed", lambda card, h: installed["unit"])
     monkeypatch.setattr(agent_stack, "daemon_build_drift", lambda ctx: build["drift"])
     monkeypatch.setattr(agent_stack, "daemon_restart", lambda card: restarts.append(card))
+    moved = {"to": None}
+    monkeypatch.setattr(agent_stack, "program_change", lambda ctx: moved["to"])
+    restarts_on_install = {"yes": False}
+    monkeypatch.setattr(agent_stack, "install_restarts", lambda: restarts_on_install["yes"])
     monkeypatch.setattr("macf.pd.cli.cmd_pd_install", fake_pd_install)
     return SimpleNamespace(home=home, claude=claude_calls, installs=installs, unit=installed, build=build,
-                           restarts=restarts)
+                           restarts=restarts, moved=moved, restarts_on_install=restarts_on_install)
 
 
 def _run(stack, *flags, preamble_status=DONE, in_container=False):
@@ -649,3 +653,89 @@ def test_the_systemd_adapter_restarts_the_daemons_unit_and_reads_its_file(tmp_pa
     unit.parent.mkdir(parents=True)
     unit.write_text("old")
     assert tier.installed(CARD, tmp_path) == "old" != tier.render(CARD, tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# --update on launchd, and a daemon pinned to its own interpreter
+# ---------------------------------------------------------------------------
+
+def test_update_refuses_to_move_a_pinned_daemon_without_repoint(stack):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    stack.moved["to"] = ("/venvs/pd/bin/python3", "/usr/local/bin/python3")
+    for flags in (("--update",), ("--plan", "--update")):
+        rc, results = _run(stack, *flags)
+        daemon = _by_step(results)["daemon"]
+        assert rc == 1 and daemon.status == REFUSED, daemon
+        assert "/venvs/pd/bin/python3" in daemon.detail and "--repoint" in daemon.detail
+    assert stack.installs == [] and stack.restarts == []
+
+
+def test_a_pinned_daemon_is_a_finding_without_update(stack):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    stack.moved["to"] = ("/venvs/pd/bin/python3", "/usr/local/bin/python3")
+    rc, results = _run(stack)
+    daemon = _by_step(results)["daemon"]
+    assert rc == 0 and daemon.status == DRIFT
+    assert "runs /venvs/pd/bin/python3; this command would render /usr/local/bin/python3" in daemon.detail
+
+
+def test_update_with_repoint_moves_a_pinned_daemon(stack):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    stack.moved["to"] = ("/venvs/pd/bin/python3", "/usr/local/bin/python3")
+    rc, results = _run(stack, "--update", "--repoint")
+    assert rc == 0 and _by_step(results)["daemon"].status == DONE
+    assert [a.force for a in stack.installs] == [True] and stack.restarts == [CARD]
+
+
+def test_update_does_not_restart_twice_where_the_install_restarts(stack):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    stack.restarts_on_install["yes"] = True
+    rc, results = _run(stack, "--update")
+    assert rc == 0 and _by_step(results)["daemon"].status == DONE
+    assert [a.force for a in stack.installs] == [True] and stack.restarts == [], "the bootstrap restarted it"
+
+
+def test_unit_program_reads_a_launch_agent_and_a_systemd_unit():
+    import plistlib
+    plist = plistlib.dumps({"Label": "x", "Program": "/a/python3", "ProgramArguments": ["maceff_pd", "-m", "macf.pd"]}).decode()
+    assert agent_stack.unit_program(plist) == "/a/python3"
+    older = plistlib.dumps({"Label": "x", "ProgramArguments": ["/b/python3", "-m", "macf.pd"]}).decode()
+    assert agent_stack.unit_program(older) == "/b/python3", "a plist from before the Program key"
+    unit = "[Service]\nExecStart='/c dir/python3' -m macf.pd /home\n"
+    assert agent_stack.unit_program(unit) == "/c dir/python3"
+    assert agent_stack.unit_program(None) is None and agent_stack.unit_program("garbage") is None
+
+
+def test_the_launchd_reinstall_boots_out_before_bootstrapping(tmp_path):
+    from macf.pd.adapter import LaunchdAdapter
+    calls = []
+
+    def run(argv):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    tier = LaunchdAdapter(user_home=tmp_path, uid=501, run=run)
+    tier.install(CARD, tmp_path)
+    assert [c[1] for c in calls] == ["bootstrap"], "a first install only bootstraps"
+    calls.clear()
+    tier.install(CARD, tmp_path, force=True)
+    from macf.platform.launchd import pd_label
+    assert calls[0] == ["launchctl", "bootout", f"gui/501/{pd_label(CARD)}"], calls
+    assert calls[1][1:3] == ["bootstrap", "gui/501"], calls
+    assert LaunchdAdapter.install_restarts is True
+
+
+def test_the_launchd_reinstall_goes_on_when_nothing_was_loaded(tmp_path):
+    from macf.pd.adapter import LaunchdAdapter
+    from macf.platform.launchd import BOOTOUT_NOT_LOADED
+    calls = []
+
+    def run(argv):
+        calls.append(argv)
+        code = BOOTOUT_NOT_LOADED if argv[1] == "bootout" else 0
+        return subprocess.CompletedProcess(argv, code, "", "Boot-out failed: 3: No such process")
+    LaunchdAdapter(user_home=tmp_path, uid=501, run=run).install(CARD, tmp_path, force=True)
+    assert [c[1] for c in calls] == ["bootout", "bootstrap"]
