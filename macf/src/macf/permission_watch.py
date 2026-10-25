@@ -32,7 +32,7 @@ import sys
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 REQUEST = "permission_requested"
 PROGRESS = frozenset({
@@ -415,6 +415,88 @@ def ask_rules(project_dir: str, home: Path, environ=None) -> List[str]:
             continue
         rules += [r for r in ask if isinstance(r, str) and r not in rules]
     return rules
+
+
+#: The client's order of precedence between rule kinds: a deny wins over an ask, an ask over an allow.
+RULE_KINDS = ("deny", "ask", "allow")
+
+
+def rules_in_force(project_dir: str, home: Path, environ=None) -> List[Tuple[str, str, Path]]:
+    """Every permission rule in force for a session started in ``project_dir``: ``(kind, rule,
+    file)``, in the client's file order, each rule once per kind. What an agent reads to know
+    which commands would stop at a dialog before it runs one (autonomous_operation 5.5)."""
+    out: List[Tuple[str, str, Path]] = []
+    seen = set()
+    for f in settings_files(project_dir, home, environ):
+        try:
+            perms = json.loads(f.read_text(encoding="utf-8")).get("permissions") or {}
+        except (OSError, ValueError, AttributeError):
+            continue
+        for kind in RULE_KINDS:
+            for rule in perms.get(kind) or []:
+                if isinstance(rule, str) and (kind, rule) not in seen:
+                    seen.add((kind, rule))
+                    out.append((kind, rule, f))
+    return out
+
+
+@dataclass(frozen=True, kw_only=True)
+class Verdict:
+    """What the rules say about one call: ``kind`` is deny, ask, allow, or unlisted when no rule
+    matches and the permission mode decides; ``rule`` and ``source`` name the rule and its file."""
+
+    kind: str
+    rule: Optional[str] = None
+    source: Optional[Path] = None
+
+
+def decide(tool: str, tool_input, rules: List[Tuple[str, str, Path]]) -> Verdict:
+    """What the client's rules say about one call, as a ``Verdict``. A call
+    matches a kind when any simple command of it matches, so one chained ``rm -r`` makes the
+    whole call ask, the way a seat hung for seven hours on 2026-10-24."""
+    for kind in RULE_KINDS:
+        of_kind = [(r, f) for k, r, f in rules if k == kind]
+        hit = matching_rule(tool, tool_input, [r for r, _ in of_kind])
+        if hit:
+            return Verdict(kind=kind, rule=hit, source=next(f for r, f in of_kind if r == hit))
+    return Verdict(kind="unlisted")
+
+
+def segment_decisions(command: str, rules: List[Tuple[str, str, Path]]) -> List[Tuple[str, Verdict]]:
+    """Each simple command of a Bash call with what the rules say of it alone. It shows which part
+    of a chain would raise the dialog."""
+    return [(seg, decide("Bash", {"command": seg}, rules)) for seg in _segments(command) if seg]
+
+
+#: The modes in which nobody is at the keyboard to answer a dialog (autonomous_operation 5.5).
+UNATTENDED = ("USER_IDLE", "USER_REMOTE")
+
+
+def unattended_refusal(tool: str, tool_input, modes, project_dir: str, home: Path,
+                       environ=None) -> Optional[str]:
+    """Why a call should be refused instead of left to stop at a dialog, or None.
+
+    In AUTO_MODE with the operator idle or remote, a call an Ask rule matches would wait until
+    someone came back: seven hours for a seat on 2026-10-24, on a cleanup chained after the real
+    work. Refused here, the agent reads the reason at once and goes on. A call no rule matches
+    is left alone: whether it asks is the permission mode's, which this can't see."""
+    if "AUTO_MODE" not in modes or not any(m in modes for m in UNATTENDED):
+        return None
+    rules = rules_in_force(project_dir, home, environ)
+    verdict = decide(tool, tool_input, rules)
+    if verdict.kind != "ask":
+        return None
+    rule, source = verdict.rule, verdict.source
+    who = "remote" if "USER_REMOTE" in modes else "idle"
+    part = ""
+    if tool == "Bash":
+        parts = [seg for seg, v in segment_decisions(_identity(tool_input), rules) if v.kind == "ask"]
+        part = f" The part that asks: {parts[0][:160]}." if parts else ""
+    return (f"Refused before it could stop at a permission dialog: the operator is {who}, and the Ask "
+            f"rule {rule} (from {source}) would leave this waiting until someone answered.{part} "
+            f"Do the work another way: delete from inside your script, leave scratch files for later, "
+            f"or split the call so the asking part waits for the operator. Check a command first with "
+            f"macf_tools permissions check '<command>'; the rules are in macf_tools permissions list.")
 
 
 def read_history(days: float, *, include_questions: bool = False, home: Optional[Path] = None) -> List[Dialog]:

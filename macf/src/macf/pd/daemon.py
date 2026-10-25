@@ -33,7 +33,9 @@ from macf.pd.interface import (
     Control,
     DaemonRecord,
     EntryAddRequest,
+    EntryEditRequest,
     EntryListRequest,
+    EntryPauseRequest,
     EntryRemoveRequest,
     EVENT_STREAM_RULE,
     IdentityError,
@@ -269,11 +271,15 @@ class Daemon:
         shared container (MIS-0002-R62 (agent_MUST_see_shared_container)): names, kinds, limits,
         restart rules, never a command or environment (``shared_view.summarize``). The
         declaration is read only at start, so a changed declaration is published by the restart
-        that loads it. A home with no public tree has no peers reading it, and gets none made.
+        that loads it. A home with no public tree gets none made, unless the deployment declares
+        its daemon: peers list declared daemons, so a service account publishes too.
         Publishing never stops the daemon: a failure is said, and peers read the home as
         UNPUBLISHED, or see the old summary's age."""
         from macf.pd import shared_view
-        if not (self.home / "agent" / "public").is_dir():
+        # A daemon the deployment declares publishes even with no public tree, since its peers
+        # list it from the declaration and would otherwise read it as unpublished: a service
+        # account's home, the mail broker's among them, has none (MIS-0002-R62).
+        if not (self.home / "agent" / "public").is_dir() and not self._deployment_declares():
             return
         try:
             shared_view.publish(self.home, self.core.declaration)
@@ -281,6 +287,11 @@ class Daemon:
             print(f"⚠️ MACF: pd: could not publish this agent's units at "
                   f"{shared_view.published_path(self.home)} (the daemon goes on; peers see "
                   f"no summary or an old one, with its age): {e!r}", file=sys.stderr)
+
+    def _deployment_declares(self) -> bool:
+        """Whether this daemon's declaration is one the deployment rendered, as in a container."""
+        from macf.pd.names import rendered_declaration_path
+        return os.path.lexists(rendered_declaration_path(self.home))
 
     def _notice_denied_grants(self) -> None:
         """Owe the agent a notice for each declared grant the last install found denied
@@ -664,7 +675,8 @@ class Daemon:
         if creds.uid != os.getuid():
             return Response(ok=False, error="this socket serves only the daemon's own user, but for the "
                                             "operator's rules for the event stream")
-        if isinstance(request, (EntryAddRequest, EntryListRequest, EntryRemoveRequest)):
+        if isinstance(request, (EntryAddRequest, EntryListRequest, EntryRemoveRequest, EntryEditRequest,
+                                EntryPauseRequest)):
             return self._entry_request(request, creds)
         if isinstance(request, StatusRequest):
             return Response(ok=True, units=self.core.statuses(), **self._wake_window())
@@ -716,13 +728,70 @@ class Daemon:
         from zoneinfo import ZoneInfo
 
         from macf.agent_events_log import append_event, read_events
-        from macf.pd.entries import (ENTRY_EVENTS, EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED, OneShot, fold, new_entry_id,
+        from macf.pd.entries import (ENTRY_EVENTS, EVENT_ENTRY_ADDED, EVENT_ENTRY_CHANGED, EVENT_ENTRY_PAUSED,
+                                     EVENT_ENTRY_REMOVED, EVENT_ENTRY_RESUMED, OneShot, fold, new_entry_id,
                                      parse_when, with_last_firing)
         from macf.pd.scheduler import EVENT_ENTRY_FIRED
         from macf.pd.taint import taint
         why = self._outside_session(creds)
         if why and isinstance(request, EntryAddRequest):
             return Response(ok=False, error=f"an entry is made only from the agent's live session, and {why}")
+        # An edit or a resume makes an entry fire as no one consented to before, so, like making one,
+        # it is taken only from the live session. A pause only stops work, like a removal.
+        if why and isinstance(request, EntryEditRequest):
+            return Response(ok=False, error=f"an entry is edited only from the agent's live session, and {why}")
+        if why and isinstance(request, EntryPauseRequest) and request.op == "entry_resume":
+            return Response(ok=False, error=f"an entry is resumed only from the agent's live session, and {why}")
+        if isinstance(request, EntryPauseRequest):
+            held = fold(read_events(reverse=False, scope="all", only=ENTRY_EVENTS), self.card)
+            if request.id not in held:
+                return Response(ok=False, error=f"no entry {request.id} is held")
+            pausing = request.op == "entry_pause"
+            if pausing == bool(held[request.id].get("paused_at")):
+                return Response(ok=False, error=f"entry {request.id} is already {'paused' if pausing else 'running'}")
+            record = {"agent": self.card, "id": request.id, "at": datetime.now(timezone.utc).isoformat(),
+                      "by_pid": creds.pid, "from_session": not why}
+            if not pausing:
+                # How many firings fell in the pause: none is fired late, whatever the entry's
+                # missed policy, since a pause is a choice, not a miss. The count is said instead.
+                from macf.pd.entries import firings_between
+                record["skipped"] = firings_between(held[request.id],
+                                                    datetime.fromisoformat(held[request.id]["paused_at"]),
+                                                    datetime.fromisoformat(record["at"]))
+            if not append_event(EVENT_ENTRY_PAUSED if pausing else EVENT_ENTRY_RESUMED, record):
+                return Response(ok=False, error="the change could not be recorded in the event log")
+            self.scheduler.entries[request.id] = fold(
+                read_events(reverse=False, scope="all", only=ENTRY_EVENTS), self.card)[request.id]
+        if isinstance(request, EntryEditRequest):
+            held = fold(read_events(reverse=False, scope="all", only=ENTRY_EVENTS), self.card)
+            if request.id not in held:
+                return Response(ok=False, error=f"no entry {request.id} is held")
+            old = held[request.id]
+            changed = {k: v for k, v in old.items() if k not in ("paused_at", "resumed_at")}
+            now = datetime.now(timezone.utc)
+            if request.when is not None:
+                zone = self.core.declaration.timezone
+                tz = ZoneInfo(zone) if zone else timezone.utc
+                try:
+                    when = parse_when(request.when, tz, now)
+                except ValueError as e:
+                    return Response(ok=False, error=f"the entry's time was refused: {e}")
+                first = when.next_after(now)
+                # A new time starts the entry's clock again, now, as making it would.
+                changed.update(when=first.isoformat() if isinstance(when, OneShot) else request.when,
+                               start=now.isoformat(), zone=zone or "UTC", first=first.isoformat() if first else None)
+            if request.purpose is not None:
+                changed["purpose"] = request.purpose
+            if request.missed is not None:
+                changed["missed"] = request.missed
+            # An edit made after untrusted input marks the entry, as making it then would have.
+            marked = list(old.get("marked") or []) + [m for m in taint(read_events(reverse=True, scope="all"))
+                                                       if m not in (old.get("marked") or [])]
+            changed.update(marked=marked, edited_at=now.isoformat(), asked_by_pid=creds.pid)
+            if not append_event(EVENT_ENTRY_CHANGED, changed):
+                return Response(ok=False, error="the edit could not be recorded in the event log")
+            self.scheduler.entries[request.id] = fold(
+                read_events(reverse=False, scope="all", only=ENTRY_EVENTS), self.card)[request.id]
         if isinstance(request, EntryRemoveRequest):
             held = fold(read_events(reverse=False, scope="all", only=ENTRY_EVENTS), self.card)
             if request.id not in held:

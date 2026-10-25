@@ -659,6 +659,37 @@ who is not there looks exactly like a session at rest. Measured on one host in
 two days: three waits of 3, 17 and 12 hours, each on a command an allow rule was
 meant to cover.
 
+**Prevention comes first.** An alert reaches an operator who can act on it, and an
+operator away from the keyboard often can't: in do-not-disturb, alerts wait unread. The
+repo owner asked on 2026-10-24 for prevention instead, after a container seat waited
+seven hours on a cleanup chained after its real work (`...; rm -r <scratch>`), which the
+Ask rule `Bash(rm -r:*)` matched. So the agent knows the rules before it writes a
+command, can ask about one before running it, and is refused rather than left waiting
+when nobody can answer.
+
+- **Session start names the Ask rules in force,** every one, with the two commands
+  below. A command that matches one, in any part of a chain, stops at a dialog.
+- **`macf_tools permissions list`** (also `rules`) shows every rule in force (deny,
+  ask and allow), each with the settings file it comes from, read the way the client
+  reads them (the files below, in its order). `--kind ask` narrows it; `--json` for tools.
+- **`macf_tools permissions check '<command>'`** says what the rules do with one call:
+  denied, asks, allowed, or no rule. For a chain, it names the part that asks. It
+  exits 0 when the call runs by the rules, 1 when a rule asks and 2 when one denies, so
+  a script can use it. The client's order holds: a deny wins over an ask, an ask over
+  an allow.
+- **"No rule" is not "safe".** With no rule matching, the permission mode decides.
+  Default mode asks. Auto mode can still ask about a command it judges risky, a chained
+  one most of all: a call chaining three `macf_tools` commands, which no rule matched,
+  once held a session for eleven hours, most likely on auto mode's own judgment. Unattended, run one plain command per call, keep scratch cleanup inside
+  the script that made it, and try a new command shape only while the operator is there.
+- **The unattended refusal.** In AUTO_MODE while USER_IDLE or USER_REMOTE is on, the
+  PreToolUse hook refuses a call an Ask rule matches, before the client can show its
+  dialog. The refusal names the rule, the part of the call that matched, and what to do
+  instead. The agent reads it at once and goes on with other work, or splits the call
+  so the asking part waits for the operator. It takes effect without a restart, unlike
+  the USER_REMOTE deny list. It can't foresee what no rule explains, which is why the
+  watch below stays.
+
 **Why the watch lives outside.** The PermissionRequest hook tells the operator
 once, when the dialog opens (a Telegram preview of the command, where Telegram
 is configured). If that one message is missed, nothing inside the session can
