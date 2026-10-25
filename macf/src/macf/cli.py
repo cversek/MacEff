@@ -3952,9 +3952,15 @@ def cmd_mode_show(args: argparse.Namespace) -> int:
     print()
     print("Idle Detection:")
     try:
+        from .pd.monitor_unit import declared_monitor_unit
         from .transcript_monitor.daemon import is_running as tm_is_running
-        tm_running = tm_is_running()
-        print(f"  Transcript Monitor: {'✅ running' if tm_running else '⏹️  stopped'}")
+        tm_unit = declared_monitor_unit()
+        # A unit's follow-mode monitor isn't in the per-session process read: the daemon reports it.
+        tm_running = tm_unit is not None or tm_is_running()
+        if tm_unit is not None:
+            print(f"  Transcript Monitor: primal daemon unit '{tm_unit}' (state: macf_tools pd status)")
+        else:
+            print(f"  Transcript Monitor: {'✅ running' if tm_running else '⏹️  stopped'}")
         if tm_running:
             print("  USER_IDLE detection: ✅ active (transcript monitor + prompt hook)")
         else:
@@ -4273,8 +4279,12 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
                     print("⚠️  Could not install AUTO_MODE ask permissions")
                 # Auto-start Transcript Monitor for idle detection
                 try:
+                    from .pd.monitor_unit import declared_monitor_unit
                     from .transcript_monitor.daemon import is_running as tm_is_running, start_daemon as tm_start
-                    if tm_is_running():
+                    tm_unit = declared_monitor_unit()
+                    if tm_unit is not None:
+                        print(f"✅ Transcript Monitor runs as primal daemon unit '{tm_unit}'")
+                    elif tm_is_running():
                         print("✅ Transcript Monitor already running")
                     else:
                         tm_start()
@@ -11277,7 +11287,17 @@ def cmd_proxy_log(args: argparse.Namespace) -> int:
 
 
 def cmd_search_service_start(args: argparse.Namespace) -> int:
-    """Start the search service daemon."""
+    """Start the search service daemon, unless a primal daemon runs it as a declared unit."""
+    from macf.search_service.declared import find_declared_search_unit
+    declared = find_declared_search_unit()
+    if declared is not None:
+        print(f"❌ The search service runs under a primal daemon as {declared.describe()}, "
+              f"so this command starts none: a copy started here would take the port and leave "
+              f"the supervised unit failing to bind.", file=sys.stderr)
+        print("   See whether it is up with: macf_tools pd status", file=sys.stderr)
+        print("   Its daemon starts and restarts it; to run it by hand instead, remove the unit "
+              "from the declaration first.", file=sys.stderr)
+        return 1
     try:
         from macf.search_service import SearchService, is_service_running
         from macf.search_service.retrievers.policy_retriever import PolicyRetriever
@@ -11360,8 +11380,10 @@ def cmd_search_service_status(args: argparse.Namespace) -> int:
 
             if running:
                 print(f"✅ Search service is running")
-                print(f"   PID: {pid}")
+                print(f"   PID: {pid if pid is not None else 'unknown'}")
                 print(f"   Port: {port}")
+                if status.get('note'):
+                    print(f"   Note: {status['note']}")
             else:
                 print("⚠️  Search service is not running")
                 print(f"   Start with: macf_tools search-service start")
@@ -11453,7 +11475,12 @@ def cmd_transcripts_list(args: argparse.Namespace) -> int:
 # -------- transcript-monitor handlers --------
 
 def _cmd_tm_start(args) -> int:
+    from .pd.monitor_unit import declared_monitor_unit, declared_refusal
     from .transcript_monitor.daemon import start_daemon
+    unit = declared_monitor_unit()
+    if unit is not None:
+        print(declared_refusal(unit), file=sys.stderr)
+        return 1
     return start_daemon(
         foreground=getattr(args, "foreground", False),
         poll_interval=getattr(args, "interval", 1.0),

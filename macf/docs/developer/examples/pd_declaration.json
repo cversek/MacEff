@@ -26,9 +26,10 @@
     {
       "name": "transcript-monitor",
       "command": [
-        "macf_tools",
-        "transcript-monitor",
-        "start"
+        "python3",
+        "-m",
+        "macf.transcript_monitor",
+        "--follow"
       ],
       "account": "example",
       "restart": "always",

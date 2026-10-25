@@ -282,11 +282,18 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # here covers every fresh start and every resume. start_daemon()
         # daemonizes (non-blocking) and is idempotent; failure is logged, never
         # fatal to the hook.
+        # Where the agent's primal daemon runs the monitor as a declared unit, nothing is
+        # started here: the hook only announces this session (its transcript, its Claude Code
+        # process, its session unit), which the unit's follow-mode monitor moves to.
         try:
+            from macf.pd.monitor_unit import declared_monitor_unit
             from macf.transcript_monitor.daemon import (
+                announce_session as _tm_announce,
                 is_running as _tm_running, start_daemon as _tm_start,
             )
-            if not _tm_running():
+            if declared_monitor_unit() is not None:
+                _tm_announce(data)
+            elif not _tm_running():
                 _tm_start()
         except (ImportError, OSError, RuntimeError) as e:
             emit_warning(Warning(
