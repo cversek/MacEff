@@ -178,6 +178,12 @@ class Daemon:
             print(f"⚠️ MACF: pd: notice_routes routes {', '.join(half)} to 'both', and only the agent's half "
                   f"is served: the operator hears unread mail alone today, so the rest reach the agent only "
                   f"(MIS-0002-R42)", file=sys.stderr)
+        if any(u.kind == "session" for u in self.core.declaration.units) \
+                and self.core.declaration.operator_channels is None:
+            # R107 ends the rule that counted every channel while none was declared.
+            print("⚠️ MACF: pd: the declaration lists no operator_channels, so no channel message counts "
+                  "as the operator's activity (MIS-0002-R107); list the operator's channels, or [] for none",
+                  file=sys.stderr)
         connect_s = self.core.declaration.channel_connect_s
         #: Where a channel is expected, whether it is dark (R115); the outside watch tells the operator.
         self.dark_channel = DarkChannel(self.card, connect_s) if connect_s else None
