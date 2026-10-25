@@ -1998,8 +1998,31 @@ def cmd_harness_cutover(args: argparse.Namespace) -> int:
         return 2
     card = calling_card_from_identifier(agent)
     home = Path(args.home) if getattr(args, "home", None) else Path.home()
-    plan = build_plan(home, card, agent, host_probes(home, card),
-                      staged=Path(args.staged) if getattr(args, "staged", None) else None)
+    import os
+    from .pd.cutover import ProbeUnavailable, remove_own_job
+    from .platform.launchd import cutover_label
+    try:
+        plan = build_plan(home, card, agent, host_probes(home, card),
+                          staged=Path(args.staged) if getattr(args, "staged", None) else None)
+    except Exception as e:  # noqa: BLE001 - the one-shot job must remove itself whatever failed
+        job_plist = Path(args.job_plist) if getattr(args, "job_plist", None) else None
+        said = str(e) if isinstance(e, ProbeUnavailable) else f"{type(e).__name__}: {e}"
+        print(f"⚠️ MACF: harness cutover: nothing was changed: {said}", file=sys.stderr, flush=True)
+        if job_plist is None:
+            if isinstance(e, ProbeUnavailable):
+                return 1
+            raise
+        # Inside the one-shot launchd job: the plan was never built, so nothing ran, but the
+        # job still removes its plist and boots itself out, or the next --run finds it loaded.
+        log_path = Path(args.log) if getattr(args, "log", None) else None
+
+        def log(line: str) -> None:
+            print(line, flush=True)
+            if log_path is not None:
+                with log_path.open("a") as fh:
+                    fh.write(line + "\n")
+        remove_own_job(job_plist, cutover_label(card), os.getuid(), log)
+        return 1
     if getattr(args, "execute", False):
         from datetime import datetime
         from .pd.cutover import came_up_by_status, execute, execute_as_launchd_job, inside_session, run_command

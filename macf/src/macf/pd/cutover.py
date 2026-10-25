@@ -436,6 +436,11 @@ def end_client(pid: int, start: str, grace_s: float, alive=None, argv_of=None, s
     return True
 
 
+class ProbeUnavailable(RuntimeError):
+    """A program a check needs can't be run here, so the plan can't be built. Under launchd a
+    job starts with PATH=/usr/bin:/bin:/usr/sbin:/sbin, where Homebrew's tmux isn't."""
+
+
 def host_probes(home: Path, card: str, platform: Optional[str] = None) -> Probes:
     """The real host: systemctl or launchctl, tmux and the agent's daemon."""
     import os
@@ -443,7 +448,11 @@ def host_probes(home: Path, card: str, platform: Optional[str] = None) -> Probes
     from macf.pd.session_unit import client_environment
 
     def run(*argv, env=None) -> subprocess.CompletedProcess:
-        return subprocess.run(list(argv), capture_output=True, text=True, env=env)
+        try:
+            return subprocess.run(list(argv), capture_output=True, text=True, env=env)
+        except FileNotFoundError as e:
+            path = (env or os.environ).get("PATH", "")
+            raise ProbeUnavailable(f"{argv[0]} isn't on PATH ({path}), so the plan can't be checked") from e
 
     systemd = shutil.which("systemctl") is not None
     launchd = (platform or sys.platform) == "darwin" and shutil.which("launchctl") is not None
@@ -626,6 +635,20 @@ def job_paths(home: Path, card: str, stamp: str) -> "tuple[Path, Path]":
     return here / f"{cutover_label(card)}.plist", here / f"cutover-{stamp}.log"
 
 
+def job_environment(home: Path, environ: Dict[str, str]) -> Dict[str, str]:
+    """The environment the one-shot launchd job runs the move in: the one the plan was checked
+    in. launchd starts a job with only ``PATH=/usr/bin:/bin:/usr/sbin:/sbin`` and ``HOME``, so
+    without this the job can't find Homebrew's tmux, or ``macf_tools``, and the plan it builds
+    isn't the one the operator was shown. A ``PYTHONPATH`` is passed on, so the job imports the
+    same macf that printed the plan."""
+    env = {"PATH": environ.get("PATH") or "/usr/bin:/bin:/usr/sbin:/sbin",
+           "HOME": environ.get("HOME") or str(Path.home()),
+           "MACEFF_AGENT_HOME_DIR": str(home)}
+    if environ.get("PYTHONPATH"):
+        env["PYTHONPATH"] = environ["PYTHONPATH"]
+    return env
+
+
 def arm_launchd(agent: str, card: str, home: Path, staged: Path, python: str, uid: int,
                 stamp: str, environ: Optional[Dict[str, str]] = None, run=None) -> "tuple[Path, Path]":
     """The launchd counterpart of ``arm_argv``: write a one-shot LaunchAgent that runs the
@@ -645,8 +668,7 @@ def arm_launchd(agent: str, card: str, home: Path, staged: Path, python: str, ui
                            f"removing its job; see launchctl print gui/{uid}/{label}")
     argv = [python, "-m", "macf.cli", "harness", "cutover", "--agent", agent, "--home", str(home),
             "--staged", str(staged), "--execute", "--job-plist", str(plist)]
-    extra = {"PYTHONPATH": env["PYTHONPATH"]} if env.get("PYTHONPATH") else None
-    content = launchd.render_cutover_job(card, argv, str(log_path), extra)
+    content = launchd.render_cutover_job(card, argv, str(log_path), job_environment(home, env))
     steps = [launchd.Step("write", path=str(plist), content=content),
              launchd.Step("launchctl", argv=launchd.launchctl_argv("bootstrap", label, uid, str(plist)))]
     try:
