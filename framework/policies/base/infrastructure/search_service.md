@@ -1,248 +1,91 @@
 # Search Service Policy
 
-**Version**: 1.0
+**Version**: 2.0
 **Tier**: CORE
 **Category**: Infrastructure
 **Status**: ACTIVE
-**Updated**: 2026-01-21
+**Updated**: 2026-10-25
 
 ---
 
 ## Policy Statement
 
-The search service provides warm-cached policy recommendations with sub-100ms latency. It pre-loads embedding models at container startup and serves queries via Unix socket, eliminating cold-start delays from hooks.
+The search service keeps the policy index's embedding model loaded, so a policy recommendation answers in well under a second instead of paying the model's cold start on every call. On an agent with a primal daemon it runs as a declared unit of a daemon (`persistent_layer` 6.4), supervised like any other long-lived process.
 
 ## Scope
 
-Applies to all MacEff agents operating in containerized environments with policy search capabilities.
+All MacEff agents and deployments, on hosts and in containers.
 
 ---
 
 ## CEP Navigation Guide
 
-**1 Architecture Overview**
-- What is the search service daemon?
-- How does warm caching improve performance?
-- What is the socket client pattern?
+**1 What It Is**
+- What does the search service hold, and how do clients reach it?
+- What happens when it isn't running?
 
-**2 Automatic Startup**
-- When does the search service start?
-- What happens during initialization?
-- How do I verify it's running?
+**2 How It Runs**
+- How does it run under a primal daemon, and how is it declared?
+- What happens to the old starts when a unit declares it?
+- How does it run where no daemon declares it?
 
-**3 Hook Integration**
-- How do hooks use the search service?
-- What is the socket client fallback?
-- Why is this faster than direct search?
-
-**4 Manual Operations**
-- How do I rebuild the policy index?
-- How do I restart the search service?
-- How do I check service status?
-
-**5 Troubleshooting**
-- What if search returns no results?
-- What if the service isn't running?
-- How do I diagnose latency issues?
+**3 Operating It**
+- How do I check it, restart it, or rebuild the index?
+- What if it doesn't answer, or answers slowly?
 
 ---
 
-## 1 Architecture Overview
+## 1 What It Is
 
-### What is the Search Service Daemon?
+**One process per host or container holds the policy retriever warm.** It loads the embedding model (sentence-transformers) and the hybrid policy index (SQLite FTS5 with vector similarity, built by `macf_tools policy build_index`), and answers queries over TCP on `127.0.0.1:9001`.
 
-The search service is a background daemon that:
-- Pre-loads the sentence-transformers embedding model (~8s cold start)
-- Maintains a warm LanceDB connection to the policy index
-- Listens on a Unix socket for search queries
-- Returns results in <100ms after warm-up
+- **Clients:** `macf.search_service.client.query_search_service()` sends one query and waits up to its timeout (0.5 s by default; `macf_tools policy recommend` allows 1 s). `get_policy_injection()` formats the result for a hook.
+- **When it isn't running, nothing breaks.** A client that can't connect, or times out, gets an error result, and the caller falls back to searching directly, paying the cold start (several seconds) for that call.
+- **It is shared, not per agent.** The port is fixed, so one copy serves everything on the host or in the container. The index it serves is the framework's policy index, the same for every agent.
 
-### How Does Warm Caching Improve Performance?
+## 2 How It Runs
 
-| Scenario | Latency | Why |
-|----------|---------|-----|
-| Cold start (no service) | ~8000ms | Model loading + index opening |
-| Warm service | <100ms | Model + index already loaded |
-| **Speedup** | **~89x** | Eliminates cold start entirely |
+### 2.1 Under a primal daemon (the normal case)
 
-### Socket Client Pattern
+**Declare it as a service unit of one daemon on the host or in the container** (`persistent_layer` 6.4, 10.2). On a host, that is the host agent's own daemon. In a container, it is the daemon of the account the container's start step used to start it as, normally the first agent's.
 
-```
-Hook (UserPromptSubmit)
-    ↓
-Socket Client (try Unix socket first)
-    ↓ success?
-Search Service Daemon (warm model)
-    ↓
-Policy Recommendations (<100ms)
-
-    ↓ fallback if socket fails
-Direct Search (cold start, ~8s)
+```yaml
+        - name: search
+          kind: service
+          command: ["/opt/maceff-venv/bin/python", "-m", "macf.search_service.daemon", "--unit"]
+          account: <that agent's login>
+          restart: always
+          liveness_interval_s: 60
+          memory_limit_mb: 2048
+          environment:
+            HOME: "{agent_home}"
 ```
 
----
+- **`--unit` never forks.** It stays in the foreground as the daemon's child, so the daemon can stop it, restart it and watch its memory. `--daemon` (a double fork) and `--unit` refuse each other.
+- **It beats from the first second.** It sends its liveness before anything heavy, about once a second while the model loads (up to ten minutes, so a hung load shows as overdue), and then on every pass of its serve loop. A slow cold start is never failed for missing liveness.
+- **It binds the port before loading, and listens after.** A port already taken fails in seconds, with exit 1 and a message that says to stop the other copy (`macf_tools search-service stop`). A client that connects during the load is refused at once instead of waiting in a queue.
+- **SIGTERM ends it cleanly,** during the load or while serving.
+- **The memory limit comes from measurement:** a running copy held 1,273 MB resident, the same as its peak, after a day and a half. 2048 MB leaves about 60 % headroom; the limit is watched, not enforced (`persistent_layer` 10.2).
 
-## 2 Automatic Startup
+**When a unit declares it, nothing else starts it.** The container's start step logs one line naming the account and unit that run it, and starts none itself. It warns if that unit's command lacks `--unit`. `macf_tools search-service start` refuses, naming the unit and pointing to `macf_tools pd status`, which is where to look. The check reads this agent's own declaration and every rendered declaration in the container (`/etc/maceff/pd/*`), and matches a unit whose command runs `macf.search_service`.
 
-### When Does the Search Service Start?
+### 2.2 Where no daemon declares it
 
-The service starts automatically during container initialization via `start.py`:
+Where no daemon declares a search unit, the old starts work as before. A container's start step runs `python -m macf.search_service.daemon --daemon` once, as the first agent, and `macf_tools search-service start` starts it by hand. Nothing supervises such a copy: if it dies, nothing restarts it, and the clients fall back to direct search until someone starts it again. Declaring it as a unit is how to fix that.
 
-1. Container starts → `start.py` runs
-2. `install_macf_tools()` installs dependencies (lancedb, sentence-transformers)
-3. `start_search_service_daemon()` launches the daemon as the PA user
-4. Daemon pre-loads model and opens index
-5. Service ready for queries
+## 3 Operating It
 
-### What Happens During Initialization?
-
-```
-[start.py] Starting search service daemon as pa_manny...
-[daemon] Loading embedding model: all-MiniLM-L6-v2
-[daemon] Model loaded in 8.36s
-[daemon] Opening LanceDB index...
-[daemon] Listening on /tmp/macf_search.sock
-[start.py] Search service daemon started successfully
-```
-
-### How Do I Verify It's Running?
-
-```bash
-# Check if socket exists
-ls -la /tmp/macf_search.sock
-
-# Check process
-ps aux | grep search_service
-
-# Test with CLI
-macf_tools search-service status
-```
-
----
-
-## 3 Hook Integration
-
-### How Do Hooks Use the Search Service?
-
-The `UserPromptSubmit` hook automatically uses the socket client:
-
-```python
-# In handle_user_prompt_submit.py
-from macf.hybrid_search.search_service.client import SearchServiceClient
-
-client = SearchServiceClient()
-if client.is_available():
-    results = client.search(prompt)  # <100ms
-else:
-    results = direct_search(prompt)   # ~8s fallback
-```
-
-### Socket Client Fallback
-
-If the search service is unavailable, hooks fall back to direct search:
-- First query will be slow (~8s) due to model loading
-- Subsequent queries in same process are faster
-- Service restart restores full speed
-
-### Why Is This Faster Than Direct Search?
-
-Direct search (no daemon):
-1. Import sentence-transformers (~2s)
-2. Load model weights (~6s)
-3. Open LanceDB index (~0.1s)
-4. Execute query (~0.05s)
-5. **Total: ~8s**
-
-Socket client (with daemon):
-1. Connect to socket (~0.001s)
-2. Send query (~0.001s)
-3. Receive results (~0.05s)
-4. **Total: <100ms**
-
----
-
-## 4 Manual Operations
-
-### How Do I Rebuild the Policy Index?
-
-```bash
-# Rebuild index (updates after policy changes)
-macf_tools policy build_index
-
-# Index location
-~/.maceff/policy_index.lance
-```
-
-### How Do I Restart the Search Service?
-
-```bash
-# Stop existing daemon
-macf_tools search-service stop
-
-# Start new daemon
-macf_tools search-service start
-
-# Or restart container (service auto-starts)
-```
-
-### How Do I Check Service Status?
-
-```bash
-macf_tools search-service status
-```
-
----
-
-## 5 Troubleshooting
-
-### What If Search Returns No Results?
-
-1. **Check index exists**: `ls ~/.maceff/policy_index.lance`
-2. **Rebuild if missing**: `macf_tools policy build_index`
-3. **Verify query length**: Minimum 10 characters required
-
-### What If the Service Isn't Running?
-
-1. **Check socket**: `ls /tmp/macf_search.sock`
-2. **Check process**: `ps aux | grep search_service`
-3. **Start manually**: `macf_tools search-service start`
-4. **Check logs**: Container logs show startup status
-
-### How Do I Diagnose Latency Issues?
-
-```bash
-# Time a query
-time macf_tools policy recommend "How do I backup TODOs?"
-
-# Expected with warm service: <1s total
-# If >5s: Service may not be running, falling back to cold start
-```
-
----
-
-## Implementation Notes
-
-**Dependencies**:
-- `lancedb>=0.26.0` - Vector database with native hybrid search
-- `sentence-transformers>=2.2.0` - Embedding model (all-MiniLM-L6-v2)
-
-**Files**:
-- Daemon: `macf/hybrid_search/search_service/daemon.py`
-- Client: `macf/hybrid_search/search_service/client.py`
-- CLI: `macf_tools search-service {start|stop|status}`
-
-**Socket Path**: `/tmp/macf_search.sock` (Unix domain socket)
+- **Check it:** `macf_tools search-service status`. Under a unit, the pid file may not be where an agent shell looks, since a unit gets only its declared environment, so `status` also probes the port and says when only the port answers. `macf_tools pd status`, as the account whose daemon declares it, shows the unit's state.
+- **Restart it:** under a unit, the daemon restarts it by its policy after a failure. To restart it on purpose, `macf_tools search-service stop` sends it SIGTERM, and a unit with `restart: always` comes back a second later. Where no unit declares it, `macf_tools search-service stop`, then `start`.
+- **Rebuild the index** after policies change: `macf_tools policy build_index`. Then restart the service as above, so the warm copy serves the rebuilt index rather than whatever it loaded at its start.
+- **It doesn't answer:** run `status`. A unit stuck in `starting` hasn't sent its first beat; read its `pd_unit_state` events (`macf_tools events query --event pd_unit_state -v`). A port held by another copy makes a unit fail at once with exit 1.
+- **It answers slowly:** a first query after a restart may wait for the model to finish loading. Timing `macf_tools policy recommend "<question>"` shows whether answers come from the warm service (well under a second) or the cold fallback (several seconds).
 
 ---
 
 ## Wiki-Links
 
-<!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
-     classes and provenance). Links are what this policy governs — the warm
-     policy-search daemon and its socket client. -->
+<!-- NORMATIVE node. Links are what this policy governs: the warm policy search service,
+     and its supervision as a daemon unit. -->
 
-[[infrastructure]] [[discoverability]] [[policy_as_api]]
-
----
-
-**End Policy**
+[[primal_daemon]] [[search]] [[tooling]] [[persistent_layer]]
