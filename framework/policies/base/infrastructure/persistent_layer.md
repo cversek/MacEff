@@ -449,7 +449,7 @@ Commands and flags complete from a table taken from the parser when the script i
 
 **An onlooker sees a session only after the observed agent invites it** [MIS-0002-R82 (onlooker_MUST_be_invited)]. The invitation names the onlooker by calling card, never by login user [MIS-0002-R94 (invitation_MUST_name_card)], and an agent never invites an onlooker that runs in another container [MIS-0002-R111 (invitation_MUST-NOT_cross_containers)]. Between containers, collaboration stays with agent mail.
 
-**Each invitation carries a secret.** On a shared login a socket's peer credentials cannot say which agent is reading, so the stream admits whoever presents the secret, and the secret reaches the onlooker through its own channel. The log keeps only the secret's SHA-256, so the record can be read without handing out the key. An onlooker that already has a live observation is not invited again; end it first.
+**Each invitation carries a secret.** On a shared login a socket's peer credentials cannot say which agent is reading, so the stream admits whoever presents the secret. The operator relays the secret to the onlooker, and the observed agent never holds it (5.4). The log keeps only the secret's SHA-256, so the record can be read without handing out the key. An onlooker that already has a live observation is not invited again; end it first.
 
 **Every invitation, pause, resume and ending is an event in the observed agent's own log** [MIS-0002-R90 (observation_acts_MUST_be_events)], and the state is whatever the log folds to. It is kept nowhere else.
 
@@ -487,6 +487,31 @@ Commands and flags complete from a table taken from the parser when the script i
 - **Presence is derived, not stored.** It is folded from the agent's own event log: onlookers from the observation acts, surfaces from their recorded states. A copy kept elsewhere could drift from the acts or outlive its writer.
 - **A row that won't parse costs only itself.** Other processes write these rows, so both folds skip one they can't read, with a line on stderr, and the carry keeps a row only once it folds, so it carries what the line showed. A failure nobody foresaw fails its own carry family, and the carry still writes its marker, so a compaction keeps its recovery output.
 - **When the primal daemon is not alive, presence is unknown,** and the segment says so. It never shows a stale onlooker, and never "nobody".
+
+### 5.4 Taking the acts: `macf_tools observe`
+
+**Each act is one request to your own primal daemon**, which reads who is asking from the socket and takes the act through the one record path (5.1). Nothing in a request says who sent it.
+
+| Command | Who may take it | What it does |
+|---|---|---|
+| `observe invite <card> [--lease 2h]` | your live session only | records the invitation at your transcript's current size; returns no secret |
+| `observe secret <card>` | the operator, from outside the session | prints the invitation's secret, once, to relay to the onlooker |
+| `observe pause <card>`, `observe resume <card>` | your live session only | records the pause or resume at your transcript's current size (5.2) |
+| `observe end <card>` | your session, or the operator from outside it | ends the observation |
+| `observe list` | anyone with your uid, or the operator's | each onlooker's state; never a secret or its digest |
+
+"Your live session" means a process below your daemon's session unit, the lineage check entries use. "The operator" means the operator's uid where your declaration names one (`operator_uid`). On a shared login it means any process with your uid that isn't below the session.
+
+**Why the invite and the secret are separate commands.** The repo owner ruled that the operator relays the secret: an invitation opens you to someone, so a person stands in it. Invite comes only from your session, so a secret in its reply would land in your transcript and your context, and a compaction summary could carry it on. You would hold the key to your own stream before the operator did, and "the operator relays it" would be a convention. Split, it holds by construction. The secret is never shown to the session's lineage, never written to the log (which keeps its SHA-256), and never sent by agent mail.
+
+- **The daemon holds the secret in memory only, until the operator fetches it.** The fetch is recorded first (`pd_observe_secret_fetched`, naming the process, never the secret), then the secret leaves memory. A second ask is refused and says when the first was answered. A lost secret means ending the invitation and inviting again; it is never fetched twice.
+- **A daemon restart before the fetch loses the secret.** `observe secret` then says so: end the invitation and invite again.
+- **Memory only, by the head maintainer's ruling on #552.** The daemon runs as the agent's uid, so a 0600 file in its runtime directory would be one `cat` away from the agent's context. The daemon's memory is a higher bar: reading another process's memory needs an entitlement on macOS, and on Ubuntu `ptrace_scope` 1 limits a process to its own descendants, and the daemon is no child of the session.
+- **On a shared login the secret's protection is advisory.** Where no `operator_uid` is declared, "the operator" is any process with the uid outside the session's lineage, and the agent can make one: a double fork from its own shell (`setsid`, or `nohup ... &` with the parent exiting) reparents a process to init, out of the lineage, and it can fetch the agent's own secret. So the split stops a confused agent, not a compromised one, as the ask rule and revocation do for entries (R136). Where `operator_uid` is declared, as in the containers, the property holds.
+- **Opening asks, closing doesn't.** `observe invite` and `observe resume` start in the client's Ask list, so the operator's approval of the prompt is their consent to opening the session. `pause` and `end` only close it, and never ask. An invitation is therefore an act for a session the operator is attending.
+- **An ending from outside the session on a shared login is advisory.** There, `ended_by: operator` means "not the live session": the agent's own scheduled check, or a shell it opened elsewhere, would be recorded the same way. `observe list` says so. That's acceptable because ending only stops work, the same reasoning that lets anyone with the uid remove an entry.
+- **An onlooker must be in your own place.** The daemon places a card by the local roster of agents this endpoint can see. A card it can't place isn't invited, since an invitation never crosses a container [MIS-0002-R111 (invitation_MUST-NOT_cross_containers)].
+- **The onlooker's own ending** comes over the stream, which this command doesn't serve. Serving the stream is its own unit's design.
 
 ---
 

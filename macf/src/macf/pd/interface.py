@@ -906,9 +906,31 @@ class StreamRuleRequest(_Closed):
         return self
 
 
+class ObserveRequest(_Closed):
+    """An observation act, taken by the agent's daemon (persistent_layer 5.4). Who asks is read
+    from the socket, never from the request: invite, pause and resume only from the live
+    session; the secret only from outside it, by the operator; an ending from either side;
+    the list by anyone with the uid. ``session_id`` names the session's own transcript, whose
+    current size the daemon reads as the offset of the act."""
+
+    op: Literal["observe_invite", "observe_secret", "observe_pause", "observe_resume",
+                "observe_end", "observe_list"]
+    onlooker: Optional[str] = Field(default=None, max_length=80)
+    lease_s: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
+    session_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-f-]{8,64}$")
+
+    @model_validator(mode="after")
+    def _onlooker_named(self) -> "ObserveRequest":
+        if (self.op != "observe_list") != (self.onlooker is not None):
+            raise ValueError("an observation act names its onlooker; only the list does not")
+        if self.lease_s is not None and self.op != "observe_invite":
+            raise ValueError("only an invitation carries a lease")
+        return self
+
+
 Request = Union[StatusRequest, ActRequest, CompactRequest, PaceRequest, EntryAddRequest,
                 EntryListRequest, EntryRemoveRequest, EntryEditRequest, EntryPauseRequest,
-                StreamRuleRequest]
+                StreamRuleRequest, ObserveRequest]
 
 
 class UnitStatus(_Closed):
@@ -937,6 +959,11 @@ class Response(_Closed):
     wake_window_from: Optional[str] = None
     #: The event stream's rules in force, answering a stream rule.
     stream_rules: Optional[Dict[str, Any]] = None
+    #: The observations the agent's log folds to, answering an observation act: each
+    #: onlooker's state, never a secret or its digest.
+    observations: Optional[List[Dict[str, Any]]] = None
+    #: The invitation's secret, answering only the operator's one ``observe_secret``.
+    secret: Optional[str] = None
 
 
 _REQUEST = TypeAdapter(Annotated[Request, Field(discriminator="op")])

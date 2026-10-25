@@ -266,6 +266,10 @@ _DEFAULT_ASK = [
     # An edit or a resume makes an entry fire as nothing consented to before, so it asks as add does.
     "Bash(macf_tools pd entry edit:*)",
     "Bash(macf_tools pd entry resume:*)",
+    # Opening the session to an onlooker, or reopening a paused stream: the operator's consent is
+    # the prompt (persistent_layer 5.4). Pausing and ending only close it, so they never ask.
+    "Bash(macf_tools observe invite:*)",
+    "Bash(macf_tools observe resume:*)",
     # The event stream's rules: approving the prompt is the operator's act (persistent_layer 11.4).
     "Bash(macf_tools pd stream silence:*)",
     "Bash(macf_tools pd stream unsilence:*)",

@@ -18,7 +18,7 @@ import socket
 import sys
 import time
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from pydantic import ValidationError
 
@@ -37,6 +37,7 @@ from macf.pd.interface import (
     EntryListRequest,
     EntryPauseRequest,
     EntryRemoveRequest,
+    ObserveRequest,
     EVENT_STREAM_RULE,
     IdentityError,
     PaceRequest,
@@ -197,6 +198,11 @@ class Daemon:
         self._wake_from = "the declaration"
         #: When the observation sweep last ran (monotonic); it runs on its first tick.
         self._observe_swept = float("-inf")
+        #: Each open invitation's secret, by onlooker, until the operator fetches it: in memory
+        #: only, never in the log or on disk, and never in a reply to the observed session
+        #: (persistent_layer 5.4). A restart before the fetch loses it; the invitation is then
+        #: ended and made again.
+        self._secrets: Dict[str, Tuple[str, str]] = {}
         if any(u.kind == "session" for u in self.core.declaration.units):
             # The keystroke fallback types into the session unit's own pane (pd.session_unit),
             # recording each wake first so it never reads as the operator (MIS-0002-R105).
@@ -672,6 +678,8 @@ class Daemon:
             return Response(ok=False, error=f"request refused: {e.errors()[0]['msg']}")
         if isinstance(request, StreamRuleRequest):
             return self._stream_rule(request, creds)
+        if isinstance(request, ObserveRequest):
+            return self._observe_request(request, creds)
         if creds.uid != os.getuid():
             return Response(ok=False, error="this socket serves only the daemon's own user, but for the "
                                             "operator's rules for the event stream")
@@ -719,6 +727,119 @@ class Daemon:
         except (OSError, ValueError, TypeError) as e:
             print(f"⚠️ MACF: pd: a lapsed observation lease could not be recorded ({e}); "
                   f"tried again in {OBSERVE_SWEEP_S:.0f} s", file=sys.stderr)
+
+    # ------------------------------------------------------------------ observation acts
+
+    #: The acts the observed agent takes, only from its live session (MIS-0002-R82, R92).
+    _SESSION_ACTS = ("observe_invite", "observe_pause", "observe_resume")
+
+    def _observe_request(self, request: ObserveRequest, creds) -> Response:
+        """An observation act, through ``observe.record``, the one path that takes one (R90).
+
+        Who asks is read from the socket. Invite, pause and resume come only from a process
+        below the session unit. The secret goes only to a process outside it, the operator's
+        uid where the declaration names one, so the observed agent never holds the key to its
+        own stream and the operator relays it by construction. An ending from the session is
+        the observed agent's; from outside it, the operator's, which on a shared login means
+        only "not the live session" and is shown as advisory (R86, R87). The list needs only
+        the uid, or the operator's."""
+        from macf.observe import acts, record
+        operator_uid = self.core.declaration.operator_uid
+        if creds.uid != os.getuid() and creds.uid != operator_uid:
+            return Response(ok=False, error="this socket serves only the daemon's own user and the operator")
+        why = self._outside_session(creds)
+        op, who = request.op, request.onlooker
+        if op in self._SESSION_ACTS and why:
+            return Response(ok=False, error=f"{op.split('_')[1]} is taken only from the agent's live session, and {why}")
+        outside_ok = operator_uid is None or creds.uid == operator_uid
+        if op == "observe_secret":
+            if not why:
+                return Response(ok=False, error=(
+                    "the secret is never shown to the observed agent's session: the operator fetches it "
+                    "from outside the session, with macf_tools observe secret, and relays it"))
+            if not outside_ok:
+                return Response(ok=False, error=f"the secret goes only to the operator's uid {operator_uid}")
+        if op == "observe_end" and why and not outside_ok:
+            return Response(ok=False, error=f"from outside the session, only the operator's uid {operator_uid} ends one")
+        secret = None
+        try:
+            if op == "observe_invite":
+                offset = self._transcript_offset(request.session_id)
+                now = time.time()
+                lease = now + request.lease_s if request.lease_s else None
+                inv = record.invite(self.card, who, offset, container_of=self._container_of,
+                                    lease_until=lease, now=now)
+                self._secrets[who] = (inv.secret, inv.event["data"]["secret_sha256"])
+            elif op == "observe_pause":
+                record.pause(who, at=self._transcript_offset(request.session_id))
+            elif op == "observe_resume":
+                record.resume(who, at=self._transcript_offset(request.session_id))
+            elif op == "observe_end":
+                record.end(who, "operator" if why else "observed")
+                self._secrets.pop(who, None)
+            elif op == "observe_secret":
+                secret = self._release_secret(who, creds, record.current())
+        except (acts.ActRefused, LookupError) as e:
+            return Response(ok=False, error=str(e))
+        except OSError as e:
+            return Response(ok=False, error=f"the act was not taken: {e}")
+        return Response(ok=True, secret=secret, observations=self._observations(operator_uid))
+
+    def _release_secret(self, onlooker: str, creds, state) -> str:
+        """The invitation's secret, once: its fetch recorded first, then dropped from memory."""
+        from macf.observe import acts, record
+        o = state.get(onlooker)
+        if o is None or o.status == acts.ENDED or acts.lapsed(o, time.time()):
+            raise acts.ActRefused(f"{onlooker} has no open invitation")
+        held = self._secrets.get(onlooker)
+        if held is None or held[1] != o.secret_sha256:
+            when = record.secret_fetched_at(onlooker)
+            if when is not None:
+                raise acts.ActRefused(
+                    f"{onlooker}'s secret was fetched at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(when))}; "
+                    f"it is given once. If it was lost, end the invitation and invite again")
+            raise acts.ActRefused(
+                f"this daemon doesn't hold {onlooker}'s secret: it started after the invitation, and a "
+                f"secret is kept only in memory. End the invitation and invite again")
+        record.secret_fetched(onlooker, by_pid=creds.pid, by_uid=creds.uid)
+        del self._secrets[onlooker]
+        return held[0]
+
+    def _observations(self, operator_uid) -> list:
+        """Each onlooker's observation as the log folds it: never its secret or digest. An ending
+        by the operator on a host that names no operator uid says it is advisory."""
+        from macf.observe import record
+        rows = []
+        for o in sorted(record.current().values(), key=lambda o: o.onlooker):
+            row = {"onlooker": o.onlooker, "status": o.status, "lease_until": o.lease_until,
+                   "ended_by": o.ended_by, "secret_held": o.onlooker in self._secrets}
+            if o.ended_by == "operator" and operator_uid is None:
+                row["ended_by_advisory"] = True
+            rows.append(row)
+        return rows
+
+    def _transcript_offset(self, session_id: Optional[str]) -> int:
+        """The current size of the named session's transcript, the offset an act is taken at.
+        The session names its own transcript; the size is read here, when the act is taken."""
+        from macf.observe.acts import ActRefused
+        from macf.utils.paths import get_session_transcript_path
+        if not session_id:
+            raise ActRefused("the session names its transcript (its session id), and this request named none")
+        path = get_session_transcript_path(session_id)
+        if path is None:
+            raise ActRefused(f"no transcript for session {session_id} is found under this agent's home")
+        return os.stat(path).st_size
+
+    def _container_of(self, card: str) -> Optional[str]:
+        """Where a card's agent runs, as ``acts.invite`` asks: None for this daemon's own place,
+        which is every agent the local roster lists. An agent it can't list is refused, since an
+        invitation never crosses a container (MIS-0002-R111)."""
+        if card == self.card:
+            return None
+        from macf.utils.roster import local_roster
+        if any(e.card == card for e in local_roster(probe=None).entries):
+            return None
+        raise LookupError(f"{card} is not an agent this daemon finds in its own place")
 
     def _entry_request(self, request, creds) -> Response:
         """An agent's request about its own entries, taken only from its live session. A

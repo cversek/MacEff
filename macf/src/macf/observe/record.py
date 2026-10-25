@@ -68,6 +68,27 @@ def end(onlooker: str, ended_by: str) -> dict:
     return _append(acts.end(onlooker, ended_by, current()))
 
 
+def secret_fetched(onlooker: str, *, by_pid: int, by_uid: int) -> dict:
+    """Record that the operator fetched ``onlooker``'s secret. Written before the secret is
+    handed over, so a secret is never out without its record."""
+    return _append({"event": acts.EVENT_SECRET_FETCHED,
+                    "data": {"onlooker": onlooker, "by_pid": by_pid, "by_uid": by_uid}})
+
+
+def secret_fetched_at(onlooker: str) -> Optional[float]:
+    """When ``onlooker``'s current invitation had its secret fetched, or None. Read newest
+    first, stopping at that onlooker's latest invitation, so an earlier invitation's fetch
+    never answers for this one."""
+    for ev in read_events(reverse=True, scope="all",
+                          only=(acts.EVENT_INVITE, acts.EVENT_SECRET_FETCHED)):
+        if (ev.get("data") or {}).get("onlooker") != onlooker:
+            continue
+        if ev.get("event") == acts.EVENT_INVITE:
+            return None
+        return ev.get("timestamp")
+    return None
+
+
 def sweep(now: float, events: Optional[List[dict]] = None) -> List[dict]:
     """Record the ending owed for each lease that has run out by ``now`` (MIS-0002-R89).
 

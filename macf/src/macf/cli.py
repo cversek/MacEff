@@ -13688,6 +13688,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     from .pd.cli import add_pd_parser
     add_pd_parser(sub)
+    from .observe.cli import add_observe_parser
+    add_observe_parser(sub)
 
     from .ids.cli import add_ids_parser
     add_ids_parser(sub)
