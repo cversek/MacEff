@@ -107,9 +107,14 @@ class Probes:
     daemon_answers: Callable[[], Optional[str]]
     launchd: bool = False
     harness_label: Callable[[str], Optional[str]] = lambda agent: None
-    #: (pid, working directory) of each live Claude Code client in the agent's project
-    #: directory, however it was started (agent_stack.clients_here): a hand-started session.
-    hand_started: Callable[[str], List[Tuple[int, str]]] = lambda agent: []
+    #: (pid, working directory, process start) of each live Claude Code client in the agent's
+    #: project directory, however it was started (agent_stack.clients_here): a hand-started
+    #: session. The start is ``notify.session.proc_start``, the fingerprint the core keeps for
+    #: the units it adopts, so the move signals the process it planned for and no other.
+    hand_started: Callable[[str], List[Tuple[int, str, str]]] = lambda agent: []
+    #: Whether the daemon is installed under the service manager at all. One that isn't is
+    #: installed by the move, after the declaration (``pd install``, undone by ``pd uninstall``).
+    daemon_installed: Callable[[], bool] = lambda: True
 
 
 def staged_path(home: Path) -> Path:
@@ -257,7 +262,13 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
 
     checks.append(_staged_check(staged, card, runtime, init.name))
     why = probes.daemon_answers()
-    checks.append(Check("daemon", why is None, "answers on its socket" if why is None else why))
+    # No daemon installed at all, as for a seat agent init left for this move: installing it is
+    # a step. One installed that doesn't answer is a fault the move would only hide.
+    install_daemon = why is not None and not probes.daemon_installed()
+    checks.append(Check("daemon", why is None or install_daemon,
+                        "answers on its socket" if why is None else
+                        "not installed: the move installs it after the declaration (pd install)"
+                        if install_daemon else why))
     if init.name == "launchd" and probes.harness_label(agent) is None:
         checks.append(Check("legacy harness", True, f"no harness LaunchAgent for {agent} is installed, "
                             "so there is no legacy harness to stop"))
@@ -272,7 +283,7 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
     clients = [] if (legacy or held) else sorted(probes.hand_started(agent))
     if clients:
         checks.append(Check("hand-started client", True,
-                            f"Claude Code pid {', '.join(str(p) for p, _ in clients)} runs in "
+                            f"Claude Code pid {', '.join(str(c[0]) for c in clients)} runs in "
                             f"{clients[0][1]}, held by no unit or tmux server"))
     clocks = sorted(u for u in probes.active_units() if "mail-clock" in u and u != init.daemon)
     checks.append(Check("duplicate clocks", True, ", ".join(clocks) + " running beside the daemon's"
@@ -301,10 +312,11 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
                           undo=init.start_harness(init.harness) if legacy else []))
     if clients:
         grace = _session_grace(staged)
-        pids = ", ".join(str(p) for p, _ in clients)
-        end = [Command([sys.executable, "-m", "macf.pd.cutover", "end-client", str(pid), f"{grace:g}"],
-                       note=f"SIGTERM to pid {pid} alone, then up to {grace:g} s for it to exit",
-                       timeout=grace + 30) for pid, _ in clients]
+        pids = ", ".join(str(c[0]) for c in clients)
+        end = [Command([sys.executable, "-m", "macf.pd.cutover", "end-client", str(pid), start, f"{grace:g}"],
+                       note=f"SIGTERM to pid {pid} alone, only while it is still the process started "
+                            f"at {start}, then up to {grace:g} s for it to exit",
+                       timeout=grace + 30) for pid, _, start in clients]
         end.append(Command([sys.executable, "-m", "macf.pd.cutover", "end-stale-monitors", str(home)],
                            note="transcript monitors of this agent whose session has ended"))
         where = clients[0][1]
@@ -312,14 +324,31 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
                           "this step)", end,
                           undo=[Command(["true"], note=f"the hand-started session ended and isn't "
                                         f"restarted; resume it with claude -c in {where}")]))
-    steps.append(Step("Install the declaration with the session unit, keeping the old one",
-                      [Command(["cp", str(live), str(saved)]), Command(["cp", str(staged), str(live)]),
-                       init.restart_daemon()],
-                      undo=[Command(["cp", str(saved), str(live)]), init.restart_daemon(),
-                            Command(["tmux", "-S", str(tmux_socket(agent, unit_base)), "kill-server"],
-                                    note="the unit's session, no longer declared, before the legacy one starts",
-                                    may_fail=True),
-                            Command(["rm", str(saved)], note="restored, so no later attempt finds it")]))
+    restart = [] if install_daemon else [init.restart_daemon()]
+    end_unit = Command(["tmux", "-S", str(tmux_socket(agent, unit_base)), "kill-server"],
+                       note="the unit's session, no longer declared, before the legacy one starts",
+                       may_fail=True)
+    if live.exists():
+        steps.append(Step("Install the declaration with the session unit, keeping the old one",
+                          [Command(["cp", str(live), str(saved)]), Command(["cp", str(staged), str(live)]),
+                           *restart],
+                          undo=[Command(["cp", str(saved), str(live)]), *restart, end_unit,
+                                Command(["rm", str(saved)], note="restored, so no later attempt finds it")]))
+    else:
+        # A seat agent init staged for this move has no declaration yet: nothing to keep, and
+        # the undo removes the one installed.
+        steps.append(Step("Install the declaration with the session unit (there is none to keep)",
+                          [Command(["cp", str(staged), str(live)]), *restart],
+                          undo=[Command(["rm", str(live)], note="there was none before the move"),
+                                *restart, end_unit]))
+    if install_daemon:
+        pd_env = {"MACEFF_AGENT_HOME_DIR": str(home)}
+        steps.append(Step(f"Install the primal daemon under {init.name} (pd install), which starts the session unit",
+                          [Command([sys.executable, "-m", "macf.cli", "pd", "install"], env=pd_env,
+                                   timeout=PD_INSTALL_TIMEOUT_S)],
+                          undo=[Command([sys.executable, "-m", "macf.cli", "pd", "uninstall"], env=pd_env,
+                                        note="the daemon wasn't installed before the move",
+                                        timeout=PD_INSTALL_TIMEOUT_S), end_unit]))
     steps.append(Step("Watch the session unit come up: starting, then running",
                       [Command(["macf_tools", "pd", "status"]), Command(["macf_tools", "harness", "status"])]))
     ready = all(c.ok for c in checks)
@@ -328,6 +357,23 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
         declaration = Declaration.model_validate_json(staged.read_text())
         session_unit = next(u.name for u in declaration.units if u.kind == "session")
     return Plan(agent, card, ready, checks, steps, session_unit=session_unit, init=init.name)
+
+
+def _daemon_installed(card: str, home: Path) -> bool:
+    """Whether the service manager has a unit or LaunchAgent for this agent's daemon, as
+    rendered or not: an existing one is the operator's to update with pd install, never
+    replaced by the move."""
+    from macf.pd import adapter
+    if sys.platform.startswith("linux"):
+        from macf.platform import systemd
+        path, _ = systemd.render_pd_user_unit(card, adapter._program(home), str(Path.home()))
+    elif sys.platform == "darwin":
+        from macf.platform import launchd
+        path, _ = launchd.render_pd_launch_agent(card, adapter._program(home), str(Path.home()),
+                                                 adapter.LaunchdAdapter._log_dir(home))
+    else:
+        return False
+    return Path(path).exists()
 
 
 def _session_grace(staged: Path) -> float:
@@ -343,13 +389,18 @@ def _session_grace(staged: Path) -> float:
 
 #: A hand-started client's time to exit when no session unit's stop grace is declared.
 HAND_STARTED_GRACE_S = 30.0
+#: How long pd install or uninstall may take as a step: a grant probe at install may wait
+#: up to its own 120 s for a person to answer a dialog.
+PD_INSTALL_TIMEOUT_S = 300.0
 
 
-def end_client(pid: int, grace_s: float, alive=None, argv_of=None, signal_pid=None,
-               sleep=None, clock=None) -> bool:
+def end_client(pid: int, start: str, grace_s: float, alive=None, argv_of=None, signal_pid=None,
+               sleep=None, clock=None, same=None) -> bool:
     """End one hand-started client: SIGTERM to *pid* alone, never a group and never SIGKILL,
     then wait up to *grace_s* for it to exit. Returns whether it is gone. A pid that is no
-    longer a Claude Code client has already ended, and its number is not signalled."""
+    longer a Claude Code client, or no longer the process started at *start* (the plan's
+    ``proc_start``, checked as the core checks an adopted unit), has already ended, and its
+    number is not signalled."""
     import os
     import signal as sig
     import time
@@ -369,7 +420,9 @@ def end_client(pid: int, grace_s: float, alive=None, argv_of=None, signal_pid=No
             return True
     alive = alive or _alive
     signal_pid = signal_pid or (lambda p: os.kill(p, sig.SIGTERM))
-    if not alive(pid) or not _is_claude(argv_of(pid)):
+    if same is None:
+        from macf.notify.session import verify_incarnation as same
+    if not alive(pid) or not same(pid, start) or not _is_claude(argv_of(pid)):
         return True
     try:
         signal_pid(pid)
@@ -438,13 +491,18 @@ def host_probes(home: Path, card: str, platform: Optional[str] = None) -> Probes
         report = status(home, card)
         return None if report.source == "daemon" else f"doesn't answer ({report.source}): {report.why}"
 
-    def hand_started(agent: str) -> List[Tuple[int, str]]:
+    def hand_started(agent: str) -> List[Tuple[int, str, str]]:
         from macf import agent_stack
+        from macf.notify.session import proc_start
         import argparse
         ctx = agent_stack.Context(home=Path(home), login_home=Path.home(), in_container=False,
                                   args=argparse.Namespace(project_dir=None), card=card)
         where = str(agent_stack.project_dir(ctx).resolve())
-        return [(pid, where) for pid in agent_stack.clients_here(ctx)]
+        found = [(pid, where, proc_start(pid)) for pid in agent_stack.clients_here(ctx)]
+        return [(pid, w, start) for pid, w, start in found if start]   # one that ended as we looked is gone
+
+    def daemon_installed() -> bool:
+        return _daemon_installed(card, home)
 
     return Probes(
         systemd=systemd,
@@ -457,6 +515,7 @@ def host_probes(home: Path, card: str, platform: Optional[str] = None) -> Probes
         launchd=launchd,
         harness_label=harness_label,
         hand_started=hand_started,
+        daemon_installed=daemon_installed,
     )
 
 
@@ -728,11 +787,11 @@ def end_stale_monitors(home: Path, find=None, alive=None, signal_pid=None,
 
 if __name__ == "__main__":
     # python -m macf.pd.cutover end-stale-monitors <agent home>: a step of the move.
-    if len(sys.argv) == 4 and sys.argv[1] == "end-client":
-        gone = end_client(int(sys.argv[2]), float(sys.argv[3]))
+    if len(sys.argv) == 5 and sys.argv[1] == "end-client":
+        gone = end_client(int(sys.argv[2]), sys.argv[3], float(sys.argv[4]))
         if not gone:
             print(f"⚠️ MACF: cutover: the hand-started client {sys.argv[2]} didn't exit within "
-                  f"{sys.argv[3]} s", file=sys.stderr)
+                  f"{sys.argv[4]} s", file=sys.stderr)
         sys.exit(0 if gone else 1)
     if len(sys.argv) == 3 and sys.argv[1] == "end-stale-monitors":
         left = end_stale_monitors(Path(sys.argv[2]))
@@ -740,5 +799,5 @@ if __name__ == "__main__":
             print(f"⚠️ MACF: cutover: transcript monitor(s) {left} didn't end", file=sys.stderr)
         sys.exit(1 if left else 0)
     print("usage: python -m macf.pd.cutover end-stale-monitors <agent home>\n"
-          "       python -m macf.pd.cutover end-client <pid> <grace seconds>", file=sys.stderr)
+          "       python -m macf.pd.cutover end-client <pid> <proc start> <grace seconds>", file=sys.stderr)
     sys.exit(2)

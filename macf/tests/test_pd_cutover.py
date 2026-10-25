@@ -23,7 +23,11 @@ def _probes(**over) -> Probes:
     return Probes(**base)
 
 
-def _stage(home: Path, *, grace=30.0, agent=CARD, session=True, runtime=RUNTIME, liveness=True):
+def _stage(home: Path, *, grace=30.0, agent=CARD, session=True, runtime=RUNTIME, liveness=True,
+           live=True):
+    """Stage a declaration for the move, and by default a live one without the session unit
+    beside it, as an agent already on its daemon has. ``live=False`` is a seat agent init
+    staged for the move: no declaration installed yet."""
     units = [Unit(name="amail-broker", command=["broker"], account="resident", restart="always",
                   liveness_interval_s=30, memory_limit_mb=64)]
     if session:
@@ -36,6 +40,9 @@ def _stage(home: Path, *, grace=30.0, agent=CARD, session=True, runtime=RUNTIME,
     path = staged_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(Declaration(version=1, agent=agent, units=units).model_dump_json())
+    current = declaration_path(home)
+    if live and not current.exists():
+        current.write_text(Declaration(version=1, agent=CARD, units=units[:1]).model_dump_json())
     return path
 
 
@@ -530,11 +537,12 @@ def test_run_on_macos_goes_through_launchd_not_systemd_run(tmp_path, monkeypatch
 # ============================================================================
 
 PROJECT = "/Users/resident/project"
+START = "Sat Oct 25 12:00:00 2026"
 
 
 def _hand_started(**over):
     base = dict(unit_active=lambda unit: "inactive", active_units=lambda: [],
-                default_session=lambda agent: False, hand_started=lambda agent: [(4321, PROJECT)])
+                default_session=lambda agent: False, hand_started=lambda agent: [(4321, PROJECT, START)])
     base.update(over)
     return base
 
@@ -550,7 +558,8 @@ def test_a_hand_started_client_gets_a_step_naming_its_pid_on_both_init_systems(t
         assert whats[0].startswith("Stop the hand-started client (pid 4321"), whats
         assert whats[1].startswith("Install"), "stopped before anything is installed"
         end = [c for c in plan.steps[0].commands if "end-client" in c.argv]
-        assert [c.argv[-2:] for c in end] == [["4321", "30"]], "that pid, the unit's 30 s stop grace"
+        assert [c.argv[-3:] for c in end] == [["4321", START, "30"]], \
+            "that pid, as the process started then, with the unit's 30 s stop grace"
         assert end[0].timeout > 30
         undo = [str(c) for c in plan.steps[0].undo]
         assert len(undo) == 1 and undo[0].startswith("true") and f"claude -c in {PROJECT}" in undo[0]
@@ -559,7 +568,7 @@ def test_a_hand_started_client_gets_a_step_naming_its_pid_on_both_init_systems(t
 
 def test_a_session_a_harness_or_tmux_holds_is_not_taken_for_hand_started(tmp_path):
     _stage(tmp_path)
-    plan = build_plan(tmp_path, CARD, AGENT, _probes(hand_started=lambda agent: [(4321, PROJECT)]),
+    plan = build_plan(tmp_path, CARD, AGENT, _probes(hand_started=lambda agent: [(4321, PROJECT, START)]),
                       runtime=RUNTIME)
     assert not any("hand-started" in s.what for s in plan.steps)
 
@@ -586,13 +595,13 @@ def _client(exits_after=None):
     def sleep(s):
         state["t"] += s
     return state, dict(alive=alive, argv_of=lambda pid: ["claude", "-c"], signal_pid=signal_pid,
-                       sleep=sleep, clock=lambda: state["t"])
+                       sleep=sleep, clock=lambda: state["t"], same=lambda pid, start: start == START)
 
 
 def test_the_job_terminates_exactly_that_pid_and_waits_for_it(tmp_path):
     from macf.pd.cutover import end_client
     state, stubs = _client(exits_after=3.0)
-    assert end_client(4321, 30.0, **stubs) is True
+    assert end_client(4321, START, 30.0, **stubs) is True
     assert state["signalled"] == [4321]
     assert 3.0 <= state["t"] < 30.0, "it waited for the exit, and no longer"
 
@@ -600,7 +609,7 @@ def test_the_job_terminates_exactly_that_pid_and_waits_for_it(tmp_path):
 def test_a_client_that_wont_exit_aborts_the_move_before_install(tmp_path):
     from macf.pd.cutover import end_client, execute
     state, stubs = _client(exits_after=None)
-    assert end_client(4321, 30.0, **stubs) is False and state["t"] >= 30.0
+    assert end_client(4321, START, 30.0, **stubs) is False and state["t"] >= 30.0
     _stage(tmp_path)
     plan = build_plan(tmp_path, CARD, AGENT, _probes(**_hand_started()), runtime=RUNTIME)
     ran = []
@@ -618,7 +627,7 @@ def test_a_pid_no_longer_a_client_is_not_signalled():
     from macf.pd.cutover import end_client
     state, stubs = _client(exits_after=1.0)
     stubs["argv_of"] = lambda pid: ["/usr/sbin/sshd"]
-    assert end_client(4321, 30.0, **stubs) is True and state["signalled"] == []
+    assert end_client(4321, START, 30.0, **stubs) is True and state["signalled"] == []
 
 
 def test_pid_one_or_below_is_refused_and_never_signalled():
@@ -629,7 +638,7 @@ def test_pid_one_or_below_is_refused_and_never_signalled():
     for pid in (1, 0, -1):
         state, stubs = _client(exits_after=1.0)
         with pytest.raises(ValueError):
-            end_client(pid, 30.0, **stubs)
+            end_client(pid, START, 30.0, **stubs)
         assert state["signalled"] == [], pid
 
 
@@ -643,4 +652,54 @@ def test_a_client_in_another_directory_is_untouched(tmp_path, monkeypatch):
     monkeypatch.setenv("MACEFF_PROJECT_DIR", str(project))
     monkeypatch.setattr(agent_stack, "client_processes",
                         lambda: [(11, str(project)), (12, str(other))])
-    assert host_probes(tmp_path, CARD).hand_started(AGENT) == [(11, str(project.resolve()))]
+    monkeypatch.setattr("macf.notify.session.proc_start", lambda pid: f"start-{pid}")
+    assert host_probes(tmp_path, CARD).hand_started(AGENT) == [(11, str(project.resolve()), "start-11")]
+
+
+def test_a_pid_whose_start_time_changed_is_not_signalled():
+    """The number came back as another process: the plan's start no longer matches."""
+    from macf.pd.cutover import end_client
+    state, stubs = _client(exits_after=1.0)
+    assert end_client(4321, "Sat Oct 25 11:00:00 2026", 30.0, **stubs) is True
+    assert state["signalled"] == []
+
+
+# ============================================================================
+# No daemon installed: the move installs it
+# ============================================================================
+
+def test_a_seat_agent_init_staged_reaches_a_ready_plan_that_installs_the_daemon(tmp_path):
+    """agent init staged the declaration and skipped pd install: no live declaration and no
+    daemon. The plan is ready, installs the declaration, then pd install, undone by uninstall."""
+    _stage(tmp_path, live=False)
+    plan = build_plan(tmp_path, CARD, AGENT, _probes(**_hand_started(
+        daemon_answers=lambda: "no record", daemon_installed=lambda: False)), runtime=RUNTIME)
+    assert plan.ready, plan.checks
+    assert any(c.name == "daemon" and "installs it" in c.detail for c in plan.checks)
+    whats = [s.what for s in plan.steps]
+    assert [w.split(" (")[0] for w in whats] == [
+        "Stop the hand-started client", "Install the declaration with the session unit",
+        "Install the primal daemon under systemd", "Watch the session unit come up: starting, then running"]
+    live = declaration_path(tmp_path)
+    install, daemon = plan.steps[1], plan.steps[2]
+    assert [str(c) for c in install.commands] == [f"cp {staged_path(tmp_path)} {live}"], \
+        "nothing to keep, and no daemon to restart yet"
+    assert str(install.undo[0]).startswith(f"rm {live}")
+    assert daemon.commands[0].argv[-3:] == ["macf.cli", "pd", "install"]
+    assert daemon.commands[0].env == {"MACEFF_AGENT_HOME_DIR": str(tmp_path)}
+    assert daemon.undo[0].argv[-3:] == ["macf.cli", "pd", "uninstall"]
+    # a failure at the watch rolls back: uninstall first, then the declaration removed
+    from macf.pd.cutover import execute
+    run, ran = _runner()
+    assert execute(plan, run, lambda: False, lambda line: None) is False
+    tail = ran[-len(plan.rollback):]
+    assert tail[0].endswith("pd uninstall      # the daemon wasn't installed before the move")
+    assert any(c.startswith(f"rm {live}") for c in tail)
+
+
+def test_a_daemon_installed_but_silent_still_stops_the_plan(tmp_path):
+    _stage(tmp_path)
+    plan = build_plan(tmp_path, CARD, AGENT, _probes(daemon_answers=lambda: "no record",
+                                                     daemon_installed=lambda: True), runtime=RUNTIME)
+    assert not plan.ready
+    assert not any("pd install" in s.what for s in plan.steps)

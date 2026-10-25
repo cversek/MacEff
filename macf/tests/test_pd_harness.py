@@ -252,7 +252,7 @@ class _Client:
                 p.wait()
 
 
-def _core(home, client, marker, path=None):
+def _core(home, client, marker, path=None, **options):
     """A core whose session unit declares a PATH holding a stub ``claude``, as an installed
     daemon must: its own PATH is the service manager's (#636 review)."""
     import os
@@ -271,7 +271,7 @@ def _core(home, client, marker, path=None):
                 restart="always", liveness_interval_s=60, memory_limit_mb=64, environment={"PATH": path})
     return Core(Declaration(version=1, agent="Tester@abc123", units=[unit]), "Tester@abc123",
                 placeholders={"agent_home": str(home)}, hosted=client.hosted, client=client,
-                backoff_base_s=0.01, backoff_cap_s=0.05)
+                backoff_base_s=0.01, backoff_cap_s=0.05, **options)
 
 
 def _settle(core, until, timeout=5.0):
@@ -754,3 +754,103 @@ def test_a_failed_login_reaches_the_beat(tmp_path, monkeypatch):
     transcript.write_text("")
     daemon.run_monitor(transcript, 0.01, owner=0)
     assert said == ["Login expired", None], said
+
+
+# ---------------------------------------------------------------------------
+# A hand-started client: the core never starts a session unit beside one (persistent_layer 6.2)
+# ---------------------------------------------------------------------------
+
+def _unit_reasons(unit="session"):
+    from macf.agent_events_log import get_log_path
+    rows = [json.loads(line) for line in get_log_path().read_text().splitlines() if line.strip()]
+    return [r["data"].get("reason", "") for r in rows
+            if r.get("event") == "pd_unit_state" and r["data"].get("unit") == unit]
+
+
+class _Terminal:
+    """Claude Code clients started by hand: pid -> working directory, none below the daemon."""
+
+    def __init__(self, clients):
+        self.clients = dict(clients)
+        self.asked = []
+
+    def __call__(self, directory):
+        from pathlib import Path
+        self.asked.append(Path(directory))
+        return sorted(p for p, cwd in self.clients.items() if Path(cwd).resolve() == Path(directory).resolve())
+
+
+def test_the_core_holds_the_session_unit_beside_a_hand_started_client_and_starts_it_after(tmp_path, monkeypatch):
+    """No start, no restart and no daemon start puts a session unit beside a plain claude -c
+    in the project directory; once that client has gone, the next look starts it."""
+    monkeypatch.delenv("MACEFF_PROJECT_DIR", raising=False)
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    terminal = _Terminal({4242: home, 5151: tmp_path})       # one here, one elsewhere
+    now = [0.0]
+    core = _core(home, _Client(home), marker, clients=terminal, ancestors=lambda pid: {pid, 1},
+                 clock=lambda: now[0])
+    core.boot()
+    assert core.state("session") == "failed" and core.pid("session") is None and not marker.exists()
+    reason = _unit_reasons()[-1]
+    assert "pid 4242" in reason and "5151" not in reason and "harness cutover" in reason
+    assert terminal.asked[-1] == home
+    now[0] += 1.0
+    core.tick()
+    assert not marker.exists(), "still held while the client runs"
+    del terminal.clients[4242]                                 # the person quit it
+    now[0] += 5.0
+    assert _settle(core, marker.exists), "started on the next look once the client is gone"
+    core.shutdown("the test is over")
+
+
+def test_the_units_own_adopted_process_is_not_a_hand_started_client(tmp_path, monkeypatch):
+    """A client below a process this unit ran or adopted, still the one recorded, is the unit's
+    own: a restart is not held by it. One below a recorded process whose start no longer
+    matches is someone else's."""
+    monkeypatch.delenv("MACEFF_PROJECT_DIR", raising=False)
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    terminal = _Terminal({4242: home})
+    live = {(777, "s777")}
+    core = _core(home, _Client(home), marker, clients=terminal,
+                 ancestors=lambda pid: {pid, 777, 1} if pid == 4242 else {pid, 1},
+                 probe=lambda pid, start: (pid, start) in live)
+    core._units["session"].own.append((777, "s777"))         # adopted earlier, by pid and start
+    core.boot()
+    assert _settle(core, marker.exists), "its own adopted process doesn't hold it"
+    core.shutdown("the test is over")
+    marker.unlink()
+    live.clear()                                               # 777 is now another process
+    core = _core(home, _Client(home), marker, clients=terminal,
+                 ancestors=lambda pid: {pid, 777, 1} if pid == 4242 else {pid, 1},
+                 probe=lambda pid, start: (pid, start) in live)
+    core._units["session"].own.append((777, "s777"))
+    core.boot()
+    assert core.state("session") == "failed" and not marker.exists()
+
+
+def test_a_hosted_session_the_core_adopts_is_recorded_as_its_own(tmp_path):
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    client = _Client(home)
+    try:
+        hosted = client.host("3d52b89a-cccc")
+        core = _core(home, client, marker)
+        core.boot()
+        assert [pid for pid, _ in core._units["session"].own] == [hosted.pid]
+    finally:
+        client.close()
+
+
+def test_a_stop_ends_the_hold(tmp_path, monkeypatch):
+    monkeypatch.delenv("MACEFF_PROJECT_DIR", raising=False)
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    terminal = _Terminal({4242: home})
+    core = _core(home, _Client(home), marker, clients=terminal, ancestors=lambda pid: {pid, 1})
+    core.boot()
+    core.stop("session", _policy(), "test stop")
+    del terminal.clients[4242]
+    core.tick()
+    assert core.state("session") == "stopped" and not marker.exists()
