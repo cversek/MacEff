@@ -371,3 +371,15 @@ def test_a_working_connection_reconnects_from_the_first_delay(monkeypatch):
     assert _loop(ch, monkeypatch, delivered=1, rounds=3) == [1.0, 1.0, 1.0]
     assert _loop(ch, monkeypatch, delivered=0, held_s=60.0, rounds=3) == [1.0, 1.0, 1.0]
 
+
+
+def test_the_channel_names_its_daemon_by_the_homes_card_not_the_environment(tmp_path):
+    """The daemon names its socket by the home's card (pd.names.agent_card). A channel that
+    took MACEFF_AGENT_NAME instead ("seat2" against the card "Seat2") looked for a record
+    and a socket the daemon never made, and retried for good (MIS-0002-R02)."""
+    from macf.channels.maceff_channel import channel_card
+    (tmp_path / ".maceff").mkdir()
+    (tmp_path / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": "Seat2"}}))
+    (tmp_path / ".maceff_primary_agent.id").write_text("78e0aa00-0000-0000-0000-000000000000\n")
+    env = {"MACEFF_AGENT_HOME_DIR": str(tmp_path), "MACEFF_AGENT_NAME": "seat2"}
+    assert channel_card(env) == "Seat2@78e0aa"
