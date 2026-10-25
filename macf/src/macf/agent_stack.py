@@ -144,6 +144,16 @@ def unit_python() -> Path:
     return unversioned if unversioned.exists() else python
 
 
+def session_runtime_dir(platform: Optional[str] = None, environ=None) -> Optional[str]:
+    """The ``XDG_RUNTIME_DIR`` the default session unit declares: on Linux the caller's own,
+    the value ``harness cutover`` checks the staged declaration against (it reads the same
+    environment variable); on macOS none, since macOS sets none and the unit and its clients
+    then agree on the per-user fallback under /tmp."""
+    if not (platform or sys.platform).startswith("linux"):
+        return None
+    return (os.environ if environ is None else environ).get("XDG_RUNTIME_DIR") or None
+
+
 def default_declaration(ctx: Context) -> Dict:
     from macf.pd import default_declaration as dd
     python = unit_python()
@@ -162,7 +172,7 @@ def default_declaration(ctx: Context) -> Dict:
         project_dir=project_dir(ctx),
         path_dirs=[str(python.parent), str(ctx.login_home / ".local" / "bin"),
                    str(Path(claude).parent) if claude else "", "/usr/local/bin", "/usr/bin", "/bin"],
-        mail=dd.mail_configured(ctx.home), telegram=telegram)
+        mail=dd.mail_configured(ctx.home), telegram=telegram, runtime_dir=session_runtime_dir())
 
 
 def _validate(declaration: Dict) -> Optional[str]:

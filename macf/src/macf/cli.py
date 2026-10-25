@@ -2002,8 +2002,9 @@ def cmd_harness_cutover(args: argparse.Namespace) -> int:
                       staged=Path(args.staged) if getattr(args, "staged", None) else None)
     if getattr(args, "execute", False):
         from datetime import datetime
-        from .pd.cutover import came_up_by_status, execute, run_command
+        from .pd.cutover import came_up_by_status, execute, execute_as_launchd_job, inside_session, run_command
         log_path = Path(args.log) if getattr(args, "log", None) else None
+        job_plist = Path(args.job_plist) if getattr(args, "job_plist", None) else None
 
         def log(line: str) -> None:
             stamped = f"{datetime.now().isoformat(timespec='seconds')} {line}"
@@ -2011,15 +2012,47 @@ def cmd_harness_cutover(args: argparse.Namespace) -> int:
             if log_path is not None:
                 with log_path.open("a") as fh:
                     fh.write(stamped + "\n")
+        client = inside_session()
+        if client is not None:
+            # Step 2 ends the legacy session, and this process with it, part-way through the
+            # move and before any rollback: the move runs only from outside (--run).
+            log(f"refused: this runs inside a Claude Code session (pid {client}), which the move "
+                f"would end before it could roll back; use --run, which moves from outside it")
+            from .pd.cutover import Check
+            plan = dataclasses.replace(plan, ready=False, checks=plan.checks + [
+                Check("outside the session", False, f"runs inside Claude Code pid {client}")])
         came_up = came_up_by_status(home, card, plan.session_unit or "session")
-        return 0 if execute(plan, run_command, came_up, log) else 1
+        if job_plist is not None:
+            import os
+            from .platform.launchd import cutover_label
+            took = execute_as_launchd_job(plan, run_command, came_up, log, job_plist,
+                                          cutover_label(card), os.getuid())
+        else:
+            took = execute(plan, run_command, came_up, log)
+        return 0 if took else 1
     if getattr(args, "run", False):
         from datetime import datetime
-        from .pd.cutover import COME_UP_S, arm_argv, staged_path
+        from .pd.cutover import COME_UP_S, arm_argv, arm_launchd, staged_path
         if not plan.ready:
             print(format_plan(plan))
             print("\n⚠️ MACF: harness cutover --run: not ready, so nothing was started", file=sys.stderr)
             return 1
+        if plan.init == "launchd":
+            import os
+            staged = Path(args.staged) if getattr(args, "staged", None) else staged_path(home)
+            try:
+                plist, log_path = arm_launchd(agent, card, home, staged, sys.executable, os.getuid(),
+                                              f"{datetime.now():%Y%m%d-%H%M%S}")
+            except (RuntimeError, OSError, ValueError) as e:
+                print(f"⚠️ MACF: harness cutover --run: the launchd job didn't start: {e}", file=sys.stderr)
+                return 1
+            print(format_plan(plan))
+            print(f"\nStarted, outside this session, as the one-shot launchd job {plist.stem}.\n"
+                  f"Follow it from any terminal:\n"
+                  f"     tail -f {log_path}\n"
+                  f"It rolls back by itself on any failure, or if the session unit isn't running "
+                  f"within {COME_UP_S:g} s, and removes its own job when it ends.")
+            return 0
         log_path = home / ".maceff" / "logs" / f"cutover-{datetime.now():%Y%m%d-%H%M%S}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         staged = Path(args.staged) if getattr(args, "staged", None) else staged_path(home)
@@ -2721,6 +2754,33 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
         return 1
 
 
+def _preamble_confirm(args: argparse.Namespace):
+    """The preamble's y/N: True to write, False when the person declined, None when nobody
+    can answer. ``--yes`` answers yes. A stdin that isn't a terminal, or one that ends before
+    an answer, is nobody: an unattended run (a script, a pipe, an agent's own tool call) gets
+    the step skipped and the flag named, not an EOFError reported as a refusal."""
+    if getattr(args, 'yes', False):
+        return True
+    try:
+        interactive = sys.stdin is not None and sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        interactive = False
+    if not interactive:
+        return None
+    try:
+        return input("\nProceed? [y/N]: ").strip().lower() == 'y'
+    except EOFError:
+        print()
+        return None
+
+
+def _preamble_not_interactive(claude_md_path: Path):
+    from .agent_stack import SKIPPED, Result
+    return Result("preamble", SKIPPED, f"not interactive: nobody to answer the y/N prompt, so "
+                                       f"{claude_md_path} is left as it is; rerun with --yes to "
+                                       f"accept the preamble unattended")
+
+
 def _agent_init_preamble(args: argparse.Namespace, pa_home: Path, config):
     """The preamble step: CLAUDE.md, the personal policy manifest and the agent's id."""
     from .agent_stack import ALREADY, DONE, REFUSED, Result
@@ -2827,10 +2887,11 @@ def _agent_init_preamble(args: argparse.Namespace, pa_home: Path, config):
                 # Confirmation prompt for modifying existing file
                 print(f"\n{action_desc} CLAUDE.md:")
                 print(f"  📄 {claude_md_path}")
-                if not getattr(args, 'yes', False):
-                    response = input("\nProceed? [y/N]: ").strip().lower()
-                    if response != 'y':
-                        return Result("preamble", "aborted")
+                answer = _preamble_confirm(args)
+                if answer is None:
+                    return _preamble_not_interactive(claude_md_path)
+                if not answer:
+                    return Result("preamble", "aborted")
                 claude_md_path.write_text(new_content)
             # Say which of the two things happened. "appended" asserted the
             # DANGEROUS outcome -- an operator reading it has been told the thing
@@ -2863,10 +2924,11 @@ def _agent_init_preamble(args: argparse.Namespace, pa_home: Path, config):
             # Create new CLAUDE.md with just the preamble (no boundary needed)
             print(f"\nCreate new CLAUDE.md with PA Preamble:")
             print(f"  📄 {claude_md_path}")
-            if not getattr(args, 'yes', False):
-                response = input("\nProceed? [y/N]: ").strip().lower()
-                if response != 'y':
-                    return Result("preamble", "aborted")
+            answer = _preamble_confirm(args)
+            if answer is None:
+                return _preamble_not_interactive(claude_md_path)
+            if not answer:
+                return Result("preamble", "aborted")
             claude_md_path.write_text(preamble_content)
             status = DONE
             print(f"✅ CLAUDE.md created successfully")
@@ -2888,11 +2950,15 @@ def _agent_init_preamble(args: argparse.Namespace, pa_home: Path, config):
                 json.dump(manifest_data, f, indent=2)
             print(f"✅ Created personal policy manifest at {personal_manifest}")
 
-        _ensure_agent_uuid(
-            pa_home,
-            assume_yes=getattr(args, 'yes', False),
-            mint_fresh=getattr(args, 'mint_fresh_id', False),
-        )
+        try:
+            _ensure_agent_uuid(
+                pa_home,
+                assume_yes=getattr(args, 'yes', False),
+                mint_fresh=getattr(args, 'mint_fresh_id', False),
+            )
+        except EOFError:
+            # Its prompts, like the preamble's, have nobody to answer them unattended.
+            print("\n⚠️  Agent UUID not written: not interactive; rerun with --yes to accept it unattended")
 
         print(f"\n📍 PA Home: {pa_home}")
         print(f"📍 Personal Policies: {personal_policies_dir}")
@@ -12307,7 +12373,9 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_init_parser = agent_sub.add_parser(
         "init", help="initialize the agent: its PA preamble and its persistent-layer stack (task store, "
                      "primal daemon declaration, harness, MacEff channel, permissions, pd install)")
-    agent_init_parser.add_argument("-y", "--yes", action="store_true", help="skip confirmation prompt")
+    agent_init_parser.add_argument("-y", "--yes", action="store_true",
+                                   help="accept the preamble unattended: skip its confirmation prompt "
+                                        "(without it, a run with no terminal skips the preamble step)")
     agent_init_parser.add_argument(
         "--mint-fresh-id", action="store_true",
         help="mint a NEW agent UUID even if one already resolves from another "
@@ -12489,11 +12557,14 @@ def _build_parser() -> argparse.ArgumentParser:
                                                   "(default: <declaration>.cutover)")
     harness_cutover.add_argument("--json", action="store_true", help="the plan as JSON")
     harness_cutover.add_argument("--run", action="store_true",
-                                 help="carry the plan out: start it as a transient unit outside this "
-                                      "session, which rolls back on any failure, and print where it logs")
+                                 help="carry the plan out: start it outside this session (a transient "
+                                      "systemd unit, or a one-shot launchd job on macOS), which rolls "
+                                      "back on any failure, and print where it logs")
     harness_cutover.add_argument("--execute", action="store_true",
-                                 help="what the transient unit runs: carry the plan out here and now")
+                                 help="what the transient unit or launchd job runs: carry the plan out "
+                                      "here and now (refused inside a Claude Code session)")
     harness_cutover.add_argument("--log", help="where --execute writes its progress")
+    harness_cutover.add_argument("--job-plist", help=argparse.SUPPRESS)   # the launchd job's own plist, removed when it ends
     harness_cutover.set_defaults(func=cmd_harness_cutover)
 
     harness_unit = harness_sub.add_parser(

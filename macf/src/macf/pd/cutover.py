@@ -16,7 +16,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from pydantic import ValidationError
 
@@ -47,6 +47,8 @@ class Command:
     note: str = ""
     env: Dict[str, str] = field(default_factory=dict)
     may_fail: bool = False
+    #: How long the command may run, where it may take longer than the usual 120 s.
+    timeout: Optional[float] = None
 
     def __str__(self) -> str:
         prefix = "".join(f"{k}={shlex.quote(v)} " for k, v in self.env.items())
@@ -77,6 +79,8 @@ class Plan:
         return [c for step in reversed(self.steps) for c in step.undo]
     #: The staged declaration's session unit, whose state says whether the move took.
     session_unit: Optional[str] = None
+    #: The init system the steps are written for: "systemd" or "launchd".
+    init: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +93,11 @@ class Probes:
     - ``default_session``: whether the agent's session is on the default tmux server.
     - ``unit_session``: whether it is already on the session unit's own server.
     - ``daemon_answers``: None when the agent's daemon answers, else why not.
+    - ``launchd``: whether per-user LaunchAgents can be managed here (macOS). Read only
+      where ``systemd`` is False; on launchd ``unit_active`` and ``active_units`` speak of
+      job labels in ``gui/<uid>``, with "active" meaning launchd reports the job running.
+    - ``harness_label``: on launchd, the label of the legacy harness LaunchAgent installed
+      for the agent, or None. A systemd host names its harness unit by convention.
     """
     systemd: bool
     unit_active: Callable[[str], str]
@@ -96,6 +105,11 @@ class Probes:
     default_session: Callable[[str], bool]
     unit_session: Callable[[str], bool]
     daemon_answers: Callable[[], Optional[str]]
+    launchd: bool = False
+    harness_label: Callable[[str], Optional[str]] = lambda agent: None
+    #: (pid, working directory) of each live Claude Code client in the agent's project
+    #: directory, however it was started (agent_stack.clients_here): a hand-started session.
+    hand_started: Callable[[str], List[Tuple[int, str]]] = lambda agent: []
 
 
 def staged_path(home: Path) -> Path:
@@ -103,7 +117,7 @@ def staged_path(home: Path) -> Path:
     return path.with_name(path.name + STAGED_SUFFIX)
 
 
-def _staged_check(path: Path, card: str, runtime: Optional[str]) -> Check:
+def _staged_check(path: Path, card: str, runtime: Optional[str], init: str = "systemd") -> Check:
     try:
         declaration = Declaration.model_validate_json(path.read_text())
     except FileNotFoundError:
@@ -125,7 +139,14 @@ def _staged_check(path: Path, card: str, runtime: Optional[str]) -> Check:
     # A unit gets only its declared environment, so without this its tmux server sits under
     # /tmp, where attach, harness status and the rollback look for it in vain.
     declared = session.environment.get("XDG_RUNTIME_DIR")
-    if not declared or (runtime and declared != runtime):
+    # macOS sets no XDG_RUNTIME_DIR, so there the unit and every client fall back to the same
+    # per-user directory under /tmp (names.runtime_dir): agreement is what counts, both unset too.
+    if init == "launchd" and not runtime:
+        if declared:
+            return Check("staged declaration", False,
+                         f"the session unit's environment declares XDG_RUNTIME_DIR={declared}, which "
+                         "this host's clients don't set, so its tmux server lands where nothing looks")
+    elif not declared or (runtime and declared != runtime):
         return Check("staged declaration", False,
                      f"the session unit's environment must declare XDG_RUNTIME_DIR={runtime or '<yours>'} "
                      f"(it declares {declared or 'none'}), or its tmux server lands where nothing looks")
@@ -141,14 +162,69 @@ def default_socket(uid: Optional[int] = None) -> Path:
     return Path("/tmp") / f"tmux-{os.getuid() if uid is None else uid}" / "default"
 
 
+@dataclass(frozen=True)
+class _Init:
+    """The commands that differ between init systems; every step is built from these, so the
+    steps, their order and their undo are the same on systemd and launchd."""
+    name: str
+    describe: str
+    harness: str
+    daemon: str
+    stop_clock: Callable[[str], List[Command]]
+    start_clock: Callable[[str], List[Command]]
+    stop_harness: Callable[[str], List[Command]]
+    start_harness: Callable[[str], List[Command]]
+    restart_daemon: Callable[[], Command]
+
+
+def _systemd_init(agent: str, card: str, harness_unit: Optional[str]) -> _Init:
+    def systemctl(*args: str) -> Command:
+        return Command(["systemctl", "--user", *args])
+    daemon = systemd_unit(card)
+    return _Init("systemd", "systemd: the user's service manager (systemctl --user)",
+                 harness_unit or f"cc-harness-{agent}.service", daemon,
+                 stop_clock=lambda u: [systemctl("disable", "--now", u)],
+                 start_clock=lambda u: [systemctl("enable", "--now", u)],
+                 stop_harness=lambda u: [systemctl("stop", u), systemctl("disable", u)],
+                 start_harness=lambda u: [systemctl("enable", "--now", u)],
+                 restart_daemon=lambda: systemctl("restart", daemon))
+
+
+def _launchd_init(agent: str, card: str, harness_label: Optional[str], uid: int,
+                  launch_agents: Path) -> _Init:
+    """launchd's counterparts: a job is stopped with ``bootout`` and kept from starting at
+    the next login with ``disable``, the pair systemd's ``disable --now`` is; it is started
+    again with ``enable``, then ``bootstrap`` of its plist, since launchd refuses to load a
+    disabled job. The daemon restarts with ``kickstart -k`` (persistent_layer 3.1)."""
+    from macf.platform import launchd
+
+    def ctl(verb: str, label: str) -> Command:
+        plist = str(launch_agents / f"{label}.plist") if verb == "bootstrap" else None
+        return Command(launchd.launchctl_argv(verb, label, uid, plist_path=plist))
+
+    def stop(label: str) -> List[Command]:
+        return [ctl("bootout", label), ctl("disable", label)]
+
+    def start(label: str) -> List[Command]:
+        return [ctl("enable", label), ctl("bootstrap", label)]
+    daemon = launchd.pd_label(card)
+    return _Init("launchd", f"launchd: per-user LaunchAgents in gui/{uid} (launchctl)",
+                 harness_label or f"<no harness LaunchAgent for {agent}>", daemon,
+                 stop_clock=stop, start_clock=start, stop_harness=stop, start_harness=start,
+                 restart_daemon=lambda: ctl("kickstart", daemon))
+
+
 def build_plan(home: Path, card: str, agent: str, probes: Probes,
                staged: Optional[Path] = None, harness_unit: Optional[str] = None,
-               runtime: Optional[str] = None) -> Plan:
+               runtime: Optional[str] = None, uid: Optional[int] = None,
+               launch_agents: Optional[Path] = None) -> Plan:
     """What moving *agent*'s session onto its daemon would do, and whether it can be done now.
 
     *agent* is the session identifier (``Name_uuid6``), *card* the calling card, *runtime*
     the caller's ``XDG_RUNTIME_DIR`` (the process environment's by default), which the
-    session unit must declare so its tmux server is where every client looks.
+    session unit must declare so its tmux server is where every client looks. On launchd,
+    *uid* names the ``gui/<uid>`` domain and *launch_agents* the directory the plists of the
+    jobs a step stops are in, to load them again on undo (``~/Library/LaunchAgents``).
     """
     import os
     from macf.pd.names import PD_IDENTIFIER
@@ -156,8 +232,6 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
     # Where the unit's tmux server will be, from the runtime directory it must declare.
     unit_base = Path(runtime) / PD_IDENTIFIER if runtime else None
     staged = staged or staged_path(home)
-    harness_unit = harness_unit or f"cc-harness-{agent}.service"
-    daemon_unit = systemd_unit(card)
     live = declaration_path(home)
     saved = live.with_name(live.name + SAVED_SUFFIX)
     checks: List[Check] = []
@@ -166,22 +240,41 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
         checks.append(Check("session", True,
                             "already runs as the primal daemon's session unit: nothing to move"))
         return Plan(agent, card, False, checks)
-    if not probes.systemd:
+    if probes.systemd:
+        init = _systemd_init(agent, card, harness_unit)
+        legacy = probes.unit_active(init.harness) == "active"
+    elif probes.launchd:
+        label = probes.harness_label(agent)
+        init = _launchd_init(agent, card, label, os.getuid() if uid is None else uid,
+                             launch_agents or Path.home() / "Library" / "LaunchAgents")
+        legacy = label is not None and probes.unit_active(label) == "active"
+    else:
         checks.append(Check("init system", False,
-                            "no systemctl here: this plan covers systemd hosts; a macOS host's move "
-                            "goes through launchd (persistent_layer 6.3)"))
+                            "neither systemctl nor launchctl here: this plan covers systemd and "
+                            "launchd hosts (persistent_layer 6.3)"))
         return Plan(agent, card, False, checks)
+    checks.append(Check("init system", True, init.describe))
 
-    checks.append(_staged_check(staged, card, runtime))
+    checks.append(_staged_check(staged, card, runtime, init.name))
     why = probes.daemon_answers()
     checks.append(Check("daemon", why is None, "answers on its socket" if why is None else why))
-    legacy = probes.unit_active(harness_unit) == "active"
-    checks.append(Check("legacy harness", True, f"{harness_unit} is active" if legacy else
-                        f"{harness_unit} isn't active, so there is no legacy session to stop"))
+    if init.name == "launchd" and probes.harness_label(agent) is None:
+        checks.append(Check("legacy harness", True, f"no harness LaunchAgent for {agent} is installed, "
+                            "so there is no legacy harness to stop"))
+    else:
+        checks.append(Check("legacy harness", True, f"{init.harness} is active" if legacy else
+                            f"{init.harness} isn't active, so there is no legacy session to stop"))
     held = probes.default_session(agent)
     checks.append(Check("legacy session", True, f"={agent} is on the default tmux server" if held
                         else f"no ={agent} on the default tmux server"))
-    clocks = sorted(u for u in probes.active_units() if "mail-clock" in u and u != daemon_unit)
+    # A client started by hand, in a terminal, is held by no unit and no tmux server: it is
+    # looked for only where neither holds the session, and is the session the move ends.
+    clients = [] if (legacy or held) else sorted(probes.hand_started(agent))
+    if clients:
+        checks.append(Check("hand-started client", True,
+                            f"Claude Code pid {', '.join(str(p) for p, _ in clients)} runs in "
+                            f"{clients[0][1]}, held by no unit or tmux server"))
+    clocks = sorted(u for u in probes.active_units() if "mail-clock" in u and u != init.daemon)
     checks.append(Check("duplicate clocks", True, ", ".join(clocks) + " running beside the daemon's"
                         if clocks else "none running beside the daemon's"))
     # A saved declaration from an earlier attempt is not this move's to restore or overwrite:
@@ -190,16 +283,13 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
                         f"{saved} is left from an earlier attempt: compare it with {live}, keep what "
                         "you need, and remove it" if saved.exists() else f"no {saved.name} from an earlier attempt"))
 
-    def systemctl(*args: str) -> Command:
-        return Command(["systemctl", "--user", *args])
-
     steps: List[Step] = []
     if clocks:
         steps.append(Step("Stop the clocks that would type into the pane beside the daemon's",
-                          [systemctl("disable", "--now", u) for u in clocks],
-                          undo=[systemctl("enable", "--now", u) for u in clocks]))
+                          [c for u in clocks for c in init.stop_clock(u)],
+                          undo=[c for u in clocks for c in init.start_clock(u)]))
     if legacy or held:
-        stop = [systemctl("stop", harness_unit), systemctl("disable", harness_unit)] if legacy else []
+        stop = init.stop_harness(init.harness) if legacy else []
         stop.append(Command(["tmux", "-S", str(default_socket()), "kill-session", "-t", f"={agent}"],
                             note="the pane a stop left behind, if any", may_fail=True))
         # A monitor the old session's hooks started is not a unit, so stopping the session
@@ -208,11 +298,24 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
         stop.append(Command([sys.executable, "-m", "macf.pd.cutover", "end-stale-monitors", str(home)],
                             note="transcript monitors of this agent whose session has ended"))
         steps.append(Step("Stop the legacy session (a session running here ends at this step)", stop,
-                          undo=[systemctl("enable", "--now", harness_unit)] if legacy else []))
+                          undo=init.start_harness(init.harness) if legacy else []))
+    if clients:
+        grace = _session_grace(staged)
+        pids = ", ".join(str(p) for p, _ in clients)
+        end = [Command([sys.executable, "-m", "macf.pd.cutover", "end-client", str(pid), f"{grace:g}"],
+                       note=f"SIGTERM to pid {pid} alone, then up to {grace:g} s for it to exit",
+                       timeout=grace + 30) for pid, _ in clients]
+        end.append(Command([sys.executable, "-m", "macf.pd.cutover", "end-stale-monitors", str(home)],
+                           note="transcript monitors of this agent whose session has ended"))
+        where = clients[0][1]
+        steps.append(Step(f"Stop the hand-started client (pid {pids}; a session running here ends at "
+                          "this step)", end,
+                          undo=[Command(["true"], note=f"the hand-started session ended and isn't "
+                                        f"restarted; resume it with claude -c in {where}")]))
     steps.append(Step("Install the declaration with the session unit, keeping the old one",
                       [Command(["cp", str(live), str(saved)]), Command(["cp", str(staged), str(live)]),
-                       systemctl("restart", daemon_unit)],
-                      undo=[Command(["cp", str(saved), str(live)]), systemctl("restart", daemon_unit),
+                       init.restart_daemon()],
+                      undo=[Command(["cp", str(saved), str(live)]), init.restart_daemon(),
                             Command(["tmux", "-S", str(tmux_socket(agent, unit_base)), "kill-server"],
                                     note="the unit's session, no longer declared, before the legacy one starts",
                                     may_fail=True),
@@ -221,24 +324,111 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
                       [Command(["macf_tools", "pd", "status"]), Command(["macf_tools", "harness", "status"])]))
     ready = all(c.ok for c in checks)
     session_unit = None
-    if checks[0].ok:      # the staged declaration validated, so it reads cleanly here
+    if next(c for c in checks if c.name == "staged declaration").ok:   # it validated, so it reads cleanly
         declaration = Declaration.model_validate_json(staged.read_text())
         session_unit = next(u.name for u in declaration.units if u.kind == "session")
-    return Plan(agent, card, ready, checks, steps, session_unit=session_unit)
+    return Plan(agent, card, ready, checks, steps, session_unit=session_unit, init=init.name)
 
 
-def host_probes(home: Path, card: str) -> Probes:
-    """The real host: systemctl, tmux and the agent's daemon."""
+def _session_grace(staged: Path) -> float:
+    """How long a hand-started client gets to exit: the staged session unit's stop grace, the
+    time the daemon itself gives a session, else 30 s."""
+    try:
+        declaration = Declaration.model_validate_json(staged.read_text())
+        session = next(u for u in declaration.units if u.kind == "session")
+        return float(session.stop_grace_s)
+    except (OSError, ValidationError, StopIteration):
+        return HAND_STARTED_GRACE_S
+
+
+#: A hand-started client's time to exit when no session unit's stop grace is declared.
+HAND_STARTED_GRACE_S = 30.0
+
+
+def end_client(pid: int, grace_s: float, alive=None, argv_of=None, signal_pid=None,
+               sleep=None, clock=None) -> bool:
+    """End one hand-started client: SIGTERM to *pid* alone, never a group and never SIGKILL,
+    then wait up to *grace_s* for it to exit. Returns whether it is gone. A pid that is no
+    longer a Claude Code client has already ended, and its number is not signalled."""
+    import os
+    import signal as sig
+    import time
+    from macf.agent_stack import _is_claude
+    if pid <= 1:
+        raise ValueError(f"refusing to signal pid {pid}")
+    sleep, clock = sleep or time.sleep, clock or time.monotonic
+    argv_of = argv_of or _process_argv
+
+    def _alive(p: int) -> bool:
+        try:
+            os.kill(p, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+    alive = alive or _alive
+    signal_pid = signal_pid or (lambda p: os.kill(p, sig.SIGTERM))
+    if not alive(pid) or not _is_claude(argv_of(pid)):
+        return True
+    try:
+        signal_pid(pid)
+    except ProcessLookupError:
+        return True
+    deadline = clock() + grace_s
+    while alive(pid):
+        if clock() >= deadline:
+            return False
+        sleep(0.2)
+    return True
+
+
+def host_probes(home: Path, card: str, platform: Optional[str] = None) -> Probes:
+    """The real host: systemctl or launchctl, tmux and the agent's daemon."""
+    import os
     from macf.pd.client import status
     from macf.pd.session_unit import client_environment
 
     def run(*argv, env=None) -> subprocess.CompletedProcess:
         return subprocess.run(list(argv), capture_output=True, text=True, env=env)
 
-    def active_units() -> List[str]:
-        out = run("systemctl", "--user", "list-units", "--type=service", "--state=active",
-                  "--no-legend", "--plain").stdout
-        return [line.split()[0] for line in out.splitlines() if line.strip()]
+    systemd = shutil.which("systemctl") is not None
+    launchd = (platform or sys.platform) == "darwin" and shutil.which("launchctl") is not None
+    if launchd and not systemd:
+        from macf.platform import launchd as ld
+        uid = os.getuid()
+
+        def job_active(label: str) -> str:
+            out = run("launchctl", "print", f"gui/{uid}/{label}")
+            return "active" if ld.parse_print(out.stdout + out.stderr).running else "inactive"
+
+        def running_jobs() -> List[str]:
+            # launchctl list: "PID<tab>Status<tab>Label", PID "-" for a job loaded but not running.
+            out = run("launchctl", "list").stdout
+            return [f[2] for f in (ln.split("\t") for ln in out.splitlines()[1:])
+                    if len(f) == 3 and f[0].strip().isdigit()]
+
+        def harness_label(agent: str) -> Optional[str]:
+            # As agent init finds it (agent_stack._launchd_harness_live): a plist whose name
+            # names the harness and this agent.
+            agents = Path.home() / "Library" / "LaunchAgents"
+            try:
+                found = sorted(p.name[:-len(".plist")] for p in agents.glob("*.plist")
+                               if "harness" in p.name and agent in p.name)
+            except OSError:
+                return None  # noqa: MACEFF003 - no readable LaunchAgents: no harness job to stop
+            return found[0] if found else None
+        unit_active, active_units = job_active, running_jobs
+    else:
+        harness_label = lambda agent: None  # noqa: E731
+
+        def unit_active(unit: str) -> str:
+            return run("systemctl", "--user", "is-active", unit).stdout.strip()
+
+        def active_units() -> List[str]:
+            out = run("systemctl", "--user", "list-units", "--type=service", "--state=active",
+                      "--no-legend", "--plain").stdout
+            return [line.split()[0] for line in out.splitlines() if line.strip()]
 
     def unit_session(agent: str) -> bool:
         env = client_environment(agent)
@@ -248,14 +438,25 @@ def host_probes(home: Path, card: str) -> Probes:
         report = status(home, card)
         return None if report.source == "daemon" else f"doesn't answer ({report.source}): {report.why}"
 
+    def hand_started(agent: str) -> List[Tuple[int, str]]:
+        from macf import agent_stack
+        import argparse
+        ctx = agent_stack.Context(home=Path(home), login_home=Path.home(), in_container=False,
+                                  args=argparse.Namespace(project_dir=None), card=card)
+        where = str(agent_stack.project_dir(ctx).resolve())
+        return [(pid, where) for pid in agent_stack.clients_here(ctx)]
+
     return Probes(
-        systemd=shutil.which("systemctl") is not None,
-        unit_active=lambda unit: run("systemctl", "--user", "is-active", unit).stdout.strip(),
+        systemd=systemd,
+        unit_active=unit_active,
         active_units=active_units,
         default_session=lambda agent: run("tmux", "-S", str(default_socket()), "has-session",
                                           "-t", f"={agent}").returncode == 0,
         unit_session=unit_session,
         daemon_answers=daemon_answers,
+        launchd=launchd,
+        harness_label=harness_label,
+        hand_started=hand_started,
     )
 
 
@@ -277,7 +478,7 @@ def run_command(command: Command) -> int:
     env = {**os.environ, **command.env} if command.env else None
     try:
         return subprocess.run(command.argv, env=env, stdin=subprocess.DEVNULL,
-                              capture_output=True, timeout=120).returncode
+                              capture_output=True, timeout=command.timeout or 120).returncode
     except (OSError, subprocess.TimeoutExpired) as e:
         print(f"⚠️ MACF: cutover: {command.argv[0]} did not run: {e}", file=sys.stderr)
         return 127
@@ -358,6 +559,110 @@ def arm_argv(agent: str, home: Path, staged: Path, log_path: Path, python: str,
             "--staged", str(staged), "--execute", "--log", str(log_path)]
 
 
+def job_paths(home: Path, card: str, stamp: str) -> "tuple[Path, Path]":
+    """Where the launchd job's plist and log go: beside the declaration. Not in
+    ~/Library/LaunchAgents, so a job a reboot interrupted is never started again at login."""
+    from macf.platform.launchd import cutover_label
+    here = declaration_path(home).parent
+    return here / f"{cutover_label(card)}.plist", here / f"cutover-{stamp}.log"
+
+
+def arm_launchd(agent: str, card: str, home: Path, staged: Path, python: str, uid: int,
+                stamp: str, environ: Optional[Dict[str, str]] = None, run=None) -> "tuple[Path, Path]":
+    """The launchd counterpart of ``arm_argv``: write a one-shot LaunchAgent that runs the
+    move and bootstrap it into ``gui/<uid>``, where launchd starts it at once, outside the
+    session it stops. Returns (plist, log). Refuses while a job of this agent's move is
+    loaded, as ``systemd-run`` refuses a unit name in use, so two moves can't overlap; a
+    bootstrap that fails leaves no plist behind. Raises ``RuntimeError`` saying why."""
+    import os
+    from macf.platform import launchd
+    env = os.environ if environ is None else environ
+    run = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+    label = launchd.cutover_label(card)
+    plist, log_path = job_paths(home, card, stamp)
+    loaded = run(launchd.launchctl_argv("print", label, uid))
+    if launchd.parse_print((loaded.stdout or "") + (loaded.stderr or "")).loaded and loaded.returncode == 0:
+        raise RuntimeError(f"{label} is already loaded: a move is under way, or one ended without "
+                           f"removing its job; see launchctl print gui/{uid}/{label}")
+    argv = [python, "-m", "macf.cli", "harness", "cutover", "--agent", agent, "--home", str(home),
+            "--staged", str(staged), "--execute", "--job-plist", str(plist)]
+    extra = {"PYTHONPATH": env["PYTHONPATH"]} if env.get("PYTHONPATH") else None
+    content = launchd.render_cutover_job(card, argv, str(log_path), extra)
+    steps = [launchd.Step("write", path=str(plist), content=content),
+             launchd.Step("launchctl", argv=launchd.launchctl_argv("bootstrap", label, uid, str(plist)))]
+    try:
+        launchd.apply_plan(steps, run=run)
+    except FileExistsError as e:
+        raise RuntimeError(f"{plist} is left from an earlier move: {e}") from e
+    except RuntimeError:
+        plist.unlink(missing_ok=True)       # nothing started, so nothing of it is left
+        raise
+    return plist, log_path
+
+
+def remove_own_job(plist: Path, label: str, uid: int, log: Log, spawn=None) -> None:
+    """The launchd job's last act: delete its plist, then boot itself out. The boot-out ends
+    this process, so it runs detached, in a session of its own that outlives the job's
+    process group, and is the very last thing done."""
+    from macf.platform import launchd
+    spawn = spawn or (lambda argv: subprocess.Popen(argv, stdin=subprocess.DEVNULL,
+                                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                                     start_new_session=True))
+    try:
+        plist.unlink(missing_ok=True)
+        log(f"removed its own job: {plist}")
+    except OSError as e:
+        log(f"couldn't remove its own plist {plist}: {e}; remove it by hand")
+    argv = launchd.launchctl_argv("bootout", label, uid)
+    log(f"booting out its own job: {shlex.join(argv)}")
+    try:
+        spawn(argv)
+    except OSError as e:
+        log(f"couldn't boot out its own job: {e}; run {shlex.join(argv)}")
+
+
+def execute_as_launchd_job(plan: Plan, run: Runner, came_up: Callable[[], bool], log: Log,
+                           plist: Path, label: str, uid: int, spawn=None) -> bool:
+    """``execute``, as the one-shot launchd job runs it: whatever the move's outcome, a step
+    that raised included, the job removes its own plist and boots itself out after it."""
+    try:
+        return execute(plan, run, came_up, log)
+    finally:
+        remove_own_job(plist, label, uid, log, spawn)
+
+
+def inside_session(pid: Optional[int] = None, ancestors=None, argv_of=None) -> Optional[int]:
+    """The pid of a Claude Code client this process runs under, or None.
+
+    ``--execute`` carries out steps that end the legacy session; run from inside that
+    session, it would be killed part-way, and nothing would be left to roll the move back.
+    ``--run`` hands it to the init system (a transient systemd unit, a launchd job), whose
+    processes descend from the service manager, never from a client."""
+    import os
+    from macf.agent_stack import _is_claude
+    if ancestors is None:
+        from macf.supervisor import ancestor_pids as ancestors
+    argv_of = argv_of or _process_argv
+    for p in sorted(ancestors(os.getpid() if pid is None else pid)):
+        if _is_claude(argv_of(p)):
+            return p
+    return None
+
+
+def _process_argv(pid: int) -> List[str]:
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+        return [a.decode(errors="replace") for a in raw.split(b"\0") if a]
+    except OSError:
+        pass  # noqa: MACEFF003 - no procfs (macOS): ask ps
+    try:
+        out = subprocess.run(["ps", "-ww", "-o", "args=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return out.split()
+
+
 def format_plan(plan: Plan) -> str:
     lines = [f"Moving {plan.card}'s session onto its primal daemon: the plan. Nothing has been changed.", ""]
     for c in plan.checks:
@@ -423,10 +728,17 @@ def end_stale_monitors(home: Path, find=None, alive=None, signal_pid=None,
 
 if __name__ == "__main__":
     # python -m macf.pd.cutover end-stale-monitors <agent home>: a step of the move.
+    if len(sys.argv) == 4 and sys.argv[1] == "end-client":
+        gone = end_client(int(sys.argv[2]), float(sys.argv[3]))
+        if not gone:
+            print(f"⚠️ MACF: cutover: the hand-started client {sys.argv[2]} didn't exit within "
+                  f"{sys.argv[3]} s", file=sys.stderr)
+        sys.exit(0 if gone else 1)
     if len(sys.argv) == 3 and sys.argv[1] == "end-stale-monitors":
         left = end_stale_monitors(Path(sys.argv[2]))
         if left:
             print(f"⚠️ MACF: cutover: transcript monitor(s) {left} didn't end", file=sys.stderr)
         sys.exit(1 if left else 0)
-    print("usage: python -m macf.pd.cutover end-stale-monitors <agent home>", file=sys.stderr)
+    print("usage: python -m macf.pd.cutover end-stale-monitors <agent home>\n"
+          "       python -m macf.pd.cutover end-client <pid> <grace seconds>", file=sys.stderr)
     sys.exit(2)
