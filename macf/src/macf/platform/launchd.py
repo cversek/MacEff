@@ -25,6 +25,13 @@ _VERBS = ("bootstrap", "bootout", "kickstart", "print", "enable", "disable")
 #: macOS 15 as "Boot-out failed: 3: No such process". Removal's goal is met, so it goes on.
 BOOTOUT_NOT_LOADED = 3
 
+#: How long a reload waits for a booted-out job to leave launchd before bootstrapping it.
+#: ``bootout`` returns while the job is still stopping, and a bootstrap in that window fails
+#: with "Bootstrap failed: 5" (measured on macOS 15 with a job that takes 3 s to exit).
+RELOAD_WAIT_S = 30.0
+#: How often that wait looks.
+RELOAD_POLL_S = 0.25
+
 
 def pd_label(card: str) -> str:
     """The launchd label for one agent's primal daemon, as the step-1 interface names it
@@ -142,10 +149,14 @@ class Step:
     content: Optional[bytes] = None
     argv: Optional[List[str]] = None
     not_loaded_ok: bool = False
+    #: For an ``unloaded`` step: how long to wait for the label to leave launchd.
+    wait_s: float = 0.0
 
     def describe(self) -> str:
         if self.what == "launchctl":
             return " ".join(self.argv or [])
+        if self.what == "unloaded":
+            return f"wait up to {self.wait_s:g} s for {(self.argv or [''])[-1]} to leave launchd"
         return f"{self.what} {self.path}"
 
 
@@ -177,6 +188,8 @@ def install_plan(card: str, program_argv: List[str], home: str, log_dir: str, ui
     steps = [Step("write", path=path, content=data)]
     if reload:
         steps.append(Step("launchctl", argv=launchctl_argv("bootout", label, uid), not_loaded_ok=True))
+        # bootout returns while the job is still stopping; a bootstrap before it's gone fails.
+        steps.append(Step("unloaded", argv=launchctl_argv("print", label, uid), wait_s=RELOAD_WAIT_S))
     steps.append(Step("launchctl", argv=launchctl_argv("bootstrap", label, uid, plist_path=path)))
     return steps
 
@@ -209,7 +222,17 @@ def apply_plan(steps: List[Step], run=None, force: bool = False) -> List[str]:
                     raise FileExistsError(f"{s.path} exists and differs from the rendered plist; "
                                           f"review it, then apply with force")
     done = []
+    booted_out = None
     for s in steps:
+        if s.what == "unloaded":
+            deadline = _clock() + s.wait_s
+            while run(s.argv).returncode == 0:
+                if _clock() >= deadline:
+                    raise RuntimeError(f"{s.argv[-1]} was booted out but is still loaded after {s.wait_s:g} s, so "
+                                       f"it wasn't bootstrapped again; the daemon isn't running" + _reload_hint(steps))
+                _sleep(RELOAD_POLL_S)
+            done.append(s.describe())
+            continue
         if s.what == "write":
             os.makedirs(os.path.dirname(s.path), exist_ok=True)
             # Whole or not at all: a full disk must not leave a half-written plist.
@@ -223,9 +246,31 @@ def apply_plan(steps: List[Step], run=None, force: bool = False) -> List[str]:
                 done.append(f"{s.describe()} (not loaded)")
                 continue
             if r.returncode != 0:
-                raise RuntimeError(f"{s.describe()} failed ({r.returncode}): {(r.stderr or r.stdout).strip()}")
+                said = f"{s.describe()} failed ({r.returncode}): {(r.stderr or r.stdout).strip()}"
+                if booted_out and s.argv[1:2] == ["bootstrap"]:
+                    # The job is gone from launchd now: say so, and how to load it again.
+                    said += f"; {booted_out} was booted out and isn't loaded now" + _reload_hint(steps)
+                raise RuntimeError(said)
+            if s.argv[1:2] == ["bootout"]:
+                booted_out = s.argv[-1]
         done.append(s.describe())
     return done
+
+
+def _reload_hint(steps: List[Step]) -> str:
+    """The command that loads the job again, from the plan's own bootstrap step."""
+    boot = next((s for s in steps if s.what == "launchctl" and s.argv[1:2] == ["bootstrap"]), None)
+    return f". Load it again with: {' '.join(boot.argv)}" if boot else ""
+
+
+def _clock() -> float:
+    import time
+    return time.monotonic()
+
+
+def _sleep(seconds: float) -> None:
+    import time
+    time.sleep(seconds)
 
 
 # ---------------------------------------------------------------------------
