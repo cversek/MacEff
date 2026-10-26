@@ -204,13 +204,17 @@ def _validate(declaration: Dict) -> Optional[str]:
     return None
 
 
-def _systemd_harness_live(ctx: Context) -> Optional[str]:
-    """The legacy harness's systemd user unit, when it is active."""
+def _systemd_harness_live(ctx: Context, platform: Optional[str] = None) -> Optional[str]:
+    """The legacy harness's systemd user unit, when it is active. On a Linux host without
+    systemctl an installed unit counts as live, since a wrong "no" starts a second session; on
+    macOS, which has no systemd, a leftover unit file runs nothing and counts as nothing."""
     from macf.pd.names import pd_id
     unit = f"cc-harness-{pd_id(ctx.card)}.service"
     if not (ctx.login_home / ".config" / "systemd" / "user" / unit).exists():
         return None
     if shutil.which("systemctl") is None:
+        if (platform or sys.platform) == "darwin":
+            return None  # macOS has no systemd: a leftover unit file there runs nothing
         return f"{unit} is installed, and without systemctl it can't be told whether it runs"
     try:
         out = subprocess.run(["systemctl", "--user", "is-active", unit],
