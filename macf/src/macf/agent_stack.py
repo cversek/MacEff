@@ -58,6 +58,14 @@ STEPS: List[Tuple[str, str, str]] = [
     ("daemon", "put the primal daemon under the service manager (pd install)", "no_daemon"),
 ]
 
+#: The steps ``--update`` runs: the declaration only to report its drift, the channel and the
+#: daemon to bring them current. The rest belong to a first init.
+UPDATE_STEPS = ("declaration", "channel", "daemon")
+#: Said for each other step under ``--update``.
+NOT_UPDATED = "--update brings only the channel and the daemon current, and reports the declaration"
+#: The fix a stale daemon is pointed at.
+UPDATE_FIX = "macf_tools agent init --update"
+
 #: Said where the container's provisioning, not agent init, owns a step.
 CONTAINER_OWNS = "in a container, the container's start step installs this"
 
@@ -76,6 +84,15 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
                              "harness's recorded choice, else MACEFF_PROJECT_DIR, else the agent home)")
     parser.add_argument("--telegram", action=argparse.BooleanOptionalAction, default=None,
                         help="declare the Telegram channel (default: when this login already uses it)")
+    parser.add_argument("--update", action="store_true",
+                        help="bring the persistent-layer stack current and nothing else: reinstall the "
+                             "daemon's unit as rendered now, restart the daemon onto this macf (its units, "
+                             "the session among them, carry across), and refresh the MacEff channel plugin; "
+                             "never rewrites a declaration or restarts the session")
+    parser.add_argument("--repoint", action="store_true",
+                        help="with --update: let the daemon's unit move to the interpreter running this "
+                             "command when the installed unit names another (a daemon pinned to its own "
+                             "venv or checkout is otherwise left on it, and the step refuses)")
 
 
 @dataclass
@@ -358,6 +375,161 @@ def pd_unit_current(card: str, home: Path) -> bool:
     return False
 
 
+def _adapter():
+    """This platform's outer-tier adapter, for the login running agent init."""
+    from macf.pd import adapter
+    return type(adapter.adapter_for(sys.platform))(user_home=Path.home())
+
+
+def pd_unit_installed(card: str, home: Path) -> bool:
+    """Whether the service manager has a unit for this daemon at all, current or not."""
+    installed = getattr(_adapter(), "installed", None)
+    return installed is not None and installed(card, home) is not None
+
+
+def daemon_restart(card: str) -> None:
+    """Restart the daemon under its service manager. Its units outlive it and the next daemon
+    adopts them (persistent_layer 12.6), so the session keeps running."""
+    tier = _adapter()
+    restart = getattr(tier, "restart", None)
+    if restart is None:
+        raise RuntimeError(f"the {tier.platform} adapter offers no restart")
+    restart(card)
+
+
+def install_restarts() -> bool:
+    """Whether this platform's forced install already restarts the daemon (launchd boots the
+    job out and bootstraps it), so --update mustn't restart it again."""
+    return bool(getattr(_adapter(), "install_restarts", False))
+
+
+def unit_program(text: Optional[str]) -> Optional[str]:
+    """The program an installed unit runs: a LaunchAgent's ``Program`` (or the first of its
+    ``ProgramArguments``), a systemd unit's first ``ExecStart`` word. None if it can't be read."""
+    import plistlib
+    import shlex
+    if not text:
+        return None
+    try:
+        plist = plistlib.loads(text.encode("utf-8"))
+    except Exception:  # noqa: BLE001 - not a plist; read it as a systemd unit below
+        plist = None
+    if isinstance(plist, dict):
+        args = plist.get("ProgramArguments") or []
+        return plist.get("Program") or (args[0] if args else None)
+    for line in text.splitlines():
+        if line.startswith("ExecStart="):
+            words = shlex.split(line[len("ExecStart="):])
+            return words[0] if words else None
+    return None
+
+
+class ProgramUnknown(Exception):
+    """Which program the installed unit runs, or the one this command would render, can't
+    be read, so whether the daemon is pinned elsewhere can't be told."""
+
+
+def program_change(ctx: Context) -> Optional[Tuple[str, str]]:
+    """(installed, rendered) when the installed unit runs another program than this command
+    would render, None when they agree. Raises ``ProgramUnknown`` when either can't be read:
+    the caller decides, and --update refuses rather than guess (fail closed). The rendered
+    program is the interpreter running agent init, so on a login where several macf installs
+    sit on PATH, a daemon pinned to its own venv would otherwise be moved by whichever ran."""
+    tier = _adapter()
+    installed = getattr(tier, "installed", None)
+    if installed is None:
+        raise ProgramUnknown(f"the {tier.platform} adapter can't read an installed unit")
+    try:
+        was = unit_program(installed(ctx.card, ctx.home))
+        now = unit_program(tier.render(ctx.card, ctx.home))
+    except (OSError, ValueError) as e:
+        raise ProgramUnknown(f"the unit can't be read: {e}") from e
+    if not was or not now:
+        raise ProgramUnknown("the installed unit names no program" if not was else
+                             "the rendering names no program")
+    return (was, now) if was != now else None
+
+
+def daemon_build_drift(ctx: Context) -> Optional[str]:
+    """How the running daemon's build differs from this command's, as ``pd status`` reads it,
+    or None when they match or no daemon answers to say."""
+    from macf.pd.client import status
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            report = status(ctx.home, ctx.card)
+    except Exception:  # noqa: BLE001 - a readout that fails says nothing about the build
+        return None  # noqa: MACEFF003 - no answer is no finding; the daemon step says what it can
+    if report.source != "daemon":
+        return None
+    if not report.daemon_build:
+        return f"the running daemon doesn't say which build it runs, so it is older than this command's {report.cli_build}"
+    if report.daemon_build != report.cli_build:
+        return f"the running daemon runs {report.daemon_build}, this command {report.cli_build}"
+    return None
+
+
+def currency_findings(ctx: Context) -> List[str]:
+    """What keeps an installed daemon from being current: a unit that differs from what the
+    renderer writes now, and a running daemon on another build."""
+    found = []
+    if not pd_unit_current(ctx.card, ctx.home):
+        found.append("the installed unit differs from what this macf renders now")
+    try:
+        moved = program_change(ctx)
+    except ProgramUnknown as e:
+        moved = None
+        found.append(f"which program the daemon is pinned to can't be told ({e})")
+    if moved:
+        found.append(f"the installed unit runs {moved[0]}; this command would render {moved[1]}")
+    drift = daemon_build_drift(ctx)
+    if drift:
+        found.append(drift)
+    return found
+
+
+def _daemon_currency(ctx: Context, installed: str) -> Result:
+    """An installed daemon: current, or what isn't, with the fix; under ``--update`` the fix,
+    which reinstalls the unit as rendered now and restarts the daemon once. The session unit
+    is never restarted: the new daemon adopts it, as any daemon restart does."""
+    findings = currency_findings(ctx)
+    if not findings:
+        return Result("daemon", ALREADY, f"{installed}; the unit is as rendered and the daemon runs this build")
+    lines = "\n".join(f"- {f}" for f in findings)
+    if not getattr(ctx.args, "update", False):
+        return Result("daemon", DRIFT, f"{installed}, but it isn't current:\n{lines}\n"
+                                       f"{UPDATE_FIX} reinstalls the unit and restarts the daemon onto this "
+                                       f"build; its units, the session among them, carry across")
+    repoint = getattr(ctx.args, "repoint", False)
+    try:
+        moved = program_change(ctx)
+    except ProgramUnknown as e:
+        if not repoint:
+            return Result("daemon", REFUSED, f"can't tell which program the daemon is pinned to ({e}), so "
+                                             f"--update won't reinstall its unit; add --repoint to point it "
+                                             f"at this command's interpreter anyway")
+        moved = None
+    if moved and not repoint:
+        # The daemon may be pinned on purpose to its own venv or checkout; moving it to
+        # whichever macf ran this command is the operator's choice, not a side effect.
+        return Result("daemon", REFUSED, f"the installed unit runs {moved[0]}, and this command would point "
+                                         f"it at {moved[1]}. Run agent init --update with {moved[0]} to "
+                                         f"keep the daemon where it is, or add --repoint to move it")
+    if ctx.dry_run:
+        return Result("daemon", WOULD, f"reinstall the unit as rendered now and restart the daemon onto this "
+                                       f"build, its units carrying across:\n{lines}")
+    from macf.pd.cli import cmd_pd_install
+    rc, text = _captured(lambda: cmd_pd_install(argparse.Namespace(plan=False, force=True)))
+    if rc != 0:
+        return Result("daemon", REFUSED, "pd install --force: " + (text.replace("maceff_pd: ", "").strip() or f"exit {rc}"))
+    if not install_restarts():
+        try:
+            daemon_restart(ctx.card)
+        except (OSError, RuntimeError) as e:
+            return Result("daemon", REFUSED, f"the unit was reinstalled, but the daemon wasn't restarted: {e}")
+    return Result("daemon", DONE, "unit reinstalled as rendered now, daemon restarted onto this build; its units "
+                                  "carry across, the session among them")
+
+
 def _captured(fn: Callable[[], int]) -> Tuple[int, str]:
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -424,6 +596,9 @@ def step_declaration(ctx: Context) -> Result:
             return Result("declaration", DRIFT, detail + "; compared with the default it lacks:\n"
                           + "\n".join(f"- {d}" for d in lacks))
         return Result("declaration", ALREADY, f"{path} has every default unit")
+    if getattr(ctx.args, "update", False):
+        return Result("declaration", SKIPPED, f"none at {path}, and --update never writes one; run agent init "
+                                              f"without --update for the default")
     target = Path(path)
     live = legacy_harness_live(ctx)
     if live:
@@ -509,7 +684,8 @@ def _plugin_state(login_home: Path) -> Tuple[set, set]:
 def step_channel(ctx: Context) -> Result:
     from macf.channels.marketplace import CHANNEL_PLUGIN_ID, MARKETPLACE, packaged_marketplace
     known, installed = _plugin_state(ctx.login_home)
-    if MARKETPLACE in known and CHANNEL_PLUGIN_ID in installed:
+    update = getattr(ctx.args, "update", False)
+    if MARKETPLACE in known and CHANNEL_PLUGIN_ID in installed and not update:
         return Result("channel", ALREADY, CHANNEL_PLUGIN_ID)
     claude = shutil.which("claude")
     if claude is None:
@@ -521,13 +697,18 @@ def step_channel(ctx: Context) -> Result:
         return Result("channel", REFUSED, str(e))
     commands = []
     if ctx.dry_run:
-        todo = ([f"add the marketplace {source}"] if MARKETPLACE not in known else []) + \
-            ([f"install {CHANNEL_PLUGIN_ID}"] if CHANNEL_PLUGIN_ID not in installed else [])
+        todo = ([f"add the marketplace {source}"] if MARKETPLACE not in known else
+                [f"refresh the marketplace {MARKETPLACE}"] if update else []) + \
+            ([f"install {CHANNEL_PLUGIN_ID}"] if CHANNEL_PLUGIN_ID not in installed else
+             [f"refresh {CHANNEL_PLUGIN_ID}"] if update else [])
         return Result("channel", WOULD, "; ".join(todo))
-    if MARKETPLACE not in known:
-        commands.append([claude, "plugin", "marketplace", "add", str(source)])
-    if CHANNEL_PLUGIN_ID not in installed:
-        commands.append([claude, "plugin", "install", CHANNEL_PLUGIN_ID])
+    # Under --update, what is already there is refreshed, as a container's start step does.
+    commands.append([claude, "plugin", "marketplace", "add", str(source)] if MARKETPLACE not in known
+                    else [claude, "plugin", "marketplace", "update", MARKETPLACE])
+    commands.append([claude, "plugin", "install", CHANNEL_PLUGIN_ID] if CHANNEL_PLUGIN_ID not in installed
+                    else [claude, "plugin", "update", CHANNEL_PLUGIN_ID])
+    if not update:
+        commands = [c for c in commands if "update" not in c[2:4]]
     for argv in commands:
         try:
             out = subprocess.run(argv, capture_output=True, text=True, timeout=CLAUDE_TIMEOUT_S)
@@ -536,7 +717,8 @@ def step_channel(ctx: Context) -> Result:
         if out.returncode != 0:
             said = _last_line(out.stderr) or _last_line(out.stdout) or f"exit {out.returncode}"
             return Result("channel", REFUSED, f"claude {' '.join(argv[1:])} failed: {said}")
-    return Result("channel", DONE, f"{CHANNEL_PLUGIN_ID} from {source}")
+    return Result("channel", DONE, f"{CHANNEL_PLUGIN_ID} from {source}" + (
+        " (refreshed; the session loads it at its next start)" if update and CHANNEL_PLUGIN_ID in installed else ""))
 
 
 def step_permissions(ctx: Context) -> Result:
@@ -639,6 +821,7 @@ def step_daemon(ctx: Context) -> Result:
     # a session already running would be a second client on one conversation (6.2, 6.3).
     # A client below this agent's own confirmed session unit is that unit's session, not a
     # second one.
+    ours: List[int] = []
     if _declares_session(declaration):
         unit_pid = daemon_session_pid(ctx, declaration)
         pids = clients_here(ctx)
@@ -655,13 +838,21 @@ def step_daemon(ctx: Context) -> Result:
                                              f"second client on one conversation; stop that session "
                                              f"deliberately, then run macf_tools harness cutover")
         if ours:
-            return Result("daemon", ALREADY, f"pd install; the session runs as its daemon's unit (pid {unit_pid})")
+            installed = f"pd install; the session runs as its daemon's unit (pid {unit_pid})"
+            if not getattr(ctx.args, "update", False):
+                return _daemon_currency(ctx, installed)
     resolved = Path(find_agent_home()).resolve()
     if resolved != ctx.home.resolve():
         return Result("daemon", REFUSED, f"pd install acts on the agent home {resolved}, not {ctx.home}; "
                                          f"run agent init from that agent's home")
-    if pd_unit_current(ctx.card, ctx.home):
-        return Result("daemon", ALREADY, "the service manager's unit is installed as rendered")
+    if ours:
+        return _daemon_currency(ctx, installed)
+    if pd_unit_current(ctx.card, ctx.home) or pd_unit_installed(ctx.card, ctx.home):
+        return _daemon_currency(ctx, "the service manager's unit is installed")
+    if getattr(ctx.args, "update", False):
+        # --update brings an installed daemon current; it never installs one (6.5).
+        return Result("daemon", SKIPPED, "no daemon installed, so nothing to bring current; run agent init "
+                                         "without --update to install one")
     if ctx.dry_run:
         return Result("daemon", WOULD, "pd install: put the daemon under the service manager")
     from macf.pd.cli import cmd_pd_install
@@ -687,8 +878,10 @@ RUNNERS: Dict[str, Callable[[Context], Result]] = {
 
 def print_plan(ctx: Context, header: str = "agent init will:") -> None:
     print(header)
+    update = getattr(ctx.args, "update", False)
     for i, (step, what, flag) in enumerate(STEPS, 1):
-        skip = f"  [skipped: --{flag.replace('_', '-')}]" if getattr(ctx.args, flag, False) else ""
+        skip = f"  [skipped: --{flag.replace('_', '-')}]" if getattr(ctx.args, flag, False) else \
+            "  [skipped: --update]" if update and step not in UPDATE_STEPS else ""
         print(f"  {i}. {step}: {what}{skip}")
 
 
@@ -712,7 +905,16 @@ def run_stack(args: argparse.Namespace, home: Path, *, in_container: bool,
     if not plan:   # under --plan the findings are the plan
         print_plan(ctx)
     results: List[Result] = []
+    update = getattr(args, "update", False)
+    if update and in_container:
+        results.append(Result("update", SKIPPED, "in a container, the container's start step brings the stack "
+                                                 "current when the container starts; nothing was changed"))
+        report(results, "agent init --update:")
+        return 0, results
     for step, _what, flag in STEPS:
+        if update and step not in UPDATE_STEPS:
+            results.append(Result(step, SKIPPED, NOT_UPDATED))
+            continue
         if getattr(args, flag, False):
             results.append(Result(step, SKIPPED, f"--{flag.replace('_', '-')}"))
             continue

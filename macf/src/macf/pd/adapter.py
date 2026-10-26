@@ -39,6 +39,15 @@ class PlatformAdapter(Protocol):
         """What the service manager reports for the unit, in its own words."""
 
 
+# Two further verbs, which ``agent init --update`` uses to bring a daemon current
+# (persistent_layer 6.5). They are not in the protocol, so an adapter that lacks them is
+# still an adapter; the caller asks for them by name and says when one is missing:
+#
+#   installed(card, agent_home) -> Optional[str]  the installed unit's text, None if none
+#   restart(card) -> None                          restart the daemon under the service
+#                                                  manager; its units carry across (12.6)
+
+
 _ADAPTERS: Dict[str, PlatformAdapter] = {}
 
 
@@ -103,13 +112,33 @@ class LaunchdAdapter:
         argv, log_dir = _program(agent_home), self._log_dir(agent_home)
         steps = launchd.install_plan(card, argv, self._home, log_dir, self._uid,
                                      [str(control_socket(card)), str(channel_socket(card)),
-                                      str(events_socket(card))])
+                                      str(events_socket(card))], reload=force)
         launchd.apply_plan(steps, run=self._run, force=force)
         return Path(launchd.render_pd_launch_agent(card, argv, self._home, log_dir)[0])
 
     def uninstall(self, card: str) -> None:
         from macf.platform import launchd
         launchd.apply_plan(launchd.uninstall_plan(card, self._home, self._uid), run=self._run)
+
+    #: A forced install boots the loaded job out and bootstraps the new plist, which starts
+    #: the daemon afresh, so agent init --update doesn't restart it a second time.
+    install_restarts = True
+
+    def installed(self, card: str, agent_home: Path) -> Optional[str]:
+        from macf.platform import launchd
+        path, _ = launchd.render_pd_launch_agent(card, _program(agent_home), self._home,
+                                                 self._log_dir(agent_home))
+        try:
+            return Path(path).read_bytes().decode("utf-8")
+        except FileNotFoundError:
+            return None  # noqa: MACEFF003 - None is the documented answer: no unit installed
+
+    def restart(self, card: str) -> None:
+        from macf.platform import launchd
+        argv = launchd.launchctl_argv("kickstart", launchd.pd_label(card), self._uid)
+        out = self._run(argv)
+        if out.returncode != 0:
+            raise RuntimeError(f"{' '.join(argv)} failed ({out.returncode}): {(out.stderr or '').strip()}")
 
     def probe_grants(self, card: str, agent_home: Path, grants: List[str]) -> Dict[str, str]:
         """Each grant's verdict from the launchd context (MIS-0002-R64
@@ -182,6 +211,24 @@ class SystemdAdapter:
             if out.returncode != 0:
                 raise RuntimeError(f"{' '.join(argv)} failed: {out.stderr.strip()}")
         return path
+
+    def installed(self, card: str, agent_home: Path) -> Optional[str]:
+        path, _ = self._unit(card, agent_home)
+        try:
+            return Path(path).read_text()
+        except FileNotFoundError:
+            return None  # noqa: MACEFF003 - None is the documented answer: no unit installed
+
+    def restart(self, card: str) -> None:
+        """``systemctl --user restart`` of the daemon's unit. Its ``KillMode=process`` signals
+        the daemon alone, which on SIGTERM leaves its units running for the next daemon to
+        adopt (12.6), so the session isn't restarted."""
+        from macf.pd.interface import systemd_unit
+        from macf.platform import systemd
+        argv = systemd.systemctl_argv("restart", systemd_unit(card))
+        out = self._run(argv)
+        if out.returncode != 0:
+            raise RuntimeError(f"{' '.join(argv)} failed ({out.returncode}): {out.stderr.strip()}")
 
     def uninstall(self, card: str) -> None:
         from macf.pd.interface import systemd_unit
