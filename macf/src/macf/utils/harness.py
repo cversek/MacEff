@@ -285,7 +285,13 @@ def default_params(agent: Optional[str] = None, home: Optional[Path] = None) -> 
     non-interactive shell resolves elsewhere — which is exactly how an earlier
     boot path ended up without the module.
     """
-    home = Path(home) if home else Path(os.environ.get("MACEFF_AGENT_HOME_DIR") or Path.home())
+    # The agent home as ``macf_tools env`` finds it: MACEFF_AGENT_HOME_DIR, else the project
+    # root that holds the event log, else ~. A host agent's home is rarely the login's ~.
+    if home:
+        home = Path(home)
+    else:
+        from .paths import find_agent_home
+        home = find_agent_home()
     resolved, _source = resolve_agent(agent)
     # An ambiguous resolution is a list of candidates; rendering for "the first
     # one" would silently pick an agent. Callers that can ask are expected to
