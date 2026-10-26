@@ -114,7 +114,7 @@ macf_tools policy read testing --section 1.1
 
 `navigate` prints section headings phrased as questions, so an agent can find the
 part it needs without reading the whole document. That indirection is the point:
-the policy corpus is far larger than any context window that could hold it.
+the policy corpus can grow to be far larger than any context window that could hold it.
 
 ## Hooks
 
