@@ -795,6 +795,25 @@ def test_program_change_fails_closed_when_the_installed_unit_cant_be_read(tmp_pa
         agent_stack.program_change(ctx)
 
 
+def test_a_leftover_systemd_unit_on_macos_runs_nothing_but_on_linux_fails_closed(tmp_path, monkeypatch):
+    """The head maintainer's Mac kept an old cc-harness unit file under ~/.config/systemd/user.
+    macOS has no systemd, so that file runs nothing, and the daemon step must not skip over it.
+    On Linux without systemctl, an installed unit still counts as live: a wrong "no" there
+    starts a second session."""
+    import argparse
+    from macf import agent_stack as real
+    from macf.pd.names import pd_id
+    card = "Seat@abc123"
+    units = tmp_path / ".config" / "systemd" / "user"
+    units.mkdir(parents=True)
+    (units / f"cc-harness-{pd_id(card)}.service").write_text("[Service]\n")
+    ctx = real.Context(home=tmp_path, login_home=tmp_path, in_container=False,
+                       args=argparse.Namespace(project_dir=None), card=card)
+    monkeypatch.setattr(real.shutil, "which", lambda name: None)
+    assert real._systemd_harness_live(ctx, platform="darwin") is None
+    assert "can't be told whether it runs" in real._systemd_harness_live(ctx, platform="linux")
+
+
 
 def test_the_launchd_reload_waits_until_the_booted_out_job_is_gone(tmp_path, monkeypatch):
     """bootout returns while the job is still stopping, and a bootstrap then fails with 5
