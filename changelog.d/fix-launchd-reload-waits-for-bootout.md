@@ -1,0 +1,3 @@
+### Fixed
+
+- **A forced `pd install` on macOS waits for the old job to leave launchd before bootstrapping** (`platform/launchd.py`, policy `persistent_layer` 6.5). `launchctl bootout` returns while the job is still stopping, and a bootstrap in that window fails with "Bootstrap failed: 5". That's what the first `agent init --update` on a Mac hit: the old daemon was booted out and the new one never loaded, until a bootstrap by hand seconds later. The reload now waits, up to 30 s, until `launchctl print` no longer finds the label. If the job won't leave, or the bootstrap still fails, the error says the daemon isn't loaded and gives the command that loads it.
