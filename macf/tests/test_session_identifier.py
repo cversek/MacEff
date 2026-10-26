@@ -127,6 +127,7 @@ class TestResolverNeverPassesAGuessOffAsAFinding:
         monkeypatch.setenv("MACEFF_AGENT_NAME", "Resident")
         monkeypatch.setattr("macf.utils.identity._resolve_uuid_prefix", lambda: ("abc123", "project"))
         monkeypatch.setattr("macf.utils.identity.get_agent_identity", lambda: CARD)
+        monkeypatch.setattr("macf.utils.identity.agent_name_source", lambda: "config")
         assert resolve_agent() == (IDENT, "calling card")
 
     def test_a_per_project_agent_with_no_card_still_takes_the_name(self, monkeypatch, tmp_path):
@@ -138,7 +139,19 @@ class TestResolverNeverPassesAGuessOffAsAFinding:
     def test_falls_back_to_the_calling_card(self, monkeypatch):
         monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
         monkeypatch.setattr("macf.utils.identity.get_agent_identity", lambda: CARD)
+        monkeypatch.setattr("macf.utils.identity.agent_name_source", lambda: "config")
         assert resolve_agent() == (IDENT, "calling card")
+
+    def test_a_fallback_name_is_not_reported_as_the_calling_card(self, monkeypatch):
+        """cversek/MacEff#842: with no card configured the name is $USER, and `env`
+        said "via calling card" while every step keyed on the card refused."""
+        monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
+        monkeypatch.setattr("macf.utils.identity.get_agent_identity", lambda: CARD)
+        monkeypatch.setattr("macf.utils.identity.agent_name_source", lambda: "user")
+        agent, source = resolve_agent()
+        assert agent == IDENT
+        assert "calling card" not in source.replace("no calling card configured", "")
+        assert source.startswith("$USER")
 
     def test_a_single_installed_unit_resolves(self, monkeypatch, tmp_path):
         monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
