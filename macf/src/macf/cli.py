@@ -4134,26 +4134,35 @@ def cmd_recommender_sample(args: argparse.Namespace) -> int:
 
 
 def cmd_mode_get(args: argparse.Namespace) -> int:
-    """Get current operating mode."""
+    """Get current operating mode, and the work mode beside it.
+
+    The work mode comes from the resolver the dashboard reads, so the two cannot
+    disagree; it was missing here, so the instrument the preamble names for reading
+    one's stance could not tell an unset work mode from an unreported one
+    (cversek/MacEff#846)."""
     from .modes import detect_auto_mode
+    from .modes.detection import _get_current_work_mode
 
     try:
         session_id = get_current_session_id()
         enabled, source = detect_auto_mode(session_id)
 
         mode = "AUTO_MODE" if enabled else "MANUAL_MODE"
+        work_mode = _get_current_work_mode()
 
         if getattr(args, 'json_output', False):
             data = {
                 "mode": mode,
                 "enabled": enabled,
                 "source": source,
+                "work_mode": work_mode,
                 "session_id": session_id
             }
             print(json.dumps(data, indent=2))
         else:
             print(f"Mode: {mode}")
             print(f"Source: {source}")
+            print(f"Work mode: {work_mode or '(unset)'}")
 
         return 0
 
