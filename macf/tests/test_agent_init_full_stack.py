@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from macf import agent_stack
-from macf.agent_stack import ALREADY, DONE, DRIFT, PLANNED, SKIPPED, STEPS, WOULD, Result, run_stack
+from macf.agent_stack import ALREADY, DONE, DRIFT, PLANNED, REFUSED, SKIPPED, STEPS, WOULD, Result, run_stack
 from macf.cli import _build_parser
 from macf.pd.interface import Declaration
 
@@ -54,11 +54,13 @@ def stack(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     installs = []
-    installed = {"unit": False}
+    installed = {"unit": False, "stale": False}
+    build = {"drift": None}
+    restarts = []
 
     def fake_pd_install(args):
         installs.append(args)
-        installed["unit"] = True
+        installed["unit"], installed["stale"] = True, False
         print("Tester@abc123: installed")
         return 0
 
@@ -73,9 +75,17 @@ def stack(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_stack, "_systemd_harness_live", lambda ctx: None)
     monkeypatch.setattr(agent_stack, "daemon_session_pid", lambda ctx, d: None)
     monkeypatch.setattr(agent_stack, "service_manager_missing", lambda: None)
-    monkeypatch.setattr(agent_stack, "pd_unit_current", lambda card, h: installed["unit"])
+    monkeypatch.setattr(agent_stack, "pd_unit_current", lambda card, h: installed["unit"] and not installed["stale"])
+    monkeypatch.setattr(agent_stack, "pd_unit_installed", lambda card, h: installed["unit"])
+    monkeypatch.setattr(agent_stack, "daemon_build_drift", lambda ctx: build["drift"])
+    monkeypatch.setattr(agent_stack, "daemon_restart", lambda card: restarts.append(card))
+    moved = {"to": None}
+    monkeypatch.setattr(agent_stack, "program_change", lambda ctx: moved["to"])
+    restarts_on_install = {"yes": False}
+    monkeypatch.setattr(agent_stack, "install_restarts", lambda: restarts_on_install["yes"])
     monkeypatch.setattr("macf.pd.cli.cmd_pd_install", fake_pd_install)
-    return SimpleNamespace(home=home, claude=claude_calls, installs=installs)
+    return SimpleNamespace(home=home, claude=claude_calls, installs=installs, unit=installed, build=build,
+                           restarts=restarts, moved=moved, restarts_on_install=restarts_on_install)
 
 
 def _run(stack, *flags, preamble_status=DONE, in_container=False):
@@ -307,6 +317,7 @@ def test_a_client_below_the_confirmed_session_unit_is_that_unit(stack, monkeypat
     _with_clients(monkeypatch, [(5151, str(stack.home))])
     monkeypatch.setattr(agent_stack, "daemon_session_pid", lambda ctx, d: 900)
     monkeypatch.setattr(agent_stack, "ancestors", lambda pid: {pid, 901, 900, 1})
+    stack.unit["unit"] = True              # a daemon running its session unit is installed
     _rc, results = _run(stack)
     daemon = _by_step(results)["daemon"]
     assert daemon.status == ALREADY and "pid 900" in daemon.detail
@@ -394,3 +405,440 @@ def test_no_remote_control_leaves_the_child_and_settings_unchanged(tmp_path):
     named = _params(tmp_path, remote_control="seat-one")
     save_settings(named)
     assert load_settings(_params(tmp_path)).remote_control == "seat-one"
+
+
+# ---------------------------------------------------------------------------
+# The preamble step, unattended: skipped and the flag named, never an EOFError refusal
+# ---------------------------------------------------------------------------
+
+class _Stdin:
+    """A stdin that is, or isn't, a terminal."""
+    def __init__(self, tty):
+        self.tty = tty
+
+    def isatty(self):
+        return self.tty
+
+
+@pytest.fixture
+def preamble(stack, tmp_path, monkeypatch):
+    """The real preamble step against the stack's home, with a template of its own."""
+    from macf import cli
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "PA_PREAMBLE.md").write_text("<!-- MACEFF_PA_PREAMBLE_v9.9_START -->\npreamble\n"
+                                              "<!-- MACEFF_PA_PREAMBLE_v9.9_END -->\n")
+    monkeypatch.setenv("MACEFF_TEMPLATES_DIR", str(templates))
+    monkeypatch.chdir(stack.home)
+    config = SimpleNamespace(agent_name="Tester")
+
+    def step(*flags):
+        args = _build_parser().parse_args(["agent", "init", *flags])
+        return cli._agent_init_preamble(args, stack.home, config)
+    return step
+
+
+def _no_input(*a, **k):
+    raise AssertionError("prompted with nobody to answer")
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_a_preamble_with_no_terminal_is_skipped_naming_yes(preamble, stack, monkeypatch, existing):
+    claude_md = stack.home / "CLAUDE.md"
+    if existing:
+        claude_md.write_text("# my own notes\n")
+    monkeypatch.setattr("sys.stdin", _Stdin(False))
+    monkeypatch.setattr("builtins.input", _no_input)
+    result = preamble()
+    assert result.status == SKIPPED, result
+    assert "not interactive" in result.detail and "--yes" in result.detail
+    assert (claude_md.read_text() == "# my own notes\n") if existing else not claude_md.exists()
+
+
+def test_a_preamble_prompt_that_meets_eof_is_skipped(preamble, stack, monkeypatch):
+    def eof(*a, **k):
+        raise EOFError
+    monkeypatch.setattr("sys.stdin", _Stdin(True))
+    monkeypatch.setattr("builtins.input", eof)
+    result = preamble()
+    assert result.status == SKIPPED and "--yes" in result.detail
+    assert not (stack.home / "CLAUDE.md").exists()
+
+
+def test_yes_accepts_the_preamble_unattended(preamble, stack, monkeypatch):
+    monkeypatch.setattr("sys.stdin", _Stdin(False))
+    monkeypatch.setattr("builtins.input", _no_input)
+    result = preamble("--yes")
+    assert result.status == DONE, result
+    assert "MACEFF_PA_PREAMBLE_v9.9_START" in (stack.home / "CLAUDE.md").read_text()
+
+
+def test_a_person_who_says_no_still_aborts(preamble, stack, monkeypatch):
+    monkeypatch.setattr("sys.stdin", _Stdin(True))
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "n")
+    assert preamble().status == "aborted"
+
+
+def test_an_unattended_run_reports_the_preamble_skipped_and_goes_on(preamble, stack, monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdin", _Stdin(False))
+    monkeypatch.setattr("builtins.input", _no_input)
+    args = _build_parser().parse_args(["agent", "init"])
+    rc, results = run_stack(args, stack.home, in_container=False, preamble=preamble)
+    assert rc == 0, results
+    assert results[0].status == SKIPPED and len(results) == len(STEPS)
+    assert "preamble: skipped: not interactive" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# The default session unit's XDG_RUNTIME_DIR: what harness cutover checks for
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_the_default_session_unit_declares_the_runtime_dir_the_cutover_expects(stack, monkeypatch, platform):
+    from macf.pd import cutover
+    from macf.pd.names import declaration_path
+    # Set on both: on macOS a variable a shell happens to export is still not declared, since
+    # the cutover there reads the clients' fallback under /tmp.
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/4242")
+    ctx = agent_stack.Context(home=stack.home, login_home=stack.home, in_container=False, args=_args())
+    agent_stack.resolve_card(ctx)
+    with monkeypatch.context() as m:     # sys.platform back before anything else reads it
+        m.setattr(agent_stack.sys, "platform", platform)
+        declaration = agent_stack.default_declaration(ctx)
+    session = next(u for u in declaration["units"] if u.get("kind") == "session")
+    others = [u for u in declaration["units"] if u.get("kind") != "session"]
+    if platform == "linux":
+        assert session["environment"]["XDG_RUNTIME_DIR"] == "/run/user/4242"
+    else:
+        assert "XDG_RUNTIME_DIR" not in session["environment"]
+    assert not any("XDG_RUNTIME_DIR" in u["environment"] for u in others), "the session unit's alone"
+    staged = declaration_path(stack.home).with_name("declaration.json.cutover")
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    staged.write_text(json.dumps(declaration))
+    runtime = "/run/user/4242" if platform == "linux" else None
+    check = cutover._staged_check(staged, ctx.card, runtime,
+                                  "systemd" if platform == "linux" else "launchd")
+    assert check.ok, check.detail
+
+
+# ---------------------------------------------------------------------------
+# A daemon that isn't current: warned of, and brought current only by --update
+# ---------------------------------------------------------------------------
+
+#: The real build readout, before the fixture stubs it out.
+REAL_BUILD_DRIFT = agent_stack.daemon_build_drift
+
+
+def _installed_stack(stack):
+    """A first init done: the daemon's unit installed, the channel installed."""
+    rc, _ = _run(stack)
+    assert rc == 0 and stack.unit["unit"]
+    stack.installs.clear()
+    stack.claude.clear()
+    return stack
+
+
+def test_a_stale_unit_is_warned_of_with_the_fix_and_nothing_changes(stack):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    for flags in ((), ("--plan",)):
+        rc, results = _run(stack, *flags)
+        daemon = _by_step(results)["daemon"]
+        assert rc == 0 and daemon.status == DRIFT, daemon
+        assert "differs from what this macf renders" in daemon.detail
+        assert "agent init --update" in daemon.detail
+    assert stack.installs == [] and stack.restarts == []
+
+
+def test_a_daemon_on_another_build_is_warned_of_with_the_fix(stack):
+    _installed_stack(stack)
+    stack.build["drift"] = "the running daemon runs macf 1.0 at aaaa, this command macf 1.0 at bbbb"
+    rc, results = _run(stack)
+    daemon = _by_step(results)["daemon"]
+    assert daemon.status == DRIFT and "at aaaa" in daemon.detail and "agent init --update" in daemon.detail
+    assert stack.installs == [] and stack.restarts == []
+
+
+def test_a_current_daemon_is_not_warned_of(stack):
+    _installed_stack(stack)
+    rc, results = _run(stack)
+    daemon = _by_step(results)["daemon"]
+    assert daemon.status == ALREADY and "runs this build" in daemon.detail and "--update" not in daemon.detail
+
+
+def test_update_reinstalls_restarts_once_and_refreshes_the_channel_only(stack):
+    from macf.pd.names import declaration_path
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    stack.build["drift"] = "the running daemon runs macf 1.0 at aaaa, this command macf 1.0 at bbbb"
+    declaration = declaration_path(stack.home)
+    before = declaration.read_bytes()
+    called = []
+    rc, results = run_stack(_args("--update"), stack.home, in_container=False,
+                            preamble=lambda: called.append("preamble") or Result("preamble", DONE))
+    steps = _by_step(results)
+    assert rc == 0, results
+    assert steps["daemon"].status == DONE, steps["daemon"]
+    assert [a.force for a in stack.installs] == [True], "the unit reinstalled as rendered now, once"
+    assert stack.restarts == [CARD], "the daemon restarted once; nothing else restarted"
+    assert any(c[1:3] == ["plugin", "update"] for c in stack.claude)
+    assert any(c[1:4] == ["plugin", "marketplace", "update"] for c in stack.claude)
+    assert declaration.read_bytes() == before, "the declaration is never rewritten"
+    assert called == [], "the preamble isn't touched"
+    for step in ("preamble", "task-store", "harness", "permissions"):
+        assert steps[step].status == SKIPPED and "--update" in steps[step].detail, step
+
+
+def test_update_on_a_current_daemon_restarts_nothing(stack):
+    _installed_stack(stack)
+    _rc, results = _run(stack, "--update")
+    assert _by_step(results)["daemon"].status == ALREADY
+    assert stack.installs == [] and stack.restarts == []
+
+
+def test_update_never_writes_a_missing_declaration(stack):
+    from macf.pd.names import declaration_path
+    _rc, results = _run(stack, "--update")
+    assert _by_step(results)["declaration"].status == SKIPPED
+    assert not declaration_path(stack.home).exists()
+
+
+def test_update_with_no_daemon_installed_installs_nothing(stack):
+    """--update brings an installed daemon current and never installs one: with the declaration
+    in place but no unit installed, the daemon step reports nothing to bring current."""
+    _installed_stack(stack)
+    stack.unit["unit"] = False
+    for flags in (("--update",), ("--plan", "--update")):
+        _rc, results = _run(stack, *flags)
+        daemon = _by_step(results)["daemon"]
+        assert daemon.status == SKIPPED and "nothing to bring current" in daemon.detail, flags
+        assert stack.installs == [] and stack.restarts == [], flags
+
+
+def test_update_in_a_container_changes_nothing(stack):
+    rc, results = _run(stack, "--update", in_container=True)
+    assert rc == 0 and len(results) == 1 and results[0].status == SKIPPED
+    assert "container's start step" in results[0].detail
+    assert stack.claude == [] and stack.installs == [] and stack.restarts == []
+
+
+def test_plan_with_update_changes_nothing(stack):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    before = _snapshot(stack.home)
+    _rc, results = _run(stack, "--plan", "--update")
+    assert _by_step(results)["daemon"].status == WOULD
+    assert _by_step(results)["channel"].status == WOULD
+    assert _snapshot(stack.home) == before
+    assert stack.claude == [] and stack.installs == [] and stack.restarts == []
+
+
+def test_the_build_drift_is_read_as_pd_status_reads_it(stack, monkeypatch):
+    def report(source, daemon_build, cli_build="macf 1.0 at bbbb"):
+        monkeypatch.setattr("macf.pd.client.status",
+                            lambda home, card: SimpleNamespace(source=source, daemon_build=daemon_build,
+                                                               cli_build=cli_build))
+    ctx = agent_stack.Context(home=stack.home, login_home=stack.home, in_container=False, args=_args())
+    agent_stack.resolve_card(ctx)
+    report("daemon", "macf 1.0 at aaaa")
+    assert "aaaa" in REAL_BUILD_DRIFT(ctx) and "bbbb" in REAL_BUILD_DRIFT(ctx)
+    report("daemon", "macf 1.0 at bbbb")
+    assert REAL_BUILD_DRIFT(ctx) is None
+    report("daemon", "")
+    assert "older" in REAL_BUILD_DRIFT(ctx)
+    report("event log", "")
+    assert REAL_BUILD_DRIFT(ctx) is None, "no daemon answering, nothing to compare"
+
+
+def test_the_systemd_adapter_restarts_the_daemons_unit_and_reads_its_file(tmp_path):
+    from macf.pd.adapter import SystemdAdapter
+    calls = []
+
+    def run(argv):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    tier = SystemdAdapter(user_home=tmp_path, run=run)
+    tier.restart(CARD)
+    assert calls == [["systemctl", "--user", "restart", "maceff_pd-Tester_abc123.service"]]
+    assert tier.installed(CARD, tmp_path) is None
+    unit = tmp_path / ".config" / "systemd" / "user" / "maceff_pd-Tester_abc123.service"
+    unit.parent.mkdir(parents=True)
+    unit.write_text("old")
+    assert tier.installed(CARD, tmp_path) == "old" != tier.render(CARD, tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# --update on launchd, and a daemon pinned to its own interpreter
+# ---------------------------------------------------------------------------
+
+def test_update_refuses_to_move_a_pinned_daemon_without_repoint(stack):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    stack.moved["to"] = ("/venvs/pd/bin/python3", "/usr/local/bin/python3")
+    for flags in (("--update",), ("--plan", "--update")):
+        rc, results = _run(stack, *flags)
+        daemon = _by_step(results)["daemon"]
+        assert rc == 1 and daemon.status == REFUSED, daemon
+        assert "/venvs/pd/bin/python3" in daemon.detail and "--repoint" in daemon.detail
+    assert stack.installs == [] and stack.restarts == []
+
+
+def test_a_pinned_daemon_is_a_finding_without_update(stack):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    stack.moved["to"] = ("/venvs/pd/bin/python3", "/usr/local/bin/python3")
+    rc, results = _run(stack)
+    daemon = _by_step(results)["daemon"]
+    assert rc == 0 and daemon.status == DRIFT
+    assert "runs /venvs/pd/bin/python3; this command would render /usr/local/bin/python3" in daemon.detail
+
+
+def test_update_with_repoint_moves_a_pinned_daemon(stack):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    stack.moved["to"] = ("/venvs/pd/bin/python3", "/usr/local/bin/python3")
+    rc, results = _run(stack, "--update", "--repoint")
+    assert rc == 0 and _by_step(results)["daemon"].status == DONE
+    assert [a.force for a in stack.installs] == [True] and stack.restarts == [CARD]
+
+
+def test_update_does_not_restart_twice_where_the_install_restarts(stack):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    stack.restarts_on_install["yes"] = True
+    rc, results = _run(stack, "--update")
+    assert rc == 0 and _by_step(results)["daemon"].status == DONE
+    assert [a.force for a in stack.installs] == [True] and stack.restarts == [], "the bootstrap restarted it"
+
+
+def test_unit_program_reads_a_launch_agent_and_a_systemd_unit():
+    import plistlib
+    plist = plistlib.dumps({"Label": "x", "Program": "/a/python3", "ProgramArguments": ["maceff_pd", "-m", "macf.pd"]}).decode()
+    assert agent_stack.unit_program(plist) == "/a/python3"
+    older = plistlib.dumps({"Label": "x", "ProgramArguments": ["/b/python3", "-m", "macf.pd"]}).decode()
+    assert agent_stack.unit_program(older) == "/b/python3", "a plist from before the Program key"
+    unit = "[Service]\nExecStart='/c dir/python3' -m macf.pd /home\n"
+    assert agent_stack.unit_program(unit) == "/c dir/python3"
+    assert agent_stack.unit_program(None) is None and agent_stack.unit_program("garbage") is None
+
+
+def test_the_launchd_reinstall_boots_out_before_bootstrapping(tmp_path):
+    from macf.pd.adapter import LaunchdAdapter
+    calls = []
+
+    def run(argv):
+        calls.append(argv)
+        # launchctl print of a label launchd doesn't have: the booted-out job is gone
+        return subprocess.CompletedProcess(argv, 113 if argv[1] == "print" else 0, "", "")
+    tier = LaunchdAdapter(user_home=tmp_path, uid=501, run=run)
+    tier.install(CARD, tmp_path)
+    assert [c[1] for c in calls] == ["bootstrap"], "a first install only bootstraps"
+    calls.clear()
+    tier.install(CARD, tmp_path, force=True)
+    from macf.platform.launchd import pd_label
+    assert calls[0] == ["launchctl", "bootout", f"gui/501/{pd_label(CARD)}"], calls
+    assert calls[1] == ["launchctl", "print", f"gui/501/{pd_label(CARD)}"], "it waits for the job to go"
+    assert calls[2][1:3] == ["bootstrap", "gui/501"], calls
+    assert LaunchdAdapter.install_restarts is True
+
+
+def test_the_launchd_reinstall_goes_on_when_nothing_was_loaded(tmp_path):
+    from macf.pd.adapter import LaunchdAdapter
+    from macf.platform.launchd import BOOTOUT_NOT_LOADED
+    calls = []
+
+    def run(argv):
+        calls.append(argv)
+        code = BOOTOUT_NOT_LOADED if argv[1] == "bootout" else 113 if argv[1] == "print" else 0
+        return subprocess.CompletedProcess(argv, code, "", "Boot-out failed: 3: No such process")
+    LaunchdAdapter(user_home=tmp_path, uid=501, run=run).install(CARD, tmp_path, force=True)
+    assert [c[1] for c in calls] == ["bootout", "print", "bootstrap"]
+
+
+def test_update_refuses_when_the_pin_cant_be_read_unless_repoint(stack, monkeypatch):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+
+    def unknown(ctx):
+        raise agent_stack.ProgramUnknown("the unit can't be read: [Errno 13] Permission denied")
+    monkeypatch.setattr(agent_stack, "program_change", unknown)
+    for flags in (("--update",), ("--plan", "--update")):
+        rc, results = _run(stack, *flags)
+        daemon = _by_step(results)["daemon"]
+        assert rc == 1 and daemon.status == REFUSED, daemon
+        assert "can't tell which program the daemon is pinned to" in daemon.detail and "--repoint" in daemon.detail
+    assert stack.installs == [] and stack.restarts == []
+    rc, results = _run(stack)
+    daemon = _by_step(results)["daemon"]
+    assert rc == 0 and daemon.status == DRIFT and "can't be told" in daemon.detail, "a finding without --update"
+    rc, results = _run(stack, "--update", "--repoint")
+    assert rc == 0 and _by_step(results)["daemon"].status == DONE and [a.force for a in stack.installs] == [True]
+
+
+def test_program_change_fails_closed_when_the_installed_unit_cant_be_read(tmp_path, monkeypatch):
+    import pytest
+
+    class Tier:
+        platform = "darwin"
+
+        def installed(self, card, home):
+            raise OSError(13, "Permission denied")
+
+        def render(self, card, home):
+            return "[Service]\nExecStart=/usr/bin/python3 -m macf.pd /h\n"
+    monkeypatch.setattr(agent_stack, "_adapter", lambda: Tier())
+    ctx = agent_stack.Context(home=tmp_path, login_home=tmp_path, in_container=False, args=_args())
+    with pytest.raises(agent_stack.ProgramUnknown, match="can't be read"):
+        agent_stack.program_change(ctx)
+    Tier.installed = lambda self, card, home: None
+    with pytest.raises(agent_stack.ProgramUnknown, match="names no program"):
+        agent_stack.program_change(ctx)
+
+
+
+def test_the_launchd_reload_waits_until_the_booted_out_job_is_gone(tmp_path, monkeypatch):
+    """bootout returns while the job is still stopping, and a bootstrap then fails with 5
+    (measured on macOS 15). The reload looks until launchd no longer has the label."""
+    from macf.pd.adapter import LaunchdAdapter
+    from macf.platform import launchd
+    calls, looks = [], {"left": 3}
+    monkeypatch.setattr(launchd, "_sleep", lambda s: None)
+
+    def run(argv):
+        calls.append(argv[1])
+        if argv[1] == "print":
+            looks["left"] -= 1
+            return subprocess.CompletedProcess(argv, 0 if looks["left"] > 0 else 113, "", "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    LaunchdAdapter(user_home=tmp_path, uid=501, run=run).install(CARD, tmp_path, force=True)
+    assert calls == ["bootout", "print", "print", "print", "bootstrap"], "no bootstrap while it's still loaded"
+
+
+def test_a_job_that_wont_leave_isnt_bootstrapped_and_the_error_says_how_to_load_it(tmp_path, monkeypatch):
+    import pytest
+    from macf.pd.adapter import LaunchdAdapter
+    from macf.platform import launchd
+    now = {"t": 0.0}
+    monkeypatch.setattr(launchd, "_clock", lambda: now["t"])
+    monkeypatch.setattr(launchd, "_sleep", lambda s: now.__setitem__("t", now["t"] + s))
+    calls = []
+
+    def run(argv):
+        calls.append(argv[1])
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    with pytest.raises(RuntimeError, match="still loaded after 30 s.*the daemon isn't running.*launchctl bootstrap gui/501"):
+        LaunchdAdapter(user_home=tmp_path, uid=501, run=run).install(CARD, tmp_path, force=True)
+    assert "bootstrap" not in calls
+
+
+def test_a_failed_bootstrap_after_a_bootout_says_the_daemon_isnt_loaded(tmp_path):
+    import pytest
+    from macf.pd.adapter import LaunchdAdapter
+
+    def run(argv):
+        if argv[1] == "print":
+            return subprocess.CompletedProcess(argv, 113, "", "")
+        code = 5 if argv[1] == "bootstrap" else 0
+        return subprocess.CompletedProcess(argv, code, "", "Bootstrap failed: 5: Input/output error")
+    with pytest.raises(RuntimeError, match="was booted out and isn't loaded now.*Load it again with: launchctl bootstrap gui/501"):
+        LaunchdAdapter(user_home=tmp_path, uid=501, run=run).install(CARD, tmp_path, force=True)
