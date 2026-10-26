@@ -158,17 +158,27 @@ def check_socket_path(path: str) -> None:
 
 
 def install_plan(card: str, program_argv: List[str], home: str, log_dir: str, uid: int,
-                 socket_paths: List[str]) -> List[Step]:
+                 socket_paths: List[str], reload: bool = False) -> List[Step]:
     """What installing one agent's primal daemon does, in order, without doing it.
 
     Every socket path the daemon will bind is checked first, so a path that cannot work
     stops the install before anything is written (R129).
+
+    ``reload`` replaces a job that may already be loaded. launchd refuses to bootstrap a
+    label it has loaded, and ``kickstart -k`` restarts a job from the definition read at its
+    bootstrap, not from the plist on disk. So the job is booted out first, then bootstrapped
+    from the new plist. The boot-out ends the daemon; ``AbandonProcessGroup`` keeps its units
+    running, and the daemon the bootstrap starts adopts them (persistent_layer 12.6).
     """
     for sp in socket_paths:
         check_socket_path(sp)
     path, data = render_pd_launch_agent(card, program_argv, home, log_dir)
-    return [Step("write", path=path, content=data),
-            Step("launchctl", argv=launchctl_argv("bootstrap", pd_label(card), uid, plist_path=path))]
+    label = pd_label(card)
+    steps = [Step("write", path=path, content=data)]
+    if reload:
+        steps.append(Step("launchctl", argv=launchctl_argv("bootout", label, uid), not_loaded_ok=True))
+    steps.append(Step("launchctl", argv=launchctl_argv("bootstrap", label, uid, plist_path=path)))
+    return steps
 
 
 def uninstall_plan(card: str, home: str, uid: int) -> List[Step]:
