@@ -89,12 +89,15 @@ class TestTheSubstitutionIsActuallyNecessary:
         return stored, addressable
 
     @pytest.mark.parametrize("bad", ["Name.suffix", "Name:suffix"])
-    def test_tmux_silently_rewrites_these_and_the_name_stops_addressing(self, bad, tmux_sandbox_env):
+    def test_tmux_accepts_these_and_the_name_stops_addressing(self, bad, tmux_sandbox_env):
         """The failure mode that motivates substituting at all: new-session
-        SUCCEEDS, and the name you asked for addresses nothing afterwards."""
-        stored, addressable = self._roundtrip(bad, tmux_sandbox_env)
-        assert stored != bad, "tmux accepted this verbatim — the rule may be stale"
-        assert not addressable
+        SUCCEEDS, and the name you asked for addresses nothing afterwards.
+
+        HOW it stops addressing depends on the version, so only the consequence is
+        asserted: tmux 3.6 rewrote '.' and ':' to '_' at creation; tmux 3.8 stores
+        them verbatim, and `-t` then splits the name at them as target separators."""
+        _stored, addressable = self._roundtrip(bad, tmux_sandbox_env)
+        assert not addressable, "tmux addressed this name — the substitution rule may be stale"
 
     def test_the_substituted_form_survives_and_addresses(self, tmux_sandbox_env):
         stored, addressable = self._roundtrip(IDENT, tmux_sandbox_env)
