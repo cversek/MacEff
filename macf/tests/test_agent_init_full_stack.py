@@ -861,3 +861,34 @@ def test_a_failed_bootstrap_after_a_bootout_says_the_daemon_isnt_loaded(tmp_path
         return subprocess.CompletedProcess(argv, code, "", "Bootstrap failed: 5: Input/output error")
     with pytest.raises(RuntimeError, match="was booted out and isn't loaded now.*Load it again with: launchctl bootstrap gui/501"):
         LaunchdAdapter(user_home=tmp_path, uid=501, run=run).install(CARD, tmp_path, force=True)
+
+
+def test_without_the_amail_extra_mail_reads_as_unconfigured_not_as_a_refusal(tmp_path):
+    """cversek/MacEff#843: the declaration and harness steps both ask mail_configured(),
+    and without the extra the amail package refuses to import. That must answer "no
+    mail" rather than refuse both steps (and the daemon step after them)."""
+    import sys
+    from macf.pd import default_declaration as dd
+    with patch.dict(sys.modules, {"macf.amail": None, "macf.amail.pickup": None}):
+        assert dd.mail_configured(tmp_path) is False
+
+
+def test_a_fresh_home_without_the_amail_extra_still_gets_the_whole_stack(stack):
+    """cversek/MacEff#843, end to end: declaration and harness refused, daemon after them."""
+    import sys
+    with patch.dict(sys.modules, {"macf.amail": None, "macf.amail.pickup": None}):
+        rc, results = _run(stack)
+    steps = _by_step(results)
+    assert rc == 0, results
+    assert all(steps[s].status == DONE for s in ("declaration", "harness", "daemon")), results
+    assert _declaration(stack)["notice_routes"] == {}
+
+
+def test_a_refused_declaration_is_named_as_the_daemons_cause(stack):
+    def refuse(ctx):
+        raise ImportError("simulated")
+    with patch.dict(agent_stack.RUNNERS, {"declaration": refuse}):
+        _rc, results = _run(stack)
+    daemon = _by_step(results)["daemon"]
+    assert daemon.status == REFUSED
+    assert "because the declaration step was refused" in daemon.detail

@@ -119,6 +119,8 @@ class Context:
     #: --plan: every step checks what it finds and reports what it would do, changing nothing.
     dry_run: bool = False
     notes: List[str] = field(default_factory=list)
+    #: Steps refused so far this run, so a later step that depends on one names it as the cause.
+    refused: Dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -819,6 +821,10 @@ def step_daemon(ctx: Context) -> Result:
             return Result("daemon", REFUSED, f"{path} can't be read: {e}")
     elif ctx.dry_run and ctx.declaration is not None:
         declaration = ctx.declaration     # the one the declaration step would write
+    elif "declaration" in ctx.refused:
+        # The symptom alone points at the wrong step (cversek/MacEff#843).
+        return Result("daemon", REFUSED, f"no declaration at {path}, because the declaration step "
+                                         f"was refused (see its line above)")
     else:
         return Result("daemon", REFUSED, f"no declaration at {path}")
     # Whatever the declaration step found, new, existing or drifted: a session unit started beside
@@ -929,6 +935,8 @@ def run_stack(args: argparse.Namespace, home: Path, *, in_container: bool,
             result = preamble() if step == "preamble" else RUNNERS[step](ctx)
         except Exception as e:  # noqa: BLE001 - one step's defect is reported, the rest still run
             result = Result(step, REFUSED, f"{type(e).__name__}: {e}")
+        if result.status == REFUSED:
+            ctx.refused[step] = result.detail
         results.append(result)
         if step == "preamble" and result.status == "aborted":
             print("Aborted.")

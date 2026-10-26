@@ -78,8 +78,14 @@ def detect_telegram(login_home: Path, harness_channels: Sequence[str] = ()) -> O
 
 def mail_configured(agent_home: Path) -> bool:
     """Whether the agent's amail settings name its pickup box (``<home>/.maceff/amail.json``),
-    the file the daemon's mail notices read. A box only guessed would deliver nothing."""
-    from macf.amail.pickup import GUESSED, resolve_pickup_box
+    the file the daemon's mail notices read. A box only guessed would deliver nothing.
+
+    Without the ``amail`` extra the package refuses to import, so there is no mail to
+    route: the answer is no, not a refusal of every step that asks (cversek/MacEff#843)."""
+    try:
+        from macf.amail.pickup import GUESSED, resolve_pickup_box
+    except ImportError:
+        return False
     try:
         _box, how = resolve_pickup_box(Path(agent_home), env={})
     except (OSError, ValueError):

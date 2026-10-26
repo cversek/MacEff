@@ -14419,7 +14419,15 @@ def main(argv=None) -> None:
             # as argparse does for anything else missing.
             _deepest_parser(parser, args).print_help()
             exit(2)
-        exit(func(args))
+        try:
+            exit(func(args))
+        except ImportError as e:
+            # amail refuses to load without its extra, and says how to install it; a
+            # traceback buries that message under the chain (cversek/MacEff#843).
+            if args.cmd != "amail" or "'amail' extra" not in str(e):
+                raise
+            print(f"❌ macf_tools amail: {e}", file=sys.stderr)
+            exit(1)
     parser.print_help()
 
 
