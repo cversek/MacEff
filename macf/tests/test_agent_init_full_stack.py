@@ -751,3 +751,43 @@ def test_the_launchd_reinstall_goes_on_when_nothing_was_loaded(tmp_path):
         return subprocess.CompletedProcess(argv, code, "", "Boot-out failed: 3: No such process")
     LaunchdAdapter(user_home=tmp_path, uid=501, run=run).install(CARD, tmp_path, force=True)
     assert [c[1] for c in calls] == ["bootout", "bootstrap"]
+
+
+def test_update_refuses_when_the_pin_cant_be_read_unless_repoint(stack, monkeypatch):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+
+    def unknown(ctx):
+        raise agent_stack.ProgramUnknown("the unit can't be read: [Errno 13] Permission denied")
+    monkeypatch.setattr(agent_stack, "program_change", unknown)
+    for flags in (("--update",), ("--plan", "--update")):
+        rc, results = _run(stack, *flags)
+        daemon = _by_step(results)["daemon"]
+        assert rc == 1 and daemon.status == REFUSED, daemon
+        assert "can't tell which program the daemon is pinned to" in daemon.detail and "--repoint" in daemon.detail
+    assert stack.installs == [] and stack.restarts == []
+    rc, results = _run(stack)
+    daemon = _by_step(results)["daemon"]
+    assert rc == 0 and daemon.status == DRIFT and "can't be told" in daemon.detail, "a finding without --update"
+    rc, results = _run(stack, "--update", "--repoint")
+    assert rc == 0 and _by_step(results)["daemon"].status == DONE and [a.force for a in stack.installs] == [True]
+
+
+def test_program_change_fails_closed_when_the_installed_unit_cant_be_read(tmp_path, monkeypatch):
+    import pytest
+
+    class Tier:
+        platform = "darwin"
+
+        def installed(self, card, home):
+            raise OSError(13, "Permission denied")
+
+        def render(self, card, home):
+            return "[Service]\nExecStart=/usr/bin/python3 -m macf.pd /h\n"
+    monkeypatch.setattr(agent_stack, "_adapter", lambda: Tier())
+    ctx = agent_stack.Context(home=tmp_path, login_home=tmp_path, in_container=False, args=_args())
+    with pytest.raises(agent_stack.ProgramUnknown, match="can't be read"):
+        agent_stack.program_change(ctx)
+    Tier.installed = lambda self, card, home: None
+    with pytest.raises(agent_stack.ProgramUnknown, match="names no program"):
+        agent_stack.program_change(ctx)

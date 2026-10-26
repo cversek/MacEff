@@ -424,21 +424,30 @@ def unit_program(text: Optional[str]) -> Optional[str]:
     return None
 
 
+class ProgramUnknown(Exception):
+    """Which program the installed unit runs, or the one this command would render, can't
+    be read, so whether the daemon is pinned elsewhere can't be told."""
+
+
 def program_change(ctx: Context) -> Optional[Tuple[str, str]]:
     """(installed, rendered) when the installed unit runs another program than this command
-    would render, None when they agree or either can't be read. The rendered program is the
-    interpreter running agent init, so on a login where several macf installs sit on PATH, a
-    daemon pinned to its own venv would otherwise be moved by whichever one ran."""
+    would render, None when they agree. Raises ``ProgramUnknown`` when either can't be read:
+    the caller decides, and --update refuses rather than guess (fail closed). The rendered
+    program is the interpreter running agent init, so on a login where several macf installs
+    sit on PATH, a daemon pinned to its own venv would otherwise be moved by whichever ran."""
     tier = _adapter()
     installed = getattr(tier, "installed", None)
     if installed is None:
-        return None
+        raise ProgramUnknown(f"the {tier.platform} adapter can't read an installed unit")
     try:
         was = unit_program(installed(ctx.card, ctx.home))
         now = unit_program(tier.render(ctx.card, ctx.home))
-    except (OSError, ValueError):
-        return None  # noqa: MACEFF003 - unreadable is no finding; the currency checks still run
-    return (was, now) if was and now and was != now else None
+    except (OSError, ValueError) as e:
+        raise ProgramUnknown(f"the unit can't be read: {e}") from e
+    if not was or not now:
+        raise ProgramUnknown("the installed unit names no program" if not was else
+                             "the rendering names no program")
+    return (was, now) if was != now else None
 
 
 def daemon_build_drift(ctx: Context) -> Optional[str]:
@@ -465,7 +474,11 @@ def currency_findings(ctx: Context) -> List[str]:
     found = []
     if not pd_unit_current(ctx.card, ctx.home):
         found.append("the installed unit differs from what this macf renders now")
-    moved = program_change(ctx)
+    try:
+        moved = program_change(ctx)
+    except ProgramUnknown as e:
+        moved = None
+        found.append(f"which program the daemon is pinned to can't be told ({e})")
     if moved:
         found.append(f"the installed unit runs {moved[0]}; this command would render {moved[1]}")
     drift = daemon_build_drift(ctx)
@@ -486,8 +499,16 @@ def _daemon_currency(ctx: Context, installed: str) -> Result:
         return Result("daemon", DRIFT, f"{installed}, but it isn't current:\n{lines}\n"
                                        f"{UPDATE_FIX} reinstalls the unit and restarts the daemon onto this "
                                        f"build; its units, the session among them, carry across")
-    moved = program_change(ctx)
-    if moved and not getattr(ctx.args, "repoint", False):
+    repoint = getattr(ctx.args, "repoint", False)
+    try:
+        moved = program_change(ctx)
+    except ProgramUnknown as e:
+        if not repoint:
+            return Result("daemon", REFUSED, f"can't tell which program the daemon is pinned to ({e}), so "
+                                             f"--update won't reinstall its unit; add --repoint to point it "
+                                             f"at this command's interpreter anyway")
+        moved = None
+    if moved and not repoint:
         # The daemon may be pinned on purpose to its own venv or checkout; moving it to
         # whichever macf ran this command is the operator's choice, not a side effect.
         return Result("daemon", REFUSED, f"the installed unit runs {moved[0]}, and this command would point "
