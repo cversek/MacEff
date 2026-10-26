@@ -743,3 +743,34 @@ def test_a_plan_that_cant_be_built_changes_nothing_and_the_job_removes_itself(tm
     assert "tmux isn't on PATH" in capsys.readouterr().err
     assert cli.cmd_harness_cutover(_cutover_args(tmp_path)) == 1, "the plan alone says it and exits 1"
     assert removed == [plist], "outside the job there is no job to remove"
+
+
+def test_cutover_without_home_plans_for_the_agent_home_not_the_login_home(tmp_path, monkeypatch):
+    """A host agent's home is rarely the login's ~. Without --home the plan is built for the
+    home `macf_tools env` finds, or it finds neither the staged declaration nor the client."""
+    from macf import cli
+    from macf.cli import _build_parser
+    from macf.pd import cutover
+    from macf.utils.paths import find_agent_home
+    agent_home, login = tmp_path / "agent_home", tmp_path / "login"
+    agent_home.mkdir()
+    login.mkdir()
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(agent_home))
+    monkeypatch.setenv("HOME", str(login))
+    find_agent_home.cache_clear()
+    seen = []
+
+    def record(home, *a, **k):
+        seen.append(Path(home))
+        raise cutover.ProbeUnavailable("stop here")
+    monkeypatch.setattr(cutover, "host_probes", lambda home, card: None)
+    monkeypatch.setattr(cutover, "build_plan", record)
+    try:
+        assert cli.cmd_harness_cutover(_build_parser().parse_args(["harness", "cutover", "--agent", AGENT])) == 1
+        assert seen == [agent_home], f"planned for {seen}, not the agent home {agent_home}"
+        other = tmp_path / "named"
+        other.mkdir()
+        cli.cmd_harness_cutover(_cutover_args(other))
+        assert seen[-1] == other, "--home still names the home"
+    finally:
+        find_agent_home.cache_clear()

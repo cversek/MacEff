@@ -1997,7 +1997,11 @@ def cmd_harness_cutover(args: argparse.Namespace) -> int:
               f"it couldn't be resolved here ({source})", file=sys.stderr)
         return 2
     card = calling_card_from_identifier(agent)
-    home = Path(args.home) if getattr(args, "home", None) else Path.home()
+    # Without --home, the agent home as `macf_tools env` finds it, not the login's ~: on a host
+    # the two differ, and a plan built for ~ finds neither the staged declaration nor the
+    # hand-started client it must stop (persistent_layer 6.3).
+    from .utils.paths import find_agent_home
+    home = Path(args.home) if getattr(args, "home", None) else find_agent_home()
     import os
     from .pd.cutover import ProbeUnavailable, remove_own_job
     from .platform.launchd import cutover_label
@@ -12575,7 +12579,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "cutover", help="print the plan for moving this agent's session onto its primal daemon "
                         "(read-only: checks, steps and rollback for this host; changes nothing)")
     harness_cutover.add_argument("--agent", help="agent slug (default: resolved from identity)")
-    harness_cutover.add_argument("--home", help="agent home directory")
+    harness_cutover.add_argument("--home", help="agent home directory (default: as macf_tools env finds it)")
     harness_cutover.add_argument("--staged", help="the declaration with the session unit "
                                                   "(default: <declaration>.cutover)")
     harness_cutover.add_argument("--json", action="store_true", help="the plan as JSON")
