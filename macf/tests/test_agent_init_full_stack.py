@@ -728,7 +728,8 @@ def test_the_launchd_reinstall_boots_out_before_bootstrapping(tmp_path):
 
     def run(argv):
         calls.append(argv)
-        return subprocess.CompletedProcess(argv, 0, "", "")
+        # launchctl print of a label launchd doesn't have: the booted-out job is gone
+        return subprocess.CompletedProcess(argv, 113 if argv[1] == "print" else 0, "", "")
     tier = LaunchdAdapter(user_home=tmp_path, uid=501, run=run)
     tier.install(CARD, tmp_path)
     assert [c[1] for c in calls] == ["bootstrap"], "a first install only bootstraps"
@@ -736,7 +737,8 @@ def test_the_launchd_reinstall_boots_out_before_bootstrapping(tmp_path):
     tier.install(CARD, tmp_path, force=True)
     from macf.platform.launchd import pd_label
     assert calls[0] == ["launchctl", "bootout", f"gui/501/{pd_label(CARD)}"], calls
-    assert calls[1][1:3] == ["bootstrap", "gui/501"], calls
+    assert calls[1] == ["launchctl", "print", f"gui/501/{pd_label(CARD)}"], "it waits for the job to go"
+    assert calls[2][1:3] == ["bootstrap", "gui/501"], calls
     assert LaunchdAdapter.install_restarts is True
 
 
@@ -747,10 +749,10 @@ def test_the_launchd_reinstall_goes_on_when_nothing_was_loaded(tmp_path):
 
     def run(argv):
         calls.append(argv)
-        code = BOOTOUT_NOT_LOADED if argv[1] == "bootout" else 0
+        code = BOOTOUT_NOT_LOADED if argv[1] == "bootout" else 113 if argv[1] == "print" else 0
         return subprocess.CompletedProcess(argv, code, "", "Boot-out failed: 3: No such process")
     LaunchdAdapter(user_home=tmp_path, uid=501, run=run).install(CARD, tmp_path, force=True)
-    assert [c[1] for c in calls] == ["bootout", "bootstrap"]
+    assert [c[1] for c in calls] == ["bootout", "print", "bootstrap"]
 
 
 def test_update_refuses_when_the_pin_cant_be_read_unless_repoint(stack, monkeypatch):
@@ -791,3 +793,52 @@ def test_program_change_fails_closed_when_the_installed_unit_cant_be_read(tmp_pa
     Tier.installed = lambda self, card, home: None
     with pytest.raises(agent_stack.ProgramUnknown, match="names no program"):
         agent_stack.program_change(ctx)
+
+
+
+def test_the_launchd_reload_waits_until_the_booted_out_job_is_gone(tmp_path, monkeypatch):
+    """bootout returns while the job is still stopping, and a bootstrap then fails with 5
+    (measured on macOS 15). The reload looks until launchd no longer has the label."""
+    from macf.pd.adapter import LaunchdAdapter
+    from macf.platform import launchd
+    calls, looks = [], {"left": 3}
+    monkeypatch.setattr(launchd, "_sleep", lambda s: None)
+
+    def run(argv):
+        calls.append(argv[1])
+        if argv[1] == "print":
+            looks["left"] -= 1
+            return subprocess.CompletedProcess(argv, 0 if looks["left"] > 0 else 113, "", "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    LaunchdAdapter(user_home=tmp_path, uid=501, run=run).install(CARD, tmp_path, force=True)
+    assert calls == ["bootout", "print", "print", "print", "bootstrap"], "no bootstrap while it's still loaded"
+
+
+def test_a_job_that_wont_leave_isnt_bootstrapped_and_the_error_says_how_to_load_it(tmp_path, monkeypatch):
+    import pytest
+    from macf.pd.adapter import LaunchdAdapter
+    from macf.platform import launchd
+    now = {"t": 0.0}
+    monkeypatch.setattr(launchd, "_clock", lambda: now["t"])
+    monkeypatch.setattr(launchd, "_sleep", lambda s: now.__setitem__("t", now["t"] + s))
+    calls = []
+
+    def run(argv):
+        calls.append(argv[1])
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    with pytest.raises(RuntimeError, match="still loaded after 30 s.*the daemon isn't running.*launchctl bootstrap gui/501"):
+        LaunchdAdapter(user_home=tmp_path, uid=501, run=run).install(CARD, tmp_path, force=True)
+    assert "bootstrap" not in calls
+
+
+def test_a_failed_bootstrap_after_a_bootout_says_the_daemon_isnt_loaded(tmp_path):
+    import pytest
+    from macf.pd.adapter import LaunchdAdapter
+
+    def run(argv):
+        if argv[1] == "print":
+            return subprocess.CompletedProcess(argv, 113, "", "")
+        code = 5 if argv[1] == "bootstrap" else 0
+        return subprocess.CompletedProcess(argv, code, "", "Bootstrap failed: 5: Input/output error")
+    with pytest.raises(RuntimeError, match="was booted out and isn't loaded now.*Load it again with: launchctl bootstrap gui/501"):
+        LaunchdAdapter(user_home=tmp_path, uid=501, run=run).install(CARD, tmp_path, force=True)
