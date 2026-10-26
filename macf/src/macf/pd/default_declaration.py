@@ -107,7 +107,11 @@ def build(card: str, *, agent_home: Path, login_home: Path, account: str, python
     where attach, harness status and the cutover look for it (persistent_layer 6.3). The
     caller passes it on Linux and not on macOS, which sets none."""
     path = ":".join(dict.fromkeys(d for d in path_dirs if d))
-    env = {"PATH": path, "HOME": str(login_home), "MACEFF_AGENT_HOME_DIR": "{agent_home}"}
+    # The declaration states a unit's whole environment (persistent_layer 6.3), so the login
+    # each unit runs as is stated too: without it the session read its login as unknown, and a
+    # home with no calling card would take "unknown" for its name (cversek/MacEff#848).
+    env = {"PATH": path, "HOME": str(login_home), "MACEFF_AGENT_HOME_DIR": "{agent_home}",
+           "USER": account, "LOGNAME": account}
     py = str(python)
     units = [
         {"name": "session", "kind": "session",
@@ -158,10 +162,22 @@ def drift(existing: Dict[str, Any], default: Dict[str, Any]) -> List[str]:
     it has every default unit, channel and notice route. Only absences are named: a value the
     agent chose differently is the agent's, not drift."""
     out = []
-    have = {_unit_key(u) for u in existing.get("units") or []}
+    have = {_unit_key(u): u for u in existing.get("units") or []}
     for unit in default["units"]:
         if _unit_key(unit) not in have:
             out.append(f"no {unit['name']} unit: the default runs {' '.join(unit['command'])}")
+            continue
+        # A variable the default states and the default's own unit doesn't is an absence too:
+        # the unit runs with only what its declaration states, so a home declared before the
+        # default gained USER and LOGNAME would never be told (cversek/MacEff#848). A unit
+        # running a command of the agent's own is the agent's, environment and all.
+        mine = have[_unit_key(unit)]
+        if [str(a) for a in mine.get("command") or []] != [str(a) for a in unit["command"]]:
+            continue
+        stated = mine.get("environment") or {}
+        missing = [k for k in (unit.get("environment") or {}) if k not in stated]
+        if missing:
+            out.append(f"the {unit['name']} unit's environment lacks {', '.join(missing)}")
     declared = {(c.get("plugin"), c.get("marketplace")) for c in existing.get("allowlisted_channels") or []}
     for c in default.get("allowlisted_channels") or []:
         if (c["plugin"], c["marketplace"]) not in declared:

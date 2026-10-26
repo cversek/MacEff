@@ -949,3 +949,25 @@ def test_a_store_provisioned_without_its_sentinel_is_not_already_done(stack):
     assert (store / "000.json").exists()
     _rc, results = _run(stack)
     assert _by_step(results)["task-store"].status == ALREADY
+
+
+def test_every_default_unit_states_the_login_it_runs_as(stack):
+    """cversek/MacEff#848: units start with only their declared environment, and the
+    default declared no USER or LOGNAME, so the session read its login as unknown."""
+    _run(stack)
+    for unit in _declaration(stack)["units"]:
+        env = unit["environment"]
+        assert env["USER"] == env["LOGNAME"] == unit["account"], unit["name"]
+
+
+def test_a_default_unit_declared_without_the_login_is_reported_as_drift():
+    from macf.pd import default_declaration as dd
+    default = {"units": [{"name": "monitor", "command": ["py", "-m", dd.MONITOR_MODULE, "--follow"],
+                          "environment": {"PATH": "/bin", "USER": "a", "LOGNAME": "a"}}]}
+    older = {"units": [{"name": "monitor", "command": ["py", "-m", dd.MONITOR_MODULE, "--follow"],
+                        "environment": {"PATH": "/bin"}}]}
+    assert dd.drift(older, default) == ["the monitor unit's environment lacks USER, LOGNAME"]
+    # The same unit running a command of the agent's own is the agent's, environment and all.
+    own = {"units": [{"name": "monitor", "command": ["my-monitor", "-m", dd.MONITOR_MODULE],
+                      "environment": {}}]}
+    assert dd.drift(own, default) == []
