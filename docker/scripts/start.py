@@ -915,9 +915,24 @@ fi
 # Marketplace sources the provisioner may add on a fresh home. A channel naming
 # a marketplace not listed here is skipped with a warning rather than guessed
 # at -- provisioning must not invent a source for third-party code.
+def _packaged_maceff_marketplace() -> Optional[str]:
+    """The ``maceff`` marketplace shipped inside the installed macf package, as a local
+    directory source, or None when this macf has none. Local, so the MacEff channel
+    installs offline and from whatever macf the container runs."""
+    try:
+        from macf.channels.marketplace import packaged_marketplace
+        return str(packaged_marketplace())
+    except (ImportError, OSError) as e:
+        log(f"maceff marketplace: not available from the installed macf ({e})")
+        return None
+
+
 KNOWN_MARKETPLACE_SOURCES = {
     'claude-plugins-official': 'anthropics/claude-plugins-official',
 }
+_maceff_source = _packaged_maceff_marketplace()
+if _maceff_source:
+    KNOWN_MARKETPLACE_SOURCES['maceff'] = _maceff_source
 
 
 def ensure_channel_plugins(username: str, channels: Optional[List[str]]) -> None:
@@ -959,7 +974,7 @@ def ensure_channel_plugins(username: str, channels: Optional[List[str]]) -> None
                     f"has no known source; skipping (add it to "
                     f"KNOWN_MARKETPLACE_SOURCES or pre-configure the home)")
                 continue
-            as_user(f'claude plugin marketplace add {source}')
+            as_user(f'claude plugin marketplace add {shlex.quote(source)}')
         else:
             as_user(f'claude plugin marketplace update {marketplace}')
 
@@ -1853,12 +1868,36 @@ def start_policy_index(agents_config: AgentsConfig, build=None):
     return thread
 
 
+def declared_search_unit(agents_config: AgentsConfig) -> Optional[tuple]:
+    """The (account, unit) of the first primal daemon unit any account declares whose command
+    runs the search service (``macf.search_service``), agents' and services' alike; None
+    when none does."""
+    for account, body, _home, _card in daemon_accounts(agents_config):
+        for unit in (body or {}).get('units', []) or []:
+            if 'macf.search_service' in ' '.join(str(a) for a in unit.get('command', []) or []):
+                return account, unit
+    return None
+
+
 def start_search_service_daemon(agents_config: AgentsConfig) -> None:
     """Start search service daemon as first PA user (background process).
 
     The search service provides 89x faster policy recommendations by keeping
     the sentence-transformers model warm in memory.
+
+    When an account's primal daemon declares it as a unit, that daemon runs and supervises it
+    and this step starts none: a second copy would take the port first.
     """
+    declared = declared_search_unit(agents_config)
+    if declared is not None:
+        account, unit = declared
+        log(f"search service: runs under {account}'s primal daemon as unit "
+            f"'{unit.get('name', '?')}'; this step starts none")
+        if '--unit' not in [str(a) for a in unit.get('command', []) or []]:
+            log(f"⚠️ MACF: search service: unit '{unit.get('name', '?')}' of {account} runs "
+                f"macf.search_service without --unit, so it may daemonize and leave its daemon "
+                f"supervising a process that has exited")
+        return
     if not agents_config.agents:
         log("No agents configured, skipping search service")
         return
@@ -2723,6 +2762,7 @@ def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] 
     (``write_agent_cards``); an agent whose home holds a different card is not rendered for.
     Returns the accounts rendered for."""
     from macf.pd import names as pd_names
+    from macf.models.agent_spec import with_schedule_targets
     from macf.pd.interface import Declaration
     root = Path(root or pd_names.RENDERED_DECLARATIONS)
     root.mkdir(mode=0o755, parents=True, exist_ok=True)
@@ -2749,7 +2789,7 @@ def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] 
                 card = pd_names.agent_card(home)
             except (pd_names.IdentityError, KeyError) as e:
                 raise OSError(f"its calling card can't be read ({e})") from e
-            declaration = Declaration(version=1, agent=card, **body)
+            declaration = Declaration(version=1, agent=card, **with_schedule_targets(body, card))
             target_dir.mkdir(mode=0o755, exist_ok=True)
             chown(target_dir, 0, 0)
             os.chmod(target_dir, 0o755)

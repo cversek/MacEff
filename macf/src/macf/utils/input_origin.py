@@ -48,6 +48,15 @@ HARNESS_NOTICE_OPENINGS = (
 )
 
 
+# What the client writes after a slash command it runs itself: the command's output, as
+# a row of its own. It is the client speaking, so it is never anyone's typing.
+LOCAL_COMMAND_OUTPUT_OPENINGS = ("<local-command-stdout>", "<local-command-stderr>")
+
+# How the client records a slash command it ran, as a second row beside the typed text,
+# a few milliseconds later. One keystroke, two rows, so each takes its own arrival.
+COMMAND_ROW_OPENING = "<command-name>"
+
+
 # A wake carries only the persistent layer's own words and message identifiers
 # (MIS-0002-R77), and it opens with these. Keys typed into the session's input
 # box are recorded as typing whoever typed them, so the opening is what tells a
@@ -104,6 +113,16 @@ def opening_channel_source(text: str) -> Optional[str]:
 def opens_with_harness_notice(text: str) -> bool:
     """True when ``text`` opens the way the client opens input it delivers itself."""
     return text.lstrip().startswith(HARNESS_NOTICE_OPENINGS)
+
+
+def opens_with_local_command_output(text: str) -> bool:
+    """True when ``text`` is the output the client writes for a slash command it ran."""
+    return text.lstrip().startswith(LOCAL_COMMAND_OUTPUT_OPENINGS)
+
+
+def opens_with_command_row(text: str) -> bool:
+    """True when ``text`` is the client's record of a slash command, beside the typed row."""
+    return text.lstrip().startswith(COMMAND_ROW_OPENING)
 
 
 def opens_with_wake(text: str) -> bool:
@@ -164,6 +183,42 @@ def typed_by_framework(text: str, now: Optional[float] = None, *, consumer: str 
             print(f"⚠️ MACF: could not record that a framework keystroke arrived, so its text "
                   f"typed again within the window will read as the framework's: {e}", file=sys.stderr)
     return kind
+
+
+#: How far back a box's text is looked for among the framework's keystrokes. Unsent text
+#: sits in a box for as long as nobody submits it (half a day, on Oct 24), so this is far
+#: wider than the window in which a keystroke names its arrival.
+BOX_TEXT_WINDOW_SECONDS = 24 * 60 * 60
+
+
+def framework_typed_box_text(box: str, now: Optional[float] = None) -> Optional[str]:
+    """The kind of the framework keystroke that typed ``box``, the text an input box holds, or
+    None when no keystroke in the window accounts for it.
+
+    The box's text counts as the framework's when it is the start of a ``keys_sent`` record's
+    text, with every run of whitespace made one space: the screen joins a wrapped line's rows
+    with a space, and Ctrl-U removes text from the end. Text a person added before or after
+    the framework's keys is no record's start, so it is never the framework's. Nothing is
+    taken: this only looks.
+    """
+    wanted = " ".join(box.split())
+    if not wanted:
+        return None
+    from macf.agent_events_log import read_events
+    cutoff = (time.time() if now is None else now) - BOX_TEXT_WINDOW_SECONDS
+    # A box keeps its text across a compaction, so the whole log is read back to the cutoff.
+    for event in read_events(reverse=True, scope="all", only=[KEYS_SENT_EVENT]):
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        if event.get("event") != KEYS_SENT_EVENT:
+            continue
+        data = event.get("data") or {}
+        if data.get("kind") == "clear_input":
+            continue                     # the Ctrl-U a clearing records types no text
+        if " ".join(str(data.get("text", "")).split()).startswith(wanted):
+            return str(data.get("kind") or "keys")
+    return None
 
 
 def from_maceff_channel(source: Optional[str]) -> bool:

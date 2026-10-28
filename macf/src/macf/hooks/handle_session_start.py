@@ -9,7 +9,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 
 from macf.utils import (
     format_macf_brand,
@@ -172,7 +172,8 @@ def _supervision_block(environ=None, ask=None) -> str:
         home = Path(env["MACEFF_AGENT_HOME_DIR"]) if env.get("MACEFF_AGENT_HOME_DIR") else find_agent_home()
         if not declaration_path(home).is_file():
             return ""
-        unit = primal_daemon_unit(get_agent_identity(), environ=env, ask=ask)
+        from ..pd.names import agent_card
+        unit = primal_daemon_unit(agent_card(home), environ=env, ask=ask)
     except Exception as e:  # noqa: BLE001 - GUARD: a readout must not break session start
         emit_warning(Warning(source="session_start", kind="supervision_unread",
                              detail=f"could not tell whether the daemon supervises this session: {e}"))
@@ -188,6 +189,31 @@ def _supervision_block(environ=None, ask=None) -> str:
                 "so the daemon won't restart it if it crashes. `macf_tools env` shows what supervises "
                 "it. Moving a session onto its daemon is the operator's step (persistent_layer 6.2).")
     return f"<system-reminder>\n{text}\n</system-reminder>\n"
+
+
+def _ask_rules_block(project_dir: Optional[str] = None, home: Optional[Path] = None, environ=None) -> str:
+    """The Ask rules in force, at every session start (autonomous_operation 5.5). A command one of
+    them matches stops at a dialog, and in AUTO_MODE with nobody at the keyboard it waits until
+    someone answers: seven hours for a seat on 2026-10-24, on a cleanup chained after the real
+    work. Read here, the agent knows the rules before it writes a command, not after it hangs.
+    Silent when there are none; a failure never breaks session start."""
+    env = os.environ if environ is None else environ
+    try:
+        from ..permission_watch import rules_in_force
+        rules = [r for k, r, _ in rules_in_force(project_dir or env.get("CLAUDE_PROJECT_DIR") or os.getcwd(),
+                                                   home or Path.home(), env) if k == "ask"]
+    except Exception as e:  # noqa: BLE001 - GUARD: a readout must not break session start
+        emit_warning(Warning(source="session_start", kind="ask_rules_unread", detail=str(e)))
+        return ""
+    if not rules:
+        return ""
+    shown = ", ".join(rules[:30]) + (f", and {len(rules) - 30} more" if len(rules) > 30 else "")
+    return ("<system-reminder>\n"
+            f"🛂 {len(rules)} Ask rule(s) are in force; a command that matches one, in any part of a chain, "
+            f"stops at a permission dialog: {shown}. Unattended, keep those out of your calls (delete "
+            "inside a script, not with a chained rm -r). `macf_tools permissions check '<command>'` says "
+            "whether a command would ask; `macf_tools permissions list` shows every rule and its file.\n"
+            "</system-reminder>\n")
 
 
 def _focused_charter_block() -> str:
@@ -257,11 +283,18 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # here covers every fresh start and every resume. start_daemon()
         # daemonizes (non-blocking) and is idempotent; failure is logged, never
         # fatal to the hook.
+        # Where the agent's primal daemon runs the monitor as a declared unit, nothing is
+        # started here: the hook only announces this session (its transcript, its Claude Code
+        # process, its session unit), which the unit's follow-mode monitor moves to.
         try:
+            from macf.pd.monitor_unit import declared_monitor_unit
             from macf.transcript_monitor.daemon import (
+                announce_session as _tm_announce,
                 is_running as _tm_running, start_daemon as _tm_start,
             )
-            if not _tm_running():
+            if declared_monitor_unit() is not None:
+                _tm_announce(data)
+            elif not _tm_running():
                 _tm_start()
         except (ImportError, OSError, RuntimeError) as e:
             emit_warning(Warning(
@@ -391,7 +424,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                     "continue": True,
                     "hookSpecificOutput": {
                         "hookEventName": "SessionStart",
-                        "additionalContext": _identity_block() + _supervision_block()
+                        "additionalContext": _identity_block() + _supervision_block() + _ask_rules_block()
                                              + f"<system-reminder>\n{migration_msg}\n</system-reminder>"
                     }
                 }
@@ -604,7 +637,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 "systemMessage": recovery_msg,  # TOP LEVEL - user sees this
                 "hookSpecificOutput": {
                     "hookEventName": "SessionStart",
-                    "additionalContext": _identity_block() + _supervision_block()
+                    "additionalContext": _identity_block() + _supervision_block() + _ask_rules_block()
                                          + f"<system-reminder>\n{recovery_msg}\n</system-reminder>"
                                          + _focused_charter_block()
                 }
@@ -714,7 +747,7 @@ Session Context:
             emit_warning(Warning(source="session_start", kind="telegram_send_failed", detail=f"session-start telegram notification failed: {e}"))
 
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
-        additional_context = (_identity_block() + _supervision_block()
+        additional_context = (_identity_block() + _supervision_block() + _ask_rules_block()
                               + f"<system-reminder>\n{message}\n</system-reminder>"
                               + _focused_charter_block())
 
