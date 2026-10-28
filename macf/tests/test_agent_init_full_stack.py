@@ -168,7 +168,10 @@ def test_an_existing_declaration_is_never_overwritten_and_its_gaps_are_reported(
     assert path.read_text() == text
     assert result.status == DRIFT
     assert "no monitor unit" in result.detail and "no search unit" in result.detail
-    assert "session unit" not in result.detail          # a session under another name counts
+    assert "no session unit" not in result.detail       # a session under another name counts
+    # It runs a command of its own, but the login is the account's, not the program's
+    # (cversek/MacEff#848).
+    assert "the session unit's environment lacks USER, LOGNAME" in result.detail
     assert "maceff-channel@maceff" in result.detail
 
 
@@ -967,7 +970,24 @@ def test_a_default_unit_declared_without_the_login_is_reported_as_drift():
     older = {"units": [{"name": "monitor", "command": ["py", "-m", dd.MONITOR_MODULE, "--follow"],
                         "environment": {"PATH": "/bin"}}]}
     assert dd.drift(older, default) == ["the monitor unit's environment lacks USER, LOGNAME"]
-    # The same unit running a command of the agent's own is the agent's, environment and all.
+    # The same unit running a command of the agent's own keeps the rest of its environment as
+    # the agent's, but the login is the account's, whatever the unit runs.
     own = {"units": [{"name": "monitor", "command": ["my-monitor", "-m", dd.MONITOR_MODULE],
                       "environment": {}}]}
+    assert dd.drift(own, default) == ["the monitor unit's environment lacks USER, LOGNAME"]
+    own["units"][0]["environment"] = {"USER": "a", "LOGNAME": "a"}
     assert dd.drift(own, default) == []
+
+
+def test_a_session_unit_with_its_own_command_is_still_told_it_lacks_the_login():
+    """cversek/MacEff#849 review: a session unit declared before agent init existed runs its
+    own argv, so drift skipped its environment, and the session read its login as unknown."""
+    from macf.pd import default_declaration as dd
+    default = {"units": [{"name": "session", "kind": "session",
+                          "command": ["py", "-m", "macf.cli", "harness", "unit", "--home", "{agent_home}"],
+                          "environment": {"PATH": "/bin", "HOME": "/h", "USER": "a", "LOGNAME": "a"}}]}
+    older = {"units": [{"name": "claude", "kind": "session",
+                        "command": ["py", "-m", "macf.cli", "harness", "unit", "--agent", "Tester_abc123",
+                                    "--project-dir", "/h/work", "--no-proxy"],
+                        "environment": {"HOME": "/h"}}]}
+    assert dd.drift(older, default) == ["the session unit's environment lacks USER, LOGNAME"]

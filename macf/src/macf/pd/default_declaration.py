@@ -35,6 +35,10 @@ SEARCH_MODULE = "macf.search_service.daemon"
 #: grace must exceed that (persistent_layer 6.2).
 SESSION_STOP_GRACE_S = 30.0
 
+#: The variables that name the login a unit runs as. They belong to the unit's account, not its
+#: program, so drift reports them missing whatever command the unit runs (cversek/MacEff#848).
+LOGIN_VARIABLES = ("USER", "LOGNAME")
+
 
 def channel_flag(plugin: str, marketplace: str) -> str:
     """A channel as the harness's ``--channels`` takes it."""
@@ -170,12 +174,14 @@ def drift(existing: Dict[str, Any], default: Dict[str, Any]) -> List[str]:
         # A variable the default states and the default's own unit doesn't is an absence too:
         # the unit runs with only what its declaration states, so a home declared before the
         # default gained USER and LOGNAME would never be told (cversek/MacEff#848). A unit
-        # running a command of the agent's own is the agent's, environment and all.
+        # running a command of the agent's own keeps the rest of its environment as the
+        # agent's; the login is still compared, since it is the account's, not the program's.
         mine = have[_unit_key(unit)]
+        wanted = list(unit.get("environment") or {})
         if [str(a) for a in mine.get("command") or []] != [str(a) for a in unit["command"]]:
-            continue
+            wanted = [k for k in wanted if k in LOGIN_VARIABLES]
         stated = mine.get("environment") or {}
-        missing = [k for k in (unit.get("environment") or {}) if k not in stated]
+        missing = [k for k in wanted if k not in stated]
         if missing:
             out.append(f"the {unit['name']} unit's environment lacks {', '.join(missing)}")
     declared = {(c.get("plugin"), c.get("marketplace")) for c in existing.get("allowlisted_channels") or []}
