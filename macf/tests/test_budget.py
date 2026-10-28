@@ -581,3 +581,59 @@ def test_a_refusal_carries_its_status_and_retry_after_and_never_the_token(monkey
         budget.fetch_reply(token_source=lambda: FAKE_TOKEN)
     assert (e.value.status, e.value.retry_after, e.value.short) == (429, 90.0, "endpoint 429")
     assert FAKE_TOKEN not in str(e.value) and FAKE_TOKEN not in str(budget._failure(e.value))
+
+
+# ── which Keychain item holds the token in use (#852) ───────────────────────
+
+DUMP = '''keychain: "/Users/x/Library/Keychains/login.keychain-db"
+class: "genp"
+attributes:
+    "acct"<blob>="x"
+    "mdat"<timedate>=0x32303236313032363032323630315A00  "20261026022601Z\\000"
+    "svce"<blob>="Claude Code-credentials"
+keychain: "/Users/x/Library/Keychains/login.keychain-db"
+class: "genp"
+attributes:
+    "acct"<blob>="other"
+    "mdat"<timedate>=0x32303236313032383130333834315A00  "20261028103841Z\\000"
+    "svce"<blob>="Something else"
+keychain: "/Users/x/Library/Keychains/login.keychain-db"
+class: "genp"
+attributes:
+    "acct"<blob>="unknown"
+    "mdat"<timedate>=0x32303236313032383130333834315A00  "20261028103841Z\\000"
+    "svce"<blob>="Claude Code-credentials"
+'''
+
+
+def keychain(monkeypatch, dump=DUMP):
+    """A fake `security`: the listing above, and a token per account."""
+    import subprocess
+    asked = []
+
+    def run(cmd, **kw):
+        if cmd[:2] == ["security", "dump-keychain"]:
+            return subprocess.CompletedProcess(cmd, 0 if dump is not None else 1, dump or "", "")
+        acct = cmd[cmd.index("-a") + 1] if "-a" in cmd else "x"
+        asked.append(acct)
+        token = {"x": "sk-ant-oat01-STALE", "unknown": FAKE_TOKEN}.get(acct)
+        out = json.dumps({"claudeAiOauth": {"accessToken": token}}) if token else ""
+        return subprocess.CompletedProcess(cmd, 0 if token else 44, out, "")
+
+    monkeypatch.setattr(budget.sys, "platform", "darwin")
+    monkeypatch.setattr(budget.subprocess, "run", run)
+    monkeypatch.setattr(budget, "CREDENTIAL_FILE", budget.Path("/nonexistent/.credentials.json"))
+    return asked
+
+
+def test_the_newest_keychain_item_is_the_one_read(monkeypatch):
+    """Two items share the service name when a session ran without USER; the token in use is in the newer one."""
+    asked = keychain(monkeypatch)
+    assert budget.keychain_accounts() == ["unknown", "x"]
+    assert budget.read_token() == FAKE_TOKEN and asked == ["unknown"]
+
+
+def test_without_a_listing_the_first_match_is_read(monkeypatch):
+    asked = keychain(monkeypatch, dump=None)
+    assert budget.keychain_accounts() == []
+    assert budget.read_token() == "sk-ant-oat01-STALE" and asked == ["x"]
