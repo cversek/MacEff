@@ -62,18 +62,49 @@ class BudgetError(Exception):
 
 # ── credential ────────────────────────────────────────────────────────────────
 
+def keychain_accounts() -> list[str]:
+    """The accounts of the Keychain items named KEYCHAIN_SERVICE, most recently written first. Attributes only: no
+    secret is read here.
+
+    There can be more than one. Claude Code names the item's account after the login it runs as, and a session started
+    without USER files its refreshed token under "unknown". The item it was first given is then never written again,
+    and its token expires while it is still the first match for the service name (#852). The newest is the one in use.
+    """
+    try:
+        r = subprocess.run(["security", "dump-keychain"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return []  # noqa: MACEFF003 - no listing: read_token falls back to the first match for the service
+    items, cur = [], {}
+    for line in r.stdout.splitlines() + ["keychain: end"]:
+        if line.startswith("keychain: "):
+            if cur.get("svce") == KEYCHAIN_SERVICE and "acct" in cur:
+                items.append((cur.get("mdat", ""), cur["acct"]))
+            cur = {}
+            continue
+        m = re.search(r'"(acct|svce)"<blob>="(.*)"\s*$', line)
+        if m:
+            cur[m.group(1)] = m.group(2)
+        m = re.search(r'"mdat"<timedate>=\S+\s+"(\d{14}Z)', line)
+        if m:
+            cur["mdat"] = m.group(1)
+    return [acct for _, acct in sorted(items, reverse=True)]
+
+
 def read_token() -> str:
     """The CLI's OAuth access token, for one request. Raises BudgetError when none is reachable."""
     raw = None
     if sys.platform == "darwin":
-        try:
-            r = subprocess.run(["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
-                               capture_output=True, text=True, timeout=10)
-        except (OSError, subprocess.TimeoutExpired) as e:
-            raise BudgetError(f"Keychain read failed ({type(e).__name__}); use `budget sample --manual`",
-                              short="credential unreadable")
-        if r.returncode == 0:
-            raw = r.stdout
+        for acct in keychain_accounts() or [None]:
+            try:
+                r = subprocess.run(["security", "find-generic-password", "-s", KEYCHAIN_SERVICE]
+                                   + (["-a", acct] if acct else []) + ["-w"],
+                                   capture_output=True, text=True, timeout=10)
+            except (OSError, subprocess.TimeoutExpired) as e:
+                raise BudgetError(f"Keychain read failed ({type(e).__name__}); use `budget sample --manual`",
+                                  short="credential unreadable")
+            if r.returncode == 0:
+                raw = r.stdout
+                break
     if raw is None and CREDENTIAL_FILE.exists():
         try:
             raw = CREDENTIAL_FILE.read_text()
