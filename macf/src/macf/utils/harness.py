@@ -190,6 +190,16 @@ def _per_project_agent() -> bool:
         return False
 
 
+#: How resolve_agent names the source of an identity it took from the identity layer,
+#: keyed by :func:`macf.utils.identity.agent_name_source`.
+_NAME_SOURCE_LABELS = {
+    "config": "calling card",
+    "env": "MACEFF_AGENT_NAME",
+    "gecos": "GECOS display name, no calling card configured",
+    "user": "$USER login name, no calling card configured",
+}
+
+
 def resolve_agent(explicit: Optional[str] = None,
                   unit_dir: Optional[Path] = None) -> "tuple":
     """Resolve which agent this harness command is about, and say how.
@@ -216,13 +226,17 @@ def resolve_agent(explicit: Optional[str] = None,
     # naming the host's resident agent) names a different agent; the card wins,
     # as it does for get_agent_identity().
     try:
-        from .identity import get_agent_identity, session_identifier
+        from .identity import agent_name_source, get_agent_identity, session_identifier
         card = get_agent_identity()
         # 'unknown' is what identity returns when no UUID resolves; deriving a
         # session name from it would manufacture an identifier for an agent
         # whose identity is precisely what could not be established.
         if card and not card.endswith("@unknown"):
-            return session_identifier(card), "calling card"
+            # Only a configured name is the calling card. A name the identity layer
+            # fell back to is reported as the fallback it is: labelled "calling card",
+            # `env` read healthy in a home the daemon refused as naming no agent
+            # (cversek/MacEff#842).
+            return session_identifier(card), _NAME_SOURCE_LABELS.get(agent_name_source(), "calling card")
     except ImportError as e:
         # A sibling module of this package, so a failure here means the install
         # is broken rather than that identity is unavailable.

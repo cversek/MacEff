@@ -63,6 +63,11 @@ class Step:
     what: str
     commands: List[Command]
     undo: List[Command] = field(default_factory=list)
+    #: Whether a session running here ends at this step, and what the step does to the daemon
+    #: ("starts", "restarts", or ""), so the plan's warning names the steps that do it rather
+    #: than guessing from a title (cversek/MacEff#847).
+    ends_session: bool = False
+    daemon: str = ""
 
 
 @dataclass(frozen=True)
@@ -309,7 +314,7 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
         stop.append(Command([sys.executable, "-m", "macf.pd.cutover", "end-stale-monitors", str(home)],
                             note="transcript monitors of this agent whose session has ended"))
         steps.append(Step("Stop the legacy session (a session running here ends at this step)", stop,
-                          undo=init.start_harness(init.harness) if legacy else []))
+                          undo=init.start_harness(init.harness) if legacy else [], ends_session=True))
     if clients:
         grace = _session_grace(staged)
         pids = ", ".join(str(c[0]) for c in clients)
@@ -323,7 +328,8 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
         steps.append(Step(f"Stop the hand-started client (pid {pids}; a session running here ends at "
                           "this step)", end,
                           undo=[Command(["true"], note=f"the hand-started session ended and isn't "
-                                        f"restarted; resume it with claude -c in {where}")]))
+                                        f"restarted; resume it with claude -c in {where}")],
+                          ends_session=True))
     restart = [] if install_daemon else [init.restart_daemon()]
     end_unit = Command(["tmux", "-S", str(tmux_socket(agent, unit_base)), "kill-server"],
                        note="the unit's session, no longer declared, before the legacy one starts",
@@ -333,14 +339,16 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
                           [Command(["cp", str(live), str(saved)]), Command(["cp", str(staged), str(live)]),
                            *restart],
                           undo=[Command(["cp", str(saved), str(live)]), *restart, end_unit,
-                                Command(["rm", str(saved)], note="restored, so no later attempt finds it")]))
+                                Command(["rm", str(saved)], note="restored, so no later attempt finds it")],
+                          daemon="restarts" if restart else ""))
     else:
         # A seat agent init staged for this move has no declaration yet: nothing to keep, and
         # the undo removes the one installed.
         steps.append(Step("Install the declaration with the session unit (there is none to keep)",
                           [Command(["cp", str(staged), str(live)]), *restart],
                           undo=[Command(["rm", str(live)], note="there was none before the move"),
-                                *restart, end_unit]))
+                                *restart, end_unit],
+                          daemon="restarts" if restart else ""))
     if install_daemon:
         pd_env = {"MACEFF_AGENT_HOME_DIR": str(home)}
         steps.append(Step(f"Install the primal daemon under {init.name} (pd install), which starts the session unit",
@@ -348,7 +356,8 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
                                    timeout=PD_INSTALL_TIMEOUT_S)],
                           undo=[Command([sys.executable, "-m", "macf.cli", "pd", "uninstall"], env=pd_env,
                                         note="the daemon wasn't installed before the move",
-                                        timeout=PD_INSTALL_TIMEOUT_S), end_unit]))
+                                        timeout=PD_INSTALL_TIMEOUT_S), end_unit],
+                          daemon="starts"))
     steps.append(Step("Watch the session unit come up: starting, then running",
                       [Command(["macf_tools", "pd", "status"]), Command(["macf_tools", "harness", "status"])]))
     ready = all(c.ok for c in checks)
@@ -759,9 +768,13 @@ def format_plan(plan: Plan) -> str:
             lines += [f"   undo step {i}:"] + [f"     {c}" for c in step.undo]
     lines += ["", "If a step fails, undo it and every step before it, last first. Never undo a "
               "step that wasn't reached: its undo may restore what it never saved."]
-    lines += ["", "Run the steps from a terminal outside the session they stop (step "
-              f"{next(i for i, s in enumerate(plan.steps, 1) if s.what.startswith('Install'))} "
-              "restarts the daemon; an earlier step may end the session you are typing in)."]
+    # Named from what each step does: the title-prefix guess named the declaration's install as
+    # restarting a daemon that, on a seat without one, the next step first starts.
+    effects = [f"step {i} ends the session you may be typing in"
+               for i, s in enumerate(plan.steps, 1) if s.ends_session]
+    effects += [f"step {i} {s.daemon} the daemon" for i, s in enumerate(plan.steps, 1) if s.daemon]
+    lines += ["", "Run the steps from a terminal outside the session they stop"
+              + (f" ({'; '.join(effects)})." if effects else ".")]
     # What only a person can do (host-side maintainer, on review).
     lines += ["", "When the new session starts:",
               "  - if it asks how to resume, answer \"continue\", never \"summarize\";",

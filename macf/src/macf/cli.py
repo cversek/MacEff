@@ -2690,7 +2690,10 @@ def _ensure_agent_uuid(
             _write(candidate, "Minted")
             return
         print(f"\n🆔 Proposed agent UUID: {candidate}")
-        print(f"    Calling card would be: @{candidate[:6]}")
+        # A bare '@abc123' is no card: every step keyed on the card needs the name half
+        # too, which the calling-card step writes (cversek/MacEff#842).
+        print(f"    Calling card would be: <name>@{candidate[:6]} "
+              f"(the name comes next, from the calling-card step or --calling-card NAME)")
         answer = input("  [A]ccept / [r]egenerate / [s]kip: ").strip().lower()
         if answer in ('', 'a', 'accept', 'y', 'yes'):
             _write(candidate, "Minted")
@@ -4131,26 +4134,35 @@ def cmd_recommender_sample(args: argparse.Namespace) -> int:
 
 
 def cmd_mode_get(args: argparse.Namespace) -> int:
-    """Get current operating mode."""
+    """Get current operating mode, and the work mode beside it.
+
+    The work mode comes from the resolver the dashboard reads, so the two cannot
+    disagree; it was missing here, so the instrument the preamble names for reading
+    one's stance could not tell an unset work mode from an unreported one
+    (cversek/MacEff#846)."""
     from .modes import detect_auto_mode
+    from .modes.detection import _get_current_work_mode
 
     try:
         session_id = get_current_session_id()
         enabled, source = detect_auto_mode(session_id)
 
         mode = "AUTO_MODE" if enabled else "MANUAL_MODE"
+        work_mode = _get_current_work_mode()
 
         if getattr(args, 'json_output', False):
             data = {
                 "mode": mode,
                 "enabled": enabled,
                 "source": source,
+                "work_mode": work_mode,
                 "session_id": session_id
             }
             print(json.dumps(data, indent=2))
         else:
             print(f"Mode: {mode}")
             print(f"Source: {source}")
+            print(f"Work mode: {work_mode or '(unset)'}")
 
         return 0
 
@@ -6705,6 +6717,18 @@ def cmd_task_store_init(args: argparse.Namespace) -> int:
         return 1
     print(f"{'✓ Already' if was == 'home' else '✅ Set'}: "
           f"task_store.mode = home  ({config_path})")
+
+    # The sentinel was seeded only by the first `task create`, so a provisioned
+    # store had none and `task tree` failed until something was created in it
+    # (cversek/MacEff#842).
+    from .task.create import SENTINEL_TASK_ID, _ensure_sentinel_task
+    seeded = not (store / f"{SENTINEL_TASK_ID}.json").exists()
+    try:
+        _ensure_sentinel_task(store)
+    except OSError as e:
+        print(f"❌ Could not write sentinel #{SENTINEL_TASK_ID} in {store}: {e}", file=sys.stderr)
+        return 1
+    print(f"{'✅ Seeded' if seeded else '✓ Present'}: sentinel #{SENTINEL_TASK_ID}")
 
     _ensure_store_gitignored_for_migration(store)
     return 0
@@ -14419,7 +14443,15 @@ def main(argv=None) -> None:
             # as argparse does for anything else missing.
             _deepest_parser(parser, args).print_help()
             exit(2)
-        exit(func(args))
+        try:
+            exit(func(args))
+        except ImportError as e:
+            # amail refuses to load without its extra, and says how to install it; a
+            # traceback buries that message under the chain (cversek/MacEff#843).
+            if args.cmd != "amail" or "'amail' extra" not in str(e):
+                raise
+            print(f"❌ macf_tools amail: {e}", file=sys.stderr)
+            exit(1)
     parser.print_help()
 
 

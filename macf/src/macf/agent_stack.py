@@ -28,6 +28,7 @@ import io
 import json
 import os
 import pwd
+import re
 import shutil
 import subprocess
 import sys
@@ -48,6 +49,8 @@ WOULD = "would do"
 STEPS: List[Tuple[str, str, str]] = [
     ("preamble", "write the PA preamble into CLAUDE.md", "no_preamble"),
     ("task-store", "provision the home task store (task store-init) if absent", "no_task_store"),
+    ("calling-card", ("name the agent: write agent_identity.calling_card into the home's config "
+                      "if no card resolves (--calling-card NAME, or asked)"), "no_calling_card"),
     ("declaration", ("write a default primal daemon declaration (session, monitor, search) if none "
                      "exists; report what an existing one lacks"), "no_declaration"),
     ("harness", "install the session's child script with the declared channels (harness install)",
@@ -79,6 +82,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     for step, what, flag in STEPS:
         parser.add_argument(f"--{flag.replace('_', '-')}", dest=flag, action="store_true",
                             help=f"skip the {step} step ({what})")
+    parser.add_argument("--calling-card", default=None, metavar="NAME",
+                        help="the agent's name, the half of its calling card before '@uuid6' "
+                             "(written only when no card resolves; asked for when omitted)")
     parser.add_argument("--project-dir", default=None, metavar="DIR",
                         help="where the session starts and its permissions live (default: the "
                              "harness's recorded choice, else MACEFF_PROJECT_DIR, else the agent home)")
@@ -119,6 +125,8 @@ class Context:
     #: --plan: every step checks what it finds and reports what it would do, changing nothing.
     dry_run: bool = False
     notes: List[str] = field(default_factory=list)
+    #: Steps refused so far this run, so a later step that depends on one names it as the cause.
+    refused: Dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -558,15 +566,72 @@ def step_task_store(ctx: Context) -> Result:
         config = json.loads((ctx.home / ".maceff" / "config.json").read_text())
     except (OSError, ValueError):
         config = {}
-    if store.is_dir() and (config.get("task_store") or {}).get("mode") == "home":
+    # A store provisioned before store-init seeded the sentinel has none, and is not done
+    # (cversek/MacEff#842); store-init is idempotent, so it is simply run again.
+    from macf.task.create import SENTINEL_TASK_ID
+    seeded = (store / f"{SENTINEL_TASK_ID}.json").exists()
+    if store.is_dir() and seeded and (config.get("task_store") or {}).get("mode") == "home":
         return Result("task-store", ALREADY, str(store))
     if ctx.dry_run:
-        return Result("task-store", WOULD, f"create {store} and point the config at it")
+        return Result("task-store", WOULD, (f"seed sentinel #{SENTINEL_TASK_ID} in {store}" if store.is_dir()
+                                            else f"create {store} and point the config at it"))
     from macf.cli import cmd_task_store_init
     rc, text = _captured(lambda: cmd_task_store_init(argparse.Namespace(home=str(ctx.home))))
     if rc != 0:
         return Result("task-store", REFUSED, _last_line(text))
     return Result("task-store", DONE, str(store))
+
+
+#: A calling card's name holds only what the session identifier keeps verbatim (agent_harness
+#: §2.2), so the card and the session and unit names derived from it map back and forth.
+_CARD_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+
+
+def card_name_problem(name: str) -> Optional[str]:
+    """Why *name* can't be a calling card's name, or None."""
+    if not name:
+        return "no name given"
+    if "@" in name:
+        return (f"{name!r} carries an '@': give the name alone; the @<uuid6> half comes from "
+                f"the agent id file")
+    if not _CARD_NAME.fullmatch(name):
+        return (f"{name!r} must be letters, digits, '-' or '_', starting with a letter or digit, "
+                f"so the session and unit names derived from it are the card's own")
+    return None
+
+
+def step_calling_card(ctx: Context) -> Result:
+    """Name the agent. The name half of ``Name@uuid6`` lives only in the home's config, and
+    no other step wrote it, so every step keyed on the card refused (cversek/MacEff#842)."""
+    if resolve_card(ctx):
+        return Result("calling-card", ALREADY, ctx.card)
+    config_path = ctx.home / ".maceff" / "config.json"
+    name = (getattr(ctx.args, "calling_card", None) or "").strip()
+    if not name:
+        if ctx.dry_run:
+            return Result("calling-card", WOULD, f"ask for the agent's name (or take --calling-card "
+                                                 f"NAME) and write it to {config_path}")
+        if getattr(ctx.args, "yes", False) or not sys.stdin.isatty():
+            return Result("calling-card", REFUSED, f"{ctx.card_error}; pass --calling-card NAME to "
+                                                   f"name the agent without being asked")
+        name = input("\n🪪 The agent's name (its calling card is NAME@<uuid6>): ").strip()
+    problem = card_name_problem(name)
+    if problem:
+        return Result("calling-card", REFUSED, problem)
+    if ctx.dry_run:
+        return Result("calling-card", WOULD, f"write calling_card {name!r} to {config_path}")
+    try:
+        config = json.loads(config_path.read_text()) if config_path.exists() else {}
+    except (OSError, ValueError) as e:
+        return Result("calling-card", REFUSED, f"{config_path} can't be read: {e}")
+    config.setdefault("agent_identity", {})["calling_card"] = name
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
+    # Read back through the resolver every keyed step uses, not the value just written.
+    if not resolve_card(ctx):
+        return Result("calling-card", REFUSED, f"wrote {name!r} to {config_path}, but the card "
+                                               f"still doesn't resolve: {ctx.card_error}")
+    return Result("calling-card", DONE, ctx.card)
 
 
 def step_declaration(ctx: Context) -> Result:
@@ -819,6 +884,10 @@ def step_daemon(ctx: Context) -> Result:
             return Result("daemon", REFUSED, f"{path} can't be read: {e}")
     elif ctx.dry_run and ctx.declaration is not None:
         declaration = ctx.declaration     # the one the declaration step would write
+    elif "declaration" in ctx.refused:
+        # The symptom alone points at the wrong step (cversek/MacEff#843).
+        return Result("daemon", REFUSED, f"no declaration at {path}, because the declaration step "
+                                         f"was refused (see its line above)")
     else:
         return Result("daemon", REFUSED, f"no declaration at {path}")
     # Whatever the declaration step found, new, existing or drifted: a session unit started beside
@@ -868,6 +937,7 @@ def step_daemon(ctx: Context) -> Result:
 
 RUNNERS: Dict[str, Callable[[Context], Result]] = {
     "task-store": step_task_store,
+    "calling-card": step_calling_card,
     "declaration": step_declaration,
     "harness": step_harness,
     "channel": step_channel,
@@ -929,6 +999,8 @@ def run_stack(args: argparse.Namespace, home: Path, *, in_container: bool,
             result = preamble() if step == "preamble" else RUNNERS[step](ctx)
         except Exception as e:  # noqa: BLE001 - one step's defect is reported, the rest still run
             result = Result(step, REFUSED, f"{type(e).__name__}: {e}")
+        if result.status == REFUSED:
+            ctx.refused[step] = result.detail
         results.append(result)
         if step == "preamble" and result.status == "aborted":
             print("Aborted.")

@@ -774,3 +774,26 @@ def test_cutover_without_home_plans_for_the_agent_home_not_the_login_home(tmp_pa
         assert seen[-1] == other, "--home still names the home"
     finally:
         find_agent_home.cache_clear()
+
+
+def _footer(plan):
+    return next(line for line in format_plan(plan).splitlines() if line.startswith("Run the steps"))
+
+
+def test_the_warning_names_the_steps_that_end_the_session_and_start_the_daemon(tmp_path):
+    """cversek/MacEff#847: on a seat with no daemon, the footer named the declaration's
+    install (a plain cp) as restarting the daemon, which the next step first starts, and
+    left the step that ends the session as "an earlier step"."""
+    _stage(tmp_path, live=False)
+    plan = build_plan(tmp_path, CARD, AGENT, _probes(**_hand_started(
+        daemon_answers=lambda: "no record", daemon_installed=lambda: False)), runtime=RUNTIME)
+    assert _footer(plan) == ("Run the steps from a terminal outside the session they stop "
+                             "(step 1 ends the session you may be typing in; step 3 starts the daemon).")
+
+
+def test_with_a_daemon_installed_the_declarations_install_is_the_restart(tmp_path):
+    plan = _ready(tmp_path)
+    footer = _footer(plan)
+    install = next(i for i, s in enumerate(plan.steps, 1) if s.what.startswith("Install the declaration"))
+    assert f"step {install} restarts the daemon" in footer, footer
+    assert "ends the session you may be typing in" in footer, footer
