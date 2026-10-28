@@ -326,9 +326,10 @@ def test_weekly_usage_is_the_newest_samples_week_and_says_when_it_is_stale(log, 
     clock = {"t": T0}
     monkeypatch.setattr(budget.time, "time", lambda: clock["t"])
     assert budget.weekly_usage() is None                          # no sample this week
-    budget.sample(fetch=lambda: reply_at(10, 70, 74), fresh=True)
+    # A week still open three hours on: REPLY's own week resets before then, and a reset week isn't shown (#852)
+    budget.sample(fetch=lambda: reply_ahead(10, 70, 74), fresh=True)
     clock["t"] = T0 + 600
-    budget.sample(fetch=lambda: reply_at(12, 71, 75), fresh=True)
+    budget.sample(fetch=lambda: reply_ahead(12, 71, 75), fresh=True)
     assert budget.weekly_usage() == "71%"                         # the newest, and the all-models week
     clock["t"] = T0 + 600 + 3 * 3600
     assert budget.weekly_usage() == "71% (3h old)"
@@ -444,3 +445,139 @@ def test_weekly_usage_rate_starts_over_at_a_reset(log, monkeypatch):
         budget.sample(fetch=lambda: r, fresh=True)
     # The new window spans 40 minutes, smoothed to about 1.6%/h; the old window's 99% never enters it.
     assert budget.weekly_usage() == "2% (1.6%/hr)"
+
+
+# ── a failed refresh is recorded and waited out (#852) ───────────────────────
+
+def throttled(calls, retry_after=None):
+    """A fetch that fails the way the usage endpoint does when it is asked too often."""
+    def fetch(**kw):
+        calls.append(kw)
+        raise budget.BudgetError("usage endpoint answered HTTP 429; use `budget sample --manual`",
+                                 short="endpoint 429", status=429, retry_after=retry_after)
+    return fetch
+
+
+def test_a_failed_refresh_is_recorded_and_the_hooks_back_off(log, monkeypatch, opus):
+    """One failure no longer makes every hook call ask again: the wait runs from the last attempt, and doubles."""
+    clock = {"t": T0}
+    monkeypatch.setattr(budget.time, "time", lambda: clock["t"])
+    budget.sample(fetch=lambda: reply_ahead(10, 40, 1), fresh=True)
+    calls = []
+    monkeypatch.setattr(budget, "fetch_reply", throttled(calls))
+    clock["t"] += 600
+    assert budget.hook_lines("wall") is None and len(calls) == 1          # due: asks, fails, and the hook survives
+    for _ in range(20):                                                   # a burst of tool calls asks nothing more
+        clock["t"] += 5
+        budget.hook_lines("wall")
+    assert len(calls) == 1
+    clock["t"] = T0 + 1200                                                # ten minutes after the first failure
+    budget.hook_lines("wall")
+    assert len(calls) == 2
+    clock["t"] += 600                                                     # the second doubled the wait to twenty
+    budget.hook_lines("wall")
+    assert len(calls) == 2
+    clock["t"] += 600
+    budget.hook_lines("wall")
+    assert len(calls) == 3
+    fails = list(budget.failures_since(T0, clock["t"]))
+    assert len(fails) == 3 and set(fails[0]) == {"t", "reason", "status", "retry_after"}
+    assert (fails[0]["reason"], fails[0]["status"]) == ("endpoint 429", 429)
+
+
+def test_a_retry_after_is_waited_out(log, monkeypatch, opus):
+    clock = {"t": T0}
+    monkeypatch.setattr(budget.time, "time", lambda: clock["t"])
+    budget.sample(fetch=lambda: reply_ahead(10, 40, 1), fresh=True)
+    calls = []
+    monkeypatch.setattr(budget, "fetch_reply", throttled(calls, retry_after=3600))
+    clock["t"] += 600
+    budget.hook_lines("wall")
+    clock["t"] += 1800
+    budget.hook_lines("wall")
+    assert len(calls) == 1                                                # the reply asked for an hour
+    clock["t"] += 1800
+    budget.hook_lines("wall")
+    assert len(calls) == 2
+
+
+def test_the_backoff_is_capped_and_a_success_resets_it(log, monkeypatch, opus):
+    clock = {"t": T0}
+    monkeypatch.setattr(budget.time, "time", lambda: clock["t"])
+    monkeypatch.setenv("MACEFF_BUDGET_BACKOFF_CAP_MIN", "30")
+    budget.sample(fetch=lambda: reply_ahead(10, 40, 1), fresh=True)
+    calls = []
+    monkeypatch.setattr(budget, "fetch_reply", throttled(calls))
+    for _ in range(6):                                                    # waits of 10, 20, then 30 capped
+        clock["t"] = budget.next_autosample()
+        budget.hook_lines("wall")
+    assert len(calls) == 6 and budget.next_autosample() - clock["t"] == 30 * 60
+    monkeypatch.setattr(budget, "fetch_reply", lambda **kw: reply_ahead(11, 41, 1))
+    clock["t"] = budget.next_autosample()
+    budget.hook_lines("wall")
+    assert budget.next_autosample() - clock["t"] == 600                   # a success: back to the interval
+
+
+def test_a_failed_refresh_keeps_the_wall_warning(log, monkeypatch, opus):
+    """The refresh and the notices have guards of their own: a failing refresh no longer silences the wall."""
+    clock = {"t": T0}
+    monkeypatch.setattr(budget.time, "time", lambda: clock["t"])
+    budget.sample(fetch=lambda: reply_ahead(93, 40, 1), fresh=True)
+    calls = []
+    monkeypatch.setattr(budget, "fetch_reply", throttled(calls))
+    clock["t"] += 2 * 3600
+    w = budget.hook_lines("wall")
+    assert len(calls) == 1 and w and "93%" in w and "sample 2h old" in w
+
+
+def test_weekly_usage_names_the_failure_and_the_way_out(log, monkeypatch, opus):
+    clock = {"t": T0}
+    monkeypatch.setattr(budget.time, "time", lambda: clock["t"])
+    budget.sample(fetch=lambda: reply_ahead(10, 71, 1), fresh=True)
+    monkeypatch.setattr(budget, "fetch_reply", throttled([]))
+    clock["t"] += 3 * 3600
+    budget.hook_lines("prompt")
+    assert budget.weekly_usage() == "71% (3h old: endpoint 429; budget sample --manual)"
+
+
+def test_a_week_that_reset_since_the_sample_is_not_reported_as_current(log, monkeypatch, opus):
+    """The sample's week is over: no old percentage or rate on the hook line, and status doesn't count backwards."""
+    clock = {"t": T0}
+    monkeypatch.setattr(budget.time, "time", lambda: clock["t"])
+    budget.sample(fetch=lambda: reply_ahead(10, 95, 1, hours=1), fresh=True)
+    clock["t"] += 2 * 3600
+    assert budget.weekly_usage() == "reset since the last sample (2h old)"
+    st = budget.status()
+    week = next(r for r in st["limits"] if r["kind"] == "weekly_all")
+    assert week["reset_since_sample"] and week["projected_at_reset"] is None and week["pace_even"] is None
+    assert "week 95% (window reset 1h ago, after this sample)" in budget.format_status(st)
+
+
+def test_status_says_when_the_refresh_last_failed_and_when_it_asks_again(log, monkeypatch, opus):
+    clock = {"t": T0}
+    monkeypatch.setattr(budget.time, "time", lambda: clock["t"])
+    budget.sample(fetch=lambda: reply_ahead(10, 40, 1), fresh=True)
+    monkeypatch.setattr(budget, "fetch_reply", throttled([]))
+    clock["t"] += 600
+    budget.hook_lines("wall")
+    st = budget.status()
+    assert st["last_failure"]["reason"] == "endpoint 429" and st["next_try"] == clock["t"] + 600
+    text = budget.format_status(st)
+    assert "last refresh failed at" in text and "budget sample --manual" in text
+
+
+def test_retry_after_reads_seconds_and_dates():
+    from email.utils import formatdate
+    assert budget._retry_after_s("120") == 120.0
+    assert budget._retry_after_s(None) is None and budget._retry_after_s("soon") is None
+    assert abs(budget._retry_after_s(formatdate(T0 + 300, usegmt=True), now=T0) - 300) < 1
+
+
+def test_a_refusal_carries_its_status_and_retry_after_and_never_the_token(monkeypatch):
+    def refuse(req, timeout):
+        raise budget.urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", {"Retry-After": "90"}, None)
+    monkeypatch.setattr(budget.urllib.request, "urlopen", refuse)
+    with pytest.raises(budget.BudgetError) as e:
+        budget.fetch_reply(token_source=lambda: FAKE_TOKEN)
+    assert (e.value.status, e.value.retry_after, e.value.short) == (429, 90.0, "endpoint 429")
+    assert FAKE_TOKEN not in str(e.value) and FAKE_TOKEN not in str(budget._failure(e.value))
