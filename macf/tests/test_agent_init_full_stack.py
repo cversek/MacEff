@@ -108,8 +108,10 @@ def test_plan_lists_every_step_and_changes_nothing(stack, capsys):
     for step, _what, _flag in STEPS:
         assert f"{step}:" in out
     assert results[0].status == PLANNED
-    assert {r.status for r in results[1:]} == {WOULD}, results   # each checked, none acted
-    assert {s for s, _w, _f in STEPS} >= {"preamble", "task-store", "declaration", "harness",
+    # Each checked, none acted. The fixture's home is already named, so that step finds it so.
+    assert _by_step(results)["calling-card"].status == ALREADY, results
+    assert {r.status for r in results[1:] if r.step != "calling-card"} == {WOULD}, results
+    assert {s for s, _w, _f in STEPS} >= {"preamble", "task-store", "calling-card", "declaration", "harness",
                                           "channel", "permissions", "daemon"}
     assert not (stack.home / ".maceff" / "pd").exists() and stack.claude == [] and stack.installs == []
 
@@ -166,7 +168,10 @@ def test_an_existing_declaration_is_never_overwritten_and_its_gaps_are_reported(
     assert path.read_text() == text
     assert result.status == DRIFT
     assert "no monitor unit" in result.detail and "no search unit" in result.detail
-    assert "session unit" not in result.detail          # a session under another name counts
+    assert "no session unit" not in result.detail       # a session under another name counts
+    # It runs a command of its own, but the login is the account's, not the program's
+    # (cversek/MacEff#848).
+    assert "the session unit's environment lacks USER, LOGNAME" in result.detail
     assert "maceff-channel@maceff" in result.detail
 
 
@@ -861,3 +866,128 @@ def test_a_failed_bootstrap_after_a_bootout_says_the_daemon_isnt_loaded(tmp_path
         return subprocess.CompletedProcess(argv, code, "", "Bootstrap failed: 5: Input/output error")
     with pytest.raises(RuntimeError, match="was booted out and isn't loaded now.*Load it again with: launchctl bootstrap gui/501"):
         LaunchdAdapter(user_home=tmp_path, uid=501, run=run).install(CARD, tmp_path, force=True)
+
+
+def test_without_the_amail_extra_mail_reads_as_unconfigured_not_as_a_refusal(tmp_path):
+    """cversek/MacEff#843: the declaration and harness steps both ask mail_configured(),
+    and without the extra the amail package refuses to import. That must answer "no
+    mail" rather than refuse both steps (and the daemon step after them)."""
+    import sys
+    from macf.pd import default_declaration as dd
+    with patch.dict(sys.modules, {"macf.amail": None, "macf.amail.pickup": None}):
+        assert dd.mail_configured(tmp_path) is False
+
+
+def test_a_fresh_home_without_the_amail_extra_still_gets_the_whole_stack(stack):
+    """cversek/MacEff#843, end to end: declaration and harness refused, daemon after them."""
+    import sys
+    with patch.dict(sys.modules, {"macf.amail": None, "macf.amail.pickup": None}):
+        rc, results = _run(stack)
+    steps = _by_step(results)
+    assert rc == 0, results
+    assert all(steps[s].status == DONE for s in ("declaration", "harness", "daemon")), results
+    assert _declaration(stack)["notice_routes"] == {}
+
+
+def test_a_refused_declaration_is_named_as_the_daemons_cause(stack):
+    def refuse(ctx):
+        raise ImportError("simulated")
+    with patch.dict(agent_stack.RUNNERS, {"declaration": refuse}):
+        _rc, results = _run(stack)
+    daemon = _by_step(results)["daemon"]
+    assert daemon.status == REFUSED
+    assert "because the declaration step was refused" in daemon.detail
+
+
+def _unnamed(stack, **config):
+    """The home as a first init finds it: an agent id, and no name anywhere (#842)."""
+    (stack.home / ".maceff" / "config.json").write_text(json.dumps(config))
+
+
+def test_an_unnamed_home_is_named_by_the_flag_and_the_whole_stack_follows(stack):
+    _unnamed(stack, task_store={"mode": "home", "path": "agent/public/tasks"})
+    rc, results = _run(stack, "--calling-card", "Tester")
+    steps = _by_step(results)
+    assert rc == 0, results
+    assert steps["calling-card"].status == DONE and steps["calling-card"].detail == CARD
+    assert all(steps[s].status == DONE for s in ("declaration", "harness", "daemon")), results
+    config = json.loads((stack.home / ".maceff" / "config.json").read_text())
+    assert config["agent_identity"] == {"calling_card": "Tester"}
+    assert config["task_store"] == {"mode": "home", "path": "agent/public/tasks"}   # kept
+
+
+def test_an_unnamed_home_under_yes_refuses_naming_the_flag(stack):
+    _unnamed(stack)
+    rc, results = _run(stack)
+    steps = _by_step(results)
+    assert rc == 1
+    assert steps["calling-card"].status == REFUSED and "--calling-card NAME" in steps["calling-card"].detail
+    assert steps["declaration"].status == REFUSED
+    assert "agent_identity" not in json.loads((stack.home / ".maceff" / "config.json").read_text())
+
+
+@pytest.mark.parametrize("bad", ["Tester@abc123", "Name.suffix", "Name:suffix", "two words", "-lead"])
+def test_a_name_the_session_identifier_would_rewrite_is_refused_and_nothing_written(stack, bad):
+    _unnamed(stack)
+    _rc, results = _run(stack, f"--calling-card={bad}")
+    assert _by_step(results)["calling-card"].status == REFUSED, results
+    assert "agent_identity" not in json.loads((stack.home / ".maceff" / "config.json").read_text())
+
+
+def test_a_named_home_keeps_its_name_whatever_the_flag_says(stack):
+    rc, results = _run(stack, "--calling-card", "Other")
+    assert _by_step(results)["calling-card"].status == ALREADY
+    config = json.loads((stack.home / ".maceff" / "config.json").read_text())
+    assert config["agent_identity"]["calling_card"] == "Tester"
+
+
+def test_a_store_provisioned_without_its_sentinel_is_not_already_done(stack):
+    """cversek/MacEff#842: such a store reported ALREADY forever and never got #000."""
+    store = stack.home / "agent" / "public" / "tasks"
+    store.mkdir(parents=True)
+    _unnamed(stack, agent_identity={"calling_card": "Tester"},
+             task_store={"mode": "home", "path": "agent/public/tasks"})
+    _rc, results = _run(stack)
+    assert _by_step(results)["task-store"].status == DONE, results
+    assert (store / "000.json").exists()
+    _rc, results = _run(stack)
+    assert _by_step(results)["task-store"].status == ALREADY
+
+
+def test_every_default_unit_states_the_login_it_runs_as(stack):
+    """cversek/MacEff#848: units start with only their declared environment, and the
+    default declared no USER or LOGNAME, so the session read its login as unknown."""
+    _run(stack)
+    for unit in _declaration(stack)["units"]:
+        env = unit["environment"]
+        assert env["USER"] == env["LOGNAME"] == unit["account"], unit["name"]
+
+
+def test_a_default_unit_declared_without_the_login_is_reported_as_drift():
+    from macf.pd import default_declaration as dd
+    default = {"units": [{"name": "monitor", "command": ["py", "-m", dd.MONITOR_MODULE, "--follow"],
+                          "environment": {"PATH": "/bin", "USER": "a", "LOGNAME": "a"}}]}
+    older = {"units": [{"name": "monitor", "command": ["py", "-m", dd.MONITOR_MODULE, "--follow"],
+                        "environment": {"PATH": "/bin"}}]}
+    assert dd.drift(older, default) == ["the monitor unit's environment lacks USER, LOGNAME"]
+    # The same unit running a command of the agent's own keeps the rest of its environment as
+    # the agent's, but the login is the account's, whatever the unit runs.
+    own = {"units": [{"name": "monitor", "command": ["my-monitor", "-m", dd.MONITOR_MODULE],
+                      "environment": {}}]}
+    assert dd.drift(own, default) == ["the monitor unit's environment lacks USER, LOGNAME"]
+    own["units"][0]["environment"] = {"USER": "a", "LOGNAME": "a"}
+    assert dd.drift(own, default) == []
+
+
+def test_a_session_unit_with_its_own_command_is_still_told_it_lacks_the_login():
+    """cversek/MacEff#849 review: a session unit declared before agent init existed runs its
+    own argv, so drift skipped its environment, and the session read its login as unknown."""
+    from macf.pd import default_declaration as dd
+    default = {"units": [{"name": "session", "kind": "session",
+                          "command": ["py", "-m", "macf.cli", "harness", "unit", "--home", "{agent_home}"],
+                          "environment": {"PATH": "/bin", "HOME": "/h", "USER": "a", "LOGNAME": "a"}}]}
+    older = {"units": [{"name": "claude", "kind": "session",
+                        "command": ["py", "-m", "macf.cli", "harness", "unit", "--agent", "Tester_abc123",
+                                    "--project-dir", "/h/work", "--no-proxy"],
+                        "environment": {"HOME": "/h"}}]}
+    assert dd.drift(older, default) == ["the session unit's environment lacks USER, LOGNAME"]

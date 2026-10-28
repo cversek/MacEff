@@ -89,12 +89,15 @@ class TestTheSubstitutionIsActuallyNecessary:
         return stored, addressable
 
     @pytest.mark.parametrize("bad", ["Name.suffix", "Name:suffix"])
-    def test_tmux_silently_rewrites_these_and_the_name_stops_addressing(self, bad, tmux_sandbox_env):
+    def test_tmux_accepts_these_and_the_name_stops_addressing(self, bad, tmux_sandbox_env):
         """The failure mode that motivates substituting at all: new-session
-        SUCCEEDS, and the name you asked for addresses nothing afterwards."""
-        stored, addressable = self._roundtrip(bad, tmux_sandbox_env)
-        assert stored != bad, "tmux accepted this verbatim — the rule may be stale"
-        assert not addressable
+        SUCCEEDS, and the name you asked for addresses nothing afterwards.
+
+        HOW it stops addressing depends on the version, so only the consequence is
+        asserted: tmux 3.6 rewrote '.' and ':' to '_' at creation; tmux 3.8 stores
+        them verbatim, and `-t` then splits the name at them as target separators."""
+        _stored, addressable = self._roundtrip(bad, tmux_sandbox_env)
+        assert not addressable, "tmux addressed this name — the substitution rule may be stale"
 
     def test_the_substituted_form_survives_and_addresses(self, tmux_sandbox_env):
         stored, addressable = self._roundtrip(IDENT, tmux_sandbox_env)
@@ -124,6 +127,7 @@ class TestResolverNeverPassesAGuessOffAsAFinding:
         monkeypatch.setenv("MACEFF_AGENT_NAME", "Resident")
         monkeypatch.setattr("macf.utils.identity._resolve_uuid_prefix", lambda: ("abc123", "project"))
         monkeypatch.setattr("macf.utils.identity.get_agent_identity", lambda: CARD)
+        monkeypatch.setattr("macf.utils.identity.agent_name_source", lambda: "config")
         assert resolve_agent() == (IDENT, "calling card")
 
     def test_a_per_project_agent_with_no_card_still_takes_the_name(self, monkeypatch, tmp_path):
@@ -135,7 +139,19 @@ class TestResolverNeverPassesAGuessOffAsAFinding:
     def test_falls_back_to_the_calling_card(self, monkeypatch):
         monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
         monkeypatch.setattr("macf.utils.identity.get_agent_identity", lambda: CARD)
+        monkeypatch.setattr("macf.utils.identity.agent_name_source", lambda: "config")
         assert resolve_agent() == (IDENT, "calling card")
+
+    def test_a_fallback_name_is_not_reported_as_the_calling_card(self, monkeypatch):
+        """cversek/MacEff#842: with no card configured the name is $USER, and `env`
+        said "via calling card" while every step keyed on the card refused."""
+        monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
+        monkeypatch.setattr("macf.utils.identity.get_agent_identity", lambda: CARD)
+        monkeypatch.setattr("macf.utils.identity.agent_name_source", lambda: "user")
+        agent, source = resolve_agent()
+        assert agent == IDENT
+        assert "calling card" not in source.replace("no calling card configured", "")
+        assert source.startswith("$USER")
 
     def test_a_single_installed_unit_resolves(self, monkeypatch, tmp_path):
         monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)

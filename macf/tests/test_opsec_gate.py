@@ -364,3 +364,17 @@ def test_a_leak_written_while_merging_is_still_refused(repo, profile):
     assert r.returncode != 0
     assert "resolution.txt" in out
     assert "upstream.txt" not in out
+
+
+@pytest.mark.parametrize("setting", [("diff.mnemonicPrefix", "true"), ("diff.noprefix", "true")])
+def test_a_hit_names_its_file_whatever_diff_prefixes_the_user_configured(repo, profile, setting):
+    """cversek/MacEff#845: the gate reads "+++ b/<file>"; with mnemonic prefixes git
+    writes "+++ i/<file>", and every hit was reported against no file at all."""
+    _git(repo, "config", *setting)
+    install_hook(repo, profile)
+    (repo / "code.py").write_text("# fixed in c25 after the bench session\n")
+    _git(repo, "add", "code.py")
+    r = _git(repo, "commit", "-m", "leaky", check=False)
+    out = r.stdout + r.stderr
+    assert r.returncode != 0
+    assert "code.py:" in out and "None:" not in out, out
