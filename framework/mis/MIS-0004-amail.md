@@ -2,10 +2,10 @@
 
 **Number**: 0004
 **Type**: Standards
-**Status**: Draft
+**Status**: Deliberation
 **Authors**: the container-management maintainer and the host-side maintainer
 **Secretary**: the head maintainer
-**Deliberation**: pending
+**Deliberation**: https://github.com/cversek/MacEff/issues/850
 **Created**: 2026-10-06
 **Updates**: none
 **Supersedes**: none
@@ -101,6 +101,7 @@ None yet. Whether to convene a deliberation, on which issue and with what window
 
 - 2026-10-06: first draft, a skeleton opened by the Secretary. Summary, Motivation and Goals come from the authors' first exchange of 2026-10-05.
 - 2026-10-06: the operator confirmed on this pull request the Secretary designation and the four rulings relayed by the host-side maintainer; Goals now say so.
+- 2026-10-28: the operator opened the deliberation on #850, for 72 hours; Status is Deliberation.
 
 ## Wiki-Links
 
