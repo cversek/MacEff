@@ -18,6 +18,7 @@ def _unit(name, **over):
 CONTAINER = {
     "system": "proto-container",
     "time_zone": "America/New_York",
+    "stop_timeout_s": 60,
     "units": [
         _unit("seat-a-pd", account="seat_a", after=["broker"]),
         _unit("broker", account="mail_broker", environment={"PATH": "/usr/bin"}),
@@ -37,10 +38,10 @@ def test_a_container_declaration_loads_and_starts_dependencies_first():
 
 
 def test_a_macos_login_job_is_watched_and_never_parented():
-    watched = _unit("operator-pd", account="operator", relationship="watch", command=[],
+    watched = _unit("operator-pd", account="operator", relationship="watch", command=[], restart="never",
                     platform={"kind": "launchd", "domain": "gui", "label": "maceff_pd.example"})
     assert _load({**CONTAINER, "units": [watched]}).units[0].relationship == "watch"
-    parented = dict(watched, relationship="parent", command=["/usr/bin/true"])
+    parented = dict(watched, relationship="parent", command=["/usr/bin/true"], restart="always")
     with pytest.raises(ValidationError, match="watches it and can't parent it"):
         _load({**CONTAINER, "units": [parented]})
 
@@ -96,3 +97,39 @@ def test_the_time_zone_must_be_a_real_zone():
 def test_accounts_and_groups_must_be_legitimate_names(field, value):
     with pytest.raises(ValidationError):
         _load({**CONTAINER, "units": [_unit("broker", **{field: value})]})
+
+
+def test_a_parented_unit_never_runs_as_root():
+    with pytest.raises(ValidationError, match="never runs as root"):
+        _load({**CONTAINER, "units": [_unit("broker", account="root")]})
+
+
+def test_a_linux_watch_is_refused_until_something_names_what_to_watch():
+    watched = _unit("host-pd", relationship="watch", command=[], restart="never")
+    with pytest.raises(ValidationError, match="nothing names what to watch on Linux"):
+        _load({**CONTAINER, "units": [watched]})
+
+
+def test_a_watched_unit_cannot_ask_to_be_restarted():
+    watched = _unit("operator-pd", account="operator", relationship="watch", command=[], restart="always",
+                    platform={"kind": "launchd", "domain": "gui", "label": "maceff_pd.example"})
+    with pytest.raises(ValidationError, match="isn't the system daemon's to restart"):
+        _load({**CONTAINER, "units": [watched]})
+
+
+def test_sixteen_groups_load_and_seventeen_are_refused():
+    sixteen = [f"g{i}" for i in range(16)]
+    assert len(_load({**CONTAINER, "units": [_unit("broker", groups=sixteen)]}).units[0].groups) == 16
+    with pytest.raises(ValidationError, match="at most 16"):
+        _load({**CONTAINER, "units": [_unit("broker", groups=sixteen + ["g16"])]})
+
+
+def test_the_longest_stop_chain_must_fit_inside_the_stop_timeout():
+    chain = [_unit("broker", stop_grace_s=10), _unit("seat-pd", stop_grace_s=30, after=["broker"]),
+             _unit("other", stop_grace_s=5)]
+    assert _load({**CONTAINER, "stop_timeout_s": 41, "units": chain})
+    with pytest.raises(ValidationError, match="40 s along seat-pd -> broker"):
+        _load({**CONTAINER, "stop_timeout_s": 40, "units": chain})
+    # A default grace (10 s) under docker's default stop timeout (10 s) has no margin.
+    with pytest.raises(ValidationError, match="doesn't fit inside stop_timeout_s 10"):
+        _load({**CONTAINER, "stop_timeout_s": 10, "units": [_unit("broker")]})
