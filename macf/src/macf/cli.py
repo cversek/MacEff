@@ -12103,6 +12103,13 @@ def cmd_knowledge_link(args: argparse.Namespace) -> int:
     else:
         print(f"ℹ️  {r.target}: nothing to change")
     print(f"   Concepts: {', '.join(r.concepts) if r.concepts else '(none)'}")
+    if r.kind == "mail":
+        from .knowledge_web import sidecar_path
+        print(f"   Links kept in {sidecar_path(Path(r.target))}; a message is never edited (amail policy)")
+        if r.still_inline:
+            print(f"   ⚠️  the message itself links {', '.join(r.still_inline)}, so it stays linked; "
+                  f"a sent message keeps its bytes")
+        return 0
     if r.still_inline:
         print(f"   ⚠️  still used inline in the prose, so still linked: {', '.join(r.still_inline)} "
               f"(inline uses are the author's; edit the passage if the link should go)")
