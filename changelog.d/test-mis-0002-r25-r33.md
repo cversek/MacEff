@@ -1,0 +1,3 @@
+### Added
+
+- **Tests for two MIS-0002 scheduler rules that had none** (`macf/tests/test_pd_schedule.py`). `test_policy_values` (R25): the four missed-run policies are the only ones, and any other value is refused rather than mapped to the nearest. `test_run_cannot_schedule` (R33): a run that rewrites the declaration on disk changes nothing the running scheduler runs, because the scheduler holds the declaration it was given. This holds within one daemon's life only: the declaration lives in the agent's home, so a run that rewrites it and then restarts the daemon would change the schedules. That route stays open, and is raised with the declaration's owner. Planting each defect (a fifth policy value, a scheduler that re-reads the file) failed its test.

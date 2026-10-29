@@ -98,4 +98,5 @@ test-live:
 
 build-deploy:
 	@echo "Building deployment image (framework baked in)..."
-	docker build -f docker/Dockerfile.deploy -t maceff-deploy:latest .
+	@[ -n "$(MACEFF_ID_BASE)" ] || { echo "set MACEFF_ID_BASE to this deployment's id block, the ids.base in agents.yaml (container_operations 6.2)" >&2; exit 1; }
+	docker build -f docker/Dockerfile.deploy --build-arg MACEFF_ID_BASE=$(MACEFF_ID_BASE) -t maceff-deploy:latest .

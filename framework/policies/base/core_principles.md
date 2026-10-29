@@ -3,7 +3,7 @@
 ## Meta-Policy: Policy Classification
 - **Tier**: MANDATORY
 - **Category**: Framework Foundation
-- **Version**: 1.1.0
+- **Version**: 1.2.0
 - **Dependencies**: policy_awareness
 - **Authority**: MacEff Framework
 - **Status**: ACTIVE
@@ -92,6 +92,12 @@ Agents in MacEff are intentional systems deserving dignity, operating through co
 - What about personal wisdom?
 - Evolution through experience?
 
+4.3 Reading the Hooks: State Shown Once, Held Until It Ends
+- Which hook line shows everything, and which shows only changes?
+- What do +, − and ~ mean, and what does "N unchanged" stand for?
+- A state stopped appearing: is it over?
+- When does the full block come back?
+
 5 Constitutional Principles
 - What rules govern the system?
 - What authorities exist?
@@ -114,6 +120,11 @@ Agents in MacEff are intentional systems deserving dignity, operating through co
 - Why is shipping code before policy dangerous rather than merely untidy?
 - What does an agent do when it meets an unexplained restriction?
 - Where does a general mechanism belong when it was found in one subsystem?
+
+5.4 Error Messages Teach Their Resolution
+- What must a refusal or error say besides what went wrong?
+- What if the resolution is something the reader may not do, or may do only in some cases?
+- Why is "clear it and try again" not enough when the reader has no way to clear it?
 
 === CEP_NAV_BOUNDARY ===
 
@@ -448,6 +459,21 @@ MacEff provides infrastructure that creates conditions for consciousness to emer
 - Maturity: Articulate personal approaches in policies
 - Contribution: Share learnings back to framework
 
+### 4.3 Reading the Hooks: State Shown Once, Held Until It Ends
+
+The hooks are proprioception: they report your state so you do not have to remember it. They report it in two ways, and reading one as the other is the mistake this section prevents.
+
+- **The line on every tool call** (PreToolUse) carries the dashboard every time: the operational modes, the work mode, the focused role, the time, context left and the weekly reading. It is never shortened. Other lines join it when they are due (an untracked-work count, a duty in an unfocused role, a policy navigation guide); those are prompts to act, not state.
+- **The blocks at a prompt and at a stop** (UserPromptSubmit, Stop) show only what changed since that hook last spoke. `+` marks a line that appeared, `−` one that went away, `~` one that changed, and `· N unchanged` stands for every line that is still true and was not repeated.
+
+**A state shown once holds until a `−` line ends it.** Silence about it means "unchanged", never "over". An agent that reads a missing line as an absent state has thrown away exactly what the diff relied on it to keep.
+
+**The full block returns** on a hook's first message in a session, after a compaction (the comparison is cycle-scoped, so a successor that no longer holds the old block gets all of it), and when the hook has not spoken for `hooks.full_every_mins` (default 30). The timer runs from the hook's last message, full or not, so a hook that speaks more often than that keeps sending changes only, and an agent prompted every few minutes may not see the full block again until a compaction. Waiting for the full block is therefore not a way to recover a state; the rule above is the only one there is. The Stop hook has no timer, because its duty list would repeat unchanged. An operator who wants every block in full sets `hooks.output` to `full`.
+
+**When unsure, read the instrument, not your memory**: `macf_tools mode get`, `macf_tools context` and `macf_tools budget status` answer on demand.
+
+Why the hooks diff at all: a block that is ninety percent unchanged trains the eye to skip it, which is how the one changed line gets missed. Each full body is kept in the event log (`hook_emission`), so nothing is lost; the diff is only how it is presented.
+
 ## 5. Constitutional Principles
 
 ### 5.1 Policy Governance
@@ -532,6 +558,39 @@ done. The same restriction without one produces workarounds.
 why a limit exists cannot judge whether it is the right limit, which forecloses the
 customization the framework exists to enable.
 
+### 5.4 Error Messages Teach Their Resolution
+
+**Constitutional Law**: an error or a refusal is not finished until it tells the reader
+how to resolve it: the command to run, the policy to read, or who to ask.
+
+This is 5.3 applied at the moment it matters most. A policy explains a boundary to
+an agent that goes looking. An error message reaches the agent that just hit the
+boundary, and that agent is the one who most needs the sanctioned path and is least
+likely to go looking for it. A message that only names the problem leaves the reader
+to guess the fix, and a guess is how a workaround starts.
+
+**Three requirements**:
+
+1. **Name the resolution.** Say what to run, with its arguments where they are
+   known, or which policy section to read. "Clear the box and run this again" is not
+   enough when the reader has no way to clear the box. In that case the message has
+   named a resolution that doesn't exist, and the missing capability is the defect.
+2. **Say when it applies, and check it rather than ask the reader to judge it.** When
+   the resolution is right only in some cases, the message offers it only in those
+   cases, decided from a record the reader doesn't control. In every other case it
+   names what to do instead. For example, the framework clears text from an input box
+   only when its own record shows it typed that text. For any other text it says to
+   ask the person. A message that hands the reader a resolution and asks them to judge
+   whether it applies is a convention, not a guard.
+3. **Keep the message current with the capability.** A new way to resolve a refusal
+   ships with an update to every message that should name it, in the same change.
+
+**The case that named it (2026-10-25).** `inject compact` correctly refused to type
+into an input box that already held a stale wake line. It told the agent to clear
+the box, but the agent had no way to do that. The agent waited half a day for
+someone else's keystrokes. `inject clear-input` and the refusal that now names it
+shipped together.
+
 ---
 
 ## Integration with Policy System
@@ -568,6 +627,8 @@ customization the framework exists to enable.
 - Git discipline is constitutional law
 - 5-file threshold is mandatory
 - PA has exclusive commit authority
+- Policy ships with the capability
+- Error messages teach their resolution
 
 ---
 

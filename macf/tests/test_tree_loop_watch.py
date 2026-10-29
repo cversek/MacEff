@@ -112,6 +112,46 @@ class TestLoopWatchIsActuallyWired:
             mtmd=mtmd,
         )
 
+    @staticmethod
+    def _fake_clock(monkeypatch, T0, loop):
+        """Freeze the clock at T0, and in loop mode turn the loop's own sleep into
+        Ctrl+C, for the test's own thread only.
+
+        The loop imports time inside the function, so the fakes must sit on the
+        module. They pass every other thread through to the real calls: an
+        unconditional fake raised KeyboardInterrupt in every thread of the process
+        for the test's duration, and a pytest-xdist worker whose own thread slept
+        then reported itself interrupted. Only a sleep called from the command's
+        own frame raises. Any other sleep on this thread is real: one from
+        elsewhere escaped the loop's handler and took the whole xdist worker down
+        (CI, twice, in this file)."""
+        import sys
+        import threading
+        import time
+
+        from macf.cli import cmd_task_tree
+
+        me = threading.current_thread()
+        real_time, real_sleep = time.time, time.sleep
+
+        def fake_time():
+            return T0 if threading.current_thread() is me else real_time()
+
+        stray = []
+
+        def fake_sleep(secs):
+            if loop and threading.current_thread() is me:
+                if sys._getframe(1).f_code is cmd_task_tree.__code__:
+                    raise KeyboardInterrupt
+                stray.append(secs)
+                if len(stray) > 50:
+                    # A loop whose own sleep isn't recognised would spin here for good.
+                    raise RuntimeError("the loop's sleep was never recognised")
+            real_sleep(secs)
+
+        monkeypatch.setattr(time, "time", fake_time)
+        monkeypatch.setattr(time, "sleep", fake_sleep)
+
     def _render(self, monkeypatch, capsys, loop: bool, tasks_factory=None):
         """Render one succinct tree and return stdout.
 
@@ -129,7 +169,6 @@ class TestLoopWatchIsActuallyWired:
         # is retroactively outside its own window, which fails for a reason
         # that has nothing to do with the wiring under test.
         T0 = 1_787_000_000.0
-        monkeypatch.setattr(cli.time, "time", lambda: T0)
         # ACTIVE carries the newest stamp on purpose. The renderer always shows
         # the recency-marked task so its marker cannot vanish, so a fixture whose
         # newest touch IS the completed task under test would show it in every
@@ -154,15 +193,14 @@ class TestLoopWatchIsActuallyWired:
 
         monkeypatch.setattr(task_mod, "TaskReader", _Reader)
         monkeypatch.setattr(cli, "get_display_mtime", lambda _d: 1.0)
-        if loop:
-            def _boom(_secs):
-                raise KeyboardInterrupt
-            monkeypatch.setattr(cli.time, "sleep", _boom)
-
         args = argparse.Namespace(task_id="000", loop=loop, succinct=True,
                                   verbose=False, title_width=0, archived=False,
                                   show_all=False)
-        cli.cmd_task_tree(args)
+        # The clock is faked for the command's call only, not until teardown,
+        # so nothing pytest runs after the call meets it.
+        with monkeypatch.context() as clock:
+            self._fake_clock(clock, T0, loop)
+            cli.cmd_task_tree(args)
         return capsys.readouterr().out
 
     def test_one_shot_hides_completed_top_tier(self, monkeypatch, capsys):
@@ -180,6 +218,48 @@ class TestLoopWatchIsActuallyWired:
         """The watch is a window, not an amnesty — old completions stay hidden."""
         out = self._render(monkeypatch, capsys, loop=True)
         assert "OLD-DONE" not in out
+
+    def test_the_fake_clock_reaches_no_other_thread(self, monkeypatch):
+        """Another thread still sleeps and still tells the time while the loop's
+        clock is faked."""
+        import threading
+        import time
+
+        T0 = 1_787_000_000.0
+        self._fake_clock(monkeypatch, T0, loop=True)
+        seen = []
+
+        def other():
+            try:
+                time.sleep(0)
+                seen.append(time.time() != T0)
+            except BaseException as e:
+                seen.append(e)
+
+        t = threading.Thread(target=other)
+        t.start()
+        t.join(5)
+        assert seen == [True]
+        assert time.time() == T0
+        time.sleep(0)       # a sleep on this thread from anywhere but the loop is real
+
+    def test_only_the_loop_s_own_sleep_is_ctrl_c(self, monkeypatch, capsys):
+        """A sleep elsewhere on the test's thread, here one the render makes, stays
+        a sleep; only the loop's own exits it."""
+        import time
+
+        from macf.utils import terminal
+
+        titled = []
+
+        def napping_title(text):
+            time.sleep(0)               # before the loop, outside its Ctrl+C handler
+            titled.append(text)
+
+        monkeypatch.setattr(terminal, "set_terminal_title", napping_title)
+        out = self._render(monkeypatch, capsys, loop=True)
+        assert titled
+        assert "FRESH-DONE" in out
 
 
 class TestArchivedDescendantDoesNotPinTheChain(TestLoopWatchIsActuallyWired):

@@ -1,0 +1,3 @@
+### Fixed
+
+- **The launchd cutover job runs in the environment its plan was checked in** (`pd/cutover.py`, `cli.py`, policy `persistent_layer` 6.3). launchd starts a job with only `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, so the one-shot job couldn't find Homebrew's tmux. Its plan build died with `FileNotFoundError` before the job's cleanup, and left the job loaded, so the next `--run` refused. The job now carries the caller's `PATH` and `HOME`, the agent home and any `PYTHONPATH`. A check whose program is missing is reported, with the program and the `PATH`, and changes nothing. A plan that can't be built inside the job still removes the job.

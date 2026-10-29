@@ -1,0 +1,3 @@
+### Added
+
+- **`mis check` looks up the tests that decidable requirements name** (`mis.py`, policy `mis` §3.1 and §4): a requirement's bracket and its Conformance row must name the same tests; in a checkout of the repository, each test a row names must exist unless the row is planned or n/a; and a test method must be named with its class (`file::Class::test`). Each fault is reported under MIS-0001-R18 (conformance_MUST_list_every_req). Before this, a row could read passing while naming a test that was not there, and one MIS-0002 requirement named a test in its bracket that its row did not. The lookup reads each test file's syntax tree and runs nothing; outside a checkout it is skipped, and the run says so.

@@ -40,6 +40,7 @@ from macf.amail.deploy_config import (BrokerDeployConfig, ConfigError,
                                       assert_package_current,
                                       explain_validation_error,
                                       load_declarative_config)
+from macf.pd.liveness import heartbeat_from_env
 
 CONFIG_PATH = Path(os.environ.get("AMAIL_BROKER_CONFIG",
                                   "/etc/amail/broker_config.yaml"))
@@ -95,6 +96,13 @@ def main() -> int:
         # an empty uid table. Each message names its own remedy; pass it through.
         print(f"refusing to start: {e}", file=sys.stderr)
         return 1
+
+    # Run as a primal daemon's unit, the broker reports its own liveness (MIS-0002-R14),
+    # one beat per interval in which its accept loop passed; started any other way, the
+    # environment names no unit and nothing is written.
+    heartbeat = heartbeat_from_env(in_flight=server.in_flight)
+    if heartbeat is not None:
+        server.on_pass = heartbeat.tick
 
     launched_by = os.environ.get("AMAIL_BROKER_LAUNCHED_BY", "")
     print(f"amail broker (unprivileged, uid {os.geteuid()}"

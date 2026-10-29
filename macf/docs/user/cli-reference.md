@@ -46,6 +46,7 @@ Complete command reference for `macf_tools` CLI.
 - [OPSEC](#opsec)
 - [API Proxy](#api-proxy)
 - [Statusline](#statusline)
+- [Account and Group Numbers](#account-and-group-numbers)
 
 ## Global Options
 
@@ -2071,11 +2072,11 @@ macf_tools knowledge viz [output]
 Keep the master learnings index (`agent/private/learnings/INDEX.md`) and its consultation trigger true.
 
 ```bash
-macf_tools learnings index add <file> --cluster <name> [--hook "<WHEN ...>"]
+macf_tools learnings index add <file> --cluster <name> [--hook "<WHEN ...>"] [--new-cluster]
 macf_tools learnings index verify [--memory PATH] [--json]
 ```
 
-`add` files one learning under its cluster heading, in the shape of the cluster's existing entries, and updates the cluster's `(N)`, the total and the date; a new cluster is created and named in the output as one the trigger must now carry. `verify` is the doctor for this corpus: entries that name no file, learnings no entry names, counts that are wrong, and a trigger that misses a cluster, does not point at the index, or states a stale count. The trigger is looked for at the platform's per-project memory file; `--memory` names another path, and a trigger it cannot find is reported with every path it tried.
+`add` files one learning under its cluster heading, in the shape of the cluster's existing entries (a backticked file name, or a link to the bare file name), and updates the cluster's `(N)`, the total and the date. A cluster name that matches no heading is refused, with the nearest existing names, unless `--new-cluster` is given; a new cluster goes after the last one and is named in the output as one the trigger must now carry. `verify` is the doctor for this corpus: entries that name no file, learnings no entry names, counts that are wrong, and a trigger that misses a cluster (naming the linked memory file when the cluster appears only there, since a linked file loads on recall), does not point at the index, or states a stale count. The trigger is looked for at the platform's per-project memory file; `--memory` names another path, and a trigger it cannot find is reported with every path it tried.
 
 ---
 
@@ -2188,17 +2189,23 @@ macf_tools auto-restart kill <name>
 
 JSONL transcript monitoring daemon for idle detection and event processing.
 
+A monitor watches one transcript for one Claude Code process, as a process of its own that `ps` shows as `python -m macf.transcript_monitor ... --transcript <path>`. It stops when that Claude Code process ends; the next session start, AUTO_MODE entry or sprint creation starts another. Which monitors run is read from the process table each time, so agents that share a login never count each other's. A second monitor on a transcript gives way to the first. Every event a monitor writes carries its `monitor_pid`, and its start and end are events too (`transcript_monitor_started`, `transcript_monitor_stopped` with a `reason`). Its stderr goes to `macf_transcript_monitor.log` in this user's runtime directory.
+
+With `MACF_TRANSCRIPT_MONITOR_DISABLED=1` in the environment, nothing starts a monitor: `start`, the SessionStart hook, AUTO_MODE entry and sprint creation each say so on stderr and go on. The test suite sets it for every test, so that a hook a test runs as a subprocess cannot start a real monitor on the developer's own session.
+
 ### transcript-monitor start
 
-Start the transcript monitor daemon.
+Start a monitor for this session's transcript, unless one already serves it.
 
 ```bash
-macf_tools transcript-monitor start [--daemon]
+macf_tools transcript-monitor start [-f] [--interval SECONDS]
 ```
+
+`-f` runs the monitor in this terminal instead of in the background.
 
 ### transcript-monitor stop
 
-Stop the transcript monitor daemon.
+Stop this agent's monitors.
 
 ```bash
 macf_tools transcript-monitor stop
@@ -2206,7 +2213,7 @@ macf_tools transcript-monitor stop
 
 ### transcript-monitor status
 
-Show transcript monitor status.
+List this agent's monitors, one line each, noting any that watch another session's transcript or whose Claude Code process has ended.
 
 ```bash
 macf_tools transcript-monitor status
@@ -2426,6 +2433,8 @@ macf_tools opsec install-hook [--profile PROFILE] [--source-root DIR] <repo>
 
 The hook runs the Python interpreter that performed the install, which is also the one its self-test certifies; the self-test is run a second time through the installed hook, and the agent's moniker is required among the categories it refuses wherever the agent has a calling card. If that interpreter later cannot import macf, the hook refuses every commit rather than check without the moniker: reinstall, or set `MACF_OPSEC_STDLIB_ONLY=1` for a commit to accept the reduced gate. Nothing is written until the dispatcher source and the profile have been found.
 
+While a merge is being committed (`MERGE_HEAD` exists), the hook scans only the lines the merge adds beyond both parents, such as conflict resolutions, and says so: what the incoming side brings was scanned when it was committed there. A squash merge or a cherry-pick has no `MERGE_HEAD` and is scanned whole.
+
 **Related:** `githooks install`
 
 ---
@@ -2548,6 +2557,36 @@ macf_tools statusline install
 - `0` - Success
 - `1` - General error
 - `2` - Command-line syntax error (also used by hooks to block tool execution)
+
+## Account and Group Numbers
+
+### ids audit
+
+A container without user-namespace remapping shares the host's uid and gid space, so a number inside it and the same number on the host are one kernel identity. `ids audit` reads the host's tables and each running container's, through `docker exec`, and names every number at or above 1000 held by more than one identity.
+
+```bash
+macf_tools ids audit                          # the host and every running container
+macf_tools ids audit --container seat-a       # the host and one container (repeatable)
+macf_tools ids audit --json
+```
+
+- **Exit codes:** 0 when every place was read and nothing overlaps; 1 on an overlap; 2 when a place couldn't be read, or when nothing was compared. A container it can't read is never counted as clear.
+- **Nothing to compare.** When the host is left out (see below) and no container was read, because none is running or none was named, the verdict is `NOTHING TO COMPARE` and the exit code 2, not `CLEAN`: an empty comparison clears nothing. The JSON carries `nothing_compared: true`.
+- **Linux hosts.** The audit is meant for a Linux host running its containers natively. It compares the host only on Linux, where containers share its kernel. On macOS (Docker Desktop, Colima) they run in a Linux VM, so the host is left out, the output says why, and the containers are compared with each other.
+- **System ids below 1000** held under different names are listed in their own section and don't affect the exit code. Each side's packages allocate those, so renumbering can't reach them. A system account held under the same name everywhere, such as `root`, isn't listed.
+
+### ids renumber
+
+Moves an existing deployment's accounts, groups and files onto the numbers agents.yaml declares, once. Run it as root inside the **old** container before recreating it, with the seats paused and their sessions stopped. The full procedure is in the `container_operations` policy.
+
+```bash
+macf_tools ids renumber --listing /root/renumber.txt          # plan only (default)
+macf_tools ids renumber --root /scratch --service indexer=21900 --apply
+```
+
+- Maps by name from the live account tables to the declared numbers. It refuses two names on one old number, an old number that is already someone's declared number, and a service outside the block.
+- Re-owns only `/home`, the shared workspace, the amail stores and each `--root`. It never follows a symlink and stays out of mounts it wasn't given. Bind-mount roots carry a warning that an old number there may be a host account's own file, and files with access lists are named.
+- After `--apply` it re-plans and exits 1 if anything is left on an old number. A second run is a no-op.
 
 ## Environment Variables
 

@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Generator
 from .models import MacfTaskMetaData
 from .reader import TaskReader
 from ..utils.paths import find_agent_home
+from ..utils.atomic import write_json_atomic
 
 
 def validate_plan_ca_ref(plan_ca_ref: Optional[str]) -> None:
@@ -425,8 +426,7 @@ Claude Code purges ALL task files when all tasks become 'completed'. This sentin
     }
 
     # Write sentinel file
-    with open(sentinel_file, "w") as f:
-        json.dump(sentinel_data, f, indent=2)
+    write_json_atomic(sentinel_file, sentinel_data)
 
     # Make sentinel read-only (444) - can't be accidentally modified
     os.chmod(sentinel_file, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
@@ -608,8 +608,7 @@ def _create_task_file(
         task_file = reader.session_path / f"{task_id}.json"
 
         # Write task file
-        with open(task_file, "w") as f:
-            json.dump(task_data, f, indent=2)
+        write_json_atomic(task_file, task_data)
 
     return task_file
 
@@ -1727,10 +1726,10 @@ def _run_task_start(task_id: int, session_uuid: Optional[str] = None,
     return True
 
 
-def _run_scope_set(task_ids: List[int], timer_minutes: int = 0) -> bool:
+def _run_scope_set(task_ids: List[int], timer_minutes: int = 0) -> int:
     """Activate scope for the given task IDs programmatically.
 
-    Returns True on success, False on failure.
+    Returns how many were scoped (a completed or archived task is left out), or 0 on failure.
     """
     from .scope import set_scope
     from ..agent_events_log import append_event
@@ -1739,7 +1738,7 @@ def _run_scope_set(task_ids: List[int], timer_minutes: int = 0) -> bool:
     str_ids = [str(tid) for tid in task_ids]
     result = set_scope(str_ids)
     if not result.get("success"):
-        return False
+        return 0
 
     if timer_minutes > 0:
         from .scope import get_active_timer
@@ -1752,7 +1751,7 @@ def _run_scope_set(task_ids: List[int], timer_minutes: int = 0) -> bool:
                 "timer_end_epoch": timer_end,
                 "session_id": _get_sid(),
             })
-    return True
+    return len(result["tasks_scoped"])
 
 
 def _run_mode_set_work(mode: str) -> bool:
@@ -1810,10 +1809,13 @@ def _verify_tm_running() -> bool:
     just-started); False on import/OS errors or if start_daemon fails.
     """
     try:
+        from ..pd.monitor_unit import declared_monitor_unit
         from ..transcript_monitor.daemon import is_running as tm_is_running, start_daemon as tm_start
     except (ImportError, OSError):
         return False
     try:
+        if declared_monitor_unit() is not None:
+            return True  # a primal daemon unit runs it: 'macf_tools pd status' shows its state
         if tm_is_running():
             return True
         # Auto-start: matches cli.py:3008-3013 pattern at AUTO_MODE entry
@@ -2011,11 +2013,12 @@ def create_sprint(
         try:
             if not _run_task_start(task_id, session_uuid=session_uuid):
                 raise RuntimeError(f"task start #{task_id} failed")
-            if not _run_scope_set(scope_ids, timer_minutes=0):
+            scoped = _run_scope_set(scope_ids, timer_minutes=0)
+            if not scoped:
                 raise RuntimeError("scope set failed")
             if not _run_mode_set_work("SPRINT"):
                 raise RuntimeError("mode set-work SPRINT failed")
-            scope_count = len(scope_ids) - 1  # exclude sprint itself
+            scope_count = scoped - 1  # what was scoped, less the sprint itself
             launch_note = (
                 f"SPRINT: Launched. Goal: {effective_goal}. "
                 f"Scope: {scope_count} task(s)."

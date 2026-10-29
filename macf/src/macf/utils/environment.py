@@ -7,6 +7,7 @@ Cross-platform system information detection using Python stdlib only.
 import json
 import os
 import platform
+import re
 import socket
 import sys
 from pathlib import Path
@@ -30,6 +31,26 @@ KEY_ENV_VARS = [
 # Prefixes for dynamic env var discovery (additional vars beyond KEY_ENV_VARS)
 ENV_VAR_PREFIXES = ("MACEFF_", "MACF_", "CLAUDE")
 
+# A variable whose name says it holds a credential is reported as set, never shown: the
+# report lands in transcripts, and CLAUDE_CODE_MESSAGING_TOKEN was printed whole. The
+# words match anywhere in the name, so PGPASSWORD and OPENAI_APIKEY are caught too; a few
+# harmless names are hidden with them, which costs a debugging line, not a credential.
+# PAT is matched only as a whole word, since as a substring it hides every PATH.
+_SECRET_NAME = re.compile(r"TOKEN|SECRET|PASSW|APIKEY|API_KEY|KEY|AUTH|CREDENTIAL|PRIVATE"
+                          r"|COOKIE|BEARER|(^|_)PAT(_|$)")
+# A value that carries a password in a URL, scheme://user:password@host, whatever its name.
+_URL_PASSWORD = re.compile(r"(?P<head>[a-zA-Z][a-zA-Z0-9+.-]*://[^/:@\s]*:)[^@\s]+(?=@)")
+
+
+def masked(name: str, value: str) -> str:
+    """*value*, or a placeholder saying it is set when *name* names a credential; a
+    password inside a URL is hidden whatever the name."""
+    if not value or value == "(not set)":
+        return value
+    if _SECRET_NAME.search(name.upper()):
+        return f"(set, {len(value)} chars, hidden)"
+    return _URL_PASSWORD.sub(lambda m: m.group("head") + "(hidden)", value)
+
 
 def get_env_var_report() -> Tuple[Dict[str, str], Dict[str, str]]:
     """
@@ -43,11 +64,11 @@ def get_env_var_report() -> Tuple[Dict[str, str], Dict[str, str]]:
     # Key vars always reported
     key_vars = {}
     for k in KEY_ENV_VARS:
-        key_vars[k] = os.getenv(k, "(not set)")
+        key_vars[k] = masked(k, os.getenv(k, "(not set)"))
 
     # Extra vars matching prefixes but not in key list
     extra_vars = {
-        k: v for k, v in sorted(os.environ.items())
+        k: masked(k, v) for k, v in sorted(os.environ.items())
         if k.startswith(ENV_VAR_PREFIXES) and k not in KEY_ENV_VARS
     }
 

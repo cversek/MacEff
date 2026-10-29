@@ -18,6 +18,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple
 
+from ..utils.atomic import write_json_atomic
+
 from ..utils.paths import find_agent_home
 
 from .reader import TaskReader, update_task_file
@@ -160,8 +162,7 @@ def archive_task(
             archive_path = archive_dir / f"{base}_{counter}.json"
             counter += 1
 
-        with open(archive_path, "w") as f:
-            json.dump(task_data, f, indent=2)
+        write_json_atomic(archive_path, task_data)
 
         if t.id == task_id:
             primary_archive_path = str(archive_path)
@@ -264,8 +265,7 @@ def restore_task(
     # Write new task file (may fail in containers where CC owns the tasks dir)
     new_task_file = reader.session_path / f"{new_id}.json"
     try:
-        with open(new_task_file, "w") as f:
-            json.dump(task_data, f, indent=2)
+        write_json_atomic(new_task_file, task_data)
         return RestoreResult(
             success=True,
             old_id=old_id,

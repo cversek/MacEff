@@ -26,7 +26,12 @@ from typing import Any, Dict, List, Optional
 ### with a wording that says why it is a style smell rather than a leak.
 DEFAULT_PROFILE: Dict[str, Any] = {
     "hard": [
-        [r"\bc[0-9]{1,2}\b(?![0-9a-fA-F])", "cycle code (c15/c22/c25...)"],
+        # Not between two slashes: a URL path segment is the content-addressed shape a
+        # package index uses (`packages/ff/c0/<hash>`), chosen by the file's hash, so a
+        # lockfile update was refused for a code nobody wrote. One slash still counts, so a
+        # list such as `c15/c22` is caught by its first code.
+        [r"(?<!/)\bc[0-9]{1,2}\b(?![0-9a-fA-F])|\bc[0-9]{1,2}\b(?![0-9a-fA-F/])",
+         "cycle code (c15/c22/c25...)"],
         [r"[Cc]ycle[-_ ][0-9]+", "cycle-N reference"],
         [r"\bEXPERIMENT\s*#?[0-9]", "experiment number"],
         [r"\bMISSION\b|\bDETOUR\b", "internal task-type label"],
@@ -330,9 +335,13 @@ def all_checks(profile):
     return checks
 
 
-def staged_added_lines():
+def _added_lines(*against):
     out = subprocess.run(
-        ["git", "diff", "--cached", "--unified=0", "--no-color"],
+        # The prefixes are pinned: the parse below reads "+++ b/", and a user's
+        # diff.mnemonicPrefix ("+++ i/") or diff.noprefix would otherwise leave every
+        # hit attributed to no file (cversek/MacEff#845).
+        ["git", "diff", "--cached", "--unified=0", "--no-color",
+         "--src-prefix=a/", "--dst-prefix=b/"] + list(against),
         capture_output=True, text=True,
     ).stdout
     fname = None
@@ -341,6 +350,44 @@ def staged_added_lines():
             fname = line[6:]
         elif line.startswith("+") and not line.startswith("+++"):
             yield fname, line[1:]
+
+
+def merging():
+    """While a merge is being committed, MERGE_HEAD names the incoming side."""
+    return subprocess.run(["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+                          capture_output=True).returncode == 0
+
+
+def incoming_published():
+    """Whether the incoming side of a merge is already on a remote-tracking branch.
+
+    The narrowing below rests on the incoming side having been scanned and
+    published before. A local branch committed past the gate, made before the
+    hook was installed, or never pushed would otherwise reach a remote for the
+    first time through this merge, unscanned. A remote-tracking ref can be
+    written by hand: like the gate itself, this guards accidents."""
+    r = subprocess.run(["git", "branch", "-r", "--contains", "MERGE_HEAD"],
+                       capture_output=True, text=True)
+    return r.returncode == 0 and bool(r.stdout.strip())
+
+
+def staged_added_lines():
+    """The lines this commit adds. In a merge whose incoming side is already on a
+    remote, only those neither parent has: that side was scanned and published
+    before. Any other merge, a squash and a cherry-pick are scanned whole."""
+    added = list(_added_lines())
+    if not merging():
+        return added
+    if not incoming_published():
+        print("pre-commit gate: merge commit: the incoming side is not on any remote, "
+              "so it is scanned whole", file=sys.stderr)
+        return added
+    new_to_both = set(_added_lines("MERGE_HEAD"))
+    kept = [pair for pair in added if pair in new_to_both]
+    print("pre-commit gate: merge commit: scanned only what the merge adds beyond "
+          "both parents (%d of %d added lines); the incoming side was scanned when "
+          "it was committed there" % (len(kept), len(added)), file=sys.stderr)
+    return kept
 
 
 def main():

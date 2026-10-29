@@ -1,0 +1,4 @@
+### Added
+
+- **In AUTO_MODE an agent resumes after every compaction, whatever asked for it** (`hooks/handle_session_start.py`, `supervisor.start_compaction_resume`, policy `autonomous_operation` §5.4, 1.7): a compaction opens no turn, and only `inject compact` started the follower that types a recovery prompt. After an operator's `/compact` or an auto-compaction, a seat sat idle until the operator noticed. The SessionStart hook now starts the follower itself when AUTO_MODE is on, with a resume prompt; in MANUAL_MODE it starts none. Its starter prints nothing to stdout, which is the hook's reply.
+- **One follower per compaction** (`compact_followup.py`): a lock in the agent home. When `inject compact` and the hook each start one, the second steps aside and records `skipped: another follower is already waiting`. Two followers once each typed the prompt into the same box.

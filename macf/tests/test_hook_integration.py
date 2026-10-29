@@ -21,10 +21,45 @@ import pytest
 pytestmark = [pytest.mark.live]
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
+
+# Resolved once, against the directory the suite runs from, because every run
+# below gets a scratch working directory of its own.
+HOOK = Path(".claude/hooks/session_start.py").resolve()
+
+
+@pytest.fixture(scope="module")
+def hook_env(tmp_path_factory):
+    """Where every hook run in this module happens: a scratch agent home with its
+    own event log, and no session.
+
+    The hook is a real subprocess, so it takes its agent home, event log and
+    session from the environment and working directory it inherits, and this
+    module's warm-up runs before any function-scoped fixture can patch them. Run
+    inside a live agent session, that inheritance pointed the hook at the agent's
+    own event log, where it recorded session starts and command invocations, and
+    at the live session's transcripts. A scratch home as the working directory,
+    the log path set, and the session variables dropped keep each run to itself.
+    """
+    home = tmp_path_factory.mktemp("hook_home")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE_")}
+    env.update({
+        "MACEFF_AGENT_HOME_DIR": str(home),
+        "CLAUDE_PROJECT_DIR": str(home),
+        "MACF_EVENTS_LOG_PATH": str(home / "agent_events_log.jsonl"),
+        "MACF_CHANNELS_DISABLED": "1",
+    })
+    return home, env
+
+
+def _run_hook(hook_env, timeout=5):
+    home, env = hook_env
+    return subprocess.run(["python3", str(HOOK)], capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL, timeout=timeout, cwd=home, env=env)
 
 
 # Every test here shells out to the same hook. MEASURED on this suite's own
@@ -42,50 +77,29 @@ import pytest
 # performance test's clothes -- and no threshold can fix that, because the thing
 # being measured is not the thing named.
 @pytest.fixture(scope="module", autouse=True)
-def _warm_hook_interpreter():
-    hook_path = Path(".claude/hooks/session_start.py")
-    if not hook_path.exists():
+def _warm_hook_interpreter(hook_env):
+    if not HOOK.exists():
         return
-    subprocess.run(
-        ["python3", str(hook_path)],
-        capture_output=True, text=True,
-        stdin=subprocess.DEVNULL, timeout=120,
-    )
+    _run_hook(hook_env, timeout=120)
 
 
-def test_hook_executes_without_crashing():
+def test_hook_executes_without_crashing(hook_env):
     """Hook executes without crashing."""
-    hook_path = Path(".claude/hooks/session_start.py")
-
-    if not hook_path.exists():
+    if not HOOK.exists():
         pytest.skip("Hook not installed")
 
-    result = subprocess.run(
-        ["python3", str(hook_path)],
-        capture_output=True,
-        text=True,
-        stdin=subprocess.DEVNULL,
-        timeout=5
-    )
+    result = _run_hook(hook_env)
 
     # Hook should not crash (exit code 0 or graceful error)
     assert result.returncode == 0, f"Hook crashed: {result.stderr}"
 
 
-def test_hook_outputs_valid_json():
+def test_hook_outputs_valid_json(hook_env):
     """Hook produces parseable JSON output."""
-    hook_path = Path(".claude/hooks/session_start.py")
-
-    if not hook_path.exists():
+    if not HOOK.exists():
         pytest.skip("Hook not installed")
 
-    result = subprocess.run(
-        ["python3", str(hook_path)],
-        capture_output=True,
-        text=True,
-        stdin=subprocess.DEVNULL,
-        timeout=5
-    )
+    result = _run_hook(hook_env)
 
     # Parse output as JSON
     try:
@@ -102,20 +116,12 @@ def test_hook_outputs_valid_json():
     assert isinstance(output, dict)
 
 
-def test_json_has_hook_specific_output_structure():
+def test_json_has_hook_specific_output_structure(hook_env):
     """JSON has hookSpecificOutput structure."""
-    hook_path = Path(".claude/hooks/session_start.py")
-
-    if not hook_path.exists():
+    if not HOOK.exists():
         pytest.skip("Hook not installed")
 
-    result = subprocess.run(
-        ["python3", str(hook_path)],
-        capture_output=True,
-        text=True,
-        stdin=subprocess.DEVNULL,
-        timeout=5
-    )
+    result = _run_hook(hook_env)
 
     output = json.loads(result.stdout)
 
@@ -123,20 +129,12 @@ def test_json_has_hook_specific_output_structure():
     assert "hookSpecificOutput" in output or "continue" in output
 
 
-def test_compaction_detection_logic():
+def test_compaction_detection_logic(hook_env):
     """Compaction detected correctly (if transcript available)."""
-    hook_path = Path(".claude/hooks/session_start.py")
-
-    if not hook_path.exists():
+    if not HOOK.exists():
         pytest.skip("Hook not installed")
 
-    result = subprocess.run(
-        ["python3", str(hook_path)],
-        capture_output=True,
-        text=True,
-        stdin=subprocess.DEVNULL,
-        timeout=5
-    )
+    result = _run_hook(hook_env)
 
     # Hook should execute successfully
     assert result.returncode == 0
@@ -146,26 +144,30 @@ def test_compaction_detection_logic():
     assert isinstance(output, dict)
 
 
-def test_hook_performance():
+def test_hook_performance(hook_env):
     """Hook completes in reasonable time (<2 seconds)."""
-    hook_path = Path(".claude/hooks/session_start.py")
-
-    if not hook_path.exists():
+    if not HOOK.exists():
         pytest.skip("Hook not installed")
 
     import time
     start = time.time()
 
-    result = subprocess.run(
-        ["python3", str(hook_path)],
-        capture_output=True,
-        text=True,
-        stdin=subprocess.DEVNULL,
-        timeout=5
-    )
+    result = _run_hook(hook_env)
 
     elapsed = time.time() - start
 
     # Warm cost measured at 0.58s on this machine; 3.0 leaves ~5x headroom, so
     # this still catches a real regression while no longer failing on cache state.
     assert elapsed < 3.0, f"Hook took {elapsed:.2f}s warm (should be <3s)"
+
+
+def test_a_hook_run_writes_to_its_scratch_home(hook_env):
+    """The run's events land in the module's scratch log, not wherever the environment pointed."""
+    if not HOOK.exists():
+        pytest.skip("Hook not installed")
+    home, env = hook_env
+    log = Path(env["MACF_EVENTS_LOG_PATH"])
+    before = log.read_text().count("\n") if log.exists() else 0
+    assert _run_hook(hook_env).returncode == 0
+    assert log.exists() and log.read_text().count("\n") > before
+

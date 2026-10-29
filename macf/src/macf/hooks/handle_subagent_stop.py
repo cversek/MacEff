@@ -26,6 +26,7 @@ from macf.utils import (
 )
 from macf.modes import detect_auto_mode
 from macf.agent_events_log import append_event, shared_event_reads
+from macf.event_queries import get_deleg_drv_bridge_by_agent_id
 from macf.hooks.hook_logging import log_hook_event
 from macf.observability import Warning, emit_warning
 
@@ -66,6 +67,25 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             agent_type_from_hook = ''
             agent_transcript_path = ''
             last_assistant_message = ''
+
+        # Not every SubagentStop ends a delegation. The client also runs agents
+        # of its own and fires SubagentStop as each one ends: a one-line progress
+        # summary of a background agent, about every 30 seconds while it works,
+        # and the summary written at each compaction. Nothing delegated them: no
+        # Agent tool call started them, SubagentStart never fired for them, and
+        # their stop arrives with an empty agent_type. Counted as delegations,
+        # they filled the stats, the terminal and the operator's trace with
+        # "DELEG_DRV Complete [unknown]" every half minute. A stop with no type
+        # and no bridge event is recorded as what it is, and nothing more is
+        # done for it. A typed stop always counts, even if its start was missed.
+        if (agent_id and not agent_type_from_hook
+                and get_deleg_drv_bridge_by_agent_id(session_id, agent_id) is None):
+            append_event(
+                event="undelegated_agent_stopped",
+                data={"session_id": session_id, "agent_id": agent_id},
+                hook_input=hook_input,
+            )
+            return {"continue": True}
 
         # Get breadcrumb BEFORE completing
         breadcrumb = get_breadcrumb()

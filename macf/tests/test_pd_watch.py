@@ -1,0 +1,483 @@
+"""The outside watch (MIS-0002-R74 (pd_MUST_have_outside_watch), R75).
+
+Each test is one of the demonstrations ``service_supervision`` section 6 asks for: stop
+the subject and see one alert, bring it back and see one recovery; corrupt, remove and
+backdate a heartbeat for three verdicts, none ALIVE; each external state its own code.
+"""
+import json
+import sys
+import time
+
+import pytest
+
+from macf.pd import interface as pdi
+from macf.pd import watch
+
+NOW = 1_800_000_000.0
+CARD = "Resident@1a2b3c"
+
+
+def _home(root, name="Resident", uuid="1a2b3c4d-0000", units=(("broker", 15.0),)):
+    home = root / name
+    (home / ".maceff" / "pd").mkdir(parents=True)
+    (home / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": name}}))
+    (home / ".maceff_primary_agent.id").write_text(uuid)
+    declaration = {"version": 1, "agent": name, "units": [
+        {"name": unit, "command": ["true"], "account": "resident", "restart": "always",
+         "liveness_interval_s": interval, "memory_limit_mb": 64} for unit, interval in units]}
+    pdi.declaration_path(home).write_text(json.dumps(declaration))
+    return home
+
+
+def _stamp(home, unit, age_s, interval_s=15.0, pid=4242, start="777"):
+    log = home / ".maceff" / "agent_events_log.jsonl"
+    data = {"agent": CARD, "unit": unit, "pid": pid, "proc_start": start, "interval_s": interval_s}
+    with log.open("a") as fh:
+        fh.write(json.dumps({"timestamp": NOW - age_s, "event": pdi.EVENT_LIVENESS, "data": data}) + "\n")
+
+
+def _record(base, pid=5151, start="888"):
+    base.mkdir(exist_ok=True)
+    pdi.record_path(CARD, base).write_text(pdi.DaemonRecord(pid=pid, proc_start=start).model_dump_json())
+
+
+def _probe(starts):
+    """A probe in verify_incarnation's shape: is pid still the process that started then."""
+    return lambda pid, start: starts.get(pid) == start
+
+
+ALL_RUNNING = _probe({5151: "888", 4242: "777"})
+
+
+def _config(tmp_path, homes, sink):
+    command = [sys.executable, "-c", f"import sys; open({str(sink)!r}, 'a').write(sys.stdin.read())"]
+    return watch.render_config(homes, command, tmp_path / "state")
+
+
+def test_a_stopped_daemon_alerts_once_then_recovers_once(tmp_path):
+    home, base, sink = _home(tmp_path), tmp_path / "run", tmp_path / "sink.txt"
+    _stamp(home, "broker", age_s=5, interval_s=600.0)  # the unit stays fresh; only the daemon varies
+    config = _config(tmp_path, [home], sink)
+
+    # Stopped: no record. One alert, through the configured command and nothing else.
+    assert watch.run_pass(config, now=NOW, base=base, probe=ALL_RUNNING) == watch.EXIT_UNHEALTHY
+    assert sink.read_text().count("ALERT") == 1
+    assert "Resident@1a2b3c daemon: ABSENT" in sink.read_text()
+    # Still stopped on the next pass: the stretch is open, nothing more is sent.
+    watch.run_pass(config, now=NOW + 120, base=base, probe=ALL_RUNNING)
+    assert sink.read_text().count("ALERT") == 1
+    # Started again: one recovery line naming the stretch's length.
+    _record(base)
+    assert watch.run_pass(config, now=NOW + 240, base=base, probe=ALL_RUNNING) == watch.EXIT_HEALTHY
+    assert "recovered: Resident@1a2b3c daemon: ALIVE" in sink.read_text()
+    assert "(after 4 min)" in sink.read_text()
+
+
+def test_a_declared_daemon_without_a_watch_is_named(tmp_path):
+    declared, other = _home(tmp_path), _home(tmp_path, name="Second", uuid="9f8e7d6c-0000")
+    bare = tmp_path / "NoDeclaration"
+    bare.mkdir()
+    config = watch.render_config([declared, other, bare], ["true"], tmp_path / "state")
+    assert [h.path for h in config.homes] == [str(declared), str(other)]
+    assert watch.unwatched(config, [declared, other, bare]) == []
+    config.homes.pop()  # a hand edit, or a home added after rendering
+    assert watch.unwatched(config, [declared, other, bare]) == [str(other)]
+
+
+def test_corrupt_removed_and_backdated_heartbeats_are_three_verdicts_none_alive(tmp_path):
+    home = _home(tmp_path, units=(("fresh", 15.0), ("old", 15.0), ("never", 15.0), ("broken", 15.0)))
+    _stamp(home, "fresh", age_s=10)
+    _stamp(home, "old", age_s=600)
+    log = home / ".maceff" / "agent_events_log.jsonl"
+    with log.open("a") as fh:
+        fh.write(json.dumps({"timestamp": NOW - 1, "event": pdi.EVENT_LIVENESS,
+                             "data": {"agent": CARD, "unit": "broken", "pid": "not a pid"}}) + "\n")
+    _record(tmp_path / "run")
+    verdicts = {f.subject: f.verdict for f in watch.check_home(home, NOW, tmp_path / "run", ALL_RUNNING)}
+    assert verdicts == {"daemon": "ALIVE", "fresh": "ALIVE", "old": "STALE",
+                        "never": "ABSENT", "broken": "UNREADABLE"}
+
+
+def test_the_bound_is_the_units_own_published_interval(tmp_path):
+    home = _home(tmp_path, units=(("fast", 15.0), ("slow", 15.0)))
+    _stamp(home, "fast", age_s=100, interval_s=10.0)
+    _stamp(home, "slow", age_s=100, interval_s=600.0)  # not the declaration's 15
+    _record(tmp_path / "run")
+    verdicts = {f.subject: f.verdict for f in watch.check_home(home, NOW, tmp_path / "run", ALL_RUNNING)}
+    assert (verdicts["fast"], verdicts["slow"]) == ("STALE", "ALIVE")
+
+
+def test_a_fresh_stamp_from_a_process_that_is_gone_is_not_alive(tmp_path):
+    home = _home(tmp_path)
+    _stamp(home, "broker", age_s=5)
+    _record(tmp_path / "run")
+    restarted = _probe({5151: "888", 4242: "999"})  # the pid now names another process
+    unit = watch.check_home(home, NOW, tmp_path / "run", restarted)[1]
+    assert (unit.verdict, unit.subject) == ("GONE", "broker")
+    daemon = watch.check_home(home, NOW, tmp_path / "run", _probe({}))[0]
+    assert daemon.verdict == "GONE"
+
+
+def test_each_external_state_has_its_own_exit_code(tmp_path):
+    missing = tmp_path / "gone"
+    assert watch.exit_code(watch.check_home(missing, NOW)) == watch.EXIT_UNREACHABLE
+    broken = _home(tmp_path)
+    pdi.declaration_path(broken).write_text('{"version": 1, "agent": "x", "surprise": true}')
+    findings = watch.check_home(broken, NOW)
+    assert [f.verdict for f in findings] == ["CHECK-FAILED"]
+    assert watch.exit_code(findings) == watch.EXIT_CHECK_FAILED
+    assert len({watch.EXIT_HEALTHY, watch.EXIT_UNHEALTHY, watch.EXIT_UNREACHABLE, watch.EXIT_CHECK_FAILED}) == 4
+
+
+@pytest.mark.parametrize("verdict", __import__("typing").get_args(watch.Verdict))
+def test_every_verdict_has_an_exit_code(verdict):
+    """A verdict added without a code made the pass raise after its alert was sent, on every
+    pass while a channel was dark or a wake held. Only ALIVE is healthy."""
+    code = watch.exit_code([watch.Finding("Resident@1a2b3c", "subject", verdict, "why")])
+    assert (code == watch.EXIT_HEALTHY) == (verdict == "ALIVE")
+
+
+def test_a_dark_channel_pass_exits_unhealthy_after_its_alert(tmp_path):
+    findings = [watch.check_channel("Resident@1a2b3c", {"event": pdi.EVENT_CHANNEL_DARK, "timestamp": NOW - 60,
+                                                         "data": {"agent": "Resident@1a2b3c", "reason": "dropped"}}, NOW)]
+    assert [f.verdict for f in findings] == ["DARK"]
+    assert watch.exit_code(findings) == watch.EXIT_UNHEALTHY
+
+
+def test_a_failed_push_is_recorded_and_loud_and_echoes_nothing_from_the_command(tmp_path, capsys):
+    durable = tmp_path / "state" / "alerts.jsonl"
+    secret_url = "https://api.example/bot123:SECRET/send"
+    command = [sys.executable, "-c", f"import sys; print({secret_url!r}); sys.exit(4)"]
+    assert watch.send(command, "ALERT: x daemon: ABSENT\n", durable) is False
+    record = json.loads(durable.read_text())
+    assert (record["outcome"], record["text"]) == ("alert command exited 4", "ALERT: x daemon: ABSENT\n")
+    err = capsys.readouterr().err
+    assert "ALERT: x daemon: ABSENT" in err
+    assert "SECRET" not in err and "SECRET" not in durable.read_text()
+
+
+def test_an_unprobed_home_gets_no_guessed_daemon_verdict(tmp_path):
+    home = _home(tmp_path)
+    _stamp(home, "broker", age_s=5)
+    findings = watch.check_home(home, NOW, tmp_path / "run", probe=None)
+    assert [(f.subject, f.verdict) for f in findings] == [("broker", "ALIVE")]
+
+
+def test_a_subject_no_longer_checked_closes_its_stretch(tmp_path):
+    lines, after = watch.transitions([], {"Resident@1a2b3c/broker": {"since": NOW - 300, "verdict": "STALE"}}, NOW)
+    assert lines == ["closed: Resident@1a2b3c/broker is no longer checked (was STALE for 5 min)"]
+    assert after == {}
+
+
+def test_a_stamp_older_than_the_lookback_reads_absent_and_says_so(tmp_path):
+    home = _home(tmp_path)
+    _stamp(home, "broker", age_s=watch.LOOKBACK_S + 60)
+    _record(tmp_path / "run")
+    unit = watch.check_home(home, NOW, tmp_path / "run", ALL_RUNNING)[1]
+    assert unit.verdict == "ABSENT"
+    assert "within 168 h" in unit.detail
+
+
+def test_the_rendered_units_run_the_watch_on_its_own_timer(tmp_path):
+    units = watch.render_systemd(tmp_path / "watch.json", every_s=90, python="/usr/bin/python3")
+    service, timer = units["maceff_pd_watch.service"], units["maceff_pd_watch.timer"]
+    assert f"ExecStart=/usr/bin/python3 -m macf.pd.watch --config {tmp_path / 'watch.json'}" in service
+    assert "SuccessExitStatus=1 2" in service
+    assert "OnUnitActiveSec=90" in timer
+
+
+def test_the_watch_breaking_is_itself_an_alert(tmp_path, monkeypatch):
+    sink = tmp_path / "sink.txt"
+    home = _home(tmp_path)
+    config = _config(tmp_path, [home], sink)
+    path = tmp_path / "watch.json"
+    path.write_text(config.model_dump_json())
+
+    def broken(*a, **k):
+        raise RuntimeError("instrument fault")
+    monkeypatch.setattr(watch, "run_pass", broken)
+    assert watch.main(["--config", str(path)]) == watch.EXIT_CHECK_FAILED
+    assert "the watch itself: CHECK-FAILED, RuntimeError: instrument fault" in sink.read_text()
+
+
+def test_an_alert_whose_push_failed_is_sent_again(tmp_path):
+    """The head maintainer's reproduction on #574: a stale unit, a first pass whose alert
+    command exits 1, then a pass with a working command. The second command must hear it."""
+    home, base, sink = _home(tmp_path), tmp_path / "run", tmp_path / "sink.txt"
+    _stamp(home, "broker", age_s=600)  # stale
+    _record(base)
+    config = _config(tmp_path, [home], sink)
+    failing = config.model_copy(update={"alert_command": [sys.executable, "-c", "raise SystemExit(1)"]})
+    assert watch.run_pass(failing, now=NOW, base=base, probe=ALL_RUNNING) == watch.EXIT_UNHEALTHY
+    assert not sink.exists()
+    watch.run_pass(config, now=NOW + 120, base=base, probe=ALL_RUNNING)
+    assert "ALERT: Resident@1a2b3c broker: STALE" in sink.read_text()
+    # Delivered now: the next pass is quiet, and the one record holds both attempts.
+    watch.run_pass(config, now=NOW + 240, base=base, probe=ALL_RUNNING)
+    assert sink.read_text().count("ALERT") == 1
+    records = [json.loads(line) for line in (tmp_path / "state" / "alerts.jsonl").read_text().splitlines()]
+    assert [r["delivered"] for r in records] == [False, True]
+    assert not (tmp_path / "state" / "stretches.json").exists()
+
+
+def test_another_agents_liveness_in_the_same_log_is_not_this_agents(tmp_path):
+    home = _home(tmp_path)
+    log = home / ".maceff" / "agent_events_log.jsonl"
+    other = {"agent": "Neighbor@9f8e7d", "unit": "broker", "pid": 4242, "proc_start": "777", "interval_s": 15.0}
+    log.write_text(json.dumps({"timestamp": NOW - 5, "event": pdi.EVENT_LIVENESS, "data": other}) + "\n")
+    _record(tmp_path / "run")
+    unit = watch.check_home(home, NOW, tmp_path / "run", ALL_RUNNING)[1]
+    assert unit.verdict == "ABSENT"
+
+
+def test_the_default_probe_compares_starts_as_the_interface_says(tmp_path):
+    """verify_incarnation puts the recorded start and /proc's through proc_start_key."""
+    import os
+    from macf.notify.session import proc_start
+    me = os.getpid()
+    _record(tmp_path / "run", pid=me, start=proc_start(me))
+    assert watch.check_daemon(CARD, tmp_path / "run", watch.verify_incarnation).verdict == "ALIVE"
+    # A wrong start in the platform's own form: pid 1's, real on Linux and macOS and far
+    # older than this process (adding 1 to ours only works for Linux's clock ticks).
+    wrong = proc_start(1)
+    assert wrong and wrong != proc_start(me)
+    _record(tmp_path / "run", pid=me, start=wrong)
+    assert watch.check_daemon(CARD, tmp_path / "run", watch.verify_incarnation).verdict == "GONE"
+
+
+def test_a_row_whose_unit_is_not_a_name_does_not_stop_the_watch(tmp_path):
+    """The outside watch skips a liveness row whose unit is a list, as the readout does, and
+    still finds the unit's good row behind it."""
+    log, now = tmp_path / "events.jsonl", time.time()
+    good = {"timestamp": now - 5, "event": pdi.EVENT_LIVENESS,
+            "data": {"agent": "Resident@1a2b3c", "unit": "broker", "pid": 4242, "proc_start": "777",
+                     "interval_s": 15.0}}
+    bad = {"timestamp": now - 1, "event": pdi.EVENT_LIVENESS,
+           "data": dict(good["data"], unit=["broker"])}
+    log.write_text(json.dumps(good) + "\n" + json.dumps(bad) + "\n")
+    found = watch.last_liveness(log, "Resident@1a2b3c", ["broker"], now)
+    assert found["broker"]["data"]["pid"] == 4242
+
+
+def _route_unread_mail(home, route):
+    path = pdi.declaration_path(home)
+    declaration = json.loads(path.read_text())
+    declaration.update(unread_mail_threshold_s=600, notice_routes={pdi.UNREAD_MAIL_SOURCE: route})
+    path.write_text(json.dumps(declaration))
+
+
+def _unread_event(home, event, age_s):
+    with (home / ".maceff" / "agent_events_log.jsonl").open("a") as fh:
+        fh.write(json.dumps({"timestamp": NOW - age_s, "event": event,
+                             "data": {"agent": CARD, "count": 2, "reason": "2 message(s) unread"}}) + "\n")
+
+
+def test_unread_mail_routed_to_the_operator_is_one_alert_per_spell(tmp_path):
+    """R55's operator half: the watch reads the daemon's spell events. One alert when a spell
+    opens, one line when the box is emptied."""
+    home = _home(tmp_path)
+    _route_unread_mail(home, "both")
+    _stamp(home, "broker", 5)
+    _unread_event(home, pdi.EVENT_UNREAD_MAIL, 30)
+    mail = [f for f in watch.check_home(home, NOW) if f.subject == "mail"]
+    assert [(f.verdict, "2 message(s) unread" in f.detail) for f in mail] == [("UNREAD", True)]
+    lines, after = watch.transitions(mail, {}, NOW)
+    assert len(lines) == 1 and lines[0].startswith(f"ALERT: {CARD} mail: UNREAD")
+    assert watch.transitions(mail, after, NOW + 60)[0] == []          # still open: nothing more
+    _unread_event(home, pdi.EVENT_UNREAD_MAIL_CLEARED, 0)
+    mail = [f for f in watch.check_home(home, NOW) if f.subject == "mail"]
+    assert [f.verdict for f in mail] == ["ALIVE"]
+    assert len(watch.transitions(mail, after, NOW)[0]) == 1
+
+
+def test_a_spell_older_than_the_lookback_still_reads_open(tmp_path):
+    """The opening event is a spell's only record; a cutoff would turn a week-old spell into
+    an all-clear while the daemon still holds it (host-side maintainer, on review)."""
+    home = _home(tmp_path)
+    _route_unread_mail(home, "operator")
+    _unread_event(home, pdi.EVENT_UNREAD_MAIL, watch.LOOKBACK_S + 3600)
+    mail = [f for f in watch.check_home(home, NOW) if f.subject == "mail"]
+    assert [f.verdict for f in mail] == ["UNREAD"]
+
+
+def test_unread_mail_routed_to_the_agent_alone_is_not_the_watchs(tmp_path):
+    home = _home(tmp_path)
+    _route_unread_mail(home, "agent")
+    _unread_event(home, pdi.EVENT_UNREAD_MAIL, 30)
+    assert not [f for f in watch.check_home(home, NOW) if f.subject == "mail"]
+
+
+# ----------------------------------------------------------------------------
+# A container's limits after each recreate (MIS-0002-R61)
+# ----------------------------------------------------------------------------
+
+class _Docker:
+    """A stand-in for docker: a container whose id and in-force memory can change, made by
+    compose from two files that declare 64 GiB. Records every command it is given."""
+
+    def __init__(self, cid="c1", memory_gib=64, fail_inspect=False, files="/d/compose.yml,/d/override.yml"):
+        self.cid, self.memory_gib, self.fail_inspect, self.calls = cid, memory_gib, fail_inspect, []
+        self.files = files
+
+    def __call__(self, argv):
+        self.calls.append(argv)
+        if self.fail_inspect:
+            raise watch.subprocess.CalledProcessError(1, argv)
+        if argv[:2] == ["docker", "inspect"]:
+            return json.dumps([{"Id": self.cid, "HostConfig": {"Memory": self.memory_gib * 1024 ** 3},
+                                "Config": {"Labels": {
+                                    "com.docker.compose.project.config_files": self.files,
+                                    "com.docker.compose.service": "seat"}}}])
+        return json.dumps({"services": {"seat": {"mem_limit": "64g"}}})
+
+    def compared(self):
+        return sum(1 for argv in self.calls if argv[:2] == ["docker", "compose"])
+
+
+def _limits_config(tmp_path, sink):
+    command = [sys.executable, "-c", f"import sys; open({str(sink)!r}, 'a').write(sys.stdin.read())"]
+    return watch.render_config([], command, tmp_path / "state", containers=["seat-1"])
+
+
+def test_limits_checked_after_recreate(tmp_path):
+    """MIS-0002-R61 (layer_MUST_check_limits_after_recreate): the comparison runs once per
+    container id, so once after each recreate, however it was done, and not on every pass."""
+    (tmp_path / "state").mkdir()
+    sink, docker = tmp_path / "sink.txt", _Docker()
+    config = _limits_config(tmp_path, sink)
+    assert watch.run_pass(config, now=NOW, run=docker) == watch.EXIT_HEALTHY
+    assert watch.run_pass(config, now=NOW + 120, run=docker) == watch.EXIT_HEALTHY
+    assert docker.compared() == 1                      # the same container: compared once
+    docker.cid = "c2"                                  # recreated
+    watch.run_pass(config, now=NOW + 240, run=docker)
+    assert docker.compared() == 2
+    assert not sink.exists()                           # matched every time: nothing to say
+
+
+def test_limits_that_drifted_in_a_recreate_alert_once_and_recover_after_the_next(tmp_path):
+    (tmp_path / "state").mkdir()
+    sink, docker = tmp_path / "sink.txt", _Docker(memory_gib=32)
+    config = _limits_config(tmp_path, sink)
+    assert watch.run_pass(config, now=NOW, run=docker) == watch.EXIT_UNHEALTHY
+    assert watch.run_pass(config, now=NOW + 120, run=docker) == watch.EXIT_UNHEALTHY
+    text = sink.read_text()
+    assert text.count("ALERT:") == 1                   # one alert for the stretch, not one per pass
+    assert "seat-1 limits: DRIFTED" in text and "declared 64 GiB, in force 32 GiB" in text
+    docker.cid, docker.memory_gib = "c2", 64            # recreated with the declared limit
+    assert watch.run_pass(config, now=NOW + 240, run=docker) == watch.EXIT_HEALTHY
+    assert "recovered: seat-1 limits: ALIVE" in sink.read_text()
+
+
+def test_a_container_that_cannot_be_inspected_is_check_failed_and_tried_again(tmp_path):
+    (tmp_path / "state").mkdir()
+    sink, docker = tmp_path / "sink.txt", _Docker(fail_inspect=True)
+    config = _limits_config(tmp_path, sink)
+    assert watch.run_pass(config, now=NOW, run=docker) == watch.EXIT_CHECK_FAILED
+    assert "seat-1 limits check: CHECK-FAILED" in sink.read_text()
+    docker.fail_inspect = False
+    assert watch.run_pass(config, now=NOW + 120, run=docker) == watch.EXIT_HEALTHY
+    assert docker.compared() == 1                      # nothing was kept for the failed pass
+
+
+def test_a_config_without_containers_runs_no_docker(tmp_path):
+    (tmp_path / "state").mkdir()
+    docker = _Docker()
+    command = [sys.executable, "-c", "pass"]
+    config = watch.render_config([], command, tmp_path / "state")
+    assert config.containers == []
+    watch.run_pass(config, now=NOW, run=docker)
+    assert docker.calls == []
+
+
+def test_a_comparison_that_failed_is_made_again_for_the_same_container(tmp_path):
+    """A failed comparison keeps nothing, so a container that was not recreated is still
+    compared on the next pass, rather than carrying a verdict nobody measured."""
+    (tmp_path / "state").mkdir()
+    sink, docker = tmp_path / "sink.txt", _Docker()
+    config = _limits_config(tmp_path, sink)
+    broken = {"on": True}
+
+    def run(argv):
+        if broken["on"] and argv[:2] == ["docker", "compose"]:
+            docker.calls.append(argv)
+            raise watch.subprocess.CalledProcessError(1, argv)
+        return docker(argv)
+    assert watch.run_pass(config, now=NOW, run=run) == watch.EXIT_CHECK_FAILED
+    broken["on"] = False
+    assert watch.run_pass(config, now=NOW + 120, run=run) == watch.EXIT_HEALTHY
+    assert docker.compared() == 2                      # same id, compared again
+
+
+def test_a_docker_update_drift_is_caught_without_a_recreate(tmp_path):
+    """Review of #700: the limits in force are read every pass, so a docker update that keeps the
+    container id still shows, and the compose files aren't read again for it."""
+    (tmp_path / "state").mkdir()
+    sink, docker = tmp_path / "sink.txt", _Docker()
+    config = _limits_config(tmp_path, sink)
+    assert watch.run_pass(config, now=NOW, run=docker) == watch.EXIT_HEALTHY
+    docker.memory_gib = 32                                 # docker update: same id
+    assert watch.run_pass(config, now=NOW + 120, run=docker) == watch.EXIT_UNHEALTHY
+    assert "seat-1 limits: DRIFTED" in sink.read_text()
+    assert docker.compared() == 1
+
+
+def test_files_edited_to_match_close_the_stretch_without_a_recreate(tmp_path):
+    (tmp_path / "state").mkdir()
+    compose = tmp_path / "compose.yml"
+    compose.write_text("services: {}\n")
+    sink, docker = tmp_path / "sink.txt", _Docker(memory_gib=32, files=str(compose))
+    config = _limits_config(tmp_path, sink)
+    assert watch.run_pass(config, now=NOW, run=docker) == watch.EXIT_UNHEALTHY
+    import os
+    os.utime(compose, (NOW + 60, NOW + 60))                # the files changed: read them again
+    docker.memory_gib = 64                                 # and the change was applied
+    assert watch.run_pass(config, now=NOW + 120, run=docker) == watch.EXIT_HEALTHY
+    assert docker.compared() == 2 and "recovered: seat-1 limits: ALIVE" in sink.read_text()
+
+
+def test_a_failed_check_in_a_drift_is_its_own_stretch_and_the_drift_stays_one(tmp_path):
+    """Review of #700: DRIFTED, then a check that fails (docker briefly unreachable), then DRIFTED
+    again. The failure opens and recovers a stretch of its own; the drift is one stretch, alerted
+    once, and nothing reads as no longer checked."""
+    (tmp_path / "state").mkdir()
+    sink, docker = tmp_path / "sink.txt", _Docker(memory_gib=32)
+    config = _limits_config(tmp_path, sink)
+    watch.run_pass(config, now=NOW, run=docker)
+    docker.fail_inspect = True
+    watch.run_pass(config, now=NOW + 60, run=docker)
+    docker.fail_inspect = False
+    watch.run_pass(config, now=NOW + 120, run=docker)
+    lines = [line for line in sink.read_text().splitlines() if "seat-1" in line]
+    assert [line.split(",")[0] for line in lines] == [
+        "ALERT: seat-1 limits: DRIFTED", "ALERT: seat-1 limits check: CHECK-FAILED",
+        "recovered: seat-1 limits check: ALIVE"], lines
+    assert docker.compared() == 1                      # the kept comparison survived the failure
+
+
+def test_a_changed_env_beside_the_compose_files_is_read_again(tmp_path):
+    """Review of #700: compose reads the .env in its project directory, so a limit taken from it
+    and changed there is read again without a recreate."""
+    (tmp_path / "state").mkdir()
+    compose = tmp_path / "compose.yml"
+    compose.write_text("services: {}\n")
+    sink, docker = tmp_path / "sink.txt", _Docker(files=str(compose))
+    config = _limits_config(tmp_path, sink)
+    watch.run_pass(config, now=NOW, run=docker)
+    watch.run_pass(config, now=NOW + 60, run=docker)
+    assert docker.compared() == 1
+    (tmp_path / ".env").write_text("SEAT_MEM=64g\n")
+    watch.run_pass(config, now=NOW + 120, run=docker)
+    assert docker.compared() == 2
+
+
+def test_a_drift_found_after_a_failed_check_is_still_an_alert(tmp_path):
+    """A failed check is its own subject, so the DRIFTED that follows opens its own stretch."""
+    (tmp_path / "state").mkdir()
+    sink, docker = tmp_path / "sink.txt", _Docker(memory_gib=32, fail_inspect=True)
+    config = _limits_config(tmp_path, sink)
+    watch.run_pass(config, now=NOW, run=docker)
+    docker.fail_inspect = False
+    watch.run_pass(config, now=NOW + 120, run=docker)
+    text = sink.read_text()
+    assert "ALERT: seat-1 limits check: CHECK-FAILED" in text and "ALERT: seat-1 limits: DRIFTED" in text
+

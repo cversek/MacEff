@@ -41,8 +41,10 @@ CARRY_KEY_FIELD = "mode"
 #: The families of state this version of the carry re-asserts. Sprint and
 #: play-time scope are event-sourced and read cycle-scoped, so they are lost at a
 #: boundary unless carried, exactly like a mode. The play-time timer is read the
-#: same way and goes with them.
-CARRY_FAMILIES = ("mode", "scope", "timer")
+#: same way and goes with them. The focused role is read on every tool call, so it
+#: is read cycle-scoped too, and carried (#460). Open observations and present operator
+#: surfaces are what the per-call line's presence reads (MIS-0002-R91), so they cross too.
+CARRY_FAMILIES = ("mode", "scope", "timer", "focus", "occurrences", "observation", "surface")
 
 #: Written after every carry, whether or not anything was carried. It is what
 #: bounds the next boundary's walk: a cycle holding a COMPLETE marker (every
@@ -51,6 +53,104 @@ CARRY_FAMILIES = ("mode", "scope", "timer")
 CARRY_MARKER_EVENT = "state_carried"
 
 TIMER_EVENT_TYPES = frozenset({"scope_timer_set", "scope_timer_cleared", "scope_cleared"})
+
+#: USER_REMOTE is set by an event but cleared by the operator typing at the CLI, which
+#: writes no mode_change (``modes.detection._detect_user_remote``). Its terminal event is
+#: therefore not its terminal value: the carry reads the activity too, and a USER_REMOTE
+#: the operator has typed since is not carried. Carried anyway, it came back at every
+#: compaction with a fresh timestamp, and the CLI typing that had ended it was on the far
+#: side of the boundary, where a cycle-scoped read can't see it.
+CLI_CLEARED_MODES = frozenset({"USER_REMOTE"})
+ACTIVITY_EVENT = "user_activity_detected"
+
+#: The roles package's focus event (``macf.roles.focus.EVENT``), named here so the
+#: carry does not import the roles package.
+FOCUS_EVENT = "role_focus_change"
+
+#: An ``on:<event>`` duty's occurrence still open at the boundary, re-recorded on the near
+#: side with the time its event happened (``roles.priority.event_occurrence`` reads it).
+#: Its own event rather than the trigger again, so no other reader of the trigger is told
+#: it happened twice.
+OCCURRENCE_EVENT = "duty_occurrence_carried"
+
+
+#: The observation acts (``macf.observe.acts``) and surface states (``macf.observe.presence``)
+#: the carry folds, named here as the focus event is; a test pins them equal.
+OBSERVE_EVENTS = frozenset({"pd_observe_invite", "pd_observe_pause", "pd_observe_resume",
+                            "pd_observe_end", "pd_surface_state", "pd_daemon_start"})
+
+
+def _open_observations(window: List[dict], now: float) -> List[dict]:
+    """Each observation still open at the boundary, as the events that re-assert it: its
+    invitation, then its pauses and resumes in their original order, so a pause open at
+    the boundary stays open and a resume after it closes the right one. An ended
+    observation, or one whose lease has run out, carries nothing, so an ending is final
+    across the boundary. The invitation is carried unchanged, ``lease_until`` included,
+    and that time is absolute, so a boundary never extends an invitation.
+
+    A row is kept only once it folds, so the carry keeps exactly the rows the per-call line
+    used: a malformed re-invitation can't replace the good one before it, and a row that
+    won't parse costs only itself."""
+    from .observe.acts import EVENT_END, EVENT_INVITE, EVENT_PAUSE, EVENT_RESUME, fold_into, lapsed
+    kinds = (EVENT_INVITE, EVENT_PAUSE, EVENT_RESUME, EVENT_END)
+    state: dict = {}
+    acts: Dict[str, List[dict]] = {}
+    for event in window:
+        if event.get("event") not in kinds or not fold_into(state, event):
+            continue
+        kind, who = event["event"], event["data"]["onlooker"]
+        if kind == EVENT_INVITE:
+            acts[who] = [event]
+        elif kind in (EVENT_PAUSE, EVENT_RESUME) and who in acts:
+            acts[who].append(event)
+        elif kind == EVENT_END:
+            acts.pop(who, None)
+    return [e for who, events in sorted(acts.items())
+            if who in state and not lapsed(state[who], now) for e in events]
+
+
+def _present_surfaces(window: List[dict]) -> List[dict]:
+    """Each operator surface present at the boundary, as its state event: its latest state
+    since the newest daemon start, unless that is ``gone``. A surface that died without
+    recording ``gone`` is covered by the daemon's liveness, which reads presence as unknown."""
+    from .observe.presence import EVENT_SURFACE, fold_surfaces
+    return [{"event": EVENT_SURFACE, "data": {"surface": name, "state": st}}
+            for name, st in sorted(fold_surfaces(window).items())]
+
+
+def _event_duties() -> List[Tuple[str, str]]:
+    """(duty id, trigger event) for every open duty with an ``on:<event>`` cadence. The
+    store builds its models, which is fine once per compaction; an unreadable store
+    carries no occurrence and says why."""
+    try:
+        from .roles.cadence import is_event_cadence, parse_cadence
+        from .roles.store import RoleStore
+        return [(d.id, parse_cadence(d.cadence).event) for d, _ in RoleStore().all_duties()
+                if d.state not in ("done", "deferred") and is_event_cadence(d.cadence)]
+    except Exception as e:  # noqa: BLE001 - GUARD: the roles store must not break the carry
+        print(f"⚠️ MACF: carry: event duties unreadable, no occurrence carried: {e}", file=sys.stderr)
+        return []
+
+
+def _open_occurrences(window: List[dict], duties: List[Tuple[str, str]]) -> List[dict]:
+    """Each event duty's occurrence left open at the boundary: its latest trigger, or
+    carried occurrence, after its declaration and not followed by a done_on service.
+    Read in the log's own order, as ``event_occurrence`` reads it."""
+    out = []
+    for duty_id, trigger in duties:
+        occ = None
+        for event in window:
+            kind, data = event.get("event"), event.get("data") or {}
+            if kind == trigger:
+                occ = event.get("timestamp")
+            elif kind == OCCURRENCE_EVENT and data.get("duty_id") == duty_id:
+                occ = data.get("occurred_at")
+            elif data.get("duty_id") == duty_id and (kind == "duty_added"
+                                                    or (kind == "duty_serviced" and data.get("done_on"))):
+                occ = None
+        if occ is not None:
+            out.append({"duty_id": duty_id, "event": trigger, "occurred_at": occ})
+    return out
 
 
 def _is_complete_marker(event: dict) -> bool:
@@ -61,7 +161,7 @@ def _is_complete_marker(event: dict) -> bool:
     return set(CARRY_FAMILIES) <= families and data.get("complete") is True
 
 
-def _read_window() -> Tuple[List[dict], bool]:
+def _read_window(extra: frozenset = frozenset()) -> Tuple[List[dict], bool]:
     """Relevant events since the last complete carry, oldest first.
 
     Walks back from the boundary just written. The walk stops at the first
@@ -76,7 +176,9 @@ def _read_window() -> Tuple[List[dict], bool]:
     reached the start of history without finding a complete marker.
     """
     from .task.scope import SCOPE_EVENT_TYPES
-    relevant = CARRIED_EVENT_TYPES | SCOPE_EVENT_TYPES | TIMER_EVENT_TYPES
+    relevant = (CARRIED_EVENT_TYPES | SCOPE_EVENT_TYPES | TIMER_EVENT_TYPES | {FOCUS_EVENT}
+                | {OCCURRENCE_EVENT, "duty_added", "duty_serviced"} | OBSERVE_EVENTS
+                | {ACTIVITY_EVENT} | extra)
 
     collected: List[dict] = []
     boundaries_seen = 0
@@ -109,12 +211,22 @@ def _terminal_modes(window: List[dict]) -> List[dict]:
     The order matters as much as the fold. Readers take the most recent
     ``mode_change`` of any key, so emitting AUTO_MODE after a later MANUAL_MODE
     would hand back an authority the operator had withdrawn.
+
+    A mode in ``CLI_CLEARED_MODES`` has no terminal event once the operator types
+    at the CLI after it, so it carries nothing, as a disabled one would.
     """
+    from .modes.detection import _CLI_ACTIVITY_SOURCES
     terminal: Dict[str, int] = {}
     for position, event in enumerate(window):
-        if event.get("event") not in CARRIED_EVENT_TYPES:
+        kind, data = event.get("event"), event.get("data") or {}
+        if kind == ACTIVITY_EVENT:
+            if data.get("source") in _CLI_ACTIVITY_SOURCES:
+                for key in CLI_CLEARED_MODES:
+                    terminal.pop(key, None)    # the operator is back at the CLI
             continue
-        key = (event.get("data") or {}).get(CARRY_KEY_FIELD)
+        if kind not in CARRIED_EVENT_TYPES:
+            continue
+        key = data.get(CARRY_KEY_FIELD)
         if key:
             terminal[key] = position
     return [window[p] for p in sorted(terminal.values())]
@@ -129,6 +241,15 @@ def _terminal_timer(window: List[dict]) -> Optional[dict]:
             return None
         end = (event.get("data") or {}).get("timer_end_epoch") or 0
         return event if end > time.time() else None
+    return None
+
+
+def _terminal_focus(window: List[dict]) -> Optional[dict]:
+    """The role focused at the boundary, if any. An unfocus carries nothing: the
+    marker says focus was carried, so a cycle-scoped read answers 'unfocused'."""
+    for event in reversed(window):
+        if event.get("event") == FOCUS_EVENT:
+            return event if (event.get("data") or {}).get("role_id") else None
     return None
 
 
@@ -174,7 +295,8 @@ def carry_state_forward(current_cycle: Optional[int] = None) -> List[str]:
 
     from .task.scope import SCOPE_EVENT_TYPES, replay_scope_events
 
-    window, bootstrapped = _read_window()
+    event_duties = _event_duties()
+    window, bootstrapped = _read_window(frozenset(t for _, t in event_duties))
     carried: List[str] = []
     failed: List[str] = []
 
@@ -220,6 +342,59 @@ def carry_state_forward(current_cycle: Optional[int] = None) -> List[str]:
         data = dict(timer.get("data") or {})
         data.update(provenance)
         (carried if append_event("scope_timer_set", data) else failed).append("timer")
+
+    # A carried focus is a continuation, never a fresh act of focusing: readers take
+    # its time from carried_from_timestamp, and the nag does not count it as the
+    # operator acknowledging a duty (``roles.focus``).
+    focus = _terminal_focus(window)
+    if focus is not None:
+        data = dict(focus.get("data") or {})
+        data["carried_from_timestamp"] = data.get("carried_from_timestamp") or focus.get("timestamp")
+        data["origin_cycle"] = _origin_cycle(focus, data, current_cycle)
+        data.update(provenance)
+        (carried if append_event(FOCUS_EVENT, data) else failed).append("focus")
+
+    # Open on:<event> occurrences, so an obligation the event opened is still owed after
+    # the agent compacts, its grace still running from the real event (#632).
+    occurrences = _open_occurrences(window, event_duties)
+    if occurrences:
+        ok = all([append_event(OCCURRENCE_EVENT, dict(o, **provenance)) for o in occurrences])
+        (carried if ok else failed).append("occurrences")
+
+    # Open observations: each is the observed agent's consent to be watched, so a carried
+    # one keeps the cycle it was given in and says it was carried, and never reads as a
+    # fresh invitation (MIS-0002-R91).
+    # Both observe families read rows other processes write. The folds skip the shapes we
+    # know are malformed; a shape nobody thought of fails its own family here, so the marker
+    # is still written and the session-start hook keeps its recovery output.
+    try:
+        # A lease that ran out before the boundary is ended first, through the one path that
+        # takes an act (R90), folded from the window: the current cycle no longer holds it, so
+        # the daemon's sweep never would, and the log would keep it open forever (R89).
+        from .observe import record as observe_record
+        observe_record.sweep(time.time(), events=window)
+        observations = _open_observations(window, time.time())
+        if observations:
+            ok = True
+            for source in observations:
+                data = dict(source.get("data") or {})
+                data["origin_cycle"] = _origin_cycle(source, data, current_cycle)
+                data["carried_from_timestamp"] = data.get("carried_from_timestamp") or source.get("timestamp")
+                data.update(provenance)
+                ok = append_event(source["event"], data) and ok
+            (carried if ok else failed).append("observation")
+    except Exception as e:  # noqa: BLE001 - GUARD: an unforeseen row must not abort the carry
+        print(f"⚠️ MACF: carry: open observations not carried: {e!r}", file=sys.stderr)
+        failed.append("observation")
+
+    try:
+        surfaces = _present_surfaces(window)
+        if surfaces:
+            ok = all([append_event(s["event"], dict(s["data"], **provenance)) for s in surfaces])
+            (carried if ok else failed).append("surface")
+    except Exception as e:  # noqa: BLE001 - GUARD: an unforeseen row must not abort the carry
+        print(f"⚠️ MACF: carry: operator surfaces not carried: {e!r}", file=sys.stderr)
+        failed.append("surface")
 
     marker = {
         "cycle": current_cycle,

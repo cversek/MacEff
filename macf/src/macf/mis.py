@@ -22,7 +22,12 @@ SECTIONS = ["Summary", "Motivation", "Goals and Non-Goals", "Guide-Level Explana
             "Specification", "Rationale and Rejected Alternatives", "Prior Art",
             "Compatibility and Deployment", "Security and Safety", "Conformance", "Landing Plan",
             "Open Questions", "Deliberation Record", "Revision History"]
-TYPES = ("Standards", "Process", "Informational")
+TYPES = ("Standards", "Process", "Informational", "Amendment")
+# An amendment spec is short (MIS-0001-R56 (amendment_spec_MUST_give_change_reason_signoff)):
+# its change is made in the MIS it amends, so it carries only what records the change.
+AMENDMENT_HEADER_FIELDS = ["Number", "Type", "Status", "Authors", "Secretary", "Created", "Amends",
+                           "Resolution"]
+AMENDMENT_SECTIONS = ["Amendment", "Reason", "Sign-off"]
 STATUSES = ("Draft", "Deliberation", "Final-Comment", "Accepted", "Rejected", "Withdrawn",
             "Deferred", "Final", "Superseded")
 DECIDED = ("Accepted", "Rejected", "Deferred", "Final", "Superseded")
@@ -68,9 +73,17 @@ RULE_SLUGS = {
     "R39": "item_slugs_MUST-NOT_repeat",
     "R45": "item_MUST_carry_ID_and_slug",
     "R49": "citation_MUST_match_slug",
+    "R56": "amendment_spec_MUST_give_change_reason_signoff",
 }
-# A citation of a requirement in framework text: MIS-0001-R14 (req_MUST_have_30_words_max).
-CITATION_RE = re.compile(r"\bMIS-(\d{4})-(R\d{2,}) \(([-_A-Za-z0-9]+)\)")
+# The note under a changed requirement names its previous slug (MIS-0001-R54
+# (changed_req_MUST_link_previous_text)), so a citation made before the change still resolves.
+PREVIOUS_SLUG_RE = re.compile(
+    r"^- \*\*(R\d{2,})\*\* \[[^\n]*\n[ \t]+- \*[^\n]*?previous slug \(([-_A-Za-z0-9]+)\)", re.M)
+# A citation of a requirement: MIS-0001-R14 (req_MUST_have_30_words_max). Between the ID and
+# the slug it may wrap, as docstrings and comments do: a line break, the next line's
+# indentation, and a comment marker or quote that carries the text on.
+CITATION_RE = re.compile(
+    r"\bMIS-(\d{4})-(R\d{2,})(?:[ \t]+|[ \t]*\n[ \t]*(?:(?:#+|//|\*|>)[ \t]*)?)\(([-_A-Za-z0-9]+)\)")
 # A requirement line's ID and trailing slug, for resolving citations.
 REQ_SLUG_RE = re.compile(r"^- \*\*(R\d{2,})\*\* \[.*\(([-_A-Za-z0-9]+)\)\s*$", re.M)
 # Open questions (Qnn), positions (Pnn) and objections (Onn): numbered items with slugs (R45).
@@ -200,13 +213,15 @@ def check_file(path: Path, glossary_terms: Optional[dict] = None) -> list[Findin
     if m and number[0].strip() != m.group(1):
         add(number[1], "R03", f"Number '{number[0].strip()}' does not match the file name's {m.group(1)}")
 
-    if list(header) != HEADER_FIELDS:
-        missing = [f for f in HEADER_FIELDS if f not in header]
-        extra = [f for f in header if f not in HEADER_FIELDS]
-        detail = (f"missing {missing}" if missing else "") + (f" unknown {extra}" if extra else "")
-        add(1, "R06", f"header fields must be {HEADER_FIELDS} in that order; {detail.strip() or 'order differs'}")
-
     mtype, mstatus = header.get("Type", ("", 1)), header.get("Status", ("", 1))
+    amendment = mtype[0].strip() == "Amendment"
+    fields, field_rule = (AMENDMENT_HEADER_FIELDS, "R56") if amendment else (HEADER_FIELDS, "R06")
+    if list(header) != fields:
+        missing = [f for f in fields if f not in header]
+        extra = [f for f in header if f not in fields]
+        detail = (f"missing {missing}" if missing else "") + (f" unknown {extra}" if extra else "")
+        add(1, field_rule, f"header fields must be {fields} in that order; {detail.strip() or 'order differs'}")
+
     if mtype[0].strip() not in TYPES:
         add(mtype[1], "R08", f"Type '{mtype[0].strip()}' is not one of {list(TYPES)}")
     status = mstatus[0].strip()
@@ -216,11 +231,12 @@ def check_file(path: Path, glossary_terms: Optional[dict] = None) -> list[Findin
     secs = read_sections(lines)
     numbered = secs["numbered"]
     got = [(s["number"], s["title"]) for s in numbered]
-    want = list(enumerate(SECTIONS, start=1))
+    want = list(enumerate(AMENDMENT_SECTIONS if amendment else SECTIONS, start=1))
     if got != want:
         missing = [t for _, t in want if t not in [g for _, g in got]]
-        add(numbered[0]["start"] if numbered else 1, "R07",
-            "sections must be numbered 1 to 15 as in MIS-0000"
+        add(numbered[0]["start"] if numbered else 1, "R56" if amendment else "R07",
+            ("an amendment spec's sections must be 1 Amendment, 2 Reason, 3 Sign-off" if amendment
+             else "sections must be numbered 1 to 15 as in MIS-0000")
             + (f"; missing {missing}" if missing else "; order or numbering differs"))
 
     spec_part = _body(lines, numbered, "Specification")
@@ -357,48 +373,244 @@ def check(paths: Iterable[Path], glossary: Optional[Path] = None) -> list[Findin
         elif num:
             seen[num] = f.name
     out.extend(check_citations(files, glossary))
+    for f in files:
+        out.extend(check_named_tests(f))
     return out
+
+
+# A test a requirement names: a path to a .py file, then ::name, or ::Class::name for a method,
+# with any parametrization in brackets, which names the same test.
+TEST_ID_RE = re.compile(r"([-\w./]+\.py)((?:::\w+)+)(?:\[[^\]\s]*\])?")
+DECIDABLE_BRACKET_RE = re.compile(r"^- \*\*(R\d{2,})\*\* \[(?:MUST NOT|SHOULD NOT|MUST|SHOULD|MAY) · decidable: ([^\]]+)\]")
+CONFORMANCE_ROW_RE = re.compile(r"^\| (R\d{2,}) \| decidable \| (.*?) \| (.*?) \|\s*$")
+# Conformance states that say no test is there to find yet (policy mis §3.1, §4).
+EXEMPT_STATES = ("planned", "n/a")
+
+
+def test_ids(text: str) -> set:
+    """The tests a bracket or a Conformance cell names, as 'file::name' or 'file::Class::name'."""
+    return {m.group(1) + m.group(2) for m in TEST_ID_RE.finditer(text)}
+
+
+def checkout_root(mis_file: Path) -> Optional[Path]:
+    """The repository checkout an MIS file belongs to, or None outside one.
+
+    As for the package texts that check_citations reads, the checkout is the directory that holds
+    framework/ (MIS-0001-R03 (MIS_MUST_be_named_by_number) fixes framework/mis), and it is a
+    checkout when it holds the package's tests, which the named test paths are relative to."""
+    root = mis_file.parent.parent.parent  # noqa: MACEFF002 - framework/mis/MIS-*.md, as above
+    return root if (root / "macf" / "tests").is_dir() else None
+
+
+def collected_tests(path: Path):
+    """What pytest's default rules collect from one test file, read from its syntax tree.
+
+    {"functions": {name}, "classes": {class: {method}}, "methods": {method: [class]}}, or, when
+    the file cannot be read or parsed, a string that says why. Functions named test*, and classes named Test* with their
+    test* methods, at any depth of class nesting (named Outer::Inner::test). Nothing is imported
+    or run."""
+    import ast
+    text, unreadable = read_utf8(path)
+    if unreadable:
+        return "is not UTF-8"
+    try:
+        tree = ast.parse(text, filename=str(path))
+    except SyntaxError as e:
+        return f"cannot be parsed (line {e.lineno}: {e.msg})"
+    funcs = (ast.FunctionDef, ast.AsyncFunctionDef)
+    out: dict = {"functions": set(), "classes": {}, "methods": {}}
+    # pytest collects a class's inherited test methods under it too; bases defined in this
+    # file are followed, a base imported from elsewhere is not (its methods read as missing,
+    # the safe direction).
+    top = {n.name: n for n in tree.body if isinstance(n, ast.ClassDef)}
+
+    def own_and_inherited(node, seen: frozenset = frozenset()) -> set:
+        found = {b.name for b in node.body if isinstance(b, funcs) and b.name.startswith("test")}
+        for base in node.bases:
+            if isinstance(base, ast.Name) and base.id in top and base.id not in seen:
+                found |= own_and_inherited(top[base.id], seen | {node.name})
+        return found
+
+    def visit_class(node, prefix: str) -> None:
+        name = f"{prefix}::{node.name}" if prefix else node.name
+        methods = own_and_inherited(node)
+        out["classes"][name] = methods
+        for m in methods:
+            out["methods"].setdefault(m, []).append(name)
+        for b in node.body:
+            if isinstance(b, ast.ClassDef) and b.name.startswith("Test"):
+                visit_class(b, name)
+
+    for node in tree.body:
+        if isinstance(node, funcs) and node.name.startswith("test"):
+            out["functions"].add(node.name)
+        elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            visit_class(node, "")
+    return out
+
+
+def check_named_tests(path: Path) -> list:
+    """R18: the Conformance table lists each decidable requirement with its check, and that check exists.
+
+    Three faults, each a Conformance row that does not list its requirement's real check:
+    - the tests a requirement's bracket names differ from those its Conformance row names;
+    - a row that is not planned or n/a names a test that does not exist in the checkout;
+    - a row names a test method as file::method, without its class (file::Class::method).
+    The existence checks read each named file's syntax tree, so they run only in a checkout of
+    the repository the tests are named in (checkout_root); elsewhere they are skipped, and the
+    CLI says so. A bracket marked (planned), or a row in state planned or n/a, names a test that
+    need not exist yet (policy mis §3.1), so only the comparison applies to it.
+    """
+    text, unreadable = read_utf8(path)
+    if unreadable:  # check_file reported it
+        return []
+    lines = text.splitlines()
+    numbered = read_sections(lines)["numbered"]
+    p = str(path)
+    out: list = []
+    brackets: dict = {}  # requirement ID -> (line, bracket text, label)
+    spec = _body(lines, numbered, "Specification")
+    for offset, line in enumerate(spec["lines"], start=1):
+        m = DECIDABLE_BRACKET_RE.match(line)
+        if m and m.group(1) not in brackets:
+            sm = REQ_SLUG_RE.match(line)
+            label = f"{m.group(1)} ({sm.group(2)})" if sm else m.group(1)
+            brackets[m.group(1)] = (spec["start"] + offset, m.group(2), label)
+    rows: dict = {}  # requirement ID -> (line, how, state)
+    conf = _body(lines, numbered, "Conformance")
+    for offset, line in enumerate(conf["lines"], start=1):
+        m = CONFORMANCE_ROW_RE.match(line)
+        if m and m.group(1) not in rows:
+            rows[m.group(1)] = (conf["start"] + offset, m.group(2), m.group(3).strip())
+
+    root = checkout_root(path)
+    cache: dict = {}
+    for rid, (bline, bracket, label) in brackets.items():
+        if rid not in rows:  # check_file reports the missing row (R18)
+            continue
+        rline, how, state = rows[rid]
+        named, listed = test_ids(bracket), test_ids(how)
+        if named != listed:
+            add = sorted(listed - named)
+            drop = sorted(named - listed)
+            detail = "; ".join(x for x in (f"only the bracket names {drop}" if drop else "",
+                                           f"only the Conformance row (line {rline}) names {add}" if add else "") if x)
+            out.append(Finding(path=p, line=bline, rule="R18",
+                               message=f"{label}: the bracket and the Conformance row name different tests; {detail}"))
+        exempt = "(planned)" in bracket or state.lower().startswith(EXEMPT_STATES)
+        if root is None or exempt:
+            continue
+        for tid in sorted(named | listed):
+            where = rline if tid in listed else bline
+            fault = _test_fault(root, tid, cache)
+            if fault:
+                out.append(Finding(path=p, line=where, rule="R18",
+                                   message=f"{label}: the Conformance state is '{state}', but {tid} {fault}"))
+    return out
+
+
+def _test_fault(root: Path, tid: str, cache: dict) -> str:
+    """Why a named test is not a test pytest collects under root, or '' when it is."""
+    file, *parts = tid.split("::")
+    if file not in cache:
+        f = root / file
+        cache[file] = collected_tests(f) if f.is_file() else "does not exist"
+    got = cache[file]
+    if isinstance(got, str):
+        return f"names a file that {got} ({file})"
+    *classes, name = parts
+    if not classes:
+        if name in got["functions"]:
+            return ""
+        owners = got["methods"].get(name)
+        if owners:
+            return f"is a method of {' and '.join(owners)}; name it {file}::{owners[0]}::{name}"
+        return "does not exist"
+    cls = "::".join(classes)
+    if cls not in got["classes"]:
+        return f"does not exist: {file} has no test class {cls}"
+    return "" if name in got["classes"][cls] else f"does not exist: class {cls} has no test {name}"
 
 
 def check_citations(files: list, glossary: Optional[Path] = None) -> list:
     """R49: each `MIS-NNNN-Rnn (slug)` in framework text names a requirement and slug that exist.
 
-    The MIS files checked define what can be cited. The texts searched are those files, the
-    glossary, and every policy under framework/policies beside the MIS directory.
+    Every MIS beside the files checked defines what can be cited, so a check of one file also
+    resolves its citations of other MIS, and a citation of an MIS that does not exist is a
+    finding. The texts searched are the files checked, the glossary, every policy under
+    framework/policies beside the MIS directory, and, in a checkout of this repository, the
+    package's code, tests and developer documents, whose docstrings and comments cite
+    requirements too. Outside the files checked, a run that names only some MIS checks only
+    citations of those, so a check of one file reports nothing about the others. A citation
+    is found when it wraps between its ID and its slug.
     """
-    defined: dict = {}
-    for f in files:
+    tree = sorted({s for f in files for s in f.parent.glob("MIS-*.md")} | set(files))
+    defined: dict = {}  # number -> {requirement ID: slug}, or None when the file is unreadable
+    former: dict = {}  # number -> {requirement ID: {previous slugs its notes name}}
+    named: set = set()
+    for f in tree:
         text, unreadable = read_utf8(f)
-        if unreadable:  # reported by check_file
-            continue
-        num = read_header(text.splitlines()).get("Number", ("", 1))[0].strip()
+        if unreadable:  # reported by check_file when named; its citations cannot be resolved
+            m = re.match(r"MIS-(\d+)-", f.name)
+            num, reqs = (m.group(1) if m else ""), None
+        else:
+            num = read_header(text.splitlines()).get("Number", ("", 1))[0].strip()
+            reqs = dict(REQ_SLUG_RE.findall(text))
+            for rid, old in PREVIOUS_SLUG_RE.findall(text):
+                former.setdefault(num, {}).setdefault(rid, set()).add(old)
         if num:
-            defined[num] = dict(REQ_SLUG_RE.findall(text))
+            defined[num] = reqs
+            if f in files:
+                named.add(num)
+    whole_tree = set(files) >= set(tree)
     reported = set(files) | ({glossary} if glossary else set())
     texts = list(files) + ([glossary] if glossary else [])
     for f in files[:1]:
-        pol = f.parent.parent / "policies"  # noqa: MACEFF002 - MIS-0001-R03 fixes framework/mis beside framework/policies
+        framework = f.parent.parent  # noqa: MACEFF002 - MIS-0001-R03 fixes framework/mis beside framework/policies
+        pol = framework / "policies"
         if pol.is_dir():
             texts.extend(sorted(pol.rglob("*.md")))
+        texts.extend(package_texts(framework.parent))
     out = []
     for path in texts:
         text, unreadable = read_utf8(path)
         if unreadable:
-            if path not in reported:  # a policy: only this check reads it
+            if path not in reported:  # a policy or the package's text: only this check reads it
                 out.append(unreadable)
             continue
-        for n, line in enumerate(text.splitlines(), start=1):
-            for num, rid, slug in CITATION_RE.findall(line):
-                if num not in defined:
-                    continue
-                want = defined[num].get(rid)
-                if want is None:
-                    out.append(Finding(path=str(path), line=n, rule="R49",
-                                       message=f"cites MIS-{num}-{rid} ({slug}), but MIS-{num} has no {rid}"))
-                elif want != slug:
-                    out.append(Finding(path=str(path), line=n, rule="R49",
-                                       message=f"cites MIS-{num}-{rid} ({slug}); MIS-{num} names it ({want})"))
+        own = path in files
+        for m in CITATION_RE.finditer(text):
+            num, rid, slug = m.groups()
+            n = text.count("\n", 0, m.start()) + 1
+            if not (own or whole_tree or num in named):
+                continue
+            if num not in defined:
+                out.append(Finding(path=str(path), line=n, rule="R49",
+                                   message=f"cites MIS-{num}-{rid} ({slug}), but there is no MIS-{num}"))
+                continue
+            if defined[num] is None:
+                continue
+            want = defined[num].get(rid)
+            if want is None:
+                out.append(Finding(path=str(path), line=n, rule="R49",
+                                   message=f"cites MIS-{num}-{rid} ({slug}), but MIS-{num} has no {rid}"))
+            elif want != slug and slug not in former.get(num, {}).get(rid, ()):
+                out.append(Finding(path=str(path), line=n, rule="R49",
+                                   message=f"cites MIS-{num}-{rid} ({slug}); MIS-{num} names it ({want})"))
     return out
+
+
+# In a checkout of this repository, the package's own texts that cite requirements: code and
+# tests in their docstrings and comments, and the developer documents.
+PACKAGE_TEXTS = (("macf/src", "*.py"), ("macf/tests", "*.py"), ("macf/docs", "*.md"))
+
+
+def package_texts(root: Path) -> list:
+    """The package's code, tests and developer documents under ``root``, when it is a checkout.
+
+    A deployment's framework tree has no package beside it, so nothing is added there."""
+    return [p for sub, pattern in PACKAGE_TEXTS if (root / sub).is_dir()
+            for p in sorted((root / sub).rglob(pattern))]
 
 
 def default_glossary(paths: list[Path]) -> Optional[Path]:

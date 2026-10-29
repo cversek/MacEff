@@ -1,6 +1,6 @@
 # Play Time Policy
 
-**Version**: 1.0
+**Version**: 1.1
 **Tier**: MANDATORY
 **Category**: Operations
 **Status**: ACTIVE
@@ -47,6 +47,7 @@ A ⏲️ PLAY_TIME is a **time-bounded autonomous play session**. The agent work
 - What is the wind-down sequence?
 - What are the CL thresholds for PLAY_TIME?
 - How does the timer gate interact with the scope gate?
+- How does an agent compact itself while the timer gate holds?
 
 **6 Anti-Patterns**
 - What is the ASCII Duck anti-pattern?
@@ -247,6 +248,8 @@ Both gates must clear to stop:
 2. **Scope gate**: All scoped tasks must be completed
 
 Timer expiry lifts the timer gate. Agent then completes the last task with a completion report, which clears the scope gate. Stop is allowed.
+
+**Compacting while the timer gate holds.** Neither gate lifts for a compaction, and pausing the play time does not lift the timer gate. The way out is `macf_tools inject compact`: it types `/compact` into the agent's own pane and arms one passage through every Stop gate, so the turn ends and the queued command runs; every gate holds again after it. MacEff installs an allow rule for exactly that command on `mode set`, because under the client's auto mode a command that types into the agent's own terminal is otherwise refused. It needs the agent to run under its supervisor, since without one there is no pane to type into, and `inject --target` from another session types into the pane without arming the passage, which belongs to the target's own event log. With auto-compact on, the client still compacts at its limit whatever the gates say; with auto-compact off and no supervisor, only the operator can compact the agent, so keep auto-compact on for long play times.
 
 ---
 

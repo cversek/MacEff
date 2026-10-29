@@ -46,10 +46,27 @@ def get_agent_identity() -> str:
         >>> get_agent_identity()
         'Card@abcdef'
     """
+    uuid_prefix, uuid_scope = _resolve_uuid_prefix()
+    display_name, _source = _resolve_name(uuid_prefix, uuid_scope)
+    return f"{display_name}@{uuid_prefix}"
+
+
+def agent_name_source() -> str:
+    """Where :func:`get_agent_identity` took the name half from: ``config`` (the
+    calling card), ``env``, ``gecos`` or ``user``.
+
+    Kept separate so a surface reporting the card can say when the name is only a
+    fallback: a default reported as a resolution is a lie the reader cannot detect
+    (agent_harness §2.1; cversek/MacEff#842)."""
+    uuid_prefix, uuid_scope = _resolve_uuid_prefix()
+    return _resolve_name(uuid_prefix, uuid_scope, warn=False)[1]
+
+
+def _resolve_name(uuid_prefix: str, uuid_scope: str, warn: bool = True) -> "tuple[str, str]":
+    """The name half of the identity and the source it came from. *warn* is off for a
+    caller asking only where the name came from, so a mismatch is reported once."""
     # Get current user
     username = os.environ.get('USER', 'unknown')
-
-    uuid_prefix, uuid_scope = _resolve_uuid_prefix()
 
     # Lazy name sources, in host-global priority order
     candidates = [
@@ -69,7 +86,7 @@ def get_agent_identity() -> str:
             display_name, name_source = value, source
             break
 
-    if uuid_scope == 'project' and name_source == 'env':
+    if warn and uuid_scope == 'project' and name_source == 'env':
         print(
             f"⚠️ MACF: identity scope mismatch — name '{display_name}' comes "
             f"from host-global MACEFF_AGENT_NAME but UUID {uuid_prefix} comes "
@@ -79,19 +96,18 @@ def get_agent_identity() -> str:
             file=sys.stderr,
         )
 
-    # Compose identity
-    return f"{display_name}@{uuid_prefix}"
+    return display_name, name_source
 
 
 # Characters that cannot survive a round trip through the session and service
 # managers, established by measurement on 2026-08-07 (tmux 3.6, systemd 257)
 # rather than from documentation:
 #
-#   tmux     '.' and ':' are accepted by ``new-session`` and then SILENTLY
-#            rewritten to '_'. The session is created, the command reports
-#            success, and the name you asked for no longer addresses anything.
-#            That is the worst available failure: it does not announce itself,
-#            and every later `-t` lookup simply misses.
+#   tmux     '.' and ':' are accepted by ``new-session``, which reports success,
+#            and the name you asked for then addresses nothing: 3.6 SILENTLY
+#            rewrote them to '_'; 3.8 keeps them and `-t` parses them as target
+#            separators (cversek/MacEff#844). That is the worst available failure:
+#            it does not announce itself, and every later `-t` lookup simply misses.
 #   systemd  ':' breaks unit processing ("Couldn't process aliases").
 #
 # '@' is NOT in this set on the evidence: a concrete unit file named

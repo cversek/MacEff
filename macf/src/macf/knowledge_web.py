@@ -69,35 +69,85 @@ _DEFAULT_CLASS = "conceptual_authority"
 _TASK_FILE = re.compile(r"\.?\d+\.json")
 
 
+# A type folder holding this file is out of the web (scholarship policy, the
+# section on opting a folder out): material that is not an artifact, such as an
+# archive or a scratch dump. The exclusion is never silent: the doctor names
+# every folder it removes, through excluded_type_roots below.
+OPT_OUT_MARKER = ".not-in-knowledge-web"
+
+
+def _opted_out(folder: Path) -> bool:
+    """Whether a type folder carries the opt-out marker."""
+    return (folder / OPT_OUT_MARKER).exists()
+
+
+def _subagent_parents(agent_home: Path) -> List[Path]:
+    """Each subagent's private and public trees, in role order."""
+    subagents = agent_home / "agent" / "subagents"
+    if not subagents.exists():
+        return []
+    return [role / base for role in sorted(p for p in subagents.iterdir() if p.is_dir())
+            for base in ("private", "public")]
+
+
+def _type_folders(parents: List[Path]) -> Iterator[Tuple[str, Path, bool]]:
+    """(name, folder, opted_out) for each type folder under the given parents."""
+    for parent in parents:
+        if not parent.exists():
+            continue
+        for d in sorted(p for p in parent.iterdir() if p.is_dir()):
+            yield d.name, d, _opted_out(d)
+
+
+def _agent_parents(agent_home: Path) -> List[Path]:
+    return [agent_home / "agent" / base for base in ("private", "public")]
+
+
+def excluded_type_roots(agent_home: Path) -> List[Tuple[str, Path]]:
+    """The (name, folder) pairs taken out of the web by the opt-out marker.
+
+    Read from the same resolution ``_type_roots`` uses (``_resolve_roots``),
+    including the task store wherever config or the environment moved it, so
+    every folder the walk drops is a folder this lists. The doctor and
+    ``knowledge status`` report these, so an exclusion is always visible to
+    whoever reads the web's health.
+    """
+    return _resolve_roots(agent_home)[1]
+
+
 def _type_roots(agent_home: Path) -> List[Tuple[str, Path]]:
     """Discover (ca_type, root) pairs from the filesystem — nothing is declared.
 
     Every subdirectory of ``agent/private`` and ``agent/public`` is an
-    artifact-producing location; its name is its type. Personal policies and
-    subagent trees are walked the same way. Framework policies are the one
+    artifact-producing location; its name is its type, unless it carries the
+    opt-out marker (``OPT_OUT_MARKER``). Personal policies and subagent trees
+    are walked the same way. Framework policies are the one
     location outside the agent tree; the direction is safe (public policy read
     into a private web) and the reverse is forbidden — a policy must never
     link a concept that resolves only in some agent's private tree.
     """
+    return _resolve_roots(agent_home)[0]
+
+
+def _resolve_roots(agent_home: Path) -> Tuple[List[Tuple[str, Path]], List[Tuple[str, Path]]]:
+    """(walked, excluded): the ONE resolution of where the web looks.
+
+    Both ``_type_roots`` and ``excluded_type_roots`` read from here, so a
+    folder the marker drops from the walk cannot fail to be announced
+    (scholarship policy: the exclusion is announced).
+    """
     roots: List[Tuple[str, Path]] = []
-    for base in ("private", "public"):
-        parent = agent_home / "agent" / base
-        if not parent.exists():
-            continue
-        for d in sorted(p for p in parent.iterdir() if p.is_dir()):
-            roots.append((d.name, d))
+    excluded: List[Tuple[str, Path]] = []
+
+    def sort(folders: Iterator[Tuple[str, Path, bool]]) -> None:
+        for name, d, out in folders:
+            (excluded if out else roots).append((name, d))
+
+    sort(_type_folders(_agent_parents(agent_home)))
     personal = agent_home / "agent" / "policies" / "personal"
     if personal.exists():
         roots.append(("personal_policies", personal))
-    subagents = agent_home / "agent" / "subagents"
-    if subagents.exists():
-        for role in sorted(p for p in subagents.iterdir() if p.is_dir()):
-            for base in ("private", "public"):
-                parent = role / base
-                if not parent.exists():
-                    continue
-                for d in sorted(p for p in parent.iterdir() if p.is_dir()):
-                    roots.append((d.name, d))
+    sort(_type_folders(_subagent_parents(agent_home)))
     try:
         from .utils.manifest import get_framework_policies_path
         pol = get_framework_policies_path()
@@ -113,7 +163,9 @@ def _type_roots(agent_home: Path) -> List[Tuple[str, Path]]:
     # The task store participates wherever it is configured to live. It sits
     # under the agent tree by default, but MACF_TASK_STORE_DIR or the
     # task_store config can move it, and a moved store must not silently drop
-    # out of the web while task links are still being written into it.
+    # out of the web while task links are still being written into it. A moved
+    # store carrying the marker is excluded, and listed as excluded, like any
+    # other marked folder.
     try:
         from .task.reader import TaskReader
         store = TaskReader._resolve_home_store()
@@ -121,10 +173,10 @@ def _type_roots(agent_home: Path) -> List[Tuple[str, Path]]:
         print(f"⚠️ MACF: task store not resolved for the web: {e}", file=sys.stderr)
         store = None
     if store is not None and store.is_dir():
-        known = {r.resolve() for _, r in roots}
+        known = {r.resolve() for _, r in roots + excluded}
         if store.resolve() not in known:
-            roots.append(("tasks", store))
-    return roots
+            (excluded if _opted_out(store) else roots).append(("tasks", store))
+    return roots, excluded
 
 
 def iter_web_files(agent_home: Path) -> Iterator[Tuple[str, Path, Path]]:
@@ -143,7 +195,8 @@ def iter_web_files(agent_home: Path) -> Iterator[Tuple[str, Path, Path]]:
 # artifact-producing location). An experiment that vendors a JavaScript bundle
 # brings thousands: on one agent's tree, 7,700 of the 8,300 directories the web
 # walked, twice per `knowledge status`, for no participating file.
-_TOOL_DIRS = frozenset({"node_modules", "__pycache__", ".git", ".venv"})
+_TOOL_DIRS = frozenset({"node_modules", "__pycache__", ".git", ".venv",
+                        ".pytest_cache", ".mypy_cache", ".ruff_cache"})
 
 
 def _files_under(root: Path, pattern: str) -> List[Path]:
@@ -301,7 +354,7 @@ def build_knowledge_web(scan_dirs: Optional[List[Path]] = None) -> Dict[str, Any
     if scan_dirs is not None:
         walk = []
         for scan_dir in scan_dirs:
-            if not scan_dir.exists():
+            if not scan_dir.exists() or _opted_out(scan_dir):
                 continue
             walk.extend(_walk_type(scan_dir.name, scan_dir))
     else:
@@ -562,91 +615,166 @@ def generate_web_html(output_path: str, kg: Optional[Dict[str, Any]] = None) -> 
     return viz.render(output_path)
 
 
-def query_knowledge_web(term: str, kg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Query the knowledge web for a concept, node ID, or keyword.
+# The expansion threshold's default: a neighbour is admitted only through a concept at least this
+# specific (inverse document frequency over the web). Chosen with `knowledge eval` on the dev split
+# and confirmed once on the held split; see the scholarship policy on how results are ordered.
+DEFAULT_MIN_IDF = 2.0
 
-    Resolution order:
-    1. Exact wiki concept match (e.g., "compaction")
-    2. Node ID match (e.g., "#007" or "learnings:microcompact...")
-    3. Keyword search across titles and concept names
 
-    Returns subweb: matched nodes + direct neighbors + shared wiki concepts.
+def _stable(node_id: Any) -> str:
+    """A tie-break that is deterministic and carries no meaning. Name order is not used, since a
+    result list in string order is the defect ranking replaces."""
+    import hashlib
+    return hashlib.sha256(str(node_id).encode()).hexdigest()
+
+
+def concept_idf(kg: Dict[str, Any]) -> Dict[str, float]:
+    """Each concept's inverse document frequency over the web's nodes: rare concepts weigh more."""
+    import math
+    n = len(kg["ideas"]) + len(kg.get("ca_nodes", {}))
+    return {c: math.log(n / len(m)) for c, m in kg.get("wiki_index", {}).items() if m and n}
+
+
+@dataclass(frozen=True, kw_only=True)
+class _TermMatch:
+    """What one query term matched: its nodes, the concepts it named, and how it matched."""
+    nodes: frozenset
+    named: frozenset
+    kind: str
+
+
+def _resolve_term(term: str, kg: Dict[str, Any]) -> _TermMatch:
+    """Resolve a term: an exact concept, then a node id, then a keyword in titles and concept names."""
+    ideas, ca_nodes, wiki_index = kg["ideas"], kg.get("ca_nodes", {}), kg.get("wiki_index", {})
+    normalized = re.sub(r'^\[\[|\]\]$', '', re.sub(r'\.md$', '', term.lower().strip()))
+    if normalized in wiki_index:
+        return _TermMatch(nodes=frozenset(wiki_index[normalized]), named=frozenset({normalized}),
+                          kind=f"concept: [[{normalized}]]")
+    m = re.match(r'#?(\d+)$', term.strip())
+    if m and int(m.group(1)) in ideas:
+        return _TermMatch(nodes=frozenset({int(m.group(1))}), named=frozenset(), kind=f"idea: #{int(m.group(1)):03d}")
+    if ":" in term:
+        found = {ca for ca in ca_nodes if term.strip() in ca}
+        if found:
+            return _TermMatch(nodes=frozenset(found), named=frozenset(), kind=f"ca: {term.strip()}")
+    low = term.lower()
+    matched = {i for i, idea in ideas.items() if low in idea.get("title", "").lower()}
+    matched |= {ca for ca, info in ca_nodes.items() if low in info.get("title", "").lower() or low in ca.lower()}
+    named = {c for c in wiki_index if low in c}
+    for c in named:
+        matched |= wiki_index[c]
+    return _TermMatch(nodes=frozenset(matched), named=frozenset(named), kind=f'keyword: "{term}"' if matched else "")
+
+
+def _node_by_id(node: str, kg: Dict[str, Any]) -> Any:
+    """The web node an id names: an idea number, an exact CA id, or the one CA id containing it."""
+    ideas, ca_nodes = kg["ideas"], kg.get("ca_nodes", {})
+    m = re.match(r'#?(\d+)$', node.strip())
+    if m and int(m.group(1)) in ideas:
+        return int(m.group(1))
+    if node in ca_nodes:
+        return node
+    found = [ca for ca in ca_nodes if node.strip() in ca]
+    if len(found) == 1:
+        return found[0]
+    if found:
+        raise ValueError(f"--like {node!r} names {len(found)} nodes; give more of the id, e.g. {found[0]}")
+    raise ValueError(f"--like {node!r} names no node in the knowledge web")
+
+
+def query_knowledge_web(term: Any = "", kg: Optional[Dict[str, Any]] = None, *, like: Optional[str] = None,
+                        any_term: bool = False, min_idf: float = DEFAULT_MIN_IDF) -> Dict[str, Any]:
+    """Query the knowledge web, and rank what it returns.
+
+    ``term`` is one term or a list of them: each a concept, a node id (#007, learnings:...), or a
+    keyword in titles and concept names. Several terms match nodes that answer every term, or any
+    of them with ``any_term``. ``like`` names a node instead: the query is that node's concepts,
+    "what bears on this artifact".
+
+    Ranking: a matched node scores the summed inverse document frequency (IDF) of the query
+    concepts it carries, plus how strongly it is tied into the rest of the match through specific
+    concepts. A neighbour is admitted only through a concept whose IDF is at least ``min_idf``, and
+    scores by the same tie. Equal scores go to the node with fewer concepts first, since it is
+    more specifically about what it shares with the query; then a stable hash, never the name.
+
+    Returns the subweb: ranked matched nodes and neighbours, each with its score and the concepts
+    it matched through, and the shared concepts.
     """
     if kg is None:
         kg = build_knowledge_web()
+    ideas, ca_nodes = kg["ideas"], kg.get("ca_nodes", {})
+    edges, wiki_index = kg["edges"], kg.get("wiki_index", {})
+    idf = concept_idf(kg)
+    concepts_of: Dict[Any, set] = {}
+    for c, members in wiki_index.items():
+        for nid in members:
+            concepts_of.setdefault(nid, set()).add(c)
+    terms = [term] if isinstance(term, str) else list(term or [])
+    label = like if like else " ".join(terms)
 
-    ideas = kg["ideas"]
-    ca_nodes = kg.get("ca_nodes", {})
-    edges = kg["edges"]
-    wiki_index = kg.get("wiki_index", {})
-
-    matched_nodes: set = set()
-    match_type = ""
-
-    # 1. Exact wiki concept match
-    normalized_term = re.sub(r'\.md$', '', term.lower().strip())
-    # Strip [[ ]] if user included them
-    normalized_term = re.sub(r'^\[\[|\]\]$', '', normalized_term)
-
-    if normalized_term in wiki_index:
-        matched_nodes = set(wiki_index[normalized_term])
-        match_type = f"concept: [[{normalized_term}]]"
+    neighbours: Dict[Any, float] = {}
+    via: Dict[Any, List[str]] = {}
+    if like:
+        source = _node_by_id(like, kg)
+        query = concepts_of.get(source, set())
+        candidates = {x for c in query if idf.get(c, 0.0) >= min_idf for x in wiki_index.get(c, ())} - {source}
+        matched = {x: sum(idf.get(c, 0.0) for c in query & concepts_of.get(x, set())) for x in candidates}
+        for x in candidates:
+            via[x] = sorted(query & concepts_of.get(x, set()), key=lambda c: -idf.get(c, 0.0))
+        match_type = f"like: {source}"
     else:
-        # 2. Node ID match
-        # Try idea ID: "#007" or "7"
-        id_match = re.match(r'#?(\d+)$', term.strip())
-        if id_match:
-            idea_id = int(id_match.group(1))
-            if idea_id in ideas:
-                matched_nodes = {idea_id}
-                match_type = f"idea: #{idea_id:03d}"
-        # Try CA node ID: "learnings:something"
-        if not matched_nodes and ":" in term:
-            for ca_id in ca_nodes:
-                if term.strip() in ca_id:
-                    matched_nodes.add(ca_id)
-                    match_type = f"ca: {ca_id}"
+        sets, named, kinds = [], set(), []
+        for t in terms:
+            match = _resolve_term(t, kg)
+            if match.kind:
+                sets.append(set(match.nodes))
+                named |= match.named
+                kinds.append(match.kind)
+            elif not any_term:
+                sets = []
+                break
+        hits = (set().union(*sets) if any_term else set.intersection(*sets)) if sets else set()
+        if not hits:
+            return {"match_type": "none", "term": label, "nodes": [], "neighbors": [],
+                    "concepts": [], "edges": 0}
+        match_type = "; ".join(kinds) + (" (any)" if any_term and len(kinds) > 1 else "")
 
-        # 3. Keyword fallback
-        if not matched_nodes:
-            term_lower = term.lower()
-            # Search in idea titles
-            for idea_id, idea in ideas.items():
-                if term_lower in idea.get("title", "").lower():
-                    matched_nodes.add(idea_id)
-            # Search in CA titles
-            for ca_id, info in ca_nodes.items():
-                if term_lower in info.get("title", "").lower() or term_lower in ca_id.lower():
-                    matched_nodes.add(ca_id)
-            # Search in wiki concepts
-            for concept in wiki_index:
-                if term_lower in concept:
-                    matched_nodes |= wiki_index[concept]
-            if matched_nodes:
-                match_type = f"keyword: \"{term}\""
+        def tie(x: Any, within: set) -> Tuple[float, List[str]]:
+            """How strongly x is tied into ``within``: each specific concept it shares, weighted by
+            its IDF and by the share of ``within`` that carries it."""
+            score, through = 0.0, []
+            for c in concepts_of.get(x, set()) - named:
+                w = idf.get(c, 0.0)
+                share = len(wiki_index.get(c, set()) & within - {x}) / len(within)
+                if w >= min_idf and share:
+                    score += w * share
+                    through.append(c)
+            return score, sorted(through, key=lambda c: -idf.get(c, 0.0))
 
-    if not matched_nodes:
-        return {"match_type": "none", "term": term, "nodes": [], "neighbors": [],
-                "concepts": [], "edges": 0}
+        matched = {}
+        for x in hits:
+            base = sum(idf.get(c, 0.0) for c in named & concepts_of.get(x, set()))
+            extra, through = tie(x, hits)
+            matched[x] = base + extra
+            via[x] = sorted(named & concepts_of.get(x, set())) + through[:3]
+        # A prefilter only: tie() counts no concept under min_idf, so a node reached through none
+        # scores 0 and is dropped below either way.
+        expansion = {c for x in hits for c in concepts_of.get(x, set()) - named if idf.get(c, 0.0) >= min_idf}
+        for x in {y for c in expansion for y in wiki_index.get(c, ())} - hits:
+            score, through = tie(x, hits)
+            if score:
+                neighbours[x], via[x] = score, through[:3]
 
-    # Expand to neighbors
-    neighbor_nodes: set = set()
-    for node_id in matched_nodes:
-        for neighbor in edges.get(node_id, set()):
-            if neighbor not in matched_nodes:
-                neighbor_nodes.add(neighbor)
+    def order(x: Any, score: float) -> Tuple[float, int, str]:
+        return (-score, len(concepts_of.get(x, ())), _stable(x))  # noqa: MACEFF004 - a sort key, compared positionally by design
+    ranked = sorted(matched, key=lambda x: order(x, matched[x]))
+    ranked_n = sorted(neighbours, key=lambda x: order(x, neighbours[x]))
+    all_subgraph = set(matched) | set(neighbours)
+    relevant_concepts = sorted(((c, len(m & all_subgraph)) for c, m in wiki_index.items()
+                                if len(m & all_subgraph) >= 2), key=lambda x: (-x[1], x[0]))
 
-    # Find shared wiki concepts for the subweb
-    all_subgraph = matched_nodes | neighbor_nodes
-    relevant_concepts = []
-    for concept, members in wiki_index.items():
-        overlap = members & all_subgraph
-        if len(overlap) >= 2:
-            relevant_concepts.append((concept, len(overlap)))
-    relevant_concepts.sort(key=lambda x: -x[1])
-
-    # Build result nodes
-    def _node_info(node_id):
+    def _node_info(node_id: Any, score: float) -> Optional[Dict[str, Any]]:
+        extra = {"score": round(score, 3), "via": via.get(node_id, [])[:4]}
         if isinstance(node_id, int) and node_id in ideas:
             idea = ideas[node_id]
             return {
@@ -656,35 +784,26 @@ def query_knowledge_web(term: str, kg: Optional[Dict[str, Any]] = None) -> Dict[
                 "degree": len(edges.get(node_id, set())),
                 # An idea is prospective, but its claim is meant to outlive the
                 # moment; status carries the proposal-versus-finding weighting.
-                "node_class": "conceptual_authority",
+                "node_class": "conceptual_authority", **extra,
             }
-        elif node_id in ca_nodes:
+        if node_id in ca_nodes:
             info = ca_nodes[node_id]
             return {
                 "id": str(node_id), "label": str(node_id).split(":")[-1][:25],
                 "title": info.get("title", ""), "type": info.get("type", "ca"),
                 "status": "", "category": info.get("type", ""),
                 "degree": len(edges.get(node_id, set())),
-                "node_class": info.get("node_class", "conceptual_authority"),
+                "node_class": info.get("node_class", "conceptual_authority"), **extra,
             }
         return None
 
-    result_nodes = [n for n in (_node_info(nid) for nid in sorted(matched_nodes, key=str)) if n]
-    result_neighbors = [n for n in (_node_info(nid) for nid in sorted(neighbor_nodes, key=str)) if n]
-
-    # Count edges within subweb
-    subgraph_edges = 0
-    for node_id in all_subgraph:
-        for neighbor in edges.get(node_id, set()):
-            if neighbor in all_subgraph:
-                subgraph_edges += 1
-    subgraph_edges //= 2
-
+    subgraph_edges = sum(1 for x in all_subgraph for y in edges.get(x, set()) if y in all_subgraph) // 2
     return {
         "match_type": match_type,
-        "term": term,
-        "nodes": result_nodes,
-        "neighbors": result_neighbors,
+        "term": label,
+        "min_idf": min_idf,
+        "nodes": [n for n in (_node_info(x, matched[x]) for x in ranked) if n],
+        "neighbors": [n for n in (_node_info(x, neighbours[x]) for x in ranked_n) if n],
         "concepts": [{"concept": c, "members": n} for c, n in relevant_concepts],
         "edges": subgraph_edges,
     }
@@ -697,10 +816,14 @@ def format_query_result(result: Dict[str, Any]) -> str:
     if result["match_type"] == "none":
         return f"No matches for \"{result['term']}\" in knowledge web."
 
+    def _via(n: Dict[str, Any]) -> str:
+        return f"  via {', '.join(n['via'][:3])}" if n.get("via") else ""
+
     lines = [
         f"🔍 Query: {result['match_type']}",
         f"   {len(result['nodes'])} matched, {len(result['neighbors'])} neighbors, "
-        f"{result['edges']} edges in subweb",
+        f"{result['edges']} edges in subweb; ranked by IDF score, neighbours through concepts "
+        f"with IDF ≥ {result.get('min_idf', DEFAULT_MIN_IDF)}",
         "",
     ]
 
@@ -710,7 +833,7 @@ def format_query_result(result: Dict[str, Any]) -> str:
             icon = STATUS_ICON.get(n.get("status", ""), "📄") if n["type"] == "idea" else (
                 "📝" if n["type"] == "learnings" else "🔭" if n["type"] == "observations" else "📄")
             cat = f"  [{n['category']}]" if n.get("category") else ""
-            lines.append(f"   {icon} {n['label']} {n['title'][:50]}{cat} (deg {n['degree']})")
+            lines.append(f"   {n['score']:6.2f}  {icon} {n['label']} {n['title'][:50]}{cat}{_via(n)}")
 
     if result["neighbors"]:
         lines.append("")
@@ -718,7 +841,7 @@ def format_query_result(result: Dict[str, Any]) -> str:
         for n in result["neighbors"]:
             icon = STATUS_ICON.get(n.get("status", ""), "📄") if n["type"] == "idea" else (
                 "📝" if n["type"] == "learnings" else "🔭" if n["type"] == "observations" else "📄")
-            lines.append(f"   {icon} {n['label']} {n['title'][:50]} (deg {n['degree']})")
+            lines.append(f"   {n['score']:6.2f}  {icon} {n['label']} {n['title'][:50]}{_via(n)}")
 
     if result["concepts"]:
         lines.append("")

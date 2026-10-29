@@ -26,6 +26,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+from typing import Optional
 import sys
 import threading
 import time
@@ -452,12 +453,17 @@ def _ppid(pid: int) -> int:
 
 
 def _ancestor_pids(limit: int = 32) -> set:
-    """This process and its ancestors, walking up until init.
+    """This process and its ancestors, walking up until init."""
+    return ancestor_pids(os.getpid(), limit)
+
+
+def ancestor_pids(pid: int, limit: int = 32) -> set:
+    """*pid* and its ancestors, walking up until init.
 
     *limit* bounds the walk: a pid whose parent chain loops or lies would
     otherwise spin here, and this runs inside a CLI an agent invokes.
     """
-    pids, pid = set(), os.getpid()
+    pids = set()
     while pid > 1 and len(pids) < limit:
         pids.add(pid)
         parent = _ppid(pid)
@@ -503,7 +509,23 @@ def _find_own_supervisor() -> dict | None:
     return max(named, key=lambda d: d.get("created", 0))
 
 
-def send_slash_to_self(command: str, target: str = "") -> int:
+def _record_keys_sent(text: str, kind: str, tmux_session: str) -> None:
+    """Record keys the framework is about to type into a session's pane.
+
+    The client records whatever reaches its input box as typing, so the
+    producers of the operator's activity can tell these keys from the
+    operator only by this record, and it has to exist before the keys arrive.
+    """
+    try:
+        from .agent_events_log import append_event
+        from .utils.input_origin import KEYS_SENT_EVENT
+        append_event(KEYS_SENT_EVENT, {"text": text, "kind": kind, "tmux_session": tmux_session})
+    except (OSError, ValueError, ImportError) as e:
+        print(f"[auto-restart] could not record the keys before sending them, so they "
+              f"will read as the operator's typing: {e}", file=sys.stderr)
+
+
+def send_slash_to_self(command: str, target: str = "", then: Optional[str] = None) -> int:
     """Queue a slash command (e.g. ``/compact``) into this agent's own live CC
     pane via the tmux side channel.
 
@@ -520,10 +542,26 @@ def send_slash_to_self(command: str, target: str = "") -> int:
     raises into the caller.
     """
     cmd = "/" + command.lstrip("/")
+    if cmd in ("/exit", "/quit"):
+        drafts = _unsent_feedback_drafts()
+        if drafts:
+            # With a draft waiting, the client answers /exit with a dialog (review and send,
+            # or discard) instead of exiting, so the restart this asks for would sit there
+            # until someone presses a key. The draft is the operator's, so it is named, not
+            # discarded.
+            print(f"[inject] The client holds {len(drafts)} unsent feedback draft(s), so {cmd} "
+                  f"would stop on its review-or-discard dialog instead of exiting: "
+                  f"{', '.join(str(d) for d in drafts)}. Ask the operator to send or discard "
+                  f"it (/feedback), then run this again.", file=sys.stderr)
+            return 1
     if target:
-        return send_keys(target, [cmd], enter=True)
-    data = _find_own_supervisor()
-    if not data:
+        if then:
+            # The follower reads THIS agent's event log, so it can only follow its own pane.
+            print("[inject] --target names another session, so no recovery prompt follows "
+                  "(--then applies only to this agent's own pane).", file=sys.stderr)
+        return send_keys(target, [cmd], enter=True, kind="inject")
+    own = own_pane_target()
+    if not own:
         # Two different situations, and the reader has to do different things
         # about them: with no supervisor running there is nothing to inject
         # into, while with supervisors running the resolution failed and
@@ -541,8 +579,22 @@ def send_slash_to_self(command: str, target: str = "") -> int:
                   "--target <name|pid> (see `auto-restart list`).",
                   file=sys.stderr)
         return 1
-    rc = send_keys(data.get("name") or str(data.get("supervisor_pid")),
-                   [cmd], enter=True)
+    draft = _draft_in_box(own)
+    if draft:
+        # Typed after a draft, the command is sent with it as one prompt and the client
+        # never runs it: a follower's unsent text once turned /compact into plain text.
+        held = (f"[inject] The input box already holds text ({draft[:60]!r}), so {cmd} typed "
+                f"now would be sent with it as one prompt and not run.")
+        if _framework_typed(draft):
+            print(f"{held} The framework typed that text, so clear it with: macf_tools inject "
+                  f"clear-input --expect {shlex.quote(_opening(draft))}  then run this again.",
+                  file=sys.stderr)
+        else:
+            print(f"{held} No framework keystroke on record typed it, so it is a person's "
+                  f"draft: ask them to send or clear it (autonomous_operation 5.4), then run "
+                  f"this again.", file=sys.stderr)
+        return 1
+    rc = send_keys(own, [cmd], enter=True, kind="inject")
     if rc == 0:
         # A queued /compact is only submitted when the turn ends, and the Stop
         # gates exist to refuse that. Arm one passage, only after delivery and
@@ -550,23 +602,282 @@ def send_slash_to_self(command: str, target: str = "") -> int:
         # another session, and this log's gates are this session's.
         from .stop_bypass import arm
         arm(command)
+        if cmd == "/compact":
+            # The ask is recorded so that a compaction without one can be found
+            # (MIS-0002-R127 (harness_compaction_MUST_be_recorded)).
+            try:
+                from .agent_events_log import append_event
+                append_event("compaction_asked", {"asker": "wind_down", "via": "macf_tools inject"})
+            except (OSError, ValueError) as e:
+                print(f"⚠️ MACF: could not record the compaction ask: {e}", file=sys.stderr)
+        if then and command.lstrip("/") == "compact":
+            _start_compact_followup(own, then)
     return rc
 
 
-def send_keys(target: str, keys: list, enter: bool = True) -> int:
+#: Ctrl-U presses clear_own_input makes at most. Each erases one screen row of the box, or the
+#: line break before the cursor when the row is already empty, so a box needs about two
+#: presses per line it holds.
+CLEAR_MAX_PRESSES = 40
+#: Seconds between a press and the readback that judges it.
+CLEAR_SPACING_S = 0.3
+#: Presses in a row that may leave the box unchanged before clearing gives up.
+CLEAR_STALL = 3
+
+
+def _squash(text: str) -> str:
+    """*text* with every run of whitespace made one space: the screen joins a wrapped line's
+    rows with a space, so the box reads the same text differently at different widths."""
+    return " ".join(text.split())
+
+
+def _opening(text: str, words: int = 3) -> str:
+    """The first few words of *text*, which is what --expect is asked to name."""
+    return " ".join(text.split()[:words])
+
+
+def _is_subsequence(part: str, whole: str) -> bool:
+    """Whether *part* is *whole* with characters only taken away, in order."""
+    rest = iter(whole)
+    return all(ch in rest for ch in part)
+
+
+def clear_own_input(expect: str, max_presses: int = CLEAR_MAX_PRESSES,
+                    spacing_s: float = CLEAR_SPACING_S, sleep=None) -> int:
+    """Empty this agent's own input box of text it recognizes, one Ctrl-U at a time.
+
+    Only text the framework typed is cleared: the box's text must be the start of a keys_sent
+    record, so a person's draft is refused whatever *expect* says. The box is read before every
+    press and the clearing stops at the first thing that is not
+    the expected text shrinking: a box that doesn't start with *expect*, text that grows or
+    changes (someone typing), a box that stops shrinking, or the screen becoming unreadable.
+    Only Ctrl-U is pressed. It edits the box and nothing else: never Escape, which interrupts a
+    running turn or opens the rewind menu on an empty box, and never Enter. Returns 0 when the
+    box is empty, and 1 with the reason otherwise.
+    """
+    sleep = sleep or time.sleep
+    if not expect.strip():
+        print("[inject] clear-input needs --expect: the opening words of the text you mean "
+              "to clear, so text you have not read is never cleared.", file=sys.stderr)
+        return 1
+    own = own_pane_target()
+    if not own:
+        print("[inject] Could not find this agent's own pane, so there is no box to clear. "
+              "clear-input acts only on the caller's own pane.", file=sys.stderr)
+        return 1
+    start = _draft_in_box(own)
+    if start is None:
+        print("[inject] The screen shows no input box (a dialog, or it can't be read), so "
+              "nothing was pressed.", file=sys.stderr)
+        return 1
+    if not start:
+        print("[inject] The input box is already empty.")
+        return 0
+    original = _squash(start)
+    if not original.startswith(_squash(expect)):
+        print(f"[inject] The input box does not start with {expect!r}, so nothing was "
+              f"pressed. It holds: {start[:120]!r}", file=sys.stderr)
+        return 1
+    if not _framework_typed(start):
+        # --expect says what the agent means to clear; whose text it is comes from the
+        # framework's own record of what it typed, never from the agent asking.
+        print(f"[inject] No framework keystroke on record typed {start[:120]!r}, so it is a "
+              f"person's draft and nothing was pressed. Ask them to send or clear it "
+              f"(autonomous_operation 5.4).", file=sys.stderr)
+        return 1
+    session = (_resolve_pane_target(own) or {}).get("tmux_session")
+    if not session or not _tmux_available():
+        print("[inject] This pane has no tmux session to press keys in.", file=sys.stderr)
+        return 1
+    _record_keys_sent("C-u", "clear_input", session)
+    seen, stalled, presses = original, 0, 0
+    while presses < max_presses:
+        if subprocess.run(["tmux", "send-keys", "-t", session, "C-u"]).returncode != 0:
+            print("[inject] tmux send-keys failed; the box was left as it is.", file=sys.stderr)
+            return 1
+        presses += 1
+        sleep(spacing_s)
+        now = _draft_in_box(own)
+        if now is None:
+            print(f"[inject] The input box went off screen after {presses} press(es); "
+                  f"stopped.", file=sys.stderr)
+            return 1
+        now = _squash(now)
+        if not now:
+            _record_box_cleared(start, presses, session)
+            print(f"[inject] Cleared the input box in {presses} press(es): {start[:120]!r}")
+            return 0
+        if not _is_subsequence(now, seen):
+            print(f"[inject] The box gained text while clearing ({now[:120]!r}), so someone "
+                  f"may be typing; stopped after {presses} press(es).", file=sys.stderr)
+            return 1
+        stalled = stalled + 1 if now == seen else 0
+        if stalled >= CLEAR_STALL:
+            print(f"[inject] The box stopped shrinking after {presses} press(es); it still "
+                  f"holds {now[:120]!r}.", file=sys.stderr)
+            return 1
+        seen = now
+    print(f"[inject] The box still holds {seen[:120]!r} after {max_presses} presses; stopped.",
+          file=sys.stderr)
+    return 1
+
+
+def _framework_typed(box: str) -> Optional[str]:
+    """The kind of framework keystroke that typed *box*'s text, or None for a person's draft."""
+    from .utils.input_origin import framework_typed_box_text
+    return framework_typed_box_text(box)
+
+
+def _record_box_cleared(text: str, presses: int, tmux_session: str) -> None:
+    """Record what clear_own_input removed, so cleared text can always be found again."""
+    try:
+        from .agent_events_log import append_event
+        append_event("box_cleared", {"text": text, "presses": presses,
+                                     "tmux_session": tmux_session})
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: could not record the cleared text: {e}", file=sys.stderr)
+
+
+def _unsent_feedback_drafts() -> list:
+    """The feedback drafts the client holds unsent, oldest name first; empty when there are none."""
+    base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    return sorted((base / "feedback" / "drafts").glob("*.json"))
+
+
+def _draft_in_box(target: str) -> Optional[str]:
+    """The text already in *target*'s input box, read whether or not a turn is running;
+    None when the screen can't be read or shows no box, since then nothing is known."""
+    from .pd.wake import draft_text
+    screen = capture_pane(target)
+    return draft_text(screen) if screen is not None else None
+
+
+def own_pane_target() -> Optional[str]:
+    """The send-keys target for this agent's own pane, or None: the supervisor whose client
+    this process descends from, else this process's own pane in a session unit."""
+    data = _find_own_supervisor()
+    if data:
+        return data.get("name") or str(data.get("supervisor_pid"))
+    # A session its primal daemon runs as a unit (pd.session_unit) has no supervisor: its
+    # pane is this process's own, on the unit's tmux server, which the inherited TMUX names.
+    return _own_session_unit_pane()
+
+
+#: A send-keys target that names a tmux pane directly rather than a supervisor.
+PANE_TARGET_PREFIX = "pane:"
+
+
+def _own_session_unit_pane() -> Optional[str]:
+    """``pane:<id>`` for this process's own pane when it runs inside a session unit,
+    else None. Both marks are required: the unit's variables say the session is a
+    daemon's unit, and TMUX with TMUX_PANE, which tmux sets for the pane's process and
+    every process under it, say which server and which pane."""
+    from .pd.liveness import ENV_SESSION_PID
+    pane = os.environ.get("TMUX_PANE", "")
+    if os.environ.get(ENV_SESSION_PID) and os.environ.get("TMUX") and pane.startswith("%"):
+        return PANE_TARGET_PREFIX + pane
+    return None
+
+
+def start_compaction_resume(since: float) -> bool:
+    """Start the follower with the AUTO_MODE resume prompt for a compaction detected at or
+    after *since*, whatever asked for it (autonomous_operation 5.4). Called by the SessionStart
+    hook on a compaction while AUTO_MODE is on, since nothing a hook returns can open a turn.
+    Returns whether a follower was started; it is the follower's lock, not this, that keeps
+    one prompt per compaction when ``inject compact`` started one too."""
+    from .compact_followup import RESUME_TEXT
+    target = own_pane_target()
+    if not target:
+        return False                                   # no pane of our own to type into
+    return _start_compact_followup(target, RESUME_TEXT, since=since, quiet=True)
+
+
+def _start_compact_followup(target: str, text: str, since: Optional[float] = None,
+                            quiet: bool = False) -> bool:
+    """Start the detached follower that types *text* once the compaction has finished.
+
+    Self-resolved path only, like the Stop passage above: the follower reads THIS agent's
+    event log, so it must type into this agent's pane. It outlives the turn that started
+    it (start_new_session), because the /compact it waits for runs only after that turn.
+    """
+    import time as _time
+    argv = [sys.executable, "-m", "macf.compact_followup", target,
+            repr(_time.time() if since is None else since), "--text", text]
+    # Its stderr goes to the transcript monitor's log in the user's runtime directory, so a
+    # follower that dies before recording its outcome still leaves a traceback somewhere.
+    log = subprocess.DEVNULL
+    try:
+        from .transcript_monitor.daemon import get_log_file_path
+        log = os.open(str(get_log_file_path()), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    except (OSError, ImportError) as e:
+        print(f"[inject] No log for the recovery follow-up ({e}); its errors are discarded.",
+              file=sys.stderr)
+    try:
+        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=log, start_new_session=True)
+    except OSError as e:
+        print(f"[inject] Could not start the recovery follow-up ({e}); after the compaction, "
+              f"this session waits until something wakes it.", file=sys.stderr)
+        return False
+    finally:
+        if log is not subprocess.DEVNULL:
+            os.close(log)
+    if not quiet:                       # a hook's stdout is its reply, so a hook passes quiet
+        print("[inject] After the compaction, a recovery prompt will be typed into this pane "
+              "(skipped if something else wakes the session first).")
+    return True
+
+
+def record_keys_sent(text: str, kind: str, tmux_session: str) -> None:
+    """Record keys the framework is about to type into a session's pane, for a sender that
+    types through a pane of its own (the primal daemon's keystroke wake)."""
+    _record_keys_sent(text, kind, tmux_session)
+
+
+def _resolve_pane_target(target: str) -> Optional[dict]:
+    """The supervisor record, or a session unit's own pane, that *target* names."""
+    if target.startswith(PANE_TARGET_PREFIX):
+        # A session unit's own pane, from inside it (_own_session_unit_pane): the
+        # inherited TMUX already names the unit's server.
+        return {"name": target, "tmux_session": target[len(PANE_TARGET_PREFIX):]}
+    return _find_supervisor(target)
+
+
+def capture_pane(target: str) -> Optional[str]:
+    """The screen of *target*'s pane, with its escape codes (the faint suggestion text is
+    told apart by them), or None when it can't be read."""
+    data = _resolve_pane_target(target)
+    session = (data or {}).get("tmux_session")
+    if not session or not _tmux_available():
+        return None
+    r = subprocess.run(["tmux", "capture-pane", "-p", "-e", "-t", session],
+                       capture_output=True, text=True)
+    return r.stdout if r.returncode == 0 else None
+
+
+def press_enter(target: str) -> int:
+    """One Enter into *target*'s pane; the tmux exit status."""
+    session = (_resolve_pane_target(target) or {}).get("tmux_session")
+    if not session or not _tmux_available():
+        return 1
+    return subprocess.run(["tmux", "send-keys", "-t", session, "Enter"]).returncode
+
+
+def send_keys(target: str, keys: list, enter: bool = True, kind: str = "send-keys") -> int:
     """Inject literal text (plus an optional Enter) into a supervised session's
     tmux pane - the side channel for driving the live CC client (e.g. a real
     `/compact`, which the client parses only from its own TTY input).
 
     *target* is a supervisor name or PID. The text is sent with `-l` (literal,
     no key-name interpretation) and the Enter is a separate key press, so text
-    that happens to contain 'Enter' or 'C-c' is not reinterpreted.
+    that happens to contain 'Enter' or 'C-c' is not reinterpreted. The text is
+    recorded first, as *kind*, so it is not read as the operator's typing.
     """
     if not _tmux_available():
         print("[auto-restart] tmux not found; send-keys requires a tmux-backed session.",
               file=sys.stderr)
         return 1
-    data = _find_supervisor(target)
+    data = _resolve_pane_target(target)
     if not data:
         print(f"[auto-restart] No running supervised process matching '{target}'.",
               file=sys.stderr)
@@ -579,6 +890,7 @@ def send_keys(target: str, keys: list, enter: bool = True) -> int:
               file=sys.stderr)
         return 1
     text = " ".join(keys)
+    _record_keys_sent(text, kind, tmux_session)
     # `-t <session>` targets that session's active pane. `--` guards text that
     # starts with '-'. CC's stdin reader receives the bytes as if typed.
     rc = subprocess.run(
@@ -888,6 +1200,7 @@ def _send_post_start_keys(tmux_session: str, keys: str, delay: int) -> None:
     here must never take down the supervisor — the child is fine either way.
     """
     time.sleep(max(0, delay))
+    _record_keys_sent(keys, "post-start", tmux_session)
     try:
         subprocess.run(["tmux", "send-keys", "-t", tmux_session, keys],
                        capture_output=True, timeout=10)

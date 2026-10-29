@@ -8,7 +8,7 @@ to user's Claude Code settings (autocompact, etc.).
 import json
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 
 def get_autocompact_setting(project_root: Optional[Path] = None) -> bool:
@@ -257,9 +257,32 @@ _PERMANENT_ASK = [
     "Bash(macf_tools mode set AUTO_MODE:*)",
 ]
 
-# Permissions that must always be in 'allow' (agent can always de-escalate)
+# Commands that start in 'ask', where the operator hasn't ruled on them: approving the prompt is the
+# operator's consent. Unlike the permanent lists, an entry here is added only when it's in neither
+# 'ask' nor 'allow', so an operator who loosens one to 'allow' keeps that choice (persistent_layer
+# 10.6; the repo owner's ruling on #744).
+_DEFAULT_ASK = [
+    "Bash(macf_tools pd entry add:*)",
+    # An edit or a resume makes an entry fire as nothing consented to before, so it asks as add does.
+    "Bash(macf_tools pd entry edit:*)",
+    "Bash(macf_tools pd entry resume:*)",
+    # The event stream's rules: approving the prompt is the operator's act (persistent_layer 11.4).
+    "Bash(macf_tools pd stream silence:*)",
+    "Bash(macf_tools pd stream unsilence:*)",
+    "Bash(macf_tools pd stream route:*)",
+]
+
+# Permissions that must always be in 'allow': the agent can always de-escalate,
+# and can always compact itself. The injected /compact passes every Stop gate
+# once (stop_bypass), so under the client's auto mode the only thing that could
+# stop it is a refusal of the command itself (GH #479). Exact, not a wildcard:
+# `inject` takes any slash command. inject compact refuses while the input box
+# holds text, so clearing the box is allowed too; clear-input presses only
+# Ctrl-U, in the caller's own pane, and only when the box starts with --expect.
 _PERMANENT_ALLOW = [
     "Bash(macf_tools mode set MANUAL_MODE:*)",
+    "Bash(macf_tools inject compact)",
+    "Bash(macf_tools inject clear-input:*)",
 ]
 
 # Operations that are NEVER legitimate in normal development (permanent deny)
@@ -332,6 +355,10 @@ def ensure_mode_safety_permissions(project_root: Optional[Path] = None) -> dict:
             if entry not in allow_list:
                 allow_list.append(entry)
                 result['allow_added'].append(entry)
+        for entry in _DEFAULT_ASK:
+            if entry not in ask_list and entry not in allow_list:
+                ask_list.append(entry)
+                result['ask_added'].append(entry)
 
         if any(result.values()):
             _write_settings(settings, settings_path)
@@ -391,7 +418,23 @@ def _find_shadowing_allow_entries(ask_entry: str, allow_list: list) -> list:
     return shadows
 
 
-def toggle_auto_mode_ask_permissions(enable_auto: bool, project_root: Optional[Path] = None) -> dict:
+def _auto_ask_exclude() -> list:
+    """The AUTO_MODE ask rules this deployment manages itself: ``modes.auto.ask_exclude``
+    in ``{agent_home}/.maceff/config.json``. The mode switch neither adds nor removes them."""
+    try:
+        from .paths import find_agent_home
+        config_file = find_agent_home() / ".maceff" / "config.json"
+        if config_file.exists():
+            data = json.loads(config_file.read_text())
+            excl = ((data.get("modes") or {}).get("auto") or {}).get("ask_exclude") or []
+            return [e for e in excl if isinstance(e, str)]
+    except (OSError, ValueError, AttributeError) as e:
+        print(f"⚠️ MACF: could not read modes.auto.ask_exclude, excluding nothing: {e}", file=sys.stderr)
+    return []
+
+
+def toggle_auto_mode_ask_permissions(enable_auto: bool, project_root: Optional[Path] = None,
+                                     exclude: Optional[list] = None) -> dict:
     """
     Toggle AUTO_MODE-specific ask permissions.
 
@@ -402,7 +445,14 @@ def toggle_auto_mode_ask_permissions(enable_auto: bool, project_root: Optional[P
             tuples for shadows moved out of allow during enable; empty during
             disable
           - 'shadows_restored': list of allow entries restored on disable
+          - 'excluded': the AUTO_MODE asks this deployment manages itself, left untouched
         Returns None on error.
+
+    A deployment that decides some of these operations another way (a hook that
+    allows them for its own repository, say) lists them in ``modes.auto.ask_exclude``,
+    or passes ``exclude``: an ask rule always beats an allow, so re-adding one would
+    undo the deployment's choice. Every change is recorded as a
+    ``mode_permissions_changed`` event, so a watcher can see what a switch did.
 
     Design (closes GH issue #67):
         On enable, for every ask entry being installed, scan the allow list
@@ -426,9 +476,12 @@ def toggle_auto_mode_ask_permissions(enable_auto: bool, project_root: Optional[P
         changed = []
         shadows_relocated = []
         shadows_restored = []
+        excluded_set = set(exclude if exclude is not None else _auto_ask_exclude())
+        excluded = [e for e in _AUTO_MODE_ASK if e in excluded_set]
+        managed = [e for e in _AUTO_MODE_ASK if e not in excluded_set]
 
         if enable_auto:
-            for entry in _AUTO_MODE_ASK:
+            for entry in managed:
                 if entry not in ask_list:
                     ask_list.append(entry)
                     changed.append(entry)
@@ -451,7 +504,7 @@ def toggle_auto_mode_ask_permissions(enable_auto: bool, project_root: Optional[P
                         file=sys.stderr,
                     )
         else:
-            for entry in _AUTO_MODE_ASK:
+            for entry in managed:
                 if entry in ask_list:
                     ask_list.remove(entry)
                     changed.append(entry)
@@ -468,10 +521,20 @@ def toggle_auto_mode_ask_permissions(enable_auto: bool, project_root: Optional[P
 
         if changed or shadows_relocated or shadows_restored:
             _write_settings(settings, settings_path)
+            from ..agent_events_log import append_event
+            append_event("mode_permissions_changed", {
+                "mode": "AUTO_MODE" if enable_auto else "MANUAL_MODE",
+                "ask_added": changed if enable_auto else [],
+                "ask_removed": [] if enable_auto else changed,
+                "allow_relocated": [s for _, ss in shadows_relocated for s in ss],
+                "allow_restored": shadows_restored,
+                "excluded": excluded,
+            })
         return {
             'changed': changed,
             'shadows_relocated': shadows_relocated,
             'shadows_restored': shadows_restored,
+            'excluded': excluded,
         }
     except (OSError, json.JSONDecodeError, TypeError, KeyError) as e:
         print(f"⚠️ MACF: Settings write failed (toggle_auto_ask): {e}", file=sys.stderr)
@@ -486,13 +549,17 @@ def toggle_auto_mode_ask_permissions(enable_auto: bool, project_root: Optional[P
 _USER_REMOTE_EXTRA_DENY = ["AskUserQuestion"]
 
 
-def toggle_user_remote_deny_permissions(enable_remote: bool, project_root: Optional[Path] = None) -> Optional[dict]:
+def toggle_user_remote_deny_permissions(enable_remote: bool, project_root: Optional[Path] = None,
+                                        home: Optional[Path] = None) -> Optional[dict]:
     """Deny CLI-blocking tools while USER_REMOTE is active; restore on exit (#143).
 
     While the operator is reachable only remotely, a permission PROMPT hangs the
     unattended CLI. Moving the Ask-list commands (and AskUserQuestion) into the
     deny list makes an attempt fail immediately — the agent routes around it —
-    instead of stranding the session until someone physically returns. On exit
+    instead of stranding the session until someone physically returns. Only what
+    the Ask list holds at the switch moves: a command the settings already let run
+    is no hang, and denying it too stopped the agent's own pushes while it worked
+    unattended, the work the operator wants done while away. On exit
     (USER_PRESENT, or an auto-clear when the operator returns to the CLI) the
     entries are restored to whichever list they came from.
 
@@ -510,28 +577,41 @@ def toggle_user_remote_deny_permissions(enable_remote: bool, project_root: Optio
         deny_list = permissions.setdefault('deny', [])
         stash = settings.setdefault('_macf_user_remote_denied', {})
 
-        targets = list(_AUTO_MODE_ASK) + _USER_REMOTE_EXTRA_DENY
         denied = []
         restored = []
 
         if enable_remote:
-            for entry in targets:
-                # Record where the entry lived so exit can restore it faithfully.
+            # Exactly what would prompt: every Ask entry the deployment holds now, its own
+            # additions included, and AskUserQuestion. A command the settings already let run
+            # without a prompt can't hang the CLI, so it keeps running (mode_system, USER_REMOTE).
+            # Every file the client reads can hold an Ask rule, the user's own settings first
+            # among them; a deny written here wins over an ask from any of them.
+            from macf.permission_watch import ask_rules
+            from .paths import find_project_root
+            elsewhere = [r for r in ask_rules(str(project_root or find_project_root()), home or Path.home())
+                         if r not in ask_list]
+            for entry in list(ask_list) + elsewhere + _USER_REMOTE_EXTRA_DENY:
+                if entry in stash:
+                    continue
+                # Record where the entry lived, and whether this switch denied it, so the exit
+                # restores exactly that and never lifts a deny the operator set.
                 was_in_ask = entry in ask_list
                 if was_in_ask:
                     ask_list.remove(entry)
-                if entry not in deny_list:
+                added = entry not in deny_list
+                if added:
                     deny_list.append(entry)
                     denied.append(entry)
-                stash[entry] = {"from_ask": was_in_ask}
+                stash[entry] = {"from_ask": was_in_ask, "added": added}
         else:
-            for entry in targets:
-                if entry in deny_list:
+            for entry, info in list(stash.items()):
+                # A stash written before "added" was recorded put every entry in deny itself.
+                if info.get("added", True) and entry in deny_list:
                     deny_list.remove(entry)
                     restored.append(entry)
-                info = stash.pop(entry, None)
-                if info and info.get("from_ask") and entry not in ask_list:
+                if info.get("from_ask") and entry not in ask_list:
                     ask_list.append(entry)
+                del stash[entry]
             if not stash:
                 settings.pop('_macf_user_remote_denied', None)
 
@@ -629,3 +709,100 @@ def toggle_write_ask_for_auto_mode(enable_auto: bool, project_root: Optional[Pat
     except (OSError, json.JSONDecodeError, TypeError, KeyError) as e:
         print(f"⚠️ MACF: Settings write failed (toggle_write_ask): {e}", file=sys.stderr)
         return False
+
+
+# Claude Code compacts an idle session on its own, about 54 minutes after the last
+# request once the context passes its threshold. From 2.1.290 the settings key
+# ``idleCompaction`` set to false stops that alone; compaction at the context limit
+# stays on. Setting the key true does not turn the feature on, so "on" means no key.
+# MIS-0002-R126 (adapter_MUST_turn_off_harness_idle_compaction).
+IDLE_COMPACTION_KEY = "idleCompaction"
+IDLE_COMPACTION_MIN_VERSION = (2, 1, 290)
+
+
+def _version_tuple(version: str) -> tuple:
+    """'2.1.296 (Claude Code)' -> (2, 1, 296)."""
+    head = version.strip().split()[0] if version.strip() else ""
+    try:
+        return tuple(int(part) for part in head.split("."))
+    except ValueError:
+        raise ValueError(f"cannot read a Claude Code version from {version!r}")
+
+
+def _option_value(argv: List[str], option: str) -> Optional[str]:
+    """An option's value in an argument list, in either form argparse takes: ``--opt value``
+    or ``--opt=value``. None when it's absent or has no value."""
+    for i, word in enumerate(argv):
+        if word == option and i + 1 < len(argv):
+            return argv[i + 1]
+        if word.startswith(option + "="):
+            return word[len(option) + 1:] or None
+    return None
+
+
+def session_project_root(agent_home: Optional[Path] = None) -> tuple:
+    """The project this agent's session starts in, and where that was read: the settings the
+    client applies to the session are that project's (MIS-0002-R126). The session unit's
+    declared ``--project-dir`` decides it where there is one, then the harness's installed
+    choice. Only then does the lookup by ``CLAUDE_PROJECT_DIR``, git root and working directory
+    apply, and it names the directory a command happens to run in, so the source says so."""
+    from .paths import find_agent_home, find_project_root
+    home = Path(agent_home) if agent_home else find_agent_home()
+    try:
+        from macf.pd.interface import declaration_path
+        units = json.loads(declaration_path(home).read_text()).get("units", [])
+    except (OSError, ValueError, AttributeError):
+        units = []
+    for unit in units if isinstance(units, list) else []:
+        if not isinstance(unit, dict) or unit.get("kind") != "session":
+            continue
+        command = [str(word) for word in (unit.get("command") or [])]
+        value = _option_value(command, "--project-dir")
+        if value:
+            return Path(value.replace("{agent_home}", str(home))), "the session unit's --project-dir"
+    try:
+        from .harness import default_params, load_settings
+        installed = load_settings(default_params(home=home)).project_dir
+    except Exception:              # an unreadable harness setting falls back, as no setting does
+        installed = None
+    if installed:
+        return Path(installed), "the harness's installed project"
+    return find_project_root(), "the current directory's project, since no session unit names one"
+
+
+def idle_compaction_status(project_root: Optional[Path] = None) -> dict:
+    """The agent's idle-compaction setting: off, or the client default."""
+    settings, settings_path = _read_settings(project_root)
+    value = settings.get(IDLE_COMPACTION_KEY)
+    return {
+        "state": "off" if value is False else "client default",
+        "settings_path": str(settings_path),
+    }
+
+
+def set_idle_compaction(enabled: bool, client_version: str,
+                        project_root: Optional[Path] = None, keep: bool = False) -> dict:
+    """Turn the client's idle compaction off, or back to its default.
+
+    Refuses on a client older than 2.1.290, which ignores the key: writing it there
+    would claim a protection the session does not have. With *keep* (the agent's
+    declaration keeps idle compaction) nothing is written.
+    """
+    if _version_tuple(client_version) < IDLE_COMPACTION_MIN_VERSION:
+        raise ValueError(
+            f"Claude Code {client_version.split()[0]} has no idleCompaction setting; "
+            f"it needs {'.'.join(map(str, IDLE_COMPACTION_MIN_VERSION))} or later")
+    settings, settings_path = _read_settings(project_root)
+    before = settings.get(IDLE_COMPACTION_KEY)
+    if keep:
+        return {"changed": False, "settings_path": str(settings_path), "reason": "kept by declaration"}
+    if enabled:
+        settings.pop(IDLE_COMPACTION_KEY, None)
+    else:
+        settings[IDLE_COMPACTION_KEY] = False
+    after = settings.get(IDLE_COMPACTION_KEY)
+    if after != before or (IDLE_COMPACTION_KEY in settings) != (before is not None):
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_settings(settings, settings_path)
+        return {"changed": True, "settings_path": str(settings_path)}
+    return {"changed": False, "settings_path": str(settings_path)}
