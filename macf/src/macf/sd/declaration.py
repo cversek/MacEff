@@ -13,8 +13,9 @@ froze it. This module loads and validates a declaration, and starts nothing.
 
 Two environment values belong to the system daemon, never to a unit:
 - ``TZ``, which it sets from the declaration's one ``time_zone``;
-- ``MACEFF_SD_UNIT``, the marker by which it finds a unit's detached workers when no
-  control group is available to stop them.
+- ``MACEFF_SD_UNIT``, the unit's name, by which the unit's own processes and its identity
+  probe know which unit they belong to. It isn't how the daemon finds them: root in a
+  container without ``CAP_SYS_PTRACE`` can't read another account's environment.
 
 A unit that declares either one is refused, so a declaration can never disagree with what
 the daemon sets.
@@ -73,9 +74,10 @@ class LinuxPlatform(_Closed):
     """How a unit is stopped on Linux.
 
     ``cgroup`` needs a control-group subtree delegated to the system daemon. ``subreaper``
-    works without one: the system daemon collects the unit's detached workers as their
-    subreaper and finds them by their marker. A container whose cgroup hierarchy is mounted
-    read-only can use only the second."""
+    works without one. A supervisor of the unit's own runs as the unit's account and is the
+    subreaper of the unit's tree, so every process the unit leaves behind is reparented to
+    it, and it ends them all. A container whose cgroup hierarchy is mounted read-only can use
+    only the second."""
 
     kind: Literal["linux"]
     stop: Literal["cgroup", "subreaper"]
