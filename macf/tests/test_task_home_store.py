@@ -251,6 +251,21 @@ class TestStoreInit:
         assert self._run(tmp_path) == 1
         assert (maceff / "config.json").read_text() == "{not json"
 
+    def test_seeds_the_sentinel_so_the_store_is_usable_before_any_create(self, tmp_path):
+        """cversek/MacEff#842: #000 came only from the first `task create`, so a
+        provisioned store had no sentinel and `task tree` failed on it."""
+        assert self._run(tmp_path) == 0
+        sentinel = json.loads((tmp_path / "agent" / "public" / "tasks" / "000.json").read_text())
+        assert sentinel["status"] == "in_progress"
+        assert "task_type: SENTINEL" in sentinel["description"]
+
+    def test_a_second_run_leaves_the_read_only_sentinel_alone(self, tmp_path):
+        assert self._run(tmp_path) == 0
+        path = tmp_path / "agent" / "public" / "tasks" / "000.json"
+        before = path.read_text()
+        assert self._run(tmp_path) == 0
+        assert path.read_text() == before
+
 
 class TestMigrateEveryLegacyDirectory:
     """Migrating only the live session leaves a directory nothing will mention.

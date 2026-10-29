@@ -1,6 +1,6 @@
 # Autonomous Operation Policy
 
-**Version**: 1.7
+**Version**: 1.8
 **Tier**: CORE
 **Category**: Operations
 **Status**: ACTIVE
@@ -70,6 +70,7 @@ Applies to all Primary Agents (PA) and Subagents (SA) capable of extended autono
 - Where is a skipped or shortened step recorded?
 - What must be re-queried before the checkpoint, and what is committed together?
 - How does the sequence end, and which compaction route applies?
+- `inject compact` refused because my input box holds text: may I clear it myself, how, and what must I never clear?
 
 **5.5 A Prompt Nobody Is Answering**
 - What does a permission dialog do to the rest of the session, including its scheduled prompts?
@@ -77,6 +78,7 @@ Applies to all Primary Agents (PA) and Subagents (SA) capable of extended autono
 - What does `macf_tools permissions watch` send, when, and when does it stop?
 - Which dialogs has this agent met, how long did each wait, and which ask rule matches it?
 - What did measuring one day of dialogs show about which commands raise them, and why is a rule built from remembered prompts not enough?
+- When must I not open a question to the operator, even though no rule refuses it, and what do I do instead?
 
 **6 Available Skills**
 - What skills support autonomous operation?
@@ -644,7 +646,26 @@ The CL15 condition and the reflection sizes (5k tokens on a 1M window, 2k on 200
 2. the operator's `/compact`, when the operator is present;
 3. otherwise auto-compaction, which AUTO_MODE turns on: keep working productively until it fires.
 
-**A compaction opens no turn.** Nothing a SessionStart hook returns can start one, so an agent whose last act was `inject compact` would sit at an empty input box after the compaction, its recovery unread, until something else woke it. `inject compact` therefore starts a follower that types one short recovery prompt into the same pane, in the framework's voice, once the compaction is in the agent's event log and the session has settled, and only into an idle, empty input box: text typed after a draft is sent with it as one prompt, so the follower waits for the box to empty and gives up, saying so, if it never does. It types nothing if a prompt has already started after the compaction (a mail clock, a schedule or the operator got there first), and gives up after half an hour if no compaction comes. **In AUTO_MODE the same follower runs after every compaction, whatever asked for it.** An operator's `/compact` and the client's own auto-compaction start no follower through `inject`, and a seat once sat idle after its compaction until the operator noticed. So the SessionStart hook, on a compaction while AUTO_MODE is on, starts the follower with a resume prompt. A hook cannot open a turn itself: what it returns is read only when a turn starts. In MANUAL_MODE it starts none, since the agent then waits for the operator by design. One follower waits at a time, by a lock in the agent home: when `inject compact` started one too, the second steps aside and records that it did. Its outcome is a `compact_followup` event, and its errors go to the transcript monitor's log. Where the session is a primal daemon's unit, the daemon is the better place for this wake, since it already knows when a compaction happened and whether AUTO_MODE is on; the follower is the way until it does. Like every framework keystroke it is recorded before it is typed (`keys_sent`), so it never reads as the operator's activity. One narrow race remains: another sender (a mail clock) can arrive in the moment between the follower's check and its keys, and two senders typing at once interleave in the input box. It is rare, and the agent then sees one garbled prompt rather than none. For the same reason `inject` refuses to type a command into a box that already holds text, and says so: the client runs a slash command only when it is the whole prompt, and a follower's unsent text once turned a `/compact` into plain text, so no compaction ran. Clear the box and run it again. `--then TEXT` replaces the prompt; `--no-then` turns it off, for an operator who will be at the keyboard when the compaction ends.
+**A compaction opens no turn.** Nothing a SessionStart hook returns can start one, so an agent whose last act was `inject compact` would sit at an empty input box after the compaction, its recovery unread, until something else woke it. `inject compact` therefore starts a follower that types one short recovery prompt into the same pane, in the framework's voice, once the compaction is in the agent's event log and the session has settled, and only into an idle, empty input box: text typed after a draft is sent with it as one prompt, so the follower waits for the box to empty and gives up, saying so, if it never does. It types nothing if a prompt has already started after the compaction (a mail clock, a schedule or the operator got there first), and gives up after half an hour if no compaction comes. **In AUTO_MODE the same follower runs after every compaction, whatever asked for it.** An operator's `/compact` and the client's own auto-compaction start no follower through `inject`, and a seat once sat idle after its compaction until the operator noticed. So the SessionStart hook, on a compaction while AUTO_MODE is on, starts the follower with a resume prompt. A hook cannot open a turn itself: what it returns is read only when a turn starts. In MANUAL_MODE it starts none, since the agent then waits for the operator by design. One follower waits at a time, by a lock in the agent home: when `inject compact` started one too, the second steps aside and records that it did. Its outcome is a `compact_followup` event, and its errors go to the transcript monitor's log. Where the session is a primal daemon's unit, the daemon is the better place for this wake, since it already knows when a compaction happened and whether AUTO_MODE is on; the follower is the way until it does. Like every framework keystroke it is recorded before it is typed (`keys_sent`), so it never reads as the operator's activity. One narrow race remains: another sender (a mail clock) can arrive in the moment between the follower's check and its keys, and two senders typing at once interleave in the input box. It is rare, and the agent then sees one garbled prompt rather than none. For the same reason `inject` refuses to type a command into a box that already holds text, and says so: the client runs a slash command only when it is the whole prompt, and a follower's unsent text once turned a `/compact` into plain text, so no compaction ran. The refusal shows the start of the text and names the command that clears it.
+
+**Clearing your own box.** `macf_tools inject clear-input --expect '<opening words>'` empties the caller's own input box, and only the caller's own: it refuses `--target`.
+- **What it presses.** Only Ctrl-U, which edits the box and nothing else. It never presses Escape, which interrupts a running turn or opens the rewind menu on an empty box, and never Enter.
+- **Why it re-reads the box after every press.** Each press erases one screen row, or the line break before the cursor when the row is already empty. So a box needs about two presses per line, and a wrapped line needs more. A fixed number of presses typed from outside left a seat's box half full overnight.
+- **When it stops.** It stops at the first sign that the expected text is not simply shrinking:
+  - the box doesn't start with `--expect`, in which case nothing is pressed;
+  - text appears that wasn't there, so someone may be typing;
+  - three presses in a row change nothing;
+  - the box leaves the screen.
+- **What it records.** The keys are recorded as `keys_sent` before they are pressed, and what was removed is recorded as `box_cleared`.
+- **What it may clear: only text the framework typed, by construction.** Before pressing anything, it checks the box's text against the framework's own record of its keystrokes.
+  - Every framework keystroke is written as a `keys_sent` event before it is typed: a wake, a recovery prompt, an `inject`.
+  - The box counts as the framework's only when its text is the start of one of those records from the last 24 hours, with whitespace ignored, since wrapping and Ctrl-U change it.
+  - Text with no record, or a record with a person's words added before or after it, is a person's draft. The command refuses it and presses nothing. A person's draft is theirs: ask them to send or clear it.
+  - `--expect` stays as the agent's own statement of what it means to clear, but the record is the authority, never the agent's judgment.
+  - `inject compact`'s refusal follows the same record. For framework text it names the clearing command with its `--expect`. For anything else it says to ask the person, and names no command.
+  - A sender that types without writing `keys_sent` makes text the framework can't vouch for. One example is a deployment's legacy mail clock script; another is a person running `tmux send-keys`. The command refuses that text, and the deployment retires or fixes the sender.
+
+Like `inject compact`, it is always allowed (`Bash(macf_tools inject clear-input:*)` in the mode-safety permissions). An agent that can't empty its box can't compact either, and the record check means the command can only remove the framework's own words. `--then TEXT` replaces the prompt; `--no-then` turns it off, for an operator who will be at the keyboard when the compaction ends.
 
 Do NOT try to trigger compaction artificially by consuming tokens with filler. Recovery reads the checkpoint and reflection from disk, and the task notes carry the rest.
 
@@ -658,6 +679,51 @@ feeding them too. Nothing errors and nothing logs: a session waiting on someone
 who is not there looks exactly like a session at rest. Measured on one host in
 two days: three waits of 3, 17 and 12 hours, each on a command an allow rule was
 meant to cover.
+
+**Prevention comes first.** An alert reaches an operator who can act on it, and an
+operator away from the keyboard often can't: in do-not-disturb, alerts wait unread. The
+repo owner asked on 2026-10-24 for prevention instead, after a container seat waited
+seven hours on a cleanup chained after its real work (`...; rm -r <scratch>`), which the
+Ask rule `Bash(rm -r:*)` matched. So the agent knows the rules before it writes a
+command, can ask about one before running it, and is refused rather than left waiting
+when nobody can answer.
+
+- **Session start names the Ask rules in force,** every one, with the two commands
+  below. A command that matches one, in any part of a chain, stops at a dialog.
+- **`macf_tools permissions list`** (also `rules`) shows every rule in force (deny,
+  ask and allow), each with the settings file it comes from, read the way the client
+  reads them (the files below, in its order). `--kind ask` narrows it; `--json` for tools.
+- **`macf_tools permissions check '<command>'`** says what the rules do with one call:
+  denied, asks, allowed, or no rule. For a chain, it names the part that asks. It
+  exits 0 when the call runs by the rules, 1 when a rule asks and 2 when one denies, so
+  a script can use it. The client's order holds: a deny wins over an ask, an ask over
+  an allow.
+- **"No rule" is not "safe".** With no rule matching, the permission mode decides.
+  Default mode asks. Auto mode can still ask about a command it judges risky, a chained
+  one most of all: a call chaining three `macf_tools` commands, which no rule matched,
+  once held a session for eleven hours, most likely on auto mode's own judgment. Unattended, run one plain command per call, keep scratch cleanup inside
+  the script that made it, and try a new command shape only while the operator is there.
+- **The unattended refusal.** In AUTO_MODE while USER_IDLE or USER_REMOTE is on, the
+  PreToolUse hook refuses a call an Ask rule matches, before the client can show its
+  dialog. The refusal names the rule, the part of the call that matched, and what to do
+  instead. The agent reads it at once and goes on with other work, or splits the call
+  so the asking part waits for the operator. It takes effect without a restart, unlike
+  the USER_REMOTE deny list. It can't foresee what no rule explains, which is why the
+  watch below stays.
+- **A question to the operator is a dialog too, and no rule refuses it.** `AskUserQuestion`
+  holds the whole session until someone answers, like a permission dialog, but no Ask rule
+  names it, so the unattended refusal above can't catch it. So:
+  - never open one while USER_IDLE or USER_REMOTE is on (`mode_system`);
+  - when the operator may be about to step away, don't open one either: late at night, or
+    just after a short reply, the mode still reads attended, but the dialog outlasts them.
+    Ask on their remote channel in one line answerable in a word, or take the conservative
+    default a later review can correct, and say which you took in a task note.
+
+  Keep the dialog for a decision that truly can't go on without them, asked while they are
+  plainly at the keyboard. The operator ruled this on 2026-10-25, after a question opened
+  two minutes after their one-word reply held a session for ten minutes: "You need to avoid
+  AskUserQuestion when USER_IDLE is active", and "It should be in the autonomous operation
+  policy too".
 
 **Why the watch lives outside.** The PermissionRequest hook tells the operator
 once, when the dialog opens (a Telegram preview of the command, where Telegram

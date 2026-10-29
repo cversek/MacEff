@@ -1,0 +1,127 @@
+name: Guard trusted threads
+
+# The repo owner's ruling of 2026-10-24: threads opened by the repo owner or a maintainer
+# take comments from collaborators only, against an agent being steered or a thread
+# derailed through GitHub discussion. Outsiders still open their own issues and comment on
+# each other's.
+#
+# An issue is locked as it opens. A pull request can't be: the maintainers post as GitHub
+# Apps, and an app can comment on a locked issue but not on a locked pull request, which
+# would cut them out of their own reviews (tested on #618 and #814). So on a trusted pull
+# request, a comment from anyone outside the trusted set is hidden as off-topic, and the
+# repo owner is emailed. A review can't be hidden, so an outsider's review is emailed only.
+#
+# Nothing here checks out or runs a pull request's code, and the text of a comment is never
+# put into a command: only its author, number, link and node id are used.
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+env:
+  TRUSTED: "cversek claude-the-builder maceff-harbormaster[bot] maceff-ira[bot]"
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  lock:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    env:
+      AUTHOR: ${{ github.event.issue.user.login }}
+      NUMBER: ${{ github.event.issue.number }}
+    steps:
+      - name: Lock when the author is the repo owner or a maintainer
+        run: |
+          set -f   # the [bot] suffixes are glob patterns to the shell
+          for t in $TRUSTED; do
+            if [ "$AUTHOR" = "$t" ]; then
+              gh api -X PUT "repos/$GITHUB_REPOSITORY/issues/$NUMBER/lock"
+              echo "locked #$NUMBER, opened by $AUTHOR"
+              exit 0
+            fi
+          done
+          echo "#$NUMBER was opened by $AUTHOR, who isn't in the trusted set; left open"
+
+  guard:
+    if: >-
+      github.event_name == 'pull_request_review_comment' ||
+      github.event_name == 'pull_request_review' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request)
+    runs-on: ubuntu-latest
+    env:
+      PR_AUTHOR: ${{ github.event.pull_request.user.login || github.event.issue.user.login }}
+      NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+      COMMENTER: ${{ github.event.comment.user.login || github.event.review.user.login }}
+      NODE_ID: ${{ github.event.comment.node_id }}
+      LINK: ${{ github.event.comment.html_url || github.event.review.html_url }}
+      KIND: ${{ github.event_name }}
+    steps:
+      - name: Decide
+        id: decide
+        run: |
+          set -f
+          trusted() { for t in $TRUSTED; do [ "$1" = "$t" ] && return 0; done; return 1; }
+          if trusted "$PR_AUTHOR" && ! trusted "$COMMENTER" && [ "$COMMENTER" != "github-actions[bot]" ]; then
+            echo "act=yes" >> "$GITHUB_OUTPUT"
+            echo "an outsider, $COMMENTER, posted on #$NUMBER, opened by $PR_AUTHOR"
+          else
+            echo "act=no" >> "$GITHUB_OUTPUT"
+            echo "nothing to do: #$NUMBER opened by $PR_AUTHOR, comment by $COMMENTER"
+          fi
+
+      - name: Hide the comment as off-topic
+        if: steps.decide.outputs.act == 'yes' && env.NODE_ID != ''
+        run: |
+          gh api graphql -f id="$NODE_ID" -f query='
+            mutation($id: ID!) {
+              minimizeComment(input: {subjectId: $id, classifier: OFF_TOPIC}) {
+                minimizedComment { isMinimized }
+              }
+            }'
+
+      - name: Email the repo owner
+        if: steps.decide.outputs.act == 'yes'
+        env:
+          SMTP_HOST: ${{ secrets.MACEFF_SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.MACEFF_SMTP_PORT }}
+          SMTP_USER: ${{ secrets.MACEFF_SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.MACEFF_SMTP_PASSWORD }}
+          ALERT_TO: ${{ secrets.MACEFF_ALERT_TO }}
+        run: |
+          python3 - <<'PY'
+          import os, smtplib, ssl, sys
+          from email.message import EmailMessage
+
+          need = ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "ALERT_TO")
+          missing = [n for n in need if not os.environ.get(n)]
+          if missing:
+              sys.exit(f"the alert can't be sent: secrets missing for {', '.join(missing)}")
+          e = os.environ
+          hidden = e["KIND"] != "pull_request_review" and e.get("NODE_ID")
+          msg = EmailMessage()
+          msg["Subject"] = f"[{e['GITHUB_REPOSITORY']}] outsider {e['COMMENTER']} on #{e['NUMBER']}"
+          msg["From"] = e["SMTP_USER"]
+          msg["To"] = e["ALERT_TO"]
+          msg.set_content(
+              f"{e['COMMENTER']} posted on #{e['NUMBER']}, a pull request opened by {e['PR_AUTHOR']}.\n"
+              f"{'It was hidden as off-topic.' if hidden else 'A review cannot be hidden; it is still visible.'}\n\n"
+              f"{e['LINK']}\n")
+          port = int(e.get("SMTP_PORT") or 465)
+          if port == 465:
+              with smtplib.SMTP_SSL(e["SMTP_HOST"], port, context=ssl.create_default_context()) as s:
+                  s.login(e["SMTP_USER"], e["SMTP_PASSWORD"]); s.send_message(msg)
+          else:
+              with smtplib.SMTP(e["SMTP_HOST"], port) as s:
+                  s.starttls(context=ssl.create_default_context())
+                  s.login(e["SMTP_USER"], e["SMTP_PASSWORD"]); s.send_message(msg)
+          print(f"alert sent for #{e['NUMBER']}")
+          PY

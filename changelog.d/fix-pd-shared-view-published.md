@@ -1,0 +1,3 @@
+### Fixed
+
+- **The primal daemon publishes its units for the shared view, and the view shows each summary's age** (`pd/daemon.py`, `pd/shared_view.py`, policy `persistent_layer` §8, MIS-0002-R62): nothing outside a test called `shared_view.publish()`, so in a container several agents share every home read UNPUBLISHED and no agent saw its peers' units. The daemon now writes `agent/public/pd/units.json` at each start, which is also when a changed declaration is loaded, and a failed publish is said on its error stream without stopping it. `python -m macf.pd.shared_view` prints how long ago each summary was published, so one left by a stopped daemon doesn't read as current.

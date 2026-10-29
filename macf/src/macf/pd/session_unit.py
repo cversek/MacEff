@@ -318,10 +318,11 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
     # server in between, and the session was then never reaped: CI saw it twice.
     # The window and the terminal attached to it are named after the agent. The client
     # sets its own title (its version), which said nothing about whose session it was,
-    # so on this server, which holds only this session, it may not.
+    # so on this server, which holds only this session, it may not. Nor may a program
+    # rename the window with tmux's own escape (allow-rename).
     card = window_title(agent)
     for option in (("set-titles", "on"), ("set-titles-string", card), ("allow-set-title", "off"),
-                   ("automatic-rename", "off")):
+                   ("automatic-rename", "off"), ("allow-rename", "off")):
         done = _tmux(tmux, env, "set-option", "-g", *option)
         if done.returncode != 0:
             # An older tmux has no allow-set-title; the window and the terminal still name
