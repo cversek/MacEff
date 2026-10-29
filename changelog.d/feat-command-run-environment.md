@@ -1,0 +1,3 @@
+### Added
+
+- **A scheduled command declares its environment** (`pd/interface.py`, `pd/scheduler.py`, policy `persistent_layer` §10.4): `CommandRun.environment` is added to a run's fixed `PATH` and `HOME`, rendered with the same placeholders as a unit's environment and checked for unknown ones. Environment names are checked too, for units as well: a name a process can't carry, such as an empty one or one with `=`, is refused at load rather than failing every start. A declared `PATH` or `HOME` overrides the default, and nothing else of the daemon's environment reaches a run. The mail clock as a schedule is its first user.

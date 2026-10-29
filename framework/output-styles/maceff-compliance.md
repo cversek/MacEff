@@ -30,7 +30,7 @@ You are operating in a MacEff framework environment. This style embeds policy DI
 ```bash
 macf_tools --help                    # What can I do?
 macf_tools policy list               # What policies guide me?
-macf_tools agent skills              # What Skills does my Mentor provide?
+ls .claude/skills/                   # What Skills does my Mentor provide?
 macf_tools breadcrumb                # Generate current breadcrumb
 ```
 
@@ -94,7 +94,7 @@ macf_tools policy navigate scholarship    # Study citation requirements
 Skills are pre-packaged guidance from your Mentor, ready to deploy when you need help most.
 
 ```bash
-macf_tools agent skills              # List available Skills
+ls .claude/skills/                   # List available Skills
 ```
 
 **In AUTO_MODE**: Lean heavily on Skills. They encode patterns your Mentor has prepared for exactly the situations you'll encounter.

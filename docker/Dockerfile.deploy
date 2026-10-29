@@ -45,10 +45,21 @@ RUN find /opt/maceff/framework -type d -exec chmod 755 {} \; && \
 COPY docker/skel/.bashrc /etc/skel/.bashrc
 RUN chmod 644 /etc/skel/.bashrc
 
-# admin (sudoer)
-RUN useradd -m -s /bin/bash admin \
- && echo "admin ALL=(ALL) NOPASSWD:ALL" >/etc/sudoers.d/90-admin \
- && chmod 0440 /etc/sudoers.d/90-admin
+# admin (sudoer), at the deployment's id block, as docker/Dockerfile does: MACEFF_ID_BASE .. +999,
+# declared again as ids.base in agents.yaml (container_operations 6.2). The base image's ubuntu
+# account goes: its uid 1000 is the first human login on most hosts, and start-up refuses an
+# image that still has it.
+ARG MACEFF_ID_BASE
+RUN set -eux; \
+    b="${MACEFF_ID_BASE:?build with --build-arg MACEFF_ID_BASE=<the deployment block, e.g. 21000>}"; \
+    [ "$b" -ge 20000 ] && [ $((b % 1000)) -eq 0 ] || { echo "MACEFF_ID_BASE must be a multiple of 1000, at least 20000 (got $b)" >&2; exit 1; }; \
+    if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi; \
+    groupadd -g "$b" admin; \
+    useradd -m -s /bin/bash -u "$b" -g "$b" admin; \
+    echo "admin ALL=(ALL) NOPASSWD:ALL" >/etc/sudoers.d/90-admin; \
+    chmod 0440 /etc/sudoers.d/90-admin; \
+    if getent passwd 1000; then echo "uid 1000 is still taken in the image" >&2; exit 1; fi; \
+    id admin
 
 # SSH hardening
 RUN mkdir -p /var/run/sshd /etc/ssh/sshd_config.d \

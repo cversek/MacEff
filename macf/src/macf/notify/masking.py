@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from ..utils.paths import user_runtime_dir
-from .notice import Notice
+from .notice import Notice, amail_notice
 
 #: Sources whose notices are about the agent ITSELF. Never maskable.
 SELF_SOURCES = frozenset({"macf-daemon", "supervision", "authority", "operator"})
@@ -367,14 +367,28 @@ class Mask:
             return removed
 
     def _to_notices(self, held: List[dict]) -> List[Notice]:
-        """Reconstructed from stored fields, never replayed verbatim, so a
-        deferred notice cannot carry anything a live one could not."""
-        return [Notice(
-            source=str(h.get("source", "amail")),
-            arrival_id=str(h.get("arrival_id", "")),
-            pointer=str(h.get("pointer", "")),
-            count=h.get("count"),
-        ) for h in held]
+        """Rebuilt by the framework's own factory, never from the stored strings.
+
+        The queue file lives outside this process, so its `source` and `pointer`
+        are claims. Only a maskable notice can have been deferred (`defer` refuses
+        the rest), and the only maskable source the framework emits is mail, so a
+        held entry is rebuilt with `amail_notice`, whose pointer is fixed. An entry
+        naming any other source cannot have come from `defer`: it is dropped and
+        said, never released. Otherwise one write to the file could forge a notice
+        about the agent itself, which no mask may hold, with words of its choosing
+        (review ira-75, F4: the floor rested on emitter discipline).
+        """
+        out = []
+        for h in held:
+            source = str(h.get("source", ""))
+            if source != "amail":
+                print(f"⚠️ MACF: dropped a deferred notice claiming source={source!r}; only "
+                      f"mail is ever deferred, so the queue file was altered", file=sys.stderr)
+                continue
+            count = h.get("count")
+            out.append(amail_notice(str(h.get("arrival_id", "")),
+                                    count if isinstance(count, int) and not isinstance(count, bool) else None))
+        return out
 
     def release(self) -> List[Notice]:
         """Return every held notice ONCE and clear the queue.
@@ -398,14 +412,7 @@ class Mask:
             held = self.deferred()
             if not held:
                 return []
-            out = []
-            for h in held:
-                out.append(Notice(
-                    source=str(h.get("source", "amail")),
-                    arrival_id=str(h.get("arrival_id", "")),
-                    pointer=str(h.get("pointer", "")),
-                    count=h.get("count"),
-                ))
+            out = self._to_notices(held)
             self._write([])
             return out
 

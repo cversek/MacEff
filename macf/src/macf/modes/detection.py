@@ -741,6 +741,13 @@ def _get_current_work_mode() -> Optional[str]:
                     # that need to surface in the dashboard work-mode slot
                     # so the agent and user see the actual current activity.
                     custom = getattr(task.mtmd, "custom", None) or {}
+                    # The declared mode first: set-work records it on the task
+                    # at every transition, override or chain advance. A play
+                    # time has no lock, so the chain phase is only the answer
+                    # when nothing has been declared.
+                    declared = custom.get("current_work_mode")
+                    if declared in WORK_MODES:
+                        return declared
                     chain = custom.get("predetermined_chain") or []
                     pos = custom.get("chain_position", 0)
                     if isinstance(pos, int) and 0 <= pos < len(chain):

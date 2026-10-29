@@ -229,12 +229,12 @@ Treat policies as stable interfaces with evolving implementation:
 
 **Examples**:
 
-**Skills** (maceff-todo-restoration, maceff-delegation):
+**Skills** (maceff-sprint, maceff-delegation):
 ```markdown
-✅ "What backup protocol does the policy specify?"
-✅ "What recovery steps does the policy document?"
-✅ "Where does the policy specify backup location?"
-❌ "What does §9 say about backups?"
+✅ "What does the policy require a sprint's scope to include?"
+✅ "How does the policy say incomplete scope crosses a compaction?"
+✅ "Which pause justifications does the policy accept?"
+❌ "What does §3.3 say about compaction?"
 ```
 
 **Agent Definitions** (PolicyWriter, DevOpsEng):
@@ -512,7 +512,7 @@ Before committing new or updated policy:
 - Refine based on agent feedback
 - Deprecate when superseded
 
-**A large change needs an MIS first.** A change that adds a subsystem, changes architecture across components, or changes what an agent may do (including a new MUST or MUST NOT in policy text) is proposed as a MacEff Improvement Specification before it lands; the threshold and the process are in the `mis` policy (§1.2).
+**A large change needs an MIS first.** A new policy, or a major architectural change (a new subsystem, or a change to architecture across components), is proposed as a MacEff Improvement Specification before it lands; a rule added to an existing policy is not, and ships with its capability in one pull request. The threshold and the process are in the `mis` policy (§1.2).
 
 **Commit Discipline**:
 ```bash

@@ -107,7 +107,7 @@ grep -ri "topic_keyword" agent/private/learnings/
 5. Write to location specified by learnings.md
 6. Create cross-links per scholarship.md patterns
 7. **Update existing learnings** with back-links where identified in step 2
-8. **Update the master learnings index and verify the consultation trigger** as the FINAL step, per the learnings policy's index + consultation-trigger section (add each new learning to its cluster in the unbounded INDEX.md with an activation hook; keep the auto-loaded trigger's cluster taxonomy complete, adding a cluster name if a new domain emerged; verify paths resolve). The CLI does the bookkeeping: `macf_tools learnings index add <file> --cluster <name> --hook "<WHEN ...>"` per learning, then `macf_tools learnings index verify`, which must end with no findings
+8. **Update the master learnings index and verify the consultation trigger** as the FINAL step, per the learnings policy's index + consultation-trigger section (add each new learning to its cluster in the unbounded INDEX.md with an activation hook; keep the auto-loaded trigger's cluster taxonomy complete, adding a cluster name if a new domain emerged; verify paths resolve). The CLI does the bookkeeping: `macf_tools learnings index add <file> --cluster <name> --hook "<WHEN ...>"` per learning (add `--new-cluster` only when the domain is genuinely new; a name that matches no cluster is otherwise refused with the nearest ones), then `macf_tools learnings index verify`, which must end with no findings
 
 **Multiple mode**: Create separate files, cross-link related learnings
 

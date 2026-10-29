@@ -424,7 +424,10 @@ consult, and (c) the **cluster taxonomy** -- the topic-domain NAMES only (e.g.
 is the reflex layer: it stays in context so the agent can recognize whether the
 current problem plausibly belongs to a domain where prior wisdom exists, then pull
 the detail from INDEX.md. It is a table of contents in context, with the contents
-themselves one read away.
+themselves one read away. Where the platform's memory is an index file that links
+one file per memory, only the index file is loaded at session start; a linked file
+loads when something recalls it. The taxonomy therefore belongs in the index file
+itself, and a cluster named only in a linked file does not count as named.
 
 **The Mandatory Consult Step (MANDATORY).** Before beginning substantive work on a
 problem, the agent MUST consult the learnings index for previously-encountered
@@ -463,9 +466,14 @@ content in the memory file; keep it lean. Verify that the trigger's path to INDE
 resolves.
 
 `macf_tools learnings index add` files an entry under its cluster and keeps the
-counts and date current, and `macf_tools learnings index verify` checks the rest:
-every entry resolves, every learning is indexed, the counts are true, and the
-trigger names every cluster and points at the index. It is the doctor for this
+counts and date current. It refuses a cluster name that matches no heading unless
+`--new-cluster` is given, so that a near-miss cannot start a one-entry cluster;
+use the flag when a new domain has emerged, then add the name to the trigger. An
+entry names its learning in backticks, or else by its first link to the bare file
+name; other links on the line are cross-references.
+`macf_tools learnings index verify` checks the rest: every entry resolves, every
+learning is indexed, the counts are true, and the trigger names every cluster and
+points at the index. It is the doctor for this
 corpus (`corpus_integrity.md`), so a curation ends when it reports nothing.
 
 ### 4.4 Knowledge Web Participation

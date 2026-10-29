@@ -9,7 +9,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 
 from macf.utils import (
     format_macf_brand,
@@ -157,6 +157,65 @@ def _identity_block() -> str:
     return f"<system-reminder>\n{text}\n</system-reminder>\n"
 
 
+def _supervision_block(environ=None, ask=None) -> str:
+    """A line when this agent has a primal daemon but this session isn't confirmed as its
+    session unit (persistent_layer 6.2): such a session isn't restarted by the daemon if it
+    crashes, and nothing told the agent so until it asked ``macf_tools env``. Silent where
+    the daemon confirms the session, and for an agent that declares no daemon at all. It
+    is also the check for moving sessions onto their daemons: after the move, no session
+    says it. A failure here must never break session start."""
+    env = os.environ if environ is None else environ
+    try:
+        from ..pd.interface import declaration_path
+        from ..utils.supervision import primal_daemon_unit
+        from ..utils.paths import find_agent_home
+        home = Path(env["MACEFF_AGENT_HOME_DIR"]) if env.get("MACEFF_AGENT_HOME_DIR") else find_agent_home()
+        if not declaration_path(home).is_file():
+            return ""
+        from ..pd.names import agent_card
+        unit = primal_daemon_unit(agent_card(home), environ=env, ask=ask)
+    except Exception as e:  # noqa: BLE001 - GUARD: a readout must not break session start
+        emit_warning(Warning(source="session_start", kind="supervision_unread",
+                             detail=f"could not tell whether the daemon supervises this session: {e}"))
+        return ""
+    if unit and unit["confirmed"]:
+        return ""
+    if unit:
+        text = (f"🧭 This session says it is your primal daemon's unit {unit['unit']} (pid {unit['pid']}), "
+                f"but the daemon doesn't confirm it: {unit['why']}. Until it does, a crash may not be "
+                "restarted. Run `macf_tools pd status` and tell the operator.")
+    else:
+        text = ("🧭 You have a primal daemon, but this session isn't running as its session unit, "
+                "so the daemon won't restart it if it crashes. `macf_tools env` shows what supervises "
+                "it. Moving a session onto its daemon is the operator's step (persistent_layer 6.2).")
+    return f"<system-reminder>\n{text}\n</system-reminder>\n"
+
+
+def _ask_rules_block(project_dir: Optional[str] = None, home: Optional[Path] = None, environ=None) -> str:
+    """The Ask rules in force, at every session start (autonomous_operation 5.5). A command one of
+    them matches stops at a dialog, and in AUTO_MODE with nobody at the keyboard it waits until
+    someone answers: seven hours for a seat on 2026-10-24, on a cleanup chained after the real
+    work. Read here, the agent knows the rules before it writes a command, not after it hangs.
+    Silent when there are none; a failure never breaks session start."""
+    env = os.environ if environ is None else environ
+    try:
+        from ..permission_watch import rules_in_force
+        rules = [r for k, r, _ in rules_in_force(project_dir or env.get("CLAUDE_PROJECT_DIR") or os.getcwd(),
+                                                   home or Path.home(), env) if k == "ask"]
+    except Exception as e:  # noqa: BLE001 - GUARD: a readout must not break session start
+        emit_warning(Warning(source="session_start", kind="ask_rules_unread", detail=str(e)))
+        return ""
+    if not rules:
+        return ""
+    shown = ", ".join(rules[:30]) + (f", and {len(rules) - 30} more" if len(rules) > 30 else "")
+    return ("<system-reminder>\n"
+            f"🛂 {len(rules)} Ask rule(s) are in force; a command that matches one, in any part of a chain, "
+            f"stops at a permission dialog: {shown}. Unattended, keep those out of your calls (delete "
+            "inside a script, not with a chained rm -r). `macf_tools permissions check '<command>'` says "
+            "whether a command would ask; `macf_tools permissions list` shows every rule and its file.\n"
+            "</system-reminder>\n")
+
+
 def _focused_charter_block() -> str:
     """The focused role's charter as one more system-reminder, or ''. A failure
     here must never break session start; it is reported and skipped."""
@@ -207,6 +266,15 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             "session_id": session_id
         })
 
+        # Baseline the permission rules of this session's settings files, so the
+        # ConfigChange hook's first change is a diff, not a baseline (autonomous_operation 5.5).
+        try:
+            from macf.hooks.handle_config_change import seed_baselines, settings_files
+            seed_baselines(settings_files(data.get("cwd")), session_id)
+        except Exception as e:  # a record, never a reason to fail session start
+            log_hook_event({"hook_name": "session_start", "event_type": "ERROR",
+                            "error": f"permission baseline: {e}"})
+
         # Ensure the Transcript Monitor is running (#144). TM produces the
         # user_activity_detected events that USER_IDLE / USER_REMOTE detection
         # depend on. It was previously started only opportunistically (AUTO_MODE
@@ -215,11 +283,18 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # here covers every fresh start and every resume. start_daemon()
         # daemonizes (non-blocking) and is idempotent; failure is logged, never
         # fatal to the hook.
+        # Where the agent's primal daemon runs the monitor as a declared unit, nothing is
+        # started here: the hook only announces this session (its transcript, its Claude Code
+        # process, its session unit), which the unit's follow-mode monitor moves to.
         try:
+            from macf.pd.monitor_unit import declared_monitor_unit
             from macf.transcript_monitor.daemon import (
+                announce_session as _tm_announce,
                 is_running as _tm_running, start_daemon as _tm_start,
             )
-            if not _tm_running():
+            if declared_monitor_unit() is not None:
+                _tm_announce(data)
+            elif not _tm_running():
                 _tm_start()
         except (ImportError, OSError, RuntimeError) as e:
             emit_warning(Warning(
@@ -349,7 +424,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                     "continue": True,
                     "hookSpecificOutput": {
                         "hookEventName": "SessionStart",
-                        "additionalContext": _identity_block()
+                        "additionalContext": _identity_block() + _supervision_block() + _ask_rules_block()
                                              + f"<system-reminder>\n{migration_msg}\n</system-reminder>"
                     }
                 }
@@ -435,6 +510,8 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             pre_compaction_active_tasks = get_active_tasks_from_filesystem()
 
             # Append compaction_detected event
+            import time as _time
+            detected_from = _time.time()
             append_event(
                 event="compaction_detected",
                 data={
@@ -534,6 +611,17 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 cycle_stats=cycle_stats
             )
 
+            # A compaction opens no turn, and nothing returned here can open one. In
+            # AUTO_MODE the agent is meant to carry on, so a follower types the resume
+            # prompt once this hook has finished, unless something else wakes it first
+            # (autonomous_operation 5.4). Whatever asked for the compaction.
+            if auto_mode:
+                try:
+                    from macf.supervisor import start_compaction_resume
+                    start_compaction_resume(detected_from)
+                except (OSError, ImportError, ValueError, RuntimeError) as e:  # recovery goes on
+                    print(f"⚠️ MACF: could not start the resume follower: {e}", file=sys.stderr)
+
             # Log recovery triggered
             log_hook_event({
                 "hook_name": "session_start",
@@ -549,7 +637,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 "systemMessage": recovery_msg,  # TOP LEVEL - user sees this
                 "hookSpecificOutput": {
                     "hookEventName": "SessionStart",
-                    "additionalContext": _identity_block()
+                    "additionalContext": _identity_block() + _supervision_block() + _ask_rules_block()
                                          + f"<system-reminder>\n{recovery_msg}\n</system-reminder>"
                                          + _focused_charter_block()
                 }
@@ -659,7 +747,7 @@ Session Context:
             emit_warning(Warning(source="session_start", kind="telegram_send_failed", detail=f"session-start telegram notification failed: {e}"))
 
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
-        additional_context = (_identity_block()
+        additional_context = (_identity_block() + _supervision_block() + _ask_rules_block()
                               + f"<system-reminder>\n{message}\n</system-reminder>"
                               + _focused_charter_block())
 

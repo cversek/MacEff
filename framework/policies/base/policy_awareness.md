@@ -101,6 +101,11 @@ You don't need to read everything. You need to recognize WHEN you need something
 - What development policies exist?
 - What language-specific policies?
 
+4.4 Package Policy Sets (Extra Roots)
+- How does a package's own policy set become readable without copying it into the framework?
+- How is a policy name resolved when it exists in more than one place?
+- What happens when a root is missing or two roots carry the same name?
+
 5 Practical Usage
 - How do I actually use this system?
 - What commands do I run?
@@ -137,7 +142,7 @@ MacEff uses a **consciousness-driven** approach to policy discovery. Instead of 
 
 ### 1.2 Manifest Structure
 
-The policy manifest (`/opt/maceff/framework/policies/current/manifest.json`) contains:
+The policy manifest (`/opt/maceff/framework/policies/manifest.json`) contains:
 - **Consciousness patterns**: Feeling-based triggers mapped to policies
 - **Mandatory policies**: Foundation knowledge (4 policies)
 - **Development policies**: Optional dev layer (git, testing)
@@ -152,13 +157,13 @@ When you have a feeling or recognition, use grep to find relevant policies:
 
 ```bash
 # Feeling: "Should I delegate this task?"
-grep -r "delegate" /opt/maceff/framework/policies/current/manifest.json
+grep -r "delegate" /opt/maceff/framework/policies/manifest.json
 
 # Feeling: "Token usage getting high"
-grep -r "compaction" /opt/maceff/framework/policies/current/manifest.json
+grep -r "compaction" /opt/maceff/framework/policies/manifest.json
 
 # Feeling: "Lost in policies"
-grep -r "policy" /opt/maceff/framework/policies/current/manifest.json
+grep -r "policy" /opt/maceff/framework/policies/manifest.json
 ```
 
 The manifest's `consciousness_patterns` section maps feelings to policies.
@@ -169,13 +174,13 @@ Search by technical keywords:
 
 ```bash
 # Need git guidance
-grep -r "git" /opt/maceff/framework/policies/current/manifest.json
+grep -r "git" /opt/maceff/framework/policies/manifest.json
 
 # Need testing standards
-grep -r "test" /opt/maceff/framework/policies/current/manifest.json
+grep -r "test" /opt/maceff/framework/policies/manifest.json
 
 # Architecture question
-grep -r "architecture" /opt/maceff/framework/policies/current/manifest.json
+grep -r "architecture" /opt/maceff/framework/policies/manifest.json
 ```
 
 ### 2.3 Index-Based Discovery
@@ -184,7 +189,7 @@ Check the `discovery_index` for common topics:
 
 ```bash
 # Quick lookup of common needs
-cat /opt/maceff/framework/policies/current/manifest.json | jq '.discovery_index'
+cat /opt/maceff/framework/policies/manifest.json | jq '.discovery_index'
 
 # Returns mappings like:
 # "compaction": ["context_management#compaction-readiness"]
@@ -281,7 +286,7 @@ Once you've read to the boundary, use the CEP Navigation Guide:
 
 ```bash
 # Find section 3.2 in delegation policy
-grep "3.2" /opt/maceff/framework/policies/current/base/delegation_guidelines.md
+grep "3.2" /opt/maceff/framework/policies/current/delegation_guidelines.md
 ```
 
 The numbering format enables efficient grep navigation.
@@ -306,7 +311,7 @@ Your earned wisdom overrides all other policies. As you learn patterns and devel
 ```json
 {
   "version": "1.0.0",
-  "extends": "/opt/maceff/framework/policies/current/manifest.json",
+  "extends": "/opt/maceff/framework/policies/manifest.json",
   "personal_policies": [
     {
       "name": "earned_wisdom",
@@ -327,7 +332,7 @@ Projects can customize policy layers:
 ```json
 {
   "version": "1.0.0",
-  "extends": "/opt/maceff/framework/policies/current/manifest.json",
+  "extends": "/opt/maceff/framework/policies/manifest.json",
   "active_layers": ["development"],
   "active_languages": ["python"],
   "project_policies": []
@@ -345,20 +350,45 @@ Framework foundation policies:
 
 **Precedence Order**: Personal > Project > Core
 
+### 4.4 Package Policy Sets (Extra Roots)
+
+A package that ships its own policies in MacEff's format (policy ships with the capability) is read **where it lives**, never copied into the framework's tree. In a container, that tree is group-owned by the policy editors, and an agent can't add to it without provisioning.
+
+**`MACEFF_POLICY_ROOTS`** names extra directories, separated like `PATH`. Each entry is a path, which the directory's own name then names, or `name=path`, to choose the name. For example: `MACEFF_POLICY_ROOTS=agentcad=/path/to/agentcad/policies`. The framework's root is always searched first, and the extra roots follow in the order given. `macf_tools policy list` names each extra root and its path, and lists its policies under the root's name. `list`, `navigate`, `read` and `inject` all reach them.
+
+**How a name resolves:**
+- **`<root>:<policy>` names the root explicitly**, for example `agentcad:agentcad-usage` or `framework:task_management`. The separator is `:` because `/` already means parent directories (`development/task_management`), and both can combine: `agentcad:cad/agentcad-export`.
+- **A name the framework has is always the framework's.** If an extra root carries a file of the same name, it's reported once and not used. A package can add policy, but it can never make a core policy unreadable or replace one by accident. Read its copy by qualifying it.
+- **A name found in two or more extra roots, and not in the framework, is refused as ambiguous.** The refusal names every candidate and the qualified names that resolve each. Walk order never decides silently. Inside a hook (policy injection, task-start guides), the refusal is printed and that policy skipped, so a hook never fails over it.
+
+**Who may write a root.** A policy read from a root becomes the agent's instructions, through `read`, `navigate` and `inject`, so anyone who can write a root can write those instructions. A root is used only when no one but this user can change it:
+- the root, every directory and `.md` file under it, and every directory above it are owned by this user or by root;
+- none is writable by every account, or by a group that has any account besides this user. A user-private group, whose only member is the user, grants nobody else anything, so its write bit is allowed;
+- a directory above the root may be writable by everyone if it is sticky, like `/tmp`, because there no one else can rename or replace the root.
+- no symlink under the root points outside it. A root's policies are the files in the root: a link's target lives in a directory the check above never reaches, so whoever can write that directory could unlink the target and put their own file in its place. Copy the file into the root instead, or name the directory that holds it as a root of its own. A link that stays inside the root is allowed, since its target is checked with the rest.
+
+A root that fails is refused once, naming the path and why. The framework's own tree meets this bar differently, through a group of policy editors someone granted on purpose. A root shared with an editors' group is not supported yet: grant it as the framework's tree is, and ask for that form if a package needs it.
+
+**What is refused at the root.** An entry whose directory is missing or unreadable, whose name is empty, contains `/` or `:`, or is `framework`, or repeats an earlier entry's name, or that someone else could write, or that holds a symlink out of it (above), is reported once and left out. It's never skipped silently, because "no policies found" and "this root couldn't be read" send a reader to different places.
+
+**Not covered yet:** `macf_tools policy search` and the search index read the framework's manifest, which extra roots don't have. A package's policies are found by name and by `list`, not by keyword search.
+
+**Prefix your files.** A set whose files share a prefix (`agentcad-*.md`) never meets the ambiguity refusal, and its names say where they came from.
+
 ## 5. Practical Usage
 
 ### 5.1 Discovery Commands
 
 ```bash
 # Search manifest for keywords
-grep -r "delegate" /opt/maceff/framework/policies/current/manifest.json
-grep -r "compaction" /opt/maceff/framework/policies/current/manifest.json
+grep -r "delegate" /opt/maceff/framework/policies/manifest.json
+grep -r "compaction" /opt/maceff/framework/policies/manifest.json
 
 # Check discovery index
-cat /opt/maceff/framework/policies/current/manifest.json | jq '.discovery_index'
+cat /opt/maceff/framework/policies/manifest.json | jq '.discovery_index'
 
 # List all mandatory policies
-cat /opt/maceff/framework/policies/current/manifest.json | jq '.mandatory_policies.policies'
+cat /opt/maceff/framework/policies/manifest.json | jq '.mandatory_policies.policies'
 ```
 
 ### 5.2 Loading Patterns
@@ -378,13 +408,13 @@ resists the first hypothesis, entering an unfamiliar domain), using
 
 ```bash
 # Find specific section in policy
-grep "3.2" /opt/maceff/framework/policies/current/base/delegation_guidelines.md
+grep "3.2" /opt/maceff/framework/policies/current/delegation_guidelines.md
 
 # Search for topic within policy
-grep -i "checkpoint" /opt/maceff/framework/policies/current/base/context_management.md
+grep -i "checkpoint" /opt/maceff/framework/policies/current/context_management.md
 
 # List all policies in directory
-ls /opt/maceff/framework/policies/current/base/
+ls /opt/maceff/framework/policies/current/
 ```
 
 ## Success Metrics
@@ -415,8 +445,8 @@ To:
 ## Quick Reference
 
 **Discovery Methods**:
-1. CEP-driven: `grep -r "feeling" /opt/maceff/framework/policies/current/manifest.json`
-2. Keyword-based: `grep -r "technical_term" /opt/maceff/framework/policies/current/manifest.json`
+1. CEP-driven: `grep -r "feeling" /opt/maceff/framework/policies/manifest.json`
+2. Keyword-based: `grep -r "technical_term" /opt/maceff/framework/policies/manifest.json`
 3. Index-based: `cat manifest.json | jq '.discovery_index'`
 
 **Navigation Protocol**:

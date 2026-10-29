@@ -1,0 +1,4 @@
+### Added
+
+- **`pd install` tests each declared macOS privacy grant from the launchd context** (`platform/grants.py`, `platform/launchd.py`, `pd/adapter.py`, `pd/cli.py`; MIS-0002-R64). A one-shot LaunchAgent runs the daemon's own interpreter, so the probe tests what a launchd job holds rather than what the terminal holds; it's loaded from the daemon's state directory and booted out when it answers. `local_network`, `full_disk_access` and `accessibility` are read without a dialog; `keychain` and `automation:` are reported untested. Each verdict is printed and recorded as `pd_grant_probe`.
+- **A denied grant raises a notice** (`pd/daemon.py`; MIS-0002-R65). A daemon that starts owes the agent one `pd_grant_denied` notice per declared grant the newest probe found denied, its id naming the grant.

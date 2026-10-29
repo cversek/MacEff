@@ -124,6 +124,15 @@ def _format_time_ago(file_path: Path) -> str:
         print(f"⚠️ MACF: file age calculation failed: {e}", file=sys.stderr)
         return "unknown"
 
+def _task_id_list(value: str) -> list:
+    """One ``--blocked-by`` value: a task ID, or a comma list of them, each without its ``#``.
+
+    The option takes one value per flag and may repeat, so a positional after it stays
+    positional. With ``nargs="+"`` it swallowed the phase title that followed it
+    (cversek/MacEff#688)."""
+    return [v.strip().lstrip("#") for v in value.split(",") if v.strip().lstrip("#")]
+
+
 def _parse_task_id_arg(arg: str):
     """Parse a task ID CLI argument into the form TaskReader.read_task expects.
 
@@ -592,7 +601,13 @@ def cmd_mis_check(args: argparse.Namespace) -> int:
     findings = mis.check(paths, glossary)
     for f in findings:
         print(f)
-    n = len(mis.mis_files(paths))
+    files = mis.mis_files(paths)
+    outside = sorted({str(f.parent) for f in files if mis.checkout_root(f) is None})
+    if outside:
+        print(f"ℹ️ no repository checkout holds {', '.join(outside)}, so the tests that decidable requirements "
+              "name were not looked up there; only bracket against Conformance row was compared "
+              "(MIS-0001-R18 (conformance_MUST_list_every_req))")
+    n = len(files)
     gl = f", glossary {glossary}" if glossary else (", no glossary found, so MIS-0001-R20 (glossary_MUST-NOT_repeat_terms) and "
           "MIS-0001-R21 (terms_MUST_reach_glossary) were not checked")
     print(f"{'❌' if findings else '✅'} {n} MIS file(s){gl}: {len(findings)} finding(s)")
@@ -632,6 +647,63 @@ def cmd_permissions_pending(args: argparse.Namespace) -> int:
         started = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(w.since))
         print(f"WAITING {w.age_minutes(now):.0f} min (since {started})  session {w.session_id[:8]}  {w.tool}: {w.preview[:200]}")
     return 0
+
+
+def cmd_permissions_history(args: argparse.Namespace) -> int:
+    """Past permission dialogs of this agent, from the event log alone (autonomous_operation 5.5)."""
+    from macf import permission_watch as pw
+    dialogs = pw.read_history(args.days, include_questions=args.include_questions)
+    print(pw.history_json(dialogs) if args.json else pw.history_text(dialogs, by_rule=args.by_rule))
+    return 0
+
+
+def _session_rules():
+    """The rules in force for this session: its starting directory is the project, as the client reads it."""
+    from pathlib import Path
+    from macf import permission_watch as pw
+    project = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    return pw.rules_in_force(project, Path.home())
+
+
+def cmd_permissions_list(args: argparse.Namespace) -> int:
+    """The permission rules in force, each with the file it comes from (autonomous_operation 5.5)."""
+    rules = [r for r in _session_rules() if args.kind is None or r[0] == args.kind]
+    if args.json:
+        print(json.dumps([{"kind": k, "rule": r, "file": str(f)} for k, r, f in rules], indent=2))
+        return 0
+    if not rules:
+        print("no rule of that kind is in force" if args.kind else "no permission rules are in force")
+        return 0
+    for kind in ("deny", "ask", "allow"):
+        of_kind = [(r, f) for k, r, f in rules if k == kind]
+        if not of_kind:
+            continue
+        print({"deny": "DENY (refused, never asked)", "ask": "ASK (stops at a dialog: never run these unattended)",
+               "allow": "ALLOW (runs without a dialog)"}[kind])
+        for rule, f in of_kind:
+            print(f"  {rule:<48} {f}")
+    return 0
+
+
+def cmd_permissions_check(args: argparse.Namespace) -> int:
+    """Whether a command would stop at a dialog, and which part of it: exit 0 when it runs
+    without one by the rules, 1 when a rule asks, 2 when a rule denies it."""
+    from macf import permission_watch as pw
+    rules = _session_rules()
+    v = pw.decide(args.tool, {"command": args.command, "file_path": args.command}, rules)
+    kind, rule, f = v.kind, v.rule, v.source
+    verdict = {"deny": f"DENIED by {rule}, from {f}",
+               "ask": f"PROMPTS: {rule}, from {f}. Unattended, this waits until someone answers",
+               "allow": f"runs: allowed by {rule}, from {f}",
+               "unlisted": ("no rule matches it, so the permission mode decides: default mode asks, and auto mode "
+                            "can still ask about a command it judges risky, a chained one most of all. Unattended, "
+                            "run one plain command per call")}[kind]
+    print(verdict)
+    if args.tool == "Bash" and kind in ("ask", "deny"):
+        for seg, part in pw.segment_decisions(args.command, rules):
+            if part.kind in ("ask", "deny"):
+                print(f"  this part: {seg[:120]}  ({part.kind}: {part.rule})")
+    return {"deny": 2, "ask": 1}.get(kind, 0)
 
 
 def cmd_permissions_watch(args: argparse.Namespace) -> int:
@@ -777,7 +849,7 @@ def _update_settings_file(settings_path: Path, hooks_prefix: str) -> bool:
         if "hooks" not in settings:
             settings["hooks"] = {}
 
-        # 11 lifecycle hooks with their script names. SubagentStart joins
+        # 12 lifecycle hooks with their script names. SubagentStart joins
         # SubagentStop as the boot-boundary marker, used by MACF to bridge
         # the parent's tool_use_id to the subagent's agent_id (CC doesn't
         # supply a direct join key between the two surfaces).
@@ -793,6 +865,7 @@ def _update_settings_file(settings_path: Path, hooks_prefix: str) -> bool:
             ("PreCompact", "pre_compact.py"),
             ("PermissionRequest", "permission_request.py"),
             ("Notification", "notification.py"),
+            ("ConfigChange", "config_change.py"),
         ]
 
         # Register all hooks
@@ -918,6 +991,7 @@ def _hooks_to_install_list():
         ("pre_compact.py", "handle_pre_compact"),
         ("permission_request.py", "handle_permission_request"),
         ("notification.py", "handle_notification"),
+        ("config_change.py", "handle_config_change"),
     ]
 
 
@@ -1009,7 +1083,7 @@ def cmd_hook_install(args: argparse.Namespace) -> int:
         # Create hooks directory
         hooks_dir.mkdir(parents=True, exist_ok=True)
 
-        # 11 lifecycle hooks with their handler module names.
+        # 12 lifecycle hooks with their handler module names.
         # subagent_start.py was added alongside subagent_stop.py to act
         # as the parent→child join-key bridge for delegation events
         # (CC's SubagentStop hook input carries agent_id but not the
@@ -1415,6 +1489,55 @@ def cmd_claude_config_init(args: argparse.Namespace) -> int:
         return 1
 
 
+def _claude_launcher() -> tuple:
+    """The client the next start will run: the ``claude`` on PATH, its real file, and its version.
+
+    The next start is what reads the setting, so this is the version that matters for it.
+    A session already running may map an older version (a launcher can update under it),
+    and it keeps the setting it started with until it restarts.
+    """
+    found = shutil.which("claude")
+    if not found:
+        raise OSError("no `claude` on PATH, so the client version cannot be checked")
+    version = subprocess.run([found, "--version"], capture_output=True, text=True, timeout=15).stdout.strip()
+    return os.path.realpath(found), version
+
+
+def cmd_claude_config_idle_compaction(args: argparse.Namespace) -> int:
+    """Report or set the client's idle compaction for this agent (MIS-0002-R126)."""
+    from .utils.claude_settings import idle_compaction_status, session_project_root, set_idle_compaction
+    # The session's project, wherever this runs: the settings the client reads at the
+    # session's start are that project's, not those of the directory a shell is in (#722).
+    root, source = session_project_root()
+    if args.action == "status":
+        status = idle_compaction_status(root)
+        print(f"idle compaction: {status['state']} ({status['settings_path']}, from {source})")
+        try:
+            path, version = _claude_launcher()
+            print(f"   client the next start runs: {path} ({version or 'version unknown'})")
+        except (OSError, subprocess.SubprocessError) as e:
+            print(f"   client: {e}")
+        print("   a session already running keeps the setting it started with")
+        return 0
+    try:
+        path, version = _claude_launcher()
+        result = set_idle_compaction(args.action == "on", client_version=version, project_root=root)
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 1
+    print(f"   client checked: {path} ({version}); the session's project, from {source}")
+    if result["changed"]:
+        from .agent_events_log import append_event
+        append_event("harness_setting_changed", {"setting": "idleCompaction",
+                                                 "state": "off" if args.action == "off" else "client default",
+                                                 "settings_path": result["settings_path"]})
+        print(f"idle compaction {'off' if args.action == 'off' else 'back to the client default'}: "
+              f"{result['settings_path']} (takes effect when the session next starts)")
+    else:
+        print(f"idle compaction already {'off' if args.action == 'off' else 'at the client default'}")
+    return 0
+
+
 def cmd_claude_config_show(args: argparse.Namespace) -> int:
     """Show current .claude.json configuration."""
     try:
@@ -1541,7 +1664,8 @@ def cmd_statusline(args: argparse.Namespace) -> int:
             environment=data["environment"],
             tokens_used=data["tokens_used"],
             tokens_total=data["tokens_total"],
-            cl=data["cl"]
+            cl=data["cl"],
+            modes=data.get("modes", ""),
         )
 
         print(statusline)
@@ -1568,6 +1692,9 @@ def _harness_params(args: argparse.Namespace):
     project_dir = getattr(args, "project_dir", None) or os.environ.get("MACEFF_PROJECT_DIR")
     if project_dir:
         p = replace(p, project_dir=Path(project_dir))
+    remote_control = getattr(args, "remote_control", None)
+    if remote_control:
+        p = replace(p, remote_control=remote_control)
     # Fill anything not given from what the last install recorded. Without this
     # a flagless `install --check` renders different artifacts and reports drift
     # that is not there — and acting on that report with --force would strip the
@@ -1712,53 +1839,267 @@ def cmd_harness_install(args: argparse.Namespace) -> int:
 
 
 def cmd_harness_attach(args: argparse.Namespace) -> int:
-    """Attach this terminal to the agent's supervised session.
+    """Attach this terminal to an agent's session, named by a short name, here or remote.
 
-    Exists so that no remote shell has to hardcode a session name. A helper on
-    another machine held the OLD name after the session was renamed, and broke
-    with "no sessions" -- a fourth hand-maintained copy of harness knowledge, on
-    a host the generator cannot reach. `ssh host -t macf_tools harness attach`
-    resolves the name where the name is defined, so a rename cannot strand it.
+    Exists so that no shell has to hardcode a session name, port, account or socket
+    directory: a helper on another machine held the OLD name after a session was renamed,
+    and broke with "no sessions". The name is matched against every agent this endpoint
+    and its declared remotes list (utils/roster.py); an agent on a remote is handed off
+    to that remote's own ``harness attach --card``, which resolves it from its own daemon
+    (persistent_layer 4.1, 4.5). The decision is utils/attach_dispatch.py's.
     """
-    from .utils.harness import resolve_agent
-    from .utils.identity import calling_card_from_identifier
+    from .pd.session_unit import client_environment
+    from .utils.attach import plan_attach_for_card, plan_attach_for_home
+    from .utils.attach_dispatch import by_card, decide, legacy_by_slug
+    from .utils.remotes import CONNECT_TIMEOUT_S, RemotesRefused, load_remotes
+    from .utils.roster import gather, local_roster, remote_fetchers, resolve
+
+    def has_session(target, env):
+        return subprocess.run(["tmux", "has-session", "-t", target],
+                              capture_output=True, env=env).returncode == 0
 
     try:
-        agent, source = resolve_agent(getattr(args, "agent", None))
-        if source == "ambiguous":
-            print("Several harnesses are installed here; name one with --agent:",
-                  file=sys.stderr)
-            for a in agent:
-                print(f"   {a}  ({calling_card_from_identifier(a)})", file=sys.stderr)
+        try:
+            remotes = load_remotes()
+        except RemotesRefused as e:
+            print(f"⚠️ MACF: {e}", file=sys.stderr)
             return 1
-
-        # "=" forces an exact match; tmux resolves targets by prefix, so a bare
-        # name would happily attach to "<agent>-stale-ssh".
-        target = f"={agent}"
-        if subprocess.run(["tmux", "has-session", "-t", target],
-                          capture_output=True).returncode != 0:
-            print(f"No tmux session '{agent}' on this host.", file=sys.stderr)
-            print(f"   start it:  {'maceff_' + agent.rpartition('_')[0].lower() + '_harness_launch'}",
-                  file=sys.stderr)
-            print(f"   or:        systemctl --user start cc-harness-{agent}.service",
-                  file=sys.stderr)
-            return 1
-
-        # -CC hands the session to iTerm2 as native windows. It matters more
-        # than it looks: the client owns the alternate screen, so under a plain
-        # attach there is no tmux-level scrollback at all -- control mode is
-        # what restores native scrollback, selection and find on macOS.
-        cmd = ["tmux"]
-        if getattr(args, "control", False):
-            cmd.append("-CC")
-        cmd += ["attach", "-t", target]
-        # -d evicts other clients: two clients of different geometries is the
-        # cause of the fragmented redraws. Read-only observers skip it.
-        cmd.append("-r" if getattr(args, "read_only", False) else "-d")
-        os.execvp("tmux", cmd)
+        local = local_roster(probe=None).entries
+        name, card = getattr(args, "name", None), getattr(args, "card", None)
+        legacy_slug = getattr(args, "agent", None)
+        if not name and not card and not legacy_slug:
+            # No name: this home's own agent, as before.
+            from .pd.names import IdentityError, agent_card
+            from .utils.paths import find_agent_home
+            try:
+                card = agent_card(find_agent_home())
+            except (IdentityError, OSError, ValueError) as e:
+                print(f"Name an agent (macf_tools harness list shows who is here): {e}",
+                      file=sys.stderr)
+                return 1
+        if legacy_slug and not name and not card:
+            from .utils.identity import calling_card_from_identifier
+            card = calling_card_from_identifier(legacy_slug)
+        decision = None
+        if card:
+            entry = by_card(local, card)
+            if entry is None and legacy_slug and not name:
+                # A slug names a session as it always did, for an agent whose card no
+                # roster row carries (one whose card comes only from a global id).
+                decision = legacy_by_slug(legacy_slug, control=bool(remotes.control if getattr(
+                    args, "control", None) is None else args.control),
+                    read_only=getattr(args, "read_only", False), has_session=has_session,
+                    environment=client_environment)
+            elif entry is None:
+                print(f"No agent here has the card {card!r} (macf_tools harness list).",
+                      file=sys.stderr)
+                return 1
+        else:
+            entries, unanswered = gather(local, remote_fetchers(), timeout=CONNECT_TIMEOUT_S)
+            for missing in unanswered:
+                print(f"⚠️ MACF: not asked: {missing}", file=sys.stderr)
+            entry, code = resolve(name, entries)
+            if entry is None:
+                return code
+        if decision is None:
+            decision = decide(entry, remotes, control=getattr(args, "control", None),
+                              read_only=getattr(args, "read_only", False),
+                              plan_for_home=plan_attach_for_home, plan_for_card=plan_attach_for_card,
+                              has_session=has_session, environment=client_environment)
+        if decision.exit_code is not None:
+            print(decision.message, file=sys.stderr)
+            return decision.exit_code
+        env = decision.env or dict(os.environ)
+        for command in decision.before:
+            # Naming the window is a courtesy: a tmux that refuses it still attaches.
+            subprocess.run(command, capture_output=True, env=env)
+        os.execvpe(decision.argv[0], decision.argv, env)
     except Exception as e:
         print(f"Error attaching to harness: {e}", file=sys.stderr)
         return 1
+
+
+def cmd_harness_list(args: argparse.Namespace) -> int:
+    """List every agent this endpoint can attach to, read only (utils/roster.py).
+
+    Exit 0 when the listing is complete. An unreadable home is listed, with why, and
+    still counts as listed; exit 1 means a source could not be read at all (the homes
+    directory, the runtime directory), which stderr names, so what is shown is partial.
+    """
+    from .utils.remotes import CONNECT_TIMEOUT_S
+    from .utils.roster import gather, local_roster, remote_fetchers, render_table
+
+    roster = local_roster()
+    entries, problems = roster.entries, list(roster.problems)
+    if not getattr(args, "local", False):
+        # Each declared remote's own listing, beside this endpoint's; one that doesn't
+        # answer is named below and makes the listing incomplete, never silently shorter.
+        entries, unanswered = gather(entries, remote_fetchers(problems), timeout=CONNECT_TIMEOUT_S)
+        problems += unanswered
+    if getattr(args, "json", False):
+        print(json.dumps([e.model_dump(mode="json") for e in entries], indent=2))
+    else:
+        print(render_table(entries, verbose=getattr(args, "verbose", False)))
+    for problem in problems:
+        print(f"⚠️ MACF: harness list is incomplete: {problem}", file=sys.stderr)
+    return 0 if not problems else 1
+
+
+def cmd_completion(args: argparse.Namespace) -> int:
+    """Print the shell completion script, or (hidden) the agent names a word completes to."""
+    if getattr(args, "candidates", False):
+        from .utils.completion import candidate_lines
+        from .utils.roster import completion_candidates, gather, local_roster, remote_fetchers
+        # Names only: completion has no use for states, and probing each would cost a
+        # tmux call per agent on every TAB.
+        local = local_roster(probe=None).entries
+        entries, _unanswered = gather(local, remote_fetchers(), timeout=args.remote_timeout)
+        for line in candidate_lines(completion_candidates(entries, args.prefix or ""), args.describe):
+            print(line)
+        return 0
+    if not getattr(args, "shell", None):
+        print("usage: macf_tools completion {bash,zsh}", file=sys.stderr)
+        return 2
+    from .utils.completion import render
+    print(render(args.shell, _build_parser()), end="")
+    return 0
+
+
+def cmd_harness_unit(args: argparse.Namespace) -> int:
+    """Be the session unit: the agent's own tmux server, parented by this process.
+
+    The primal daemon runs this as the declared ``session`` unit (MIS-0002-R12). It
+    returns when the session ends, which is the unit's exit; restarts are the daemon's.
+    """
+    from .pd.session_unit import main as session_unit_main
+    argv = []
+    for flag, value in (("--agent", args.agent), ("--home", args.home), ("--project-dir", args.project_dir)):
+        if value:
+            argv += [flag, str(value)]
+    if args.no_proxy:
+        argv.append("--no-proxy")
+    return session_unit_main(argv)
+
+
+def cmd_harness_cutover(args: argparse.Namespace) -> int:
+    """Print the plan for moving the agent's session onto its primal daemon (persistent_layer
+    6.3). Read-only: exit 0 when every check holds, 1 when one doesn't or there is nothing
+    to move, 2 when the agent can't be resolved."""
+    import dataclasses
+    from pathlib import Path
+    from .pd.cutover import build_plan, format_plan, host_probes
+    from .utils.harness import resolve_agent
+    from .utils.identity import calling_card_from_identifier
+
+    agent, source = resolve_agent(getattr(args, "agent", None))
+    if source in ("ambiguous", "default"):
+        print("⚠️ MACF: harness cutover: name the agent with --agent; "
+              f"it couldn't be resolved here ({source})", file=sys.stderr)
+        return 2
+    card = calling_card_from_identifier(agent)
+    # Without --home, the agent home as `macf_tools env` finds it, not the login's ~: on a host
+    # the two differ, and a plan built for ~ finds neither the staged declaration nor the
+    # hand-started client it must stop (persistent_layer 6.3).
+    from .utils.paths import find_agent_home
+    home = Path(args.home) if getattr(args, "home", None) else find_agent_home()
+    import os
+    from .pd.cutover import ProbeUnavailable, remove_own_job
+    from .platform.launchd import cutover_label
+    try:
+        plan = build_plan(home, card, agent, host_probes(home, card),
+                          staged=Path(args.staged) if getattr(args, "staged", None) else None)
+    except Exception as e:  # noqa: BLE001 - the one-shot job must remove itself whatever failed
+        job_plist = Path(args.job_plist) if getattr(args, "job_plist", None) else None
+        said = str(e) if isinstance(e, ProbeUnavailable) else f"{type(e).__name__}: {e}"
+        print(f"⚠️ MACF: harness cutover: nothing was changed: {said}", file=sys.stderr, flush=True)
+        if job_plist is None:
+            if isinstance(e, ProbeUnavailable):
+                return 1
+            raise
+        # Inside the one-shot launchd job: the plan was never built, so nothing ran, but the
+        # job still removes its plist and boots itself out, or the next --run finds it loaded.
+        log_path = Path(args.log) if getattr(args, "log", None) else None
+
+        def log(line: str) -> None:
+            print(line, flush=True)
+            if log_path is not None:
+                with log_path.open("a") as fh:
+                    fh.write(line + "\n")
+        remove_own_job(job_plist, cutover_label(card), os.getuid(), log)
+        return 1
+    if getattr(args, "execute", False):
+        from datetime import datetime
+        from .pd.cutover import came_up_by_status, execute, execute_as_launchd_job, inside_session, run_command
+        log_path = Path(args.log) if getattr(args, "log", None) else None
+        job_plist = Path(args.job_plist) if getattr(args, "job_plist", None) else None
+
+        def log(line: str) -> None:
+            stamped = f"{datetime.now().isoformat(timespec='seconds')} {line}"
+            print(stamped, flush=True)
+            if log_path is not None:
+                with log_path.open("a") as fh:
+                    fh.write(stamped + "\n")
+        client = inside_session()
+        if client is not None:
+            # Step 2 ends the legacy session, and this process with it, part-way through the
+            # move and before any rollback: the move runs only from outside (--run).
+            log(f"refused: this runs inside a Claude Code session (pid {client}), which the move "
+                f"would end before it could roll back; use --run, which moves from outside it")
+            from .pd.cutover import Check
+            plan = dataclasses.replace(plan, ready=False, checks=plan.checks + [
+                Check("outside the session", False, f"runs inside Claude Code pid {client}")])
+        came_up = came_up_by_status(home, card, plan.session_unit or "session")
+        if job_plist is not None:
+            import os
+            from .platform.launchd import cutover_label
+            took = execute_as_launchd_job(plan, run_command, came_up, log, job_plist,
+                                          cutover_label(card), os.getuid())
+        else:
+            took = execute(plan, run_command, came_up, log)
+        return 0 if took else 1
+    if getattr(args, "run", False):
+        from datetime import datetime
+        from .pd.cutover import COME_UP_S, arm_argv, arm_launchd, staged_path
+        if not plan.ready:
+            print(format_plan(plan))
+            print("\n⚠️ MACF: harness cutover --run: not ready, so nothing was started", file=sys.stderr)
+            return 1
+        if plan.init == "launchd":
+            import os
+            staged = Path(args.staged) if getattr(args, "staged", None) else staged_path(home)
+            try:
+                plist, log_path = arm_launchd(agent, card, home, staged, sys.executable, os.getuid(),
+                                              f"{datetime.now():%Y%m%d-%H%M%S}")
+            except (RuntimeError, OSError, ValueError) as e:
+                print(f"⚠️ MACF: harness cutover --run: the launchd job didn't start: {e}", file=sys.stderr)
+                return 1
+            print(format_plan(plan))
+            print(f"\nStarted, outside this session, as the one-shot launchd job {plist.stem}.\n"
+                  f"Follow it from any terminal:\n"
+                  f"     tail -f {log_path}\n"
+                  f"It rolls back by itself on any failure, or if the session unit isn't running "
+                  f"within {COME_UP_S:g} s, and removes its own job when it ends.")
+            return 0
+        log_path = home / ".maceff" / "logs" / f"cutover-{datetime.now():%Y%m%d-%H%M%S}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        staged = Path(args.staged) if getattr(args, "staged", None) else staged_path(home)
+        argv = arm_argv(agent, home, staged, log_path, sys.executable)
+        started = subprocess.run(argv, capture_output=True, text=True)
+        if started.returncode != 0:
+            print(f"⚠️ MACF: harness cutover --run: the transient unit didn't start: "
+                  f"{started.stderr.strip()}", file=sys.stderr)
+            return 1
+        print(format_plan(plan))
+        print(f"\nStarted, outside this session. Follow it from any terminal:\n"
+              f"     tail -f {log_path}\n"
+              f"It rolls back by itself on any failure, or if the session unit isn't running "
+              f"within {COME_UP_S:g} s.")
+        return 0
+    if getattr(args, "json", False):
+        print(json.dumps(dataclasses.asdict(plan), indent=2))
+    else:
+        print(format_plan(plan))
+    return 0 if plan.ready else 1
 
 
 def cmd_harness_status(args: argparse.Namespace) -> int:
@@ -1794,31 +2135,47 @@ def cmd_harness_status(args: argparse.Namespace) -> int:
                   f"environment, config or any installed unit)")
         else:
             print(f"agent:   {p.agent}  ({card}, via {source})")
-        print(f"unit:    {unit_path} "
-              f"{'(present)' if unit_path.exists() else f'(ABSENT for agent {p.agent})'}")
-
-        # A HOST WITH NO INIT SYSTEM IS A SUPPORTED HOST, not an error. This
-        # call used to raise FileNotFoundError straight into the broad handler
-        # below, aborting the whole command -- so on a container the reader
-        # lost the session, owner and proxy lines as well and got an exception
-        # where a status belonged. Whether the unit is manageable says nothing
-        # about whether the session is UP, which is what the command is asked.
-        if shutil.which("systemctl") is None:
-            active = "no init system (systemctl absent) -- unit not managed here"
+        # Asked first: a session under the primal daemon has no systemd harness, and on a
+        # host without systemd (macOS) its lines were only noise above the one that answers.
+        from .pd.session_unit import client_environment
+        unit_env = client_environment(p.agent)
+        has_unit_session = unit_env is not None and subprocess.run(
+            ["tmux", "has-session", "-t", f"={p.agent}"], capture_output=True, env=unit_env).returncode == 0
+        if has_unit_session:
+            print("harness: not used -- the session runs as the primal daemon's session unit")
         else:
-            active = subprocess.run(["systemctl", "--user", "is-active", p.unit_name],
-                                    capture_output=True, text=True).stdout.strip()
-        print(f"active:  {active or 'unknown'}")
+            print(f"unit:    {unit_path} "
+                  f"{'(present)' if unit_path.exists() else f'(ABSENT for agent {p.agent})'}")
+
+            # A HOST WITH NO INIT SYSTEM IS A SUPPORTED HOST, not an error. This
+            # call used to raise FileNotFoundError straight into the broad handler
+            # below, aborting the whole command -- so on a container the reader
+            # lost the session, owner and proxy lines as well and got an exception
+            # where a status belonged. Whether the unit is manageable says nothing
+            # about whether the session is UP, which is what the command is asked.
+            if shutil.which("systemctl") is None:
+                active = "no init system (systemctl absent) -- unit not managed here"
+            else:
+                active = subprocess.run(["systemctl", "--user", "is-active", p.unit_name],
+                                        capture_output=True, text=True).stdout.strip()
+            print(f"active:  {active or 'unknown'}")
 
         # "=" forces an EXACT session match. Without it tmux resolves a target
         # by prefix, so `-t thm` happily matches a session called
         # "thm-stale-ssh" -- which is precisely the name someone gives the
         # imposter while moving it out of the way, so the workaround for the
         # name collision silently did not resolve the collision.
-        has_session = subprocess.run(["tmux", "has-session", "-t", f"={p.agent}"],
-                                     capture_output=True).returncode == 0
-        print(f"session: {'up' if has_session else f'absent for {p.agent}'} "
-              f"(tmux -t ={p.agent})")
+        if has_unit_session:
+            # The session unit's server socket is private to this user, so a session on
+            # it is the primal daemon's, whose own status names the unit's process.
+            print(f"session: up as the primal daemon's session unit "
+                  f"(TMUX_TMPDIR={unit_env['TMUX_TMPDIR']} tmux -t ={p.agent}; see macf_tools pd status)")
+            has_session = False
+        else:
+            has_session = subprocess.run(["tmux", "has-session", "-t", f"={p.agent}"],
+                                         capture_output=True).returncode == 0
+            print(f"session: {'up' if has_session else f'absent for {p.agent}'} "
+                  f"(tmux -t ={p.agent})")
 
         # Presence is not ownership. A session under this name may be anyone's
         # — that is how the harness stayed down for days while every surface
@@ -2333,7 +2690,10 @@ def _ensure_agent_uuid(
             _write(candidate, "Minted")
             return
         print(f"\n🆔 Proposed agent UUID: {candidate}")
-        print(f"    Calling card would be: @{candidate[:6]}")
+        # A bare '@abc123' is no card: every step keyed on the card needs the name half
+        # too, which the calling-card step writes (cversek/MacEff#842).
+        print(f"    Calling card would be: <name>@{candidate[:6]} "
+              f"(the name comes next, from the calling-card step or --calling-card NAME)")
         answer = input("  [A]ccept / [r]egenerate / [s]kip: ").strip().lower()
         if answer in ('', 'a', 'accept', 'y', 'yes'):
             _write(candidate, "Minted")
@@ -2367,7 +2727,7 @@ def other_claude_md_in_load_path(reconciled_path):
     cwd = _Path.cwd()
     candidates += [cwd / "CLAUDE.md", cwd / ".claude" / "CLAUDE.md"]
 
-    reconciled = _Path(reconciled_path).resolve()
+    reconciled = Path(reconciled_path).resolve()
     seen, out = set(), []
     for c in candidates:
         try:
@@ -2390,11 +2750,17 @@ def other_claude_md_in_load_path(reconciled_path):
 
 
 def cmd_agent_init(args: argparse.Namespace) -> int:
-    """Initialize agent with preamble injection (idempotent)."""
+    """Initialize the agent: its PA preamble and its whole persistent-layer stack (idempotent).
+
+    The steps, their order and their flags are ``macf.agent_stack``'s; the preamble step is
+    ``_agent_init_preamble`` below, the behavior agent init always had.
+    """
+    from . import agent_stack
     try:
         # Detect PA home directory
         config = ConsciousnessConfig()
-        if config._is_container():
+        in_container = config._is_container()
+        if in_container:
             # In container: use detected home
             pa_home = Path.home()
         else:
@@ -2409,7 +2775,46 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
             except (OSError, IOError) as e:
                 print(f"⚠️ MACF: agent home detection failed: {e}", file=sys.stderr)
                 pa_home = Path.cwd()
+        rc, _results = agent_stack.run_stack(
+            args, Path(pa_home), in_container=in_container,
+            preamble=lambda: _agent_init_preamble(args, Path(pa_home), config))
+        return rc
+    except Exception as e:
+        print(f"Error during agent initialization: {e}")
+        return 1
 
+
+def _preamble_confirm(args: argparse.Namespace):
+    """The preamble's y/N: True to write, False when the person declined, None when nobody
+    can answer. ``--yes`` answers yes. A stdin that isn't a terminal, or one that ends before
+    an answer, is nobody: an unattended run (a script, a pipe, an agent's own tool call) gets
+    the step skipped and the flag named, not an EOFError reported as a refusal."""
+    if getattr(args, 'yes', False):
+        return True
+    try:
+        interactive = sys.stdin is not None and sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        interactive = False
+    if not interactive:
+        return None
+    try:
+        return input("\nProceed? [y/N]: ").strip().lower() == 'y'
+    except EOFError:
+        print()
+        return None
+
+
+def _preamble_not_interactive(claude_md_path: Path):
+    from .agent_stack import SKIPPED, Result
+    return Result("preamble", SKIPPED, f"not interactive: nobody to answer the y/N prompt, so "
+                                       f"{claude_md_path} is left as it is; rerun with --yes to "
+                                       f"accept the preamble unattended")
+
+
+def _agent_init_preamble(args: argparse.Namespace, pa_home: Path, config):
+    """The preamble step: CLAUDE.md, the personal policy manifest and the agent's id."""
+    from .agent_stack import ALREADY, DONE, REFUSED, Result
+    if True:
         claude_md_path = pa_home / "CLAUDE.md"
 
         # Determine preamble template path (portable)
@@ -2448,7 +2853,7 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
             print("Expected locations:")
             for loc in template_locations:
                 print(f"  - {loc}")
-            return 1
+            return Result("preamble", REFUSED, "PA_PREAMBLE.md template not found")
 
         # Read preamble template
         preamble_content = preamble_template_path.read_text()
@@ -2501,24 +2906,31 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
                 print(f"🧹 Removing {len(stale_versions)} stale preamble block(s): "
                       f"{', '.join('v' + v for v in stale_versions)}")
 
-            # Confirmation prompt for modifying existing file
-            print(f"\n{action_desc} CLAUDE.md:")
-            print(f"  📄 {claude_md_path}")
-            if not getattr(args, 'yes', False):
-                response = input("\nProceed? [y/N]: ").strip().lower()
-                if response != 'y':
-                    print("Aborted.")
-                    return 0
-
             # Append: user + boundary + preamble
             new_content = user_content + "\n\n" + UPGRADE_BOUNDARY + "\n\n" + preamble_content
-            claude_md_path.write_text(new_content)
+            if new_content == existing_content:
+                # Already current: no prompt and no write, so a second run is a no-op.
+                status = ALREADY
+                print(f"✓ PA Preamble already current in {claude_md_path}")
+            else:
+                status = DONE
+                # Confirmation prompt for modifying existing file
+                print(f"\n{action_desc} CLAUDE.md:")
+                print(f"  📄 {claude_md_path}")
+                answer = _preamble_confirm(args)
+                if answer is None:
+                    return _preamble_not_interactive(claude_md_path)
+                if not answer:
+                    return Result("preamble", "aborted")
+                claude_md_path.write_text(new_content)
             # Say which of the two things happened. "appended" asserted the
             # DANGEROUS outcome -- an operator reading it has been told the thing
             # they should check for has occurred, when in fact the old block was
             # replaced in place. A message that describes a different operation
             # than the one performed is worse than no message.
-            if _replacing:
+            if status == ALREADY:
+                pass
+            elif _replacing:
                 print("✅ PA Preamble replaced in place (one managed block, now current)")
             else:
                 print("✅ PA Preamble added below the upgrade boundary")
@@ -2542,12 +2954,13 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
             # Create new CLAUDE.md with just the preamble (no boundary needed)
             print(f"\nCreate new CLAUDE.md with PA Preamble:")
             print(f"  📄 {claude_md_path}")
-            if not getattr(args, 'yes', False):
-                response = input("\nProceed? [y/N]: ").strip().lower()
-                if response != 'y':
-                    print("Aborted.")
-                    return 0
+            answer = _preamble_confirm(args)
+            if answer is None:
+                return _preamble_not_interactive(claude_md_path)
+            if not answer:
+                return Result("preamble", "aborted")
             claude_md_path.write_text(preamble_content)
+            status = DONE
             print(f"✅ CLAUDE.md created successfully")
 
         # Create personal policy directory structure (PA only)
@@ -2567,21 +2980,19 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
                 json.dump(manifest_data, f, indent=2)
             print(f"✅ Created personal policy manifest at {personal_manifest}")
 
-        _ensure_agent_uuid(
-            pa_home,
-            assume_yes=getattr(args, 'yes', False),
-            mint_fresh=getattr(args, 'mint_fresh_id', False),
-        )
+        try:
+            _ensure_agent_uuid(
+                pa_home,
+                assume_yes=getattr(args, 'yes', False),
+                mint_fresh=getattr(args, 'mint_fresh_id', False),
+            )
+        except EOFError:
+            # Its prompts, like the preamble's, have nobody to answer them unattended.
+            print("\n⚠️  Agent UUID not written: not interactive; rerun with --yes to accept it unattended")
 
         print(f"\n📍 PA Home: {pa_home}")
         print(f"📍 Personal Policies: {personal_policies_dir}")
-        print(f"\nAgent initialization complete!")
-
-        return 0
-
-    except Exception as e:
-        print(f"Error during agent initialization: {e}")
-        return 1
+        return Result("preamble", status, str(claude_md_path))
 
 
 def cmd_agent_init_auth_token(args: argparse.Namespace) -> int:
@@ -3105,6 +3516,9 @@ def cmd_policy_list(args: argparse.Namespace) -> int:
         else:
             print("All Policies")
         print("=" * 50)
+        from .utils.manifest import extra_policy_roots
+        for root in extra_policy_roots():
+            print(f"  root {root.name}: {root.path} (MACEFF_POLICY_ROOTS; read as {root.name}:<policy>)")
 
         if not policies:
             # "None found" and "cannot look" are different facts, and reporting
@@ -3655,9 +4069,15 @@ def cmd_mode_show(args: argparse.Namespace) -> int:
     print()
     print("Idle Detection:")
     try:
+        from .pd.monitor_unit import declared_monitor_unit
         from .transcript_monitor.daemon import is_running as tm_is_running
-        tm_running = tm_is_running()
-        print(f"  Transcript Monitor: {'✅ running' if tm_running else '⏹️  stopped'}")
+        tm_unit = declared_monitor_unit()
+        # A unit's follow-mode monitor isn't in the per-session process read: the daemon reports it.
+        tm_running = tm_unit is not None or tm_is_running()
+        if tm_unit is not None:
+            print(f"  Transcript Monitor: primal daemon unit '{tm_unit}' (state: macf_tools pd status)")
+        else:
+            print(f"  Transcript Monitor: {'✅ running' if tm_running else '⏹️  stopped'}")
         if tm_running:
             print("  USER_IDLE detection: ✅ active (transcript monitor + prompt hook)")
         else:
@@ -3714,26 +4134,35 @@ def cmd_recommender_sample(args: argparse.Namespace) -> int:
 
 
 def cmd_mode_get(args: argparse.Namespace) -> int:
-    """Get current operating mode."""
+    """Get current operating mode, and the work mode beside it.
+
+    The work mode comes from the resolver the dashboard reads, so the two cannot
+    disagree; it was missing here, so the instrument the preamble names for reading
+    one's stance could not tell an unset work mode from an unreported one
+    (cversek/MacEff#846)."""
     from .modes import detect_auto_mode
+    from .modes.detection import _get_current_work_mode
 
     try:
         session_id = get_current_session_id()
         enabled, source = detect_auto_mode(session_id)
 
         mode = "AUTO_MODE" if enabled else "MANUAL_MODE"
+        work_mode = _get_current_work_mode()
 
         if getattr(args, 'json_output', False):
             data = {
                 "mode": mode,
                 "enabled": enabled,
                 "source": source,
+                "work_mode": work_mode,
                 "session_id": session_id
             }
             print(json.dumps(data, indent=2))
         else:
             print(f"Mode: {mode}")
             print(f"Source: {source}")
+            print(f"Work mode: {work_mode or '(unset)'}")
 
         return 0
 
@@ -3777,9 +4206,11 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
             else:
                 print("     reply tool. The hook trace is off, so your turn-final message")
                 print("     does NOT reach the channel (macf_tools channel telegram hook-trace).")
-            print("   • Ask-list commands (git push, gh pr create/merge, gh issue")
-            print("     create/close, git reset --hard, rm -r, docker teardown) — each")
-            print("     prompts at the empty CLI. Commit locally; HOLD pushes/PRs.")
+            print("   • Whatever the Ask list holds (git push, gh pr create/merge, gh issue")
+            print("     create/close, git reset --hard, rm -r, docker teardown, unless the")
+            print("     operator allowed it) — each prompts at the empty CLI, so it is denied.")
+            print("   What the settings let run without a prompt still runs: commit, push")
+            print("   your own branches, answer reviews.")
             print("   Communicate via the Telegram reply tool. The dashboard indicator")
             print("   clears when you return to the CLI; run `mode set USER_PRESENT`")
             print("   (or restart) to restore the denied permissions.")
@@ -3974,8 +4405,12 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
                     print("⚠️  Could not install AUTO_MODE ask permissions")
                 # Auto-start Transcript Monitor for idle detection
                 try:
+                    from .pd.monitor_unit import declared_monitor_unit
                     from .transcript_monitor.daemon import is_running as tm_is_running, start_daemon as tm_start
-                    if tm_is_running():
+                    tm_unit = declared_monitor_unit()
+                    if tm_unit is not None:
+                        print(f"✅ Transcript Monitor runs as primal daemon unit '{tm_unit}'")
+                    elif tm_is_running():
                         print("✅ Transcript Monitor already running")
                     else:
                         tm_start()
@@ -4043,45 +4478,16 @@ def cmd_events_show(args: argparse.Namespace) -> int:
 
 
 def cmd_events_history(args: argparse.Namespace) -> int:
-    """Display recent events from log."""
+    """The newest events, one readable line each, oldest first: ``events query --limit N``
+    with no filter (the same formatter, `macf.eventlog.reader`)."""
     from .agent_events_log import read_events
+    from .eventlog.reader import format_line, select
 
-    try:
-        limit = getattr(args, 'limit', 10)
-
-        print(f"Recent Events (last {limit})")
-        print("=" * 50)
-
-        events = list(read_events(limit=limit, reverse=True))
-
-        if not events:
-            print("No events found")
-            return 0
-
-        for event in events:
-            timestamp = event.get('timestamp', 0)
-            event_type = event.get('event', 'unknown')
-            breadcrumb = event.get('breadcrumb', 'N/A')
-
-            # Format timestamp
-            dt = datetime.fromtimestamp(timestamp, tz=_pick_tz())
-            time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
-
-            print(f"[{time_str}] {event_type}")
-            print(f"  Breadcrumb: {breadcrumb}")
-
-            # Show key data fields
-            data = event.get('data', {})
-            if data:
-                for key, value in data.items():
-                    print(f"  {key}: {value}")
-            print()
-
-        return 0
-
-    except Exception as e:
-        print(f"Error reading event history: {e}")
-        return 1
+    tz = _pick_tz()
+    today = datetime.now(tz=tz).date()
+    for event in select(read_events(limit=None, reverse=True), limit=getattr(args, "limit", 10) or 10):
+        print(format_line(event, tz, today))
+    return 0
 
 
 def cmd_events_analyze(args: argparse.Namespace) -> int:
@@ -4159,96 +4565,83 @@ def cmd_events_analyze(args: argparse.Namespace) -> int:
 
 
 def cmd_events_query(args: argparse.Namespace) -> int:
-    """Query events with filters."""
-    from .agent_events_log import query_events
+    """Read the event log as lines a person can follow (`macf.eventlog.reader`).
 
+    One line per event; ``--verbose`` prints every field, and ``--json`` one JSON line per event
+    for scripts. ``--event`` repeats and takes globs; ``--after`` and ``--before`` take 30m, 2h,
+    09:00, an ISO time or an epoch; ``--follow`` keeps printing new events until Ctrl+C. A query
+    with no bound reads the current cycle, and one bounded by time or a breadcrumb reads the whole
+    log, newest first, stopping where its bound says (``coding_standards`` §6.3, §6.4)."""
+    import json as _json
+    from .agent_events_log import _matches_filter, get_log_path, query_scope_for, read_events
+    from .eventlog.reader import follow, format_line, format_verbose, matches, parse_when, select
+
+    tz = _pick_tz()
     try:
-        # Build filter dict from args
-        filters = {}
+        after = parse_when(args.after, tz=tz) if getattr(args, "after", None) else None
+        before = parse_when(args.before, tz=tz) if getattr(args, "before", None) else None
+    except ValueError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 2
 
-        # Event type filter
-        if hasattr(args, 'event') and args.event:
-            filters['event_type'] = args.event
+    crumbs = {}
+    for key, attr in (("c", "cycle"), ("g", "git_hash"), ("s", "session"), ("p", "prompt")):
+        value = getattr(args, attr, None)
+        if value:
+            crumbs[key] = int(value) if key == "c" else value
+    filters = {"breadcrumb": crumbs} if crumbs else {}
+    if after is not None:
+        filters["since"] = after
+    if before is not None:
+        filters["until"] = before          # any time bound reads the whole log, not this cycle
+    command = getattr(args, "command", None)
 
-        # Breadcrumb filters
-        breadcrumb_filters = {}
+    def keep(event: dict) -> bool:
+        if crumbs and not _matches_filter(event, {"breadcrumb": crumbs}):
+            return False
+        if command:
+            data = event.get("data") or {}
+            argv = data.get("argv") if isinstance(data, dict) else None
+            if event.get("event") != "cli_command_invoked" or command not in " ".join(map(str, argv or [])):
+                return False
+        return True
 
-        if hasattr(args, 'cycle') and args.cycle:
-            breadcrumb_filters['c'] = int(args.cycle)
+    patterns = list(getattr(args, "event", None) or [])
+    today = datetime.now(tz=tz).date()
+    as_json, verbose = getattr(args, "json_output", False), getattr(args, "verbose", False)
 
-        if hasattr(args, 'git_hash') and args.git_hash:
-            breadcrumb_filters['g'] = args.git_hash
+    def show(event: dict) -> None:
+        if as_json:
+            print(_json.dumps(event, default=str))
+        elif verbose:
+            print(format_verbose(event, tz, today))
+        else:
+            print(format_line(event, tz, today), flush=True)
 
-        if hasattr(args, 'session') and args.session:
-            breadcrumb_filters['s'] = args.session
+    # Where --follow starts, taken before the scan, so an event written while it runs is
+    # printed by one or the other, never lost between them.
+    log_path = get_log_path()
+    follow_from = os.path.getsize(log_path) if os.path.exists(log_path) else 0
+    events = select(read_events(limit=None, reverse=True, scope=query_scope_for(filters)),
+                    after=after, before=before, patterns=patterns,
+                    limit=getattr(args, "limit", None), keep=keep)
+    for event in events:
+        show(event)
+    if not events and not getattr(args, "follow", False):
+        print("no matching events", file=sys.stderr)
+    if getattr(args, "follow", False):
+        def keep_new(event: dict) -> bool:
+            stamp = event.get("timestamp")
+            if before is not None and isinstance(stamp, (int, float)) and stamp > before:
+                return False
+            return (not patterns or matches(str(event.get("event", "")), patterns)) and keep(event)
 
-        if hasattr(args, 'prompt') and args.prompt:
-            breadcrumb_filters['p'] = args.prompt
-
-        if breadcrumb_filters:
-            filters['breadcrumb'] = breadcrumb_filters
-
-        # Timestamp filters
-        if hasattr(args, 'after') and args.after:
-            filters['since'] = float(args.after)
-
-        if hasattr(args, 'before') and args.before:
-            filters['until'] = float(args.before)
-
-        # Execute query
-        results = query_events(filters)
-
-        # Post-filter by command if specified (for cli_command_invoked events)
-        command_filter = getattr(args, 'command', None)
-        if command_filter:
-            filtered = []
-            for event in results:
-                if event.get('event') == 'cli_command_invoked':
-                    argv = event.get('data', {}).get('argv', [])
-                    cmd_str = ' '.join(argv)
-                    if command_filter in cmd_str:
-                        filtered.append(event)
-            results = filtered
-
-        print(f"Query Results: {len(results)} events")
-        print("=" * 50)
-
-        if not results:
-            print("No matching events found")
+        try:
+            for event in follow(log_path, keep_new, start=follow_from):
+                show(event)
+        except KeyboardInterrupt:
             return 0
-
-        verbose = getattr(args, 'verbose', False)
-
-        for event in results:
-            timestamp = event.get('timestamp', 0)
-            event_type = event.get('event', 'unknown')
-            breadcrumb = event.get('breadcrumb', 'N/A')
-            data = event.get('data', {})
-
-            # Format timestamp
-            dt = datetime.fromtimestamp(timestamp, tz=_pick_tz())
-            time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
-
-            print(f"[{time_str}] {event_type}")
-            print(f"  Breadcrumb: {breadcrumb}")
-
-            # Show command details for cli_command_invoked
-            if event_type == 'cli_command_invoked' and 'argv' in data:
-                argv = data.get('argv', [])
-                print(f"  Command: {' '.join(argv)}")
-
-            # Verbose mode: show all data
-            if verbose and data:
-                import json
-                print(f"  Data: {json.dumps(data, indent=4)}")
-
-            print()
-
-        return 0
-
-    except Exception as e:
-        print(f"Error querying events: {e}")
-        return 1
+    return 0
 
 
 def cmd_events_query_set(args: argparse.Namespace) -> int:
@@ -5881,6 +6274,8 @@ def cmd_task_metadata_set(args: argparse.Namespace) -> int:
                 task_type=new_mtmd.task_type,
                 title=title_for_recompose,
                 parent_id=new_mtmd.parent_id,
+                plan_ca_ref=new_mtmd.plan_ca_ref,
+                custom=new_mtmd.custom or None,
             )
             updates["subject"] = new_subject
 
@@ -6322,6 +6717,18 @@ def cmd_task_store_init(args: argparse.Namespace) -> int:
         return 1
     print(f"{'✓ Already' if was == 'home' else '✅ Set'}: "
           f"task_store.mode = home  ({config_path})")
+
+    # The sentinel was seeded only by the first `task create`, so a provisioned
+    # store had none and `task tree` failed until something was created in it
+    # (cversek/MacEff#842).
+    from .task.create import SENTINEL_TASK_ID, _ensure_sentinel_task
+    seeded = not (store / f"{SENTINEL_TASK_ID}.json").exists()
+    try:
+        _ensure_sentinel_task(store)
+    except OSError as e:
+        print(f"❌ Could not write sentinel #{SENTINEL_TASK_ID} in {store}: {e}", file=sys.stderr)
+        return 1
+    print(f"{'✅ Seeded' if seeded else '✓ Present'}: sentinel #{SENTINEL_TASK_ID}")
 
     _ensure_store_gitignored_for_migration(store)
     return 0
@@ -7954,7 +8361,11 @@ def cmd_task_start(args: argparse.Namespace) -> int:
             already = {}
         policies = get_policies_for_task_type(task_type)
         for policy_name in policies:
-            policy_path = find_policy_file(policy_name)
+            try:
+                policy_path = find_policy_file(policy_name)
+            except LookupError as e:        # ambiguous across extra roots (#592)
+                print(f"⚠️ MACF: {e}", file=sys.stderr)
+                continue
             if not policy_path:
                 continue
             if policy_name in already:
@@ -8183,7 +8594,12 @@ def cmd_task_note(args: argparse.Namespace) -> int:
 
 
 def cmd_task_block(args: argparse.Namespace) -> int:
-    """Add blocking relationship: task blocks another task."""
+    """Add blocking relationship: task blocks another task.
+
+    Written as the forward edge, on the blocked task's ``blockedBy``: the one ``task start``
+    enforces and ``task get`` shows from both ends (``dependents_of`` derives the inverse).
+    Writing ``blocks`` on the blocking task instead left the blocked task showing no
+    blocker and starting freely (cversek/MacEff#688)."""
     from .task import TaskReader, update_task_file
     from .utils.breadcrumbs import get_breadcrumb
 
@@ -8206,15 +8622,12 @@ def cmd_task_block(args: argparse.Namespace) -> int:
         print(f"❌ Target task #{target_id} not found")
         return 1
 
-    # Get current blocks array
-    current_blocks = task.blocks or []
-    if str(target_id) in current_blocks or target_id in current_blocks:
+    current = target.blocked_by or []
+    if str(task_id) in [str(b).lstrip("#") for b in current]:
         print(f"⚠️  Task #{task_id} already blocks #{target_id}")
         return 0
 
-    # Add to blocks
-    new_blocks = current_blocks + [str(target_id)]
-    update_task_file(task_id, {"blocks": new_blocks})
+    update_task_file(target_id, {"blockedBy": current + [str(task_id)]})
 
     print(f"✅ Task #{task_id} now blocks #{target_id}")
     print(f"   Breadcrumb: {get_breadcrumb()}")
@@ -8222,7 +8635,8 @@ def cmd_task_block(args: argparse.Namespace) -> int:
 
 
 def cmd_task_unblock(args: argparse.Namespace) -> int:
-    """Remove blocking relationship."""
+    """Remove blocking relationship: the forward edge on the blocked task, and the ``blocks``
+    entry the command used to write on the blocking task, if one is still there."""
     from .task import TaskReader, update_task_file
     from .utils.breadcrumbs import get_breadcrumb
 
@@ -8239,15 +8653,18 @@ def cmd_task_unblock(args: argparse.Namespace) -> int:
         print(f"❌ Task #{task_id} not found")
         return 1
 
-    current_blocks = task.blocks or []
-    # Check both str and int forms
-    if str(target_id) not in current_blocks and target_id not in current_blocks:
+    target = reader.read_task(target_id)
+    current = (target.blocked_by or []) if target else []
+    edge = str(task_id) in [str(b).lstrip("#") for b in current]
+    stale = str(target_id) in [str(b) for b in (task.blocks or [])]
+    if not edge and not stale:
         print(f"⚠️  Task #{task_id} does not block #{target_id}")
         return 0
 
-    # Remove from blocks
-    new_blocks = [b for b in current_blocks if str(b) != str(target_id)]
-    update_task_file(task_id, {"blocks": new_blocks})
+    if edge:
+        update_task_file(target_id, {"blockedBy": [b for b in current if str(b).lstrip("#") != str(task_id)]})
+    if stale:
+        update_task_file(task_id, {"blocks": [b for b in task.blocks if str(b) != str(target_id)]})
 
     print(f"✅ Task #{task_id} no longer blocks #{target_id}")
     print(f"   Breadcrumb: {get_breadcrumb()}")
@@ -8376,11 +8793,22 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
             expanded.append(_sid)
             _readded.append(_sid)
 
+    from .task.scope import get_scope_state
+    _kept_paused = [t for t, st in get_scope_state().items() if st == "paused" and t in expanded]
+
     result = set_scope(expanded, parent_expanded=len(expanded) > len(raw_ids),
                        expanded_from=raw_ids[0] if len(raw_ids) == 1 else None)
 
+    for _done in result.get("skipped_completed", []):
+        print(f"⚠️  Task #{_done} is done (completed or archived), so it was not scoped")
+    if not result["success"] and not result["tasks_scoped"]:
+        print("❌ No open tasks to scope")
+        return 1
     if result["success"]:
-        print(f"✅ Scoped {len(expanded)} task(s):")
+        print(f"✅ Scoped {len(result['tasks_scoped'])} task(s):")
+        for _pid in _kept_paused:
+            # Re-listing a paused task does not answer what it waits on; unpause is explicit.
+            print(f"   ⏸️  #{_pid} stays paused (macf_tools task scope unpause {_pid} to resume it)")
         for _sid in _readded:
             # Reported, never silent: the caller did not ask for this task and
             # should see that the sprint mode-lock is what put it back.
@@ -8392,7 +8820,7 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
             marker = "📌" if is_parent else "  └─"
             print(f"   {marker} #{tid} {subject}")
         if result["parent_expanded"]:
-            print(f"   (parent #{result['expanded_from']} expanded to {len(expanded) - len(raw_ids)} children)")
+            print(f"   (parent #{result['expanded_from']} expanded to {len([t for t in result['tasks_scoped'] if t not in raw_ids])} children)")
         print(f"   Breadcrumb: {get_breadcrumb()}")
 
         # Show full scope state after adding
@@ -8804,27 +9232,24 @@ def _gh_issue_closeout(task_id: int, mtmd, args, breadcrumb: str) -> None:
 
     comment_body = "\n".join(comment_lines)
 
-    # Post comment
-    try:
-        comment_result = _subprocess.run(
-            ["gh", "issue", "comment", str(gh_issue_number),
-             "--repo", repo_slug,
-             "--body", comment_body],
-            capture_output=True, text=True, timeout=15
-        )
-        if comment_result.returncode == 0:
-            print(f"   📝 Close-out comment posted to {repo_slug}#{gh_issue_number}")
-        else:
-            print(f"   ⚠️  Failed to post comment: {comment_result.stderr.strip()}")
-    except FileNotFoundError:
-        print("   ⚠️  gh CLI not found — skipping GitHub comment")
-    except _subprocess.TimeoutExpired:
-        print("   ⚠️  gh CLI timed out — skipping GitHub comment")
+    # Post the close-out as this agent, through the publishing checks, when it says
+    # something (#582): never through whatever gh account happens to be active.
+    from . import closeout
+    choice = getattr(args, "closeout", None)
+    is_open, closed_by = closeout.item_state(repo_slug, gh_issue_number)
+    env = closeout.post("issue", gh_issue_number, repo_slug, comment_body,
+                        choice=choice if choice in (True, False) else None, is_open=is_open,
+                        closed_by=closed_by, signed=_public_attribution_enabled())
 
     # Status-aware closure (GH issue #79): close the upstream issue only when
     # the fix has actually landed (at least one --commit hash is in a merged
     # PR). Otherwise leave it open and let the natural PR-merge auto-close
     # path take over once the user reviews+merges the PR.
+    # --no-closeout means the issue is left as it is, not only uncommented: a task can end
+    # here (handed off, say) while its issue stays open for its owner.
+    if choice is False:
+        print(f"   ℹ️  Issue {repo_slug}#{gh_issue_number} left as it is (--no-closeout)")
+        return
     fix_landed = _commit_landed_in_merged_pr(repo_slug, list(args.commit or []))
     if not fix_landed:
         print(
@@ -8833,6 +9258,17 @@ def _gh_issue_closeout(task_id: int, mtmd, args, breadcrumb: str) -> None:
             f"GitHub will auto-close on PR merge if the PR body links the issue."
         )
         return
+    if is_open is False:
+        print(f"   ℹ️  Issue {repo_slug}#{gh_issue_number} already closed")
+        return
+
+    # Closing is an act in someone's name too, so it takes the agent's identity even
+    # when no comment was posted.
+    if env is None:
+        env, how = closeout.agent_env(repo_slug)
+        if env is None:
+            print(f"   ⚠️  Issue {repo_slug}#{gh_issue_number} left OPEN: no identity of this agent's own ({how})")
+            return
 
     # Close issue
     try:
@@ -8840,7 +9276,7 @@ def _gh_issue_closeout(task_id: int, mtmd, args, breadcrumb: str) -> None:
             ["gh", "issue", "close", str(gh_issue_number),
              "--repo", repo_slug,
              "--reason", "completed"],
-            capture_output=True, text=True, timeout=15
+            capture_output=True, text=True, timeout=15, env=env
         )
         if close_result.returncode == 0:
             print(f"   🔒 Issue {repo_slug}#{gh_issue_number} closed")
@@ -8910,12 +9346,17 @@ def _autowork_counts(task, reader, scoped_ids):
     reported 0 learnings whatever had been curated.
 
     Ideas: 💡 notes on the task itself, plus those written on the tasks in its
-    scope since it began. Learnings: files in the learnings directory named for
-    a moment at or after its creation, or None when that cannot be counted (no
-    creation time, no directory), so the report says so instead of 0.
+    scope since it began. A 💡 note is one that opens with the lightbulb, after
+    an optional work-mode tag ("SPRINT: 💡 ...", the shape `task note --idea`
+    writes); a note that only mentions it is not one. Learnings: files in the
+    learnings directory named for a moment at or after its creation, or None
+    when that cannot be counted (no creation time, no directory), so the
+    report says so instead of 0.
     """
     from datetime import datetime as _dt
     from .utils.breadcrumbs import parse_breadcrumb
+
+    idea_note = re.compile(r"(?:[A-Z][A-Z_/]*: )?💡 ")
 
     def _when(breadcrumb):
         parsed = parse_breadcrumb(breadcrumb) if isinstance(breadcrumb, str) else None
@@ -8924,7 +9365,7 @@ def _autowork_counts(task, reader, scoped_ids):
     def _ideas(t, since=None):
         n = 0
         for u in ((getattr(t.mtmd, "updates", None) or []) if t is not None and t.mtmd else []):
-            if "💡 " not in (getattr(u, "description", "") or ""):
+            if not idea_note.match(getattr(u, "description", "") or ""):
                 continue
             if since is not None:
                 at = _when(getattr(u, "breadcrumb", None))
@@ -9019,17 +9460,18 @@ def _gh_pr_closeout(task_id: int, mtmd, args, breadcrumb: str) -> str:
 
     # Ground-truth outcome from GitHub (live), plus the merge commit and CI
     # conclusion (statusCheckRollup folded into the same call — no extra request).
-    outcome, merge_commit, ci_red = "OPEN", None, False
+    outcome, merge_commit, ci_red, merged_by = "OPEN", None, False, None
     try:
         r = _subprocess.run(
             ["gh", "pr", "view", str(gh_pr_number), "--repo", repo_slug,
-             "--json", "state,mergeCommit,statusCheckRollup"],
+             "--json", "state,mergeCommit,statusCheckRollup,mergedBy"],
             capture_output=True, text=True, timeout=15)
         if r.returncode == 0:
             d = _json.loads(r.stdout)
             state = d.get("state", "OPEN")
             outcome = "MERGED" if state == "MERGED" else ("CLOSED_UNMERGED" if state == "CLOSED" else "OPEN")
             merge_commit = (d.get("mergeCommit") or {}).get("oid")
+            merged_by = (d.get("mergedBy") or {}).get("login")
             _bad = {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE"}
             for chk in (d.get("statusCheckRollup") or []):
                 if (chk.get("conclusion") or chk.get("state") or "").upper() in _bad:
@@ -9067,16 +9509,16 @@ def _gh_pr_closeout(task_id: int, mtmd, args, breadcrumb: str) -> str:
             agent_name = "unknown"
         comment_lines += ["", "---", f"*[{agent_name}: task#{task_id} {breadcrumb}]*"]
     comment = "\n".join(comment_lines)
-    try:
-        cr = _subprocess.run(
-            ["gh", "pr", "comment", str(gh_pr_number), "--repo", repo_slug, "--body", comment],
-            capture_output=True, text=True, timeout=15)
-        if cr.returncode == 0:
-            print(f"   📝 Close-out comment posted to {repo_slug}#{gh_pr_number}")
-        else:
-            print(f"   ⚠️  Failed to post PR comment: {cr.stderr.strip()}")
-    except (FileNotFoundError, _subprocess.TimeoutExpired):
-        print("   ⚠️  gh CLI unavailable — skipping PR comment")
+    # As this agent, through the publishing checks, and by default not on a pull request
+    # someone else merged or closed (#582).
+    from . import closeout
+    choice = getattr(args, "closeout", None)
+    # A pull request closed without merging names no merger; its closer is on the issue record.
+    closed_by = closeout.item_state(repo_slug, gh_pr_number)[1] if outcome == "CLOSED_UNMERGED" else merged_by
+    closeout.post("pr", gh_pr_number, repo_slug, comment,
+                  choice=choice if choice in (True, False) else None,
+                  is_open=None if outcome == "UNKNOWN" else outcome == "OPEN",
+                  closed_by=closed_by, signed=_public_attribution_enabled())
 
     # Cascade to linked GH_ISSUE tasks (only when merged).
     linked_tasks = _gh_pr_find_linked_issue_tasks(linked_issues, repo_slug) if outcome == "MERGED" else []
@@ -9513,6 +9955,7 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         })
 
         # Auto-complete scoped task if it's in the active scope
+        scope_result = {}
         try:
             from .task.scope import complete_scoped_task
             scope_result = complete_scoped_task(str(task_id))
@@ -9532,11 +9975,20 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         # at their real status; they are not fake-completed). Paused members are
         # released here too: completing a member never clears them away, since a
         # paused task is still open, so its owner's completion is what lets go.
-        if task_type in ("SPRINT", "PLAY_TIME"):
+        # Only the scope's owner lets go, though: a sprint whose scope another
+        # sprint has since replaced releases nothing, and neither does one that
+        # shares the scope with a sprint or play time still running in it.
+        # Completing an old sprint once emptied the scope a newer sprint had just
+        # taken over, silently ending that sprint's mode lock.
+        if task_type in ("SPRINT", "PLAY_TIME") and scope_result.get("success"):
             try:
                 from .task.scope import get_scope_check, clear_scope
+                from .task.sprint_gate import get_sprint_play_time_in_scope
                 _check = get_scope_check()
-                if _check.get("active_count", 0) + _check.get("paused_count", 0) > 0:
+                _held = get_sprint_play_time_in_scope()
+                if _held.get("sprint_task") or _held.get("play_time_task"):
+                    print("   ↪️  Another sprint or play time still holds the scope; nothing released")
+                elif _check.get("active_count", 0) + _check.get("paused_count", 0) > 0:
                     clr = clear_scope()
                     if clr.get("success"):
                         swept = len(set(
@@ -10973,7 +11425,17 @@ def cmd_proxy_log(args: argparse.Namespace) -> int:
 
 
 def cmd_search_service_start(args: argparse.Namespace) -> int:
-    """Start the search service daemon."""
+    """Start the search service daemon, unless a primal daemon runs it as a declared unit."""
+    from macf.search_service.declared import find_declared_search_unit
+    declared = find_declared_search_unit()
+    if declared is not None:
+        print(f"❌ The search service runs under a primal daemon as {declared.describe()}, "
+              f"so this command starts none: a copy started here would take the port and leave "
+              f"the supervised unit failing to bind.", file=sys.stderr)
+        print("   See whether it is up with: macf_tools pd status", file=sys.stderr)
+        print("   Its daemon starts and restarts it; to run it by hand instead, remove the unit "
+              "from the declaration first.", file=sys.stderr)
+        return 1
     try:
         from macf.search_service import SearchService, is_service_running
         from macf.search_service.retrievers.policy_retriever import PolicyRetriever
@@ -11056,8 +11518,10 @@ def cmd_search_service_status(args: argparse.Namespace) -> int:
 
             if running:
                 print(f"✅ Search service is running")
-                print(f"   PID: {pid}")
+                print(f"   PID: {pid if pid is not None else 'unknown'}")
                 print(f"   Port: {port}")
+                if status.get('note'):
+                    print(f"   Note: {status['note']}")
             else:
                 print("⚠️  Search service is not running")
                 print(f"   Start with: macf_tools search-service start")
@@ -11149,7 +11613,12 @@ def cmd_transcripts_list(args: argparse.Namespace) -> int:
 # -------- transcript-monitor handlers --------
 
 def _cmd_tm_start(args) -> int:
+    from .pd.monitor_unit import declared_monitor_unit, declared_refusal
     from .transcript_monitor.daemon import start_daemon
+    unit = declared_monitor_unit()
+    if unit is not None:
+        print(declared_refusal(unit), file=sys.stderr)
+        return 1
     return start_daemon(
         foreground=getattr(args, "foreground", False),
         poll_interval=getattr(args, "interval", 1.0),
@@ -11223,8 +11692,16 @@ def _cmd_inject(args):
     mid-turn). The canonical use is an operator, away from the keyboard,
     directing the agent to compact itself.
     """
-    from .supervisor import send_slash_to_self
-    return send_slash_to_self(args.command, target=getattr(args, "target", "") or "")
+    from .compact_followup import DEFAULT_TEXT
+    from .supervisor import clear_own_input, send_slash_to_self
+    if args.command == "clear-input":
+        if getattr(args, "target", ""):
+            print("[inject] clear-input acts only on this agent's own pane; --target is "
+                  "refused.", file=sys.stderr)
+            return 1
+        return clear_own_input(getattr(args, "expect", "") or "")
+    then = None if getattr(args, "no_then", False) else (getattr(args, "then", None) or DEFAULT_TEXT)
+    return send_slash_to_self(args.command, target=getattr(args, "target", "") or "", then=then)
 
 
 _HOOK_TRACE_ON_TEXT = (
@@ -11394,6 +11871,7 @@ def cmd_idea_graph(args: argparse.Namespace) -> int:
         print(json.dumps({
             **graph["stats"],
             "top5": [{"id": i, "degree": d, "title": graph["ideas"][i].get("title", "")} for i, d in top5],
+            "isolated": [{"id": i, "title": graph["ideas"][i].get("title", "")} for i in graph["isolated"]],
         }, indent=2))
         return 0
 
@@ -11424,7 +11902,17 @@ def cmd_knowledge_query(args: argparse.Namespace) -> int:
     """Query knowledge graph by concept, node ID, or keyword."""
     from .knowledge_web import query_knowledge_web, format_query_result
 
-    result = query_knowledge_web(args.term)
+    terms = list(getattr(args, "term", None) or [])
+    like = getattr(args, "like", None)
+    if bool(terms) == bool(like):
+        print("❌ give one or more terms, or --like NODE, not both")
+        return 2
+    try:
+        kwargs = {} if args.min_idf is None else {"min_idf": args.min_idf}
+        result = query_knowledge_web(terms, like=like, any_term=getattr(args, "any_term", False), **kwargs)
+    except ValueError as e:
+        print(f"❌ {e}")
+        return 2
 
     # Filter by node class. A checkpoint's claims expire and a learning's do
     # not; a query asking "what do I know about X" wants durable insight, while
@@ -11504,7 +11992,15 @@ def cmd_knowledge_doctor(args: argparse.Namespace) -> int:
             print(f"❌ {e}")
             return 2
     view = "all" if getattr(args, "all_orphans", False) else "summary"
-    dx = examine(orphans=view, since=since, orphan_type=getattr(args, "orphan_type", None))
+    orphan_type = getattr(args, "orphan_type", None)
+    dx = examine(orphans=view, since=since, orphan_type=orphan_type)
+    if orphan_type and orphan_type not in dx.chart.scope:
+        # A type the doctor never examines would match nothing, and the report
+        # would come back unchanged, as if the filter had run and found everything.
+        print(f"❌ the doctor does not examine {orphan_type!r}. It examines: {', '.join(dx.chart.scope)}")
+        if orphan_type.rstrip("s") == "idea":
+            print("   Ideas live in their own store: list the isolated ones with macf_tools idea graph --json")
+        return 2
     if getattr(args, "json_output", False):
         print(json.dumps(dx.to_dict(), indent=2, default=str))
     else:
@@ -11545,10 +12041,46 @@ def cmd_knowledge_status(args: argparse.Namespace) -> int:
         "acute": counts.get(Severity.ACUTE, 0), "chronic": counts.get(Severity.CHRONIC, 0),
         "gaps": len(detect_web_gaps(kg)),
     }
+    # Folders the opt-out marker takes out of the web: named, never only counted.
+    # The doctor above reports them as notes; status carries the same list.
+    from .knowledge_doctor import excluded_folders
+    from .utils.paths import find_agent_home
+    home = find_agent_home()
+    status["opted_out"] = excluded_folders(home) if home else []
     if getattr(args, "json_output", False):
         print(json.dumps(status, indent=2))
     else:
         print("🕸️ " + "  ".join(f"{k}={v}" for k, v in status.items()))
+    return 0
+
+
+def cmd_knowledge_eval(args: argparse.Namespace) -> int:
+    """Score the knowledge query against relevance the agent's past selves wrote."""
+    import hashlib
+
+    from .knowledge_eval import (EvalRefused, Corpus, build_snapshot, evaluate, format_report,
+                                 load_snapshot, save_snapshot, snapshot_bytes)
+
+    if args.snapshot:
+        try:
+            snap, digest = load_snapshot(Path(args.snapshot))
+        except (OSError, ValueError) as e:
+            print(f"❌ cannot read the snapshot {args.snapshot}: {e}")
+            return 2
+    else:
+        snap = build_snapshot(exclude=args.exclude or ())
+        digest = hashlib.sha256(snapshot_bytes(snap)).hexdigest()
+    if args.save_snapshot:
+        digest = save_snapshot(snap, Path(args.save_snapshot))
+        print(f"📸 snapshot {digest[:12]} saved to {args.save_snapshot} (owner-only: it holds private text)")
+    try:
+        out = evaluate(Corpus(snap, digest), args.rankers or ["random", "today", "idf", "like"],
+                       sources=args.labels or ("xref", "citations", "same_subject"), which=args.split,
+                       seed=args.split_seed, compare=tuple(args.compare) if args.compare else None)
+    except EvalRefused as e:
+        print(f"❌ refused: {e}")
+        return 2
+    print(json.dumps(out, indent=2) if args.json_output else format_report(out))
     return 0
 
 
@@ -11581,7 +12113,8 @@ def cmd_learnings_index_add(args: argparse.Namespace) -> int:
     """File a learning under its cluster in the master index."""
     from .learnings_index import add_entry
     try:
-        ok, msg = add_entry(args.file, args.cluster, hook=args.hook or "")
+        ok, msg = add_entry(args.file, args.cluster, hook=args.hook or "",
+                            new_cluster=getattr(args, "new_cluster", False))
     except OSError as e:
         print(f"❌ could not update the index: {e}")
         return 1
@@ -11594,7 +12127,7 @@ def cmd_learnings_index_verify(args: argparse.Namespace) -> int:
     from .diagnostics import Severity, format_diagnosis
     from .learnings_index import verify
     from pathlib import Path as _Path
-    dx = verify(memory_file=_Path(args.memory).expanduser() if args.memory else None)
+    dx = verify(memory_file=Path(args.memory).expanduser() if args.memory else None)
     if getattr(args, "json_output", False):
         print(json.dumps(dx.to_dict(), indent=2, default=str))
     else:
@@ -11789,6 +12322,33 @@ def _build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--repeat", type=float, default=60.0, metavar="MIN", help="minutes between reminders while it still waits (default 60)")
     pp.add_argument("--dry-run", action="store_true", help="print the messages instead of sending them; the state file is not written")
     pp.set_defaults(func=cmd_permissions_watch)
+    pp = perm_sub.add_parser(
+        "history",
+        help="the permission dialogs this agent met, read from its event log: when, how long each waited "
+             "(until the session moved on; an approved command adds its run time), whether it then ran, "
+             "and the ask rule of today's settings that matches it",
+    )
+    pp.add_argument("--days", type=float, default=7.0, metavar="N", help="how far back to read (default 7)")
+    pp.add_argument("--by-rule", action="store_true", help="one line per matching ask rule: dialogs, total and longest wait")
+    pp.add_argument("--include-questions", action="store_true", help="also list question dialogs (AskUserQuestion, ExitPlanMode)")
+    pp.add_argument("--json", action="store_true")
+    pp.set_defaults(func=cmd_permissions_history)
+    pp = perm_sub.add_parser(
+        "list", aliases=["rules"],
+        help="the permission rules in force for this session, deny, ask and allow, each with its settings "
+             "file: what would stop at a dialog before you run it",
+    )
+    pp.add_argument("--kind", choices=("deny", "ask", "allow"), default=None, help="only rules of this kind")
+    pp.add_argument("--json", action="store_true")
+    pp.set_defaults(func=cmd_permissions_list)
+    pp = perm_sub.add_parser(
+        "check",
+        help="would this command stop at a dialog? Names the rule and the part of a chain that matches it; "
+             "exit 0 runs, 1 asks, 2 denied",
+    )
+    pp.add_argument("command", help="the command, quoted whole, as you would run it")
+    pp.add_argument("--tool", default="Bash", help="the tool the call is for (default Bash)")
+    pp.set_defaults(func=cmd_permissions_check)
 
     # New consciousness commands
     list_parser = sub.add_parser("list", help="list consciousness artifacts")
@@ -11853,19 +12413,28 @@ def _build_parser() -> argparse.ArgumentParser:
 
     claude_config_sub.add_parser("init", help="set recommended defaults (verbose=true, autoCompact=false)").set_defaults(func=cmd_claude_config_init)
     claude_config_sub.add_parser("show", help="show current .claude.json configuration").set_defaults(func=cmd_claude_config_show)
+    idle_parser = claude_config_sub.add_parser("idle-compaction", help="report, or turn off, the client's own compaction of an idle session (MIS-0002-R126)")
+    idle_parser.add_argument("action", choices=["status", "off", "on"])
+    idle_parser.set_defaults(func=cmd_claude_config_idle_compaction)
 
     # Agent commands
     agent_parser = sub.add_parser("agent", help="agent initialization and management")
     agent_sub = agent_parser.add_subparsers(dest="agent_cmd")
 
-    agent_init_parser = agent_sub.add_parser("init", help="initialize agent with PA preamble")
-    agent_init_parser.add_argument("-y", "--yes", action="store_true", help="skip confirmation prompt")
+    agent_init_parser = agent_sub.add_parser(
+        "init", help="initialize the agent: its PA preamble and its persistent-layer stack (task store, "
+                     "primal daemon declaration, harness, MacEff channel, permissions, pd install)")
+    agent_init_parser.add_argument("-y", "--yes", action="store_true",
+                                   help="accept the preamble unattended: skip its confirmation prompt "
+                                        "(without it, a run with no terminal skips the preamble step)")
     agent_init_parser.add_argument(
         "--mint-fresh-id", action="store_true",
         help="mint a NEW agent UUID even if one already resolves from another "
              "scope (default is to transfer the existing identity, preserving "
              "the calling card)",
     )
+    from .agent_stack import add_arguments as _agent_stack_arguments
+    _agent_stack_arguments(agent_init_parser)
     agent_init_parser.set_defaults(func=cmd_agent_init)
 
     # AUTO_MODE auth token bootstrap (host / non-Docker installs) — #115
@@ -11966,6 +12535,9 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_generate.add_argument("--project-dir", metavar="DIR",
                                  help="directory the supervised session starts in; decides which "
                                       "conversation 'claude -c' resumes (default: MACEFF_PROJECT_DIR)")
+    harness_generate.add_argument("--remote-control", metavar="NAME",
+                                 help="Remote Control name the session's client is started with "
+                                      "(rendered as --remote-control NAME; default: none)")
     harness_generate.add_argument("--shell-prefix", metavar="NAME",
                                  help="short handle for the generated shell functions (default: the moniker half of the Calling Card)")
     harness_generate.add_argument(
@@ -11983,6 +12555,9 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_install.add_argument("--project-dir", metavar="DIR",
                                  help="directory the supervised session starts in; decides which "
                                       "conversation 'claude -c' resumes (default: MACEFF_PROJECT_DIR)")
+    harness_install.add_argument("--remote-control", metavar="NAME",
+                                 help="Remote Control name the session's client is started with "
+                                      "(rendered as --remote-control NAME; default: none)")
     harness_install.add_argument("--shell-prefix", metavar="NAME",
                                  help="short handle for the generated shell functions (default: the moniker half of the Calling Card)")
     harness_install.add_argument("--watchdog", action="store_true",
@@ -11996,16 +12571,61 @@ def _build_parser() -> argparse.ArgumentParser:
 
     harness_attach = harness_sub.add_parser(
         "attach", help="attach this terminal to the agent's supervised session")
-    harness_attach.add_argument("--agent", help="agent slug (default: resolved from identity)")
-    harness_attach.add_argument("--control", action="store_true",
-                                help="attach in tmux control mode (-CC), for iTerm2 on macOS")
+    harness_attach.add_argument("name", nargs="?",
+                                help="a card, uuid, moniker or unique prefix, here or on a declared "
+                                     "remote (default: this home's own agent)")
+    harness_attach.add_argument("--card", help="exactly this calling card, on this endpoint "
+                                               "(what a remote hand-off names)")
+    harness_attach.add_argument("--agent", help="session slug, as before (Moniker_uuid)")
+    harness_attach.add_argument("--control", action=argparse.BooleanOptionalAction, default=None,
+                                help="tmux control mode (-CC), for iTerm2 on macOS "
+                                     "(default: the remotes declaration's control)")
     harness_attach.add_argument("--read-only", action="store_true",
                                 help="observe without evicting other clients or taking the keyboard")
     harness_attach.set_defaults(func=cmd_harness_attach)
 
+    harness_list = harness_sub.add_parser(
+        "list", help="list every agent this endpoint can attach to: card, account, session "
+                     "kind and state, with a reason wherever one is unknown (read-only)")
+    harness_list.add_argument("--json", action="store_true",
+                              help="a list of objects, one per agent or unreadable home")
+    harness_list.add_argument("--verbose", "-v", action="store_true",
+                              help="say why each unknown field is unknown, and each row's detail")
+    harness_list.add_argument("--local", action="store_true",
+                              help="this endpoint only, without asking the declared remotes")
+    harness_list.set_defaults(func=cmd_harness_list)
+
     harness_status = harness_sub.add_parser("status", help="show harness unit and session state")
     harness_status.add_argument("--agent", help="agent slug")
     harness_status.set_defaults(func=cmd_harness_status)
+
+    harness_cutover = harness_sub.add_parser(
+        "cutover", help="print the plan for moving this agent's session onto its primal daemon "
+                        "(read-only: checks, steps and rollback for this host; changes nothing)")
+    harness_cutover.add_argument("--agent", help="agent slug (default: resolved from identity)")
+    harness_cutover.add_argument("--home", help="agent home directory (default: as macf_tools env finds it)")
+    harness_cutover.add_argument("--staged", help="the declaration with the session unit "
+                                                  "(default: <declaration>.cutover)")
+    harness_cutover.add_argument("--json", action="store_true", help="the plan as JSON")
+    harness_cutover.add_argument("--run", action="store_true",
+                                 help="carry the plan out: start it outside this session (a transient "
+                                      "systemd unit, or a one-shot launchd job on macOS), which rolls "
+                                      "back on any failure, and print where it logs")
+    harness_cutover.add_argument("--execute", action="store_true",
+                                 help="what the transient unit or launchd job runs: carry the plan out "
+                                      "here and now (refused inside a Claude Code session)")
+    harness_cutover.add_argument("--log", help="where --execute writes its progress")
+    harness_cutover.add_argument("--job-plist", help=argparse.SUPPRESS)   # the launchd job's own plist, removed when it ends
+    harness_cutover.set_defaults(func=cmd_harness_cutover)
+
+    harness_unit = harness_sub.add_parser(
+        "unit", help="run the agent's session as its primal daemon's session unit (the command a "
+                     "declaration names; it runs until the session ends)")
+    harness_unit.add_argument("--agent", help="agent slug (default: resolved from identity)")
+    harness_unit.add_argument("--home", help="agent home directory")
+    harness_unit.add_argument("--project-dir", help="where the session starts (default: the installed choice)")
+    harness_unit.add_argument("--no-proxy", action="store_true", help="never attach the API proxy")
+    harness_unit.set_defaults(func=cmd_harness_unit)
 
     harness_parser.set_defaults(func=cmd_harness_status)
 
@@ -12154,22 +12774,30 @@ def _build_parser() -> argparse.ArgumentParser:
     show_parser.set_defaults(func=cmd_events_show)
 
     # events history
-    history_parser = events_sub.add_parser("history", help="show recent events")
+    history_parser = events_sub.add_parser("history", help="the newest events, one readable line each")
     history_parser.add_argument("--limit", type=int, default=10,
                                help="number of events to show (default: 10)")
     history_parser.set_defaults(func=cmd_events_history)
 
     # events query
-    query_parser = events_sub.add_parser("query", help="query events with filters")
-    query_parser.add_argument("--event", help="filter by event type")
+    query_parser = events_sub.add_parser(
+        "query", help="read the event log: one line per event, filtered by name, time and breadcrumb")
+    query_parser.add_argument("--event", action="append", metavar="NAME",
+                              help="an event name or glob (pd_wake_*); repeat for several")
     query_parser.add_argument("--cycle", help="filter by cycle number")
     query_parser.add_argument("--git-hash", help="filter by git hash")
     query_parser.add_argument("--session", help="filter by session ID")
     query_parser.add_argument("--prompt", help="filter by prompt UUID")
-    query_parser.add_argument("--after", help="events after timestamp")
-    query_parser.add_argument("--before", help="events before timestamp")
+    query_parser.add_argument("--after", metavar="WHEN",
+                              help="events after a time: 30m, 2h, 7d, 09:00, an ISO time or an epoch")
+    query_parser.add_argument("--before", metavar="WHEN", help="events before a time, in the same forms")
+    query_parser.add_argument("--limit", type=int, metavar="N", help="only the newest N matching events")
+    query_parser.add_argument("--follow", "-f", action="store_true",
+                              help="keep printing matching events as they arrive, until Ctrl+C")
     query_parser.add_argument("--command", help="filter cli_command_invoked by command (e.g., 'policy read')")
-    query_parser.add_argument("--verbose", "-v", action="store_true", help="show full event data")
+    query_parser.add_argument("--verbose", "-v", action="store_true", help="every field of each event")
+    query_parser.add_argument("--json", dest="json_output", action="store_true",
+                              help="one JSON line per event, for scripts")
     query_parser.set_defaults(func=cmd_events_query)
 
     # events query-set
@@ -12438,8 +13066,10 @@ def _build_parser() -> argparse.ArgumentParser:
     phase_plan_group = task_create_phase_parser.add_mutually_exclusive_group(required=True)
     phase_plan_group.add_argument("--plan", dest="plan", help="inline plan description")
     phase_plan_group.add_argument("--plan-ca-ref", dest="plan_ca_ref", help="path to plan CA")
-    task_create_phase_parser.add_argument("--blocked-by", dest="blocked_by", nargs="+",
-                                          help="task IDs that block this phase (e.g., #50 51)")
+    task_create_phase_parser.add_argument("--blocked-by", dest="blocked_by", action="extend",
+                                          type=_task_id_list, metavar="ID[,ID...]",
+                                          help="a task that blocks this phase; repeat the flag or give "
+                                               "a comma list (e.g., --blocked-by 50,51)")
     task_create_phase_parser.add_argument("--json", dest="json", action="store_true",
                                           help="output as JSON")
     task_create_phase_parser.set_defaults(func=cmd_task_create_phase)
@@ -12730,6 +13360,11 @@ def _build_parser() -> argparse.ArgumentParser:
                                            "See autonomous_sprint.md §3.3.2 for acceptable vs unacceptable justifications.")
     task_complete_parser.add_argument("--cascade", action="store_true", default=False,
                                       help="GH_PR only: auto-complete linked GH_ISSUE tasks when the PR is merged")
+    closeout_choice = task_complete_parser.add_mutually_exclusive_group()
+    closeout_choice.add_argument("--closeout", dest="closeout", action="store_const", const=True, default=None,
+                                 help="GH_ISSUE/GH_PR: post the close-out even when someone else closed or merged the item")
+    closeout_choice.add_argument("--no-closeout", dest="closeout", action="store_const", const=False,
+                                 help="GH_ISSUE/GH_PR: complete without posting a close-out; a GH_ISSUE's issue is also left open")
     task_complete_parser.set_defaults(func=cmd_task_complete)
 
     # task block - add blocking relationship
@@ -13087,10 +13722,20 @@ def _build_parser() -> argparse.ArgumentParser:
     inject_parser = sub.add_parser(
         "inject",
         help="queue a slash command into this agent's own CC pane (e.g. inject compact)")
-    inject_parser.add_argument("command", help="slash command without the slash, e.g. 'compact'")
+    inject_parser.add_argument("command", help="slash command without the slash, e.g. 'compact'; "
+                                                "or 'clear-input' to empty this pane's input box "
+                                                "of framework text (with --expect)")
+    inject_parser.add_argument("--expect", default="", metavar="OPENING",
+                               help="for clear-input: the opening words of the text to clear; "
+                                    "nothing is pressed unless the box starts with them")
     inject_parser.add_argument("--target", default="",
                                help="supervisor name/pid to target directly "
                                     "(default: self-resolve from this session id)")
+    inject_parser.add_argument("--then", default=None, metavar="TEXT",
+                               help="for compact: the prompt typed into this pane once the "
+                                    "compaction has finished (default: a short recovery prompt)")
+    inject_parser.add_argument("--no-then", action="store_true",
+                               help="for compact: type nothing after the compaction")
     inject_parser.set_defaults(func=lambda args: _cmd_inject(args))
 
     # channel: settings for the channels the operator reads (GH #477)
@@ -13235,6 +13880,12 @@ def _build_parser() -> argparse.ArgumentParser:
     from .roles.cli import add_role_parser
     add_role_parser(sub)
 
+    from .pd.cli import add_pd_parser
+    add_pd_parser(sub)
+
+    from .ids.cli import add_ids_parser
+    add_ids_parser(sub)
+
     idea_parser = sub.add_parser("idea", help="ideas — prospective knowledge capture")
     idea_sub = idea_parser.add_subparsers(dest="idea_cmd")
 
@@ -13313,8 +13964,18 @@ def _build_parser() -> argparse.ArgumentParser:
     kg_graph.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
     kg_graph.set_defaults(func=cmd_knowledge_graph)
 
-    kg_query = knowledge_sub.add_parser("query", help="query subgraph by concept, node ID, or keyword")
-    kg_query.add_argument("term", help="concept name, node ID (#007), or keyword")
+    kg_query = knowledge_sub.add_parser(
+        "query", help="ranked results for concepts, node IDs or keywords, or for what bears on a node",
+        description=("Results are ranked by the summed IDF of the query concepts they carry, plus how "
+                     "strongly they tie into the match through specific concepts; neighbours come in "
+                     "only through concepts with IDF at least --min-idf. Several terms match nodes that "
+                     "answer every term (--any: any of them). See the scholarship policy on ordering."))
+    kg_query.add_argument("term", nargs="*", help="concept names, node IDs (#007) or keywords")
+    kg_query.add_argument("--like", metavar="NODE", help="what bears on this node: its concepts are the query")
+    kg_query.add_argument("--any", dest="any_term", action="store_true",
+                          help="with several terms, match nodes that answer any of them")
+    kg_query.add_argument("--min-idf", type=float, default=None, metavar="T",
+                          help="admit a neighbour only through a concept this specific (default: chosen by knowledge eval)")
     kg_query.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
     kg_query.add_argument(
         "--class", dest="node_class",
@@ -13342,7 +14003,7 @@ def _build_parser() -> argparse.ArgumentParser:
     kg_doctor.add_argument("--since", metavar="DATE|Nd",
                            help="also list each orphan dated on or after this (2026-09-01, or 7d)")
     kg_doctor.add_argument("--type", dest="orphan_type", metavar="TYPE",
-                           help="list every orphan of one type (the bulk pass)")
+                           help="list every orphan of one type, and no other type (the bulk pass)")
     kg_doctor.add_argument("--all", dest="all_orphans", action="store_true",
                            help="list every orphan individually instead of one line per type")
     kg_doctor.set_defaults(func=cmd_knowledge_doctor)
@@ -13352,6 +14013,37 @@ def _build_parser() -> argparse.ArgumentParser:
     kg_status.add_argument("--json", dest="json_output", action="store_true",
                            help="machine-readable output")
     kg_status.set_defaults(func=cmd_knowledge_status)
+
+    kg_eval = knowledge_sub.add_parser(
+        "eval", help="score the query against relevance your own artifacts wrote, on a sealed split",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Score rankers against three label sources your past selves wrote: learning\n"
+            "cross-references (xref), enhanced citations (citations) and learnings-index\n"
+            "clusters (same_subject). A fifth of the queries is held out by a stable hash.\n"
+            "Run dev as often as you like; every held run is recorded in your event log and\n"
+            "counted on every later report. When to run it: corpus_integrity, section 6."),
+        epilog=("examples:\n"
+                "  macf_tools knowledge eval                       # dev split, every ranker\n"
+                "  macf_tools knowledge eval --compare today idf   # paired difference, idf minus today\n"
+                "  macf_tools knowledge eval --save-snapshot s.json # pin the corpus for a later rerun\n"
+                "  macf_tools knowledge eval --snapshot s.json --split held"))
+    kg_eval.add_argument("--split", choices=["dev", "held"], default="dev",
+                         help="dev (default), or held: spent once read, and recorded")
+    kg_eval.add_argument("--ranker", dest="rankers", action="append", metavar="NAME",
+                         help="random, today, idf or like; repeat for several (default: all four)")
+    kg_eval.add_argument("--labels", action="append", choices=["xref", "citations", "same_subject"],
+                         help="label source; repeat for several (default: all three)")
+    kg_eval.add_argument("--compare", nargs=2, metavar=("A", "B"),
+                         help="paired bootstrap interval of B minus A")
+    kg_eval.add_argument("--snapshot", metavar="PATH", help="score a pinned snapshot instead of the live corpus")
+    kg_eval.add_argument("--save-snapshot", metavar="PATH", help="write the corpus scored to PATH, owner-only")
+    kg_eval.add_argument("--exclude", action="append", metavar="TEXT",
+                         help="leave out files whose path contains TEXT (an experiment's own folder)")
+    kg_eval.add_argument("--split-seed", default="knowledge-eval-heldout", metavar="SEED",
+                         help="the seed of the held split; a new seed is a new seal")
+    kg_eval.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
+    kg_eval.set_defaults(func=cmd_knowledge_eval)
 
     for _verb, _help in (("link", "add wiki-link concepts to an artifact of any type"),
                          ("unlink", "remove wiki-link concepts from an artifact")):
@@ -13370,6 +14062,8 @@ def _build_parser() -> argparse.ArgumentParser:
     li_add.add_argument("file", help="the learning's file name (or path) in agent/private/learnings")
     li_add.add_argument("--cluster", required=True, help="the cluster heading to file it under")
     li_add.add_argument("--hook", default="", help='when to consult it, e.g. "WHEN a bug resists the first hypothesis"')
+    li_add.add_argument("--new-cluster", dest="new_cluster", action="store_true",
+                        help="create the cluster if no heading matches; without it an unknown name is refused")
     li_add.set_defaults(func=cmd_learnings_index_add)
     li_verify = li_sub.add_parser("verify", help="check entries, counts and the consultation trigger")
     li_verify.add_argument("--memory", help="path to the auto-loaded memory file, if not the platform default")
@@ -13439,6 +14133,18 @@ def _build_parser() -> argparse.ArgumentParser:
     shell_parser = sub.add_parser("shell", help="shell integration (tab completion)")
     shell_sub = shell_parser.add_subparsers(dest="shell_cmd")
     shell_sub.add_parser("setup", help="print tab completion setup instructions").set_defaults(func=cmd_shell_setup)
+
+    # ── completion ───────────────────────────────────────────────────────
+    completion_parser = sub.add_parser(
+        "completion", help="print a shell completion script: source <(macf_tools completion bash)")
+    completion_parser.add_argument("shell", nargs="?", choices=["bash", "zsh"],
+                                   help="the shell to print the script for")
+    # Hidden: what the printed script calls for `harness attach <TAB>`.
+    completion_parser.add_argument("--candidates", action="store_true", help=argparse.SUPPRESS)
+    completion_parser.add_argument("--prefix", default="", help=argparse.SUPPRESS)
+    completion_parser.add_argument("--describe", action="store_true", help=argparse.SUPPRESS)
+    completion_parser.add_argument("--remote-timeout", type=float, default=1.0, help=argparse.SUPPRESS)
+    completion_parser.set_defaults(func=cmd_completion)
 
     return p
 
@@ -13737,7 +14443,15 @@ def main(argv=None) -> None:
             # as argparse does for anything else missing.
             _deepest_parser(parser, args).print_help()
             exit(2)
-        exit(func(args))
+        try:
+            exit(func(args))
+        except ImportError as e:
+            # amail refuses to load without its extra, and says how to install it; a
+            # traceback buries that message under the chain (cversek/MacEff#843).
+            if args.cmd != "amail" or "'amail' extra" not in str(e):
+                raise
+            print(f"❌ macf_tools amail: {e}", file=sys.stderr)
+            exit(1)
     parser.print_help()
 
 

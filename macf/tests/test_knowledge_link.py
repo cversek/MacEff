@@ -99,7 +99,7 @@ def test_an_idea_is_linked_through_its_own_update(home):
 
 @pytest.mark.parametrize("ref, says", [
     ("12", "idea or a task"),
-    ("duties:D123", "role duty add"),
+    ("duties:D123", "role duty edit"),
     ("nowhere.md", "no artifact found"),
 ])
 def test_ambiguous_or_foreign_targets_are_refused(home, ref, says):

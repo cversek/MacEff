@@ -35,6 +35,10 @@ import pytest
 
 from macf.utils.harness import HarnessParams, render_child
 
+#: A test that takes the real client past argument parsing starts a conversation,
+#: which calls the model on the operator's account. Such a test runs only when asked.
+SPEND_MODEL_CALLS = os.environ.get("MACF_TEST_SPEND_MODEL_CALLS") == "1"
+
 
 def _params(tmp_path, **kw):
     return HarnessParams(
@@ -116,6 +120,15 @@ class TestTheChildBuildsTheArgvItMeansTo:
         assert consumed == ["plugin:tg@mkt"], \
             f"--channels swallowed more than its value: {consumed}"
 
+    def test_each_channel_is_its_own_argument(self, tmp_path):
+        """Two channels, the operator's and the MacEff channel, reach `--channels` as two
+        values. Joined with a comma they were one malformed entry, and the operator's
+        channel would have gone down with the new one."""
+        p = _params(tmp_path, channels=("plugin:tg@mkt", "plugin:maceff-channel@maceff"))
+        argv = _run_child(tmp_path, p)
+        i = argv.index("--channels")
+        assert argv[i + 1:] == ["plugin:tg@mkt", "plugin:maceff-channel@maceff"]
+
     def test_the_mode_selects_the_prompt(self, tmp_path):
         auto = _run_child(tmp_path, _params(tmp_path), mode_output="AUTO_MODE")
         manual = _run_child(tmp_path, _params(tmp_path), mode_output="MANUAL_MODE")
@@ -147,11 +160,19 @@ class TestTheChildBuildsTheArgvItMeansTo:
 class TestTheRealClientAcceptsWhatWeGenerate:
     """The stub proves what argv we BUILD; only the real binary proves it PARSES.
 
-    Run in an empty directory so `-c` has nothing to resume: the client then
-    exits on its own without a conversation, and any *usage* error it prints is
-    about our arguments rather than about the session. Skipped where the client
-    is absent, so CI without it stays green — but on a developer machine this is
+    Run in an empty directory, so any *usage* error the client prints is about
+    our arguments rather than about a session. Skipped where the client is
+    absent, so CI without it stays green — but on a developer machine this is
     the test that would have caught the variadic-flag defect in seconds.
+
+    The empty directory was also meant to leave `-c` nothing to resume, so that
+    the client exited without a conversation. That held for older clients only.
+    Measured on 2.1.296: `-c` with nothing to resume starts a new session with
+    the prompt, runs the user's hooks, calls the model, and leaves a project
+    directory in `~/.claude/projects`. So the test whose order is accepted, and
+    which therefore gets that far, runs only when `MACF_TEST_SPEND_MODEL_CALLS=1`
+    asks for it. The negative control stops at its usage error, before any
+    session, and runs with the rest of the live set.
     """
 
     def _usage_error(self, tmp_path, argv):
@@ -175,6 +196,9 @@ class TestTheRealClientAcceptsWhatWeGenerate:
                 return out.strip().splitlines()[0]
         return None
 
+    @pytest.mark.skipif(not SPEND_MODEL_CALLS,
+                        reason="starts a real client conversation, which calls the model; "
+                               "set MACF_TEST_SPEND_MODEL_CALLS=1 to run it")
     def test_the_generated_argument_order_is_accepted(self, tmp_path):
         work = tmp_path / "empty"
         work.mkdir()

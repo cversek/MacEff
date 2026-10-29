@@ -9,9 +9,10 @@ import json
 import os
 import subprocess
 import sys
+import time
 import traceback
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 
 from macf.utils import (
     format_macf_brand,
@@ -30,6 +31,15 @@ from macf.modes import detect_auto_mode
 from macf.hooks.hook_logging import log_hook_event
 from macf.observability import Warning, emit_warning
 from macf.agent_events_log import shared_event_reads
+from macf.utils.input_origin import (
+    entry_text,
+    opening_channel_source,
+    opens_with_harness_notice,
+    opens_with_wake,
+    operator_channel,
+    typed_by_framework,
+)
+from macf.channels.channel_tag import CHANNEL_SOURCE, is_maceff_notice, opening_tag
 
 # Lines that change on every prompt by design. The diff header carries them
 # (clock, breadcrumb, CL); diffing them would report a change every time.
@@ -71,7 +81,99 @@ def get_memory_injection(prompt: str) -> str:
     return ""
 
 
-def record_user_activity_from_payload(prompt: str) -> bool:
+#: How much of the transcript's end is read to find the entry for a prompt.
+_TRANSCRIPT_TAIL_BYTES = 64 * 1024
+
+
+def scheduled_prompt(prompt: str, transcript_path: Optional[str]) -> bool:
+    """True when the transcript's newest entry for ``prompt`` says the client fired it on a schedule.
+
+    The payload carries a prompt's text and nothing about where it came from.
+    A session's scheduled prompt is written to the transcript, marked
+    ``turnOrigin: scheduled``, before this hook runs, so the end of the file
+    can say. When it cannot (no path, no entry yet, an unreadable file), the
+    prompt is read as typed, as it was before.
+    """
+    if not transcript_path:
+        return False
+    try:
+        with open(transcript_path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - _TRANSCRIPT_TAIL_BYTES))
+            tail = fh.read().decode("utf-8", errors="replace")
+    except OSError as e:
+        print(f"⚠️ MACF: cannot read the transcript's end to place a prompt: {e}", file=sys.stderr)
+        return False
+    wanted = prompt.strip()
+    for line in reversed(tail.splitlines()):
+        if '"turnOrigin"' not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue  # only the window's first line can be cut short
+        message = entry.get("message")
+        if entry.get("type") == "user" and isinstance(message, dict) \
+                and entry_text(message.get("content", "")) == wanted:
+            return entry.get("turnOrigin") == "scheduled"
+    return False
+
+
+def maybe_restore_user_remote(prompt: str, recorded: bool) -> bool:
+    """Lift USER_REMOTE's deny only for a prompt the operator typed: one that counted as
+    activity (so not framework-typed, not a wake or a harness notice) and arrived directly
+    rather than through a channel. Returns whether a restore was asked for."""
+    if not recorded or opening_channel_source(prompt) is not None:
+        return False
+    try:
+        from macf.utils.claude_settings import restore_user_remote_deny_if_active
+        restored = restore_user_remote_deny_if_active()
+        if restored and restored.get("restored"):
+            from macf.agent_events_log import append_event
+            append_event("mode_change", {
+                "mode": "USER_REMOTE",
+                "enabled": False,
+                "source": "auto_restore_on_cli_activity",
+            })
+    except Exception as e:  # noqa: BLE001 - a failed restore is reported, never fatal to the prompt
+        emit_warning(Warning(source="user_prompt_submit",
+                             kind="user_remote_auto_restore_failed",
+                             detail=str(e)))
+    return True
+
+
+def maybe_enter_user_remote(prompt: str, recorded: bool) -> bool:
+    """Enter USER_REMOTE when the operator writes from their own channel while away from the
+    CLI: a prompt that counted as activity (so from a channel the declaration lists as the
+    operator's, never the MacEff channel, a wake or framework-typed keys), with no message typed
+    at the CLI inside the idle window. The operator is present but the CLI is unattended, which
+    is what USER_REMOTE means, so it is entered as ``mode set USER_REMOTE`` would: the event,
+    then the Ask-list flipped to Deny. Their next message at the CLI clears it, as before.
+    Returns whether it was entered."""
+    if not recorded or opening_channel_source(prompt) is None:
+        return False
+    try:
+        import time
+
+        from macf.config import resolve_setting
+        from macf.modes.detection import _CLI_ACTIVITY_SOURCES, _detect_user_remote, _had_user_activity_since
+        if _detect_user_remote(""):
+            return False
+        idle_mins, _ = resolve_setting("MACF_USER_IDLE_TIMEOUT_MINS", "session.user_idle_timeout_mins", 10, coerce=int)
+        if _had_user_activity_since(time.time() - idle_mins * 60, sources=_CLI_ACTIVITY_SOURCES):
+            return False   # typed at the CLI just now: the operator is here, writing from both
+        from macf.agent_events_log import append_event
+        append_event("mode_change", {"mode": "USER_REMOTE", "enabled": True,
+                                     "source": "auto_on_operator_channel_while_away"})
+        from macf.utils.claude_settings import toggle_user_remote_deny_permissions
+        toggle_user_remote_deny_permissions(True)
+        return True
+    except Exception as e:  # noqa: BLE001 - a failed switch is reported, never fatal to the prompt
+        emit_warning(Warning(source="user_prompt_submit", kind="user_remote_auto_enter_failed", detail=str(e)))
+        return False
+
+
+def record_user_activity_from_payload(prompt: str, transcript_path: Optional[str] = None) -> bool:
     """Record user activity when *this* invocation carries a typed prompt.
 
     USER_IDLE is derived from ``user_activity_detected`` events, which the
@@ -86,9 +188,14 @@ def record_user_activity_from_payload(prompt: str) -> bool:
     ones, which reset the idle timer from the agent's own activity. That
     constraint still holds, so the discrimination is made from the payload
     rather than by trusting every invocation: a typed prompt (direct, slash
-    command, or channel message) is present only for genuine user input.
-    Empirically the split is near-even across a long event log, and every
-    non-empty prompt corresponds to real user input.
+    command, or channel message) is user input. A non-empty prompt is not
+    always one: the client also delivers a background task's completion
+    notice and another session's message as prompts, and those open with
+    the client's own notice forms, so they record nothing. Nor does a wake,
+    which the persistent layer types into the input box with its own opening
+    (MIS-0002-R106), or a prompt the session's own schedule fired, which the
+    transcript marks before the hook runs, or keys the framework typed, which
+    their sender recorded before sending.
 
     Emitting here (rather than only suppressing the indicator) also corrects
     the clock for the renders that follow — Stop, PreToolUse — instead of
@@ -96,14 +203,30 @@ def record_user_activity_from_payload(prompt: str) -> bool:
 
     Args:
         prompt: The ``prompt`` field of the hook payload.
+        transcript_path: The payload's ``transcript_path``, where a scheduled
+            prompt's entry is looked up.
 
     Returns:
         True when an activity event was recorded.
     """
     if not prompt or not prompt.strip():
         return False
+    if opens_with_harness_notice(prompt) or opens_with_wake(prompt):
+        return False
+    if scheduled_prompt(prompt, transcript_path):
+        return False
+    # One keystroke record per arrival, with this session's hook as the consumer.
+    if typed_by_framework(prompt, consumer=f"prompt_hook:{transcript_path or ''}"):
+        return False
 
-    source = "channel" if prompt.lstrip().startswith("<channel ") else "direct"
+    channel_source = opening_channel_source(prompt)
+    # A channel counts as the operator only by a name the agent declares as theirs,
+    # and the MacEff channel, the persistent layer's, never does (R107). The
+    # transcript monitor asks the same of the same name.
+    if channel_source is not None and not operator_channel(channel_source):
+        return False
+
+    source = "channel" if channel_source is not None else "direct"
     try:
         from macf.agent_events_log import append_event
         append_event("user_activity_detected", {
@@ -116,6 +239,41 @@ def record_user_activity_from_payload(prompt: str) -> bool:
             source="user_prompt_submit",
             kind="user_activity_emit_failed",
             detail=f"could not record user activity from payload: {e}",
+        ))
+        return False
+
+
+def record_channel_receipt(prompt: str) -> bool:
+    """Record that this session took a MacEff channel notice, and when.
+
+    Claude Code acknowledges nothing to a channel, so the received time of a notice
+    (the third time of MIS-0002-R39 (notice_MUST_carry_three_times)) has to come from
+    inside the session. This hook runs on the event 26 ms after the channel sent it,
+    measured on 2.1.296 (MIS-0002-R120 (prompt_hook_MUST_record_notice_receipt)). On a
+    busy session the hook runs when the client hands the event to the turn, and that is
+    the time recorded.
+
+    Returns:
+        True when a receipt event was recorded.
+    """
+    if not is_maceff_notice(prompt):
+        return False
+    attrs = opening_tag(prompt) or {}
+    try:
+        from macf.agent_events_log import append_event
+        append_event("notice_received", {
+            "notice_id": attrs.get("notice_id"),
+            "notice_source": attrs.get("notice_source"),
+            "channel": CHANNEL_SOURCE,
+            "sent_at": attrs.get("sent_at"),
+            "received_at": f"{time.time():.3f}",
+        })
+        return True
+    except (OSError, ValueError, ImportError) as e:
+        emit_warning(Warning(
+            source="user_prompt_submit",
+            kind="notice_receipt_emit_failed",
+            detail=f"could not record a channel notice's receipt: {e}",
         ))
         return False
 
@@ -164,28 +322,18 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # Record activity from the payload in hand before anything derives
         # staleness from the event log, so this render and the ones after it
         # agree with the event that produced them (#181).
-        record_user_activity_from_payload(prompt)
+        recorded = record_user_activity_from_payload(prompt, transcript_path)
+        record_channel_receipt(prompt)
 
-        # USER_REMOTE auto-restore: a CLI prompt means the operator is back at the
-        # keyboard, which auto-clears USER_REMOTE (detection derives that from the
-        # activity just recorded). Restore the deny'd permissions here too —
-        # otherwise the tools USER_REMOTE walled off stay denied until an explicit
-        # `mode set USER_PRESENT`, stranding the returned operator. No-op when
-        # nothing is denied; full permission enforcement reloads on the next restart.
-        try:
-            from macf.utils.claude_settings import restore_user_remote_deny_if_active
-            _ur_restored = restore_user_remote_deny_if_active()
-            if _ur_restored and _ur_restored.get("restored"):
-                from macf.agent_events_log import append_event
-                append_event("mode_change", {
-                    "mode": "USER_REMOTE",
-                    "enabled": False,
-                    "source": "auto_restore_on_cli_activity",
-                })
-        except Exception as e:
-            emit_warning(Warning(source="user_prompt_submit",
-                                 kind="user_remote_auto_restore_failed",
-                                 detail=str(e)))
+        # USER_REMOTE auto-restore: a prompt the operator typed at the keyboard means
+        # they are back, which auto-clears USER_REMOTE; restore the deny'd permissions
+        # too. Only that prompt: one the framework typed (a wake, a recovery prompt)
+        # or a channel message is not the operator at the keyboard, and lifting the
+        # deny for it ended remote mode for an operator still away.
+        maybe_restore_user_remote(prompt, recorded)
+        # USER_REMOTE auto-enter: a message from the operator's own channel while nothing was
+        # typed at the CLI inside the idle window means they are present, but not at the CLI.
+        maybe_enter_user_remote(prompt, recorded)
 
         # Start Development Drive tracking with current UUID and prompt preview
         # Note: start_dev_drv() emits dev_drv_started event internally

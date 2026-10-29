@@ -25,6 +25,9 @@ This appendix provides complete YAML schema specifications for Named Agents v0.3
 ### Root Structure
 
 ```yaml
+ids:
+  base: 21000  # the deployment's uid/gid block, base..base+999 (container_operations 6.2)
+
 agents:
   <agent_name>:
     # AgentSpec fields
@@ -32,6 +35,10 @@ agents:
 subagents:
   <subagent_name>:
     # SubagentSpec fields
+
+services:  # Optional
+  <account>:
+    # ServiceSpec fields: secrets, and optionally primal_daemon with calling_card
 
 defaults:  # Optional
   # DefaultsConfig fields
@@ -44,6 +51,7 @@ defaults:  # Optional
 | Field | Type | Description |
 |-------|------|-------------|
 | `username` | string | Linux username for the agent (e.g., `pa_manny`) |
+| `uid` | int | The agent's uid (its own group takes the same gid), in the agent slots `ids.base + 100` to `+ 899`; unique per deployment |
 | `personality` | string | Path to personality file (Identity layer CLAUDE.md source) |
 
 **Optional Fields**:
@@ -54,6 +62,8 @@ defaults:  # Optional
 | `assigned_projects` | list[string] | `[]` | List of assigned project names |
 | `consciousness_artifacts` | ConsciousnessArtifactsConfig | `null` | Consciousness artifact configuration |
 | `hooks` | dict | `null` | Hook configuration (enabled list, etc.) |
+| `primal_daemon` | dict | `null` | The agent's primal daemon declaration, without `agent` or `version`; rendered by start-up, owned by root (persistent_layer 10.1) |
+| `calling_card` | string | `null` | The name the agent's daemon goes by, `^[A-Za-z][A-Za-z0-9]{0,47}$`. Required with `primal_daemon`. Written into the home's `.maceff/config.json` at every start; a different card already there is refused, and that agent gets no daemon |
 
 ### SubagentSpec Fields
 
@@ -92,9 +102,13 @@ defaults:  # Optional
 ### Complete agents.yaml Example
 
 ```yaml
+ids:
+  base: 21000
+
 agents:
   manny:
     username: pa_manny
+    uid: 21100
     personality: ../custom/agents/manny_personality.md
     subagents: [devops_eng, test_eng]
     assigned_projects: [NeuroVEP, DataPipeline]
@@ -103,9 +117,30 @@ agents:
       public: [roadmaps, reports, observations]
     hooks:
       enabled: [session_start, stop, user_prompt_submit]
+    # Optional: this agent's primal daemon, the body of a declaration without agent or version.
+    # Start-up renders it owned by root to /etc/maceff/pd/pa_manny/declaration.json, which the
+    # daemon reads; the agent can't change it (persistent_layer 10.1, MIS-0002-R33).
+    # calling_card is required with it: the name the daemon goes by. Start-up writes it into
+    # the home's .maceff/config.json at every start, and refuses to overwrite a different one.
+    calling_card: Manny1
+    primal_daemon:
+      units:
+        - name: session
+          kind: session
+          command: ["/opt/maceff-venv/bin/python", "-m", "macf.cli", "harness", "unit",
+                    "--agent", "manny1", "--home", "{agent_home}", "--project-dir", "{agent_home}",
+                    "--no-proxy"]
+          account: pa_manny
+          restart: always
+          liveness_interval_s: 120
+          memory_limit_mb: 16384
+          stop_grace_s: 30
+      operator_channels: ["plugin:telegram:telegram"]
+      notice_routes: {amail: agent, pd_carried: agent}
 
   claudethebuilder:
     username: pa_claudethebuilder
+    uid: 21101
     personality: ../custom/agents/builder_personality.md
     subagents: [devops_eng, test_eng]
     assigned_projects: [MacEff, ClaudeTheBuilder]
@@ -125,6 +160,39 @@ subagents:
     tool_access: Read, Write, Edit, Bash
     consciousness_artifacts:
       public: [delegation_trails]
+
+# Service accounts, which are not agents. The mail broker's account runs its own primal daemon:
+# the broker and the inbound watcher are its units, and the aged sweep its schedule. Start-up
+# renders it owned by root, like an agent's, and writes the account's identity from calling_card
+# (persistent_layer 10.1, MIS-0002-R53, MIS-0002-R54).
+services:
+  amail_broker:
+    calling_card: AmailBroker
+    primal_daemon:
+      units:
+        - name: broker
+          command: ["/opt/maceff-venv/bin/python", "-m", "macf.amail.daemons.broker"]
+          account: amail_broker
+          restart: always
+          liveness_interval_s: 60
+          memory_limit_mb: 256
+        - name: inbound-watcher
+          command: ["/opt/maceff-venv/bin/python", "-m", "macf.amail.daemons.inbound", "watch"]
+          account: amail_broker
+          restart: always
+          liveness_interval_s: 60
+          memory_limit_mb: 256
+      schedules:
+        - name: inbound-sweep
+          cron: "*/5 * * * *"
+          target: isolated
+          missed_run: {kind: skip}
+          run:
+            command: ["/opt/maceff-venv/bin/python", "-m", "macf.amail.daemons.inbound", "sweep", "--quiet"]
+            wake_when: stdout
+          timeout_s: 120
+      timezone: UTC
+  amail_ingest: {}
 
 defaults:
   consciousness_artifacts:
@@ -223,11 +291,13 @@ projects:
 ### agents.yaml Validation
 
 **Root Level**:
-- ✅ Both `agents` and `subagents` sections are **required**
+- ✅ `ids`, `agents` and `subagents` sections are **required**
+- ✅ `ids.base` is a multiple of 1000 and at least 20000
+- ✅ Every agent's `uid` lies in `ids.base + 100` to `+ 899`, and no two agents share one
 - ✅ `defaults` section is optional
 
 **AgentSpec Validation**:
-- ✅ `username` and `personality` are **required**
+- ✅ `username`, `uid` and `personality` are **required**
 - ✅ `subagents` and `assigned_projects` default to empty lists if omitted
 - ✅ `consciousness_artifacts` and `hooks` are optional
 

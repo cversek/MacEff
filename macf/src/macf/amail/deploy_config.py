@@ -306,6 +306,14 @@ class AgentAddressing(AgentBinding):
                     "exception is visible to whoever reads about it.")
 
 
+#: Supervision values MIS-0002 retired, mapped to their current name. The old
+#: name keeps meaning the new one (MIS-0002-R76), so a deployment that already
+#: wrote it does not strand on a rename.
+_RETIRED_SUPERVISION_VALUES = {
+    "hypervisor": "primal-daemon",
+}
+
+
 class AddressingConfig(BaseModel):
     """The amail deployment's identity: its domain, its agents, their contacts.
 
@@ -328,12 +336,22 @@ class AddressingConfig(BaseModel):
     supervision: Optional[str] = Field(
         default=None,
         description="who or what watches a host-tier deployment: "
-                    "`operator-at-terminal` or `hypervisor`. Required under "
+                    "`operator-at-terminal` or `primal-daemon`. The retired "
+                    "name `hypervisor` is still accepted and read as "
+                    "`primal-daemon` (MIS-0002-R76). Required under "
                     "`tier: host`; `none` is refused, because the tier's "
                     "justification is supervision and a file may not declare "
                     "the tier while declaring the justification absent.")
     agents: Dict[str, AgentAddressing] = Field(
         description="address local-part -> agent")
+
+    @field_validator("supervision")
+    @classmethod
+    def _normalize_retired_supervision(cls, v: Optional[str]) -> Optional[str]:
+        """Read a retired supervision value as its current name (MIS-0002-R76)."""
+        if v is None:
+            return v
+        return _RETIRED_SUPERVISION_VALUES.get(v.strip().lower(), v)
 
     @field_validator("agents")
     @classmethod
@@ -362,7 +380,7 @@ class AddressingConfig(BaseModel):
                 raise ValueError(
                     "tier: host declared without a supervision (amail.md §1.3, "
                     "§7.5): the host tier is justified by supervision, so name "
-                    "it -- operator-at-terminal or hypervisor -- or drop the tier")
+                    "it -- operator-at-terminal or primal-daemon -- or drop the tier")
             if in_container():
                 raise ValueError(
                     f"tier: host declared, but this process is inside a "

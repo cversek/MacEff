@@ -21,7 +21,24 @@ from typing import Any, Dict, List, Optional
 from .concepts import extract_wiki_concepts, normalize_concept
 from .diagnostics import Chart, Diagnosis, Finding, Severity
 
-__all__ = ["examine"]
+__all__ = ["examine", "excluded_folders", "OPTED_OUT_CHECK"]
+
+OPTED_OUT_CHECK = "opted out"
+
+
+def excluded_folders(agent_home: Path) -> List[str]:
+    """Each folder the opt-out marker takes out of the web, named by its path
+    under ``agent/`` (``private/scratchpad_archive``), so two subagents'
+    folders of the same name stay distinguishable."""
+    from .knowledge_web import excluded_type_roots
+    base = agent_home / "agent"
+    out = []
+    for _name, d in excluded_type_roots(agent_home):
+        try:
+            out.append(str(d.relative_to(base)))
+        except ValueError:
+            out.append(str(d))
+    return out
 
 # Spellings that normalize to the same concept but are written differently in
 # source. Harmless to the graph now that extraction normalizes, but they are
@@ -34,8 +51,8 @@ def _link_remedy(ca_type: str) -> str:
     """How an orphan of this type joins the web. A duty is a JSON record with a
     wiki_links field, governed by the roles policy; everything else is markdown."""
     if ca_type == "duties":
-        return ("add concepts to the record's wiki_links field (role duty add --wiki-links, or edit "
-                "the JSON); see the roles policy on knowledge web participation for what a duty links")
+        return ("macf_tools role duty edit <id> --wiki-links <concepts>; see the roles policy on "
+                "knowledge web participation for what a duty links")
     if ca_type == "tasks":
         return ("macf_tools knowledge link task:<id> <concept>; see the task_management policy on "
                 "knowledge web participation for what a task links")
@@ -76,9 +93,11 @@ def examine(agent_home: Optional[Path] = None,
     ``orphans`` is how the orphan census is reported. ``"all"`` lists each
     orphan. ``"summary"`` gives one finding per type and lists individually only
     the orphans in view: those dated on or after ``since``, and every orphan of
-    ``orphan_type``. The chart's orphan count is the whole census either way.
+    ``orphan_type``. Given ``orphan_type``, the orphan findings are that type's
+    alone, the bulk pass over one type. The chart's orphan count is the whole
+    census either way.
     """
-    from .knowledge_web import build_knowledge_web, concepts_of, iter_web_files
+    from .knowledge_web import OPT_OUT_MARKER, build_knowledge_web, concepts_of, iter_web_files
     from .utils.paths import find_agent_home
 
     agent_home = agent_home or find_agent_home()
@@ -111,6 +130,8 @@ def examine(agent_home: Optional[Path] = None,
             mention_only.append(path)
 
     for ca_type, paths in sorted(orphans_by_type.items()):
+        if orphan_type and ca_type != orphan_type:
+            continue
         if orphans == "summary":
             in_view = [p for p in paths
                        if ca_type == orphan_type or (since is not None and artifact_date(p) >= since)]
@@ -148,6 +169,20 @@ def examine(agent_home: Optional[Path] = None,
                         "## Wiki-Links section if the mentions were deliberate"
                         if is_mention_only else _link_remedy(ca_type)),
             ))
+
+    # ---- folders opted out by the marker -----------------------------------
+    # An exclusion is never silent: every folder the marker removes is named
+    # here, so a reader of the web's health sees what the web does not hold.
+    excluded = excluded_folders(agent_home)
+    for label in excluded:
+        findings.append(Finding(
+            check=OPTED_OUT_CHECK,
+            severity=Severity.NOTE,
+            subject=f"{label}: out of the web by its marker",
+            detail=f"the folder holds {OPT_OUT_MARKER}, so none of its files is walked",
+            remedy=(f"none if the folder holds no artifacts; if it does, delete {OPT_OUT_MARKER} "
+                    "and link them instead (see the scholarship policy on opting a folder out)"),
+        ))
 
     # ---- normalization drift in source text --------------------------------
     drift: Dict[str, set] = {}
@@ -214,6 +249,7 @@ def examine(agent_home: Optional[Path] = None,
             "edges": stats.get("total_edges", 0),
             "concepts": stats.get("wiki_concepts", 0),
             "orphans": sum(len(v) for v in orphans_by_type.values()),
+            "opted_out": len(excluded),
         },
     )
     return Diagnosis(chart=chart, findings=findings)

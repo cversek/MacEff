@@ -51,23 +51,33 @@ def execute_hook(hook_path, stdin_data="", tmp_project_root=None):
         tmp_project_root: If provided, isolates state to this temp directory
 
     Returns (stdout, stderr, returncode)
-    """
-    # Belt & suspenders: testing mode + project isolation
-    env = {
-        **os.environ,
-        'MACF_TESTING_MODE': 'true',  # Prevents state mutations
-    }
-    if tmp_project_root:
-        env['MACF_PROJECT_ROOT'] = str(tmp_project_root)
 
-    result = subprocess.run(
-        [sys.executable, str(hook_path)],
-        input=stdin_data,
-        capture_output=True,
-        text=True,
-        timeout=10,
-        env=env
-    )
+    The run happens in a scratch agent home, never the caller's: the working directory,
+    the agent home and the event log are a temporary directory's, and the client's
+    session variables are dropped. Run inside a live session, a hook would otherwise
+    write to that session's log and could start a monitor bound to its transcript.
+    """
+    with tempfile.TemporaryDirectory(prefix="hookexec-") as scratch:
+        home = Path(scratch)
+        (home / ".maceff").mkdir()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE_")}
+        env.update({
+            'MACF_TESTING_MODE': 'true',
+            'MACEFF_AGENT_HOME_DIR': str(home),
+            'MACF_EVENTS_LOG_PATH': str(home / ".maceff" / "agent_events_log.jsonl"),
+        })
+        if tmp_project_root:
+            env['MACF_PROJECT_ROOT'] = str(tmp_project_root)
+
+        result = subprocess.run(
+            [sys.executable, str(hook_path)],
+            input=stdin_data,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=env,
+            cwd=str(home),
+        )
     return result.stdout, result.stderr, result.returncode
 
 
@@ -302,3 +312,18 @@ def test_hook_output_format_compliance():
         if "additionalContext" in hook_output:
             assert isinstance(hook_output["additionalContext"], str), \
                 "additionalContext must be string"
+
+
+def test_a_hook_run_leaves_the_callers_home_alone(tmp_path, monkeypatch):
+    """A hook run here never writes to the caller's agent home or event log, whatever the
+    caller's environment names, so a suite run inside a live session leaves it alone."""
+    caller = tmp_path / "caller"
+    (caller / ".maceff").mkdir(parents=True)
+    caller_log = caller / ".maceff" / "agent_events_log.jsonl"
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(caller))
+    monkeypatch.setenv("MACF_EVENTS_LOG_PATH", str(caller_log))
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "00000000-0000-0000-0000-00000000c0de")
+
+    stdout, stderr, returncode = execute_hook(get_hook_script_path('session_start'), "")
+    assert returncode == 0, stderr
+    assert not caller_log.exists(), "the hook wrote to the caller's event log"

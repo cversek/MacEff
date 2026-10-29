@@ -29,12 +29,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from macf.supervisor import ancestor_pids
+
 SESSIONS_DIRNAME = ".claude/sessions"
 SOCKET_DIRNAME = "cc-socks"
 
 
 def sessions_dir() -> Path:
     return Path(os.path.expanduser("~")) / SESSIONS_DIRNAME
+
+
+def jobs_dir() -> Path:
+    """Where the client's background daemon keeps one ``<short>/state.json`` per job."""
+    return Path(os.path.expanduser("~")) / ".claude" / "jobs"
 
 
 def socket_dir() -> Path:
@@ -112,17 +119,16 @@ def proc_start_ticks(pid: int) -> Optional[int]:
     try:
         with open(f"/proc/{pid}/stat") as fh:
             data = fh.read()
-    except (FileNotFoundError, ProcessLookupError) as e:
-        print(f"⚠️ MACF: pid {pid} is not running (no wake): {e}", file=sys.stderr)
-        return None
+    except (FileNotFoundError, ProcessLookupError):
+        return None  # noqa: MACEFF003 - not running is this function's answer, not a failure
     except (PermissionError, OSError) as e:
-        print(f"⚠️ MACF: /proc unreadable for pid {pid} (no wake): {e}", file=sys.stderr)
+        print(f"⚠️ MACF: /proc unreadable for pid {pid}: {e}", file=sys.stderr)
         return None
     try:
         tail = data[data.rfind(")") + 2:].split()
         return int(tail[19])
     except (IndexError, ValueError) as e:
-        print(f"⚠️ MACF: /proc stat unparseable for pid {pid} (no wake): {e}", file=sys.stderr)
+        print(f"⚠️ MACF: /proc stat unparseable for pid {pid}: {e}", file=sys.stderr)
         return None
 
 
@@ -139,17 +145,16 @@ def _proc_start_darwin(pid: int) -> Optional[str]:
         out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)],
                              capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError) as e:
-        print(f"⚠️ MACF: ps unavailable for pid {pid} (no wake): {e}", file=sys.stderr)
+        print(f"⚠️ MACF: ps unavailable for pid {pid}: {e}", file=sys.stderr)
         return None
     raw = out.stdout.strip()
     if out.returncode != 0 or not raw:
-        print(f"⚠️ MACF: pid {pid} is not running (no wake)", file=sys.stderr)
-        return None
+        return None  # not running: an ordinary answer for every caller, so nothing to warn about
     try:
         local = time.strptime(raw, _ASCTIME)
         return time.asctime(time.gmtime(time.mktime(local)))
     except (ValueError, OverflowError) as e:
-        print(f"⚠️ MACF: ps lstart unparseable for pid {pid} (no wake): {e!r} {raw!r}", file=sys.stderr)
+        print(f"⚠️ MACF: ps lstart unparseable for pid {pid}: {e!r} {raw!r}", file=sys.stderr)
         return None
 
 
@@ -160,13 +165,15 @@ def proc_start(pid: int) -> Optional[str]:
     macOS: ``asctime`` of the start instant in UTC (see ``_proc_start_darwin``).
     None when the pid is not running or the platform has no known source --
     which every caller treats as "not live", so an unknown platform fails closed.
+    The wake, the readout, the MacEff channel's peer check and the transcript monitor
+    all ask through here, so a pid that is not running is an answer, not a warning.
     """
     if sys.platform.startswith("linux"):
         ticks = proc_start_ticks(pid)
         return None if ticks is None else str(ticks)
     if sys.platform == "darwin":
         return _proc_start_darwin(pid)
-    print(f"⚠️ MACF: no process-start source on {sys.platform} (no wake)", file=sys.stderr)
+    print(f"⚠️ MACF: no process-start source on {sys.platform}", file=sys.stderr)
     return None
 
 
@@ -217,7 +224,7 @@ def verify_incarnation(pid: int, declared_start) -> bool:
     """
     if declared_start is None:
         print(
-            f"⚠️ MACF: credential for pid {pid} declares no procStart (refusing: "
+            f"⚠️ MACF: no recorded start time for pid {pid} (refusing: "
             "an incarnation check cannot fail open)",
             file=sys.stderr,
         )
@@ -227,14 +234,35 @@ def verify_incarnation(pid: int, declared_start) -> bool:
         return False
     declared = proc_start_key(declared_start)
     if declared is None:
-        print(f"⚠️ MACF: procStart unusable for pid {pid} (refusing): {declared_start!r}", file=sys.stderr)
+        print(f"⚠️ MACF: recorded start time unusable for pid {pid} (refusing): {declared_start!r}", file=sys.stderr)
         return False
     if declared != actual:
         print(
-            f"⚠️ MACF: incarnation mismatch for pid {pid} (refusing: stale credential "
-            f"against a recycled pid) declared={declared} actual={actual}",
+            f"⚠️ MACF: incarnation mismatch for pid {pid} (refusing: the recorded start "
+            f"is stale against a recycled pid) declared={declared} actual={actual}",
             file=sys.stderr,
         )
+        return False
+    return True
+
+
+def descends_from(pid: int, ancestor_pid: int, ancestor_start) -> bool:
+    """True when *pid* is *ancestor_pid* or below it, and the ancestor is the same
+    INCARNATION it declared.
+
+    For a peer check on a local socket (MIS-0002-R122
+    (pd_MUST_check_channel_peer_lineage)): the kernel names the peer's pid and uid,
+    but every command an agent runs has the same uid and descends from the same
+    session, so the uid alone cannot tell the agent's channel from anything else
+    the agent runs. Lineage under the live session narrows it to that session's
+    process tree. The incarnation check stops a recycled session pid from passing,
+    and a channel left running after its session ended fails because its old
+    session is no longer its ancestor.
+    """
+    if not verify_incarnation(ancestor_pid, ancestor_start):
+        return False
+    if ancestor_pid not in ancestor_pids(pid):
+        print(f"⚠️ MACF: pid {pid} does not descend from pid {ancestor_pid} (refusing)", file=sys.stderr)
         return False
     return True
 
@@ -305,13 +333,19 @@ class SessionInfo:
     tmux: Optional[str] = None
 
 
-def read_session_info(pid: int) -> Optional[SessionInfo]:
-    """Read the sidecar. Returns None with a stated reason, never a partial."""
+def read_session_info(pid: int, missing_ok: bool = False) -> Optional[SessionInfo]:
+    """Read the sidecar. Returns None with a stated reason, never a partial. ``missing_ok``
+    keeps quiet about a sidecar that doesn't exist, which is ordinary for a session the
+    client's own daemon doesn't host (one under tmux)."""
     path = sessions_dir() / f"{pid}.json"
     try:
         with open(path) as fh:
             data = json.load(fh)
-    except (FileNotFoundError, PermissionError, OSError) as e:
+    except FileNotFoundError as e:
+        if not missing_ok:
+            print(f"⚠️ MACF: session sidecar unreadable for pid {pid}: {e}", file=sys.stderr)
+        return None
+    except (PermissionError, OSError) as e:
         print(f"⚠️ MACF: session sidecar unreadable for pid {pid}: {e}", file=sys.stderr)
         return None
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
@@ -334,6 +368,73 @@ def read_session_info(pid: int) -> Optional[SessionInfo]:
         updated_at=float(data.get("updatedAt") or 0) / 1000.0,
         tmux=data.get("tmux"),
     )
+
+
+@dataclass
+class HostedSession:
+    """A live session hosted by Claude Code's own background daemon.
+
+    MEASURED on 2.1.296: a worker started cold carries its flags in argv, but a
+    respawned one runs in a pre-started spare whose argv is generic, so the job
+    record is the one place the launch flags always are. ``channels`` is None
+    when that record is missing or unreadable: unknown, never "none".
+    """
+    pid: int
+    session_id: str
+    status: str
+    cwd: str
+    channels: Optional[list]
+
+
+def _respawn_flags(session_id: str) -> Optional[list]:
+    path = jobs_dir() / session_id[:8] / "state.json"
+    try:
+        with open(path) as fh:
+            flags = json.load(fh).get("respawnFlags")
+    except (FileNotFoundError, PermissionError, OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
+        print(f"⚠️ MACF: job record unreadable for session {session_id[:8]}: {e}", file=sys.stderr)
+        return None
+    return flags if isinstance(flags, list) else None
+
+
+def _channels_from_flags(flags: list) -> list:
+    """The channel entries in a job's launch flags.
+
+    MEASURED on 2.1.296: ``--channels=X`` is kept as one token, and ``--channels`` takes
+    every value up to the next flag.
+    """
+    channels = []
+    taking = False
+    for f in flags:
+        if not isinstance(f, str):
+            taking = False
+        elif f.startswith("--channels="):
+            channels.append(f.split("=", 1)[1])
+            taking = False
+        elif f == "--channels":
+            taking = True
+        elif f.startswith("-"):
+            taking = False
+        elif taking:
+            channels.append(f)
+    return channels
+
+
+def harness_hosted_sessions() -> list:
+    """Live sessions the client's background daemon hosts, with their channels.
+
+    The first thing MIS-0002-R66 (pd_MUST_adopt_harness_supervisor) needs: a readout
+    that sees what the harness's own supervisor runs instead of reporting nothing.
+    """
+    hosted = []
+    for info in live_sessions():
+        if info.kind != "bg":
+            continue
+        flags = _respawn_flags(info.session_id)
+        channels = None if flags is None else _channels_from_flags(flags)
+        hosted.append(HostedSession(pid=info.pid, session_id=info.session_id,
+                                    status=info.status, cwd=info.cwd, channels=channels))
+    return hosted
 
 
 def live_sessions() -> list:

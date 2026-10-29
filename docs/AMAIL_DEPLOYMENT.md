@@ -252,7 +252,7 @@ who is watching.
 
 ```yaml
 tier: host                          # default is container; every older file means container
-supervision: operator-at-terminal   # or hypervisor; `none` refuses to start
+supervision: operator-at-terminal   # or primal-daemon; the old name hypervisor still works; `none` refuses to start
 agents:
   ira:
     account: cversek

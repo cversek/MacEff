@@ -189,6 +189,8 @@ Events are emitted by hook handlers during agent operations.
 }
 ```
 
+Written only for a SubagentStop that ends a delegation. A SubagentStop for an agent nobody delegated (an empty `agent_type` and no SubagentStart bridge event for the agent) is recorded as `undelegated_agent_stopped` instead, with `session_id` and `agent_id`. See `hooks/handle_subagent_stop.py`.
+
 #### `todo_restoration_completed`
 
 **Purpose**: Track TODO file recovery from orphaned files

@@ -244,6 +244,20 @@ hook-side code should set it in its tests too.
 export MACF_EVENTS_MEMO_CHECK=1
 ```
 
+
+### `MACF_SESSION_ROOT`
+
+**Purpose**: Move the per-session directories (the hook log, scratch scripts and caches) out of `/tmp/macf`.
+
+**Value**: Absolute path to a directory; each session's directory is `<root>/<agent>/<session>/`.
+
+**Default**: `/tmp/macf`. The framework's test suite points it at a temporary directory for the whole run, so a run inside a live session leaves that session's hook log alone.
+
+**Example**:
+```bash
+export MACF_SESSION_ROOT=/tmp/my_test_sessions
+```
+
 ### `MACF_SESSION_RETENTION_DAYS`
 
 **Purpose**: Configure session retention policy.

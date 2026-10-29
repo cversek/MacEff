@@ -398,6 +398,17 @@ class TestPrivateReferencesAreRefused:
         r = subprocess.run(["bash", str(guard), str(msg)], capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
 
+    @pytest.mark.parametrize("card", ["*[IraMacEff@ee9a78: task#242 s_abc12345/c_40/p_x/t_1]*",
+                                      "_[IraMacEff@ee9a78: task#242 s_abc12345/c_40/p_x/t_1]_"])
+    def test_an_italic_card_footer_passes(self, tmp_path, card):
+        """public_voice allows the card bare or in italics, and a close-out posted
+        by task completion ends with the italic form."""
+        guard = self._guard(tmp_path)
+        msg = tmp_path / "m"
+        msg.write_text(f"## Close-out Report\n\nFixed by #499.\n\n---\n{card}\n")
+        r = subprocess.run(["bash", str(guard), str(msg)], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+
     def test_a_card_shaped_line_before_the_end_is_read_as_prose(self, tmp_path):
         guard = self._guard(tmp_path)
         msg = tmp_path / "m"

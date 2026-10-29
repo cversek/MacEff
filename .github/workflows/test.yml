@@ -1,28 +1,54 @@
 name: Tests
 
+# Three gates (policy testing §3.1, agreed on #552 on Oct 14):
+# - a push to a pull request: the full suite on Python 3.12, split across four runners;
+#   main's ruleset requires the branch to be up to date with main before it merges, so
+#   these results are for the actual merge (#654 was green against an old main);
+# - main: both versions, after each merge;
+# - nightly: both versions here, and macOS in macos.yml.
+# merge_group stays for the day the repository can have a merge queue (an organization's
+# can; a personal account's cannot).
 on:
   pull_request:
     branches: [main]
+  merge_group:
   push:
     branches: [main]
+  schedule:
+    - cron: '0 7 * * *'
+  workflow_dispatch:
 
 jobs:
-  test:
+  shard:
+    # Four runners per version, each running a quarter of the tests: MACF_TEST_SHARD
+    # picks a test's shard by a hash of its id (macf/tests/conftest.py). One runner with
+    # four workers took about 3 minutes, most of it tests that wait on real processes.
+    name: shard (${{ matrix.python-version }}, ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
+        # Both versions on every event, so the gate jobs below exist by name on every
+        # event. On a PR push the 3.10 shards skip their steps and report success without
+        # running; main and nightly run both for real (CTB, on #676).
         python-version: ['3.10', '3.12']
+        shard: [1, 2, 3, 4]
+    env:
+      RUN_TESTS: ${{ github.event_name != 'pull_request' || matrix.python-version == '3.12' }}
+      MACF_TEST_SHARD: ${{ matrix.shard }}/4
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
+        if: env.RUN_TESTS == 'true'
         with:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
           cache-dependency-path: macf/pyproject.toml
 
       - name: Install package with test dependencies
+        if: env.RUN_TESTS == 'true'
         # `proxy` too: the proxy tests import aiohttp, which lives in that extra,
         # so with [test] alone they could never pass in CI.
         # `amail` is here because the amail suite imports the crypto backend.
@@ -31,11 +57,18 @@ jobs:
         run: pip install -e "./macf[test,proxy,amail]"
 
       - name: Create CI environment directories
+        if: env.RUN_TESTS == 'true'
         run: mkdir -p ~/.claude/projects
 
       - name: Run tests (hermetic)
+        if: env.RUN_TESTS == 'true'
+        # In parallel (pytest-xdist): 4,600 tests took ~4.5 min serially here; measured
+        # Oct 14 at 87 s with 4 workers on Linux and ~95 s on macOS. -q, since nobody
+        # reads thousands of PASSED lines; failures still print in full. A test marked
+        # flaky (pytest-rerunfailures) is rerun once and the rerun shows in the summary;
+        # nothing else is ever retried (testing §3.1).
         run: >
-          pytest macf/tests/ -v --tb=short -m "not live"
+          pytest macf/tests/ -q -n auto -rR --tb=short -m "not live"
           --ignore=macf/tests/test_recommend.py
           --ignore=macf/tests/test_hybrid_search.py
           --ignore=macf/tests/test_lancedb_search.py
@@ -43,9 +76,17 @@ jobs:
           --ignore=macf/tests/test_env_cli.py
           --ignore=macf/tests/test_get_token_info.py
           --ignore=macf/tests/test_handle_session_start.py
-        timeout-minutes: 3
+        # MEASURED 2026-10-11: main's hermetic run took 2:48 on 3.10 and 2:12 on
+        # 3.12, so the old 3-minute limit failed the first pull request that
+        # added tests driving real processes, at 77% and with nothing failing.
+        # Six minutes still stops a hang.
+        timeout-minutes: 6
 
       - name: Run tests (live external state)
+        # Small and quick, so whole on the first shard rather than split.
+        if: env.RUN_TESTS == 'true' && matrix.shard == 1
+        env:
+          MACF_TEST_SHARD: ''
         # MEASURED on this runner, not predicted: 26 passed, 7 skipped. The
         # image does ship tmux, so most of this set genuinely executes here;
         # what stays skipped is systemd-analyze, the real claude client, and
@@ -64,6 +105,21 @@ jobs:
           --ignore=macf/tests/test_get_token_info.py
           --ignore=macf/tests/test_handle_session_start.py
         timeout-minutes: 2
+
+  test:
+    # The checks main's ruleset requires, test (3.10) and test (3.12), kept under their
+    # names so the ruleset needs no change when the shard count does. Each passes only
+    # when every shard passed, of both versions: a failing or cancelled shard fails both.
+    name: test (${{ matrix.python-version }})
+    needs: shard
+    if: always()
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.12']
+    steps:
+      - name: Every shard passed
+        run: test "${{ needs.shard.result }}" = success
 
   style:
     # The gate `ruff.toml` describes as blocking. It was configured, scripted,

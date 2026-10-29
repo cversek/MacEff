@@ -19,6 +19,8 @@ test = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "pytest-mock>=3.10.0",
+    "pytest-xdist>=3.5",  # CI runs the suite in parallel (testing §3.1)
+    "pytest-rerunfailures>=14.0",  # a rerun only for a test marked flaky with its issue (testing §3.1)
     "click>=8.0.0",
     "PyYAML>=6.0.0",
     "psutil>=5.9.0",  # For performance testing
@@ -41,6 +43,11 @@ lint = [
 ]
 proxy = [
     "aiohttp>=3.9.0",  # For API proxy streaming
+]
+tray = [
+    # The optional menu-bar app (MIS-0002-R67, R68): macOS only, never imported by the
+    # persistent layer. python -m macf.tray
+    "rumps>=0.4.0; sys_platform == 'darwin'",
 ]
 completion = [
     "argcomplete>=3.0.0",  # Shell tab completion for macf_tools CLI
@@ -70,3 +77,21 @@ macf_tools = "macf.cli:main"     # fastest startup (direct Python)
 amail-broker = "macf.amail.daemons.broker:main"
 amail-inbound = "macf.amail.daemons.inbound:main"
 amail-receiver = "macf.amail.daemons.receiver:main"
+
+# The MacEff channel (MIS-0002 section 6.14). Claude Code starts it from the plugin's
+# .mcp.json, which names this command, so it has to resolve on PATH wherever macf
+# is installed rather than depend on which interpreter a session finds first.
+maceff-channel = "macf.channels.maceff_channel:main"
+
+# The tray's state glyphs are files, not modules, so a wheel carries them only when
+# they are named here (an editable install reads them from the tree either way).
+[tool.setuptools.package-data]
+"macf.tray" = ["glyphs/*.svg", "glyphs/*.png"]
+# The maceff plugin marketplace, so an installed macf can install the MacEff channel from a
+# local directory (macf.channels.marketplace). Dot-directories are named outright: a wildcard
+# never matches them.
+"macf.channels" = [
+    "maceff_marketplace/.claude-plugin/marketplace.json",
+    "maceff_marketplace/plugins/maceff-channel/.mcp.json",
+    "maceff_marketplace/plugins/maceff-channel/.claude-plugin/plugin.json",
+]

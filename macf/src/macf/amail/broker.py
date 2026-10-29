@@ -55,7 +55,7 @@ from dataclasses import dataclass, field
 
 from macf.agent_events_log import append_event
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .audit import AuditLog
 from .contacts import ContactBook, ContactListError
@@ -175,44 +175,10 @@ def strip_inbound_headers(message: Message) -> List[str]:
     return cleared
 
 
-#: macOS / BSD: getsockopt(SOL_LOCAL, LOCAL_PEERCRED) fills a `struct xucred`
-#: {u_int cr_version; uid_t cr_uid; short cr_ngroups; gid_t cr_groups[16]}.
-#: The constants are not in Python's socket module on any platform.
-#: Usable bytes of `sun_path` (the array is 104 on macOS/BSD, 108 on Linux, and
-#: the last byte is the terminator).
-SUN_PATH_MAX = 103 if (sys.platform == "darwin" or sys.platform.endswith("bsd")) else 107
-
-_SOL_LOCAL = 0
-_LOCAL_PEERCRED = 0x0001
-_XUCRED_SIZE = 76
-_XUCRED_VERSION = 0
-
-
-def peer_uid(conn: socket.socket) -> int:
-    """The uid the kernel recorded for the connected process.
-
-    One implementation, used both to authenticate a submission and to meter
-    connections, so the two can never disagree about who is calling.
-
-    Linux supplies it as SO_PEERCRED (pid, uid, gid); macOS and the BSDs as
-    LOCAL_PEERCRED (a `struct xucred`). Both are set by the kernel at connect
-    time and neither can be influenced by the peer, which is the property the
-    caller relies on. Any other platform raises, and the caller fails closed.
-    """
-    if hasattr(socket, "SO_PEERCRED"):
-        raw = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
-                              struct.calcsize("3I"))
-        # ucred fields are unsigned; reading them signed turns a high uid negative.
-        # It failed closed, but a lookup should not depend on that.
-        _pid, uid, _gid = struct.unpack("3I", raw)
-        return uid
-    if sys.platform == "darwin" or sys.platform.endswith("bsd"):
-        raw = conn.getsockopt(_SOL_LOCAL, _LOCAL_PEERCRED, _XUCRED_SIZE)
-        version, uid = struct.unpack_from("II", raw)
-        if version != _XUCRED_VERSION:
-            raise OSError(f"unexpected xucred version {version} from LOCAL_PEERCRED")
-        return uid
-    raise OSError(f"no kernel peer-credential source on {sys.platform}")
+# The kernel peer credentials and the sun_path limit live in one shared module, so
+# the broker and the MacEff channel can never disagree about who is calling.
+# Re-exported here because callers and tests import them from the broker.
+from macf.utils.peercred import SUN_PATH_MAX, peer_uid
 
 #: The trust classification, as data rather than prose. canonicalize() asserts
 #: its union covers every Message field, so a field added later fails loudly
@@ -296,6 +262,15 @@ class Identity(str):
 
 def _how(sender: Any) -> str:
     return getattr(sender, "how", "so_peercred")
+
+
+
+def unprovisioned_box(agent: str, box: Path) -> str:
+    """Why mail for ``agent`` was not placed: its pickup box was never provisioned."""
+    return (f"the pickup box for '{agent}' ({box}) was never provisioned, and this broker "
+            f"runs as another uid, so a box it created would not be readable by "
+            f"'{agent}' (amail.md §2.3). Provision it with the agent's group, as "
+            f"container start-up does, and the next delivery will be placed")
 
 
 @dataclass
@@ -422,6 +397,17 @@ class BrokerConfig:
     def address_for(self, agent: str) -> str:
         return f"{agent}@{self.domain}"
 
+    def may_create_pickup_box(self, agent: str) -> bool:
+        """Whether this broker may create ``agent``'s missing pickup box itself (amail.md
+        §2.3): only when it runs as a uid bound to that agent in its own authentication
+        table, so the box it makes is the recipient's own. Across a uid boundary an
+        unprivileged broker cannot place a box in the recipient's group, and a box it
+        made would be unreadable by the agent it belongs to while the sender was told
+        the mail was delivered. The test is the broker's own table, not the declared
+        tier: a host broker left at the default tier still shares its agents' uid."""
+        me = os.geteuid()
+        return self.agent_uids.get(me) == agent or agent in self.shared_uid_agents.get(me, ())
+
     def agent_for(self, address: str) -> Optional[str]:
         """Local agent owning this address, or None if it is not ours."""
         addr = address.strip().lower()
@@ -483,7 +469,8 @@ class Broker:
     def __init__(self, config: BrokerConfig):
         self.config = config
         self.contacts = ContactBook(config.contacts_path) if config.contacts_path else None
-        self.audit = AuditLog(config.audit_path) if config.audit_path else None
+        self.audit = (AuditLog(config.audit_path, tier=config.tier)
+                      if config.audit_path else None)
         self._warned_peers: set = set()
 
     # ---------------------------------------------------------------- enforcement
@@ -957,7 +944,10 @@ class Broker:
                 "there is nowhere to hand this message. Refusing rather than "
                 "reporting a delivery that did not happen.")
         box = Path(self.config.inbound_handoff) / agent
-        box.mkdir(mode=0o2770, parents=True, exist_ok=True)
+        if not box.is_dir():
+            if not self.config.may_create_pickup_box(agent):
+                raise DeliveryError(unprovisioned_box(agent, box))
+            box.mkdir(mode=0o2770, parents=True, exist_ok=True)
         payload = message.serialize().encode("utf-8")
         stem = f"{int(time.time())}-{message.message_id}"
         sidecar = {
@@ -1632,7 +1622,10 @@ class Broker:
         return TrustClass.DOMAIN_AUTH if domain_authenticated else TrustClass.UNVERIFIED
 
     def accept_inbound(self, message: Message, recipient: str,
-                       via: str = "") -> Dict[str, Any]:
+                       via: str = "", *, rung: str = "shared") -> Dict[str, Any]:
+        # `rung` goes into the audit record (amail.md §3.3). Its one production
+        # caller is the shared-rung intake, hence the default; a new inbound path
+        # must pass its own.
         """Deliver inbound mail, or quarantine it when the sender is unlisted.
 
         An allowlisted sender is an AUTHORIZATION fact, not an authenticity or
@@ -1735,7 +1728,7 @@ class Broker:
             if self.audit:
                 self.audit.inbound(sender=message.sender, recipient=recipient,
                                    message_id=message.message_id,
-                                   decision="quarantined",
+                                   decision="quarantined", rung=rung,
                                    reason=(f"{reason}; via {via}" if via else reason),
                                    trust=message.trust)
             return {"ok": True, "decision": "quarantined", "reason": reason}
@@ -1781,7 +1774,7 @@ class Broker:
         if self.audit:
             self.audit.inbound(sender=message.sender, recipient=recipient,
                                message_id=message.message_id, decision="delivered",
-                               trust=message.trust,
+                               rung=rung, trust=message.trust,
                                # So an investigator can tell "the sender lied"
                                # apart from "we edited it and the signature
                                # stopped covering what we stored".
@@ -1893,7 +1886,7 @@ class Broker:
                           f"speak for its own domain")
         try:
             outcome = self.accept_inbound(message, recipient,
-                                         via=f"shared hand-off from {dom}")
+                                         via=f"shared hand-off from {dom}", rung="shared")
         except Exception as e:  # noqa: BLE001 - the pair must not vanish on an unexpected error
             return reject(f"{type(e).__name__}: {e}")
         try:
@@ -2422,6 +2415,10 @@ class _Server(socketserver.ThreadingUnixStreamServer):
     # with an explained one. Linux absorbs such bursts anyway; macOS refuses at
     # the backlog (ECONNREFUSED), so it has to be sized to the metering cap.
     request_queue_size = MAX_CONCURRENT_CONNECTIONS
+    # Called once per pass of the accept loop, idle or not (serve_forever passes at least
+    # every half second). The daemon entry point sets it to its liveness heartbeat's tick,
+    # so liveness stops when this loop stops (MIS-0002-R14).
+    on_pass: Optional[Callable[[], None]] = None
 
     def __init__(self, *args, **kwargs):
         self._meter_lock = threading.Lock()
@@ -2429,6 +2426,17 @@ class _Server(socketserver.ThreadingUnixStreamServer):
         self._per_uid: Dict[int, int] = {}
         self._overload_audited: Dict[Optional[int], float] = {}
         super().__init__(*args, **kwargs)
+
+    def service_actions(self) -> None:
+        super().service_actions()
+        if self.on_pass is not None:
+            self.on_pass()
+
+    def in_flight(self) -> int:
+        """Connections being handled now. A handler that hangs runs in its own thread and
+        doesn't stop the accept loop, so it shows here, bounded by the metering cap."""
+        with self._meter_lock:
+            return len(self._inflight)
 
     def _acquire(self, request: Any, uid: Optional[int]) -> bool:
         with self._meter_lock:
@@ -2461,7 +2469,11 @@ class _Server(socketserver.ThreadingUnixStreamServer):
     def _audit_overload(self, uid: Optional[int]) -> None:
         now = time.monotonic()
         with self._meter_lock:
-            if now - self._overload_audited.get(uid, 0.0) < OVERLOAD_AUDIT_INTERVAL:
+            # A uid never audited has no entry. Defaulting it to 0.0 would read as
+            # "audited at boot", because monotonic() counts from boot: on a machine
+            # up for less than the interval, the first refusal went unrecorded.
+            last = self._overload_audited.get(uid)
+            if last is not None and now - last < OVERLOAD_AUDIT_INTERVAL:
                 return
             self._overload_audited[uid] = now
             depth = len(self._inflight)

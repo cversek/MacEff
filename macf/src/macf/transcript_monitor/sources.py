@@ -93,6 +93,22 @@ class StoreSource:
         self._primed = True
         return self
 
+    def names(self) -> Optional[Set[str]]:
+        """The store's current names, read without adopting them, or None when it can't be
+        read. Names only, as everywhere here, and nothing is consumed."""
+        return self._entry_ids()
+
+    def start(self) -> Optional[Set[str]]:
+        """Adopt the current contents as seen, as ``prime`` does, and return them, or None
+        when the store can't be read. For a caller that runs while the session is down
+        (the primal daemon's notifier), what was waiting at its start is news to announce
+        once, not history to drop."""
+        current = self._entry_ids()
+        if current is not None:
+            self._seen = current
+            self._primed = True
+        return current
+
     def poll(self) -> List[Detection]:
         """Return at most one Detection describing what is NEW since last poll.
 
@@ -130,8 +146,10 @@ class StoreSource:
 
 
 def agent_store_source(agent_home: Path, name: str = "amail") -> StoreSource:
-    """A StoreSource over an agent's own pickup box."""
-    return StoreSource(Path(agent_home) / "amail" / "pickup", name=name)
+    """A StoreSource over an agent's own pickup box, where the broker delivers its mail
+    (``macf.amail.pickup``), never a guessed path."""
+    from macf.amail.pickup import pickup_box
+    return StoreSource(pickup_box(Path(agent_home)), name=name)
 
 
 def notify_sink(deliver: Callable, session_id_of: Callable) -> Callable:

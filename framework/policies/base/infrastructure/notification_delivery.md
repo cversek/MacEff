@@ -70,6 +70,7 @@ policy; it does not contain it.
 - What does a delivered notice cost, and for how long?
 - What budget governs it?
 - Why defer rather than drop?
+- Can a held notice come back as something it was not when it was deferred?
 
 **8 What a notifier must never do**
 - Why does a notifier not decide?
@@ -232,6 +233,14 @@ position-dependent and measurable.
 
 **7.3** This gives a principled reason to **defer rather than drop**: a deferred notice
 is *cheaper*, not merely later.
+
+**7.4 A held notice is rebuilt by the framework, never replayed from storage.** The
+deferred queue is a file outside the process, so what it records is a claim. Only a
+maskable notice can be deferred, so each held entry is rebuilt by its source's own
+factory, with that source's fixed wording; an entry naming a source that is never
+deferred (a notice about the agent itself) is dropped and reported, never delivered.
+Otherwise one write to the file could forge a notice no mask may hold, in words of its
+choosing.
 
 ## 8. What a notifier must never do
 

@@ -11,6 +11,7 @@ about sweeping. The sweep worked throughout the outage it was meant to catch.
 What did not exist was anything outside the watcher looking at it.
 """
 import json
+import sys
 import time
 
 import pytest
@@ -280,17 +281,20 @@ class TestHealthIsTheOutsideSurface:
         _stamp(daemon.WD_HEARTBEAT, epoch=time.time(), interval_s=300)
         assert daemon.health(object(), _FakeInbound()) == 1
 
-    def test_a_dead_WATCHDOG_exits_non_zero_even_with_a_live_watcher(self, paths):
-        """The reading nobody should trust: a green watcher reported by a
-        supervisor that has itself stopped checking. Without this the chain
-        just moves one level up and goes quiet there."""
+    def test_a_stale_watchdog_is_reported_and_does_not_decide(self, paths, capsys):
+        """Health reads the watcher's own heartbeat and runs the sweep itself, so it
+        needs no watchdog's word on either. In a container the broker account's primal
+        daemon supervises the watcher and schedules the sweep (MIS-0002-R53, R54), and
+        the outside watch supervises that daemon, so the chain ends there, not here."""
         _stamp(daemon.HEARTBEAT, epoch=time.time())
         _stamp(daemon.WD_HEARTBEAT, epoch=time.time() - 10_000, interval_s=300)
-        assert daemon.health(object(), _FakeInbound()) == 1
+        assert daemon.health(object(), _FakeInbound()) == 0
+        assert json.loads(capsys.readouterr().out)["watchdog"]["state"] == "stale"
 
-    def test_a_missing_watchdog_exits_non_zero(self, paths):
+    def test_no_watchdog_at_all_is_healthy_with_a_live_watcher(self, paths, capsys):
         _stamp(daemon.HEARTBEAT, epoch=time.time())
-        assert daemon.health(object(), _FakeInbound()) == 1
+        assert daemon.health(object(), _FakeInbound()) == 0
+        assert json.loads(capsys.readouterr().out)["watchdog"]["state"] == "absent"
 
     def test_aged_entries_alone_exit_non_zero(self, paths):
         _stamp(daemon.HEARTBEAT, epoch=time.time())
@@ -310,7 +314,8 @@ class TestTheWatcherPublishesItsCadence:
         field is dropped the observer silently falls back to the floor, which
         is wrong in the quiet direction for any slow cadence."""
         import inspect
-        assert "interval_s" in inspect.getsource(daemon.watch)
+        # The payload is written by the watcher's loop, which watch() runs.
+        assert "interval_s" in inspect.getsource(daemon._drain_until_stopped)
 
 
 def test_the_edge_ledger_lands_where_the_BROKER_can_write(tmp_path):
@@ -326,3 +331,31 @@ def test_the_edge_ledger_lands_where_the_BROKER_can_write(tmp_path):
     assert path.parent == cfg.broker_config.audit_path.parent
     assert path.parent != cfg.spool_dir.parent, (
         "the spool's parent is the ingest identity's directory, not the broker's")
+
+
+class TestAQuietSweepForASchedule:
+    """`sweep --quiet`: scheduled with `wake_when: stdout`, a clean sweep has nothing to
+    say, and a sweep that alerts is a failed run by its exit, never a quiet one."""
+
+    @staticmethod
+    def _sweep(monkeypatch, capsys, report, *flags):
+        import macf.amail.inbound as inbound_module
+        monkeypatch.setattr(daemon, "load_config", lambda: object())
+        monkeypatch.setattr(inbound_module, "sweep_aged", lambda cfg, now=None: report)
+        monkeypatch.setattr(sys, "argv", ["inbound", "sweep", *flags])
+        code = daemon.main()
+        return code, capsys.readouterr().out
+
+    CLEAN = {"alerts": 0, "aged_spool": [], "aged_pickup": []}
+    STUCK = {"alerts": 1, "aged_spool": ["a.eml"], "aged_pickup": []}
+
+    def test_clean_and_quiet_says_nothing(self, monkeypatch, capsys):
+        assert self._sweep(monkeypatch, capsys, self.CLEAN, "--quiet") == (0, "")
+
+    def test_an_alert_is_printed_and_exits_one_even_when_quiet(self, monkeypatch, capsys):
+        code, out = self._sweep(monkeypatch, capsys, self.STUCK, "--quiet")
+        assert code == 1 and json.loads(out)["alerts"] == 1
+
+    def test_without_quiet_the_report_is_printed_as_before(self, monkeypatch, capsys):
+        code, out = self._sweep(monkeypatch, capsys, self.CLEAN)
+        assert code == 0 and json.loads(out)["alerts"] == 0

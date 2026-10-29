@@ -437,7 +437,7 @@ Continuing to produce single-token / acknowledgment-only responses after seeing 
 
 **Always-available substrate menu** (each item is high-density token spend AND lasting value):
 
-- **🧠 ULTRATHINK idea generation / curation** — `macf_tools idea capture <text>` followed by reflection on the idea. The most powerful end-of-cycle activity: high token spend (thinking through the idea generates substantial output), produces lasting knowledge web nodes, and the curation pipeline can promote ideas to experiments/missions in future cycles. **This is the power move at the edge.**
+- **🧠 ULTRATHINK idea generation / curation** — `macf_tools idea create --title <text> --category <category>` followed by reflection on the idea. The most powerful end-of-cycle activity: high token spend (thinking through the idea generates substantial output), produces lasting knowledge web nodes, and the curation pipeline can promote ideas to experiments/missions in future cycles. **This is the power move at the edge.**
 - **Curate cycle learnings** — capture surprising findings as `agent/private/learnings/` entries
 - **Update strategic anchor** — incorporate cycle's findings into `agent/public/MacEff_Anchor.md`
 - **Create design drafts** for upcoming phase tasks (architectural reasoning before implementation)

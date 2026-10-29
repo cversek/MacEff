@@ -53,9 +53,17 @@ class AuditLog:
     this module's docstring says a log exists to preserve.
     """
 
-    def __init__(self, path: Path, max_bytes: int = MAX_AUDIT_BYTES):
+    def __init__(self, path: Path, max_bytes: int = MAX_AUDIT_BYTES,
+                 tier: Optional[str] = None):
         self.path = Path(path)
         self.max_bytes = max_bytes
+        #: The tier the writer runs under (amail.md §3.3, §7.5), stamped on EVERY
+        #: record. It was written only where a caller passed it, so an inbound line,
+        #: and any container-tier line, carried no tier, and a reader could not tell
+        #: "container" from "not recorded". The broker and the inbound paths pass
+        #: their configured tier; a log made without one (a test, a tool) stays
+        #: honest by omitting it rather than guessing.
+        self.tier = tier
         self._lock = threading.Lock()
         #: A DESCRIPTOR HELD IN RESERVE, closed to make room when the process
         #: runs out and reopened afterwards.
@@ -259,6 +267,8 @@ class AuditLog:
         })
 
     def _append(self, record: Dict[str, Any]) -> None:
+        if self.tier is not None:
+            record.setdefault("tier", self.tier)
         # The lock spans BOTH operations. Locking them separately would leave
         # exactly the window it is meant to close: the loss happens between the
         # rename and the marker write, not inside either one.
@@ -331,11 +341,13 @@ class AuditLog:
         })
 
     def inbound(self, *, sender: str, recipient: str, message_id: str,
-                decision: str, reason: Optional[str] = None,
+                decision: str, rung: str, reason: Optional[str] = None,
                 trust: Optional[str] = None) -> None:
+        # `rung` is required: amail.md §3.3 asks every record for the rung, and an
+        # inbound line had none. Required, so a new inbound path cannot omit it.
         rec = {
             "decision": decision, "direction": "inbound", "sender": sender,
-            "recipients": [recipient], "message_id": message_id,
+            "recipients": [recipient], "message_id": message_id, "rung": rung,
         }
         if reason:
             rec["reason"] = reason

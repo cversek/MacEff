@@ -1,0 +1,6 @@
+{
+  "name": "maceff-channel",
+  "description": "MacEff channel for Claude Code: notices from the agent's primal daemon arrive as channel events, without keystrokes. One-way; no tools and no permission relay (MIS-0002 section 6.14).",
+  "version": "0.1.0",
+  "keywords": ["maceff", "channel", "mcp", "notifications"]
+}
