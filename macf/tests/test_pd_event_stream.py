@@ -81,7 +81,12 @@ class Sub:
                 line["position"] = position
             if name is not None:
                 line["name"] = name
-            self.conn.sendall(json.dumps(line).encode() + b"\n")
+            try:
+                self.conn.sendall(json.dumps(line).encode() + b"\n")
+            except (BrokenPipeError, ConnectionResetError):
+                # The daemon may answer a peer it refuses and close before the hello lands (macOS
+                # raises here); its refusal line is still there to read.
+                pass
 
     def read(self, until, timeout=5.0):
         """Lines until one satisfies ``until``; that one, or None at the timeout or the close."""
