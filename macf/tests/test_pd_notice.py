@@ -728,12 +728,18 @@ def test_a_daemon_with_a_threshold_notices_unread_mail(tmp_path, base, run_daemo
     _mail(home, "waiting")
     daemon = run_daemon(home, base)
     assert daemon.unread_mail is not None and daemon.core.session_active_since() == float("-inf")
+
+    def owed():  # a snapshot: the daemon's thread writes this dict while the test reads it
+        return [o.source for o in list(daemon.notifier.owed.values())]
+
+    # The tracker appends the event and only then raises the notice, so wait for both: a loaded
+    # runner can look between the two.
     deadline = time.time() + 5
-    while time.time() < deadline and not list(read_events(only=(EVENT_UNREAD_MAIL,))):
+    while time.time() < deadline and not (list(read_events(only=(EVENT_UNREAD_MAIL,))) and "pd_unread_mail" in owed()):
         time.sleep(0.1)                                   # the serve loop ticks on its own
     [event] = list(read_events(only=(EVENT_UNREAD_MAIL,)))
     assert event["data"]["agent"] == "Tester@abc123" and event["data"]["count"] == 1
-    assert any(o.source == "pd_unread_mail" for o in daemon.notifier.owed.values())
+    assert "pd_unread_mail" in owed()
 
 
 from test_primal_daemon import _crash, drive, make_core, make_unit, script  # noqa: E402,F401 - fixtures
