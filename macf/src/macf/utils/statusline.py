@@ -66,7 +66,8 @@ def format_statusline(
     environment: str,
     tokens_used: int,
     tokens_total: int,
-    cl: int
+    cl: int,
+    modes: str = "",
 ) -> str:
     """
     Format statusline string for Claude Code display.
@@ -88,8 +89,11 @@ def format_statusline(
     # Format tokens
     tokens_str = f"{format_tokens(tokens_used)}/{format_tokens(tokens_total)}"
 
-    # Build fields list
-    fields = [agent_name]
+    # Build fields list. The modes lead, so the operator sees at a glance whether the
+    # agent reads them as idle (😴) or remote (📡): the hook lines carrying the same
+    # emoji reach the agent's context, not the operator's screen.
+    fields = [modes.strip()] if modes.strip() else []
+    fields.append(agent_name)
 
     if project:
         fields.append(project)
@@ -119,6 +123,7 @@ def get_statusline_data(cc_json: Optional[Dict[str, Any]] = None) -> Dict[str, A
         - tokens_total: int
         - cl: int
     """
+    cc_json_in = cc_json
     # Get MACF-sourced data
     try:
         agent_name = get_agent_identity()
@@ -155,7 +160,16 @@ def get_statusline_data(cc_json: Optional[Dict[str, Any]] = None) -> Dict[str, A
             tokens_total = get_total_context()
             cl = 100
 
+    modes = ""
+    try:
+        from macf.modes.detection import detect_active_modes, format_mode_indicators
+        session_id = (cc_json_in or {}).get("session_id", "") if isinstance(cc_json_in, dict) else ""
+        modes = format_mode_indicators(detect_active_modes(session_id, {"cl_level": cl}))
+    except Exception as e:  # noqa: BLE001 - a status line must render even when mode detection fails
+        print(f"⚠️ MACF: mode detection for the status line failed: {e}", file=sys.stderr)
+
     return {
+        "modes": modes,
         "agent_name": agent_name,
         "project": project,
         "environment": environment,

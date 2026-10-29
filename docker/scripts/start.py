@@ -17,6 +17,7 @@ import json
 import hashlib
 import shlex
 import shutil
+import stat
 import subprocess
 import pwd
 import grp
@@ -203,6 +204,86 @@ def write_service_identity(name: str, card_name: str, ids, home: Path, *, chown=
         chown(tmp, 0, 0)
         os.chmod(tmp, 0o644)
         tmp.replace(path)
+
+
+class AgentIdentityConflict(Exception):
+    """An agent's home already names it differently from agents.yaml, or can't be read."""
+
+
+def write_agent_card(username: str, card_name: str, home: Path, *, chown=os.chown) -> bool:
+    """Write the calling card agents.yaml declares for an agent into its home, as
+    ``agent_identity.calling_card`` in ``.maceff/config.json``, where its primal daemon reads it
+    (``pd.names.agent_card``). Every other key stays, and so do the file's owner and mode. A file
+    that doesn't exist is created as the agent's, mode 0600, holding just that key. Returns True
+    when it wrote, False when the home already held this card.
+
+    A different card already in the home is not overwritten: the card is the agent's identity,
+    and its daemon's sockets and unit names are keyed by it, so a silent rename would strand them.
+    That, and a config.json that can't be read, raise ``AgentIdentityConflict`` naming both
+    values, and the caller withholds that agent's daemon.
+
+    The home is the agent's to write, so nothing here follows a link it could plant: a symlinked
+    ``.maceff`` or ``config.json`` is refused, and the temporary file is created afresh, never
+    opened through whatever already has its name."""
+    dot = home / '.maceff'
+    path = dot / 'config.json'
+    if dot.is_symlink() or path.is_symlink():
+        raise AgentIdentityConflict(f"{path} or its directory is a symlink; left as it is")
+    if path.exists():
+        try:
+            config = json.loads(path.read_text())
+        except (OSError, ValueError) as e:
+            raise AgentIdentityConflict(f"{path} can't be read ({e}); left as it is") from e
+        identity = config.get('agent_identity') if isinstance(config, dict) else None
+        if not isinstance(config, dict) or not isinstance(identity or {}, dict):
+            raise AgentIdentityConflict(f"{path} isn't a config with an agent_identity table; left as it is")
+        identity = identity or {}
+        for key in ('calling_card', 'moniker'):
+            held = identity.get(key)
+            if isinstance(held, str) and held.strip() and held.strip() != card_name:
+                raise AgentIdentityConflict(
+                    f"identity conflict: {path} holds {key} {held.strip()!r}, agents.yaml declares "
+                    f"calling_card {card_name!r}; not overwritten")
+        if isinstance(identity.get('calling_card'), str) and identity['calling_card'].strip() == card_name:
+            return False
+        config['agent_identity'] = {**identity, 'calling_card': card_name}
+        st = path.stat()
+        uid, gid, mode = st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode)
+    else:
+        uid, gid = account_ids(username)
+        if not dot.exists():
+            dot.mkdir(mode=0o755)
+            chown(dot, uid, gid)
+        config, mode = {'agent_identity': {'calling_card': card_name}}, 0o600
+    tmp = dot / 'config.json.tmp'
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w') as f:
+        f.write(json.dumps(config, indent=2) + '\n')
+    chown(tmp, uid, gid)
+    os.chmod(tmp, mode)
+    tmp.replace(path)
+    return True
+
+
+def write_agent_cards(agents_config: AgentsConfig, *, chown=os.chown) -> Dict[str, str]:
+    """Write every declared agent calling card into its agent's home (``write_agent_card``), at
+    every start, before any declaration renders. An agent that declares none gets nothing
+    written. Returns, by account, why each refused agent's identity wasn't settled: one agent's
+    conflict costs that agent its daemon, never the others'."""
+    refused = {}
+    for spec in agents_config.agents.values():
+        card_name = getattr(spec, 'calling_card', None)
+        if card_name is None:
+            continue
+        home = HOME_ROOT / spec.username
+        try:
+            if write_agent_card(spec.username, card_name, home, chown=chown):
+                log(f"calling card of {spec.username}: {card_name} written to {home / '.maceff' / 'config.json'}")
+        except (AgentIdentityConflict, OSError, KeyError) as e:
+            refused[spec.username] = str(e)
+            log(f"calling card of {spec.username}: refused; its daemon won't be rendered or started. {e}")
+    return refused
 
 
 def daemon_accounts(agents_config: AgentsConfig) -> List[tuple]:
@@ -834,9 +915,24 @@ fi
 # Marketplace sources the provisioner may add on a fresh home. A channel naming
 # a marketplace not listed here is skipped with a warning rather than guessed
 # at -- provisioning must not invent a source for third-party code.
+def _packaged_maceff_marketplace() -> Optional[str]:
+    """The ``maceff`` marketplace shipped inside the installed macf package, as a local
+    directory source, or None when this macf has none. Local, so the MacEff channel
+    installs offline and from whatever macf the container runs."""
+    try:
+        from macf.channels.marketplace import packaged_marketplace
+        return str(packaged_marketplace())
+    except (ImportError, OSError) as e:
+        log(f"maceff marketplace: not available from the installed macf ({e})")
+        return None
+
+
 KNOWN_MARKETPLACE_SOURCES = {
     'claude-plugins-official': 'anthropics/claude-plugins-official',
 }
+_maceff_source = _packaged_maceff_marketplace()
+if _maceff_source:
+    KNOWN_MARKETPLACE_SOURCES['maceff'] = _maceff_source
 
 
 def ensure_channel_plugins(username: str, channels: Optional[List[str]]) -> None:
@@ -878,7 +974,7 @@ def ensure_channel_plugins(username: str, channels: Optional[List[str]]) -> None
                     f"has no known source; skipping (add it to "
                     f"KNOWN_MARKETPLACE_SOURCES or pre-configure the home)")
                 continue
-            as_user(f'claude plugin marketplace add {source}')
+            as_user(f'claude plugin marketplace add {shlex.quote(source)}')
         else:
             as_user(f'claude plugin marketplace update {marketplace}')
 
@@ -1772,12 +1868,36 @@ def start_policy_index(agents_config: AgentsConfig, build=None):
     return thread
 
 
+def declared_search_unit(agents_config: AgentsConfig) -> Optional[tuple]:
+    """The (account, unit) of the first primal daemon unit any account declares whose command
+    runs the search service (``macf.search_service``), agents' and services' alike; None
+    when none does."""
+    for account, body, _home, _card in daemon_accounts(agents_config):
+        for unit in (body or {}).get('units', []) or []:
+            if 'macf.search_service' in ' '.join(str(a) for a in unit.get('command', []) or []):
+                return account, unit
+    return None
+
+
 def start_search_service_daemon(agents_config: AgentsConfig) -> None:
     """Start search service daemon as first PA user (background process).
 
     The search service provides 89x faster policy recommendations by keeping
     the sentence-transformers model warm in memory.
+
+    When an account's primal daemon declares it as a unit, that daemon runs and supervises it
+    and this step starts none: a second copy would take the port first.
     """
+    declared = declared_search_unit(agents_config)
+    if declared is not None:
+        account, unit = declared
+        log(f"search service: runs under {account}'s primal daemon as unit "
+            f"'{unit.get('name', '?')}'; this step starts none")
+        if '--unit' not in [str(a) for a in unit.get('command', []) or []]:
+            log(f"⚠️ MACF: search service: unit '{unit.get('name', '?')}' of {account} runs "
+                f"macf.search_service without --unit, so it may daemonize and leave its daemon "
+                f"supervising a process that has exited")
+        return
     if not agents_config.agents:
         log("No agents configured, skipping search service")
         return
@@ -2638,14 +2758,18 @@ def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] 
     the agent could write is one a run could change before a daemon restart; this one it can't
     (MIS-0002-R33 (run_MUST-NOT_change_schedules)). An agent that declares none has any earlier
     rendering removed. A service that declares one gets its identity written into its home
-    first (``write_service_identity``). Returns the accounts rendered for."""
+    first (``write_service_identity``), and so does every agent that declares a calling card
+    (``write_agent_cards``); an agent whose home holds a different card is not rendered for.
+    Returns the accounts rendered for."""
     from macf.pd import names as pd_names
+    from macf.models.agent_spec import with_schedule_targets
     from macf.pd.interface import Declaration
     root = Path(root or pd_names.RENDERED_DECLARATIONS)
     root.mkdir(mode=0o755, parents=True, exist_ok=True)
     chown(root, 0, 0)
     os.chmod(root, 0o755)
     rendered = []
+    refused = write_agent_cards(agents_config, chown=chown)
     for account, body, home, card_name in daemon_accounts(agents_config):
         target_dir = root / account
         target = target_dir / 'declaration.json'
@@ -2657,13 +2781,15 @@ def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] 
             continue
         tmp = target_dir / '.declaration.json.tmp'
         try:
+            if account in refused:
+                raise OSError(f"its calling card was refused ({refused[account]})")
             try:
                 if card_name is not None:
                     write_service_identity(account, card_name, agents_config.ids, home, chown=chown)
                 card = pd_names.agent_card(home)
             except (pd_names.IdentityError, KeyError) as e:
                 raise OSError(f"its calling card can't be read ({e})") from e
-            declaration = Declaration(version=1, agent=card, **body)
+            declaration = Declaration(version=1, agent=card, **with_schedule_targets(body, card))
             target_dir.mkdir(mode=0o755, exist_ok=True)
             chown(target_dir, 0, 0)
             os.chmod(target_dir, 0o755)

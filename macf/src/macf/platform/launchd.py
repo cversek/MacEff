@@ -10,18 +10,27 @@ Rendering, then install and removal as plans: ``install_plan`` and ``uninstall_p
 what would be written and run, and only ``apply_plan`` does it. A LaunchAgent persists on
 the host, so a plan is shown before it is applied.
 """
+import os
 import plistlib
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from macf.pd.interface import launchd_label
+from macf.pd.names import PD_IDENTIFIER
 from macf.utils.atomic import write_text_atomic
 
-_VERBS = ("bootstrap", "bootout", "kickstart", "print")
+_VERBS = ("bootstrap", "bootout", "kickstart", "print", "enable", "disable")
 
 #: launchctl's exit status for a boot-out of a service the domain does not have, measured on
 #: macOS 15 as "Boot-out failed: 3: No such process". Removal's goal is met, so it goes on.
 BOOTOUT_NOT_LOADED = 3
+
+#: How long a reload waits for a booted-out job to leave launchd before bootstrapping it.
+#: ``bootout`` returns while the job is still stopping, and a bootstrap in that window fails
+#: with "Bootstrap failed: 5" (measured on macOS 15 with a job that takes 3 s to exit).
+RELOAD_WAIT_S = 30.0
+#: How often that wait looks.
+RELOAD_POLL_S = 0.25
 
 
 def pd_label(card: str) -> str:
@@ -43,13 +52,24 @@ def render_pd_launch_agent(card: str, program_argv: List[str], home: str,
     *program_argv* starts the daemon; the plist carries no declaration and no agent
     configuration (MIS-0002-R04 (outer_tier_MUST-NOT_hold_agent_config)), and no
     identity in its environment.
+
+    launchd runs its first element, the interpreter, as ``Program``, with ``maceff_pd`` in
+    its place as ``argv[0]``. macOS has no call that renames a running process, so this is
+    where the daemon gets the name ``ps`` and ``pgrep`` show
+    (MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd)). The kernel's own name, which ``top``
+    shows, stays the interpreter's. A framework-build interpreter is run through its
+    Python.app directly (``framework_app``), since its launcher's re-exec would rename it.
     """
     if not program_argv:
         raise ValueError("program_argv is empty")
+    if not os.path.isabs(program_argv[0]):
+        raise ValueError(f"launchd runs a program by its absolute path, not {program_argv[0]!r}")
     label = pd_label(card)
+    app = framework_app(program_argv[0])
     plist = {
         "Label": label,
-        "ProgramArguments": list(program_argv),
+        "Program": app or program_argv[0],
+        "ProgramArguments": [PD_IDENTIFIER, *program_argv[1:]],
         "RunAtLoad": True,
         "KeepAlive": True,
         "ThrottleInterval": 10,
@@ -64,14 +84,41 @@ def render_pd_launch_agent(card: str, program_argv: List[str], home: str,
         "StandardOutPath": f"{log_dir}/{label}.out.log",
         "StandardErrorPath": f"{log_dir}/{label}.err.log",
     }
+    if app:
+        # What the build's own launcher would have told Python.app: the path it was started
+        # as, so a venv survives the direct start. An internal of CPython's macOS build, which
+        # a test pins, so a release that drops it fails there rather than losing the name.
+        plist["EnvironmentVariables"] = {"__PYVENV_LAUNCHER__": program_argv[0]}
     path = f"{home}/Library/LaunchAgents/{label}.plist"
     return path, plistlib.dumps(plist, fmt=plistlib.FMT_XML, sort_keys=True)
+
+
+def framework_app(interpreter: str) -> Optional[str]:
+    """The Python.app binary a framework-build interpreter re-execs itself through, or None
+    for a plain build.
+
+    A framework build's ``bin/python3`` (Homebrew's, python.org's) is a launcher: it re-execs
+    ``Resources/Python.app/Contents/MacOS/Python``, which names the process, and passes the
+    path it was started as in ``__PYVENV_LAUNCHER__``. Read from the interpreter's resolved
+    path, so a venv's ``python3`` leads to its base build.
+    """
+    real = os.path.realpath(interpreter)
+    bin_dir = os.path.dirname(real)
+    version_dir = os.path.dirname(bin_dir)
+    versions = os.path.dirname(version_dir)
+    if (os.path.basename(bin_dir) != "bin" or os.path.basename(versions) != "Versions"
+            or not os.path.basename(os.path.dirname(versions)).endswith(".framework")):
+        return None
+    app = os.path.join(version_dir, "Resources", "Python.app", "Contents", "MacOS", "Python")
+    return app if os.path.isfile(app) else None
 
 
 def launchctl_argv(verb: str, label: str, uid: int, plist_path: Optional[str] = None) -> List[str]:
     """The launchctl command for *verb* on this user's GUI domain.
 
-    Only the domain-target verbs are offered; the legacy load/unload are not.
+    Only the domain-target verbs are offered; the legacy load/unload are not. ``disable``
+    keeps a job from loading at the next login and ``enable`` lifts that, so a job booted out
+    and disabled is stopped the way systemd's ``disable --now`` stops a unit.
     """
     if verb not in _VERBS:
         raise ValueError(f"unsupported launchctl verb {verb!r}; use one of {', '.join(_VERBS)}")
@@ -102,10 +149,14 @@ class Step:
     content: Optional[bytes] = None
     argv: Optional[List[str]] = None
     not_loaded_ok: bool = False
+    #: For an ``unloaded`` step: how long to wait for the label to leave launchd.
+    wait_s: float = 0.0
 
     def describe(self) -> str:
         if self.what == "launchctl":
             return " ".join(self.argv or [])
+        if self.what == "unloaded":
+            return f"wait up to {self.wait_s:g} s for {(self.argv or [''])[-1]} to leave launchd"
         return f"{self.what} {self.path}"
 
 
@@ -118,17 +169,29 @@ def check_socket_path(path: str) -> None:
 
 
 def install_plan(card: str, program_argv: List[str], home: str, log_dir: str, uid: int,
-                 socket_paths: List[str]) -> List[Step]:
+                 socket_paths: List[str], reload: bool = False) -> List[Step]:
     """What installing one agent's primal daemon does, in order, without doing it.
 
     Every socket path the daemon will bind is checked first, so a path that cannot work
     stops the install before anything is written (R129).
+
+    ``reload`` replaces a job that may already be loaded. launchd refuses to bootstrap a
+    label it has loaded, and ``kickstart -k`` restarts a job from the definition read at its
+    bootstrap, not from the plist on disk. So the job is booted out first, then bootstrapped
+    from the new plist. The boot-out ends the daemon; ``AbandonProcessGroup`` keeps its units
+    running, and the daemon the bootstrap starts adopts them (persistent_layer 12.6).
     """
     for sp in socket_paths:
         check_socket_path(sp)
     path, data = render_pd_launch_agent(card, program_argv, home, log_dir)
-    return [Step("write", path=path, content=data),
-            Step("launchctl", argv=launchctl_argv("bootstrap", pd_label(card), uid, plist_path=path))]
+    label = pd_label(card)
+    steps = [Step("write", path=path, content=data)]
+    if reload:
+        steps.append(Step("launchctl", argv=launchctl_argv("bootout", label, uid), not_loaded_ok=True))
+        # bootout returns while the job is still stopping; a bootstrap before it's gone fails.
+        steps.append(Step("unloaded", argv=launchctl_argv("print", label, uid), wait_s=RELOAD_WAIT_S))
+    steps.append(Step("launchctl", argv=launchctl_argv("bootstrap", label, uid, plist_path=path)))
+    return steps
 
 
 def uninstall_plan(card: str, home: str, uid: int) -> List[Step]:
@@ -159,7 +222,17 @@ def apply_plan(steps: List[Step], run=None, force: bool = False) -> List[str]:
                     raise FileExistsError(f"{s.path} exists and differs from the rendered plist; "
                                           f"review it, then apply with force")
     done = []
+    booted_out = None
     for s in steps:
+        if s.what == "unloaded":
+            deadline = _clock() + s.wait_s
+            while run(s.argv).returncode == 0:
+                if _clock() >= deadline:
+                    raise RuntimeError(f"{s.argv[-1]} was booted out but is still loaded after {s.wait_s:g} s, so "
+                                       f"it wasn't bootstrapped again; the daemon isn't running" + _reload_hint(steps))
+                _sleep(RELOAD_POLL_S)
+            done.append(s.describe())
+            continue
         if s.what == "write":
             os.makedirs(os.path.dirname(s.path), exist_ok=True)
             # Whole or not at all: a full disk must not leave a half-written plist.
@@ -173,9 +246,31 @@ def apply_plan(steps: List[Step], run=None, force: bool = False) -> List[str]:
                 done.append(f"{s.describe()} (not loaded)")
                 continue
             if r.returncode != 0:
-                raise RuntimeError(f"{s.describe()} failed ({r.returncode}): {(r.stderr or r.stdout).strip()}")
+                said = f"{s.describe()} failed ({r.returncode}): {(r.stderr or r.stdout).strip()}"
+                if booted_out and s.argv[1:2] == ["bootstrap"]:
+                    # The job is gone from launchd now: say so, and how to load it again.
+                    said += f"; {booted_out} was booted out and isn't loaded now" + _reload_hint(steps)
+                raise RuntimeError(said)
+            if s.argv[1:2] == ["bootout"]:
+                booted_out = s.argv[-1]
         done.append(s.describe())
     return done
+
+
+def _reload_hint(steps: List[Step]) -> str:
+    """The command that loads the job again, from the plan's own bootstrap step."""
+    boot = next((s for s in steps if s.what == "launchctl" and s.argv[1:2] == ["bootstrap"]), None)
+    return f". Load it again with: {' '.join(boot.argv)}" if boot else ""
+
+
+def _clock() -> float:
+    import time
+    return time.monotonic()
+
+
+def _sleep(seconds: float) -> None:
+    import time
+    time.sleep(seconds)
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +344,39 @@ def parse_print(output: str) -> AgentStatus:
     pid = int(fields["pid"]) if fields.get("pid", "").isdigit() else None
     return AgentStatus(loaded=True, running=fields.get("state") == "running", pid=pid,
                        last_exit=fields.get("last exit code"))
+
+
+# ---------------------------------------------------------------------------
+# The cutover job: one run of harness cutover, outside the session it ends
+# ---------------------------------------------------------------------------
+
+def cutover_label(card: str) -> str:
+    """The label of the one-shot job that moves one agent's session onto its daemon:
+    ``maceff_pd.<id>.cutover``. One per agent, so two moves can't overlap."""
+    return pd_label(card) + ".cutover"
+
+
+def render_cutover_job(card: str, program_argv: List[str], log_path: str,
+                       environment: Optional[dict] = None) -> bytes:
+    """A one-shot LaunchAgent that runs ``harness cutover --execute`` once, in the user's GUI
+    session and outside the session the move ends, the launchd counterpart of the transient
+    systemd unit. ``RunAtLoad`` starts it when it is bootstrapped; there is no ``KeepAlive``,
+    so launchd never runs it again, and the job removes its own plist when it finishes.
+    Everything it prints goes to *log_path*."""
+    if not program_argv or not os.path.isabs(program_argv[0]):
+        raise ValueError(f"launchd runs a program by its absolute path, not {program_argv[:1]!r}")
+    plist = {
+        "Label": cutover_label(card),
+        "ProgramArguments": list(program_argv),
+        "RunAtLoad": True,
+        "KeepAlive": False,
+        "LimitLoadToSessionType": "Aqua",
+        "StandardOutPath": log_path,
+        "StandardErrorPath": log_path,
+    }
+    if environment:
+        plist["EnvironmentVariables"] = dict(environment)
+    return plistlib.dumps(plist, fmt=plistlib.FMT_XML, sort_keys=True)
 
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,8 @@ Every invitation, pause, resume and ending is an event in the observed agent's o
 (MIS-0002-R90 (observation_acts_MUST_be_events)); the current state is never stored
 anywhere else, so it is whatever the log says. Each function here checks one act and
 returns the event to append; ``fold`` reads a log back. Nothing here appends, opens a
-socket or reads the clock: the caller passes ``now``.
+socket or reads the clock: the caller passes ``now``. ``macf.observe.record`` takes an
+act, folding the state from the agent's own log and appending the event there.
 
 Who is asking is the caller's to establish. ``end`` takes ``ended_by`` as given, and the
 caller derives it from the transport the act arrived on: the observed agent's own control
