@@ -31,8 +31,8 @@ the daemon sets.
 So under ``on-failure``, a unit that wants to be restarted has to fail. A watched unit
 isn't the system daemon's to restart, so its ``restart`` is ``never`` until the draft
 settles whether the daemon may kickstart a watched job. Nor does the daemon start or stop
-one, so a watched unit carries no command, environment, groups, memory limit or stop
-grace: each would be a key the daemon ignores.
+one, so a watched unit carries no command, environment, exit table, groups, memory limit
+or stop grace: each would be a key the daemon ignores.
 
 **Not here, for the loader:** reading the file belongs to whatever loads it. The loader
 opens the file by descriptor, checks that root owns it, and refuses one that a group or
@@ -59,7 +59,7 @@ MAX_GROUPS = 16
 
 #: The keys only a parented unit uses: the system daemon neither starts nor stops a
 #: watched unit, so on one each of these would be ignored.
-PARENT_ONLY = ("command", "environment", "groups", "memory_limit_mb", "stop_grace_s")
+PARENT_ONLY = ("command", "environment", "exit_codes", "groups", "memory_limit_mb", "stop_grace_s")
 
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ACCOUNT = r"^[a-z_][a-z0-9_-]{0,31}$"
