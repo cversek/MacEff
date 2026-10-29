@@ -18,9 +18,26 @@ Two environment values belong to the system daemon, never to a unit:
 
 A unit that declares either one is refused, so a declaration can never disagree with what
 the daemon sets.
+
+**The exit table** is the primal daemon's ``ExitCodes``, read the way its core reads it:
+
+| a parented unit exits with | ``restart: always`` | ``on-failure`` | ``never`` |
+|---|---|---|---|
+| a code in ``success`` | restarted | stays stopped | stays stopped |
+| a code in ``no_restart`` | stays stopped | stays stopped | stays stopped |
+| any other code | a failure, restarted with backoff | a failure, restarted with backoff | a failure, stays down |
+
+So under ``on-failure``, a unit that wants to be restarted has to fail. A watched unit
+isn't the system daemon's to restart, so its ``restart`` is ``never`` until the draft
+settles whether the daemon may kickstart a watched job.
+
+**Not here, for the loader:** reading the file belongs to whatever loads it. The loader
+opens the file by descriptor, checks that root owns it, and refuses one that a group or
+others can write. It also refuses an account that resolves to uid 0 at start, which the
+name check below can't see.
 """
 import re
-from typing import Dict, List, Literal, Union
+from typing import Dict, List, Literal, Tuple, Union
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -29,6 +46,10 @@ from macf.pd.interface import ExitCodes
 
 #: Environment names the system daemon sets in every unit itself.
 RESERVED_ENVIRONMENT = ("TZ", "MACEFF_SD_UNIT")
+
+#: Supplementary groups a unit may declare. macOS's setgroups(2) refuses more than 16, and
+#: one format holds on every platform, so the limit is applied everywhere at load.
+MAX_GROUPS = 16
 
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ACCOUNT = r"^[a-z_][a-z0-9_-]{0,31}$"
@@ -97,16 +118,30 @@ class SystemUnit(_Closed):
         bad = [g for g in groups if not re.match(_ACCOUNT, g)]
         if bad:
             raise ValueError(f"group names must match {_ACCOUNT}: {', '.join(map(repr, bad))}")
+        if len(groups) > MAX_GROUPS:
+            raise ValueError(f"{len(groups)} supplementary groups; at most {MAX_GROUPS}, the most "
+                             f"macOS's setgroups accepts")
         return groups
 
     @model_validator(mode="after")
     def _relationship_fits(self) -> "SystemUnit":
-        if self.relationship == "parent" and not self.command:
-            raise ValueError(f"unit {self.name}: a parented unit needs the command its parent starts")
-        if (isinstance(self.platform, LaunchdPlatform) and self.platform.domain == "gui"
-                and self.relationship == "parent"):
-            raise ValueError(f"unit {self.name}: a job in a login's gui domain belongs to that login's "
-                             f"session, so the system daemon watches it and can't parent it")
+        if self.relationship == "parent":
+            if not self.command:
+                raise ValueError(f"unit {self.name}: a parented unit needs the command its parent starts")
+            if self.account == "root":
+                raise ValueError(f"unit {self.name}: a parented unit runs feature code, which never runs "
+                                 f"as root; give it an unprivileged account")
+            if isinstance(self.platform, LaunchdPlatform) and self.platform.domain == "gui":
+                raise ValueError(f"unit {self.name}: a job in a login's gui domain belongs to that login's "
+                                 f"session, so the system daemon watches it and can't parent it")
+        else:
+            if isinstance(self.platform, LinuxPlatform):
+                raise ValueError(f"unit {self.name}: nothing names what to watch on Linux yet; the Linux "
+                                 f"host form, which adds the identifier, hasn't been decided")
+            if self.restart != "never":
+                raise ValueError(f"unit {self.name}: a watched unit isn't the system daemon's to restart, "
+                                 f"so its restart is never until the draft settles whether the daemon "
+                                 f"may kickstart a watched job")
         return self
 
 
@@ -117,6 +152,9 @@ class SystemDeclaration(_Closed):
     version: Literal[1] = 1
     system: str = Field(pattern=_NAME)
     time_zone: str
+    #: The outer manager's limit on stopping the whole system daemon: a container's
+    #: ``docker stop -t``, or launchd's ``ExitTimeOut``. Every stop must finish inside it.
+    stop_timeout_s: float = Field(gt=0)
     units: List[SystemUnit] = Field(min_length=1)
 
     @field_validator("time_zone")
@@ -139,6 +177,12 @@ class SystemDeclaration(_Closed):
             if unknown:
                 raise ValueError(f"unit {unit.name} starts after unknown unit(s): {', '.join(unknown)}")
         start_order(self)  # refuses a cycle
+        needed, chain = longest_stop(self)
+        if needed >= self.stop_timeout_s:
+            raise ValueError(f"stopping takes up to {needed:g} s along {' -> '.join(chain)} (each unit's "
+                             f"stop_grace_s, in reverse start order), which doesn't fit inside "
+                             f"stop_timeout_s {self.stop_timeout_s:g}; raise the outer manager's stop "
+                             f"timeout or shorten a grace")
         return self
 
 
@@ -163,6 +207,21 @@ def start_order(declaration: SystemDeclaration) -> List[str]:
     for unit in declaration.units:
         place(unit.name)
     return placed
+
+
+def longest_stop(declaration: SystemDeclaration) -> Tuple[float, List[str]]:
+    """The longest a full stop can take, and the chain it takes that long along.
+
+    Units stop in reverse start order: a unit stops before the units its ``after`` names,
+    one after another, while units with no order between them stop together. So the worst
+    case is the chain whose stop graces add up to the most."""
+    by_name = {u.name: u for u in declaration.units}
+    best: Dict[str, Tuple[float, List[str]]] = {}
+    for name in start_order(declaration):
+        unit = by_name[name]
+        before = max((best[a] for a in unit.after), key=lambda t: t[0], default=(0.0, []))
+        best[name] = (unit.stop_grace_s + before[0], [name] + before[1])
+    return max(best.values(), key=lambda t: t[0])
 
 
 def unit_environment(declaration: SystemDeclaration, unit: SystemUnit) -> Dict[str, str]:
