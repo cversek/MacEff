@@ -8,7 +8,7 @@ to user's Claude Code settings (autocompact, etc.).
 import json
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 
 def get_autocompact_setting(project_root: Optional[Path] = None) -> bool:
@@ -263,16 +263,26 @@ _PERMANENT_ASK = [
 # 10.6; the repo owner's ruling on #744).
 _DEFAULT_ASK = [
     "Bash(macf_tools pd entry add:*)",
+    # An edit or a resume makes an entry fire as nothing consented to before, so it asks as add does.
+    "Bash(macf_tools pd entry edit:*)",
+    "Bash(macf_tools pd entry resume:*)",
+    # The event stream's rules: approving the prompt is the operator's act (persistent_layer 11.4).
+    "Bash(macf_tools pd stream silence:*)",
+    "Bash(macf_tools pd stream unsilence:*)",
+    "Bash(macf_tools pd stream route:*)",
 ]
 
 # Permissions that must always be in 'allow': the agent can always de-escalate,
 # and can always compact itself. The injected /compact passes every Stop gate
 # once (stop_bypass), so under the client's auto mode the only thing that could
 # stop it is a refusal of the command itself (GH #479). Exact, not a wildcard:
-# `inject` takes any slash command.
+# `inject` takes any slash command. inject compact refuses while the input box
+# holds text, so clearing the box is allowed too; clear-input presses only
+# Ctrl-U, in the caller's own pane, and only when the box starts with --expect.
 _PERMANENT_ALLOW = [
     "Bash(macf_tools mode set MANUAL_MODE:*)",
     "Bash(macf_tools inject compact)",
+    "Bash(macf_tools inject clear-input:*)",
 ]
 
 # Operations that are NEVER legitimate in normal development (permanent deny)
@@ -539,13 +549,17 @@ def toggle_auto_mode_ask_permissions(enable_auto: bool, project_root: Optional[P
 _USER_REMOTE_EXTRA_DENY = ["AskUserQuestion"]
 
 
-def toggle_user_remote_deny_permissions(enable_remote: bool, project_root: Optional[Path] = None) -> Optional[dict]:
+def toggle_user_remote_deny_permissions(enable_remote: bool, project_root: Optional[Path] = None,
+                                        home: Optional[Path] = None) -> Optional[dict]:
     """Deny CLI-blocking tools while USER_REMOTE is active; restore on exit (#143).
 
     While the operator is reachable only remotely, a permission PROMPT hangs the
     unattended CLI. Moving the Ask-list commands (and AskUserQuestion) into the
     deny list makes an attempt fail immediately — the agent routes around it —
-    instead of stranding the session until someone physically returns. On exit
+    instead of stranding the session until someone physically returns. Only what
+    the Ask list holds at the switch moves: a command the settings already let run
+    is no hang, and denying it too stopped the agent's own pushes while it worked
+    unattended, the work the operator wants done while away. On exit
     (USER_PRESENT, or an auto-clear when the operator returns to the CLI) the
     entries are restored to whichever list they came from.
 
@@ -563,28 +577,41 @@ def toggle_user_remote_deny_permissions(enable_remote: bool, project_root: Optio
         deny_list = permissions.setdefault('deny', [])
         stash = settings.setdefault('_macf_user_remote_denied', {})
 
-        targets = list(_AUTO_MODE_ASK) + _USER_REMOTE_EXTRA_DENY
         denied = []
         restored = []
 
         if enable_remote:
-            for entry in targets:
-                # Record where the entry lived so exit can restore it faithfully.
+            # Exactly what would prompt: every Ask entry the deployment holds now, its own
+            # additions included, and AskUserQuestion. A command the settings already let run
+            # without a prompt can't hang the CLI, so it keeps running (mode_system, USER_REMOTE).
+            # Every file the client reads can hold an Ask rule, the user's own settings first
+            # among them; a deny written here wins over an ask from any of them.
+            from macf.permission_watch import ask_rules
+            from .paths import find_project_root
+            elsewhere = [r for r in ask_rules(str(project_root or find_project_root()), home or Path.home())
+                         if r not in ask_list]
+            for entry in list(ask_list) + elsewhere + _USER_REMOTE_EXTRA_DENY:
+                if entry in stash:
+                    continue
+                # Record where the entry lived, and whether this switch denied it, so the exit
+                # restores exactly that and never lifts a deny the operator set.
                 was_in_ask = entry in ask_list
                 if was_in_ask:
                     ask_list.remove(entry)
-                if entry not in deny_list:
+                added = entry not in deny_list
+                if added:
                     deny_list.append(entry)
                     denied.append(entry)
-                stash[entry] = {"from_ask": was_in_ask}
+                stash[entry] = {"from_ask": was_in_ask, "added": added}
         else:
-            for entry in targets:
-                if entry in deny_list:
+            for entry, info in list(stash.items()):
+                # A stash written before "added" was recorded put every entry in deny itself.
+                if info.get("added", True) and entry in deny_list:
                     deny_list.remove(entry)
                     restored.append(entry)
-                info = stash.pop(entry, None)
-                if info and info.get("from_ask") and entry not in ask_list:
+                if info.get("from_ask") and entry not in ask_list:
                     ask_list.append(entry)
+                del stash[entry]
             if not stash:
                 settings.pop('_macf_user_remote_denied', None)
 
@@ -700,6 +727,47 @@ def _version_tuple(version: str) -> tuple:
         return tuple(int(part) for part in head.split("."))
     except ValueError:
         raise ValueError(f"cannot read a Claude Code version from {version!r}")
+
+
+def _option_value(argv: List[str], option: str) -> Optional[str]:
+    """An option's value in an argument list, in either form argparse takes: ``--opt value``
+    or ``--opt=value``. None when it's absent or has no value."""
+    for i, word in enumerate(argv):
+        if word == option and i + 1 < len(argv):
+            return argv[i + 1]
+        if word.startswith(option + "="):
+            return word[len(option) + 1:] or None
+    return None
+
+
+def session_project_root(agent_home: Optional[Path] = None) -> tuple:
+    """The project this agent's session starts in, and where that was read: the settings the
+    client applies to the session are that project's (MIS-0002-R126). The session unit's
+    declared ``--project-dir`` decides it where there is one, then the harness's installed
+    choice. Only then does the lookup by ``CLAUDE_PROJECT_DIR``, git root and working directory
+    apply, and it names the directory a command happens to run in, so the source says so."""
+    from .paths import find_agent_home, find_project_root
+    home = Path(agent_home) if agent_home else find_agent_home()
+    try:
+        from macf.pd.interface import declaration_path
+        units = json.loads(declaration_path(home).read_text()).get("units", [])
+    except (OSError, ValueError, AttributeError):
+        units = []
+    for unit in units if isinstance(units, list) else []:
+        if not isinstance(unit, dict) or unit.get("kind") != "session":
+            continue
+        command = [str(word) for word in (unit.get("command") or [])]
+        value = _option_value(command, "--project-dir")
+        if value:
+            return Path(value.replace("{agent_home}", str(home))), "the session unit's --project-dir"
+    try:
+        from .harness import default_params, load_settings
+        installed = load_settings(default_params(home=home)).project_dir
+    except Exception:              # an unreadable harness setting falls back, as no setting does
+        installed = None
+    if installed:
+        return Path(installed), "the harness's installed project"
+    return find_project_root(), "the current directory's project, since no session unit names one"
 
 
 def idle_compaction_status(project_root: Optional[Path] = None) -> dict:

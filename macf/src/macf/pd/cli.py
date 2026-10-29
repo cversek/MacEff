@@ -4,9 +4,12 @@
 manager and take it out. Starting, stopping and restarting a unit over the control socket
 must name who asks (MIS-0002-R52 (control_act_MUST_name_who_asked)), and which asker a
 command line typed in a session claims is still an open question, so no unit act is here.
+``wake`` paces the keystroke wake, which acts on no unit: it is asked by the agent, or by the
+operator with ``--asked-by operator`` (persistent_layer 1.9).
 """
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -33,6 +36,20 @@ def add_pd_parser(sub) -> None:
         "uninstall", help="stop this agent's primal daemon and remove its unit; the units it "
                           "supervises keep running, for a later daemon to adopt")
     rm.set_defaults(func=cmd_pd_uninstall)
+    tray = pd_sub.add_parser(
+        "tray", help="keep the operator's tray running under the service manager, outside every "
+                     "agent's daemon (macOS)")
+    tray_sub = tray.add_subparsers(dest="tray_cmd")
+    tray_inst = tray_sub.add_parser(
+        "install", help="install the tray as this user's own LaunchAgent and start it; refused where "
+                        "this host can't show it")
+    tray_inst.add_argument("--plan", action="store_true", help="print the steps it would take, and change nothing")
+    tray_inst.add_argument("--force", action="store_true", help="replace an installed plist that differs")
+    tray_inst.set_defaults(func=cmd_pd_tray_install)
+    tray_rm = tray_sub.add_parser(
+        "uninstall", help="stop the tray and remove its LaunchAgent")
+    tray_rm.add_argument("--plan", action="store_true", help="print the steps it would take, and change nothing")
+    tray_rm.set_defaults(func=cmd_pd_tray_uninstall)
     alive = pd_sub.add_parser(
         "alive", help="write one liveness event for the unit this process runs as (for shell "
                       "units, once per pass); does nothing outside a primal daemon (MIS-0002-R14)")
@@ -60,7 +77,23 @@ def add_pd_parser(sub) -> None:
     remove = entry_sub.add_parser("remove", help="remove an entry; the agent or the operator may, since it only stops work")
     remove.add_argument("id", help="the entry's id, e- and 12 hex digits")
     remove.set_defaults(func=cmd_pd_entry_remove)
-    show = entry_sub.add_parser("show", help="one entry in full: its purpose, time, state and why it was marked")
+    edit = entry_sub.add_parser("edit", help="change an entry's time, purpose or missed policy, keeping its id; "
+                                             "from your live session, like add")
+    edit.add_argument("id", help="the entry's id, e- and 12 hex digits")
+    edit.add_argument("--when", default=None, help="a new time, in any shape add takes; its clock starts again now")
+    edit.add_argument("--purpose", default=None, help="a new purpose")
+    edit.add_argument("--missed", choices=("once", "skip", "report"), default=None, help="a new missed-run policy")
+    edit.set_defaults(func=cmd_pd_entry_edit)
+    pause = entry_sub.add_parser("pause", help="stop an entry firing without removing it; the agent or the "
+                                               "operator may, since it only stops work")
+    pause.add_argument("id", help="the entry's id, e- and 12 hex digits")
+    pause.set_defaults(func=cmd_pd_entry_pause, pause_op="entry_pause")
+    resume = entry_sub.add_parser("resume", help="let a paused entry fire again, from now: the firings it "
+                                                 "missed while paused are not made up; from your live session")
+    resume.add_argument("id", help="the entry's id, e- and 12 hex digits")
+    resume.set_defaults(func=cmd_pd_entry_pause, pause_op="entry_resume")
+    show = entry_sub.add_parser("show", help="one entry in full: its purpose, time, state, why it was marked, "
+                                             "and when it last fired and how late")
     show.add_argument("id", help="the entry's id, e- and 12 hex digits")
     show.set_defaults(func=cmd_pd_entry_show)
     lst = entry_sub.add_parser("list", help="the entries you hold")
@@ -69,6 +102,40 @@ def add_pd_parser(sub) -> None:
     agenda = pd_sub.add_parser(
         "agenda", help="what is scheduled: the declared schedules' next runs and your own entries")
     agenda.set_defaults(func=cmd_pd_agenda)
+    wake = pd_sub.add_parser(
+        "wake", help="the keystroke wake's window: show it, or pace it (persistent_layer 1.9)")
+    wake.add_argument("--refractory", default=None, metavar="DURATION",
+                      help="rest this long after each wake: seconds, or 90s, 5m, 1h; never under "
+                           "the declared floor")
+    wake.add_argument("--declared", action="store_true", help="go back to the declared window")
+    wake.add_argument("--reason", default=None, help="why; recorded with the pace, and needed to pace")
+    wake.add_argument("--asked-by", choices=("agent", "operator"), default="agent",
+                      help="who paces: the agent itself (default), or the operator")
+    wake.set_defaults(func=cmd_pd_wake)
+    stream = pd_sub.add_parser(
+        "stream", help="the layer's event stream: subscribe to it, or silence and reroute it (persistent_layer 11.4)")
+    stream_sub = stream.add_subparsers(dest="stream_cmd")
+    sub_p = stream_sub.add_parser("subscribe", help="print the stream's records, one JSON line each, until Ctrl+C")
+    sub_p.add_argument("--source", action="append", default=None, metavar="EVENT",
+                       help="an event name to take, with * globs; repeat it (default: every source)")
+    sub_p.add_argument("--position", default=None, metavar="LOG:OFFSET",
+                       help="resume just after the record that carried this position")
+    sub_p.add_argument("--name", default=None, help="the name this subscriber goes by, for silence and route")
+    sub_p.set_defaults(func=cmd_pd_stream_subscribe)
+    for act, helptext in (("silence", "stop delivering a source, or anything to a subscriber (@name); it still lands in the log"),
+                          ("unsilence", "deliver a source or a subscriber (@name) again")):
+        rule = stream_sub.add_parser(act, help=helptext)
+        rule.add_argument("target", help="an event name or notice source with * globs, or @name for a "
+                                         "subscriber (@channel: the agent's own session)")
+        rule.add_argument("--reason", default="", help="why; recorded with the rule")
+        rule.set_defaults(func=cmd_pd_stream_rule, act=act)
+    route = stream_sub.add_parser("route", help="send a source only to one subscriber, or --clear that route")
+    route.add_argument("target", metavar="source", help="an event name or notice source, with * globs; "
+                                                        "routed elsewhere, it no longer reaches the session")
+    route.add_argument("subscriber", nargs="?", default=None, help="the subscriber's name, with or without @")
+    route.add_argument("--clear", action="store_true", help="take the source's route away")
+    route.add_argument("--reason", default="", help="why; recorded with the rule")
+    route.set_defaults(func=cmd_pd_stream_rule, act="route")
 
 
 def cmd_pd_alive(args: argparse.Namespace) -> int:
@@ -82,6 +149,129 @@ def cmd_pd_alive(args: argparse.Namespace) -> int:
         return 1
     pid = args.pid or os.getppid()
     return 0 if liveness.emit(found.card, found.unit, found.interval_s, args.in_flight, pid=pid) else 1
+
+
+def cmd_pd_stream_subscribe(args: argparse.Namespace) -> int:
+    """0 when the stream ends or on Ctrl+C; 1 when it refused or could not be reached."""
+    from macf.pd.interface import events_socket
+    from macf.pd.stream import subscribe
+    _, card = _this_agent()
+    position = None
+    if args.position:
+        log, sep, offset = args.position.rpartition(":")
+        if not sep or not log or not offset.isdigit():
+            print("maceff_pd: --position is LOG:OFFSET, as a record's position names them", file=sys.stderr)
+            return 1
+        position = {"log": log, "offset": int(offset)}
+    try:
+        conn = subscribe(events_socket(card), args.source or ["*"], position=position, name=args.name)
+    except OSError as e:
+        print(f"maceff_pd: {card}: the event stream can't be reached: {e}", file=sys.stderr)
+        return 1
+    try:
+        for line in conn.makefile("rb"):
+            sys.stdout.write(line.decode("utf-8", errors="replace"))
+            sys.stdout.flush()
+            if line.startswith(b'{"type": "refused"'):
+                return 1
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        conn.close()
+    return 0
+
+
+def cmd_pd_stream_rule(args: argparse.Namespace) -> int:
+    """0 when the rule is recorded and in force; 1 when the daemon refused it or couldn't be reached."""
+    from macf.pd.client import DaemonUnavailable, ask
+    _, card = _this_agent()
+    act, subscriber = args.act, None
+    if act == "route":
+        if getattr(args, "clear", False):
+            act = "unroute"
+        elif not args.subscriber:
+            print("maceff_pd: a route names the subscriber it sends the source to, or --clear", file=sys.stderr)
+            return 1
+        else:
+            subscriber = args.subscriber.lstrip("@")
+    request = {"op": "stream_rule", "act": act, "target": args.target, "asked_by": {"kind": "operator"},
+               "reason": args.reason}
+    if subscriber is not None:
+        request["subscriber"] = subscriber
+    try:
+        reply = ask(card, request)
+    except DaemonUnavailable as e:
+        print(f"maceff_pd: {card}: {e}", file=sys.stderr)
+        return 1
+    if not reply.ok:
+        print(f"maceff_pd: {card}: refused: {reply.error}", file=sys.stderr)
+        return 1
+    rules = reply.stream_rules or {}
+    print(f"{card}: silenced {', '.join(rules.get('silenced') or []) or 'nothing'}; routes "
+          f"{', '.join(f'{k} -> @{v}' for k, v in (rules.get('routes') or {}).items()) or 'none'}")
+    return 0
+
+
+def _seconds(text: str) -> float:
+    """A duration from the command line: a plain number of seconds, or one with s, m or h."""
+    units = {"s": 1, "m": 60, "h": 3600}
+    scale = units.get(text[-1:].lower(), 1)
+    number = text[:-1] if text[-1:].lower() in units else text
+    try:
+        value = float(number) * scale
+    except ValueError:
+        raise ValueError(f"not a duration: {text!r} (use seconds, or 90s, 5m, 1h)") from None
+    if not math.isfinite(value):
+        raise ValueError(f"a window is a finite length of time: {text!r}")
+    if not value > 0:
+        raise ValueError(f"a window must be longer than nothing: {text!r}")
+    return value
+
+
+def cmd_pd_wake(args: argparse.Namespace) -> int:
+    """0 when shown or paced; 1 when the daemon refused, could not be reached, or has no wake."""
+    from macf.pd.client import DaemonUnavailable, ask
+    from macf.pd.core import POLICY_POINTER, DeclarationRefused
+    from macf.pd.daemon import card_for_home
+    from macf.utils.paths import find_agent_home
+
+    home = find_agent_home()
+    try:
+        card = card_for_home(home)
+    except DeclarationRefused as e:
+        print(f"maceff_pd: {e}\n{POLICY_POINTER}", file=sys.stderr)
+        return 1
+    if args.refractory is not None and args.declared:
+        print("maceff_pd: --refractory and --declared ask for different windows; give one", file=sys.stderr)
+        return 1
+    pacing = args.refractory is not None or args.declared
+    if pacing and not args.reason:
+        print("maceff_pd: a pace is recorded with its reason; give --reason", file=sys.stderr)
+        return 1
+    if pacing:
+        try:
+            window = None if args.declared else _seconds(args.refractory)
+        except ValueError as e:
+            print(f"maceff_pd: {e}", file=sys.stderr)
+            return 1
+        asker = {"kind": args.asked_by, **({"card": card} if args.asked_by == "agent" else {})}
+        request = {"op": "pace", "refractory_s": window, "asked_by": asker, "reason": args.reason}
+    else:
+        request = {"op": "status"}
+    try:
+        reply = ask(card, request)
+    except DaemonUnavailable as e:
+        print(f"maceff_pd: {card}: {e}", file=sys.stderr)
+        return 1
+    if not reply.ok:
+        print(f"maceff_pd: {card}: refused: {reply.error}", file=sys.stderr)
+        return 1
+    if reply.wake_refractory_s is None:
+        print(f"{card}: no session unit is declared, so there is no keystroke wake")
+        return 1
+    print(f"{card}: the wake rests {reply.wake_refractory_s:g} s after each wake, "
+          f"from {reply.wake_window_from}")
+    return 0
 
 
 def _when(epoch: Optional[float]) -> str:
@@ -113,6 +303,17 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         _say_tray(report)
         return 0
     print(f"{card}: from the {report.source} ({report.why})")
+    if report.source == "daemon":
+        from macf.pd.build import UPDATE_HINT
+        if not report.daemon_build:
+            print(f"  ⚠️ the daemon doesn't say which build it runs, so it is older than this command "
+                  f"({report.cli_build}); {UPDATE_HINT}")
+        elif report.daemon_build != report.cli_build:
+            # "Differ", not "older": two checkouts give no order, and the daemon may be the newer.
+            print(f"  ⚠️ the daemon and this command run different builds: the daemon {report.daemon_build}, "
+                  f"this command {report.cli_build}. If this command's is the one you mean, {UPDATE_HINT}")
+        else:
+            print(f"  build: {report.daemon_build}, the same as this command")
     for unit in report.units:
         line = f"  {unit['unit']}: {unit.get('state') or 'no state recorded'}"
         if unit.get("pid"):
@@ -180,11 +381,43 @@ def cmd_pd_entry_show(args: argparse.Namespace) -> int:
     if entry is None:
         print(f"⚠️ MACF: pd: no entry {args.id} is held", file=sys.stderr)
         return 1
-    for key in ("id", "agent", "action", "purpose", "when", "zone", "first", "missed", "marked", "start"):
+    for key in ("id", "agent", "action", "purpose", "when", "zone", "first", "missed", "marked", "start",
+                "edited_at", "paused_at", "resumed_at"):
         if entry.get(key) not in (None, "", []):
             value = "; ".join(entry[key]) if isinstance(entry[key], list) else entry[key]
             print(f"{key + ':':13} {value}")
+    print(f"{'last fired:':13} {_last_fired(entry.get('last_fired'))}")
     return 0
+
+
+def _late_text(late_s) -> str:
+    """How late a firing was, readably: "on time" within the scheduler's grace."""
+    from macf.pd.scheduler import ENTRY_GRACE_S
+    if late_s is None:
+        return "its lateness was not recorded"
+    if late_s <= ENTRY_GRACE_S:
+        return "on time"
+    minutes = int(late_s // 60)
+    days, hours, mins = minutes // 1440, minutes % 1440 // 60, minutes % 60
+    if days:
+        return f"fired {days}d {hours}h {mins}m late"
+    if hours:
+        return f"fired {hours}h {mins}m late"
+    return f"fired {mins}m late"
+
+
+def _last_fired(fired) -> str:
+    """An entry's newest firing as one line: the instant it was due, how late it fired, and the
+    firings it stood for, so the record a pd_entry_due notice points to says how late the wake
+    is (MIS-0002-R34 (late_run_MUST_state_lateness))."""
+    if not fired:
+        return "not yet"
+    text = f"for {fired.get('for')}, {_late_text(fired.get('late_s'))}"
+    if fired.get("missed"):
+        text += f", standing for {fired['missed']} earlier firing(s) missed"
+    if fired.get("notified") is False:
+        text += "; no wake was sent"
+    return text
 
 
 def cmd_pd_entry_remove(args: argparse.Namespace) -> int:
@@ -192,6 +425,37 @@ def cmd_pd_entry_remove(args: argparse.Namespace) -> int:
     if reply is None:
         return 1
     print(f"entry {args.id} removed; you hold {len(reply.entries or [])}")
+    return 0
+
+
+def cmd_pd_entry_edit(args: argparse.Namespace) -> int:
+    request = {"op": "entry_edit", "id": args.id}
+    request.update({k: v for k, v in (("when", args.when), ("purpose", args.purpose), ("missed", args.missed))
+                    if v is not None})
+    if len(request) == 2:
+        print("⚠️ MACF: pd: an edit names at least one of --when, --purpose or --missed", file=sys.stderr)
+        return 2
+    reply = _ask_entries(request)
+    if reply is None:
+        return 1
+    entry = next((e for e in reply.entries or [] if e.get("id") == args.id), {})
+    print(f"entry {args.id} edited; next {_next(entry) if entry else 'unknown'}")
+    if entry.get("marked"):
+        print(f"it is marked: this context read untrusted input ({'; '.join(entry['marked'])})")
+    return 0
+
+
+def cmd_pd_entry_pause(args: argparse.Namespace) -> int:
+    reply = _ask_entries({"op": args.pause_op, "id": args.id})
+    if reply is None:
+        return 1
+    entry = next((e for e in reply.entries or [] if e.get("id") == args.id), {})
+    if args.pause_op == "entry_pause":
+        print(f"entry {args.id} paused; it fires again only after pd entry resume")
+    else:
+        skipped = entry.get("skipped_in_pause") or 0
+        print(f"entry {args.id} resumed; next {_next(entry) if entry else 'unknown'}"
+              + (f"; {skipped} firing(s) fell in the pause and are not made up" if skipped else ""))
     return 0
 
 
@@ -223,9 +487,9 @@ def _next(entry: dict, now=None) -> str:
 
 
 def _state(entry: dict) -> str:
-    """What an entry's line says before its purpose: marked, when it was made from a context that
-    read untrusted input (the scheduler design, 5.3)."""
-    return "[marked] " if entry.get("marked") else ""
+    """What an entry's line says before its purpose: paused, and marked, when it was made from a
+    context that read untrusted input (the scheduler design, 5.3)."""
+    return ("[paused] " if entry.get("paused_at") else "") + ("[marked] " if entry.get("marked") else "")
 
 
 def agenda_lines(declaration, entries, now) -> list:
@@ -277,14 +541,14 @@ _SERVICE_ENV_KEEP = ("HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG")
 _SERVICE_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 
 
-def daemon_macf(python: str) -> Tuple[Optional[Path], str]:
+def daemon_macf(python: str, modules: Tuple[str, ...] = ("macf.pd",)) -> Tuple[Optional[Path], str]:
     """The macf that ``python -m macf.pd`` imports when the service manager runs it, or None and
     why not. Asked of the interpreter itself, from ``/`` and without the installing shell's Python
-    settings, because the unit carries neither (#650)."""
+    settings, because the unit carries neither (#650). *modules* are what the job must import."""
     env = {k: os.environ[k] for k in _SERVICE_ENV_KEEP if k in os.environ}
     env["PATH"] = _SERVICE_PATH
     try:
-        out = subprocess.run([python, "-c", "import macf.pd, macf; print(macf.__file__)"],
+        out = subprocess.run([python, "-c", f"import {', '.join(modules)}, macf; print(macf.__file__)"],
                              cwd="/", env=env, capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
         return None, str(e)
@@ -443,3 +707,64 @@ def _gone(said: str) -> bool:
     """Whether a status line says the service is no longer loaded: launchd's "not loaded",
     or systemd's LoadState=not-found."""
     return said.startswith("not loaded") or "LoadState=not-found" in said
+
+
+def _tray_log_dir() -> str:
+    """Where the tray's job writes its output: one tray for the user, so not under any agent's home."""
+    return str(Path.home() / "Library" / "Logs" / "MacEff")
+
+
+def cmd_pd_tray_install(args: argparse.Namespace) -> int:
+    """The tray as this user's own LaunchAgent, so launchd relaunches it when it dies (#747)."""
+    from macf.platform import launchd
+    from macf.platform.tray_host import tray_host
+
+    host = tray_host()
+    if not host.available:
+        # MIS-0002-R73: where the host can't show the tray, say why, and install nothing.
+        print(f"maceff_pd: tray not installed: {host.reason}", file=sys.stderr)
+        return 1
+    tray_macf, why = daemon_macf(sys.executable, modules=("rumps", "macf.tray"))
+    import macf
+    planned = Path(macf.__file__).resolve().parent
+    if tray_macf != planned:
+        found = f"imports macf from {tray_macf}" if tray_macf else f"can't import the tray ({why})"
+        print(f"maceff_pd: tray not {'planned' if args.plan else 'installed'}: run as launchd runs it, "
+              f"{sys.executable} {found}, not the macf this command runs ({planned}). Install from an "
+              f"interpreter with macf[tray] installed in it.", file=sys.stderr)
+        return 1
+    argv = [sys.executable, "-m", "macf.tray"]
+    steps = launchd.tray_install_plan(argv, str(Path.home()), _tray_log_dir(), os.getuid())
+    if args.plan:
+        print(f"# the tray, not installed (--plan); it runs {sys.executable}, with macf from {planned}")
+        for s in steps:
+            print(s.describe())
+        print(launchd.render_tray_launch_agent(argv, str(Path.home()), _tray_log_dir())[1].decode("utf-8"))
+        return 0
+    try:
+        Path(_tray_log_dir()).mkdir(parents=True, exist_ok=True)
+        launchd.apply_plan(steps, force=args.force)
+    except (OSError, RuntimeError) as e:
+        print(f"maceff_pd: tray install stopped: {e}", file=sys.stderr)
+        return 1
+    print(f"tray: installed at {steps[0].path}; it runs {sys.executable}, with macf from {planned}. "
+          f"A tray started by hand is still running: quit it, or there are two icons.")
+    return 0
+
+
+def cmd_pd_tray_uninstall(args: argparse.Namespace) -> int:
+    from macf.platform import launchd
+
+    steps = launchd.tray_uninstall_plan(str(Path.home()), os.getuid())
+    if args.plan:
+        print("# removing the tray (--plan)")
+        for s in steps:
+            print(s.describe())
+        return 0
+    try:
+        launchd.apply_plan(steps)
+    except (OSError, RuntimeError) as e:
+        print(f"maceff_pd: tray uninstall stopped: {e}", file=sys.stderr)
+        return 1
+    print("tray: uninstalled; launchd no longer keeps it running")
+    return 0

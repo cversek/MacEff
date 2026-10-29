@@ -57,6 +57,74 @@ def test_declaration_can_keep_idle_compaction(project):
     assert "idleCompaction" not in _settings(project)
 
 
+def _start_session_unit(tmp_path, project, monkeypatch, keep):
+    """Run the harness adapter's own entry point (``macf_tools harness unit``) with the client
+    launch stubbed out, for a home whose declaration keeps idle compaction or not, a client
+    new enough to have the setting, and the session's project at *project*. Returns the
+    sessions the stub was asked to start."""
+    from types import SimpleNamespace
+
+    import macf.cli as cli
+    from macf.pd import names as pd_names
+    from macf.pd import session_unit
+    from macf.utils import harness
+    from macf.utils.paths import find_project_root
+
+    home = tmp_path / "home"
+    (home / ".maceff" / "pd").mkdir(parents=True)
+    card = "Resident@1a2b3c"
+    (home / ".maceff" / "pd" / "declaration.json").write_text(json.dumps(
+        {"version": 1, "agent": card, "keep_harness_idle_compaction": keep}))
+    monkeypatch.setattr(pd_names, "RENDERED_DECLARATIONS", tmp_path / "rendered")   # none rendered
+    monkeypatch.setattr(pd_names, "agent_card", lambda h: card)
+    monkeypatch.setattr(cli, "_claude_launcher", lambda: ("/usr/bin/claude", "2.1.296 (Claude Code)"))
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(home))
+    find_project_root.cache_clear()
+    params = SimpleNamespace(agent="resident", home=home, project_dir=project,
+                             child_path=home / "child", context_window=200000,
+                             term="xterm-256color", proxy_port=0)
+    monkeypatch.setattr(harness, "default_params", lambda agent=None, home=None: params)
+    monkeypatch.setattr(harness, "load_settings", lambda p: p)
+    started = []
+    monkeypatch.setattr(session_unit, "run", lambda agent, child, **kw: started.append(agent) or 0)
+    try:
+        assert session_unit.main(["--no-proxy"]) == 0
+    finally:
+        find_project_root.cache_clear()
+    return started
+
+
+def test_the_adapter_turns_idle_compaction_off_when_it_starts_the_session(tmp_path, project, monkeypatch):
+    """R126 at the place it names: starting the session through the adapter's own entry point
+    leaves the project's settings with idle compaction off, every other key untouched."""
+    started = _start_session_unit(tmp_path, project, monkeypatch, keep=False)
+    assert started == ["resident"]
+    settings = _settings(project)
+    assert settings.get("idleCompaction") is False
+    assert settings["env"] == {"A": "1"} and "hooks" in settings
+
+
+def test_an_unreadable_declaration_keeps_nothing_so_idle_compaction_goes_off(tmp_path, project, monkeypatch):
+    """The protection holds when the keep can't be read: a declaration that doesn't parse turns
+    idle compaction off and says so, and the session still starts."""
+    import macf.pd.core as core
+    monkeypatch.setattr(core, "load_declaration", lambda home, card: (_ for _ in ()).throw(
+        core.DeclarationRefused("not a valid declaration")))
+    started = _start_session_unit(tmp_path, project, monkeypatch, keep=True)
+    assert started == ["resident"] and _settings(project).get("idleCompaction") is False
+
+
+def test_the_adapter_leaves_idle_compaction_alone_when_the_declaration_keeps_it(
+        tmp_path, project, monkeypatch):
+    """R126's keep clause, through the adapter: a declaration with keep_harness_idle_compaction
+    true starts the session and writes nothing to the project's settings."""
+    before = _settings(project)
+    started = _start_session_unit(tmp_path, project, monkeypatch, keep=True)
+    assert started == ["resident"]
+    assert _settings(project) == before
+
+
 def test_turning_it_back_on_removes_the_key(project):
     """`true` does not turn idle compaction on in the client, so on means the key is gone."""
     set_idle_compaction(False, client_version="2.1.296", project_root=project)
@@ -64,6 +132,66 @@ def test_turning_it_back_on_removes_the_key(project):
     assert "idleCompaction" not in _settings(project)
     assert idle_compaction_status(project)["state"] == "client default"
 
+
+def test_the_sessions_project_is_read_wherever_the_command_runs(tmp_path, monkeypatch):
+    """#722: run from inside another checkout with its own .claude/, the status and the switch
+    use the project the session starts in, from its unit's --project-dir, and say so. Without a
+    session unit naming one, the lookup by working directory is used, and named as such."""
+    from macf.pd.interface import declaration_path
+    from macf.utils.claude_settings import session_project_root
+    from macf.utils.paths import find_project_root
+    home, work, checkout = tmp_path / "home", tmp_path / "work", tmp_path / "checkout"
+    for d in (work / ".claude", checkout / ".claude", checkout / ".git"):
+        d.mkdir(parents=True)
+    path = declaration_path(home)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"version": 1, "agent": "Resident@1a2b3c", "units": [{
+        "name": "session", "kind": "session", "account": "resident",
+        "command": ["python", "-m", "macf.cli", "harness", "unit", "--home", "{agent_home}",
+                    "--project-dir", str(work), "--no-proxy"]}]}))
+    monkeypatch.chdir(checkout)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    root, source = session_project_root(home)
+    assert root == work and "session unit" in source
+    set_idle_compaction(False, client_version="2.1.296", project_root=root)
+    assert idle_compaction_status(root)["state"] == "off"
+    assert idle_compaction_status(checkout)["state"] == "client default"   # the checkout is untouched
+    path.unlink()
+    find_project_root.cache_clear()   # cached per process; an earlier test may have filled it
+    root, source = session_project_root(home)
+    assert root == checkout and "current directory" in source
+
+
+
+def _declare(home, units):
+    from macf.pd.interface import declaration_path
+    path = declaration_path(home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"version": 1, "agent": "Resident@1a2b3c", "units": units}))
+
+
+def test_the_equals_form_and_a_malformed_unit(tmp_path, monkeypatch):
+    """--project-dir=PATH is read as argparse reads it, and a units entry that isn't an object is
+    passed over rather than crashing the command (both found in review)."""
+    from macf.utils.claude_settings import session_project_root
+    home, work = tmp_path / "home", tmp_path / "work"
+    _declare(home, ["not a unit", {"name": "session", "kind": "session", "account": "resident",
+                                   "command": ["claude", f"--project-dir={work}"]}])
+    monkeypatch.chdir(tmp_path)
+    assert session_project_root(home) == (work, "the session unit's --project-dir")
+
+
+def test_the_harness_installed_project_comes_second(tmp_path, monkeypatch):
+    """With no session unit naming a project, the harness's installed project is used, and named."""
+    from types import SimpleNamespace
+
+    from macf.utils import harness
+    from macf.utils.claude_settings import session_project_root
+    home, installed = tmp_path / "home", tmp_path / "installed"
+    _declare(home, [{"name": "broker", "kind": "service", "account": "resident", "command": ["broker"]}])
+    monkeypatch.setattr(harness, "load_settings", lambda params: SimpleNamespace(project_dir=str(installed)))
+    monkeypatch.chdir(tmp_path)
+    assert session_project_root(home) == (installed, "the harness's installed project")
 
 def test_status_without_settings_file(tmp_path):
     """No settings file is the client default, reported plainly rather than raised."""
@@ -124,7 +252,7 @@ class _Client:
                 p.wait()
 
 
-def _core(home, client, marker, path=None):
+def _core(home, client, marker, path=None, **options):
     """A core whose session unit declares a PATH holding a stub ``claude``, as an installed
     daemon must: its own PATH is the service manager's (#636 review)."""
     import os
@@ -143,7 +271,7 @@ def _core(home, client, marker, path=None):
                 restart="always", liveness_interval_s=60, memory_limit_mb=64, environment={"PATH": path})
     return Core(Declaration(version=1, agent="Tester@abc123", units=[unit]), "Tester@abc123",
                 placeholders={"agent_home": str(home)}, hosted=client.hosted, client=client,
-                backoff_base_s=0.01, backoff_cap_s=0.05)
+                backoff_base_s=0.01, backoff_cap_s=0.05, **options)
 
 
 def _settle(core, until, timeout=5.0):
@@ -400,7 +528,7 @@ def test_channel_first(tmp_path, isolated_events_log, monkeypatch, capsys):
     import socket
 
     from macf.agent_events_log import read_events
-    from macf.channels.maceff_channel import parse_record
+    from macf.channels.maceff_channel import TAKES, parse_record
     from macf.pd import notifier as nt
     from macf.pd import wake as wk
 
@@ -428,7 +556,7 @@ def test_channel_first(tmp_path, isolated_events_log, monkeypatch, capsys):
     n.waker = wk.Waker(IdlePane(), record_keys=lambda text, kind: None, append=lambda e, d: True)
     ours, theirs = socket.socketpair()
     theirs.settimeout(2)
-    n.attach(ours)
+    n.attach(ours, takes=TAKES)
     (box / "1791990000-msg-1791990000-aaaaaaaaaaaa.amsg").write_text("never read by the notifier")
     n.poll()                                                    # the wake
     assert n.raise_notice("pd_limit_exceeded", "limit-worker-1")   # the notice
@@ -626,3 +754,205 @@ def test_a_failed_login_reaches_the_beat(tmp_path, monkeypatch):
     transcript.write_text("")
     daemon.run_monitor(transcript, 0.01, owner=0)
     assert said == ["Login expired", None], said
+
+
+# ---------------------------------------------------------------------------
+# A hand-started client: the core never starts a session unit beside one (persistent_layer 6.2)
+# ---------------------------------------------------------------------------
+
+def _unit_reasons(unit="session"):
+    from macf.agent_events_log import get_log_path
+    rows = [json.loads(line) for line in get_log_path().read_text().splitlines() if line.strip()]
+    return [r["data"].get("reason", "") for r in rows
+            if r.get("event") == "pd_unit_state" and r["data"].get("unit") == unit]
+
+
+class _Terminal:
+    """Claude Code clients started by hand: pid -> working directory, none below the daemon."""
+
+    def __init__(self, clients):
+        self.clients = dict(clients)
+        self.asked = []
+
+    def __call__(self, directory):
+        from pathlib import Path
+        self.asked.append(Path(directory))
+        return sorted(p for p, cwd in self.clients.items() if Path(cwd).resolve() == Path(directory).resolve())
+
+
+def test_the_core_holds_the_session_unit_beside_a_hand_started_client_and_starts_it_after(tmp_path, monkeypatch):
+    """No start, no restart and no daemon start puts a session unit beside a plain claude -c
+    in the project directory; once that client has gone, the next look starts it."""
+    monkeypatch.delenv("MACEFF_PROJECT_DIR", raising=False)
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    terminal = _Terminal({4242: home, 5151: tmp_path})       # one here, one elsewhere
+    now = [0.0]
+    core = _core(home, _Client(home), marker, clients=terminal, ancestors=lambda pid: {pid, 1},
+                 clock=lambda: now[0])
+    core.boot()
+    assert core.state("session") == "failed" and core.pid("session") is None and not marker.exists()
+    reason = _unit_reasons()[-1]
+    assert "pid 4242" in reason and "5151" not in reason and "harness cutover" in reason
+    assert terminal.asked[-1] == home
+    now[0] += 1.0
+    core.tick()
+    assert not marker.exists(), "still held while the client runs"
+    del terminal.clients[4242]                                 # the person quit it
+    now[0] += 5.0
+    assert _settle(core, marker.exists), "started on the next look once the client is gone"
+    core.shutdown("the test is over")
+
+
+def test_the_units_own_adopted_process_is_not_a_hand_started_client(tmp_path, monkeypatch):
+    """A client below a process this unit ran or adopted, still the one recorded, is the unit's
+    own: a restart is not held by it. One below a recorded process whose start no longer
+    matches is someone else's."""
+    monkeypatch.delenv("MACEFF_PROJECT_DIR", raising=False)
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    terminal = _Terminal({4242: home})
+    live = {(777, "s777")}
+    core = _core(home, _Client(home), marker, clients=terminal,
+                 ancestors=lambda pid: {pid, 777, 1} if pid == 4242 else {pid, 1},
+                 probe=lambda pid, start: (pid, start) in live)
+    core._units["session"].own.append((777, "s777"))         # adopted earlier, by pid and start
+    core.boot()
+    assert _settle(core, marker.exists), "its own adopted process doesn't hold it"
+    core.shutdown("the test is over")
+    marker.unlink()
+    live.clear()                                               # 777 is now another process
+    core = _core(home, _Client(home), marker, clients=terminal,
+                 ancestors=lambda pid: {pid, 777, 1} if pid == 4242 else {pid, 1},
+                 probe=lambda pid, start: (pid, start) in live)
+    core._units["session"].own.append((777, "s777"))
+    core.boot()
+    assert core.state("session") == "failed" and not marker.exists()
+
+
+def test_a_hosted_session_the_core_adopts_is_recorded_as_its_own(tmp_path):
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    client = _Client(home)
+    try:
+        hosted = client.host("3d52b89a-cccc")
+        core = _core(home, client, marker)
+        core.boot()
+        assert [pid for pid, _ in core._units["session"].own] == [hosted.pid]
+    finally:
+        client.close()
+
+
+def test_a_stop_ends_the_hold(tmp_path, monkeypatch):
+    monkeypatch.delenv("MACEFF_PROJECT_DIR", raising=False)
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    terminal = _Terminal({4242: home})
+    core = _core(home, _Client(home), marker, clients=terminal, ancestors=lambda pid: {pid, 1})
+    core.boot()
+    core.stop("session", _policy(), "test stop")
+    del terminal.clients[4242]
+    core.tick()
+    assert core.state("session") == "stopped" and not marker.exists()
+
+
+def test_a_respawn_is_held_beside_a_hand_started_client_and_issued_after(tmp_path, monkeypatch):
+    """claude respawn starts a client on the conversation as surely as the unit's own start: a
+    session the client hosted before is not respawned while someone has resumed it by hand in
+    the project directory, and is respawned on a later look once that client has gone."""
+    from macf.pd import core as core_module
+    monkeypatch.delenv("MACEFF_PROJECT_DIR", raising=False)
+    monkeypatch.setattr(core_module, "CLIENT_RECHECK_S", 0.0)
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    client = _Client(home)
+    terminal = _Terminal({})
+    try:
+        hosted = client.host("3d52b89a-dddd")
+        terminal.clients[hosted.pid] = home                    # the hosted worker is a client here too
+        core = _core(home, client, marker, clients=terminal, ancestors=lambda pid: {pid, 1})
+        core.boot()
+        assert core.state("session") == "running" and core.pid("session") == hosted.pid
+        del terminal.clients[hosted.pid]
+        terminal.clients[4242] = home                          # resumed by hand meanwhile
+        core.restart("session", _policy(), "test restart")
+        assert _settle(core, lambda: core.state("session") == "failed")
+        core.tick()
+        core.tick()
+        assert [c[1] for c in client.calls] == ["stop"], "no respawn beside the hand-started client"
+        reason = _unit_reasons()[-1]
+        assert reason.startswith("not started:") and "pid 4242" in reason and "harness cutover" in reason
+        del terminal.clients[4242]                             # the person quit it
+        assert _settle(core, lambda: core.state("session") == "running")
+        assert [c[1] for c in client.calls] == ["stop", "respawn"]
+        assert core.pid("session") == client.sessions["3d52b89a-dddd"].pid and not marker.exists()
+    finally:
+        client.close()
+
+
+def test_the_hosted_worker_being_respawned_is_not_a_hand_started_client(tmp_path, monkeypatch):
+    """At the respawn, the client's own live worker for that session sits in the project
+    directory; it is the unit's own, by pid and start time, and doesn't hold the respawn."""
+    monkeypatch.delenv("MACEFF_PROJECT_DIR", raising=False)
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    client = _Client(home)
+    try:
+        worker = client.host("3d52b89a-eeee")
+        terminal = _Terminal({worker.pid: home})
+        core = _core(home, client, marker, clients=terminal, ancestors=lambda pid: {pid, 1})
+        core._units["session"].client_session = "3d52b89a-eeee"   # hosted before, as a restart finds it
+        core.boot()
+        assert [c[1] for c in client.calls] == ["respawn"], _unit_reasons()
+        assert core.state("session") == "running" and not marker.exists()
+    finally:
+        client.close()
+
+
+def test_clients_that_cannot_be_listed_hold_the_session_unit(tmp_path, monkeypatch):
+    """Fail closed: when the process listing fails, whether a hand-started client runs is
+    unknown, so the unit is held, says why, and starts once a listing works and finds none."""
+    from macf.pd import core as core_module
+    monkeypatch.delenv("MACEFF_PROJECT_DIR", raising=False)
+    monkeypatch.setattr(core_module, "CLIENT_RECHECK_S", 0.0)
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    broken = [True]
+
+    def clients(directory):
+        if broken[0]:
+            raise OSError("ps: not found")
+        return []
+
+    core = _core(home, _Client(home), marker, clients=clients, ancestors=lambda pid: {pid, 1})
+    core.boot()
+    core.tick()
+    assert core.state("session") == "failed" and not marker.exists()
+    reason = _unit_reasons()[-1]
+    assert reason.startswith("not started:") and "process listing failed" in reason and "ps: not found" in reason
+    broken[0] = False
+    assert _settle(core, marker.exists), "started once the listing works and finds none"
+    core.shutdown("the test is over")
+
+
+def test_a_client_below_the_daemon_is_its_own_when_the_units_start_is_unknown(tmp_path, monkeypatch):
+    """A unit process whose start time can't be read never lands in the unit's own record, so
+    a client below it is recognised only by descending from the daemon itself."""
+    import os
+
+    from macf.pd import core as core_module
+    monkeypatch.delenv("MACEFF_PROJECT_DIR", raising=False)
+    monkeypatch.setattr(core_module, "proc_start", lambda pid: None)
+    home, marker = tmp_path / "home", tmp_path / "started_by_pd"
+    home.mkdir()
+    terminal = _Terminal({})
+    core = _core(home, _Client(home), marker, clients=terminal,
+                 ancestors=lambda pid: {pid, 99999, os.getpid(), 1})   # below the unit's process, below the daemon
+    core.boot()
+    assert _settle(core, marker.exists)
+    assert core._units["session"].own == [], "the start was unknown, so nothing is recorded"
+    marker.unlink()
+    terminal.clients[4242] = home                              # the unit's own client
+    assert _settle(core, marker.exists), "restarted: its own client below the daemon doesn't hold it"
+    assert not any("started by hand" in reason for reason in _unit_reasons())
+    core.shutdown("the test is over")

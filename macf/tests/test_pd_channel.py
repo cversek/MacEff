@@ -55,6 +55,19 @@ class StubDaemon:
     def _serve(self):
         conn, _ = self.server.accept()
         with conn:
+            # Read the channel's hello first, as the daemon does (R149). Closing with it still
+            # unread makes the kernel reset the connection, and the channel's read can then
+            # fail before it reaches the lines already sent.
+            conn.settimeout(2)
+            try:
+                hello = b""
+                while not hello.endswith(b"\n"):
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    hello += chunk
+            except OSError:
+                pass  # a channel that sent no hello, or hung up, is what some tests are about
             try:
                 for line in self.lines:
                     conn.sendall((line + "\n").encode())
@@ -201,7 +214,8 @@ def test_only_the_opening_tag_is_read():
     assert channel_tag.opening_tag("text first <channel source=\"x\">") is None
 
 
-def test_a_maceff_notice_is_not_the_operators_activity(monkeypatch):
+def test_a_maceff_notice_is_not_the_operators_activity(monkeypatch, operator_channels):
+    operator_channels("plugin:telegram:telegram")
     # MIS-0002-R106 (wake_MUST-NOT_count_as_operator_activity): the slice this channel needs.
     seen = []
     monkeypatch.setattr("macf.agent_events_log.append_event", lambda name, data: seen.append((name, data)))
@@ -211,7 +225,8 @@ def test_a_maceff_notice_is_not_the_operators_activity(monkeypatch):
     assert hook.record_user_activity_from_payload(_notice_prompt(source="plugin:telegram:telegram")) is True
 
 
-def test_the_transcript_monitor_does_not_count_a_maceff_notice_either():
+def test_the_transcript_monitor_does_not_count_a_maceff_notice_either(operator_channels):
+    operator_channels("plugin:telegram:telegram")
     # The other producer of the operator's activity, delivered and queued. Both ask
     # input_origin.from_maceff_channel, so the two cannot disagree about a notice.
     from macf.transcript_monitor.daemon import detect_mid_turn_enqueue, detect_user_activity
@@ -356,3 +371,42 @@ def test_a_working_connection_reconnects_from_the_first_delay(monkeypatch):
     assert _loop(ch, monkeypatch, delivered=1, rounds=3) == [1.0, 1.0, 1.0]
     assert _loop(ch, monkeypatch, delivered=0, held_s=60.0, rounds=3) == [1.0, 1.0, 1.0]
 
+
+
+def test_the_channel_names_its_daemon_by_the_homes_card_not_the_environment(tmp_path):
+    """The daemon names its socket by the home's card (pd.names.agent_card). A channel that
+    took MACEFF_AGENT_NAME instead ("seat2" against the card "Seat2") looked for a record
+    and a socket the daemon never made, and retried for good (MIS-0002-R02)."""
+    from macf.channels.maceff_channel import channel_card
+    (tmp_path / ".maceff").mkdir()
+    (tmp_path / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": "Seat2"}}))
+    (tmp_path / ".maceff_primary_agent.id").write_text("78e0aa00-0000-0000-0000-000000000000\n")
+    env = {"MACEFF_AGENT_HOME_DIR": str(tmp_path), "MACEFF_AGENT_NAME": "seat2"}
+    assert channel_card(env) == "Seat2@78e0aa"
+
+
+def test_main_starts_the_channel_with_the_homes_card(tmp_path, monkeypatch):
+    """The line that picks the card the channel looks for is main(): the seat that never got
+    a notice failed exactly there, so main() itself is pinned, not only channel_card."""
+    from macf.channels import maceff_channel
+    (tmp_path / ".maceff").mkdir()
+    (tmp_path / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": "Seat2"}}))
+    (tmp_path / ".maceff_primary_agent.id").write_text("78e0aa00-0000-0000-0000-000000000000\n")
+    # The seat's shape: the identity file is home-wide (HOME is the agent home), which is
+    # where get_agent_identity() lets MACEFF_AGENT_NAME win.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path))
+    monkeypatch.setenv("MACEFF_AGENT_NAME", "seat2")
+    from macf.utils.identity import get_agent_identity
+    assert get_agent_identity() == "seat2@78e0aa", "the fixture must reproduce the seat's mismatch"
+    started = []
+
+    class _Recorded:
+        def __init__(self, card, *a, **k):
+            started.append(card)
+
+        def serve(self):
+            pass
+    monkeypatch.setattr(maceff_channel, "Channel", _Recorded)
+    assert maceff_channel.main() == 0
+    assert started == ["Seat2@78e0aa"]

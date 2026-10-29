@@ -13,6 +13,7 @@ surface from it through ``session_identifier`` (MIS-0002-R06
 import json
 import os
 import stat
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -74,6 +75,27 @@ def launchd_label(card: str) -> str:
     return f"{PD_IDENTIFIER}.{pd_id(card)}"
 
 
+def name_this_process(name: str = PD_IDENTIFIER) -> bool:
+    """Give this process the name ``ps``, ``top`` and ``pgrep`` show, so a daemon reads as
+    ``maceff_pd`` in a process listing rather than as the interpreter (MIS-0002-R06). True when
+    the name was set.
+
+    Linux only, through ``prctl(PR_SET_NAME)``, which takes at most 15 bytes and leaves the
+    command line alone, so ``pgrep -f macf.pd`` still finds it. A unit the daemon starts gets
+    its own name at exec. macOS has no call that renames a running process, so this returns
+    False there; the LaunchAgent names the daemon at exec instead, with ``maceff_pd`` as its
+    ``argv[0]`` (``macf.platform.launchd``).
+    """
+    if not sys.platform.startswith("linux"):
+        return False
+    import ctypes
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        return libc.prctl(15, name.encode()[:15], 0, 0, 0) == 0   # 15: PR_SET_NAME
+    except (OSError, AttributeError):
+        return False
+
+
 def runtime_dir() -> Path:
     """Where the daemon's sockets and record live: per user, never shared."""
     base = os.environ.get("XDG_RUNTIME_DIR")
@@ -110,6 +132,11 @@ def control_socket(card: str, base: Optional[Path] = None) -> Path:
 
 def channel_socket(card: str, base: Optional[Path] = None) -> Path:
     return (base or runtime_dir()) / f"{pd_id(card)}.channel.sock"
+
+
+def events_socket(card: str, base: Optional[Path] = None) -> Path:
+    """The event stream's socket (persistent_layer 11.4), beside the control and channel sockets."""
+    return (base or runtime_dir()) / f"{pd_id(card)}.events.sock"
 
 
 def record_path(card: str, base: Optional[Path] = None) -> Path:

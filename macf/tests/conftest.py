@@ -28,6 +28,13 @@ import json
 import os
 import subprocess
 import sys
+
+# A child Python (subprocess, or the macf_tools script) imports from the environment, not from
+# pytest's pythonpath, so it would load the editable install's checkout instead of this one.
+# Putting this checkout's source first in PYTHONPATH makes every child test this checkout too.
+_SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+if os.environ.get("PYTHONPATH", "").split(os.pathsep)[0] != _SRC:
+    os.environ["PYTHONPATH"] = os.pathsep.join(p for p in (_SRC, os.environ.get("PYTHONPATH")) if p)
 import tempfile
 import warnings
 from datetime import datetime, timedelta, timezone
@@ -1345,3 +1352,18 @@ def no_managed_settings(tmp_path, monkeypatch):
     allowlist plants one and passes its path."""
     from macf.pd import allowlist
     monkeypatch.setattr(allowlist, "MANAGED_SETTINGS", (tmp_path / "no-managed-settings.json",))
+
+
+@pytest.fixture
+def operator_channels(isolated_agent_home):
+    """Declare which channels count as the operator's for this test's agent
+    (MIS-0002-R107): call it with the exact channel names. Without a declared list no channel
+    counts, so a test about a channel that does count declares it first."""
+    def declare(*names):
+        from macf.pd.interface import declaration_path
+        from macf.utils import input_origin
+        path = declaration_path(isolated_agent_home)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"version": 1, "agent": "Resident@1a2b3c", "operator_channels": list(names)}))
+        input_origin._DECLARED.clear()
+    return declare

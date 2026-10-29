@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from macf.pd import adapter as adapters
 from macf.pd import interface, shared_view as sv
+from test_primal_daemon import base, run_daemon, script  # noqa: F401 - fixtures
 
 GIB = 2 ** 30
 
@@ -96,6 +97,21 @@ def test_every_agents_units_are_seen_and_none_controlled(tmp_path):
     assert not any(hasattr(sv, act) for act in ("stop", "start", "restart", "act", "control"))
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a home whatever its mode")
+def test_a_home_that_cannot_be_looked_into_is_unreadable_and_the_rest_still_listed(tmp_path):
+    """One locked home emptied the whole view: is_dir raised inside the one try."""
+    homes = tmp_path / "home"
+    for user in ("pa_first", "pa_locked", "pa_second"):
+        (homes / user / "agent" / "public").mkdir(parents=True)
+    (homes / "pa_locked").chmod(0)
+    try:
+        views = sv.read_agents(homes)
+    finally:
+        (homes / "pa_locked").chmod(0o755)
+    assert [(Path(v.home).name, v.status) for v in views] == [
+        ("pa_first", "UNPUBLISHED"), ("pa_locked", "UNREADABLE"), ("pa_second", "UNPUBLISHED")]
+
+
 def test_a_summary_that_does_not_parse_is_unreadable_never_empty(tmp_path):
     home = tmp_path / "pa_x"
     path = sv.published_path(home)
@@ -131,6 +147,91 @@ def test_every_agent_gets_its_publishing_point_at_init():
     calls = [n.func.id for n in ast.walk(ast.parse(src))
              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
     assert "create_pd_view_dir" in calls
+
+
+def _published_home(tmp_path, units):
+    """A daemon's home, as the container makes it: with a public tree for its peers to read."""
+    from test_primal_daemon import make_home
+    home = make_home(tmp_path, units)
+    (home / "agent" / "public").mkdir(parents=True)
+    return home
+
+
+def test_a_started_daemon_publishes_its_units_for_its_peers(tmp_path, script, base, run_daemon):
+    """MIS-0002-R62 through the publisher, not the reader: a real daemon start writes the agent's
+    units.json into its own agent/public/pd/, and the view of the homes sees it. Review on #552
+    found nothing outside a test called publish(), so every home read UNPUBLISHED."""
+    from test_primal_daemon import CARD, make_unit
+    worker = make_unit("worker", script, {})
+    home = _published_home(tmp_path, [worker])
+    assert not sv.published_path(home).exists()
+    run_daemon(home, base)
+    path = sv.published_path(home)
+    assert path.exists(), "the daemon started and published nothing"
+    text = path.read_text()
+    assert str(script) not in text and "MACF_EVENTS_LOG_PATH" not in text   # no command, no environment
+    [view] = sv.read_agents(home.parent)
+    assert view.status == "PUBLISHED" and view.units.agent == CARD
+    assert [u.name for u in view.units.units] == ["worker"]
+
+
+def test_a_restarted_daemon_publishes_the_declaration_it_reloaded(tmp_path, script, base, run_daemon):
+    """The declaration is read only when the daemon starts, so a changed declaration is
+    reloaded by a restart, and the restart publishes it: the summary names the new unit and is
+    stamped by the second start, not left as the first daemon wrote it."""
+    from macf.pd.interface import Declaration, declaration_path
+    from test_primal_daemon import CARD, make_unit
+    worker = make_unit("worker", script, {})
+    home = _published_home(tmp_path, [worker])
+    first = run_daemon(home, base)
+    stamped = sv.read_agent(home).units.published_at
+    first.stop(units=True)
+    assert _wait(lambda: not first.control_path.exists())
+    declaration_path(home).write_text(Declaration(
+        version=1, agent=CARD, units=[worker, make_unit("helper", script, {})]).model_dump_json())
+    time.sleep(0.01)
+    run_daemon(home, base)
+    view = sv.read_agent(home)
+    assert [u.name for u in view.units.units] == ["worker", "helper"]
+    assert view.units.published_at > stamped
+
+
+def test_a_summary_that_cannot_be_published_never_stops_the_daemon(tmp_path, script, base, run_daemon,
+                                                                   monkeypatch, capsys):
+    """Publishing is for the peers: a failure is said on the daemon's error stream and the
+    daemon starts all the same."""
+    from test_primal_daemon import make_unit
+
+    def refuse(*a, **k):
+        raise PermissionError("agent/public/pd is not writable")
+    monkeypatch.setattr(sv, "publish", refuse)
+    daemon = run_daemon(_published_home(tmp_path, [make_unit("worker", script, {})]), base)
+    assert daemon.control_path.exists()
+    assert "could not publish this agent's units" in capsys.readouterr().err
+
+
+def _wait(until, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if until():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_the_view_prints_each_summarys_age(tmp_path):
+    """A summary outlives the daemon that wrote it, so the view says how old each one is: one
+    left by a stopped daemon days ago doesn't read as current."""
+    homes = tmp_path / "home"
+    for user, card, at in (("pa_manny", "Manny@b82044", 1000.0), ("pa_manny2", "Manny2@78e0aa", 1000.0 - 3 * 86400)):
+        (homes / user / "agent" / "public").mkdir(parents=True)
+        sv.publish(homes / user, _declaration(agent=card), now=at)
+    text = sv.render(sv.read_agents(homes), sv.read_budget(_cgroup(tmp_path)), now=1045.0)
+    assert "Manny@b82044: summary published 45s ago" in text
+    assert "Manny2@78e0aa: summary published 3d ago" in text
+    # A stamp ahead of the reader's clock is said as such, never shown as a negative age.
+    assert "Manny@b82044: summary stamped 75s ahead of this clock" in sv.render(
+        sv.read_agents(homes), sv.Budget(), now=925.0)
 
 
 def test_grants_declared():
@@ -207,7 +308,12 @@ def test_renderings_hold_only_the_agent_home(tmp_path):
     unit = adapters.SystemdAdapter(user_home=tmp_path).render(CARD_T, home)
     for text in (launch, unit):
         assert "macf.pd" in text and str(home) in text
-    assert "EnvironmentVariables" not in launch
+    # The one variable a LaunchAgent may carry is interpreter plumbing, never agent
+    # configuration: a framework-build Python's venv path, as its own launcher passes it.
+    import plistlib
+    import sys
+    env = plistlib.loads(launch.encode()).get("EnvironmentVariables", {})
+    assert env in ({}, {"__PYVENV_LAUNCHER__": sys.executable}), env
     assert not any(line.startswith("Environment=") for line in unit.splitlines())
 
 
@@ -534,3 +640,80 @@ def test_periodic_clock_is_schedule(tmp_path, monkeypatch):
     start.start_amail_services(cfg)
     assert launched["popen"] == []
 
+
+
+def test_a_declared_daemon_outside_home_is_listed_once_and_seen_when_it_publishes(tmp_path):
+    """MIS-0002-R62, the head maintainer's judgment on #552: the view lists the deployment's
+    declared daemons from root's rendered declarations, so a service account whose home is
+    outside /home counts. One that published nothing reads declared, not absent, and a declared
+    home that is also under /home is listed once."""
+    rendered, homes, broker = tmp_path / "rendered", tmp_path / "home", tmp_path / "var" / "broker"
+    for account in ("svc_broker", "pa_seat"):
+        (rendered / account).mkdir(parents=True)
+        (rendered / account / "declaration.json").write_text("{}")
+    (homes / "pa_seat" / "agent" / "public").mkdir(parents=True)
+    broker.mkdir(parents=True)
+    home_of = {"svc_broker": broker, "pa_seat": homes / "pa_seat"}.get
+    views = sv.read_agents(homes, rendered=rendered, home_of=home_of)
+    assert sorted((Path(v.home).name, v.status) for v in views) == [("broker", "UNPUBLISHED"), ("pa_seat", "UNPUBLISHED")]
+    assert all(v.detail == "declared, no summary published" for v in views)
+    sv.publish(broker, _declaration(agent="Broker@ab12cd", units=[_unit("broker", memory=256)]), now=1.0)
+    seen = {Path(v.home).name: v for v in sv.read_agents(homes, rendered=rendered, home_of=home_of)}
+    assert seen["broker"].status == "PUBLISHED" and seen["broker"].units.agent == "Broker@ab12cd"
+
+
+def test_a_declared_daemon_with_no_public_tree_still_publishes(tmp_path, script, base, run_daemon, monkeypatch):
+    """The mail broker's home has no agent/public tree, so its daemon published nothing and its
+    units were invisible to every seat beside it. A daemon the deployment declares publishes
+    anyway; one it doesn't still makes no tree."""
+    from macf.pd.daemon import Daemon
+    from test_primal_daemon import make_home, make_unit
+    monkeypatch.setattr(Daemon, "_deployment_declares", lambda self: True)
+    declared = make_home(tmp_path / "declared", [make_unit("worker", script, {})])
+    assert not (declared / "agent" / "public").exists()
+    run_daemon(declared, base)
+    assert sv.published_path(declared).exists(), "a declared daemon with no public tree published nothing"
+
+
+def test_an_undeclared_daemon_with_no_public_tree_makes_none(tmp_path, script, base, run_daemon):
+    from test_primal_daemon import make_home, make_unit
+    plain = make_home(tmp_path / "plain", [make_unit("worker", script, {})])
+    run_daemon(plain, base)
+    assert not sv.published_path(plain).exists() and not (plain / "agent" / "public").exists()
+
+
+def test_one_declared_account_the_reader_cannot_look_into_costs_only_itself(tmp_path):
+    """Ira's probe on #819: three rendered accounts, one at mode 0. Asked inside one try, the
+    permission error emptied the declared list and the broker vanished again. Each account is
+    asked on its own: the unreadable one is listed with its reason, and the others still count."""
+    import os
+    if os.geteuid() == 0:
+        pytest.skip("root reads a mode-0 directory")
+    rendered, homes = tmp_path / "rendered", tmp_path / "home"
+    for account in ("svc_broker", "pa_seat", "pa_shut"):
+        (rendered / account).mkdir(parents=True)
+        (rendered / account / "declaration.json").write_text("{}")
+    homes.mkdir()
+    home_of = {a: tmp_path / "homes" / a for a in ("svc_broker", "pa_seat", "pa_shut")}.get
+    (rendered / "pa_shut").chmod(0)
+    try:
+        views = {Path(v.home).name: v for v in sv.read_agents(homes, rendered=rendered, home_of=home_of)}
+    finally:
+        (rendered / "pa_shut").chmod(0o755)
+    assert set(views) == {"svc_broker", "pa_seat", "pa_shut"}
+    assert views["pa_shut"].status == "UNREADABLE" and "pa_shut" in views["pa_shut"].detail
+    assert views["svc_broker"].detail == "declared, no summary published"
+
+
+def test_agents_yaml_accepts_a_schedule_aimed_at_its_own_card_and_refuses_a_literal_one():
+    """agents.yaml validates a body against a placeholder agent, so only {card} can name the
+    seat's own session there; a literal card is refused, since the file can't prove it is this
+    seat's (MIS-0002-R29 (schedule_MUST_declare_target))."""
+    import pytest
+    from macf.models.agent_spec import declaration_body as _validate_primal_daemon
+    schedule = {"name": "sweep", "cron": "47 9 * * *", "missed_run": {"kind": "run_once"},
+                "timeout_s": 900, "run": {"command": ["/usr/bin/true"], "wake_when": "exit_code"}}
+    body = {"timezone": "UTC", "units": [], "schedules": [dict(schedule, target="{card}")]}
+    assert _validate_primal_daemon(body) is body
+    with pytest.raises(ValueError, match="may target only"):
+        _validate_primal_daemon({**body, "schedules": [dict(schedule, target="Someone@abcdef")]})

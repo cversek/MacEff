@@ -3,11 +3,18 @@
 This file holds the macOS rendering (MIS-0002 step 4). Linux renderings belong to
 step 1 and get their own classes here.
 """
+import json
+import os
 import plistlib
 import shutil
+import stat
 import subprocess
 import sys
+import sysconfig
+import tempfile
 import textwrap
+import time
+from pathlib import Path
 
 import pytest
 
@@ -22,6 +29,11 @@ def _plist(**overrides):
     kwargs.update(overrides)
     path, data = render_pd_launch_agent(**kwargs)
     return path, plistlib.loads(data)
+
+
+def _listed_name(pid: int) -> str:
+    """The name ``ps`` lists a process by, which on macOS is its argv[0]."""
+    return subprocess.run(["ps", "-o", "comm=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
 
 
 class TestMacOSLaunchAgent:
@@ -48,7 +60,7 @@ class TestMacOSLaunchAgent:
         conformance row names this test; the Linux rendering adds its own half."""
         _, plist = _plist()
         assert plist["KeepAlive"] is True and plist["RunAtLoad"] is True
-        assert plist["ProgramArguments"] == ARGV
+        assert plist["Program"] == ARGV[0] and plist["ProgramArguments"][1:] == ARGV[1:]
 
     def test_units_outlive_the_daemons_exit(self):
         """launchd leaves the daemon's process group alone when the daemon dies, so its units,
@@ -77,6 +89,125 @@ class TestMacOSLaunchAgent:
         target = tmp_path / "agent.plist"
         target.write_bytes(data)
         assert subprocess.run(["plutil", "-lint", str(target)], capture_output=True).returncode == 0
+
+
+class TestEveryNameCarriesTheIdentifier:
+    """MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd) past the label: the Linux unit, the
+    sockets a daemon binds, and the name its process shows in a listing."""
+
+    def test_the_linux_unit_is_named_maceff_pd(self):
+        from macf.platform.systemd import render_pd_user_unit
+        path, _ = render_pd_user_unit(CARD, ARGV, "/home/someone")
+        assert Path(path).name == "maceff_pd-IraMacEff_ee9a78.service"
+
+    def test_the_launch_agent_names_the_daemon_maceff_pd(self):
+        """macOS names a process only at exec, so the LaunchAgent does it: launchd runs the
+        interpreter as ``Program`` with ``maceff_pd`` as ``argv[0]``, and the rest of the
+        command line is unchanged."""
+        _, plist = _plist()
+        assert plist["Program"] == ARGV[0]
+        assert plist["ProgramArguments"] == ["maceff_pd", *ARGV[1:]]
+
+    def test_a_program_that_is_not_an_absolute_path_is_refused(self):
+        """launchd runs ``Program`` by its absolute path, so a bare name is refused here
+        rather than written into a plist that never starts."""
+        with pytest.raises(ValueError):
+            _plist(program_argv=["python3", "-m", "macf.pd", "/Users/someone/agent"])
+
+    @pytest.mark.skipif(sys.platform != "darwin", reason="ps lists a process by its argv[0] on macOS")
+    def test_an_exec_with_maceff_pd_as_argv0_is_listed_as_maceff_pd(self):
+        """What launchd does with ``Program`` and ``ProgramArguments``, done here without
+        launchd: ``ps`` and ``pgrep`` name the process by its argv[0]."""
+        child = subprocess.Popen(["maceff_pd", "30"], executable="/bin/sleep")
+        try:
+            assert _listed_name(child.pid) == "maceff_pd"
+            assert str(child.pid) in subprocess.run(["pgrep", "maceff_pd"], capture_output=True,
+                                                    text=True).stdout.split()
+        finally:
+            child.terminate()
+            child.wait(timeout=30)
+
+    def test_a_framework_build_is_started_through_its_python_app(self, tmp_path):
+        """A framework build's launcher would re-exec Python.app and rename the process, so
+        the plist starts Python.app itself, and passes the venv's interpreter as the launcher
+        would, in ``__PYVENV_LAUNCHER__``. A plain build gets neither."""
+        version = tmp_path / "Python.framework" / "Versions" / "3.99"
+        (version / "bin").mkdir(parents=True)
+        (version / "bin" / "python3.99").write_text("")
+        app = version / "Resources" / "Python.app" / "Contents" / "MacOS" / "Python"
+        app.parent.mkdir(parents=True)
+        app.write_text("")
+        venv_python = tmp_path / "venv" / "bin" / "python3"
+        venv_python.parent.mkdir(parents=True)
+        venv_python.symlink_to(version / "bin" / "python3.99")
+        _, plist = _plist(program_argv=[str(venv_python), "-m", "macf.pd", "/Users/someone/agent"])
+        assert plist["Program"] == str(app.resolve())
+        assert plist["ProgramArguments"] == ["maceff_pd", "-m", "macf.pd", "/Users/someone/agent"]
+        assert plist["EnvironmentVariables"] == {"__PYVENV_LAUNCHER__": str(venv_python)}
+        _, plain = _plist()
+        assert plain["Program"] == ARGV[0] and "EnvironmentVariables" not in plain
+
+    @pytest.mark.skipif(sys.platform != "darwin", reason="ps lists a process by its argv[0] on macOS")
+    def test_the_daemons_interpreter_started_as_the_launch_agent_says_is_listed_as_maceff_pd(self, tmp_path):
+        """The daemon's own interpreter, started as launchd would start the plist: ``Program``,
+        ``ProgramArguments`` and ``EnvironmentVariables``. It is listed as maceff_pd, whether
+        it is a plain build or a framework one, and it still finds its own prefix, so a venv
+        keeps working. A Python release that drops ``__PYVENV_LAUNCHER__`` fails here."""
+        _, plist = _plist(program_argv=[sys.executable, "-m", "macf.pd", str(tmp_path)])
+        assert ("EnvironmentVariables" in plist) == bool(sysconfig.get_config_var("PYTHONFRAMEWORK"))
+        child = subprocess.Popen([plist["ProgramArguments"][0], "-c",
+                                  "import sys, time; print(sys.prefix, flush=True); time.sleep(30)"],
+                                 executable=plist["Program"], env={**os.environ, **plist.get("EnvironmentVariables", {})},
+                                 stdout=subprocess.PIPE, text=True)
+        try:
+            assert child.stdout.readline().strip() == sys.prefix
+            assert _listed_name(child.pid) == "maceff_pd"
+            assert str(child.pid) in subprocess.run(["pgrep", "maceff_pd"], capture_output=True,
+                                                    text=True).stdout.split()
+        finally:
+            child.terminate()
+            child.wait(timeout=30)
+
+    @pytest.mark.parametrize("xdg", [True, False], ids=["XDG_RUNTIME_DIR", "no XDG_RUNTIME_DIR"])
+    def test_every_socket_path_runs_through_a_directory_named_maceff_pd(self, xdg, monkeypatch, tmp_path):
+        """A socket's file is named for the agent; the directory it lives in carries the
+        identifier, with or without a runtime directory from the session."""
+        from macf.pd.names import channel_socket, control_socket
+        if xdg:
+            monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+        else:
+            monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+        for sock in (control_socket(CARD), channel_socket(CARD)):
+            assert sock.parent.name.startswith("maceff_pd"), sock
+            assert sock.name.startswith("IraMacEff_ee9a78."), sock
+
+    @pytest.mark.skipif(not Path("/proc/self/comm").exists(), reason="a process name is read from /proc on Linux")
+    def test_a_running_daemon_is_listed_as_maceff_pd_and_binds_only_maceff_pd_sockets(self, tmp_path):
+        """The daemon as the outer tier starts it, ``python -m macf.pd <home>``: its process
+        name, what ``ps`` and ``pgrep`` show, is maceff_pd, and every socket it binds lies under
+        the runtime directory named maceff_pd."""
+        home = tmp_path / "home"
+        (home / ".maceff" / "pd").mkdir(parents=True)
+        (home / ".maceff_primary_agent.id").write_text("ee9a78aa-0000\n")
+        (home / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": "IraMacEff"}}))
+        (home / ".maceff" / "pd" / "declaration.json").write_text(json.dumps({"version": 1, "agent": CARD}))
+        xdg = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))   # short enough for a socket path
+        env = {k: v for k, v in os.environ.items() if k != "MACF_EVENTS_LOG_PATH"}
+        daemon = subprocess.Popen([sys.executable, "-m", "macf.pd", str(home)], env={**env, "XDG_RUNTIME_DIR": str(xdg)},
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.monotonic() + 30
+            sockets = []
+            while len(sockets) < 2 and time.monotonic() < deadline and daemon.poll() is None:
+                time.sleep(0.05)
+                sockets = [p for p in xdg.rglob("*") if stat.S_ISSOCK(p.lstat().st_mode)]
+            assert len(sockets) >= 2, f"the daemon bound {sockets}: {daemon.stderr.read() if daemon.poll() is not None else ''}"
+            assert all(p.relative_to(xdg).parts[0] == "maceff_pd" for p in sockets), sockets
+            assert Path(f"/proc/{daemon.pid}/comm").read_text().strip() == "maceff_pd"
+        finally:
+            daemon.terminate()
+            daemon.wait(timeout=30)
+            shutil.rmtree(xdg, ignore_errors=True)
 
 
 class TestMacOSInstall:

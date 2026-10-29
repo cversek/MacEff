@@ -337,7 +337,11 @@ def all_checks(profile):
 
 def _added_lines(*against):
     out = subprocess.run(
-        ["git", "diff", "--cached", "--unified=0", "--no-color"] + list(against),
+        # The prefixes are pinned: the parse below reads "+++ b/", and a user's
+        # diff.mnemonicPrefix ("+++ i/") or diff.noprefix would otherwise leave every
+        # hit attributed to no file (cversek/MacEff#845).
+        ["git", "diff", "--cached", "--unified=0", "--no-color",
+         "--src-prefix=a/", "--dst-prefix=b/"] + list(against),
         capture_output=True, text=True,
     ).stdout
     fname = None

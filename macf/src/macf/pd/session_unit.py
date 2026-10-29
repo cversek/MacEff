@@ -318,10 +318,11 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
     # server in between, and the session was then never reaped: CI saw it twice.
     # The window and the terminal attached to it are named after the agent. The client
     # sets its own title (its version), which said nothing about whose session it was,
-    # so on this server, which holds only this session, it may not.
+    # so on this server, which holds only this session, it may not. Nor may a program
+    # rename the window with tmux's own escape (allow-rename).
     card = window_title(agent)
     for option in (("set-titles", "on"), ("set-titles-string", card), ("allow-set-title", "off"),
-                   ("automatic-rename", "off")):
+                   ("automatic-rename", "off"), ("allow-rename", "off")):
         done = _tmux(tmux, env, "set-option", "-g", *option)
         if done.returncode != 0:
             # An older tmux has no allow-set-title; the window and the terminal still name
@@ -437,6 +438,35 @@ def _remove_leftovers(tmux: str, env: Mapping[str, str], directory: Path) -> Non
             break
 
 
+def turn_off_idle_compaction(home: Path, project_dir: Path) -> None:
+    """MIS-0002-R126 (adapter_MUST_turn_off_harness_idle_compaction): before the client starts,
+    the project it starts in gets idle compaction off, unless the declaration keeps it. A
+    declaration that can't be read keeps nothing, so the protection holds; a client too old to
+    have the setting, or one that can't be found, is said and the session starts anyway."""
+    from macf.agent_events_log import append_event
+    from macf.cli import _claude_launcher
+    from macf.pd.core import DeclarationRefused, load_declaration
+    from macf.pd.names import agent_card
+    from macf.utils.claude_settings import set_idle_compaction
+
+    keep = False
+    try:
+        keep = load_declaration(home, agent_card(home)).keep_harness_idle_compaction
+    except (DeclarationRefused, OSError, ValueError) as e:
+        print(f"⚠️ MACF: session unit: the declaration couldn't be read, so idle compaction is turned "
+              f"off ({e})", file=sys.stderr)
+    try:
+        _, version = _claude_launcher()
+        result = set_idle_compaction(False, client_version=version, project_root=project_dir, keep=keep)
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        print(f"⚠️ MACF: session unit: idle compaction was not turned off: {e}", file=sys.stderr)
+        return
+    if result["changed"]:
+        append_event("harness_setting_changed", {"setting": "idleCompaction", "state": "off",
+                                                 "settings_path": result["settings_path"],
+                                                 "by": "session unit"})
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     """``macf_tools harness unit``: the session unit's command in a declaration."""
     import argparse
@@ -457,6 +487,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not args.no_proxy:
         extra.update(proxy_environment(p.proxy_port))
     conf = p.home / f".tmux-{p.agent}.conf"
+    turn_off_idle_compaction(p.home, p.project_dir)
     return run(p.agent, p.child_path, project_dir=p.project_dir, conf=conf, extra_env=extra)
 
 
