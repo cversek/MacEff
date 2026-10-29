@@ -29,15 +29,19 @@ the daemon sets.
 
 So under ``on-failure``, a unit that wants to be restarted has to fail. A watched unit
 isn't the system daemon's to restart, so its ``restart`` is ``never`` until the draft
-settles whether the daemon may kickstart a watched job.
+settles whether the daemon may kickstart a watched job. Nor does the daemon start or stop
+one, so a watched unit carries no command, environment, groups, memory limit or stop
+grace: each would be a key the daemon ignores.
 
 **Not here, for the loader:** reading the file belongs to whatever loads it. The loader
 opens the file by descriptor, checks that root owns it, and refuses one that a group or
 others can write. It also refuses an account that resolves to uid 0 at start, which the
-name check below can't see.
+name check below can't see. On launchd, it also refuses a unit whose account doesn't
+already hold each group the unit names, because launchd takes a job's groups from the
+directory, not from the daemon.
 """
 import re
-from typing import Dict, List, Literal, Tuple, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -48,8 +52,13 @@ from macf.pd.interface import ExitCodes
 RESERVED_ENVIRONMENT = ("TZ", "MACEFF_SD_UNIT")
 
 #: Supplementary groups a unit may declare. macOS's setgroups(2) refuses more than 16, and
-#: one format holds on every platform, so the limit is applied everywhere at load.
+#: one format holds on every platform, so the limit is applied everywhere at load, even on
+#: launchd, where the daemon checks the memberships rather than setting them.
 MAX_GROUPS = 16
+
+#: The keys only a parented unit uses: the system daemon neither starts nor stops a
+#: watched unit, so on one each of these would be ignored.
+PARENT_ONLY = ("command", "environment", "groups", "memory_limit_mb", "stop_grace_s")
 
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ACCOUNT = r"^[a-z_][a-z0-9_-]{0,31}$"
@@ -74,11 +83,16 @@ class LinuxPlatform(_Closed):
 
 class LaunchdPlatform(_Closed):
     """How a unit is reached on macOS, where launchd is every job's parent: the domain the
-    job lives in and its label. A job in a login's ``gui`` domain belongs to that login's
-    session, so the system daemon watches it and never starts it."""
+    job lives in and its label.
+
+    A login has two domains of its own: ``gui``, only while it holds a GUI session, and
+    ``user``, for its background work. A job in either belongs to that login, so the system
+    daemon watches it and never starts it. The loader addresses such a job as
+    ``<domain>/<uid>`` with the uid of the unit's ``account``, so ``account`` names the
+    domain's owner; launchd ignores ``UserName`` for these jobs."""
 
     kind: Literal["launchd"]
-    domain: Literal["system", "gui"]
+    domain: Literal["system", "gui", "user"]
     label: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
@@ -95,7 +109,10 @@ class SystemUnit(_Closed):
     exit_codes: ExitCodes = Field(default_factory=ExitCodes)
     stop_grace_s: float = Field(default=10.0, gt=0)
     liveness_interval_s: float = Field(gt=0)
-    memory_limit_mb: int = Field(gt=0)
+    #: Required on a parented unit; a watched unit's memory isn't the daemon's to limit.
+    memory_limit_mb: Optional[int] = Field(default=None, gt=0)
+    #: Supplementary groups. On Linux the system daemon sets them before exec. On launchd
+    #: they name memberships the install step grants, which the loader verifies.
     groups: List[str] = Field(default_factory=list)
     after: List[str] = Field(default_factory=list)
     platform: Union[LinuxPlatform, LaunchdPlatform] = Field(discriminator="kind")
@@ -131,9 +148,13 @@ class SystemUnit(_Closed):
             if self.account == "root":
                 raise ValueError(f"unit {self.name}: a parented unit runs feature code, which never runs "
                                  f"as root; give it an unprivileged account")
-            if isinstance(self.platform, LaunchdPlatform) and self.platform.domain == "gui":
-                raise ValueError(f"unit {self.name}: a job in a login's gui domain belongs to that login's "
-                                 f"session, so the system daemon watches it and can't parent it")
+            if isinstance(self.platform, LaunchdPlatform) and self.platform.domain != "system":
+                raise ValueError(f"unit {self.name}: a job in a login's {self.platform.domain} domain "
+                                 f"belongs to that login, so the system daemon watches it and can't "
+                                 f"parent it")
+            if self.memory_limit_mb is None:
+                raise ValueError(f"unit {self.name}: a parented unit needs memory_limit_mb, the limit "
+                                 f"its process tree is held to")
         else:
             if isinstance(self.platform, LinuxPlatform):
                 raise ValueError(f"unit {self.name}: nothing names what to watch on Linux yet; the Linux "
@@ -142,6 +163,10 @@ class SystemUnit(_Closed):
                 raise ValueError(f"unit {self.name}: a watched unit isn't the system daemon's to restart, "
                                  f"so its restart is never until the draft settles whether the daemon "
                                  f"may kickstart a watched job")
+            ignored = [k for k in PARENT_ONLY if k in self.model_fields_set]
+            if ignored:
+                raise ValueError(f"unit {self.name}: the system daemon neither starts nor stops a watched "
+                                 f"unit, so it would ignore {', '.join(ignored)}; leave them out")
         return self
 
 
@@ -168,6 +193,10 @@ class SystemDeclaration(_Closed):
 
     @model_validator(mode="after")
     def _units_fit_together(self) -> "SystemDeclaration":
+        kinds = sorted({u.platform.kind for u in self.units})
+        if len(kinds) > 1:
+            raise ValueError(f"a declaration describes one system, so its units share one platform; "
+                             f"found {', '.join(kinds)}")
         names = [u.name for u in self.units]
         duplicated = sorted({n for n in names if names.count(n) > 1})
         if duplicated:
@@ -176,6 +205,18 @@ class SystemDeclaration(_Closed):
             unknown = [a for a in unit.after if a not in names]
             if unknown:
                 raise ValueError(f"unit {unit.name} starts after unknown unit(s): {', '.join(unknown)}")
+        # One label per launchd domain. A login's own domains are counted per account.
+        claimed: Dict[Tuple[str, ...], str] = {}
+        for unit in self.units:
+            if not isinstance(unit.platform, LaunchdPlatform):
+                continue
+            domain, label = unit.platform.domain, unit.platform.label
+            key = (domain, label) if domain == "system" else (domain, unit.account, label)
+            if key in claimed:
+                where = "the system domain" if domain == "system" else f"{unit.account}'s {domain} domain"
+                raise ValueError(f"units {claimed[key]} and {unit.name} both claim the label {label} in "
+                                 f"{where}; launchd would refuse the second when it is bootstrapped")
+            claimed[key] = unit.name
         start_order(self)  # refuses a cycle
         needed, chain = longest_stop(self)
         if needed >= self.stop_timeout_s:
@@ -214,13 +255,15 @@ def longest_stop(declaration: SystemDeclaration) -> Tuple[float, List[str]]:
 
     Units stop in reverse start order: a unit stops before the units its ``after`` names,
     one after another, while units with no order between them stop together. So the worst
-    case is the chain whose stop graces add up to the most."""
+    case is the chain whose stop graces add up to the most. A watched unit adds no grace,
+    since the system daemon never stops it, but it still orders the units on either side."""
     by_name = {u.name: u for u in declaration.units}
     best: Dict[str, Tuple[float, List[str]]] = {}
     for name in start_order(declaration):
         unit = by_name[name]
+        grace = unit.stop_grace_s if unit.relationship == "parent" else 0.0
         before = max((best[a] for a in unit.after), key=lambda t: t[0], default=(0.0, []))
-        best[name] = (unit.stop_grace_s + before[0], [name] + before[1])
+        best[name] = (grace + before[0], [name] + before[1])
     return max(best.values(), key=lambda t: t[0])
 
 
