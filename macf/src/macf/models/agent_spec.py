@@ -363,8 +363,27 @@ def declaration_body(value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]
                     f"declare it in schedules, with its missed-run policy, so each run is recorded "
                     f"(MIS-0002-R54 (periodic_mail_clock_MUST_be_schedule))")
     from macf.pd.interface import Declaration
-    Declaration(version=1, agent="placeholder@000000", **value)
+    Declaration(version=1, agent="placeholder@000000",
+                **with_schedule_targets(value, "placeholder@000000"))
     return value
+
+
+#: The schedule target that names the declaring agent's own session in agents.yaml. The card
+#: carries an id the file can't know, so the container fills it in when it renders the
+#: declaration (``with_schedule_targets``), the way it fills in ``agent`` itself.
+OWN_CARD_TARGET = "{card}"
+
+
+def with_schedule_targets(body: dict, card: str) -> dict:
+    """*body* with every schedule target of ``{card}`` replaced by *card*. A target naming a
+    literal card is left alone, so the declaration's own check still refuses a foreign one
+    (MIS-0002-R29 (schedule_MUST_declare_target))."""
+    schedules = body.get('schedules')
+    if not schedules:
+        return body
+    return {**body, 'schedules': [
+        {**s, 'target': card} if isinstance(s, dict) and s.get('target') == OWN_CARD_TARGET else s
+        for s in schedules]}
 
 
 class AgentSpec(BaseModel):
@@ -519,6 +538,18 @@ class AgentSpec(BaseModel):
         ),
     )
 
+    calling_card: Optional[str] = Field(
+        default=None,
+        pattern=r"^[A-Za-z][A-Za-z0-9]{0,47}$",
+        description=(
+            "The name this agent goes by, its calling card's first half; the second half is the "
+            "first six characters of the agent's identity file. Container start-up writes it into "
+            "the agent's home as agent_identity.calling_card in .maceff/config.json, where the "
+            "primal daemon reads it, and refuses to overwrite a different card already there. "
+            "Required with primal_daemon (persistent_layer 10.1)."
+        ),
+    )
+
     @field_validator('primal_daemon')
     @classmethod
     def _primal_daemon_is_a_declaration(cls, value):
@@ -540,6 +571,23 @@ class AgentSpec(BaseModel):
                 f"{self.username} is vanilla and declares primal_daemon: a vanilla account gets no "
                 "MacEff footprint, so no daemon would run its units or schedules. Remove primal_daemon, "
                 "or make the account maceff-flavored")
+        return self
+
+    @model_validator(mode='after')
+    def _a_daemon_has_a_name(self) -> 'AgentSpec':
+        """A daemon runs under its agent's calling card, which a container agent's home holds only
+        if agents.yaml declares it: without one the declaration can't be rendered at start. So the
+        pair is refused when agents.yaml loads, naming the agent. A card without a daemon is fine;
+        a card on a vanilla account is not, since writing it would give the account a footprint."""
+        if self.primal_daemon is not None and self.calling_card is None:
+            raise ValueError(
+                f"agent '{self.username}' declares primal_daemon without calling_card: the daemon "
+                "runs under the agent's calling card, which start-up writes into its home from "
+                "agents.yaml. Add calling_card beside primal_daemon")
+        if self.flavor == AgentFlavor.VANILLA and self.calling_card is not None:
+            raise ValueError(
+                f"agent '{self.username}' is vanilla and declares calling_card: a vanilla account "
+                "gets no MacEff footprint, so no card is written for it. Remove calling_card")
         return self
 
     @model_validator(mode='after')

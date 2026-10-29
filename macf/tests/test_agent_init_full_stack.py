@@ -1,0 +1,993 @@
+"""``macf_tools agent init`` installs the agent's whole persistent-layer stack (MIS-0002).
+
+Every test runs against a tmp home with the service manager, the claude CLI and ``pd install``
+mocked: nothing here touches the real home, systemd or Claude Code. The harness install runs for
+real, into the tmp home.
+"""
+import importlib.util
+import json
+import subprocess
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
+
+from macf import agent_stack
+from macf.agent_stack import ALREADY, DONE, DRIFT, PLANNED, REFUSED, SKIPPED, STEPS, WOULD, Result, run_stack
+from macf.cli import _build_parser
+from macf.pd.interface import Declaration
+
+REPO = Path(__file__).resolve().parents[2]
+#: The real live-session check, before the fixture stubs it out.
+REAL_LIVE_CHECK = agent_stack.legacy_harness_live
+CARD = "Tester@abc123"
+
+
+def _args(*flags):
+    return _build_parser().parse_args(["agent", "init", "-y", *flags])
+
+
+@pytest.fixture
+def stack(tmp_path, monkeypatch):
+    """A fresh agent home that is also the login home, with every outside party mocked."""
+    home = tmp_path / "home"
+    (home / ".maceff").mkdir(parents=True)
+    (home / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": "Tester"}}))
+    (home / ".maceff_primary_agent.id").write_text("abc123de-0000-0000-0000-000000000000\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("MACEFF_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
+    monkeypatch.setattr("macf.utils.paths.find_agent_home", lambda *a, **k: home)
+
+    claude_calls = []
+
+    def fake_claude(argv, **kw):
+        # Emulates the CLI's own state files, so a second run finds the plugin installed.
+        claude_calls.append(argv)
+        plugins = home / ".claude" / "plugins"
+        plugins.mkdir(parents=True, exist_ok=True)
+        if argv[1:4] == ["plugin", "marketplace", "add"]:
+            (plugins / "known_marketplaces.json").write_text(json.dumps({"maceff": {"source": argv[4]}}))
+        if argv[1:3] == ["plugin", "install"]:
+            (plugins / "installed_plugins.json").write_text(json.dumps({"version": 2, "plugins": {argv[3]: []}}))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    installs = []
+    installed = {"unit": False, "stale": False}
+    build = {"drift": None}
+    restarts = []
+
+    def fake_pd_install(args):
+        installs.append(args)
+        installed["unit"], installed["stale"] = True, False
+        print("Tester@abc123: installed")
+        return 0
+
+    real_which = agent_stack.shutil.which
+    monkeypatch.setattr(agent_stack.shutil, "which",
+                        lambda name: "/fake/bin/claude" if name == "claude" else real_which(name))
+    monkeypatch.setattr(agent_stack.subprocess, "run", fake_claude)
+    monkeypatch.setattr(agent_stack, "legacy_harness_live", lambda ctx: None)
+    # No live session and no daemon unless a test says so: nothing reads the real host.
+    for source in ("_clients_from_proc", "_clients_from_ps", "_clients_from_sidecars"):
+        monkeypatch.setattr(agent_stack, source, lambda *a: [])
+    monkeypatch.setattr(agent_stack, "_systemd_harness_live", lambda ctx: None)
+    monkeypatch.setattr(agent_stack, "daemon_session_pid", lambda ctx, d: None)
+    monkeypatch.setattr(agent_stack, "service_manager_missing", lambda: None)
+    monkeypatch.setattr(agent_stack, "pd_unit_current", lambda card, h: installed["unit"] and not installed["stale"])
+    monkeypatch.setattr(agent_stack, "pd_unit_installed", lambda card, h: installed["unit"])
+    monkeypatch.setattr(agent_stack, "daemon_build_drift", lambda ctx: build["drift"])
+    monkeypatch.setattr(agent_stack, "daemon_restart", lambda card: restarts.append(card))
+    moved = {"to": None}
+    monkeypatch.setattr(agent_stack, "program_change", lambda ctx: moved["to"])
+    restarts_on_install = {"yes": False}
+    monkeypatch.setattr(agent_stack, "install_restarts", lambda: restarts_on_install["yes"])
+    monkeypatch.setattr("macf.pd.cli.cmd_pd_install", fake_pd_install)
+    return SimpleNamespace(home=home, claude=claude_calls, installs=installs, unit=installed, build=build,
+                           restarts=restarts, moved=moved, restarts_on_install=restarts_on_install)
+
+
+def _run(stack, *flags, preamble_status=DONE, in_container=False):
+    return run_stack(_args(*flags), stack.home, in_container=in_container,
+                     preamble=lambda: Result("preamble", preamble_status))
+
+
+def _by_step(results):
+    return {r.step: r for r in results}
+
+
+def _declaration(stack):
+    return json.loads((stack.home / ".maceff" / "pd" / "declaration.json").read_text())
+
+
+def test_plan_lists_every_step_and_changes_nothing(stack, capsys):
+    rc, results = _run(stack, "--plan")
+    out = capsys.readouterr().out
+    assert rc == 0
+    for step, _what, _flag in STEPS:
+        assert f"{step}:" in out
+    assert results[0].status == PLANNED
+    # Each checked, none acted. The fixture's home is already named, so that step finds it so.
+    assert _by_step(results)["calling-card"].status == ALREADY, results
+    assert {r.status for r in results[1:] if r.step != "calling-card"} == {WOULD}, results
+    assert {s for s, _w, _f in STEPS} >= {"preamble", "task-store", "calling-card", "declaration", "harness",
+                                          "channel", "permissions", "daemon"}
+    assert not (stack.home / ".maceff" / "pd").exists() and stack.claude == [] and stack.installs == []
+
+
+def test_fresh_home_gets_a_valid_declaration_and_the_whole_stack(stack):
+    rc, results = _run(stack)
+    steps = _by_step(results)
+    assert rc == 0, results
+    assert all(steps[s].status == DONE for s in ("task-store", "declaration", "harness", "channel",
+                                                 "permissions", "daemon")), results
+    declaration = _declaration(stack)
+    Declaration.model_validate(declaration)   # the daemon's own model
+    units = {u["name"]: u for u in declaration["units"]}
+    assert set(units) == {"session", "monitor", "search"}
+    assert units["session"]["kind"] == "session"
+    assert units["session"]["command"][-5:] == ["unit", "--home", "{agent_home}", "--project-dir", "{agent_home}"]
+    assert units["monitor"]["command"][1:] == ["-m", "macf.transcript_monitor", "--follow"]
+    assert units["search"]["command"][1:] == ["-m", "macf.search_service.daemon", "--unit"]
+    assert declaration["agent"] == CARD
+    assert {"plugin": "maceff-channel", "marketplace": "maceff"} in declaration["allowlisted_channels"]
+    # No Telegram here and no mail: neither is declared.
+    assert declaration["operator_channels"] == [] and declaration["notice_routes"] == {}
+    # The channel comes from the packaged marketplace; the harness was given it.
+    from macf.channels.marketplace import packaged_marketplace
+    assert ["/fake/bin/claude", "plugin", "marketplace", "add", str(packaged_marketplace())] in stack.claude
+    assert ["/fake/bin/claude", "plugin", "install", "maceff-channel@maceff"] in stack.claude
+    harness = json.loads((stack.home / ".maceff" / "harness_Tester_abc123.json").read_text())
+    assert "plugin:maceff-channel@maceff" in harness["channels"]
+    assert len(stack.installs) == 1
+
+
+def test_telegram_and_mail_are_declared_when_the_agent_uses_them(stack):
+    (stack.home / ".claude").mkdir()
+    (stack.home / ".claude" / "settings.json").write_text(
+        json.dumps({"enabledPlugins": {"telegram@claude-plugins-official": True}}))
+    (stack.home / ".maceff" / "amail.json").write_text(json.dumps({"agent": "tester", "handoff": "/x"}))
+    _run(stack)
+    declaration = _declaration(stack)
+    assert declaration["operator_channels"] == ["plugin:telegram:telegram"]
+    assert declaration["notice_routes"] == {"amail": "agent"}
+    assert {"plugin": "telegram", "marketplace": "claude-plugins-official"} in declaration["allowlisted_channels"]
+
+
+def test_an_existing_declaration_is_never_overwritten_and_its_gaps_are_reported(stack):
+    path = stack.home / ".maceff" / "pd" / "declaration.json"
+    path.parent.mkdir(parents=True)
+    mine = {"version": 1, "agent": CARD, "units": [
+        {"name": "my-session", "kind": "session", "command": ["/bin/true"], "account": "x",
+         "restart": "always", "liveness_interval_s": 60, "memory_limit_mb": 10}]}
+    text = json.dumps(mine)
+    path.write_text(text)
+    rc, results = _run(stack)
+    result = _by_step(results)["declaration"]
+    assert path.read_text() == text
+    assert result.status == DRIFT
+    assert "no monitor unit" in result.detail and "no search unit" in result.detail
+    assert "no session unit" not in result.detail       # a session under another name counts
+    # It runs a command of its own, but the login is the account's, not the program's
+    # (cversek/MacEff#848).
+    assert "the session unit's environment lacks USER, LOGNAME" in result.detail
+    assert "maceff-channel@maceff" in result.detail
+
+
+@pytest.mark.parametrize("step,flag", [(s, f"--{f.replace('_', '-')}") for s, _w, f in STEPS])
+def test_each_skip_flag_skips_its_step(stack, step, flag):
+    called = []
+    with patch.dict(agent_stack.RUNNERS, {step: lambda ctx: called.append(step) or Result(step, DONE)}):
+        _rc, results = run_stack(_args(flag), stack.home, in_container=False,
+                                 preamble=lambda: called.append("preamble") or Result("preamble", DONE))
+    assert _by_step(results)[step].status == SKIPPED
+    assert step not in called
+
+
+def test_a_second_run_reports_everything_already_done(stack):
+    rc1, _ = _run(stack)
+    claude_before, installs_before = len(stack.claude), len(stack.installs)
+    rc2, results = _run(stack, preamble_status=ALREADY)
+    assert rc1 == rc2 == 0
+    assert [r.status for r in results] == [ALREADY] * len(STEPS), results
+    assert len(stack.claude) == claude_before and len(stack.installs) == installs_before
+
+
+def test_a_live_legacy_session_stages_the_declaration_for_cutover(stack, monkeypatch):
+    monkeypatch.setattr(agent_stack, "legacy_harness_live", lambda ctx: "cc-harness-x.service is active")
+    _rc, results = _run(stack)
+    steps = _by_step(results)
+    pd = stack.home / ".maceff" / "pd"
+    assert not (pd / "declaration.json").exists() and (pd / "declaration.json.cutover").exists()
+    assert steps["daemon"].status == SKIPPED and "cutover" in steps["daemon"].detail
+    assert stack.installs == []
+
+
+def test_a_container_leaves_the_declaration_harness_and_daemon_to_its_start_step(stack):
+    _rc, results = _run(stack, in_container=True)
+    steps = _by_step(results)
+    assert {steps[s].status for s in ("declaration", "harness", "daemon")} == {SKIPPED}
+    assert not (stack.home / ".maceff" / "pd" / "declaration.json").exists()
+    assert stack.installs == []
+
+
+def _with_clients(monkeypatch, clients):
+    """The real live-session check, over a mocked process table and no sidecars."""
+    monkeypatch.setattr(agent_stack, "legacy_harness_live", REAL_LIVE_CHECK)
+    monkeypatch.setattr(agent_stack, "_clients_from_proc", lambda *a: list(clients))
+    monkeypatch.setattr(agent_stack, "_clients_from_ps", lambda: list(clients))
+    monkeypatch.setattr(agent_stack, "_clients_from_sidecars", list)
+
+
+def test_a_hand_started_client_in_the_project_dir_stages_the_declaration(stack, monkeypatch):
+    # No systemd unit, no tmux, no supervisor: a plain claude -c in the agent's directory.
+    _with_clients(monkeypatch, [(4242, str(stack.home))])
+    _rc, results = _run(stack)
+    steps = _by_step(results)
+    pd = stack.home / ".maceff" / "pd"
+    assert not (pd / "declaration.json").exists() and (pd / "declaration.json.cutover").exists()
+    assert "pid 4242" in steps["declaration"].detail and "harness cutover" in steps["declaration"].detail
+    assert steps["daemon"].status == SKIPPED and stack.installs == []
+
+
+def test_a_client_in_another_directory_does_not_block(stack, monkeypatch, tmp_path):
+    elsewhere = tmp_path / "other-project"
+    elsewhere.mkdir()
+    _with_clients(monkeypatch, [(4242, str(elsewhere))])
+    _rc, results = _run(stack)
+    assert (stack.home / ".maceff" / "pd" / "declaration.json").exists()
+    assert _by_step(results)["daemon"].status == DONE
+
+
+def test_the_proc_walk_finds_this_accounts_claude_and_its_cwd(tmp_path):
+    proc = tmp_path / "proc"
+    for pid, argv, cwd in ((101, b"/home/x/.local/bin/claude\0-c\0", tmp_path),
+                           (102, b"/usr/bin/python3\0-m\0macf.cli\0", tmp_path),
+                           (103, b"node\0/opt/lib/node_modules/@anthropic-ai/claude-code/cli.js\0", tmp_path)):
+        (proc / str(pid)).mkdir(parents=True)
+        (proc / str(pid) / "cmdline").write_bytes(argv)
+        (proc / str(pid) / "cwd").symlink_to(cwd)
+    assert sorted(agent_stack._clients_from_proc(proc)) == [(101, str(tmp_path)), (103, str(tmp_path))]
+
+
+def test_a_running_harness_launch_agent_counts_as_live_on_macos(stack, monkeypatch):
+    agents = stack.home / "Library" / "LaunchAgents"
+    agents.mkdir(parents=True)
+    (agents / "cc-harness-Tester_abc123.plist").write_text("<plist/>")
+    real_which = agent_stack.shutil.which
+    monkeypatch.setattr(agent_stack.shutil, "which",
+                        lambda name: "/bin/launchctl" if name == "launchctl" else real_which(name))
+    monkeypatch.setattr(agent_stack.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(
+        argv, 0, "gui/501/cc-harness-Tester_abc123 = {\n\tstate = running\n\tpid = 777\n}\n", ""))
+    ctx = agent_stack.Context(home=stack.home, login_home=stack.home, in_container=False,
+                              args=_args(), card=CARD)
+    said = agent_stack._launchd_harness_live(ctx, platform="darwin")
+    assert said and "cc-harness-Tester_abc123" in said and "pid 777" in said
+    assert agent_stack._launchd_harness_live(ctx, platform="linux") is None
+
+
+def _snapshot(root):
+    return {str(p.relative_to(root)): (p.read_bytes() if p.is_file() else None)
+            for p in sorted(root.rglob("*"))}
+
+
+def _write_partial_declaration(stack):
+    path = stack.home / ".maceff" / "pd" / "declaration.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"version": 1, "agent": CARD, "units": [
+        {"name": "session", "kind": "session", "command": ["/bin/true"], "account": "x",
+         "restart": "always", "liveness_interval_s": 60, "memory_limit_mb": 10}]}))
+    return path
+
+
+def test_an_existing_declaration_with_a_live_client_never_reaches_pd_install(stack, monkeypatch):
+    _write_partial_declaration(stack)
+    _with_clients(monkeypatch, [(5151, str(stack.home))])
+    _rc, results = _run(stack)
+    steps = _by_step(results)
+    assert steps["declaration"].status == DRIFT              # the declaration step had nothing to stage
+    assert steps["daemon"].status == SKIPPED
+    assert "pid 5151" in steps["daemon"].detail and "harness cutover" in steps["daemon"].detail
+    assert stack.installs == []
+
+
+def test_plan_reports_what_an_existing_declaration_lacks(stack, capsys):
+    _write_partial_declaration(stack)
+    _rc, results = _run(stack, "--plan")
+    detail = _by_step(results)["declaration"].detail
+    assert "no monitor unit" in detail and "no search unit" in detail
+    assert "no monitor unit" in capsys.readouterr().out
+
+
+def test_plan_says_a_live_client_would_stop_the_daemon_step(stack, monkeypatch, capsys):
+    _write_partial_declaration(stack)
+    _with_clients(monkeypatch, [(5151, str(stack.home))])
+    _rc, results = _run(stack, "--plan")
+    daemon = _by_step(results)["daemon"]
+    assert daemon.status == SKIPPED and "pid 5151" in daemon.detail
+    assert "pid 5151" in capsys.readouterr().out
+
+
+def test_plan_writes_nothing(stack):
+    _write_partial_declaration(stack)
+    before = _snapshot(stack.home)
+    _run(stack, "--plan")
+    assert _snapshot(stack.home) == before
+    assert stack.claude == [] and stack.installs == []
+
+
+def test_a_client_below_the_confirmed_session_unit_is_that_unit(stack, monkeypatch):
+    _write_partial_declaration(stack)
+    _with_clients(monkeypatch, [(5151, str(stack.home))])
+    monkeypatch.setattr(agent_stack, "daemon_session_pid", lambda ctx, d: 900)
+    monkeypatch.setattr(agent_stack, "ancestors", lambda pid: {pid, 901, 900, 1})
+    stack.unit["unit"] = True              # a daemon running its session unit is installed
+    _rc, results = _run(stack)
+    daemon = _by_step(results)["daemon"]
+    assert daemon.status == ALREADY and "pid 900" in daemon.detail
+    assert stack.installs == []
+    _rc, results = _run(stack, "--plan")
+    assert _by_step(results)["daemon"].status == ALREADY
+
+
+def test_a_client_not_below_the_session_unit_still_blocks(stack, monkeypatch):
+    _write_partial_declaration(stack)
+    _with_clients(monkeypatch, [(5151, str(stack.home))])
+    monkeypatch.setattr(agent_stack, "daemon_session_pid", lambda ctx, d: 900)
+    monkeypatch.setattr(agent_stack, "ancestors", lambda pid: {pid, 77, 1})
+    _rc, results = _run(stack)
+    daemon = _by_step(results)["daemon"]
+    assert daemon.status == SKIPPED and "pid 5151" in daemon.detail
+    assert stack.installs == []
+
+
+def test_plan_prints_findings_not_the_static_list(stack, capsys):
+    _run(stack, "--plan")
+    out = capsys.readouterr().out
+    assert "1. preamble" not in out and "agent init --plan" in out
+
+
+# --- the packaged marketplace ------------------------------------------------------------------
+
+def test_the_packaged_marketplace_and_the_root_one_agree():
+    from macf.channels.marketplace import packaged_marketplace
+    packaged = packaged_marketplace()
+    root = json.loads((REPO / ".claude-plugin" / "marketplace.json").read_text())
+    pkg = json.loads((packaged / ".claude-plugin" / "marketplace.json").read_text())
+
+    def without_sources(m):
+        return {**m, "plugins": [{k: v for k, v in p.items() if k != "source"} for p in m["plugins"]]}
+    assert without_sources(root) == without_sources(pkg)
+    # One copy of the plugin: both catalogs resolve each plugin to the same directory.
+    for r, p in zip(root["plugins"], pkg["plugins"], strict=True):
+        assert (REPO / r["source"]).resolve() == (packaged / p["source"]).resolve()
+        assert ((packaged / p["source"]) / ".claude-plugin" / "plugin.json").is_file()
+        assert ((packaged / p["source"]) / ".mcp.json").is_file()
+    assert not (REPO / "plugins" / "maceff-channel").exists()
+
+
+def test_start_py_installs_the_maceff_channel_from_the_packaged_marketplace(tmp_path):
+    from macf.channels.marketplace import packaged_marketplace
+    spec = importlib.util.spec_from_file_location("maceff_start_stack", REPO / "docker" / "scripts" / "start.py")
+    start = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(start)
+    assert start.KNOWN_MARKETPLACE_SOURCES["maceff"] == str(packaged_marketplace())
+    (tmp_path / "pa_test").mkdir()
+    calls = []
+    with patch.object(start, "HOME_ROOT", tmp_path), \
+            patch.object(start, "run_command", side_effect=lambda cmd, **kw: calls.append((cmd, kw))):
+        start.ensure_channel_plugins("pa_test", ["plugin:maceff-channel@maceff"])
+    payloads = [c[-1] for c, _kw in calls]
+    assert payloads == [f"timeout 90 claude plugin marketplace add {packaged_marketplace()}",
+                        "timeout 90 claude plugin install maceff-channel@maceff"]
+    assert all(kw.get("check") is False for _c, kw in calls)
+
+
+# --- the harness's Remote Control name ---------------------------------------------------------
+
+def _params(tmp_path, **kw):
+    from macf.utils.harness import HarnessParams
+    return HarnessParams(agent="T_abc123", home=tmp_path, python=Path("/usr/bin/python3"),
+                         macf_tools=Path("/usr/bin/macf_tools"), child_path=tmp_path / "child", **kw)
+
+
+def test_remote_control_is_rendered_before_the_variadic_channels(tmp_path):
+    from macf.utils.harness import render_child
+    child = render_child(_params(tmp_path, channels=("plugin:tg@m",), remote_control="seat-one"))
+    exec_line = [ln for ln in child.splitlines() if ln.startswith("exec claude")][0]
+    assert exec_line == 'exec claude -c "$PROMPT" "$@" --remote-control seat-one --channels plugin:tg@m'
+
+
+def test_no_remote_control_leaves_the_child_and_settings_unchanged(tmp_path):
+    from macf.utils.harness import load_settings, render_child, save_settings
+    p = _params(tmp_path, channels=("plugin:tg@m",))
+    assert 'exec claude -c "$PROMPT" "$@" --channels plugin:tg@m\n' in render_child(p)
+    assert "remote-control" not in render_child(p)
+    save_settings(p)
+    assert "remote_control" not in json.loads(p.settings_path.read_text())
+    # And a recorded name comes back on a flagless reload.
+    named = _params(tmp_path, remote_control="seat-one")
+    save_settings(named)
+    assert load_settings(_params(tmp_path)).remote_control == "seat-one"
+
+
+# ---------------------------------------------------------------------------
+# The preamble step, unattended: skipped and the flag named, never an EOFError refusal
+# ---------------------------------------------------------------------------
+
+class _Stdin:
+    """A stdin that is, or isn't, a terminal."""
+    def __init__(self, tty):
+        self.tty = tty
+
+    def isatty(self):
+        return self.tty
+
+
+@pytest.fixture
+def preamble(stack, tmp_path, monkeypatch):
+    """The real preamble step against the stack's home, with a template of its own."""
+    from macf import cli
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "PA_PREAMBLE.md").write_text("<!-- MACEFF_PA_PREAMBLE_v9.9_START -->\npreamble\n"
+                                              "<!-- MACEFF_PA_PREAMBLE_v9.9_END -->\n")
+    monkeypatch.setenv("MACEFF_TEMPLATES_DIR", str(templates))
+    monkeypatch.chdir(stack.home)
+    config = SimpleNamespace(agent_name="Tester")
+
+    def step(*flags):
+        args = _build_parser().parse_args(["agent", "init", *flags])
+        return cli._agent_init_preamble(args, stack.home, config)
+    return step
+
+
+def _no_input(*a, **k):
+    raise AssertionError("prompted with nobody to answer")
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_a_preamble_with_no_terminal_is_skipped_naming_yes(preamble, stack, monkeypatch, existing):
+    claude_md = stack.home / "CLAUDE.md"
+    if existing:
+        claude_md.write_text("# my own notes\n")
+    monkeypatch.setattr("sys.stdin", _Stdin(False))
+    monkeypatch.setattr("builtins.input", _no_input)
+    result = preamble()
+    assert result.status == SKIPPED, result
+    assert "not interactive" in result.detail and "--yes" in result.detail
+    assert (claude_md.read_text() == "# my own notes\n") if existing else not claude_md.exists()
+
+
+def test_a_preamble_prompt_that_meets_eof_is_skipped(preamble, stack, monkeypatch):
+    def eof(*a, **k):
+        raise EOFError
+    monkeypatch.setattr("sys.stdin", _Stdin(True))
+    monkeypatch.setattr("builtins.input", eof)
+    result = preamble()
+    assert result.status == SKIPPED and "--yes" in result.detail
+    assert not (stack.home / "CLAUDE.md").exists()
+
+
+def test_yes_accepts_the_preamble_unattended(preamble, stack, monkeypatch):
+    monkeypatch.setattr("sys.stdin", _Stdin(False))
+    monkeypatch.setattr("builtins.input", _no_input)
+    result = preamble("--yes")
+    assert result.status == DONE, result
+    assert "MACEFF_PA_PREAMBLE_v9.9_START" in (stack.home / "CLAUDE.md").read_text()
+
+
+def test_a_person_who_says_no_still_aborts(preamble, stack, monkeypatch):
+    monkeypatch.setattr("sys.stdin", _Stdin(True))
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "n")
+    assert preamble().status == "aborted"
+
+
+def test_an_unattended_run_reports_the_preamble_skipped_and_goes_on(preamble, stack, monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdin", _Stdin(False))
+    monkeypatch.setattr("builtins.input", _no_input)
+    args = _build_parser().parse_args(["agent", "init"])
+    rc, results = run_stack(args, stack.home, in_container=False, preamble=preamble)
+    assert rc == 0, results
+    assert results[0].status == SKIPPED and len(results) == len(STEPS)
+    assert "preamble: skipped: not interactive" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# The default session unit's XDG_RUNTIME_DIR: what harness cutover checks for
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_the_default_session_unit_declares_the_runtime_dir_the_cutover_expects(stack, monkeypatch, platform):
+    from macf.pd import cutover
+    from macf.pd.names import declaration_path
+    # Set on both: on macOS a variable a shell happens to export is still not declared, since
+    # the cutover there reads the clients' fallback under /tmp.
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/4242")
+    ctx = agent_stack.Context(home=stack.home, login_home=stack.home, in_container=False, args=_args())
+    agent_stack.resolve_card(ctx)
+    with monkeypatch.context() as m:     # sys.platform back before anything else reads it
+        m.setattr(agent_stack.sys, "platform", platform)
+        declaration = agent_stack.default_declaration(ctx)
+    session = next(u for u in declaration["units"] if u.get("kind") == "session")
+    others = [u for u in declaration["units"] if u.get("kind") != "session"]
+    if platform == "linux":
+        assert session["environment"]["XDG_RUNTIME_DIR"] == "/run/user/4242"
+    else:
+        assert "XDG_RUNTIME_DIR" not in session["environment"]
+    assert not any("XDG_RUNTIME_DIR" in u["environment"] for u in others), "the session unit's alone"
+    staged = declaration_path(stack.home).with_name("declaration.json.cutover")
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    staged.write_text(json.dumps(declaration))
+    runtime = "/run/user/4242" if platform == "linux" else None
+    check = cutover._staged_check(staged, ctx.card, runtime,
+                                  "systemd" if platform == "linux" else "launchd")
+    assert check.ok, check.detail
+
+
+# ---------------------------------------------------------------------------
+# A daemon that isn't current: warned of, and brought current only by --update
+# ---------------------------------------------------------------------------
+
+#: The real build readout, before the fixture stubs it out.
+REAL_BUILD_DRIFT = agent_stack.daemon_build_drift
+
+
+def _installed_stack(stack):
+    """A first init done: the daemon's unit installed, the channel installed."""
+    rc, _ = _run(stack)
+    assert rc == 0 and stack.unit["unit"]
+    stack.installs.clear()
+    stack.claude.clear()
+    return stack
+
+
+def test_a_stale_unit_is_warned_of_with_the_fix_and_nothing_changes(stack):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    for flags in ((), ("--plan",)):
+        rc, results = _run(stack, *flags)
+        daemon = _by_step(results)["daemon"]
+        assert rc == 0 and daemon.status == DRIFT, daemon
+        assert "differs from what this macf renders" in daemon.detail
+        assert "agent init --update" in daemon.detail
+    assert stack.installs == [] and stack.restarts == []
+
+
+def test_a_daemon_on_another_build_is_warned_of_with_the_fix(stack):
+    _installed_stack(stack)
+    stack.build["drift"] = "the running daemon runs macf 1.0 at aaaa, this command macf 1.0 at bbbb"
+    rc, results = _run(stack)
+    daemon = _by_step(results)["daemon"]
+    assert daemon.status == DRIFT and "at aaaa" in daemon.detail and "agent init --update" in daemon.detail
+    assert stack.installs == [] and stack.restarts == []
+
+
+def test_a_current_daemon_is_not_warned_of(stack):
+    _installed_stack(stack)
+    rc, results = _run(stack)
+    daemon = _by_step(results)["daemon"]
+    assert daemon.status == ALREADY and "runs this build" in daemon.detail and "--update" not in daemon.detail
+
+
+def test_update_reinstalls_restarts_once_and_refreshes_the_channel_only(stack):
+    from macf.pd.names import declaration_path
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    stack.build["drift"] = "the running daemon runs macf 1.0 at aaaa, this command macf 1.0 at bbbb"
+    declaration = declaration_path(stack.home)
+    before = declaration.read_bytes()
+    called = []
+    rc, results = run_stack(_args("--update"), stack.home, in_container=False,
+                            preamble=lambda: called.append("preamble") or Result("preamble", DONE))
+    steps = _by_step(results)
+    assert rc == 0, results
+    assert steps["daemon"].status == DONE, steps["daemon"]
+    assert [a.force for a in stack.installs] == [True], "the unit reinstalled as rendered now, once"
+    assert stack.restarts == [CARD], "the daemon restarted once; nothing else restarted"
+    assert any(c[1:3] == ["plugin", "update"] for c in stack.claude)
+    assert any(c[1:4] == ["plugin", "marketplace", "update"] for c in stack.claude)
+    assert declaration.read_bytes() == before, "the declaration is never rewritten"
+    assert called == [], "the preamble isn't touched"
+    for step in ("preamble", "task-store", "harness", "permissions"):
+        assert steps[step].status == SKIPPED and "--update" in steps[step].detail, step
+
+
+def test_update_on_a_current_daemon_restarts_nothing(stack):
+    _installed_stack(stack)
+    _rc, results = _run(stack, "--update")
+    assert _by_step(results)["daemon"].status == ALREADY
+    assert stack.installs == [] and stack.restarts == []
+
+
+def test_update_never_writes_a_missing_declaration(stack):
+    from macf.pd.names import declaration_path
+    _rc, results = _run(stack, "--update")
+    assert _by_step(results)["declaration"].status == SKIPPED
+    assert not declaration_path(stack.home).exists()
+
+
+def test_update_with_no_daemon_installed_installs_nothing(stack):
+    """--update brings an installed daemon current and never installs one: with the declaration
+    in place but no unit installed, the daemon step reports nothing to bring current."""
+    _installed_stack(stack)
+    stack.unit["unit"] = False
+    for flags in (("--update",), ("--plan", "--update")):
+        _rc, results = _run(stack, *flags)
+        daemon = _by_step(results)["daemon"]
+        assert daemon.status == SKIPPED and "nothing to bring current" in daemon.detail, flags
+        assert stack.installs == [] and stack.restarts == [], flags
+
+
+def test_update_in_a_container_changes_nothing(stack):
+    rc, results = _run(stack, "--update", in_container=True)
+    assert rc == 0 and len(results) == 1 and results[0].status == SKIPPED
+    assert "container's start step" in results[0].detail
+    assert stack.claude == [] and stack.installs == [] and stack.restarts == []
+
+
+def test_plan_with_update_changes_nothing(stack):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    before = _snapshot(stack.home)
+    _rc, results = _run(stack, "--plan", "--update")
+    assert _by_step(results)["daemon"].status == WOULD
+    assert _by_step(results)["channel"].status == WOULD
+    assert _snapshot(stack.home) == before
+    assert stack.claude == [] and stack.installs == [] and stack.restarts == []
+
+
+def test_the_build_drift_is_read_as_pd_status_reads_it(stack, monkeypatch):
+    def report(source, daemon_build, cli_build="macf 1.0 at bbbb"):
+        monkeypatch.setattr("macf.pd.client.status",
+                            lambda home, card: SimpleNamespace(source=source, daemon_build=daemon_build,
+                                                               cli_build=cli_build))
+    ctx = agent_stack.Context(home=stack.home, login_home=stack.home, in_container=False, args=_args())
+    agent_stack.resolve_card(ctx)
+    report("daemon", "macf 1.0 at aaaa")
+    assert "aaaa" in REAL_BUILD_DRIFT(ctx) and "bbbb" in REAL_BUILD_DRIFT(ctx)
+    report("daemon", "macf 1.0 at bbbb")
+    assert REAL_BUILD_DRIFT(ctx) is None
+    report("daemon", "")
+    assert "older" in REAL_BUILD_DRIFT(ctx)
+    report("event log", "")
+    assert REAL_BUILD_DRIFT(ctx) is None, "no daemon answering, nothing to compare"
+
+
+def test_the_systemd_adapter_restarts_the_daemons_unit_and_reads_its_file(tmp_path):
+    from macf.pd.adapter import SystemdAdapter
+    calls = []
+
+    def run(argv):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    tier = SystemdAdapter(user_home=tmp_path, run=run)
+    tier.restart(CARD)
+    assert calls == [["systemctl", "--user", "restart", "maceff_pd-Tester_abc123.service"]]
+    assert tier.installed(CARD, tmp_path) is None
+    unit = tmp_path / ".config" / "systemd" / "user" / "maceff_pd-Tester_abc123.service"
+    unit.parent.mkdir(parents=True)
+    unit.write_text("old")
+    assert tier.installed(CARD, tmp_path) == "old" != tier.render(CARD, tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# --update on launchd, and a daemon pinned to its own interpreter
+# ---------------------------------------------------------------------------
+
+def test_update_refuses_to_move_a_pinned_daemon_without_repoint(stack):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    stack.moved["to"] = ("/venvs/pd/bin/python3", "/usr/local/bin/python3")
+    for flags in (("--update",), ("--plan", "--update")):
+        rc, results = _run(stack, *flags)
+        daemon = _by_step(results)["daemon"]
+        assert rc == 1 and daemon.status == REFUSED, daemon
+        assert "/venvs/pd/bin/python3" in daemon.detail and "--repoint" in daemon.detail
+    assert stack.installs == [] and stack.restarts == []
+
+
+def test_a_pinned_daemon_is_a_finding_without_update(stack):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    stack.moved["to"] = ("/venvs/pd/bin/python3", "/usr/local/bin/python3")
+    rc, results = _run(stack)
+    daemon = _by_step(results)["daemon"]
+    assert rc == 0 and daemon.status == DRIFT
+    assert "runs /venvs/pd/bin/python3; this command would render /usr/local/bin/python3" in daemon.detail
+
+
+def test_update_with_repoint_moves_a_pinned_daemon(stack):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    stack.moved["to"] = ("/venvs/pd/bin/python3", "/usr/local/bin/python3")
+    rc, results = _run(stack, "--update", "--repoint")
+    assert rc == 0 and _by_step(results)["daemon"].status == DONE
+    assert [a.force for a in stack.installs] == [True] and stack.restarts == [CARD]
+
+
+def test_update_does_not_restart_twice_where_the_install_restarts(stack):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+    stack.restarts_on_install["yes"] = True
+    rc, results = _run(stack, "--update")
+    assert rc == 0 and _by_step(results)["daemon"].status == DONE
+    assert [a.force for a in stack.installs] == [True] and stack.restarts == [], "the bootstrap restarted it"
+
+
+def test_unit_program_reads_a_launch_agent_and_a_systemd_unit():
+    import plistlib
+    plist = plistlib.dumps({"Label": "x", "Program": "/a/python3", "ProgramArguments": ["maceff_pd", "-m", "macf.pd"]}).decode()
+    assert agent_stack.unit_program(plist) == "/a/python3"
+    older = plistlib.dumps({"Label": "x", "ProgramArguments": ["/b/python3", "-m", "macf.pd"]}).decode()
+    assert agent_stack.unit_program(older) == "/b/python3", "a plist from before the Program key"
+    unit = "[Service]\nExecStart='/c dir/python3' -m macf.pd /home\n"
+    assert agent_stack.unit_program(unit) == "/c dir/python3"
+    assert agent_stack.unit_program(None) is None and agent_stack.unit_program("garbage") is None
+
+
+def test_the_launchd_reinstall_boots_out_before_bootstrapping(tmp_path):
+    from macf.pd.adapter import LaunchdAdapter
+    calls = []
+
+    def run(argv):
+        calls.append(argv)
+        # launchctl print of a label launchd doesn't have: the booted-out job is gone
+        return subprocess.CompletedProcess(argv, 113 if argv[1] == "print" else 0, "", "")
+    tier = LaunchdAdapter(user_home=tmp_path, uid=501, run=run)
+    tier.install(CARD, tmp_path)
+    assert [c[1] for c in calls] == ["bootstrap"], "a first install only bootstraps"
+    calls.clear()
+    tier.install(CARD, tmp_path, force=True)
+    from macf.platform.launchd import pd_label
+    assert calls[0] == ["launchctl", "bootout", f"gui/501/{pd_label(CARD)}"], calls
+    assert calls[1] == ["launchctl", "print", f"gui/501/{pd_label(CARD)}"], "it waits for the job to go"
+    assert calls[2][1:3] == ["bootstrap", "gui/501"], calls
+    assert LaunchdAdapter.install_restarts is True
+
+
+def test_the_launchd_reinstall_goes_on_when_nothing_was_loaded(tmp_path):
+    from macf.pd.adapter import LaunchdAdapter
+    from macf.platform.launchd import BOOTOUT_NOT_LOADED
+    calls = []
+
+    def run(argv):
+        calls.append(argv)
+        code = BOOTOUT_NOT_LOADED if argv[1] == "bootout" else 113 if argv[1] == "print" else 0
+        return subprocess.CompletedProcess(argv, code, "", "Boot-out failed: 3: No such process")
+    LaunchdAdapter(user_home=tmp_path, uid=501, run=run).install(CARD, tmp_path, force=True)
+    assert [c[1] for c in calls] == ["bootout", "print", "bootstrap"]
+
+
+def test_update_refuses_when_the_pin_cant_be_read_unless_repoint(stack, monkeypatch):
+    _installed_stack(stack)
+    stack.unit["stale"] = True
+
+    def unknown(ctx):
+        raise agent_stack.ProgramUnknown("the unit can't be read: [Errno 13] Permission denied")
+    monkeypatch.setattr(agent_stack, "program_change", unknown)
+    for flags in (("--update",), ("--plan", "--update")):
+        rc, results = _run(stack, *flags)
+        daemon = _by_step(results)["daemon"]
+        assert rc == 1 and daemon.status == REFUSED, daemon
+        assert "can't tell which program the daemon is pinned to" in daemon.detail and "--repoint" in daemon.detail
+    assert stack.installs == [] and stack.restarts == []
+    rc, results = _run(stack)
+    daemon = _by_step(results)["daemon"]
+    assert rc == 0 and daemon.status == DRIFT and "can't be told" in daemon.detail, "a finding without --update"
+    rc, results = _run(stack, "--update", "--repoint")
+    assert rc == 0 and _by_step(results)["daemon"].status == DONE and [a.force for a in stack.installs] == [True]
+
+
+def test_program_change_fails_closed_when_the_installed_unit_cant_be_read(tmp_path, monkeypatch):
+    import pytest
+
+    class Tier:
+        platform = "darwin"
+
+        def installed(self, card, home):
+            raise OSError(13, "Permission denied")
+
+        def render(self, card, home):
+            return "[Service]\nExecStart=/usr/bin/python3 -m macf.pd /h\n"
+    monkeypatch.setattr(agent_stack, "_adapter", lambda: Tier())
+    ctx = agent_stack.Context(home=tmp_path, login_home=tmp_path, in_container=False, args=_args())
+    with pytest.raises(agent_stack.ProgramUnknown, match="can't be read"):
+        agent_stack.program_change(ctx)
+    Tier.installed = lambda self, card, home: None
+    with pytest.raises(agent_stack.ProgramUnknown, match="names no program"):
+        agent_stack.program_change(ctx)
+
+
+def test_a_leftover_systemd_unit_on_macos_runs_nothing_but_on_linux_fails_closed(tmp_path, monkeypatch):
+    """The head maintainer's Mac kept an old cc-harness unit file under ~/.config/systemd/user.
+    macOS has no systemd, so that file runs nothing, and the daemon step must not skip over it.
+    On Linux without systemctl, an installed unit still counts as live: a wrong "no" there
+    starts a second session."""
+    import argparse
+    from macf import agent_stack as real
+    from macf.pd.names import pd_id
+    card = "Seat@abc123"
+    units = tmp_path / ".config" / "systemd" / "user"
+    units.mkdir(parents=True)
+    (units / f"cc-harness-{pd_id(card)}.service").write_text("[Service]\n")
+    ctx = real.Context(home=tmp_path, login_home=tmp_path, in_container=False,
+                       args=argparse.Namespace(project_dir=None), card=card)
+    monkeypatch.setattr(real.shutil, "which", lambda name: None)
+    assert real._systemd_harness_live(ctx, platform="darwin") is None
+    assert "can't be told whether it runs" in real._systemd_harness_live(ctx, platform="linux")
+
+
+
+def test_the_launchd_reload_waits_until_the_booted_out_job_is_gone(tmp_path, monkeypatch):
+    """bootout returns while the job is still stopping, and a bootstrap then fails with 5
+    (measured on macOS 15). The reload looks until launchd no longer has the label."""
+    from macf.pd.adapter import LaunchdAdapter
+    from macf.platform import launchd
+    calls, looks = [], {"left": 3}
+    monkeypatch.setattr(launchd, "_sleep", lambda s: None)
+
+    def run(argv):
+        calls.append(argv[1])
+        if argv[1] == "print":
+            looks["left"] -= 1
+            return subprocess.CompletedProcess(argv, 0 if looks["left"] > 0 else 113, "", "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    LaunchdAdapter(user_home=tmp_path, uid=501, run=run).install(CARD, tmp_path, force=True)
+    assert calls == ["bootout", "print", "print", "print", "bootstrap"], "no bootstrap while it's still loaded"
+
+
+def test_a_job_that_wont_leave_isnt_bootstrapped_and_the_error_says_how_to_load_it(tmp_path, monkeypatch):
+    import pytest
+    from macf.pd.adapter import LaunchdAdapter
+    from macf.platform import launchd
+    now = {"t": 0.0}
+    monkeypatch.setattr(launchd, "_clock", lambda: now["t"])
+    monkeypatch.setattr(launchd, "_sleep", lambda s: now.__setitem__("t", now["t"] + s))
+    calls = []
+
+    def run(argv):
+        calls.append(argv[1])
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    with pytest.raises(RuntimeError, match="still loaded after 30 s.*the daemon isn't running.*launchctl bootstrap gui/501"):
+        LaunchdAdapter(user_home=tmp_path, uid=501, run=run).install(CARD, tmp_path, force=True)
+    assert "bootstrap" not in calls
+
+
+def test_a_failed_bootstrap_after_a_bootout_says_the_daemon_isnt_loaded(tmp_path):
+    import pytest
+    from macf.pd.adapter import LaunchdAdapter
+
+    def run(argv):
+        if argv[1] == "print":
+            return subprocess.CompletedProcess(argv, 113, "", "")
+        code = 5 if argv[1] == "bootstrap" else 0
+        return subprocess.CompletedProcess(argv, code, "", "Bootstrap failed: 5: Input/output error")
+    with pytest.raises(RuntimeError, match="was booted out and isn't loaded now.*Load it again with: launchctl bootstrap gui/501"):
+        LaunchdAdapter(user_home=tmp_path, uid=501, run=run).install(CARD, tmp_path, force=True)
+
+
+def test_without_the_amail_extra_mail_reads_as_unconfigured_not_as_a_refusal(tmp_path):
+    """cversek/MacEff#843: the declaration and harness steps both ask mail_configured(),
+    and without the extra the amail package refuses to import. That must answer "no
+    mail" rather than refuse both steps (and the daemon step after them)."""
+    import sys
+    from macf.pd import default_declaration as dd
+    with patch.dict(sys.modules, {"macf.amail": None, "macf.amail.pickup": None}):
+        assert dd.mail_configured(tmp_path) is False
+
+
+def test_a_fresh_home_without_the_amail_extra_still_gets_the_whole_stack(stack):
+    """cversek/MacEff#843, end to end: declaration and harness refused, daemon after them."""
+    import sys
+    with patch.dict(sys.modules, {"macf.amail": None, "macf.amail.pickup": None}):
+        rc, results = _run(stack)
+    steps = _by_step(results)
+    assert rc == 0, results
+    assert all(steps[s].status == DONE for s in ("declaration", "harness", "daemon")), results
+    assert _declaration(stack)["notice_routes"] == {}
+
+
+def test_a_refused_declaration_is_named_as_the_daemons_cause(stack):
+    def refuse(ctx):
+        raise ImportError("simulated")
+    with patch.dict(agent_stack.RUNNERS, {"declaration": refuse}):
+        _rc, results = _run(stack)
+    daemon = _by_step(results)["daemon"]
+    assert daemon.status == REFUSED
+    assert "because the declaration step was refused" in daemon.detail
+
+
+def _unnamed(stack, **config):
+    """The home as a first init finds it: an agent id, and no name anywhere (#842)."""
+    (stack.home / ".maceff" / "config.json").write_text(json.dumps(config))
+
+
+def test_an_unnamed_home_is_named_by_the_flag_and_the_whole_stack_follows(stack):
+    _unnamed(stack, task_store={"mode": "home", "path": "agent/public/tasks"})
+    rc, results = _run(stack, "--calling-card", "Tester")
+    steps = _by_step(results)
+    assert rc == 0, results
+    assert steps["calling-card"].status == DONE and steps["calling-card"].detail == CARD
+    assert all(steps[s].status == DONE for s in ("declaration", "harness", "daemon")), results
+    config = json.loads((stack.home / ".maceff" / "config.json").read_text())
+    assert config["agent_identity"] == {"calling_card": "Tester"}
+    assert config["task_store"] == {"mode": "home", "path": "agent/public/tasks"}   # kept
+
+
+def test_an_unnamed_home_under_yes_refuses_naming_the_flag(stack):
+    _unnamed(stack)
+    rc, results = _run(stack)
+    steps = _by_step(results)
+    assert rc == 1
+    assert steps["calling-card"].status == REFUSED and "--calling-card NAME" in steps["calling-card"].detail
+    assert steps["declaration"].status == REFUSED
+    assert "agent_identity" not in json.loads((stack.home / ".maceff" / "config.json").read_text())
+
+
+@pytest.mark.parametrize("bad", ["Tester@abc123", "Name.suffix", "Name:suffix", "two words", "-lead"])
+def test_a_name_the_session_identifier_would_rewrite_is_refused_and_nothing_written(stack, bad):
+    _unnamed(stack)
+    _rc, results = _run(stack, f"--calling-card={bad}")
+    assert _by_step(results)["calling-card"].status == REFUSED, results
+    assert "agent_identity" not in json.loads((stack.home / ".maceff" / "config.json").read_text())
+
+
+def test_a_named_home_keeps_its_name_whatever_the_flag_says(stack):
+    rc, results = _run(stack, "--calling-card", "Other")
+    assert _by_step(results)["calling-card"].status == ALREADY
+    config = json.loads((stack.home / ".maceff" / "config.json").read_text())
+    assert config["agent_identity"]["calling_card"] == "Tester"
+
+
+def test_a_store_provisioned_without_its_sentinel_is_not_already_done(stack):
+    """cversek/MacEff#842: such a store reported ALREADY forever and never got #000."""
+    store = stack.home / "agent" / "public" / "tasks"
+    store.mkdir(parents=True)
+    _unnamed(stack, agent_identity={"calling_card": "Tester"},
+             task_store={"mode": "home", "path": "agent/public/tasks"})
+    _rc, results = _run(stack)
+    assert _by_step(results)["task-store"].status == DONE, results
+    assert (store / "000.json").exists()
+    _rc, results = _run(stack)
+    assert _by_step(results)["task-store"].status == ALREADY
+
+
+def test_every_default_unit_states_the_login_it_runs_as(stack):
+    """cversek/MacEff#848: units start with only their declared environment, and the
+    default declared no USER or LOGNAME, so the session read its login as unknown."""
+    _run(stack)
+    for unit in _declaration(stack)["units"]:
+        env = unit["environment"]
+        assert env["USER"] == env["LOGNAME"] == unit["account"], unit["name"]
+
+
+def test_a_default_unit_declared_without_the_login_is_reported_as_drift():
+    from macf.pd import default_declaration as dd
+    default = {"units": [{"name": "monitor", "command": ["py", "-m", dd.MONITOR_MODULE, "--follow"],
+                          "environment": {"PATH": "/bin", "USER": "a", "LOGNAME": "a"}}]}
+    older = {"units": [{"name": "monitor", "command": ["py", "-m", dd.MONITOR_MODULE, "--follow"],
+                        "environment": {"PATH": "/bin"}}]}
+    assert dd.drift(older, default) == ["the monitor unit's environment lacks USER, LOGNAME"]
+    # The same unit running a command of the agent's own keeps the rest of its environment as
+    # the agent's, but the login is the account's, whatever the unit runs.
+    own = {"units": [{"name": "monitor", "command": ["my-monitor", "-m", dd.MONITOR_MODULE],
+                      "environment": {}}]}
+    assert dd.drift(own, default) == ["the monitor unit's environment lacks USER, LOGNAME"]
+    own["units"][0]["environment"] = {"USER": "a", "LOGNAME": "a"}
+    assert dd.drift(own, default) == []
+
+
+def test_a_session_unit_with_its_own_command_is_still_told_it_lacks_the_login():
+    """cversek/MacEff#849 review: a session unit declared before agent init existed runs its
+    own argv, so drift skipped its environment, and the session read its login as unknown."""
+    from macf.pd import default_declaration as dd
+    default = {"units": [{"name": "session", "kind": "session",
+                          "command": ["py", "-m", "macf.cli", "harness", "unit", "--home", "{agent_home}"],
+                          "environment": {"PATH": "/bin", "HOME": "/h", "USER": "a", "LOGNAME": "a"}}]}
+    older = {"units": [{"name": "claude", "kind": "session",
+                        "command": ["py", "-m", "macf.cli", "harness", "unit", "--agent", "Tester_abc123",
+                                    "--project-dir", "/h/work", "--no-proxy"],
+                        "environment": {"HOME": "/h"}}]}
+    assert dd.drift(older, default) == ["the session unit's environment lacks USER, LOGNAME"]

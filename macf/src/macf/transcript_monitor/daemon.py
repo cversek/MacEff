@@ -35,6 +35,8 @@ from ..utils.input_origin import (
     HARNESS_ORIGIN_KINDS,
     entry_text,
     opening_channel_source,
+    opens_with_command_row,
+    opens_with_local_command_output,
     opens_with_harness_notice,
     opens_with_wake,
     operator_channel,
@@ -75,6 +77,10 @@ DISABLE_ENV = "MACF_TRANSCRIPT_MONITOR_DISABLED"
 #: occurrence immediately and then back off by an order of magnitude.
 _STAT_FAILURE_REPORT_AT = frozenset({1, 10, 100, 1000, 10000})
 LOG_FILE_NAME = "macf_transcript_monitor.log"
+
+#: The SessionStart hook's record of the session a follow-mode monitor should watch, written
+#: when a declared unit runs the monitor (``announce_session``, ``follow``).
+EVENT_SESSION_ANNOUNCED = "transcript_monitor_session_announced"
 
 
 # ============================================================================
@@ -119,7 +125,8 @@ def detect_user_activity(entry: dict) -> Optional[Detection]:
     written without one is read by how its text opens. A wake is not the
     operator either (MIS-0002-R106): its keys are recorded as typed, so its
     opening is read before the origin record. Nor are keys the framework typed,
-    which their sender recorded in the event log before sending them.
+    which their sender recorded in the event log before sending them, nor the
+    output row the client writes after a slash command it ran.
     """
     if entry.get("type") != "user":
         return None
@@ -141,7 +148,13 @@ def detect_user_activity(entry: dict) -> Optional[Detection]:
         return None
     if kind is None and opens_with_harness_notice(entry_text(content)):
         return None
-    if kind != "channel" and typed_by_framework(typed_text(content), consumer=_keys_consumer()):
+    if kind != "channel" and opens_with_local_command_output(entry_text(content)):
+        return None
+    # A slash command arrives as two rows, the typed text and the client's command row, so
+    # the command row pairs with the framework's record under its own tally, as the
+    # compaction-ask detector's does. One shared tally let the second row read as typing.
+    consumer = _keys_consumer() + (":command" if opens_with_command_row(entry_text(content)) else "")
+    if kind != "channel" and typed_by_framework(typed_text(content), consumer=consumer):
         return None
 
     source = "direct"
@@ -466,7 +479,8 @@ def _as_delivered(twin: dict, queued: Detection) -> Optional[Detection]:
     """What a queued copy was, by the record on the entry that delivered it.
 
     A queued copy carries no provenance; its delivery does (MIS-0002-R121).
-    A channel event takes its server from that record. A prompt the client
+    A channel event takes its server from that record, and counts only when that server is
+    one the declaration lists as the operator's (MIS-0002-R107). A prompt the client
     fired itself, a scheduled one or a notice, is not the operator, and None
     says so. Anything else stands as read from the queued copy.
     """
@@ -474,8 +488,11 @@ def _as_delivered(twin: dict, queued: Detection) -> Optional[Detection]:
     origin = record.get("origin")
     kind = origin.get("kind") if isinstance(origin, dict) else None
     if kind == "channel":
+        server = origin.get("server", "")
+        if not operator_channel(server):
+            return None   # the delivery names the channel, and R107 counts it only by a declared name
         return Detection(queued.event_name, {**queued.data, "source": "channel",
-                                             "channel_server": origin.get("server", "")})
+                                             "channel_server": server})
     if (record.get("turnOrigin") in _NOT_OPERATOR_TURN_ORIGINS
             or kind in HARNESS_ORIGIN_KINDS
             or record.get("commandMode") == "task-notification"):
@@ -1268,6 +1285,12 @@ def start_daemon(foreground: bool = False, poll_interval: float = DEFAULT_POLL_I
         # that crosses into the hook's process; a patched name does not.
         print(f"📡 Transcript Monitor not started: {DISABLE_ENV}=1", file=sys.stderr)
         return 0
+    from ..pd.monitor_unit import declared_monitor_unit
+    if declared_monitor_unit() is not None:
+        # The agent's primal daemon runs the monitor as a unit; one started here would run
+        # beside it. Quiet: the callers that get here (the hook, AUTO_MODE entry, task
+        # creation) check first, and ``transcript-monitor start`` refuses with the reason.
+        return 0
     # A monitor the code before this one started is invisible to find_monitors,
     # so it would serve beside the new one and outlive it.
     stop_legacy_monitor()
@@ -1326,6 +1349,47 @@ def start_daemon(foreground: bool = False, poll_interval: float = DEFAULT_POLL_I
     return 0
 
 
+def _identity(me: int, owner: int, transcript: Path) -> dict:
+    """A monitor's identity as its start and stop events record it. The start is in the form
+    the events record (notify.session's stored form), so a readout confirms this pid's
+    incarnation the way it confirms a unit's."""
+    started = _process_started(me)
+    return {"pid": me, "proc_start": None if started is None else proc_start_from_key(started),
+            "owner": owner, "transcript": str(transcript)}
+
+
+def _session_monitor(transcript: Path, poll_interval: float, owner: int, session_env,
+                     extra_pass: Optional[Callable[[], None]] = None):
+    """The monitor for one session's transcript, and the session unit's heartbeat it ticks.
+
+    Under a session unit (pd.session_unit), this monitor is the unit's liveness
+    (MIS-0002-R14): it beats for the unit's own pid on each pass, and stops beating
+    within one interval once its session, and with it the loop, has ended. Which session
+    unit, if any, is read from *session_env* (``MACF_PD_SESSION_*``).
+    It also says when the session waits on a permission dialog (MIS-0002-R21), read from
+    the event log for this transcript's session, since the client can't say so while it waits.
+    And when it can't authenticate, read from the transcript as it arrives (MIS-0002-R19).
+    *extra_pass* runs on every pass too: a follow-mode monitor's own unit beat and its check
+    for a newly announced session.
+    """
+    from ..pd.liveness import session_heartbeat_from_env
+    from ..permission_watch import SessionDialogs
+    auth = AuthWatch()
+    heartbeat = session_heartbeat_from_env(environ=session_env,
+                                           waiting_on=SessionDialogs(transcript.stem),
+                                           auth_failed=auth.state)
+    passes = [f for f in (heartbeat.tick if heartbeat else None, extra_pass) if f is not None]
+
+    def on_pass() -> None:
+        for f in passes:
+            f()
+
+    monitor = TranscriptMonitor(transcript, poll_interval=poll_interval, owner=owner,
+                                on_pass=on_pass if passes else None,
+                                detectors=list(DEFAULT_DETECTORS) + [auth])
+    return monitor, heartbeat
+
+
 def run_monitor(transcript: Path, poll_interval: float = DEFAULT_POLL_INTERVAL, owner: int = 0) -> int:
     """Be one monitor on *transcript*, in this process, until there is a reason to stop.
 
@@ -1337,27 +1401,10 @@ def run_monitor(transcript: Path, poll_interval: float = DEFAULT_POLL_INTERVAL, 
     me = os.getpid()
     monitors = find_monitors()
     older = _duplicate_of(me, transcript, monitors) if monitors else None
-    # The start in the form the events record (notify.session's stored form), so
-    # a readout confirms this pid's incarnation the way it confirms a unit's.
-    started = _process_started(me)
-    identity = {"pid": me, "proc_start": None if started is None else proc_start_from_key(started),
-                "owner": owner, "transcript": str(transcript)}
+    identity = _identity(me, owner, transcript)
     append_event("transcript_monitor_started", identity)
-
-    # Under a session unit (pd.session_unit), this monitor is the unit's liveness
-    # (MIS-0002-R14): it beats for the unit's own pid on each pass, and stops beating
-    # within one interval once its session, and with it the loop, has ended.
-    # It also says when the session waits on a permission dialog (MIS-0002-R21), read from
-    # the event log for this transcript's session, since the client can't say so while it waits.
-    # And when it can't authenticate, read from the transcript as it arrives (MIS-0002-R19).
-    from ..pd.liveness import session_heartbeat_from_env
-    from ..permission_watch import SessionDialogs
-    auth = AuthWatch()
-    heartbeat = None if older is not None else session_heartbeat_from_env(
-        waiting_on=SessionDialogs(transcript.stem), auth_failed=auth.state)
-    monitor = TranscriptMonitor(transcript, poll_interval=poll_interval, owner=owner,
-                                on_pass=heartbeat.tick if heartbeat else None,
-                                detectors=list(DEFAULT_DETECTORS) + [auth])
+    monitor, heartbeat = _session_monitor(transcript, poll_interval, owner,
+                                          session_env={} if older is not None else os.environ)
     if older is not None:
         monitor.stop(f"monitor {older.pid} already serves this transcript")
     else:
@@ -1379,6 +1426,307 @@ def run_monitor(transcript: Path, poll_interval: float = DEFAULT_POLL_INTERVAL, 
             "events_emitted": monitor.events_emitted,
         })
     return 0
+
+
+# ============================================================================
+# Follow mode: the monitor as a declared unit of the agent's primal daemon
+# ============================================================================
+#
+# Where the source of "which session, which owner" comes from, and why. The SessionStart
+# hook is the one process that holds all of it first-hand: Claude Code hands it the session
+# id and the transcript path in its input, and its own pid as CLAUDE_PID, and the hook runs
+# in the session's environment, which under a session unit carries the MACF_PD_SESSION_*
+# variables the unit's wrapper set (pd.session_unit). Every other source is a reconstruction:
+# the event log's newest session id is last-writer-wins across sessions and names no pid,
+# the newest transcript by mtime names no pid either, the client's sidecar in
+# ~/.claude/sessions is absent for sessions under tmux, and the daemon's own pd_unit_state
+# names the session unit's pid but not whether the session being watched is the one it
+# runs. So the hook writes it down as an event, EVENT_SESSION_ANNOUNCED, on every
+# SessionStart (startup, resume, clear, compact) when a unit runs the monitor, and the
+# follower reads the newest one: once from the end of the log when it starts, then only
+# the bytes appended since, at each pass. Both pids carry their start times, so a recycled
+# pid is never taken for the process that was announced.
+
+
+def announce_session(hook_input: Optional[dict] = None, environ=os.environ) -> bool:
+    """Record this session for the follow-mode monitor: its id, transcript and Claude Code
+    process, and the session unit it runs as when it runs as one. Called by the SessionStart
+    hook in place of starting a monitor. True when the event log took it."""
+    from ..notify.session import proc_start
+    from ..pd.liveness import session_unit_from_env
+    hook_input = hook_input or {}
+    try:
+        owner = int(environ.get("CLAUDE_PID") or 0)
+    except ValueError:
+        owner = 0
+    transcript = hook_input.get("transcript_path") or find_current_transcript()
+    if not owner or not transcript:
+        print(f"⚠️ MACF: this session can't be announced to the transcript monitor unit "
+              f"(Claude Code process {owner or 'unknown'}, transcript {transcript or 'unknown'}); "
+              f"it is not watched until the next session start", file=sys.stderr)
+        return False
+    data = {"session_id": str(hook_input.get("session_id") or Path(transcript).stem),
+            "transcript": str(transcript), "owner": owner, "owner_start": proc_start(owner)}
+    unit = session_unit_from_env(environ)
+    if unit is not None:
+        data["session_unit"] = {"unit": unit.unit, "interval_s": unit.interval_s, "pid": unit.pid,
+                                "proc_start": proc_start(unit.pid)}
+    return append_event(EVENT_SESSION_ANNOUNCED, data)
+
+
+def _same_start(pid: int, recorded: Optional[str]) -> bool:
+    """Whether *pid* still runs the incarnation that started at *recorded*. No recorded start
+    leaves the pid alone to decide. Quiet, unlike ``verify_incarnation``: a stale announcement
+    is the ordinary state between two sessions, asked about on every pass."""
+    from ..notify.session import proc_start, proc_start_key
+    if not _alive(pid):
+        return False
+    if not recorded:
+        return True
+    actual = proc_start_key(proc_start(pid))
+    return actual is None or actual == proc_start_key(recorded)
+
+
+@dataclass(frozen=True)
+class AnnouncedSession:
+    """A session as the SessionStart hook announced it."""
+
+    session_id: str
+    transcript: Path
+    owner: int
+    owner_start: Optional[str] = None
+    #: The session unit it runs as ({unit, interval_s, pid, proc_start}); None outside one.
+    session_unit: Optional[dict] = None
+
+    @classmethod
+    def from_event(cls, event: dict) -> Optional["AnnouncedSession"]:
+        data = event.get("data") or {}
+        try:
+            owner = int(data.get("owner") or 0)
+            transcript = Path(str(data["transcript"]))
+        except (KeyError, TypeError, ValueError):
+            return None  # noqa: MACEFF003 - a malformed announcement names no session; the caller waits for the next
+        unit = data.get("session_unit")
+        return cls(str(data.get("session_id") or transcript.stem), transcript, owner,
+                   data.get("owner_start"), unit if isinstance(unit, dict) else None)
+
+    def same_session(self, other: "AnnouncedSession") -> bool:
+        """One transcript served for one process: a compaction re-announces the session it
+        compacted, which must not restart the monitor on it."""
+        return (self.transcript, self.owner) == (other.transcript, other.owner)
+
+    def live(self) -> bool:
+        return self.owner > 0 and _same_start(self.owner, self.owner_start)
+
+    def session_env(self, environ) -> Dict[str, str]:
+        """The ``MACF_PD_SESSION_*`` variables a per-session monitor would have inherited from
+        the session, for ``session_heartbeat_from_env``; empty outside a session unit, or when
+        the unit's wrapper is no longer the process that was announced."""
+        from ..pd.liveness import ENV_HOME, ENV_SESSION_INTERVAL, ENV_SESSION_PID, ENV_SESSION_UNIT
+        u = self.session_unit or {}
+        try:
+            pid = int(u.get("pid") or 0)
+        except (TypeError, ValueError):
+            return {}
+        if not (u.get("unit") and u.get("interval_s") and pid > 1 and _same_start(pid, u.get("proc_start"))):
+            return {}
+        return {ENV_SESSION_UNIT: str(u["unit"]), ENV_SESSION_INTERVAL: str(u["interval_s"]),
+                ENV_SESSION_PID: str(pid), ENV_HOME: str(environ.get(ENV_HOME) or "")}
+
+
+class _AnnouncementTail:
+    """The newest session announcement in the agent's event log, read without rereading it:
+    once backwards from the end at the start, then only the bytes appended since."""
+
+    def __init__(self, log_path: Path):
+        self.path = log_path
+        try:
+            self.offset = log_path.stat().st_size
+        except OSError:
+            self.offset = 0
+
+    def newest_so_far(self) -> Optional[AnnouncedSession]:
+        """The newest announcement already in the log: the session to follow when the unit
+        starts, or restarts, in the middle of one. Exits on its first match."""
+        from ..agent_events_log import read_events
+        try:
+            for event in read_events(reverse=True, scope="all", only=[EVENT_SESSION_ANNOUNCED]):
+                if event.get("event") == EVENT_SESSION_ANNOUNCED:
+                    return AnnouncedSession.from_event(event)
+        except (OSError, ValueError) as e:
+            print(f"⚠️ MACF: TM: cannot read the event log for the current session: {e}", file=sys.stderr)
+        return None
+
+    def poll(self) -> Optional[AnnouncedSession]:
+        """The newest announcement appended since the last poll, or None."""
+        try:
+            size = self.path.stat().st_size
+        except OSError:
+            return None  # noqa: MACEFF003 - a log not readable yet has nothing new; the next pass reads again
+        if size < self.offset:
+            self.offset = 0      # the log was replaced: read the new one from its start
+        if size == self.offset:
+            return None
+        try:
+            with open(self.path, "rb") as f:
+                f.seek(self.offset)
+                chunk = f.read(size - self.offset)
+        except OSError as e:
+            print(f"⚠️ MACF: TM: cannot read the event log for a new session: {e}", file=sys.stderr)
+            return None
+        end = chunk.rfind(b"\n")
+        if end < 0:
+            return None          # a line still being written: read it whole next time
+        self.offset += end + 1
+        newest = None
+        marker = EVENT_SESSION_ANNOUNCED.encode()
+        for line in chunk[:end].split(b"\n"):
+            if marker not in line:
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if event.get("event") == EVENT_SESSION_ANNOUNCED:
+                newest = AnnouncedSession.from_event(event) or newest
+        return newest
+
+
+class Follower:
+    """The follow-mode monitor: follows this agent's live session, whichever it is, for as long
+    as it runs. One ``TranscriptMonitor`` at a time, on the announced session's transcript.
+    When that session's Claude Code process ends, it waits for the next session instead of
+    exiting; when a new session is announced (a restart, a /clear), it moves to it."""
+
+    def __init__(self, poll_interval: float = DEFAULT_POLL_INTERVAL, environ=os.environ,
+                 log_path: Optional[Path] = None, sleep: Callable[[float], None] = time.sleep):
+        from ..agent_events_log import get_log_path
+        self.poll_interval = poll_interval
+        self.environ = environ
+        self.tail = _AnnouncementTail(log_path or get_log_path())
+        self.sleep = sleep
+        self.current: Optional[AnnouncedSession] = None
+        self.monitor: Optional[TranscriptMonitor] = None
+        self.stop_reason: Optional[str] = None
+        self._own = None
+        self._deferred_to: Optional[int] = None
+        #: Whether the current session's transcript did not exist yet when it was announced,
+        #: so that it is read from its first line once it appears.
+        self._from_start = False
+
+    def stop(self, reason: str = "stopped") -> None:
+        self.stop_reason = self.stop_reason or reason
+        if self.monitor is not None:
+            self.monitor.stop(reason)
+
+    def _tick(self) -> None:
+        if self._own is not None:
+            self._own.tick()
+
+    def _take(self, newer: Optional[AnnouncedSession]) -> bool:
+        """Take *newer* as the session to follow when it is another session; True if taken."""
+        if newer is None or (self.current is not None and newer.same_session(self.current)):
+            return False
+        self.current = newer
+        self._from_start = False
+        return True
+
+    def run(self) -> int:
+        from ..pd.liveness import heartbeat_from_env
+        # Its own liveness as the declared unit (MACF_PD_UNIT from the daemon), on every pass,
+        # whether it watches a session or waits for one: waiting is this unit working.
+        self._own = heartbeat_from_env(environ=self.environ)
+        self.current = self.tail.newest_so_far()
+        print(f"📡 Transcript Monitor following this agent's sessions"
+              f"{' (unit ' + self.environ.get('MACF_PD_UNIT', '') + ')' if self._own else ''}",
+              file=sys.stderr)
+        try:
+            while self.stop_reason is None:
+                self._take(self.tail.poll())
+                self._tick()
+                if self._ready():
+                    self._follow_current()
+                else:
+                    self.sleep(self.poll_interval)
+        finally:
+            if self._own is not None:
+                self._own.stop()
+        return 0
+
+    def _ready(self) -> bool:
+        """Whether the current session can be watched now, by this monitor."""
+        session = self.current
+        if session is None or not session.live():
+            self.current = None
+            return False
+        if not session.transcript.exists():
+            self._from_start = True      # it appears with the session's first entry
+            return False
+        # A monitor started for this session the old way (before its agent moved onto the
+        # unit) already serves it: two would write every event twice. It ends with its
+        # session, and the next session is this unit's; until then this one waits.
+        monitors = find_monitors()
+        other = _serving_on(session.transcript, monitors) if monitors else None
+        if other is not None:
+            if self._deferred_to != other.pid:
+                print(f"📡 TM: monitor {other.pid} already serves {session.transcript.name}; "
+                      f"following it once that one ends", file=sys.stderr)
+                self._deferred_to = other.pid
+            return False
+        self._deferred_to = None
+        return True
+
+    def _follow_current(self) -> None:
+        session = self.current
+        assert session is not None
+        pending: List[AnnouncedSession] = []
+
+        def each_pass() -> None:
+            self._tick()
+            newer = self.tail.poll()
+            if newer is not None and not newer.same_session(session):
+                pending.append(newer)
+                self.monitor.stop(f"session {newer.session_id} was announced")
+
+        monitor, heartbeat = _session_monitor(session.transcript, self.poll_interval, session.owner,
+                                              session.session_env(self.environ), extra_pass=each_pass)
+        identity = {**_identity(os.getpid(), session.owner, session.transcript),
+                    "session_id": session.session_id, "follow": True}
+        self.monitor = monitor
+        if self.stop_reason is not None:
+            monitor.stop(self.stop_reason)
+        append_event("transcript_monitor_started", identity)
+        try:
+            monitor.run(start_from_end=not self._from_start)
+        finally:
+            self.monitor = None
+            if heartbeat is not None:
+                heartbeat.stop()
+            append_event("transcript_monitor_stopped", {
+                **identity,
+                "reason": monitor.stop_reason or "ended without a reason (see the monitor log)",
+                "entries_processed": monitor.entries_processed,
+                "events_emitted": monitor.events_emitted,
+            })
+        self._from_start = False
+        if pending:
+            self._take(pending[-1])
+        # Otherwise its process ended (the next session is announced when it starts), or the
+        # transcript was truncated while it runs (watched again from its new end), or a stop.
+
+
+def follow(poll_interval: float = DEFAULT_POLL_INTERVAL) -> int:
+    """Be the follow-mode monitor in this process, in the foreground, until a signal: the
+    command of the transcript monitor's declared unit. It never daemonizes; the primal daemon
+    that started it is its supervisor."""
+    follower = Follower(poll_interval)
+
+    def handle_signal(signum, frame):
+        follower.stop(f"signal {signum}")
+
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGINT, handle_signal)
+    return follower.run()
 
 
 def _agent_monitors(monitors: List[MonitorProcess]) -> List[MonitorProcess]:
@@ -1423,6 +1771,13 @@ def stop_daemon() -> int:
 
 def daemon_status() -> int:
     """Print this agent's monitors, one line each."""
+    from ..pd.monitor_unit import declared_monitor_unit
+    unit = declared_monitor_unit()
+    if unit is not None:
+        # The unit's monitor runs with --follow and no transcript, so the process table read
+        # below doesn't list it: its state is the daemon's to report.
+        print(f"📡 The transcript monitor runs as unit '{unit}' of this agent's primal daemon; "
+              f"its state: 'macf_tools pd status'")
     legacy = legacy_monitor()
     if legacy is not None:
         print(f"⚠️ A transcript monitor started before the upgrade is running (PID {legacy}); "
@@ -1433,7 +1788,8 @@ def daemon_status() -> int:
         return 1
     mine = _agent_monitors(monitors)
     if not mine:
-        print("⏹️  Transcript Monitor not running")
+        if unit is None:
+            print("⏹️  Transcript Monitor not running")
         return 0
 
     current = find_current_transcript()
@@ -1449,6 +1805,7 @@ def daemon_status() -> int:
 
 
 def ensure_running(poll_interval: float = DEFAULT_POLL_INTERVAL) -> None:
-    """Start the daemon if not already running. Called by AUTO_MODE activation."""
-    if not is_running():
+    """Start the daemon if not already running, unless a primal daemon unit runs it."""
+    from ..pd.monitor_unit import declared_monitor_unit
+    if declared_monitor_unit() is None and not is_running():
         start_daemon(foreground=False, poll_interval=poll_interval)

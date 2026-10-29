@@ -601,7 +601,13 @@ def cmd_mis_check(args: argparse.Namespace) -> int:
     findings = mis.check(paths, glossary)
     for f in findings:
         print(f)
-    n = len(mis.mis_files(paths))
+    files = mis.mis_files(paths)
+    outside = sorted({str(f.parent) for f in files if mis.checkout_root(f) is None})
+    if outside:
+        print(f"ℹ️ no repository checkout holds {', '.join(outside)}, so the tests that decidable requirements "
+              "name were not looked up there; only bracket against Conformance row was compared "
+              "(MIS-0001-R18 (conformance_MUST_list_every_req))")
+    n = len(files)
     gl = f", glossary {glossary}" if glossary else (", no glossary found, so MIS-0001-R20 (glossary_MUST-NOT_repeat_terms) and "
           "MIS-0001-R21 (terms_MUST_reach_glossary) were not checked")
     print(f"{'❌' if findings else '✅'} {n} MIS file(s){gl}: {len(findings)} finding(s)")
@@ -649,6 +655,55 @@ def cmd_permissions_history(args: argparse.Namespace) -> int:
     dialogs = pw.read_history(args.days, include_questions=args.include_questions)
     print(pw.history_json(dialogs) if args.json else pw.history_text(dialogs, by_rule=args.by_rule))
     return 0
+
+
+def _session_rules():
+    """The rules in force for this session: its starting directory is the project, as the client reads it."""
+    from pathlib import Path
+    from macf import permission_watch as pw
+    project = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    return pw.rules_in_force(project, Path.home())
+
+
+def cmd_permissions_list(args: argparse.Namespace) -> int:
+    """The permission rules in force, each with the file it comes from (autonomous_operation 5.5)."""
+    rules = [r for r in _session_rules() if args.kind is None or r[0] == args.kind]
+    if args.json:
+        print(json.dumps([{"kind": k, "rule": r, "file": str(f)} for k, r, f in rules], indent=2))
+        return 0
+    if not rules:
+        print("no rule of that kind is in force" if args.kind else "no permission rules are in force")
+        return 0
+    for kind in ("deny", "ask", "allow"):
+        of_kind = [(r, f) for k, r, f in rules if k == kind]
+        if not of_kind:
+            continue
+        print({"deny": "DENY (refused, never asked)", "ask": "ASK (stops at a dialog: never run these unattended)",
+               "allow": "ALLOW (runs without a dialog)"}[kind])
+        for rule, f in of_kind:
+            print(f"  {rule:<48} {f}")
+    return 0
+
+
+def cmd_permissions_check(args: argparse.Namespace) -> int:
+    """Whether a command would stop at a dialog, and which part of it: exit 0 when it runs
+    without one by the rules, 1 when a rule asks, 2 when a rule denies it."""
+    from macf import permission_watch as pw
+    rules = _session_rules()
+    v = pw.decide(args.tool, {"command": args.command, "file_path": args.command}, rules)
+    kind, rule, f = v.kind, v.rule, v.source
+    verdict = {"deny": f"DENIED by {rule}, from {f}",
+               "ask": f"PROMPTS: {rule}, from {f}. Unattended, this waits until someone answers",
+               "allow": f"runs: allowed by {rule}, from {f}",
+               "unlisted": ("no rule matches it, so the permission mode decides: default mode asks, and auto mode "
+                            "can still ask about a command it judges risky, a chained one most of all. Unattended, "
+                            "run one plain command per call")}[kind]
+    print(verdict)
+    if args.tool == "Bash" and kind in ("ask", "deny"):
+        for seg, part in pw.segment_decisions(args.command, rules):
+            if part.kind in ("ask", "deny"):
+                print(f"  this part: {seg[:120]}  ({part.kind}: {part.rule})")
+    return {"deny": 2, "ask": 1}.get(kind, 0)
 
 
 def cmd_permissions_watch(args: argparse.Namespace) -> int:
@@ -1609,7 +1664,8 @@ def cmd_statusline(args: argparse.Namespace) -> int:
             environment=data["environment"],
             tokens_used=data["tokens_used"],
             tokens_total=data["tokens_total"],
-            cl=data["cl"]
+            cl=data["cl"],
+            modes=data.get("modes", ""),
         )
 
         print(statusline)
@@ -1636,6 +1692,9 @@ def _harness_params(args: argparse.Namespace):
     project_dir = getattr(args, "project_dir", None) or os.environ.get("MACEFF_PROJECT_DIR")
     if project_dir:
         p = replace(p, project_dir=Path(project_dir))
+    remote_control = getattr(args, "remote_control", None)
+    if remote_control:
+        p = replace(p, remote_control=remote_control)
     # Fill anything not given from what the last install recorded. Without this
     # a flagless `install --check` renders different artifacts and reports drift
     # that is not there — and acting on that report with --force would strip the
@@ -1780,58 +1839,130 @@ def cmd_harness_install(args: argparse.Namespace) -> int:
 
 
 def cmd_harness_attach(args: argparse.Namespace) -> int:
-    """Attach this terminal to the agent's supervised session.
+    """Attach this terminal to an agent's session, named by a short name, here or remote.
 
-    Exists so that no remote shell has to hardcode a session name. A helper on
-    another machine held the OLD name after the session was renamed, and broke
-    with "no sessions" -- a fourth hand-maintained copy of harness knowledge, on
-    a host the generator cannot reach. `ssh host -t macf_tools harness attach`
-    resolves the name where the name is defined, so a rename cannot strand it.
+    Exists so that no shell has to hardcode a session name, port, account or socket
+    directory: a helper on another machine held the OLD name after a session was renamed,
+    and broke with "no sessions". The name is matched against every agent this endpoint
+    and its declared remotes list (utils/roster.py); an agent on a remote is handed off
+    to that remote's own ``harness attach --card``, which resolves it from its own daemon
+    (persistent_layer 4.1, 4.5). The decision is utils/attach_dispatch.py's.
     """
-    from .utils.harness import resolve_agent
-    from .utils.identity import calling_card_from_identifier
+    from .pd.session_unit import client_environment
+    from .utils.attach import plan_attach_for_card, plan_attach_for_home
+    from .utils.attach_dispatch import by_card, decide, legacy_by_slug
+    from .utils.remotes import CONNECT_TIMEOUT_S, RemotesRefused, load_remotes
+    from .utils.roster import gather, local_roster, remote_fetchers, resolve
+
+    def has_session(target, env):
+        return subprocess.run(["tmux", "has-session", "-t", target],
+                              capture_output=True, env=env).returncode == 0
 
     try:
-        agent, source = resolve_agent(getattr(args, "agent", None))
-        if source == "ambiguous":
-            print("Several harnesses are installed here; name one with --agent:",
-                  file=sys.stderr)
-            for a in agent:
-                print(f"   {a}  ({calling_card_from_identifier(a)})", file=sys.stderr)
+        try:
+            remotes = load_remotes()
+        except RemotesRefused as e:
+            print(f"⚠️ MACF: {e}", file=sys.stderr)
             return 1
-
-        # "=" forces an exact match; tmux resolves targets by prefix, so a bare
-        # name would happily attach to "<agent>-stale-ssh".
-        target = f"={agent}"
-        # A session the primal daemon runs as its session unit lives on the unit's own
-        # tmux server, reached through TMUX_TMPDIR (pd.session_unit); otherwise the
-        # legacy harness's session on the default server.
-        from .pd.session_unit import client_environment
-        env = client_environment(agent) or dict(os.environ)
-        if subprocess.run(["tmux", "has-session", "-t", target],
-                          capture_output=True, env=env).returncode != 0:
-            print(f"No tmux session '{agent}' on this host.", file=sys.stderr)
-            print(f"   start it:  {'maceff_' + agent.rpartition('_')[0].lower() + '_harness_launch'}",
-                  file=sys.stderr)
-            print(f"   or:        systemctl --user start cc-harness-{agent}.service",
-                  file=sys.stderr)
-            return 1
-
-        # -CC hands the session to iTerm2 as native windows. It matters more
-        # than it looks: the client owns the alternate screen, so under a plain
-        # attach there is no tmux-level scrollback at all -- control mode is
-        # what restores native scrollback, selection and find on macOS.
-        cmd = ["tmux"]
-        if getattr(args, "control", False):
-            cmd.append("-CC")
-        cmd += ["attach", "-t", target]
-        # -d evicts other clients: two clients of different geometries is the
-        # cause of the fragmented redraws. Read-only observers skip it.
-        cmd.append("-r" if getattr(args, "read_only", False) else "-d")
-        os.execvpe("tmux", cmd, env)
+        local = local_roster(probe=None).entries
+        name, card = getattr(args, "name", None), getattr(args, "card", None)
+        legacy_slug = getattr(args, "agent", None)
+        if not name and not card and not legacy_slug:
+            # No name: this home's own agent, as before.
+            from .pd.names import IdentityError, agent_card
+            from .utils.paths import find_agent_home
+            try:
+                card = agent_card(find_agent_home())
+            except (IdentityError, OSError, ValueError) as e:
+                print(f"Name an agent (macf_tools harness list shows who is here): {e}",
+                      file=sys.stderr)
+                return 1
+        if legacy_slug and not name and not card:
+            from .utils.identity import calling_card_from_identifier
+            card = calling_card_from_identifier(legacy_slug)
+        decision = None
+        if card:
+            entry = by_card(local, card)
+            if entry is None and legacy_slug and not name:
+                # A slug names a session as it always did, for an agent whose card no
+                # roster row carries (one whose card comes only from a global id).
+                decision = legacy_by_slug(legacy_slug, control=bool(remotes.control if getattr(
+                    args, "control", None) is None else args.control),
+                    read_only=getattr(args, "read_only", False), has_session=has_session,
+                    environment=client_environment)
+            elif entry is None:
+                print(f"No agent here has the card {card!r} (macf_tools harness list).",
+                      file=sys.stderr)
+                return 1
+        else:
+            entries, unanswered = gather(local, remote_fetchers(), timeout=CONNECT_TIMEOUT_S)
+            for missing in unanswered:
+                print(f"⚠️ MACF: not asked: {missing}", file=sys.stderr)
+            entry, code = resolve(name, entries)
+            if entry is None:
+                return code
+        if decision is None:
+            decision = decide(entry, remotes, control=getattr(args, "control", None),
+                              read_only=getattr(args, "read_only", False),
+                              plan_for_home=plan_attach_for_home, plan_for_card=plan_attach_for_card,
+                              has_session=has_session, environment=client_environment)
+        if decision.exit_code is not None:
+            print(decision.message, file=sys.stderr)
+            return decision.exit_code
+        env = decision.env or dict(os.environ)
+        for command in decision.before:
+            # Naming the window is a courtesy: a tmux that refuses it still attaches.
+            subprocess.run(command, capture_output=True, env=env)
+        os.execvpe(decision.argv[0], decision.argv, env)
     except Exception as e:
         print(f"Error attaching to harness: {e}", file=sys.stderr)
         return 1
+
+
+def cmd_harness_list(args: argparse.Namespace) -> int:
+    """List every agent this endpoint can attach to, read only (utils/roster.py).
+
+    Exit 0 when the listing is complete. An unreadable home is listed, with why, and
+    still counts as listed; exit 1 means a source could not be read at all (the homes
+    directory, the runtime directory), which stderr names, so what is shown is partial.
+    """
+    from .utils.remotes import CONNECT_TIMEOUT_S
+    from .utils.roster import gather, local_roster, remote_fetchers, render_table
+
+    roster = local_roster()
+    entries, problems = roster.entries, list(roster.problems)
+    if not getattr(args, "local", False):
+        # Each declared remote's own listing, beside this endpoint's; one that doesn't
+        # answer is named below and makes the listing incomplete, never silently shorter.
+        entries, unanswered = gather(entries, remote_fetchers(problems), timeout=CONNECT_TIMEOUT_S)
+        problems += unanswered
+    if getattr(args, "json", False):
+        print(json.dumps([e.model_dump(mode="json") for e in entries], indent=2))
+    else:
+        print(render_table(entries, verbose=getattr(args, "verbose", False)))
+    for problem in problems:
+        print(f"⚠️ MACF: harness list is incomplete: {problem}", file=sys.stderr)
+    return 0 if not problems else 1
+
+
+def cmd_completion(args: argparse.Namespace) -> int:
+    """Print the shell completion script, or (hidden) the agent names a word completes to."""
+    if getattr(args, "candidates", False):
+        from .utils.completion import candidate_lines
+        from .utils.roster import completion_candidates, gather, local_roster, remote_fetchers
+        # Names only: completion has no use for states, and probing each would cost a
+        # tmux call per agent on every TAB.
+        local = local_roster(probe=None).entries
+        entries, _unanswered = gather(local, remote_fetchers(), timeout=args.remote_timeout)
+        for line in candidate_lines(completion_candidates(entries, args.prefix or ""), args.describe):
+            print(line)
+        return 0
+    if not getattr(args, "shell", None):
+        print("usage: macf_tools completion {bash,zsh}", file=sys.stderr)
+        return 2
+    from .utils.completion import render
+    print(render(args.shell, _build_parser()), end="")
+    return 0
 
 
 def cmd_harness_unit(args: argparse.Namespace) -> int:
@@ -1866,13 +1997,41 @@ def cmd_harness_cutover(args: argparse.Namespace) -> int:
               f"it couldn't be resolved here ({source})", file=sys.stderr)
         return 2
     card = calling_card_from_identifier(agent)
-    home = Path(args.home) if getattr(args, "home", None) else Path.home()
-    plan = build_plan(home, card, agent, host_probes(home, card),
-                      staged=Path(args.staged) if getattr(args, "staged", None) else None)
+    # Without --home, the agent home as `macf_tools env` finds it, not the login's ~: on a host
+    # the two differ, and a plan built for ~ finds neither the staged declaration nor the
+    # hand-started client it must stop (persistent_layer 6.3).
+    from .utils.paths import find_agent_home
+    home = Path(args.home) if getattr(args, "home", None) else find_agent_home()
+    import os
+    from .pd.cutover import ProbeUnavailable, remove_own_job
+    from .platform.launchd import cutover_label
+    try:
+        plan = build_plan(home, card, agent, host_probes(home, card),
+                          staged=Path(args.staged) if getattr(args, "staged", None) else None)
+    except Exception as e:  # noqa: BLE001 - the one-shot job must remove itself whatever failed
+        job_plist = Path(args.job_plist) if getattr(args, "job_plist", None) else None
+        said = str(e) if isinstance(e, ProbeUnavailable) else f"{type(e).__name__}: {e}"
+        print(f"⚠️ MACF: harness cutover: nothing was changed: {said}", file=sys.stderr, flush=True)
+        if job_plist is None:
+            if isinstance(e, ProbeUnavailable):
+                return 1
+            raise
+        # Inside the one-shot launchd job: the plan was never built, so nothing ran, but the
+        # job still removes its plist and boots itself out, or the next --run finds it loaded.
+        log_path = Path(args.log) if getattr(args, "log", None) else None
+
+        def log(line: str) -> None:
+            print(line, flush=True)
+            if log_path is not None:
+                with log_path.open("a") as fh:
+                    fh.write(line + "\n")
+        remove_own_job(job_plist, cutover_label(card), os.getuid(), log)
+        return 1
     if getattr(args, "execute", False):
         from datetime import datetime
-        from .pd.cutover import came_up_by_status, execute, run_command
+        from .pd.cutover import came_up_by_status, execute, execute_as_launchd_job, inside_session, run_command
         log_path = Path(args.log) if getattr(args, "log", None) else None
+        job_plist = Path(args.job_plist) if getattr(args, "job_plist", None) else None
 
         def log(line: str) -> None:
             stamped = f"{datetime.now().isoformat(timespec='seconds')} {line}"
@@ -1880,15 +2039,47 @@ def cmd_harness_cutover(args: argparse.Namespace) -> int:
             if log_path is not None:
                 with log_path.open("a") as fh:
                     fh.write(stamped + "\n")
+        client = inside_session()
+        if client is not None:
+            # Step 2 ends the legacy session, and this process with it, part-way through the
+            # move and before any rollback: the move runs only from outside (--run).
+            log(f"refused: this runs inside a Claude Code session (pid {client}), which the move "
+                f"would end before it could roll back; use --run, which moves from outside it")
+            from .pd.cutover import Check
+            plan = dataclasses.replace(plan, ready=False, checks=plan.checks + [
+                Check("outside the session", False, f"runs inside Claude Code pid {client}")])
         came_up = came_up_by_status(home, card, plan.session_unit or "session")
-        return 0 if execute(plan, run_command, came_up, log) else 1
+        if job_plist is not None:
+            import os
+            from .platform.launchd import cutover_label
+            took = execute_as_launchd_job(plan, run_command, came_up, log, job_plist,
+                                          cutover_label(card), os.getuid())
+        else:
+            took = execute(plan, run_command, came_up, log)
+        return 0 if took else 1
     if getattr(args, "run", False):
         from datetime import datetime
-        from .pd.cutover import COME_UP_S, arm_argv, staged_path
+        from .pd.cutover import COME_UP_S, arm_argv, arm_launchd, staged_path
         if not plan.ready:
             print(format_plan(plan))
             print("\n⚠️ MACF: harness cutover --run: not ready, so nothing was started", file=sys.stderr)
             return 1
+        if plan.init == "launchd":
+            import os
+            staged = Path(args.staged) if getattr(args, "staged", None) else staged_path(home)
+            try:
+                plist, log_path = arm_launchd(agent, card, home, staged, sys.executable, os.getuid(),
+                                              f"{datetime.now():%Y%m%d-%H%M%S}")
+            except (RuntimeError, OSError, ValueError) as e:
+                print(f"⚠️ MACF: harness cutover --run: the launchd job didn't start: {e}", file=sys.stderr)
+                return 1
+            print(format_plan(plan))
+            print(f"\nStarted, outside this session, as the one-shot launchd job {plist.stem}.\n"
+                  f"Follow it from any terminal:\n"
+                  f"     tail -f {log_path}\n"
+                  f"It rolls back by itself on any failure, or if the session unit isn't running "
+                  f"within {COME_UP_S:g} s, and removes its own job when it ends.")
+            return 0
         log_path = home / ".maceff" / "logs" / f"cutover-{datetime.now():%Y%m%d-%H%M%S}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         staged = Path(args.staged) if getattr(args, "staged", None) else staged_path(home)
@@ -2499,7 +2690,10 @@ def _ensure_agent_uuid(
             _write(candidate, "Minted")
             return
         print(f"\n🆔 Proposed agent UUID: {candidate}")
-        print(f"    Calling card would be: @{candidate[:6]}")
+        # A bare '@abc123' is no card: every step keyed on the card needs the name half
+        # too, which the calling-card step writes (cversek/MacEff#842).
+        print(f"    Calling card would be: <name>@{candidate[:6]} "
+              f"(the name comes next, from the calling-card step or --calling-card NAME)")
         answer = input("  [A]ccept / [r]egenerate / [s]kip: ").strip().lower()
         if answer in ('', 'a', 'accept', 'y', 'yes'):
             _write(candidate, "Minted")
@@ -2556,11 +2750,17 @@ def other_claude_md_in_load_path(reconciled_path):
 
 
 def cmd_agent_init(args: argparse.Namespace) -> int:
-    """Initialize agent with preamble injection (idempotent)."""
+    """Initialize the agent: its PA preamble and its whole persistent-layer stack (idempotent).
+
+    The steps, their order and their flags are ``macf.agent_stack``'s; the preamble step is
+    ``_agent_init_preamble`` below, the behavior agent init always had.
+    """
+    from . import agent_stack
     try:
         # Detect PA home directory
         config = ConsciousnessConfig()
-        if config._is_container():
+        in_container = config._is_container()
+        if in_container:
             # In container: use detected home
             pa_home = Path.home()
         else:
@@ -2575,7 +2775,46 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
             except (OSError, IOError) as e:
                 print(f"⚠️ MACF: agent home detection failed: {e}", file=sys.stderr)
                 pa_home = Path.cwd()
+        rc, _results = agent_stack.run_stack(
+            args, Path(pa_home), in_container=in_container,
+            preamble=lambda: _agent_init_preamble(args, Path(pa_home), config))
+        return rc
+    except Exception as e:
+        print(f"Error during agent initialization: {e}")
+        return 1
 
+
+def _preamble_confirm(args: argparse.Namespace):
+    """The preamble's y/N: True to write, False when the person declined, None when nobody
+    can answer. ``--yes`` answers yes. A stdin that isn't a terminal, or one that ends before
+    an answer, is nobody: an unattended run (a script, a pipe, an agent's own tool call) gets
+    the step skipped and the flag named, not an EOFError reported as a refusal."""
+    if getattr(args, 'yes', False):
+        return True
+    try:
+        interactive = sys.stdin is not None and sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        interactive = False
+    if not interactive:
+        return None
+    try:
+        return input("\nProceed? [y/N]: ").strip().lower() == 'y'
+    except EOFError:
+        print()
+        return None
+
+
+def _preamble_not_interactive(claude_md_path: Path):
+    from .agent_stack import SKIPPED, Result
+    return Result("preamble", SKIPPED, f"not interactive: nobody to answer the y/N prompt, so "
+                                       f"{claude_md_path} is left as it is; rerun with --yes to "
+                                       f"accept the preamble unattended")
+
+
+def _agent_init_preamble(args: argparse.Namespace, pa_home: Path, config):
+    """The preamble step: CLAUDE.md, the personal policy manifest and the agent's id."""
+    from .agent_stack import ALREADY, DONE, REFUSED, Result
+    if True:
         claude_md_path = pa_home / "CLAUDE.md"
 
         # Determine preamble template path (portable)
@@ -2614,7 +2853,7 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
             print("Expected locations:")
             for loc in template_locations:
                 print(f"  - {loc}")
-            return 1
+            return Result("preamble", REFUSED, "PA_PREAMBLE.md template not found")
 
         # Read preamble template
         preamble_content = preamble_template_path.read_text()
@@ -2667,24 +2906,31 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
                 print(f"🧹 Removing {len(stale_versions)} stale preamble block(s): "
                       f"{', '.join('v' + v for v in stale_versions)}")
 
-            # Confirmation prompt for modifying existing file
-            print(f"\n{action_desc} CLAUDE.md:")
-            print(f"  📄 {claude_md_path}")
-            if not getattr(args, 'yes', False):
-                response = input("\nProceed? [y/N]: ").strip().lower()
-                if response != 'y':
-                    print("Aborted.")
-                    return 0
-
             # Append: user + boundary + preamble
             new_content = user_content + "\n\n" + UPGRADE_BOUNDARY + "\n\n" + preamble_content
-            claude_md_path.write_text(new_content)
+            if new_content == existing_content:
+                # Already current: no prompt and no write, so a second run is a no-op.
+                status = ALREADY
+                print(f"✓ PA Preamble already current in {claude_md_path}")
+            else:
+                status = DONE
+                # Confirmation prompt for modifying existing file
+                print(f"\n{action_desc} CLAUDE.md:")
+                print(f"  📄 {claude_md_path}")
+                answer = _preamble_confirm(args)
+                if answer is None:
+                    return _preamble_not_interactive(claude_md_path)
+                if not answer:
+                    return Result("preamble", "aborted")
+                claude_md_path.write_text(new_content)
             # Say which of the two things happened. "appended" asserted the
             # DANGEROUS outcome -- an operator reading it has been told the thing
             # they should check for has occurred, when in fact the old block was
             # replaced in place. A message that describes a different operation
             # than the one performed is worse than no message.
-            if _replacing:
+            if status == ALREADY:
+                pass
+            elif _replacing:
                 print("✅ PA Preamble replaced in place (one managed block, now current)")
             else:
                 print("✅ PA Preamble added below the upgrade boundary")
@@ -2708,12 +2954,13 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
             # Create new CLAUDE.md with just the preamble (no boundary needed)
             print(f"\nCreate new CLAUDE.md with PA Preamble:")
             print(f"  📄 {claude_md_path}")
-            if not getattr(args, 'yes', False):
-                response = input("\nProceed? [y/N]: ").strip().lower()
-                if response != 'y':
-                    print("Aborted.")
-                    return 0
+            answer = _preamble_confirm(args)
+            if answer is None:
+                return _preamble_not_interactive(claude_md_path)
+            if not answer:
+                return Result("preamble", "aborted")
             claude_md_path.write_text(preamble_content)
+            status = DONE
             print(f"✅ CLAUDE.md created successfully")
 
         # Create personal policy directory structure (PA only)
@@ -2733,21 +2980,19 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
                 json.dump(manifest_data, f, indent=2)
             print(f"✅ Created personal policy manifest at {personal_manifest}")
 
-        _ensure_agent_uuid(
-            pa_home,
-            assume_yes=getattr(args, 'yes', False),
-            mint_fresh=getattr(args, 'mint_fresh_id', False),
-        )
+        try:
+            _ensure_agent_uuid(
+                pa_home,
+                assume_yes=getattr(args, 'yes', False),
+                mint_fresh=getattr(args, 'mint_fresh_id', False),
+            )
+        except EOFError:
+            # Its prompts, like the preamble's, have nobody to answer them unattended.
+            print("\n⚠️  Agent UUID not written: not interactive; rerun with --yes to accept it unattended")
 
         print(f"\n📍 PA Home: {pa_home}")
         print(f"📍 Personal Policies: {personal_policies_dir}")
-        print(f"\nAgent initialization complete!")
-
-        return 0
-
-    except Exception as e:
-        print(f"Error during agent initialization: {e}")
-        return 1
+        return Result("preamble", status, str(claude_md_path))
 
 
 def cmd_agent_init_auth_token(args: argparse.Namespace) -> int:
@@ -3824,9 +4069,15 @@ def cmd_mode_show(args: argparse.Namespace) -> int:
     print()
     print("Idle Detection:")
     try:
+        from .pd.monitor_unit import declared_monitor_unit
         from .transcript_monitor.daemon import is_running as tm_is_running
-        tm_running = tm_is_running()
-        print(f"  Transcript Monitor: {'✅ running' if tm_running else '⏹️  stopped'}")
+        tm_unit = declared_monitor_unit()
+        # A unit's follow-mode monitor isn't in the per-session process read: the daemon reports it.
+        tm_running = tm_unit is not None or tm_is_running()
+        if tm_unit is not None:
+            print(f"  Transcript Monitor: primal daemon unit '{tm_unit}' (state: macf_tools pd status)")
+        else:
+            print(f"  Transcript Monitor: {'✅ running' if tm_running else '⏹️  stopped'}")
         if tm_running:
             print("  USER_IDLE detection: ✅ active (transcript monitor + prompt hook)")
         else:
@@ -3883,26 +4134,35 @@ def cmd_recommender_sample(args: argparse.Namespace) -> int:
 
 
 def cmd_mode_get(args: argparse.Namespace) -> int:
-    """Get current operating mode."""
+    """Get current operating mode, and the work mode beside it.
+
+    The work mode comes from the resolver the dashboard reads, so the two cannot
+    disagree; it was missing here, so the instrument the preamble names for reading
+    one's stance could not tell an unset work mode from an unreported one
+    (cversek/MacEff#846)."""
     from .modes import detect_auto_mode
+    from .modes.detection import _get_current_work_mode
 
     try:
         session_id = get_current_session_id()
         enabled, source = detect_auto_mode(session_id)
 
         mode = "AUTO_MODE" if enabled else "MANUAL_MODE"
+        work_mode = _get_current_work_mode()
 
         if getattr(args, 'json_output', False):
             data = {
                 "mode": mode,
                 "enabled": enabled,
                 "source": source,
+                "work_mode": work_mode,
                 "session_id": session_id
             }
             print(json.dumps(data, indent=2))
         else:
             print(f"Mode: {mode}")
             print(f"Source: {source}")
+            print(f"Work mode: {work_mode or '(unset)'}")
 
         return 0
 
@@ -3946,9 +4206,11 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
             else:
                 print("     reply tool. The hook trace is off, so your turn-final message")
                 print("     does NOT reach the channel (macf_tools channel telegram hook-trace).")
-            print("   • Ask-list commands (git push, gh pr create/merge, gh issue")
-            print("     create/close, git reset --hard, rm -r, docker teardown) — each")
-            print("     prompts at the empty CLI. Commit locally; HOLD pushes/PRs.")
+            print("   • Whatever the Ask list holds (git push, gh pr create/merge, gh issue")
+            print("     create/close, git reset --hard, rm -r, docker teardown, unless the")
+            print("     operator allowed it) — each prompts at the empty CLI, so it is denied.")
+            print("   What the settings let run without a prompt still runs: commit, push")
+            print("   your own branches, answer reviews.")
             print("   Communicate via the Telegram reply tool. The dashboard indicator")
             print("   clears when you return to the CLI; run `mode set USER_PRESENT`")
             print("   (or restart) to restore the denied permissions.")
@@ -4143,8 +4405,12 @@ def cmd_mode_set(args: argparse.Namespace) -> int:
                     print("⚠️  Could not install AUTO_MODE ask permissions")
                 # Auto-start Transcript Monitor for idle detection
                 try:
+                    from .pd.monitor_unit import declared_monitor_unit
                     from .transcript_monitor.daemon import is_running as tm_is_running, start_daemon as tm_start
-                    if tm_is_running():
+                    tm_unit = declared_monitor_unit()
+                    if tm_unit is not None:
+                        print(f"✅ Transcript Monitor runs as primal daemon unit '{tm_unit}'")
+                    elif tm_is_running():
                         print("✅ Transcript Monitor already running")
                     else:
                         tm_start()
@@ -6451,6 +6717,18 @@ def cmd_task_store_init(args: argparse.Namespace) -> int:
         return 1
     print(f"{'✓ Already' if was == 'home' else '✅ Set'}: "
           f"task_store.mode = home  ({config_path})")
+
+    # The sentinel was seeded only by the first `task create`, so a provisioned
+    # store had none and `task tree` failed until something was created in it
+    # (cversek/MacEff#842).
+    from .task.create import SENTINEL_TASK_ID, _ensure_sentinel_task
+    seeded = not (store / f"{SENTINEL_TASK_ID}.json").exists()
+    try:
+        _ensure_sentinel_task(store)
+    except OSError as e:
+        print(f"❌ Could not write sentinel #{SENTINEL_TASK_ID} in {store}: {e}", file=sys.stderr)
+        return 1
+    print(f"{'✅ Seeded' if seeded else '✓ Present'}: sentinel #{SENTINEL_TASK_ID}")
 
     _ensure_store_gitignored_for_migration(store)
     return 0
@@ -11147,7 +11425,17 @@ def cmd_proxy_log(args: argparse.Namespace) -> int:
 
 
 def cmd_search_service_start(args: argparse.Namespace) -> int:
-    """Start the search service daemon."""
+    """Start the search service daemon, unless a primal daemon runs it as a declared unit."""
+    from macf.search_service.declared import find_declared_search_unit
+    declared = find_declared_search_unit()
+    if declared is not None:
+        print(f"❌ The search service runs under a primal daemon as {declared.describe()}, "
+              f"so this command starts none: a copy started here would take the port and leave "
+              f"the supervised unit failing to bind.", file=sys.stderr)
+        print("   See whether it is up with: macf_tools pd status", file=sys.stderr)
+        print("   Its daemon starts and restarts it; to run it by hand instead, remove the unit "
+              "from the declaration first.", file=sys.stderr)
+        return 1
     try:
         from macf.search_service import SearchService, is_service_running
         from macf.search_service.retrievers.policy_retriever import PolicyRetriever
@@ -11230,8 +11518,10 @@ def cmd_search_service_status(args: argparse.Namespace) -> int:
 
             if running:
                 print(f"✅ Search service is running")
-                print(f"   PID: {pid}")
+                print(f"   PID: {pid if pid is not None else 'unknown'}")
                 print(f"   Port: {port}")
+                if status.get('note'):
+                    print(f"   Note: {status['note']}")
             else:
                 print("⚠️  Search service is not running")
                 print(f"   Start with: macf_tools search-service start")
@@ -11323,7 +11613,12 @@ def cmd_transcripts_list(args: argparse.Namespace) -> int:
 # -------- transcript-monitor handlers --------
 
 def _cmd_tm_start(args) -> int:
+    from .pd.monitor_unit import declared_monitor_unit, declared_refusal
     from .transcript_monitor.daemon import start_daemon
+    unit = declared_monitor_unit()
+    if unit is not None:
+        print(declared_refusal(unit), file=sys.stderr)
+        return 1
     return start_daemon(
         foreground=getattr(args, "foreground", False),
         poll_interval=getattr(args, "interval", 1.0),
@@ -11398,7 +11693,13 @@ def _cmd_inject(args):
     directing the agent to compact itself.
     """
     from .compact_followup import DEFAULT_TEXT
-    from .supervisor import send_slash_to_self
+    from .supervisor import clear_own_input, send_slash_to_self
+    if args.command == "clear-input":
+        if getattr(args, "target", ""):
+            print("[inject] clear-input acts only on this agent's own pane; --target is "
+                  "refused.", file=sys.stderr)
+            return 1
+        return clear_own_input(getattr(args, "expect", "") or "")
     then = None if getattr(args, "no_then", False) else (getattr(args, "then", None) or DEFAULT_TEXT)
     return send_slash_to_self(args.command, target=getattr(args, "target", "") or "", then=then)
 
@@ -11740,6 +12041,12 @@ def cmd_knowledge_status(args: argparse.Namespace) -> int:
         "acute": counts.get(Severity.ACUTE, 0), "chronic": counts.get(Severity.CHRONIC, 0),
         "gaps": len(detect_web_gaps(kg)),
     }
+    # Folders the opt-out marker takes out of the web: named, never only counted.
+    # The doctor above reports them as notes; status carries the same list.
+    from .knowledge_doctor import excluded_folders
+    from .utils.paths import find_agent_home
+    home = find_agent_home()
+    status["opted_out"] = excluded_folders(home) if home else []
     if getattr(args, "json_output", False):
         print(json.dumps(status, indent=2))
     else:
@@ -12026,6 +12333,22 @@ def _build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--include-questions", action="store_true", help="also list question dialogs (AskUserQuestion, ExitPlanMode)")
     pp.add_argument("--json", action="store_true")
     pp.set_defaults(func=cmd_permissions_history)
+    pp = perm_sub.add_parser(
+        "list", aliases=["rules"],
+        help="the permission rules in force for this session, deny, ask and allow, each with its settings "
+             "file: what would stop at a dialog before you run it",
+    )
+    pp.add_argument("--kind", choices=("deny", "ask", "allow"), default=None, help="only rules of this kind")
+    pp.add_argument("--json", action="store_true")
+    pp.set_defaults(func=cmd_permissions_list)
+    pp = perm_sub.add_parser(
+        "check",
+        help="would this command stop at a dialog? Names the rule and the part of a chain that matches it; "
+             "exit 0 runs, 1 asks, 2 denied",
+    )
+    pp.add_argument("command", help="the command, quoted whole, as you would run it")
+    pp.add_argument("--tool", default="Bash", help="the tool the call is for (default Bash)")
+    pp.set_defaults(func=cmd_permissions_check)
 
     # New consciousness commands
     list_parser = sub.add_parser("list", help="list consciousness artifacts")
@@ -12098,14 +12421,20 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_parser = sub.add_parser("agent", help="agent initialization and management")
     agent_sub = agent_parser.add_subparsers(dest="agent_cmd")
 
-    agent_init_parser = agent_sub.add_parser("init", help="initialize agent with PA preamble")
-    agent_init_parser.add_argument("-y", "--yes", action="store_true", help="skip confirmation prompt")
+    agent_init_parser = agent_sub.add_parser(
+        "init", help="initialize the agent: its PA preamble and its persistent-layer stack (task store, "
+                     "primal daemon declaration, harness, MacEff channel, permissions, pd install)")
+    agent_init_parser.add_argument("-y", "--yes", action="store_true",
+                                   help="accept the preamble unattended: skip its confirmation prompt "
+                                        "(without it, a run with no terminal skips the preamble step)")
     agent_init_parser.add_argument(
         "--mint-fresh-id", action="store_true",
         help="mint a NEW agent UUID even if one already resolves from another "
              "scope (default is to transfer the existing identity, preserving "
              "the calling card)",
     )
+    from .agent_stack import add_arguments as _agent_stack_arguments
+    _agent_stack_arguments(agent_init_parser)
     agent_init_parser.set_defaults(func=cmd_agent_init)
 
     # AUTO_MODE auth token bootstrap (host / non-Docker installs) — #115
@@ -12206,6 +12535,9 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_generate.add_argument("--project-dir", metavar="DIR",
                                  help="directory the supervised session starts in; decides which "
                                       "conversation 'claude -c' resumes (default: MACEFF_PROJECT_DIR)")
+    harness_generate.add_argument("--remote-control", metavar="NAME",
+                                 help="Remote Control name the session's client is started with "
+                                      "(rendered as --remote-control NAME; default: none)")
     harness_generate.add_argument("--shell-prefix", metavar="NAME",
                                  help="short handle for the generated shell functions (default: the moniker half of the Calling Card)")
     harness_generate.add_argument(
@@ -12223,6 +12555,9 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_install.add_argument("--project-dir", metavar="DIR",
                                  help="directory the supervised session starts in; decides which "
                                       "conversation 'claude -c' resumes (default: MACEFF_PROJECT_DIR)")
+    harness_install.add_argument("--remote-control", metavar="NAME",
+                                 help="Remote Control name the session's client is started with "
+                                      "(rendered as --remote-control NAME; default: none)")
     harness_install.add_argument("--shell-prefix", metavar="NAME",
                                  help="short handle for the generated shell functions (default: the moniker half of the Calling Card)")
     harness_install.add_argument("--watchdog", action="store_true",
@@ -12236,12 +12571,29 @@ def _build_parser() -> argparse.ArgumentParser:
 
     harness_attach = harness_sub.add_parser(
         "attach", help="attach this terminal to the agent's supervised session")
-    harness_attach.add_argument("--agent", help="agent slug (default: resolved from identity)")
-    harness_attach.add_argument("--control", action="store_true",
-                                help="attach in tmux control mode (-CC), for iTerm2 on macOS")
+    harness_attach.add_argument("name", nargs="?",
+                                help="a card, uuid, moniker or unique prefix, here or on a declared "
+                                     "remote (default: this home's own agent)")
+    harness_attach.add_argument("--card", help="exactly this calling card, on this endpoint "
+                                               "(what a remote hand-off names)")
+    harness_attach.add_argument("--agent", help="session slug, as before (Moniker_uuid)")
+    harness_attach.add_argument("--control", action=argparse.BooleanOptionalAction, default=None,
+                                help="tmux control mode (-CC), for iTerm2 on macOS "
+                                     "(default: the remotes declaration's control)")
     harness_attach.add_argument("--read-only", action="store_true",
                                 help="observe without evicting other clients or taking the keyboard")
     harness_attach.set_defaults(func=cmd_harness_attach)
+
+    harness_list = harness_sub.add_parser(
+        "list", help="list every agent this endpoint can attach to: card, account, session "
+                     "kind and state, with a reason wherever one is unknown (read-only)")
+    harness_list.add_argument("--json", action="store_true",
+                              help="a list of objects, one per agent or unreadable home")
+    harness_list.add_argument("--verbose", "-v", action="store_true",
+                              help="say why each unknown field is unknown, and each row's detail")
+    harness_list.add_argument("--local", action="store_true",
+                              help="this endpoint only, without asking the declared remotes")
+    harness_list.set_defaults(func=cmd_harness_list)
 
     harness_status = harness_sub.add_parser("status", help="show harness unit and session state")
     harness_status.add_argument("--agent", help="agent slug")
@@ -12251,16 +12603,19 @@ def _build_parser() -> argparse.ArgumentParser:
         "cutover", help="print the plan for moving this agent's session onto its primal daemon "
                         "(read-only: checks, steps and rollback for this host; changes nothing)")
     harness_cutover.add_argument("--agent", help="agent slug (default: resolved from identity)")
-    harness_cutover.add_argument("--home", help="agent home directory")
+    harness_cutover.add_argument("--home", help="agent home directory (default: as macf_tools env finds it)")
     harness_cutover.add_argument("--staged", help="the declaration with the session unit "
                                                   "(default: <declaration>.cutover)")
     harness_cutover.add_argument("--json", action="store_true", help="the plan as JSON")
     harness_cutover.add_argument("--run", action="store_true",
-                                 help="carry the plan out: start it as a transient unit outside this "
-                                      "session, which rolls back on any failure, and print where it logs")
+                                 help="carry the plan out: start it outside this session (a transient "
+                                      "systemd unit, or a one-shot launchd job on macOS), which rolls "
+                                      "back on any failure, and print where it logs")
     harness_cutover.add_argument("--execute", action="store_true",
-                                 help="what the transient unit runs: carry the plan out here and now")
+                                 help="what the transient unit or launchd job runs: carry the plan out "
+                                      "here and now (refused inside a Claude Code session)")
     harness_cutover.add_argument("--log", help="where --execute writes its progress")
+    harness_cutover.add_argument("--job-plist", help=argparse.SUPPRESS)   # the launchd job's own plist, removed when it ends
     harness_cutover.set_defaults(func=cmd_harness_cutover)
 
     harness_unit = harness_sub.add_parser(
@@ -13367,7 +13722,12 @@ def _build_parser() -> argparse.ArgumentParser:
     inject_parser = sub.add_parser(
         "inject",
         help="queue a slash command into this agent's own CC pane (e.g. inject compact)")
-    inject_parser.add_argument("command", help="slash command without the slash, e.g. 'compact'")
+    inject_parser.add_argument("command", help="slash command without the slash, e.g. 'compact'; "
+                                                "or 'clear-input' to empty this pane's input box "
+                                                "of framework text (with --expect)")
+    inject_parser.add_argument("--expect", default="", metavar="OPENING",
+                               help="for clear-input: the opening words of the text to clear; "
+                                    "nothing is pressed unless the box starts with them")
     inject_parser.add_argument("--target", default="",
                                help="supervisor name/pid to target directly "
                                     "(default: self-resolve from this session id)")
@@ -13774,6 +14134,18 @@ def _build_parser() -> argparse.ArgumentParser:
     shell_sub = shell_parser.add_subparsers(dest="shell_cmd")
     shell_sub.add_parser("setup", help="print tab completion setup instructions").set_defaults(func=cmd_shell_setup)
 
+    # ── completion ───────────────────────────────────────────────────────
+    completion_parser = sub.add_parser(
+        "completion", help="print a shell completion script: source <(macf_tools completion bash)")
+    completion_parser.add_argument("shell", nargs="?", choices=["bash", "zsh"],
+                                   help="the shell to print the script for")
+    # Hidden: what the printed script calls for `harness attach <TAB>`.
+    completion_parser.add_argument("--candidates", action="store_true", help=argparse.SUPPRESS)
+    completion_parser.add_argument("--prefix", default="", help=argparse.SUPPRESS)
+    completion_parser.add_argument("--describe", action="store_true", help=argparse.SUPPRESS)
+    completion_parser.add_argument("--remote-timeout", type=float, default=1.0, help=argparse.SUPPRESS)
+    completion_parser.set_defaults(func=cmd_completion)
+
     return p
 
 
@@ -14071,7 +14443,15 @@ def main(argv=None) -> None:
             # as argparse does for anything else missing.
             _deepest_parser(parser, args).print_help()
             exit(2)
-        exit(func(args))
+        try:
+            exit(func(args))
+        except ImportError as e:
+            # amail refuses to load without its extra, and says how to install it; a
+            # traceback buries that message under the chain (cversek/MacEff#843).
+            if args.cmd != "amail" or "'amail' extra" not in str(e):
+                raise
+            print(f"❌ macf_tools amail: {e}", file=sys.stderr)
+            exit(1)
     parser.print_help()
 
 

@@ -81,6 +81,15 @@ def _session_unit(response: Optional[dict], unit: str) -> tuple:
     return None, f"the primal daemon reports no unit named {unit!r}"
 
 
+def _owned(path) -> bool:
+    """A directory this account owns: another account's server is no keyboard of ours."""
+    import os
+    try:
+        return path.is_dir() and path.stat().st_uid == os.getuid()
+    except OSError:
+        return False
+
+
 def plan_attach(response: Optional[dict], session_unit: str, *,
                 read_info: Optional[Callable] = None,
                 verify: Optional[Callable] = None,
@@ -95,7 +104,7 @@ def plan_attach(response: Optional[dict], session_unit: str, *,
     """
     if read_info is None or verify is None:
         from ..notify.session import read_session_info, verify_incarnation
-        read_info = read_info or read_session_info
+        read_info = read_info or (lambda pid: read_session_info(pid, missing_ok=True))
         verify = verify or verify_incarnation
 
     status, why = _session_unit(response, session_unit)
@@ -126,14 +135,22 @@ def plan_attach(response: Optional[dict], session_unit: str, *,
         # parents its own tmux server, so the session's pane descends from the unit
         # rather than the other way round, on the server under ``tmux_tmpdir``.
         import os
-        env = {**os.environ, "TMUX_TMPDIR": tmux_tmpdir}
-        env.pop("TMUX", None)
-        for pane, name in tmux_panes(env).items():
-            if pid in ancestors(pane):
-                argv = (["env", f"TMUX_TMPDIR={tmux_tmpdir}", "tmux"] + (["-CC"] if control else [])
-                        + ["attach", "-t", f"={name}", "-r" if read_only else "-d"])
-                return AttachPlan(TMUX, argv, reason=f"the session unit runs tmux session {name!r} "
-                                                     f"on its own server")
+        from pathlib import Path
+        # The card's own server first; then this account's other session-unit servers beside
+        # it, for a unit declared with another --agent, which names its server after that.
+        # Either way the pane is found by descent from the daemon's pid, never by a name.
+        here = Path(tmux_tmpdir)
+        servers = [here] + sorted(d for d in here.parent.glob("*.tmux")
+                                  if d != here and _owned(d))
+        for server in servers:
+            env = {**os.environ, "TMUX_TMPDIR": str(server)}
+            env.pop("TMUX", None)
+            for pane, name in tmux_panes(env).items():
+                if pid in ancestors(pane):
+                    argv = (["env", f"TMUX_TMPDIR={server}", "tmux"] + (["-CC"] if control else [])
+                            + ["attach", "-t", f"={name}", "-r" if read_only else "-d"])
+                    return AttachPlan(TMUX, argv, reason=f"the session unit runs tmux session {name!r} "
+                                                         f"on its own server")
     return AttachPlan(NONE, reason=f"pid {pid} runs in a plain terminal, "
                                    f"not hosted by the client's daemon and not under tmux")
 
@@ -143,3 +160,90 @@ def readout_line(plan: AttachPlan) -> str:
     if plan.kind == NONE:
         return f"Attach:       nothing attachable hosts this session ({plan.reason})"
     return f"Attach:       {' '.join(plan.argv)}  ({plan.reason})"
+
+
+def plan_attach_for_home(home, *, read_only: bool = False, control: bool = False,
+                         ask: Optional[Callable] = None, load: Optional[Callable] = None,
+                         card_of: Optional[Callable] = None, base=None,
+                         **probes) -> Optional[AttachPlan]:
+    """How to attach to the session of the agent whose home is ``home``, from its daemon.
+
+    The card comes from the home's own files and the session unit from the agent's
+    declaration (the one unit of kind ``session``); the daemon's status says which process
+    that unit is (R100). None means the agent declares no session unit, so any session it
+    has is the legacy harness's; a declared one that can't be resolved is a plan of kind
+    ``none`` with the reason, never a guess by name (persistent_layer 4.1).
+    """
+    from ..pd.client import DaemonUnavailable
+    from ..pd.core import DeclarationRefused
+    from ..pd.session_unit import tmux_dir
+    from .identity import session_identifier
+    if card_of is None:
+        from ..pd.names import agent_card as card_of
+    if load is None:
+        from ..pd.core import load_declaration as load
+    if ask is None:
+        from ..pd.client import ask
+
+    try:
+        card = card_of(home)
+        declaration = load(home, card)
+    except (DeclarationRefused, OSError, ValueError) as e:
+        return AttachPlan(NONE, reason=f"the agent's declaration can't be read: {e}")
+    session = next((u for u in declaration.units if u.kind == "session"), None)
+    if session is None:
+        return None
+    try:
+        response = ask(card, {"op": "status"}).model_dump()
+    except DaemonUnavailable as e:
+        return AttachPlan(NONE, reason=f"the primal daemon did not answer: {e}")
+    return plan_attach(response, session.name, read_only=read_only, control=control,
+                       tmux_tmpdir=str(tmux_dir(session_identifier(card), base)), **probes)
+
+
+def plan_attach_for_card(card: str, *, read_only: bool = False, control: bool = False,
+                         ask: Optional[Callable] = None, base=None, **probes) -> AttachPlan:
+    """How to attach to the session of the agent with ``card``, from its daemon alone.
+
+    For an agent whose home isn't known here (a second agent on one login, whose home the
+    roster can't place), so its declaration can't name the session unit. The daemon's
+    status still says which processes are its units, and the session is the live unit
+    whose process parents a pane on the card's own tmux server (R100): found by descent
+    from the daemon's own pid, never by a name.
+    """
+    from ..pd.client import DaemonUnavailable
+    from ..pd.session_unit import tmux_dir
+    from .identity import session_identifier
+    if ask is None:
+        from ..pd.client import ask
+
+    try:
+        response = ask(card, {"op": "status"}).model_dump()
+    except DaemonUnavailable as e:
+        return AttachPlan(NONE, reason=f"the primal daemon did not answer: {e}")
+    tmpdir = str(tmux_dir(session_identifier(card), base))
+    reasons = []
+    for unit in response.get("units") or []:
+        plan = plan_attach(response, unit.get("unit"), read_only=read_only, control=control,
+                           tmux_tmpdir=tmpdir, **probes)
+        if plan.kind != NONE:
+            return plan
+        reasons.append(f"{unit.get('unit')}: {plan.reason}")
+    return AttachPlan(NONE, reason="no unit of the primal daemon hosts a session here ("
+                                   + ("; ".join(reasons) or "it reports no units") + ")")
+
+
+def window_commands(plan: AttachPlan, card: str) -> List[List[str]]:
+    """The tmux commands that name the attached window by ``card`` and keep that name.
+
+    Run before the attach, on the same server the attach reaches. A read-only plan gets
+    none: an onlooker changes nothing in the session it watches.
+    """
+    if plan.kind != TMUX or "-r" in plan.argv:
+        return []
+    tmux_at = plan.argv.index("tmux")
+    prefix = plan.argv[:tmux_at + 1]
+    target = plan.argv[plan.argv.index("-t") + 1] + ":"
+    return [prefix + ["rename-window", "-t", target, card],
+            prefix + ["set-window-option", "-t", target, "automatic-rename", "off"],
+            prefix + ["set-window-option", "-t", target, "allow-rename", "off"]]

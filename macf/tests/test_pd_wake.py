@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from macf.agent_events_log import read_events
+from macf.channels.maceff_channel import TAKES
 from macf.pd import notifier as nt
 from macf.pd import wake as wk
 from macf.utils.input_origin import WAKE_OPENING, opens_with_wake
@@ -219,7 +221,7 @@ def test_wake_through_notifier(tmp_path, isolated_events_log):
     pane = FakePane([screen()])
     n.waker = _waker(pane, []).waker
     ours, theirs = socket.socketpair()
-    n.attach(ours)
+    n.attach(ours, takes=TAKES)
     clock[0] += 3600
     assert not n.wake() and pane.typed == [], "typed a wake while a channel was attached"
     n.detach(ours)
@@ -231,6 +233,53 @@ def test_wake_through_notifier(tmp_path, isolated_events_log):
     assert n.wake() and len(pane.typed) == 1
     assert ID1 in pane.typed[0] and ID2 in pane.typed[0]
     assert not n.owed, "a typed wake left its notices owed, for a channel to deliver again"
+
+
+def test_a_source_no_attached_channel_declared_is_typed(tmp_path, isolated_events_log):
+    """R105 counted per source (MIS-0002-R149): a channel is attached, but its hello left mail
+    out, so for mail there is no channel. After the grace the wake is typed, never held forever,
+    and the channel is sent no mail record."""
+    clock = [1000.0]
+    n = nt.Notifier(_home_with_mail(tmp_path, ID1), {"amail": "agent"}, clock=lambda: clock[0])
+    n.boot()
+    pane = FakePane([screen()])
+    n.waker = _waker(pane, []).waker
+    ours, theirs = socket.socketpair()
+    theirs.settimeout(0.2)
+    n.attach(ours, takes=[s for s in TAKES if s != "amail"])
+    assert n.flush() == 0 and n.owed, "mail went to a channel that didn't declare it"
+    clock[0] += nt.CHANNEL_GRACE_S + 1
+    assert n.wake() and len(pane.typed) == 1 and ID1 in pane.typed[0]
+    assert not n.owed
+    with pytest.raises(socket.timeout):
+        theirs.recv(1)
+    n.detach(ours)
+    theirs.close()
+
+
+@pytest.mark.parametrize("rule", [("silence", "amail", None), ("silence", "@channel", None),
+                                  ("route", "amail", "tray")])
+def test_the_wake_honors_the_operators_rules(tmp_path, isolated_events_log, rule):
+    """MIS-0002-R152 for the keystroke wake: a typed wake is delivery to the session, so mail
+    silenced, the session (@channel) silenced, or mail routed to another subscriber is never
+    typed. The notice is settled as silenced, not owed, and taking the rule away later types
+    nothing for it. The rules are read live: the rule is set after the notifier was made."""
+    from macf.pd.stream import Rules
+    clock, rules = [1000.0], Rules()
+    n = nt.Notifier(_home_with_mail(tmp_path, ID1), {"amail": "agent"}, clock=lambda: clock[0],
+                    rules=lambda: rules)
+    n.boot()
+    pane = FakePane([screen()])
+    n.waker = _waker(pane, []).waker
+    rules.apply(*rule)
+    clock[0] += nt.CHANNEL_GRACE_S + 1
+    assert not n.wake() and pane.typed == [], "a wake was typed for mail the rules keep from the session"
+    assert not n.owed, "a silenced notice stayed owed"
+    assert [e["data"]["source"] for e in read_events(reverse=False, scope="all")
+            if e.get("event") == nt.EVENT_SILENCED] == ["amail"]
+    rules.apply("unroute" if rule[0] == "route" else "unsilence", rule[1])
+    clock[0] += 3600
+    assert not n.wake() and pane.typed == [], "a silenced notice was typed once the rule was gone"
 
 
 # --- the real pane ---------------------------------------------------------------
@@ -394,7 +443,7 @@ def test_a_hold_that_a_channel_ends_is_released(tmp_path, isolated_events_log):
     n.wake()
     assert [e for e, _ in events] == [wk.EVENT_HELD]
     ours, theirs = socket.socketpair()
-    n.attach(ours)
+    n.attach(ours, takes=TAKES)
     n.flush()
     n.wake()
     n.wake()

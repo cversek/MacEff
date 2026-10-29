@@ -78,6 +78,11 @@ class HarnessParams:
     # than a launch from the project, and neither reports a substitution.
     # None keeps the previous behaviour (inherit the caller's cwd).
     project_dir: Optional[Path] = None
+    # The session's Remote Control name, handed to the client as
+    # `--remote-control NAME`. Under a primal daemon's session unit the child is
+    # run with no arguments, so a name the legacy start script passed through
+    # "$@" is lost unless it is recorded here. None renders nothing.
+    remote_control: Optional[str] = None
     proxy_port: int = DEFAULT_PROXY_PORT
     context_window: int = DEFAULT_CONTEXT_WINDOW
     term: str = "xterm-256color"
@@ -185,6 +190,16 @@ def _per_project_agent() -> bool:
         return False
 
 
+#: How resolve_agent names the source of an identity it took from the identity layer,
+#: keyed by :func:`macf.utils.identity.agent_name_source`.
+_NAME_SOURCE_LABELS = {
+    "config": "calling card",
+    "env": "MACEFF_AGENT_NAME",
+    "gecos": "GECOS display name, no calling card configured",
+    "user": "$USER login name, no calling card configured",
+}
+
+
 def resolve_agent(explicit: Optional[str] = None,
                   unit_dir: Optional[Path] = None) -> "tuple":
     """Resolve which agent this harness command is about, and say how.
@@ -211,13 +226,17 @@ def resolve_agent(explicit: Optional[str] = None,
     # naming the host's resident agent) names a different agent; the card wins,
     # as it does for get_agent_identity().
     try:
-        from .identity import get_agent_identity, session_identifier
+        from .identity import agent_name_source, get_agent_identity, session_identifier
         card = get_agent_identity()
         # 'unknown' is what identity returns when no UUID resolves; deriving a
         # session name from it would manufacture an identifier for an agent
         # whose identity is precisely what could not be established.
         if card and not card.endswith("@unknown"):
-            return session_identifier(card), "calling card"
+            # Only a configured name is the calling card. A name the identity layer
+            # fell back to is reported as the fallback it is: labelled "calling card",
+            # `env` read healthy in a home the daemon refused as naming no agent
+            # (cversek/MacEff#842).
+            return session_identifier(card), _NAME_SOURCE_LABELS.get(agent_name_source(), "calling card")
     except ImportError as e:
         # A sibling module of this package, so a failure here means the install
         # is broken rather than that identity is unavailable.
@@ -257,6 +276,7 @@ def load_settings(p: HarnessParams) -> HarnessParams:
         channels=p.channels or tuple(data.get("channels") or ()),
         shell_prefix=p.shell_prefix or data.get("shell_prefix"),
         project_dir=p.project_dir or (Path(data["project_dir"]) if data.get("project_dir") else None),
+        remote_control=p.remote_control or data.get("remote_control") or None,
     )
 
 
@@ -266,7 +286,8 @@ def save_settings(p: HarnessParams) -> None:
     p.settings_path.parent.mkdir(parents=True, exist_ok=True)
     p.settings_path.write_text(json.dumps(
         {"agent": p.agent, "channels": list(p.channels), "shell_prefix": p.shell_prefix,
-         "project_dir": str(p.project_dir) if p.project_dir else None},
+         "project_dir": str(p.project_dir) if p.project_dir else None,
+         **({"remote_control": p.remote_control} if p.remote_control else {})},
         indent=2) + "\n")
 
 
@@ -278,7 +299,13 @@ def default_params(agent: Optional[str] = None, home: Optional[Path] = None) -> 
     non-interactive shell resolves elsewhere — which is exactly how an earlier
     boot path ended up without the module.
     """
-    home = Path(home) if home else Path(os.environ.get("MACEFF_AGENT_HOME_DIR") or Path.home())
+    # The agent home as ``macf_tools env`` finds it: MACEFF_AGENT_HOME_DIR, else the project
+    # root that holds the event log, else ~. A host agent's home is rarely the login's ~.
+    if home:
+        home = Path(home)
+    else:
+        from .paths import find_agent_home
+        home = find_agent_home()
     resolved, _source = resolve_agent(agent)
     # An ambiguous resolution is a list of candidates; rendering for "the first
     # one" would silently pick an agent. Callers that can ask are expected to
@@ -554,6 +581,9 @@ def render_child(p: HarnessParams) -> str:
     # comma, two channels would reach the client as one malformed entry, and the
     # operator's own channel would go down with the new one.
     channels = f" --channels {' '.join(shlex.quote(c) for c in p.channels)}" if p.channels else ""
+    # Before the variadic --channels, which would swallow it as a channel (see the
+    # argument-order note at the exec below).
+    remote = f" --remote-control {shlex.quote(p.remote_control)}" if p.remote_control else ""
     return f"""#!/bin/bash
 # MacEff harness child wrapper — generated, do not hand-edit.
 # Regenerate with: macf_tools harness generate --agent {p.agent}
@@ -650,7 +680,7 @@ else
   PROMPT="Session resumed by the harness. Summarize where things stand and await instructions."
 fi
 
-exec claude -c "$PROMPT" "$@"{channels}
+exec claude -c "$PROMPT" "$@"{remote}{channels}
 """
 
 

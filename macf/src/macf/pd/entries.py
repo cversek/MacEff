@@ -33,7 +33,14 @@ _UNITS = {"m": "minutes", "h": "hours", "d": "days"}
 #: what these events fold to.
 EVENT_ENTRY_ADDED = "pd_entry_added"
 EVENT_ENTRY_REMOVED = "pd_entry_removed"
-ENTRY_EVENTS = (EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED)
+#: An entry edited (its whole new form, under the same id), paused, and resumed. A pause stops
+#: its firings without forgetting it; a resume starts them again from the moment of resuming,
+#: so the instants that passed while it was paused are not fired late.
+EVENT_ENTRY_CHANGED = "pd_entry_changed"
+EVENT_ENTRY_PAUSED = "pd_entry_paused"
+EVENT_ENTRY_RESUMED = "pd_entry_resumed"
+ENTRY_EVENTS = (EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED, EVENT_ENTRY_CHANGED, EVENT_ENTRY_PAUSED,
+                EVENT_ENTRY_RESUMED)
 
 
 def new_entry_id() -> str:
@@ -56,7 +63,39 @@ def fold(events: Iterable[dict], card: str) -> Dict[str, dict]:
             held[entry_id] = data
         elif kind == EVENT_ENTRY_REMOVED:
             held.pop(entry_id, None)
+        elif entry_id not in held:
+            continue  # an edit, pause or resume of an entry not held changes nothing
+        elif kind == EVENT_ENTRY_CHANGED:
+            # The edit carries the entry's whole new form. A pause outlives it, and so does a
+            # resume: an edit that keeps the start must not bring back what the pause covered.
+            kept = {k: held[entry_id][k] for k in ("paused_at", "resumed_at", "skipped_in_pause")
+                    if held[entry_id].get(k)}
+            held[entry_id] = {**data, **kept}
+        elif kind == EVENT_ENTRY_PAUSED:
+            held[entry_id] = {**held[entry_id], "paused_at": data.get("at")}
+        elif kind == EVENT_ENTRY_RESUMED:
+            entry = {k: v for k, v in held[entry_id].items() if k != "paused_at"}
+            held[entry_id] = {**entry, "resumed_at": data.get("at"), "skipped_in_pause": data.get("skipped", 0)}
     return held
+
+
+#: The fields of an entry's newest pd_entry_fired that its views carry as ``last_fired``.
+LAST_FIRED_FIELDS = ("for", "late_s", "missed", "notified")
+
+
+def with_last_firing(held: Dict[str, dict], events: Iterable[dict], card: str, fired_event: str) -> list:
+    """The entries held, each carrying ``last_fired`` from its newest *fired_event* (the
+    scheduler's pd_entry_fired) in *events*, read oldest first: the instant it fired for and how late it fired, so the record a
+    pd_entry_due notice points to says how late the wake is (MIS-0002-R34
+    (late_run_MUST_state_lateness)). Read from the log, which stays the only store."""
+    last: Dict[str, dict] = {}
+    for event in events:
+        data = event.get("data") if isinstance(event, dict) else None
+        if (event.get("event") == fired_event and isinstance(data, dict) and data.get("agent") == card
+                and data.get("id") in held):
+            last[data["id"]] = {k: data.get(k) for k in LAST_FIRED_FIELDS}
+    return [{**entry, "last_fired": last[entry_id]} if entry_id in last else entry
+            for entry_id, entry in held.items()]
 
 
 class OneShot:
@@ -85,8 +124,20 @@ def when_of(entry: dict) -> When:
         return parse_when(entry["when"], tz, start, start=start)
 
 
+def firings_between(entry: dict, after: datetime, until: datetime, cap: int = 10000) -> int:
+    """How many of ``entry``'s instants fall strictly after ``after`` (and its start) and at or
+    before ``until``: the firings a pause covered, which a resume says rather than fires."""
+    when = when_of(entry)
+    t, n = max(after, datetime.fromisoformat(entry["start"])), 0
+    while n < cap and (t := when.next_after(t)) is not None and t <= until:
+        n += 1
+    return n
+
+
 def next_fire(entry: dict, now: datetime) -> Optional[datetime]:
-    """When ``entry`` next fires after ``now``, or None when it never will."""
+    """When ``entry`` next fires after ``now``, or None when it never will, or is paused."""
+    if entry.get("paused_at"):
+        return None
     return when_of(entry).next_after(now)
 
 
