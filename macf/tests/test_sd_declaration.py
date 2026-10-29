@@ -130,7 +130,8 @@ def test_a_watched_unit_cannot_ask_to_be_restarted():
 
 
 @pytest.mark.parametrize("key,value", [("command", ["/usr/bin/true"]), ("environment", {"PATH": "/usr/bin"}),
-                                       ("groups", ["staff"]), ("memory_limit_mb", 256), ("stop_grace_s", 10)])
+                                       ("groups", ["staff"]), ("memory_limit_mb", 256), ("stop_grace_s", 10),
+                                       ("exit_codes", {"success": [0]})])
 def test_a_watched_unit_refuses_what_only_a_parent_uses(key, value):
     with pytest.raises(ValidationError, match=f"would ignore {key}"):
         _load({**CONTAINER, "units": [_watched("operator-pd", **{key: value})]})
