@@ -2,10 +2,10 @@
 
 **Number**: 0007
 **Type**: Standards
-**Status**: Draft
+**Status**: Deliberation
 **Authors**: the operator; drafted by the head maintainer as Secretary
 **Secretary**: the head maintainer
-**Deliberation**: pending
+**Deliberation**: https://github.com/cversek/MacEff/issues/867
 **Created**: 2026-10-28
 **Updates**: none
 **Supersedes**: none
@@ -250,7 +250,7 @@ The prototypes' results make this draft's next revision. MIS-0004's requirements
 
 ## 14 Deliberation Record
 
-None yet. The operator opened this draft by motion on #850 (comment 6477160351) and named the head maintainer its Secretary. Whether it gets a deliberation of its own is the operator's decision on its pull request (MIS-0001-R22 (operator_MUST_convene_or_explain)). Its requirements come from MIS-0004's deliberation, #850, and from the two prototypes' reports there; section 7 names the comment behind each one.
+The operator convened the deliberation on #867 on 2026-10-31, for 72 hours, with a wider scope: the system daemon as MacEff's grouping layer. It hosts what each grouping of agents shares, is the network door for components attached across the network, routes primal-daemon event streams that leave an agent, and knows the status of every unit under it. The requirements MIS-0004 depends on are tentative and may be built before this MIS completes. The operator opened this draft by motion on #850 (comment 6477160351) and named the head maintainer its Secretary. Whether it gets a deliberation of its own is the operator's decision on its pull request (MIS-0001-R22 (operator_MUST_convene_or_explain)). Its requirements come from MIS-0004's deliberation, #850, and from the two prototypes' reports there; section 7 names the comment behind each one.
 
 ## 15 Revision History
 
@@ -261,6 +261,7 @@ None yet. The operator opened this draft by motion on #850 (comment 6477160351) 
   - R26 is new: the outer manager's stop timeout is set from the declaration, or the start refuses.
   - Q05 is new: who reads whether the egress rule is loaded.
   - The Guide follows #856 at 9059a177, section 9 gains the account footprint on macOS, and section 12.1 records what each prototype showed and left untested.
+- 2026-10-31: the operator convened the deliberation on #867, widening the scope to MacEff's grouping layer, and made the requirements MIS-0004 depends on tentative and buildable now. The Status is Deliberation.
 
 ## Wiki-Links
 
