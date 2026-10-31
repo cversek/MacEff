@@ -353,7 +353,7 @@ The three receiver changes the container prototype found were opened at the oper
 
 ## 14 Deliberation Record
 
-The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 hours, and it closed on 2026-10-31 at 02:18Z (22:18 EDT on 2026-10-30). The same day it opened, the operator suspended it pending the two prototypes (P17), and both reported before the close (P24 to P29). The Secretary's synthesis on #850 quotes each position and proposes revise.
+The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 hours, and it closed on 2026-10-31 at 02:18Z (22:18 EDT on 2026-10-30). The same day it opened, the operator suspended it pending the two prototypes (P17), and both reported before the close (P24 to P29). The Secretary's synthesis ([6543897092](https://github.com/cversek/MacEff/issues/850#issuecomment-6543897092)) quotes each position and proposes revise.
 
 - **P01** The container-management maintainer, [6459064091](https://github.com/cversek/MacEff/issues/850#issuecomment-6459064091): revise; split the processes by account; pulled hand-off; a declared peer list; the sweep as health; receipts; section 10 as a list. (thm_split_by_account)
 - **P02** The host-side maintainer, [6468749316](https://github.com/cversek/MacEff/issues/850#issuecomment-6468749316): revise; Q02's (a); egress matched by socket owner; the job's environment; raised kept apart from delivered. (ira_own_login_for_reachable)
