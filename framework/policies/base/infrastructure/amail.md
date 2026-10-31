@@ -3,6 +3,7 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.7.0 — §2.3: a message is held once. Ingest drops a copy whose id the store already holds, and records the drop in that message's sidecar as `duplicates_dropped` (MIS-0004 R16). Minor: a behavior an agent can meet in its store.
 **Version**: 1.6.0 — §2.3: ingest believes only what the broker wrote. A box entry is taken only as a regular file the box's owner owns, with one link, checked on the open descriptor; anything else is refused and set aside as `.refused` (MIS-0004 R37). Minor: a new refusal an agent can meet.
 **Version**: 1.5.0 — adds §9: mail joins the knowledge web, each message and markdown attachment a temporal-record node, with its links in a `.wiki-links` sidecar under `amail/.links/` so a message's bytes stay as sent and no sender can supply its links. Minor: a new section a type policy owes the scholarship policy.
 **Version**: 1.4.2 — §2.3 says how a recipient learns where its pickup box is: provisioning names `handoff` and `agent` in its own `amail.json`, which its daemon needs, since an outer tier passes it no agent-configured variables. Patch.
@@ -331,6 +332,12 @@ the recipient's own account wrote, a FIFO. It is renamed with a `.refused` suffi
 reported once and kept as evidence, and it is listed among ingest's failures. **A
 `.refused` file in your box is that record.** Read it before trusting anything in it, and
 remove it once it is explained.
+
+**A message is held once.** A broker restarted between writing the box and clearing its
+intake can hand the same message off again. Ingest drops a copy whose id the store already
+holds, removes it from the box, and records the drop in the held message's own sidecar,
+under `duplicates_dropped` (MIS-0004 R16). Ids are minted by the broker that accepts a
+message, so a repeated id is a repeated hand-off, never a second message.
 
 **Why this is a policy statement and not an implementation note.** The obvious
 design has the broker write each recipient's mailbox directly. That requires a
