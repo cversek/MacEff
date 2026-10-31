@@ -266,13 +266,41 @@ def ingest(home: Path, pickup_box: Path, contacts_path: Optional[Path] = None,
     try:
         # The box belongs to the broker's account (MIS-0004 R13), so its owner is whose files count.
         broker_uid = os.fstat(box_fd).st_uid
-        for amsg in sorted(pickup_box.glob("*.amsg")):
-            results.append(_ingest_bundle(home, amsg, contacts_path, agent, box_fd, broker_uid))
+        bundles = sorted(pickup_box.glob("*.amsg"))
+        held = _held_bundle_ids(home) if bundles else {}
+        for amsg in bundles:
+            results.append(_ingest_bundle(home, amsg, contacts_path, agent, box_fd, broker_uid, held))
         for eml in sorted(pickup_box.glob("*.eml")):
             results.append(_ingest_eml(home, eml, box_fd, broker_uid))
     finally:
         os.close(box_fd)
     return results
+
+
+def _held_bundle_ids(home: Path) -> Dict[str, Path]:
+    """The agent messages this store already holds, by message id, from the sidecar ingest wrote
+    beside each one. Read once per ingest pass, and only when the box has bundles waiting."""
+    from . import store
+    held: Dict[str, Path] = {}
+    for p in store.bundle_sidecars_for(home).glob("*.json"):
+        try:
+            mid = json.loads(p.read_text()).get("message_id")
+        except (OSError, ValueError):
+            continue  # noqa: MACEFF003 - an unreadable sidecar names no id; read_bundle_sidecar reports it
+        if mid:
+            held[mid] = p
+    return held
+
+
+def _record_dropped_duplicate(sidecar: Path, name: str) -> None:
+    """Note a dropped copy in the held message's own sidecar: the drop's durable record (R16)."""
+    try:
+        meta = json.loads(sidecar.read_text())
+        meta.setdefault("duplicates_dropped", []).append({"entry": name, "dropped_at": _now_iso()})
+        sidecar.write_text(json.dumps(meta, indent=1))
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: dropped duplicate {name} but could not record it in {sidecar.name}: {e}",
+              file=sys.stderr)
 
 
 class BoxEntryRefused(Exception):
@@ -364,7 +392,7 @@ def _ingest_eml(home: Path, eml: Path, box_fd: int, broker_uid: int) -> dict:
 
 
 def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str, box_fd: int,
-                   broker_uid: int) -> dict:
+                   broker_uid: int, held: Optional[Dict[str, Path]] = None) -> dict:
     """Custody transfer for an agent message, including the signature verdict.
 
     VERIFICATION HAPPENS HERE, not at read time, for three reasons the battery
@@ -412,6 +440,19 @@ def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str, box_fd: in
         entry.update(ingested=False, reason=f"undeserializable message: {e}")
         return entry
 
+    # MIS-0004 R16: a message id this store already holds is a repeated hand-off (a broker
+    # restarted between writing the box and clearing its intake). Drop the copy and record it.
+    held = {} if held is None else held
+    if message.message_id in held:
+        _record_dropped_duplicate(held[message.message_id], amsg.name)
+        e = _remove_pair(box_fd, [amsg.name, sidecar.name])
+        reason = f"{message.message_id} is already held; the copy was dropped and recorded"
+        if e is not None:
+            reason += f", but not removable from the box ({e})"
+        print(f"⚠️ MACF: pickup entry {amsg.name}: {reason}", file=sys.stderr)
+        entry.update(ingested=False, duplicate=True, reason=reason)
+        return entry
+
     verdict = _verify_at_ingest(message, contacts_path, agent)
     message.trust = verdict["trust"]
     meta["ingest_verification"] = verdict
@@ -425,7 +466,7 @@ def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str, box_fd: in
         meta["ingest_verification"]["disagrees_with_broker"] = broker_trust
 
     delivered = store.deliver(home, message)
-    store.write_bundle_sidecar(home, delivered.name, json.dumps(meta, indent=1))
+    held[message.message_id] = store.write_bundle_sidecar(home, delivered.name, json.dumps(meta, indent=1))
     e = _remove_pair(box_fd, [amsg.name, sidecar.name])
     if e is not None:
         print(f"⚠️ MACF: pickup entry {amsg.name} ingested but not removable "
