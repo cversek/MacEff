@@ -20,7 +20,7 @@ A system daemon is one process per system, run by root. It starts each of its un
 
 MIS-0004 depends on it directly, because its mail broker is a system-daemon unit. The operator proposed the system daemon on #850, MIS-0004's deliberation, and on 2026-10-28 moved that its requirements be documented in a separate draft. That way mail and the system daemon can be developed in parallel without breaking the basis for reconciling them (#850, comment 6477160351). The same motion named the head maintainer Secretary of this draft. The requirements below are gathered from the positions on #850. This MIS concerns the operator, who installs and declares the system daemon, and every agent on a system that has one.
 
-**This draft is a working specification for two prototypes.** The container-management maintainer prototypes it in a Linux multi-seat container, where it can parent the seats' primal daemons. The host-side maintainer prototypes on macOS the one relationship a container can't test: watching a unit that the system daemon can't parent. Section 12 assigns each requirement to one of them.
+**This revision carries what the two prototypes found.** The container-management maintainer ran a root process under tini in a disposable container, parenting stand-in units on synthetic accounts (#850, comment 6510997994). The host-side maintainer ran the system daemon under launchd on macOS with the operator at the keyboard, then removed it (6515533280, 6538604020). The largest change is how a unit is stopped: root can't find a unit's processes by a marker in their environment, and launchd doesn't stop what a job started, so a stop now goes through the unit's own account and is verified (R05, R23, R24). Section 12 records what each prototype showed and left untested.
 
 ## 2 Motivation
 
@@ -55,16 +55,12 @@ To place a new unit, ask three questions:
 
 The usage reading is an example. It holds a person's credential and serves every agent on that person's login. So it runs once per login, as that login. On macOS it is a LaunchAgent the system daemon watches. Each agent given a login of its own needs its own client credential, which multiplies those readers, so one reader serving other logins through the system daemon's feed keeps the account-wide reading to one (#850, 6481387490).
 
-**The system declaration's format** is #856 (draft), which both prototypes import and which freezes once each has run a unit against it. A declaration has `version`, `system`, one `time_zone`, `stop_timeout_s` and its `units`. Each unit has:
-- `name`, `account` and `relationship` (parent or watch);
-- `command`, required for a parented unit;
-- `environment` in full, and an `identity_probe` for R12;
-- `restart` and `exit_codes`;
-- `stop_grace_s`, `liveness_interval_s` and `memory_limit_mb`;
-- up to 16 `groups`, and `after` for the start order;
-- a `platform`: `linux`, with `stop` set to `cgroup` or `subreaper`, or `launchd`, with a `domain` and a `label`.
+**The system declaration's format** is #856, which both prototypes import; this summary follows it at 9059a177. A declaration describes one system, so its units share one platform. It has `version`, `system`, one `time_zone`, `stop_timeout_s` and its `units`. Each unit has:
+- `name`, `account` and `relationship` (parent or watch), plus `liveness_interval_s`, `after` for the start order, and an `identity_probe` for R12;
+- a `platform`: `linux`, with `stop` set to `cgroup` or `subreaper`, or `launchd`, with a `domain` (`system`, or a login's `gui` or `user`) and a `label` unique within its domain;
+- on a parented unit only: `command`, `environment` in full, `restart`, `exit_codes`, `stop_grace_s`, a required `memory_limit_mb`, and up to 16 `groups`.
 
-The system daemon sets `TZ` and the unit's marker itself, and a unit can't declare them. A parented unit's exit code is read through the exit table:
+A watched unit carries none of the parented-only keys, since the system daemon neither starts nor stops it, and a parented launchd unit lives in the system domain. On launchd, `groups` names memberships the account already holds, which the loader verifies, because launchd takes a job's groups from the directory. The system daemon sets `TZ` and the unit's marker itself, and a unit can't declare them. A parented unit's exit code is read through the exit table:
 
 | A parented unit exits with | `restart: always` | `on-failure` | `never` |
 |---|---|---|---|
@@ -90,7 +86,8 @@ These are the terms the Specification uses beyond the glossary.
 - **feed**: data the system daemon publishes for primal daemons and hooks to read and weigh.
 - **outer manager**: the service manager that starts the system daemon: launchd, systemd, or a container's runtime.
 - **stop timeout**: the outer manager's limit on stopping the whole system daemon, such as a container's `docker stop -t` or launchd's `ExitTimeOut`.
-- **marker**: the environment value `MACEFF_SD_UNIT`, which the system daemon sets in each unit so that it can find the unit's detached workers where no control group is delegated.
+- **marker**: the environment value `MACEFF_SD_UNIT`, which the system daemon sets in each unit: the unit's own name for its processes, and for its identity probe. It is not how root finds a unit's processes, since root without `CAP_SYS_PTRACE` can't read another account's environment.
+- **unit supervisor**: a process the root process forks for one unit, which runs as the unit's account, starts the unit, and ends every process the unit leaves behind.
 - **exit table**: how a unit's exit code is read: a code meaning success, a code meaning do not restart, or any other code, a failure.
 
 ## 6 Specification
@@ -103,7 +100,10 @@ The Secretary gathered these preliminary requirements from the positions on #850
 - **R02** [MUST · decidable: macf/tests/test_sd_root.py::test_root_only_supervises] The root process MUST only start declared units as their accounts, stop them, and reap or read their exits, and run no feature code. (root_MUST_only_supervise)
 - **R03** [MUST · decidable: macf/tests/test_sd_root.py::test_declaration_parsed_unprivileged] The system daemon MUST parse its system declaration in a process without root, and import nothing from any unit's tree. (declaration_MUST_be_parsed_unprivileged)
 - **R04** [MUST · decidable: macf/tests/test_sd_root.py::test_unit_files_by_descriptor] When root touches a unit's file, it MUST open it by descriptor without following links, check the owner on that descriptor, and act relative to it. (root_MUST_act_by_descriptor)
-- **R05** [MUST · decidable: macf/tests/test_sd_root.py::test_stop_reaches_whole_unit] When the system daemon stops a unit, it MUST end the unit's control group where delegated, its launchd job on macOS, and otherwise each process carrying the unit's marker. (stop_MUST_reach_the_whole_unit)
+- **R05** [MUST · decidable: macf/tests/test_sd_root.py::test_stop_reaches_whole_unit] When the system daemon stops a unit, it MUST end every process the unit started, then verify that none remains. (stop_MUST_reach_the_whole_unit)
+- **R23** [MUST · decidable: macf/tests/test_sd_root.py::test_subreaper_supervisor_ends_detached] On Linux without a delegated control group, a unit supervisor running as the unit's account MUST be the subreaper of the unit's tree, and end it. (linux_stop_MUST_use_unit_supervisor)
+- **R24** [MUST · decidable: macf/tests/test_sd_platform.py::test_stop_sweeps_unit_account] On macOS, stopping a unit MUST boot out its job, then send TERM, wait its grace, and KILL every remaining process of the unit's account. (macos_stop_MUST_sweep_unit_account)
+- **R25** [MUST · decidable: macf/tests/test_sd_declaration.py::test_parented_launchd_accounts_unique] On macOS, each parented unit MUST run as an account that no other unit uses. (macos_parented_unit_MUST_have_own_account)
 - **R06** [MUST · decidable: macf/tests/test_sd_root.py::test_declaration_root_written] The system daemon MUST refuse a system declaration that any account other than root can write. (declaration_MUST_be_root_written)
 - **R07** [MUST · decidable: macf/tests/test_sd_socket.py::test_status_only] The system daemon's socket MUST answer status only, and accept no instruction from any agent. (socket_MUST_answer_status_only)
 
@@ -130,6 +130,7 @@ The Secretary gathered these preliminary requirements from the positions on #850
 
 - **R19** [MUST · decidable: macf/tests/test_sd_platform.py::test_reload_waits_for_bootout] On macOS, a reload MUST wait until launchd reports the booted-out job gone before it bootstraps the job again. (reload_MUST_wait_for_bootout)
 - **R20** [MUST · decidable: macf/tests/test_sd_declaration.py::test_the_longest_stop_chain_must_fit_inside_the_stop_timeout] The longest chain of unit stop graces, in reverse start order, MUST fit inside the stop timeout the system declaration states. (container_stop_timeout_MUST_exceed_unit_grace)
+- **R26** [MUST · decidable: macf/tests/test_sd_platform.py::test_outer_stop_timeout_matches_declaration] Before the system daemon starts, the install or start step MUST set the outer manager's stop timeout from the declaration, or refuse to start where they differ. (outer_stop_timeout_MUST_match_declaration)
 
 ## 7 Rationale and Rejected Alternatives
 
@@ -138,9 +139,12 @@ Each requirement's reason, with its source on #850.
 - **R02**: a thread of a root process runs with root's privilege, so feature code can't live there (the container-management maintainer, 6475537319). On Linux the root process forks, changes account, executes and reaps. On macOS launchd is every job's parent, so its verbs there are rendering a unit's plist by descriptor (R04), `bootstrap`, `bootout`, `kickstart`, and reading a job's state (6481387490). Seat M asked that root's job be a closed list, and the container-management maintainer asked that the list go into this MIS verbatim (6476229281, 6476259000). Units that share one account and one trust context can still share a process as threads, as long as that process isn't root's (6472809029, 6475537319). That keeps the operator's performance option.
 - **R03**: a root-run step once imported from an environment that a service account could rewrite, which made that account's code run as root (Seat M, 6476229281).
 - **R04**: a root delete once checked ownership by name, then acted by name, and a symlink swapped in between the two redirected it. The rule ("check the ancestors") was followed both times; what was missing was binding the check to the act (Seat M, 6476229281).
-- **R05**: a process-group kill misses whatever detached (Seat M). In both multi-seat containers the cgroup2 hierarchy is mounted read-only and the container is unprivileged, so there the system daemon makes itself a child subreaper, collects a unit's detached workers, and finds them by the marker in their environment (6479561476). macOS has no control groups, and each unit is its own launchd job (6476909402). On either, a unit that scrubs the marker or detaches outside its job must end its own workers, the limit persistent_layer already states for primal-daemon units.
+- **R05**: a process-group kill misses whatever detached (Seat M). The previous revision had root find a unit's detached workers by the marker in their environment. The container prototype showed that can't work: Docker's default capabilities leave root without `CAP_SYS_PTRACE`, so reading another account's `/proc/<pid>/environ` failed for root while the unit's own account read it, and every marker sweep came back empty while two detached workers survived (6510997994). launchd fared no better: `launchctl bootout` returned success, but a child that started its own session and ignored TERM and HUP kept running, re-parented to launchd, and a plain TERM sweep missed it too (6538604020). So R05 now states the outcome, and R23 and R24 how each platform reaches it. Where a control group is delegated, ending it is still the stop. The container-management maintainer proposed this as one sentence (6510997994); the Secretary split it into R05, R23 and R24 for the language standard, and added R24 from the macOS report.
+- **R23**: the root process forks a unit supervisor, which becomes the unit's account and sets itself as the subreaper of the unit's tree (`PR_SET_CHILD_SUBREAPER` needs no capability). Every process the unit leaves behind is reparented to it, whatever session it moved to, whatever signals it ignores and whatever environment it cleared. It finds them through `/proc/<pid>/stat`, which anyone can read, sends TERM, and kills what is left after the unit's grace. In the prototype nothing was left. It also keeps root narrower: root signals one supervisor and reads its exit, and never inspects a unit's processes. Granting `CAP_SYS_PTRACE` so root could read markers would let it read and trace every process in the container, against R02 (6510997994).
+- **R24**: macOS has no subreaper, so the unit's account is the boundary of the sweep: TERM, a grace period, KILL across the account, then verify (6538604020). The host-side maintainer had asked whether a per-unit supervisor would be needed on macOS as well (6515533280); the sweep across the account answers the same need.
+- **R25**: a sweep across an account ends everything that account runs, so on macOS the account has to belong to the one unit. The host-side maintainer drew this consequence ("one more reason for one account per unit: the account is the sweep's boundary", 6538604020).
 - **R06**: the declaration is what keeps a unit's account and command out of an agent's reach (persistent_layer 10.1). On macOS that is a system-domain plist only root can write (6468749316).
-- **R07**: this is the system-level form of MIS-0002-R78 (layer_MUST-NOT_widen_permissions). An agent reads the system daemon's state but never steers it (6472809029).
+- **R07**: this is the system-level form of MIS-0002-R78 (layer_MUST-NOT_widen_permissions). An agent reads the system daemon's state but never steers it (6472809029). Both prototypes held it: a seat's account sending `stop broker` got status, and the broker kept running (6510997994); on macOS every verb from another account got "status, verb ignored" (6538604020). The socket lives in the runtime directory, not beside the root-owned declaration, where the first macOS install put it and the unit couldn't bind it (6538604020).
 - **R08**: same reason as R02 (6475537319).
 - **R09**: whose secret a unit holds decides its account, and how many agents it serves decides its supervisor (6475537319). Asked as one question, the usage reading had no home (6476909402).
 - **R10**: on macOS, privacy grants attach to the responsible process and the login session (persistent_layer 3.1, 3.2), so a primal daemon stays a LaunchAgent (6472809029, 6475350267). launchd holds a job's exit status for any watcher, so on macOS watching versus parenting comes down to who may start and stop the unit, not who can read its status (6481387490). The host-side maintainer found that a GUI-domain LaunchAgent and its descendants can read the login keychain (6476909402). Whether a system-domain job with `UserName` can read it is untested (Q02).
@@ -153,9 +157,10 @@ Each requirement's reason, with its source on #850.
 - **R17**: a fleet server, if it comes, aggregates the system daemons' reports, and each hop carries data the reader weighs (the host-side maintainer, 6475350267). Mode changes still come from the operator directly, as `public_voice` 2.5 says of relayed words.
 - **R18**: a watch that runs inside the thing it watches dies with it. Once the system daemon hosts the broker and the model, its failure takes them all down at once (6475537319). This extends MIS-0002-R74 (pd_MUST_have_outside_watch) to the new locus.
 - **R19**: `launchctl bootout` returns before the job has exited, so a bootstrap straight after it fails with error 5 (#841, 6468749316).
-- **R20**: docker's default stop timeout is 10 s, shorter than a session unit's 30 s stop grace (persistent_layer 6.2), so `docker stop` kills units mid-grace, and does so today (6479561476). Units stop in reverse start order, so the graces add along each chain. #856 checks this at load.
+- **R20**: docker's default stop timeout is 10 s, shorter than a session unit's 30 s stop grace (persistent_layer 6.2), so `docker stop` kills units mid-grace, and does so today (6479561476). Units stop in reverse start order, so the graces add along each chain. #856 checks this at load, and a watched unit adds no grace but still orders the units on either side. The container prototype measured it: with a 60 s stop timeout the ordered stop took 25.3 s, both seats together and then the broker (6510997994). Whether launchd keeps any order among system-domain jobs at shutdown is untested (6496466005, 6538604020).
+- **R26**: the system daemon can't see the outer manager's stop timeout from inside a container. With 10 s set outside, the prototype's seat was killed 10 s into its 25 s stop although the declaration said 60 (6510997994). On macOS, launchd's per-job `ExitTimeOut` plays the same part (6515533280).
 - **R21**: a parented primal daemon that asked through the socket would be instructing the system daemon, which R07 forbids, so its exit status is its one channel up (6479561476). The exit table is the primal daemon's own, read the way its core reads it (#856).
-- **R22**: loading a pf or iptables rule needs root, which R02 keeps from the root process. So the operator's install step loads it and makes it survive a reboot, as a container's start step does today, and the status says whether it is in force (6481387490, 6481618179).
+- **R22**: loading a pf or iptables rule needs root, which R02 keeps from the root process. So the operator's install step loads it and makes it survive a reboot, as a container's start step does today, and the status says whether it is in force (6481387490, 6481618179). Reading whether it is in force needs privilege too, and Q05 asks who reads it. On macOS the rule held as an anchor under `com.apple/*`, with no edit to pf.conf (6538604020); the container image had no `iptables`, so it is untested there (6510997994).
 
 **Rejected**
 - **Units as threads of the root process.** A thread there runs as root (6475537319).
@@ -177,6 +182,7 @@ Each requirement's reason, with its source on #850.
 
 - **No flag day.** A system without a system daemon keeps working as it does today. Each unit moves under it one system at a time.
 - **Order.** The container first, where the start step becomes the system daemon kept running. A macOS spike of the watch relationship runs in parallel, before the interfaces freeze (6476909402). The Linux host follows the container.
+- **Accounts have a footprint on macOS.** A service account with no login session still got a per-user set of launchd services, which outlived the account's deletion until its user domain was booted out. Creating and retiring a unit's account manages that domain (6538604020).
 - **Installing it is the operator's act.** It runs as root, so its installation is never the layer's own act (MIS-0002-R78 (layer_MUST-NOT_widen_permissions)). In a container, the start step is the install step: it runs once as root, creates the accounts and the boxes, loads the egress rule, and then hands over to the system daemon (6481618179).
 
 ## 10 Security and Safety
@@ -209,6 +215,10 @@ The root process is the one privileged piece of the system daemon, and R02 to R0
 | R20 | decidable | `macf/tests/test_sd_declaration.py::test_the_longest_stop_chain_must_fit_inside_the_stop_timeout`, in #856 | planned |
 | R21 | decidable | `macf/tests/test_sd_units.py::test_parented_pd_speaks_by_exit_status` | planned |
 | R22 | decidable | `macf/tests/test_sd_socket.py::test_status_reports_egress_rule` | planned |
+| R23 | decidable | `macf/tests/test_sd_root.py::test_subreaper_supervisor_ends_detached` | planned |
+| R24 | decidable | `macf/tests/test_sd_platform.py::test_stop_sweeps_unit_account` | planned |
+| R25 | decidable | `macf/tests/test_sd_declaration.py::test_parented_launchd_accounts_unique` | planned |
+| R26 | decidable | `macf/tests/test_sd_platform.py::test_outer_stop_timeout_matches_declaration` | planned |
 
 **Cold-reader trial**: not yet held.
 
@@ -218,13 +228,13 @@ The root process is the one privileged piece of the system daemon, and R02 to R0
 
 ### 12.1 The prototypes
 
-The operator's motion on #850 (comment 6477160351) treats this draft as the working specification for two prototypes.
+The operator's motion on #850 (comment 6477160351) made the previous revision the working specification for two prototypes. What each showed, so the passes aren't read wider than they are:
 
-| Prototype | Who | Requirements | What it should show |
-|---|---|---|---|
-| Linux container | the container-management maintainer | R01 to R09, R11 to R18, R20 to R22 | The start step kept running as the system daemon. Each seat's primal daemon parented, with its exit status read. The root process held to R02's list, stopping by control group. |
-| macOS host | the host-side maintainer | R01, R02 (launchd's verbs), R05 (a launchd job per unit), R06, R07, R10, R12, R19, R20 (launchd's `ExitTimeOut`), R22 | A system-domain job with `UserName` starting a unit as a service account. Watching a LaunchAgent the daemon can't parent, with the per-login usage reading as its first unit (#853's reader). An answer to Q02. |
-| Withheld | after the prototypes | the Linux host form of each requirement; a fleet layer (Q04) | The order puts the Linux host after the container, and the fleet layer is deferred. |
+| | Linux container (6510997994) | macOS host (6515533280, 6538604020) |
+|---|---|---|
+| Held as drafted | R03 (the parser ran as `nobody`); R04 and R06 (an account's, a 664, a symlinked and a hard-linked declaration refused, the root-owned one loaded); R08 (nothing of a unit's ran as root); R12 and R13 (exactly the declared environment, `TZ` and the marker); the exit table; R07 | R07 (every other account's verb ignored); R22's rule loaded and enforced, as MIS-0004's R33 |
+| Changed by the results | R05 (the marker sweep found nothing): R23; R20 measured, and R26 | R05 (`bootout` left a detached child): R24 and R25; account footprint in section 9 |
+| Not exercised | R11 and R21 with a real primal daemon parented; R14, R15, R16; R22 (no `iptables`); per-unit logs; liveness and memory limits | Q01 and Q02; R11's watched exit status; launchd's shutdown order for R20 |
 
 ### 12.2 After the prototypes
 
@@ -236,15 +246,21 @@ The prototypes' results make this draft's next revision. MIS-0004's requirements
 - **Q02** Can a system-domain job with `UserName` read the login keychain? Untested. A GUI-domain LaunchAgent and its descendants can. The host prototype tests it with the usage reading. (system_job_reads_login_keychain)
 - **Q03** Who installs and updates the system daemon, and how does an update avoid restarting every unit? (system_daemon_update_path)
 - **Q04** Does a fleet layer that reads several systems' reports belong in this MIS or a later one? Deferred. (fleet_layer_placement)
+- **Q05** Who reads whether the egress rule is loaded, for R22? Reading it needs `CAP_NET_ADMIN`, which R02's list doesn't include. The container-management maintainer gave two options: "Either R02 adds "read the egress rule's state", or a unit holding only that capability reads it and status reports the unit's answer" (6510997994). Open. (egress_rule_read_by_whom)
 
 ## 14 Deliberation Record
 
-None yet. The operator opened this draft by motion on #850 (comment 6477160351) and named the head maintainer its Secretary. Whether it gets a deliberation of its own is the operator's decision on its pull request (MIS-0001-R22 (operator_MUST_convene_or_explain)). Its requirements come from MIS-0004's deliberation, #850, and section 7 names the comment behind each one.
+None yet. The operator opened this draft by motion on #850 (comment 6477160351) and named the head maintainer its Secretary. Whether it gets a deliberation of its own is the operator's decision on its pull request (MIS-0001-R22 (operator_MUST_convene_or_explain)). Its requirements come from MIS-0004's deliberation, #850, and from the two prototypes' reports there; section 7 names the comment behind each one.
 
 ## 15 Revision History
 
 - 2026-10-28: first draft, written by the Secretary at the operator's motion and addendum on #850 (comment 6477160351), from the positions there. Its number, 0007, is provisional until the Secretary confirms it before the draft leaves Draft.
 - 2026-10-29: the corrections the authors of MIS-0004 agreed on #850 for the system daemon (6479561476, 6481387490, 6481618179), folded in by the Secretary. R02 states root's verbs per platform. R05 gains the container's subreaper and marker. R11 is scoped to containers, and R16 to the units under an agent's primal daemon. R20 to R22 are new: the stop budget #856 checks, a parented primal daemon speaking only by its exit status, and the status reporting the egress rule. The Guide gains the schema (#856) and its exit table, and Q01 a likely answer.
+- 2026-10-31: the prototypes' results, folded in by the Secretary at the operator's direction (6510997994, 6515533280, 6538604020, with 6496466005).
+  - R05 states the outcome, a stop that ends every process of the unit and verifies it. R23 (Linux: a unit supervisor as the unit's account and subreaper) and R24 and R25 (macOS: boot out, then TERM, grace and KILL across the unit's own account) say how. The marker is the unit's own name, not root's way to find its processes, and "unit supervisor" is a new term.
+  - R26 is new: the outer manager's stop timeout is set from the declaration, or the start refuses.
+  - Q05 is new: who reads whether the egress rule is loaded.
+  - The Guide follows #856 at 9059a177, section 9 gains the account footprint on macOS, and section 12.1 records what each prototype showed and left untested.
 
 ## Wiki-Links
 
