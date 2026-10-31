@@ -11,8 +11,11 @@ having no authority.
 """
 from __future__ import annotations
 
+import errno
 import json
+import os
 import socket
+import stat
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -259,43 +262,109 @@ def ingest(home: Path, pickup_box: Path, contacts_path: Optional[Path] = None,
     results = []
     if not pickup_box.is_dir():
         return results
-    for amsg in sorted(pickup_box.glob("*.amsg")):
-        results.append(_ingest_bundle(home, amsg, contacts_path, agent))
-    for eml in sorted(pickup_box.glob("*.eml")):
-        sidecar = eml.with_suffix(".json")
-        entry = {"name": eml.name}
-        try:
-            raw = eml.read_bytes()
-            meta = json.loads(sidecar.read_text())
-        except (OSError, json.JSONDecodeError) as e:
-            entry.update(ingested=False, reason=f"unreadable pair: {e}")
-            results.append(entry)
-            continue
-        actual = hashlib.sha256(raw).hexdigest()
-        if meta.get("raw_sha256") != actual:
-            entry.update(ingested=False,
-                         reason=f"hash mismatch (sidecar {str(meta.get('raw_sha256'))[:12]}, "
-                                f"bytes {actual[:12]}); left in box")
-            results.append(entry)
-            continue
-        delivered = store.deliver_raw(home, raw, json.dumps(meta, indent=1))
-        try:
-            eml.unlink()
-            sidecar.unlink()
-        except OSError as e:
-            # Ingested but not removed: the copy exists and a duplicate
-            # ingest is prevented next round by... nothing yet — so say it
-            # loudly instead of pretending.
-            print(f"⚠️ MACF: pickup entry {eml.name} ingested but not "
-                  f"removable ({e}); it will re-ingest as a duplicate next "
-                  f"round unless removed", file=sys.stderr)
-        entry.update(ingested=True, path=str(delivered), sha256=actual)
-        results.append(entry)
+    box_fd = os.open(pickup_box, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        # The box belongs to the broker's account (MIS-0004 R13), so its owner is whose files count.
+        broker_uid = os.fstat(box_fd).st_uid
+        for amsg in sorted(pickup_box.glob("*.amsg")):
+            results.append(_ingest_bundle(home, amsg, contacts_path, agent, box_fd, broker_uid))
+        for eml in sorted(pickup_box.glob("*.eml")):
+            results.append(_ingest_eml(home, eml, box_fd, broker_uid))
+    finally:
+        os.close(box_fd)
     return results
 
 
+class BoxEntryRefused(Exception):
+    """A pickup-box entry the broker didn't write (MIS-0004 R37)."""
 
-def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str) -> dict:
+
+def _read_box_file(box_fd: int, name: str, broker_uid: int) -> bytes:
+    """Read one pickup-box file only if it is a regular file the broker's account owns, with one
+    link, all checked on the descriptor actually opened (MIS-0004 R37).
+
+    The recipient's group may remove files from its box, so it may create them there too: a name
+    in the box proves nothing about who wrote it. A symlink isn't followed, and a hard link fails
+    the link count; on macOS nothing else stops one.
+    """
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=box_fd)
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise BoxEntryRefused(f"{name} is a symbolic link") from None
+        raise
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise BoxEntryRefused(f"{name} is not a regular file")
+        if st.st_uid != broker_uid:
+            raise BoxEntryRefused(f"{name} is owned by uid {st.st_uid}, not the broker's ({broker_uid})")
+        if st.st_nlink != 1:
+            raise BoxEntryRefused(f"{name} has {st.st_nlink} links")
+        return b"".join(iter(lambda: os.read(fd, 1 << 16), b""))
+    finally:
+        os.close(fd)
+
+
+def _set_aside(box_fd: int, names, reason: str) -> None:
+    """Rename a refused pair out of the box's globs, so it is reported once and kept as evidence."""
+    for name in names:
+        try:
+            os.rename(name, name + ".refused", src_dir_fd=box_fd, dst_dir_fd=box_fd)
+        except FileNotFoundError:
+            continue
+    print(f"⚠️ MACF: pickup entry {names[0]} refused and set aside as .refused: {reason}", file=sys.stderr)
+
+
+def _remove_pair(box_fd: int, names) -> Optional[OSError]:
+    """Remove an ingested pair by name relative to the box's descriptor; the error, if any."""
+    try:
+        for name in names:
+            os.unlink(name, dir_fd=box_fd)
+    except OSError as e:
+        return e
+    return None
+
+
+def _ingest_eml(home: Path, eml: Path, box_fd: int, broker_uid: int) -> dict:
+    """Custody transfer for one internet message waiting in the pickup box."""
+    import hashlib
+    from . import store
+
+    sidecar = eml.with_suffix(".json")
+    entry = {"name": eml.name}
+    try:
+        raw = _read_box_file(box_fd, eml.name, broker_uid)
+        meta = json.loads(_read_box_file(box_fd, sidecar.name, broker_uid))
+    except BoxEntryRefused as e:
+        _set_aside(box_fd, [eml.name, sidecar.name], str(e))
+        entry.update(ingested=False, refused=True, reason=str(e))
+        return entry
+    except (OSError, json.JSONDecodeError) as e:
+        entry.update(ingested=False, reason=f"unreadable pair: {e}")
+        return entry
+    actual = hashlib.sha256(raw).hexdigest()
+    if meta.get("raw_sha256") != actual:
+        entry.update(ingested=False,
+                     reason=f"hash mismatch (sidecar {str(meta.get('raw_sha256'))[:12]}, "
+                            f"bytes {actual[:12]}); left in box")
+        return entry
+    delivered = store.deliver_raw(home, raw, json.dumps(meta, indent=1))
+    e = _remove_pair(box_fd, [eml.name, sidecar.name])
+    if e is not None:
+        # Ingested but not removed: the copy exists and a duplicate
+        # ingest is prevented next round by... nothing yet — so say it
+        # loudly instead of pretending.
+        print(f"⚠️ MACF: pickup entry {eml.name} ingested but not "
+              f"removable ({e}); it will re-ingest as a duplicate next "
+              f"round unless removed", file=sys.stderr)
+    entry.update(ingested=True, path=str(delivered), sha256=actual)
+    return entry
+
+
+
+def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str, box_fd: int,
+                   broker_uid: int) -> dict:
     """Custody transfer for an agent message, including the signature verdict.
 
     VERIFICATION HAPPENS HERE, not at read time, for three reasons the battery
@@ -322,8 +391,12 @@ def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str) -> dict:
     sidecar = amsg.with_suffix(".json")
     entry = {"name": amsg.name, "kind": "bundle"}
     try:
-        payload = amsg.read_bytes()
-        meta = json.loads(sidecar.read_text())
+        payload = _read_box_file(box_fd, amsg.name, broker_uid)
+        meta = json.loads(_read_box_file(box_fd, sidecar.name, broker_uid))
+    except BoxEntryRefused as e:
+        _set_aside(box_fd, [amsg.name, sidecar.name], str(e))
+        entry.update(ingested=False, refused=True, reason=str(e))
+        return entry
     except (OSError, json.JSONDecodeError) as e:
         entry.update(ingested=False, reason=f"unreadable pair: {e}")
         return entry
@@ -353,10 +426,8 @@ def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str) -> dict:
 
     delivered = store.deliver(home, message)
     store.write_bundle_sidecar(home, delivered.name, json.dumps(meta, indent=1))
-    try:
-        amsg.unlink()
-        sidecar.unlink()
-    except OSError as e:
+    e = _remove_pair(box_fd, [amsg.name, sidecar.name])
+    if e is not None:
         print(f"⚠️ MACF: pickup entry {amsg.name} ingested but not removable "
               f"({e}); it will re-ingest as a duplicate next round unless "
               f"removed", file=sys.stderr)
