@@ -9292,23 +9292,32 @@ def _gh_issue_closeout(task_id: int, mtmd, args, breadcrumb: str) -> None:
         print("   ⚠️  gh CLI timed out — skipping issue close")
 
 
-def _find_sprint_log(plan_ca_ref: str):
-    """Return Path to sprint_log.md given plan_ca_ref directory, or None."""
+def _find_run_log(plan_ca_ref: str, name: str):
+    """Return Path to the log ``name`` beside a task's plan_ca_ref, or None.
+
+    ``task create`` stores plan_ca_ref relative to the agent home, so a relative one is read
+    against that home, never the working directory. The CLI often runs from a project
+    directory, where the relative path names nothing, and the close used to skip the log
+    without a word. plan_ca_ref may be a file (sprint_log.md) or a directory.
+    """
     from pathlib import Path
+    from macf.utils.paths import find_agent_home
     p = Path(plan_ca_ref)
-    # plan_ca_ref may be a file (roadmap.md) or a directory
+    if not p.is_absolute():
+        p = find_agent_home() / p
     folder = p if p.is_dir() else p.parent
-    candidate = folder / "sprint_log.md"
+    candidate = folder / name
     return candidate if candidate.exists() else None
+
+
+def _find_sprint_log(plan_ca_ref: str):
+    """Return Path to sprint_log.md given plan_ca_ref, or None."""
+    return _find_run_log(plan_ca_ref, "sprint_log.md")
 
 
 def _find_play_log(plan_ca_ref: str):
-    """Return Path to play_log.md given plan_ca_ref directory, or None."""
-    from pathlib import Path
-    p = Path(plan_ca_ref)
-    folder = p if p.is_dir() else p.parent
-    candidate = folder / "play_log.md"
-    return candidate if candidate.exists() else None
+    """Return Path to play_log.md given plan_ca_ref, or None."""
+    return _find_run_log(plan_ca_ref, "play_log.md")
 
 
 def _write_final_synthesis(log_path, aggregate: str, open_children) -> None:
@@ -9802,6 +9811,10 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         if _plan_ref:
             try:
                 _log_path = _find_sprint_log(_plan_ref)
+                if not _log_path:
+                    import sys as _sys
+                    print(f"⚠️ MACF: no sprint_log.md beside {_plan_ref} under the agent home; "
+                          f"its Final Synthesis was not filled", file=_sys.stderr)
                 if _log_path:
                     _write_final_synthesis(_log_path, _aggregate, _open_children if '_open_children' in dir() else [])
                     _fill_scoped_table(_log_path, reader, _scoped)
@@ -9871,6 +9884,10 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         if _plan_ref:
             try:
                 _log_path = _find_play_log(_plan_ref)
+                if not _log_path:
+                    import sys as _sys
+                    print(f"⚠️ MACF: no play_log.md beside {_plan_ref} under the agent home; "
+                          f"its Final Synthesis was not filled", file=_sys.stderr)
                 if _log_path:
                     _write_final_synthesis(_log_path, _aggregate, [])
             except (OSError, ValueError) as e:
