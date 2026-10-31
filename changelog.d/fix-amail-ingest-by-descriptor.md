@@ -1,0 +1,3 @@
+### Fixed
+
+- **Ingest believes only what the broker wrote** (`amail/client.py`, MIS-0004 R37): the recipient read pickup-box entries by path, so a pair its own account planted in the box, or a symlinked pair, entered its store as mail from another agent, as a container experiment showed. Ingest now opens the box by descriptor and takes an entry only if it is a regular file owned by the box's owner (the broker's account) with a single link, checked on the descriptor it opened. Anything else is refused, renamed `.refused` and reported once. Removal after ingest also goes through the descriptor. Policy `amail` 1.6.0, §2.3.
