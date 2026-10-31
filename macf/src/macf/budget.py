@@ -27,6 +27,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
@@ -43,40 +44,98 @@ SHORT = {"session": "session", "weekly_all": "week"}
 RESET_GRAIN = 300  # seconds: reset times are compared rounded to this; see _reset_key
 RATE_TAU_MIN = 120  # minutes: the burn-rate EWMA's time constant (MACEFF_BUDGET_RATE_TAU_MIN)
 MIN_RATE_SPAN = 1800  # seconds of samples in one window before a rate is shown at all
+BACKOFF_CAP_MIN = 120  # minutes: the longest wait between failed hook refreshes (MACEFF_BUDGET_BACKOFF_CAP_MIN)
 
 
 class BudgetError(Exception):
-    """A budget operation that cannot proceed; the message says what to do instead."""
+    """A budget operation that cannot proceed; the message says what to do instead.
+
+    ``short`` is the reason in a few words, for a hook line. A failed fetch also carries the HTTP ``status`` and the
+    ``retry_after`` the reply asked for, in seconds, so the hooks can wait it out (#852).
+    """
+
+    def __init__(self, message: str, short: Optional[str] = None, status: Optional[int] = None,
+                 retry_after: Optional[float] = None):
+        super().__init__(message)
+        self.short, self.status, self.retry_after = short or message, status, retry_after
 
 
 # ── credential ────────────────────────────────────────────────────────────────
+
+def keychain_accounts() -> list[str]:
+    """The accounts of the Keychain items named KEYCHAIN_SERVICE, most recently written first. Attributes only: no
+    secret is read here.
+
+    There can be more than one. Claude Code names the item's account after the login it runs as, and a session started
+    without USER files its refreshed token under "unknown". The item it was first given is then never written again,
+    and its token expires while it is still the first match for the service name (#852). The newest is the one in use.
+    """
+    try:
+        r = subprocess.run(["security", "dump-keychain"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return []  # noqa: MACEFF003 - no listing: read_token falls back to the first match for the service
+    items, cur = [], {}
+    for line in r.stdout.splitlines() + ["keychain: end"]:
+        if line.startswith("keychain: "):
+            if cur.get("svce") == KEYCHAIN_SERVICE and "acct" in cur:
+                items.append((cur.get("mdat", ""), cur["acct"]))
+            cur = {}
+            continue
+        m = re.search(r'"(acct|svce)"<blob>="(.*)"\s*$', line)
+        if m:
+            cur[m.group(1)] = m.group(2)
+        m = re.search(r'"mdat"<timedate>=\S+\s+"(\d{14}Z)', line)
+        if m:
+            cur["mdat"] = m.group(1)
+    return [acct for _, acct in sorted(items, reverse=True)]
+
 
 def read_token() -> str:
     """The CLI's OAuth access token, for one request. Raises BudgetError when none is reachable."""
     raw = None
     if sys.platform == "darwin":
-        try:
-            r = subprocess.run(["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
-                               capture_output=True, text=True, timeout=10)
-        except (OSError, subprocess.TimeoutExpired) as e:
-            raise BudgetError(f"Keychain read failed ({type(e).__name__}); use `budget sample --manual`")
-        if r.returncode == 0:
-            raw = r.stdout
+        for acct in keychain_accounts() or [None]:
+            try:
+                r = subprocess.run(["security", "find-generic-password", "-s", KEYCHAIN_SERVICE]
+                                   + (["-a", acct] if acct else []) + ["-w"],
+                                   capture_output=True, text=True, timeout=10)
+            except (OSError, subprocess.TimeoutExpired) as e:
+                raise BudgetError(f"Keychain read failed ({type(e).__name__}); use `budget sample --manual`",
+                                  short="credential unreadable")
+            if r.returncode == 0:
+                raw = r.stdout
+                break
     if raw is None and CREDENTIAL_FILE.exists():
         try:
             raw = CREDENTIAL_FILE.read_text()
         except OSError as e:
-            raise BudgetError(f"credential file unreadable ({e.strerror}); use `budget sample --manual`")
+            raise BudgetError(f"credential file unreadable ({e.strerror}); use `budget sample --manual`",
+                              short="credential unreadable")
     if raw is None:
         raise BudgetError("no Claude Code credential reachable (Keychain or ~/.claude/.credentials.json); "
-                          "paste the /usage screen with `budget sample --manual`")
+                          "paste the /usage screen with `budget sample --manual`", short="no credential")
     try:
         tok = (json.loads(raw).get("claudeAiOauth") or {}).get("accessToken")
     except (json.JSONDecodeError, AttributeError):
         tok = None
     if not tok:
-        raise BudgetError("the credential holds no OAuth access token; use `budget sample --manual`")
+        raise BudgetError("the credential holds no OAuth access token; use `budget sample --manual`",
+                          short="no token in the credential")
     return tok
+
+
+def _retry_after_s(value: Optional[str], now: Optional[float] = None) -> Optional[float]:
+    """A Retry-After header in seconds. The header is a number of seconds or an HTTP date; None when absent or
+    unreadable."""
+    if not value:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return float(value)
+    try:
+        return max(0.0, parsedate_to_datetime(value).timestamp() - (now or time.time()))
+    except (TypeError, ValueError):
+        return None  # noqa: MACEFF003 - an unreadable header is no header: the caller falls back to its backoff
 
 
 def fetch_reply(token_source: Optional[Callable[[], str]] = None, timeout: float = 20) -> dict:
@@ -89,9 +148,12 @@ def fetch_reply(token_source: Optional[Callable[[], str]] = None, timeout: float
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.load(r)
     except urllib.error.HTTPError as e:
-        raise BudgetError(f"usage endpoint answered HTTP {e.code}; use `budget sample --manual`")
+        raise BudgetError(f"usage endpoint answered HTTP {e.code}; use `budget sample --manual`",
+                          short=f"endpoint {e.code}", status=e.code,
+                          retry_after=_retry_after_s(e.headers.get("Retry-After") if e.headers else None))
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
-        raise BudgetError(f"usage endpoint unreachable or unreadable ({type(e).__name__}); use `budget sample --manual`")
+        raise BudgetError(f"usage endpoint unreachable or unreadable ({type(e).__name__}); use `budget sample --manual`",
+                          short="endpoint unreachable")
 
 
 # ── the limits list ──────────────────────────────────────────────────────────
@@ -171,11 +233,56 @@ def sample(fresh: bool = False, manual: Optional[str] = None,
         last = next(iter(s for s in reversed(samples(now=now)) if s["source"] == "endpoint"), None)
         if last and not fresh and now - last["t"] < MIN_FETCH_INTERVAL:
             return dict(last, reused=True)
-        lim, source = parse_limits((fetch or fetch_reply)()), "endpoint"
-        if not lim:
-            raise BudgetError("the reply carried no limits list; the endpoint may have changed. Use --manual")
+        try:
+            lim, source = parse_limits((fetch or fetch_reply)()), "endpoint"
+            if not lim:
+                raise BudgetError("the reply carried no limits list; the endpoint may have changed. Use --manual",
+                                  short="reply without limits")
+        except Exception as e:  # noqa: BLE001 - recorded and re-raised, not handled
+            # A failed fetch leaves a record, so the hooks wait from it instead of asking again on every call (#852)
+            append_event("budget_sample_failed", _failure(e))
+            raise
     append_event("budget_sampled", {"source": source, "limits": lim})
     return {"t": now, "source": source, "limits": lim, "reused": False}
+
+
+def _failure(e: Exception) -> dict:
+    """What a failed fetch leaves in the log: a short reason, the HTTP status and the Retry-After seconds. Nothing
+    from the reply and nothing from the credential, as for a sample."""
+    if isinstance(e, BudgetError):
+        return {"reason": e.short, "status": e.status, "retry_after": e.retry_after}
+    return {"reason": type(e).__name__, "status": None, "retry_after": None}
+
+
+def failures_since(t: float, now: Optional[float] = None) -> Iterable[dict]:
+    """The recorded failed fetches after time ``t``, newest first: ``{t, reason, status, retry_after}``."""
+    now = now or time.time()
+    for e in _recent("budget_sample_failed", now):
+        if e["timestamp"] <= t:
+            return
+        yield {"t": e["timestamp"], **e["data"]}
+
+
+def next_autosample(now: Optional[float] = None) -> Optional[float]:
+    """When the hooks may next ask the endpoint; None for an agent with no sample this week, which they never ask for.
+
+    The interval runs from the last attempt, not the last success (#852). Measured from a success it never closed once
+    a fetch failed, so every hook call asked again, and on a busy session that kept the endpoint answering 429 for
+    days. Each failure in a row since the newest sample doubles the wait, up to MACEFF_BUDGET_BACKOFF_CAP_MIN, and a
+    reply that said how long to wait is waited out even past the cap.
+    """
+    now = now or time.time()
+    hist = samples(now=now)
+    if not hist:
+        return None
+    base = 60 * _env_float("MACEFF_BUDGET_AUTOSAMPLE_MIN", 10)
+    fails = list(failures_since(hist[-1]["t"], now))
+    if not fails:
+        return hist[-1]["t"] + base
+    wait = min(60 * _env_float("MACEFF_BUDGET_BACKOFF_CAP_MIN", BACKOFF_CAP_MIN), base * 2 ** min(len(fails) - 1, 16))
+    if fails[0].get("retry_after"):
+        wait = max(wait, float(fails[0]["retry_after"]))
+    return fails[0]["t"] + wait
 
 
 # ── mode ─────────────────────────────────────────────────────────────────────
@@ -301,13 +408,15 @@ def status(now: Optional[float] = None) -> dict:
         # a reading, not a pace: one quiet hour after a busy night once projected zero growth over
         # the 79 hours left, and the number was quoted as if it were the week's outlook.
         pace = r_ewma if r_ewma is not None else r_window
+        open_ = left is not None and left > 0  # False once the window has reset since this sample (#852)
         row = {"label": label(l), "kind": l["kind"], "percent": l["percent"], "resets_at": l["resets_at"],
                "hours_left": round(left, 2) if left is not None else None,
+               "reset_since_sample": left is not None and left <= 0,
                "rate_last_hour": round(r_hour, 2) if r_hour is not None else None,
                "rate_window": round(r_window, 2) if r_window is not None else None,
                "rate_ewma": round(r_ewma, 3) if r_ewma is not None else None,
                "projected_at_reset": (round(min(100.0, l["percent"] + pace * left), 1)
-                                      if pace is not None and left is not None and l["percent"] is not None else None),
+                                      if pace is not None and open_ and l["percent"] is not None else None),
                # the even pace: the rate that lands exactly on 100% at the reset
                "pace_even": (round(max(0.0, 100.0 - l["percent"]) / left, 2)
                              if left and left > 0 and l["percent"] is not None else None)}
@@ -322,14 +431,21 @@ def status(now: Optional[float] = None) -> dict:
     family = model["display"].split(" ")[0].lower() if model["id"] != "unknown" else None
     for r in rows:  # the limits this agent's own work is filling right now
         r["spending"] = r["kind"] != "weekly_scoped" or (family is not None and r["label"].lower().startswith(family))
+    failure = next(iter(failures_since(latest["t"], now)), None)
     return {"sampled_at": latest["t"], "age_min": round((now - latest["t"]) / 60, 1), "source": latest["source"],
-            "model": model, "mode": mode, "limits": rows}
+            "model": model, "mode": mode, "limits": rows, "last_failure": failure, "next_try": next_autosample(now)}
+
+
+def _clock(t: float) -> str:
+    return dt.datetime.fromtimestamp(t).strftime("%H:%M")
 
 
 def format_status(st: dict, brief: bool = False) -> str:
     def one(r: dict) -> str:
         s = f"{r['label']} {r['percent']:g}%"
-        if r["hours_left"] is not None:
+        if r.get("reset_since_sample"):
+            s += f" (window reset {-r['hours_left']:g}h ago, after this sample)"
+        elif r["hours_left"] is not None:
             s += f" ({r['hours_left']:g}h to reset)"
         return s
     if brief:
@@ -340,6 +456,11 @@ def format_status(st: dict, brief: bool = False) -> str:
              f"budget mode: {st['mode']['mode']}" + (f" (target {st['mode']['target']:g}% of {st['mode'].get('scope') or 'week'}"
              f"{' by ' + st['mode']['by'] if st['mode'].get('by') else ' by its reset'})" if st['mode']['mode'] == 'burn' else ""),
              f"latest sample: {st['age_min']:g} min old ({st['source']})"]
+    fail = st.get("last_failure")
+    if fail:
+        lines.append(f"last refresh failed at {_clock(fail['t'])}: {fail.get('reason')}"
+                     + (f"; the hooks ask again after {_clock(st['next_try'])}" if st.get("next_try") else "")
+                     + "; `budget sample --manual` takes the numbers from /usage meanwhile")
     for r in st["limits"]:
         lines.append(f"  {one(r)}" + ("" if r.get("spending", True) else "  (not this model)"))
         bits = []
@@ -432,11 +553,12 @@ def bands() -> list[float]:
 
 
 def maybe_autosample(now: Optional[float] = None) -> Optional[dict]:
-    """Refresh the sample from a hook, at most every MACEFF_BUDGET_AUTOSAMPLE_MIN minutes (default 10), and only for
-    an agent that has sampled in the last week: nothing reads a credential on an installation that never asked to."""
+    """Refresh the sample from a hook, at most every MACEFF_BUDGET_AUTOSAMPLE_MIN minutes (default 10) and later after
+    a failure (``next_autosample``), and only for an agent that has sampled in the last week: nothing reads a
+    credential on an installation that never asked to."""
     now = now or time.time()
-    hist = samples(now=now)
-    if not hist or now - hist[-1]["t"] < 60 * _env_float("MACEFF_BUDGET_AUTOSAMPLE_MIN", 10):
+    due = next_autosample(now)
+    if due is None or now < due:
         return None
     return sample(now=now, fetch=lambda: fetch_reply(timeout=5))  # a hook may not wait 20 s
 
@@ -462,7 +584,7 @@ def prompt_notice(now: Optional[float] = None) -> Optional[str]:
     seen = _last_notices(now)
     out = []
     for r in st["limits"]:
-        if not r.get("spending", True) or r["percent"] is None:
+        if not r.get("spending", True) or r["percent"] is None or r.get("reset_since_sample"):
             continue
         band = max([b for b in bands() if r["percent"] >= b], default=None)
         k = _key(r, "band")
@@ -478,7 +600,13 @@ def prompt_notice(now: Optional[float] = None) -> Optional[str]:
                 out.append(f"burn {r['label']}: needs {r['pace_needed']:+g}%/h" + (f", running {obs:+g}%/h" if obs is not None else ""))
     if not out:
         return None
-    return "💳 budget: " + "; ".join(out) + f" [{st['model']['display']}, {st['mode']['mode']}] (details: macf_tools budget status)"
+    return ("💳 budget: " + "; ".join(out) + f" [{st['model']['display']}, {st['mode']['mode']}{_stale(st)}]"
+            " (details: macf_tools budget status)")
+
+
+def _stale(st: dict) -> str:
+    """A notice computed from a sample over an hour old says so: the refresh may be failing (#852)."""
+    return f", sample {st['age_min'] / 60:.0f}h old" if st["age_min"] >= 60 else ""
 
 
 def wall_warning(now: Optional[float] = None) -> Optional[str]:
@@ -490,21 +618,26 @@ def wall_warning(now: Optional[float] = None) -> Optional[str]:
     st = status(now)
     wall = _env_float("MACEFF_BUDGET_WALL", 90)
     for r in st["limits"]:
-        if r["kind"] != "session" or r["percent"] is None or r["percent"] < wall:
+        if r["kind"] != "session" or r["percent"] is None or r["percent"] < wall or r.get("reset_since_sample"):
             continue
         k = _key(r, "wall")
         if k in _last_notices(now):
             return None
         append_event("budget_notice", {"key": k, "value": r["percent"]})
-        return (f"💳 5-hour window at {r['percent']:g}% (resets in {r['hours_left']:g}h). Work stops at the wall with no "
-                f"recovery hook: write a task note or checkpoint for the work in hand now.")
+        return (f"💳 5-hour window at {r['percent']:g}% (resets in {r['hours_left']:g}h{_stale(st)}). Work stops at the "
+                f"wall with no recovery hook: write a task note or checkpoint for the work in hand now.")
     return None
 
 
 def hook_lines(which: str, now: Optional[float] = None) -> Optional[str]:
-    """Entry point for hooks. A GUARD: budget reporting must never take a hook down."""
+    """Entry point for hooks. Two GUARDS: budget reporting must never take a hook down, and a failed refresh must not
+    take the notices with it (#852). They are computed from the newest sample either way, and say how old it is."""
     try:
         maybe_autosample(now)
+    except Exception as e:
+        # Deliberately broad: a GUARD, not a handler. sample() has already recorded the failure for the backoff.
+        print(f"⚠️ MACF: budget refresh skipped: {type(e).__name__}: {e}", file=sys.stderr)
+    try:
         return prompt_notice(now) if which == "prompt" else wall_warning(now)
     except Exception as e:
         # Deliberately broad: this is a GUARD, not a handler. The hook continues without the budget line.
@@ -520,8 +653,11 @@ def weekly_usage(now: Optional[float] = None) -> Optional[str]:
     ``ewma_rate`` over that window's samples, read back no further than four time constants (eight
     hours by default; older samples weigh under 2%), so a hook pays a few milliseconds and not the
     week's history. The rate is left out until the window's samples span half an hour. A sample
-    more than an hour old says how old it is. None when there is no sample this week, or the newest
-    carries no weekly limit. A GUARD, like hook_lines: the budget must never take a hook down.
+    more than an hour old says how old it is, and, when the refresh has failed since, why and what
+    to run: "38% (57h old: endpoint 429; budget sample --manual)". Once the sample's week has reset,
+    its percentage and rate describe a window that is over, so neither is shown (#852). None when
+    there is no sample this week, or the newest carries no weekly limit. A GUARD, like hook_lines:
+    the budget must never take a hook down.
     """
     try:
         now = now or time.time()
@@ -538,11 +674,23 @@ def weekly_usage(now: Optional[float] = None) -> Optional[str]:
         if not points:
             return None  # noqa: MACEFF003 - no sample this week is the answer, not a failure to get one
         t_new, pct, key = points[0]
+        age_h = (now - t_new) / 3600
+        age = None
+        if age_h >= 1:
+            age = f"{age_h:.0f}h old"
+            fail = next(iter(failures_since(t_new, now)), None)
+            if fail:
+                age += f": {fail.get('reason')}; budget sample --manual"
+        try:
+            left = _hours_to(key, now)
+        except ValueError:
+            left = None  # an unreadable reset time can't say the week is over
+        if left is not None and left <= 0:
+            return "reset since the last sample" + (f" ({age})" if age else "")
         rate = ewma_rate([(t, p) for t, p, k in reversed(points) if k == key])
         notes = [f"{format_rate(rate)}%/hr"] if rate is not None else []
-        age_h = (now - t_new) / 3600
-        if age_h >= 1:
-            notes.append(f"{age_h:.0f}h old")
+        if age:
+            notes.append(age)
         return f"{pct:g}%" + (f" ({', '.join(notes)})" if notes else "")
     except Exception as e:  # noqa: BLE001 - GUARD, not handler: see coding_standards
         # Deliberately broad: a GUARD, not a handler. The header goes out without it.
