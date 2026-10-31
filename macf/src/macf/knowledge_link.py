@@ -1,8 +1,9 @@
 """One verb to link any artifact into the knowledge web.
 
-Wiki-links live in three shapes: a ``## Wiki-Links`` section in a markdown
-artifact, ``links.wiki_links`` in an idea record, and the ``wiki_links`` field
-of a task's metadata. Curating them used to take a different tool for each
+Wiki-links live in four shapes: a ``## Wiki-Links`` section in a markdown
+artifact, ``links.wiki_links`` in an idea record, the ``wiki_links`` field
+of a task's metadata, and a ``.wiki-links`` sidecar for a mail message, kept
+under the amail folder's ``.links``. Curating them used to take a different tool for each
 (and a hand edit for the markdown), so this module takes a target in any of the
 forms the graph prints and applies the change in that target's own shape.
 
@@ -10,6 +11,8 @@ Concepts are normalized the one way the web normalizes them, and adding a
 concept that is already there changes nothing. Role duties are records the
 roles subsystem owns; they are refused here with a pointer to `role duty edit
 --wiki-links`, which changes them on the record, rather than edited behind its back.
+A mail message is a record of what was sent, so its links go in the sidecar and the
+message and its manifest are never written (amail policy: knowledge web participation).
 """
 
 from __future__ import annotations
@@ -34,7 +37,7 @@ class LinkError(ValueError):
 
 @dataclass
 class LinkResult:
-    kind: str                      # markdown | idea | task
+    kind: str                      # markdown | idea | task | mail
     target: str                    # what was edited, as a reader would name it
     changed: List[str] = field(default_factory=list)
     concepts: List[str] = field(default_factory=list)
@@ -42,7 +45,8 @@ class LinkResult:
 
 
 def resolve_target(ref: str) -> Tuple[str, str]:
-    """Classify a target as ('markdown', path), ('idea', id) or ('task', id).
+    """Classify a target as ('markdown', path), ('mail', path), ('idea', id)
+    or ('task', id).
 
     Accepted forms: a path to a markdown artifact; ``task:N``, ``tasks:#N`` or
     ``#N`` for a task; ``idea:N`` for an idea; or a node id as ``knowledge
@@ -64,23 +68,94 @@ def resolve_target(ref: str) -> Tuple[str, str]:
                         "macf_tools role duty edit <id> --wiki-links <concepts> (it replaces the list)")
     path = Path(ref).expanduser()
     if path.is_file():
+        mail = _mail_target(path)
+        if mail:
+            return "mail", mail
         if path.suffix != ".md":
             raise LinkError(f"{path} is not a markdown artifact; use idea:N or task:N for records")
         return "markdown", str(path)
     node_path = _node_path(ref)
     if node_path:
-        return "markdown", node_path
+        mail = _mail_target(Path(node_path))
+        return ("mail", mail) if mail else ("markdown", node_path)
     raise LinkError(f"no artifact found for '{ref}'")
 
 
+def _mail_target(path: Path) -> Optional[str]:
+    """The message a path under an amail root names, or None if not under one.
+
+    A sidecar given by mistake names its message; a file under the root that
+    is not a mail node (a manifest, an index.html) is refused, so the link
+    cannot land in a sidecar the web never reads.
+    """
+    from .knowledge_web import SIDECAR_ROOT, SIDECAR_SUFFIX, _mail_root, in_mail_root, is_mail_unit
+    if not in_mail_root(path):
+        return None
+    if path.name.endswith(SIDECAR_SUFFIX):
+        root = _mail_root(path)
+        rel = path.resolve().relative_to(root)
+        if rel.parts[:1] != (SIDECAR_ROOT,):
+            raise LinkError(f"{path} is not a sidecar the web reads; a message's links live under "
+                            f"{root / SIDECAR_ROOT} (amail policy: knowledge web participation)")
+        path = root.joinpath(*rel.parts[1:])
+        path = path.with_name(path.name[:-len(SIDECAR_SUFFIX)])
+    if not (path.is_file() and is_mail_unit(path)):
+        raise LinkError(f"{path} is not a mail message or markdown attachment; the web keeps "
+                        "sidecars only for those (amail policy: knowledge web participation)")
+    return str(path)
+
+
 def _node_path(node_id: str) -> Optional[str]:
-    """The file behind a markdown node id such as ``learnings:2026-...``."""
+    """The file behind a node id such as ``learnings:2026-...`` or an amail
+    message's ``amail:<thread>/001_msg.html``."""
     if ":" not in node_id:
         return None
     from .knowledge_web import build_knowledge_web
     info = build_knowledge_web().get("ca_nodes", {}).get(node_id)
     path = (info or {}).get("path", "")
-    return path if path.endswith(".md") and Path(path).is_file() else None
+    if not Path(path).is_file():
+        return None
+    return path if path.endswith(".md") or (info or {}).get("type") == "amail" else None
+
+
+def _edit_sidecar(message: Path, concepts: List[str], remove: bool = False,
+                  declined: Optional[List[str]] = None) -> List[str]:
+    """Add or remove concepts in a message's sidecar; returns what changed.
+
+    The sidecar is rewritten whole, one ``[[concept]]`` per line in the order
+    they were linked, with the declined concepts on one ``not linked`` line. A
+    sidecar left holding nothing is removed. The message itself is never
+    opened for writing.
+    """
+    from .knowledge_web import read_sidecar, sidecar_path
+    present, not_linked = read_sidecar(message)
+    if declined is not None:
+        changed = [c for c in declined if c not in not_linked]
+        not_linked = not_linked + changed
+    elif remove:
+        changed = [c for c in concepts if c in present]
+        present = [c for c in present if c not in changed]
+    else:
+        changed = [c for c in concepts if c not in present]
+        present = present + changed
+    if not changed:
+        return []
+    from .knowledge_web import SIDECAR_ROOT
+    side = sidecar_path(message)
+    lines = [f"[[{c}]]" for c in present]
+    if not_linked:
+        lines.append(f"<!-- not linked: {', '.join(not_linked)} -->")
+    if lines:
+        side.parent.mkdir(parents=True, exist_ok=True)
+        side.write_text("\n".join(lines) + "\n")
+    elif side.exists():
+        side.unlink()
+        # Folders emptied by the unlink go too, up to the .links root.
+        d = side.parent
+        while d.name != SIDECAR_ROOT and not any(d.iterdir()):
+            d.rmdir()
+            d = d.parent
+    return changed
 
 
 def _edit_markdown(text: str, concepts: List[str], remove: bool) -> Tuple[str, List[str]]:
@@ -177,6 +252,18 @@ def apply_links(ref: str, raw_concepts: List[str], remove: bool = False) -> Link
     if kind == "task":
         return _edit_task(handle, concepts, remove)
 
+    if kind == "mail":
+        from .knowledge_web import concepts_of
+        message = Path(handle)
+        changed = _edit_sidecar(message, concepts, remove)
+        content = message.read_text(errors="replace")
+        after = concepts_of("amail", message, content)
+        # A concept the message itself carries in [[links]] survives an
+        # unlink; the message is the record and is reported, not edited.
+        own = extract_wiki_concepts(content) if message.suffix == ".md" else []
+        inline = [c for c in concepts if c in own] if remove else []
+        return LinkResult("mail", str(message), changed, after, inline)
+
     path = Path(handle)
     text = path.read_text()
     new_text, changed = _edit_markdown(text, concepts, remove)
@@ -253,6 +340,11 @@ def decline(ref: str, raw_concepts: List[str]) -> LinkResult:
             if not update_task_file(handle, {"description": task.description_with_updated_mtmd(mtmd)}):
                 raise LinkError(f"task #{handle} could not be written")
         return LinkResult("task", f"task #{handle}", new, list(mtmd.not_linked))
+
+    if kind == "mail":
+        from .knowledge_web import read_sidecar
+        new = _edit_sidecar(Path(handle), [], declined=concepts)
+        return LinkResult("mail", handle, new, read_sidecar(Path(handle))[1])
 
     path = Path(handle)
     text = path.read_text()

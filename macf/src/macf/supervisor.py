@@ -843,24 +843,49 @@ def _resolve_pane_target(target: str) -> Optional[dict]:
     return _find_supervisor(target)
 
 
+def _pane_of(data: dict) -> Optional[str]:
+    """The tmux target for the pane a supervisor record names: the pane whose process is
+    the supervisor, else the record's session.
+
+    ``-t <session>`` reaches the session's ACTIVE pane. Once someone splits the window and
+    works in the new pane (a watch beside the agent, say), the session target lands there
+    and every keystroke meant for the client goes into the wrong program. The supervisor
+    runs as its pane's own process, so its pid finds its pane wherever focus is.
+    """
+    session = data.get("tmux_session")
+    pid = data.get("supervisor_pid")
+    if not session or session.startswith("%") or not pid:
+        return session
+    r = subprocess.run(["tmux", "list-panes", "-s", "-t", f"={session}", "-F", "#{pane_id} #{pane_pid}"],
+                       capture_output=True, text=True)
+    if r.returncode == 0:
+        for line in r.stdout.splitlines():
+            fields = line.split()
+            if len(fields) == 2 and fields[1] == str(pid):
+                return fields[0]
+    # The old behaviour, and exactly the case that types into the wrong pane (#777): say so.
+    print(f"⚠️ MACF: no pane of session {session} runs supervisor {pid}; keys go to the "
+          f"session's active pane", file=sys.stderr)
+    return session
+
+
 def capture_pane(target: str) -> Optional[str]:
     """The screen of *target*'s pane, with its escape codes (the faint suggestion text is
     told apart by them), or None when it can't be read."""
     data = _resolve_pane_target(target)
-    session = (data or {}).get("tmux_session")
-    if not session or not _tmux_available():
+    if not (data or {}).get("tmux_session") or not _tmux_available():
         return None
-    r = subprocess.run(["tmux", "capture-pane", "-p", "-e", "-t", session],
+    r = subprocess.run(["tmux", "capture-pane", "-p", "-e", "-t", _pane_of(data)],
                        capture_output=True, text=True)
     return r.stdout if r.returncode == 0 else None
 
 
 def press_enter(target: str) -> int:
     """One Enter into *target*'s pane; the tmux exit status."""
-    session = (_resolve_pane_target(target) or {}).get("tmux_session")
-    if not session or not _tmux_available():
+    data = _resolve_pane_target(target)
+    if not (data or {}).get("tmux_session") or not _tmux_available():
         return 1
-    return subprocess.run(["tmux", "send-keys", "-t", session, "Enter"]).returncode
+    return subprocess.run(["tmux", "send-keys", "-t", _pane_of(data), "Enter"]).returncode
 
 
 def send_keys(target: str, keys: list, enter: bool = True, kind: str = "send-keys") -> int:
@@ -891,13 +916,14 @@ def send_keys(target: str, keys: list, enter: bool = True, kind: str = "send-key
         return 1
     text = " ".join(keys)
     _record_keys_sent(text, kind, tmux_session)
-    # `-t <session>` targets that session's active pane. `--` guards text that
-    # starts with '-'. CC's stdin reader receives the bytes as if typed.
+    # The supervisor's own pane, not the session's active one (_pane_of). `--` guards
+    # text that starts with '-'. CC's stdin reader receives the bytes as if typed.
+    pane = _pane_of(data)
     rc = subprocess.run(
-        ["tmux", "send-keys", "-t", tmux_session, "-l", "--", text]
+        ["tmux", "send-keys", "-t", pane, "-l", "--", text]
     ).returncode
     if rc == 0 and enter:
-        rc = subprocess.run(["tmux", "send-keys", "-t", tmux_session, "Enter"]).returncode
+        rc = subprocess.run(["tmux", "send-keys", "-t", pane, "Enter"]).returncode
     if rc == 0:
         suffix = " + Enter" if enter else ""
         print(f"[auto-restart] Sent to tmux session '{tmux_session}': {text!r}{suffix}")
@@ -1202,7 +1228,9 @@ def _send_post_start_keys(tmux_session: str, keys: str, delay: int) -> None:
     time.sleep(max(0, delay))
     _record_keys_sent(keys, "post-start", tmux_session)
     try:
-        subprocess.run(["tmux", "send-keys", "-t", tmux_session, keys],
+        # This runs in the supervisor, which is its pane's own process, so TMUX_PANE names
+        # its pane; the session would mean whichever pane is active (_pane_of).
+        subprocess.run(["tmux", "send-keys", "-t", os.environ.get("TMUX_PANE") or tmux_session, keys],
                        capture_output=True, timeout=10)
         print(f"[auto-restart] Sent post-start keys to '{tmux_session}': {keys!r}")
     except (OSError, subprocess.SubprocessError) as e:
