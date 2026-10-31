@@ -11160,7 +11160,7 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
             _resp = _status(sock)
             if _resp.get("ok"):
                 counts = {k: _resp.get(k) for k in
-                          ("quarantined", "pending_pickup", "budget")}
+                          ("quarantined", "pending_pickup", "oldest_pending_s", "budget")}
             else:
                 # An explicit refusal is not the same fact as an unreachable
                 # broker, and swallowing it made the two indistinguishable —
@@ -11204,8 +11204,10 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
     # transfer — the one count that calls for an action, so it gets its own
     # line rather than a slot in the summary.
     if counts is not None and counts.get("pending_pickup"):
+        _age = counts.get("oldest_pending_s")
         print(f"📬 {counts['pending_pickup']} message(s) waiting in your pickup "
-              f"box — `amail list` ingests them into your own store.")
+              f"box" + (f", the oldest for {_age // 60} min" if _age is not None else "")
+              + " — `amail list` ingests them into your own store.")
     # THE BUDGET, BEFORE THE WALL (amail spec O5b.6b). The threat case for the
     # rate limit is the well-intentioned under-scoped sender, and a control
     # aimed at good faith that good faith cannot see is discoverable only by
