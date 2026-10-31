@@ -77,7 +77,7 @@ Durations are `std::chrono` types, not bare integers; interfaces are strongly ty
 
 ### 3.1 Error codes in code loaded through JNI; nothing crosses an entry point
 
-Code that runs inside an Android app through JNI reports failure with error codes or result types, not exceptions, as Android's JNI guidance advises ([JNI tips](https://developer.android.com/training/articles/perf-jni)), and uses them systematically ([E.25, E.27](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#Re-no-throw-codes)); RAII still releases resources on every path. Elsewhere the Core Guidelines' preference for exceptions applies (E.2, E.14). Third-party code that throws is wrapped so no exception reaches a JNI entry point: each entry point catches and converts.
+Code that runs inside an Android app through JNI reports failure with error codes or result types, not exceptions, as Android's JNI guidance advises: "C++ exceptions, generally discouraged on Android, must not be thrown across the JNI transition boundary from C++ code to managed code" ([JNI tips](https://developer.android.com/training/articles/perf-jni)). ndk-build disables them by default; CMake enables them ([C++ library support](https://developer.android.com/ndk/guides/cpp-support)). Error codes are used systematically ([E.25, E.27](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#Re-no-throw-codes)); RAII still releases resources on every path. Elsewhere the Core Guidelines' preference for exceptions applies (E.2, E.14). Third-party code that throws is wrapped so no exception reaches a JNI entry point: each entry point catches and converts.
 
 ## 4 Clocks and Time
 
@@ -97,7 +97,7 @@ Code that combines times from more than one source has a unit test that feeds th
 
 ### 5.1 The JNI layer is thin
 
-JNI entry points convert arguments, call plain C++ and convert results; logic lives in plain C++ that has no `jni.h` include and is tested on the host. Keep calls across the boundary few and small ([JNI tips](https://developer.android.com/training/articles/perf-jni)).
+JNI entry points convert arguments, call plain C++ and convert results; logic lives in plain C++ that has no `jni.h` include and is tested on the host. The plain C++ builds as a host target with no `jni.h` on its include path, so a JNI include in it fails the host build instead of waiting for review. Keep calls across the boundary few and small ([JNI tips](https://developer.android.com/training/articles/perf-jni)).
 
 ### 5.2 References, exceptions and threads
 
@@ -117,7 +117,7 @@ Plain C++ logic is tested with GoogleTest on the host; device runs are for code 
 ## 7 Build, Warnings and Sanitizers
 
 - Native test builds use HWASan on arm64 where the device supports it (Android 14 or later); plain ASan is unsupported for new work ([HWASan](https://developer.android.com/ndk/guides/hwasan), [ASan](https://developer.android.com/ndk/guides/asan)).
-- `-Wall -Wextra` on the project's own sources, with `-Werror` in CI; vendored sources are exempt and listed. (A convention, not an NDK mandate.)
+- `-Wall -Wextra` on the project's own sources, with `-Werror` in CI; vendored sources are exempt and listed. (A convention, not an NDK mandate.) The build pins `ndkVersion`, so a toolchain update that adds a warning fails on purpose, in its own change.
 
 ## 8 Anti-Patterns
 

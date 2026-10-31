@@ -100,7 +100,7 @@ Before a value goes into a field narrower than its type (a length into a byte, a
 
 ### 4.1 Every timestamp names its clock
 
-A field or variable holding a time says which clock it came from (for example `atElapsedNanos`, or a comment on the field). `SensorEvent.timestamp` is on the `SystemClock.elapsedRealtimeNanos()` base on current devices ([NDK sensor event](https://developer.android.com/ndk/reference/struct/a-sensor-event)); it is compared only with that clock, never with `System.nanoTime()` or `currentTimeMillis()`. Because devices have varied, code that depends on the base measures the offset at startup and logs it rather than assuming it.
+A field or variable holding a time says which clock it came from (for example `atElapsedNanos`, or a comment on the field). `SensorEvent.timestamp` is on the `SystemClock.elapsedRealtimeNanos()` base on current devices ([SensorEvent](https://developer.android.com/reference/android/hardware/SensorEvent)); it is compared only with that clock, never with `System.nanoTime()` or `currentTimeMillis()`. Because devices have varied, code that depends on the base measures the offset at startup and logs it rather than assuming it.
 
 ### 4.2 Two clocks are never mixed in one computation
 
@@ -116,7 +116,7 @@ A difference or a prediction horizon is computed from two times on the same cloc
 
 ### 6.1 The toolchain is pinned
 
-The build declares its Java toolchain, with `sourceCompatibility` and `targetCompatibility` equal ("always specify the Java toolchain", [JDKs](https://developer.android.com/build/jdks)), and the JDK is one the Android Gradle Plugin version supports (AGP 7.4: JDK 11; AGP 8.x: JDK 17, [AGP 7.4 notes](https://developer.android.com/build/releases/past-releases/agp-7-4-0-release-notes)).
+The build declares its Java toolchain, with `sourceCompatibility` and `targetCompatibility` equal ("always specify the Java toolchain", [JDKs](https://developer.android.com/build/jdks)), and the JDK is the one the release notes name for the Android Gradle Plugin version in use (for example, AGP 7.4 names JDK 11 and AGP 8.x needs JDK 17: [AGP 7.4 notes](https://developer.android.com/build/releases/past-releases/agp-7-4-0-release-notes)). Re-check the pairing on every AGP upgrade.
 
 **Why it binds:** observed, a newer JDK on the machine broke the dexer with no code change; the build had picked up whatever `JAVA_HOME` said.
 
@@ -130,7 +130,7 @@ Error Prone ([errorprone.info](https://errorprone.info)) catches classes of bugs
 
 ## 7 Style
 
-Google Java Style ([guide](https://google.github.io/styleguide/javaguide.html)) applies to every new or touched file, whatever the file's older style: an edit brings what it touches up to the standard, rather than matching the code around it. The rules most often broken in edits: no wildcard imports; braces on every block; `@Override` wherever legal; `UPPER_SNAKE_CASE` constants; uppercase `L` on long literals; 100-column lines.
+Google Java Style ([guide](https://google.github.io/styleguide/javaguide.html)) applies to every new or touched file, whatever the file's older style: an edit brings what it touches up to the standard, rather than matching the code around it. The restyle goes in its own commit before the logic change, so a reviewer sees the change itself and not a one-line fix inside a whole-file reformat. The rules most often broken in edits: no wildcard imports; braces on every block; `@Override` wherever legal; `UPPER_SNAKE_CASE` constants; uppercase `L` on long literals; 100-column lines.
 
 **Javadoc on every visible member** except the simple and obvious ones (the guide's section 7). It is the contract, not decoration: `@param`, `@return` and `@throws` state what a caller may rely on, editors show it at the call site, and an agent reading a class learns its contract without reading its body. A summary line alone is enough only where the guide allows it.
 
