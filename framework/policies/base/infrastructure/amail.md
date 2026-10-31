@@ -3,6 +3,7 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.5.0 — adds §9: mail joins the knowledge web, each message and markdown attachment a temporal-record node, with its links in a `.wiki-links` sidecar under `amail/.links/` so a message's bytes stay as sent and no sender can supply its links. Minor: a new section a type policy owes the scholarship policy.
 **Version**: 1.4.2 — §2.3 says how a recipient learns where its pickup box is: provisioning names `handoff` and `agent` in its own `amail.json`, which its daemon needs, since an outer tier passes it no agent-configured variables. Patch.
 **Version**: 1.4.1 — §5.1 and §6b.1 say who mints the message id (the broker, on
 acceptance) and what that means for the sender's copy: it keeps the id the sender
@@ -137,6 +138,12 @@ becomes tractable once the address stops encoding how the message travels.
 **8 Resolved and Deferred Questions**
 - Which previously open questions does this specification settle?
 - What is deliberately left for later, and why?
+
+**9 Knowledge Web Participation**
+- Which mail joins the knowledge web, and what is the unit of a node?
+- Which node class and provenance does mail carry?
+- What should a message link, and what must it never link?
+- Why do a message's links live in a sidecar under `.links/`, and never in the message or beside it?
 
 === CEP_NAV_BOUNDARY ===
 
@@ -1113,6 +1120,28 @@ and a refusal for every combination that would have meant something else.
 
 ---
 
+## 9 Knowledge Web Participation
+
+Definitions of class and provenance live in `../consciousness/scholarship.md` and are cited here, not restated. This section answers the four questions that policy asks of every artifact type, and one more that mail alone raises: where the links can live when the artifact may not be edited.
+
+**What is walked.** The `amail` folder under the agent tree: its `inbox/` and `outbox/` thread folders, kept from the superseded v0 convention and by bundles carried by hand (§6b.6). Sealed `.zip` bundles are not walked. The authoritative Maildir (§2.4) is outside the agent tree by design and is not part of the web; bringing it in would be its own decision, not a consequence of this one.
+
+**Unit of a node.** Each message, and each markdown attachment. A message is a `*msg.md` or `*msg.html` file in a thread folder, or a one-file message lying directly in `inbox/` or `outbox/`. HTML is walked only for messages: an `index.html` or an HTML page sent as an attachment is not a node. HTML messages are walked at all because most early mail is HTML only, and a rule that read markdown alone would leave that correspondence unreachable by concept. A thread's `003_msg.md` and `003_msg.html` are two nodes, `amail:<thread>/003_msg` and `amail:<thread>/003_msg.html`. A message without links is not a node and appears in the knowledge doctor's orphan census, which is honest.
+
+**Class.** Temporal record. A message says what one correspondent told another at a moment; "the PR is unmerged" was true when it was sent, and the message is not wrong once it is merged. The question mail answers is "which correspondence touched X, and what was said then".
+
+**Provenance.** Lived. Sent and received mail are both a record of this agent's correspondence. A received message's *claims* are its sender's and remain untrusted input (§6.2); the node records that it was said, not that it is so. A correspondence archive carried in from a predecessor lineage is inherited, and is marked by a banner beside it in its folder, never inside a message (scholarship: the banner frames, it never edits).
+
+**What a message links.** The domains the correspondence is about, as a checkpoint tags the domains a cycle worked on: two or three concepts, chosen by querying the web first (`macf_tools knowledge query`). Link the message where a subject was proposed, decided or handed over, not every reply that mentions it. Never a correspondent's name or address, a thread id or a message number: a concept minted from an identifier connects to nothing. An attachment links what it is about, as the artifact type it resembles would (a specification draft links what it specifies).
+
+**Where the links live, and why not in the message or beside it.** In a sidecar under the amail folder's `.links/`, at the message's own path with `.wiki-links` appended (`.links/outbox/<thread>/003_msg.md.wiki-links`, `.links/inbox/<thread>/001_msg.html.wiki-links`): one concept per line, bare or as `[[concept]]`, normalized as every other link is. Declined concepts go on one `<!-- not linked: ... -->` line in the same file. A sidecar is never a node itself. A message is a record of what was sent, and its bytes stay as sent: an edited sent copy disagrees with the copy its recipient holds, and an edited received message is no longer the evidence §6.2 tells the agent to treat it as. An HTML message has no Wiki-Links section to write into in any case. So a message's own bytes are read for links only when it is markdown this agent sent, where its `[[links]]` are its own. A received message's text was written by its sender, and inbound mail is untrusted input (§6.2), so another agent's words never add concepts to this agent's web: a received message's links, and an HTML message's, are its sidecar's alone.
+
+The sidecars sit apart from the mail because a bundle carried by hand (§6b.6) is a folder of files its sender named. A sidecar beside a received message could be the sender's, and honoring it would hand the sender the very concepts this section refuses them, under a second file name. So the web reads sidecars only under the `.links/` of the amail folder it walks (`amail` directly under the agent's private or public tree, or a subagent's), which no bundle unpacks into, and ignores a sidecar-named file anywhere else under it. That includes a bundle that brings its own `amail/.links/` inside a received thread: an `amail` folder anywhere else is only a folder, so its messages' links still come from the walked root's `.links/` alone. The same rule decides what is mail at all: a folder named `amail` elsewhere, such as in source code, is not. The knowledge doctor names each such file as a stray mail sidecar, since one inside a received thread may be an attempt to steer what the agent is shown. Read it before trusting any of it.
+
+**How to add them.** `macf_tools knowledge link <message path or node id> <concept> ...` writes or extends the sidecar under `.links/`, creating its folders, and never opens the message or its manifest for writing; `knowledge unlink` removes from the sidecar, and a sidecar left empty is deleted, with any folders it leaves empty. A concept the message itself carries in markdown survives an unlink, and the verb says so rather than editing the message. A suggestion `knowledge gaps` keeps making and a curator has judged wrong goes in the sidecar's `not linked` line through `knowledge gaps --reject`, as for every type (scholarship: declining a suggested concept).
+
+---
+
 ## Integration
 
 - **Provisioning** creates the mailbox at account-creation time. A mailbox that
@@ -1170,6 +1199,7 @@ and a refusal for every combination that would have meant something else.
 
 <!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
      classes and provenance). Links are what this policy governs — agent mail
-     identity, the broker boundary, and the contact restriction. -->
+     identity, the broker boundary, the contact restriction, and how mail
+     joins the knowledge web without its messages being edited. -->
 
-[[amail]] [[capability_boundary]] [[security]] [[inter_agent_messaging]] [[egress]]
+[[amail]] [[capability_boundary]] [[security]] [[inter_agent_messaging]] [[egress]] [[knowledge_web]]
