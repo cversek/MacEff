@@ -79,3 +79,21 @@ def test_a_file_the_broker_does_not_own_is_refused(box):
         assert client._read_box_file(fd, "5-pair.amsg", os.getuid())  # the owner reads it
     finally:
         os.close(fd)
+
+
+def test_ingest_takes_the_broker_uid_from_the_box_owner_not_the_reader(tmp_path, box, monkeypatch):
+    """The derivation is the whole of R37 in a deployment: the recipient runs ingest, so a uid
+    taken from the process would accept every file the recipient's group planted."""
+    m = _pair(box, "6-planted")
+    monkeypatch.setattr(client, "_box_owner", lambda fd: os.getuid() + 1)  # the broker is someone else
+    [r] = client.ingest(tmp_path / "home", box, agent="a")
+    assert r["refused"] and "not the broker's" in r["reason"]
+    assert m.message_id not in _ids(tmp_path / "home")
+    assert sorted(p.name for p in box.iterdir()) == ["6-planted.amsg.refused", "6-planted.json.refused"]
+
+
+def test_a_box_that_is_a_symlink_is_refused_not_raised(tmp_path, box):
+    link = tmp_path / "box-link"
+    os.symlink(box, link)
+    [r] = client.ingest(tmp_path / "home", link, agent="a")
+    assert r["refused"] and not r["ingested"]

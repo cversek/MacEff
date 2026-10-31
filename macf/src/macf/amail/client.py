@@ -262,10 +262,16 @@ def ingest(home: Path, pickup_box: Path, contacts_path: Optional[Path] = None,
     results = []
     if not pickup_box.is_dir():
         return results
-    box_fd = os.open(pickup_box, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
-        # The box belongs to the broker's account (MIS-0004 R13), so its owner is whose files count.
-        broker_uid = os.fstat(box_fd).st_uid
+        box_fd = os.open(pickup_box, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as e:
+        # A box that is itself a link, or not a directory, is refused with a reason, not raised.
+        print(f"⚠️ MACF: pickup box {pickup_box} refused: {e.strerror}", file=sys.stderr)
+        return [{"name": str(pickup_box), "ingested": False, "refused": True,
+                 "reason": f"the pickup box can't be opened as a directory without following a link "
+                           f"({e.strerror})"}]
+    try:
+        broker_uid = _box_owner(box_fd)
         bundles = sorted(pickup_box.glob("*.amsg"))
         held = _held_bundle_ids(home) if bundles else {}
         for amsg in bundles:
@@ -275,6 +281,12 @@ def ingest(home: Path, pickup_box: Path, contacts_path: Optional[Path] = None,
     finally:
         os.close(box_fd)
     return results
+
+
+def _box_owner(box_fd: int) -> int:
+    """The uid whose files the box may hold: its owner, the broker's account (MIS-0004 R13).
+    Never the uid running ingest, which is the recipient's, whose group may plant files."""
+    return os.fstat(box_fd).st_uid
 
 
 def _held_bundle_ids(home: Path) -> Dict[str, Path]:
