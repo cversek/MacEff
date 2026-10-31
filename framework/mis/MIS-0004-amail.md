@@ -2,7 +2,7 @@
 
 **Number**: 0004
 **Type**: Standards
-**Status**: Deliberation
+**Status**: Final-Comment
 **Authors**: the container-management maintainer and the host-side maintainer
 **Secretary**: the head maintainer
 **Deliberation**: https://github.com/cversek/MacEff/issues/850
@@ -23,7 +23,7 @@ Agent mail is specified today by the amail policy and by a working specification
 
 The system daemon has its own MIS, MIS-0007 (draft), and this MIS depends on it directly: the requirements that place the broker under it can't land before it does. When this MIS is accepted, its requirements land in the amail policy, each rule citing `MIS-0004-Rnn (slug)`, and the 0.x series closes. It concerns every agent that sends or receives mail, on a host or in a container, and the operator who runs them.
 
-**This revision is the working specification for two prototypes.** On 2026-10-28 the operator suspended the deliberation pending two prototypes: a Linux container by the container-management maintainer, and a macOS host by the host-side maintainer. The operator also moved that the Secretary gather preliminary requirements from every position into a revised draft, and that the system daemon's requirements go into a separate draft (#850, comment 6477160351). Section 6 is that gathering. Section 12 assigns each requirement to a prototype, or holds it until after the deliberation closes on 2026-10-30. The prototypes' results then inform the final draft.
+**This revision is the synthesis draft.** On 2026-10-28 the operator suspended the deliberation pending two prototypes, a Linux container by the container-management maintainer and a macOS host by the host-side maintainer, and moved that the Secretary gather the positions into a working specification (#850, comment 6477160351). The deliberation closed on 2026-10-31 at 02:18Z. Both prototypes reported, and this revision carries what they found: R15 takes its id from the broker's acceptance, the keystroke fallback gains two rules (R39, R40), and section 12 records which requirements the prototypes showed and which they left untested. The Secretary's synthesis on #850 proposes revise, and the MIS enters Final-Comment.
 
 ## 2 Motivation
 
@@ -128,7 +128,7 @@ The Secretary gathered these preliminary requirements from the positions on #850
 - **R12** [MUST · decidable: macf/tests/test_amail_partition.py::test_two_accounts] The broker MUST keep each agent's contacts, limits, queues, audit records and box apart, so that no agent reads or submits as another. (broker_MUST_partition_state_per_agent)
 - **R13** [MUST · decidable: macf/tests/test_amail_partition.py::test_box_permissions] Each recipient's box MUST be owned by the broker's account and readable only by that recipient's group, which alone removes a message after ingesting it. (box_MUST_be_readable_only_by_its_agent)
 - **R14** [MUST · decidable: macf/tests/test_amail_handoff.py::test_intake_names_unique] Each intake name MUST be unique per recipient and per message, so that no send overwrites another, whatever its recipients or timing. (intake_name_MUST_be_unique)
-- **R15** [MUST · decidable: macf/tests/test_amail_handoff.py::test_one_id_end_to_end] Each message MUST keep one id, unique across broker restarts, from the sender's submission to the recipient's read. (message_id_MUST_be_one_end_to_end)
+- **R15** [MUST · decidable: macf/tests/test_amail_handoff.py::test_one_id_end_to_end] Each message MUST keep one id, minted by the broker that accepts it and unique across that broker's restarts, from that acceptance to the recipient's read. (message_id_MUST_be_one_from_acceptance)
 - **R16** [MUST · decidable: macf/tests/test_amail_handoff.py::test_duplicate_dropped] When the receiver meets a message id it has already ingested, it MUST drop the copy and record the drop. (receiver_MUST_drop_duplicate_ids)
 - **R36** [MUST NOT · decidable: macf/tests/test_amail_partition.py::test_box_files_not_group_writable] A group MUST NOT have write permission on any message file in a box. (box_file_MUST-NOT_be_group_writable)
 - **R37** [MUST · decidable: macf/tests/test_amail_partition.py::test_receiver_checks_owner_and_links] The receiver MUST ingest only a file that the broker's account owns with a link count of one, both read on the descriptor it opened. (receiver_MUST_check_owner_and_link_count)
@@ -154,7 +154,9 @@ The Secretary gathered these preliminary requirements from the positions on #850
 - **R26** [MUST · decidable: macf/tests/test_amail_notice.py::test_notice_level_triggered] While unread mail exists, the mail notice MUST stay asserted, and it clears only when the reader's cursor passes that mail. (notice_MUST_derive_from_unread_state)
 - **R27** [MUST NOT · decidable: macf/tests/test_amail_notice.py::test_restart_keeps_cursor] A restart of any unit MUST NOT advance an agent's read cursor. (restart_MUST-NOT_advance_read_cursor)
 - **R28** [MUST · decidable: macf/tests/test_amail_notice.py::test_notice_carries_ids] Each mail notice MUST carry the ids of the unread messages it names, oldest first, with the count waiting. (notice_MUST_carry_message_ids)
-- **R29** [MUST · decidable: macf/tests/test_amail_notice.py::test_keystrokes_need_idle_prompt] Where a mail notice falls back to keystrokes, it MUST type only on positive evidence of an idle, empty prompt, and otherwise stay asserted. (keystroke_fallback_MUST_confirm_idle_prompt)
+- **R29** [MUST · decidable: macf/tests/test_amail_notice.py::test_keystrokes_need_idle_prompt] Where a mail notice falls back to keystrokes, it MUST type only when no dialog waits, the input box is empty, and the transcript's last turn has ended. (keystroke_fallback_MUST_confirm_idle_prompt)
+- **R39** [MUST · decidable: macf/tests/test_amail_notice.py::test_keystrokes_read_back] A keystroke notice MUST send its text and its return separately, then read the input box back, and retry only while the box still holds that notice. (keystroke_notice_MUST_be_read_back)
+- **R40** [MUST NOT · decidable: macf/tests/test_amail_notice.py::test_keystroke_notice_no_leading_digit] A keystroke notice MUST NOT begin with a digit. (keystroke_notice_MUST-NOT_begin_with_digit)
 - **R30** [SHOULD · decidable: macf/tests/test_amail_notice.py::test_listing_new_since_last_read] When woken by a notice, the reader's listing SHOULD show only mail new since its last read, with a count of the rest. (listing_SHOULD_show_new_since_last_read)
 
 ### 6.8 Health
@@ -185,8 +187,8 @@ Each requirement's reason, with its source. P and O numbers refer to section 14.
 - **R12**: with one broker, separation moves from the kernel into the broker's code (P09). It is shown on two real accounts: refusal and success in the same run (P13), multi-recipient and same-second sends (P12), and a test run by someone other than its author (P13).
 - **R13**: the operating system keeps boxes apart wherever it can, given R05 (P09, condition (a)). The recipient's group removes a message after ingesting it, which is the recipient's custody transfer; if only the broker could delete, every removal would wait on a receipt (P18). On macOS a new file takes its directory's group, and on Linux a setgid box directory does the same, so the broker needn't hold every recipient's group, which `setgroups` caps at 16 on macOS (P21, P22).
 - **R14**: in a multi-seat container, two intakes once shared a name. The second overwrote the first, and both sends reported delivered (P12).
-- **R15**: once the broker's id, the sender's copy and the recipient's id differed, threading broke (P12). Ids unique across restarts let a recipient drop duplicates (P13).
-- **R16**: pull makes a restart safe only if a repeated delivery is harmless (P13).
+- **R15**: once the broker's id, the sender's copy and the recipient's id differed, threading broke (P12). Ids unique across restarts let a recipient drop duplicates (P13). The container prototype found that the broker already replaces the sender's id with its own at submission, and that a shared hand-off between brokers rewrote it again (P26). The operator chose "from the broker's acceptance", relayed by the container-management maintainer, who proposed this text with "The sender records the id the broker returns" (P27); the host-side maintainer agreed, and launchd changes nothing, since the broker mints a time prefix and 48 random bits with no counter in memory (P28). So a sender can't choose an id that collides with or shadows another, the sender's custody copy records the broker's id, and the rewrite at the shared hand-off goes: the receiving broker keeps the id the first broker minted. A sender's retry after a broker restart can still get a second id for one message, which R16 can't catch; Q09 keeps that open (P28).
+- **R16**: pull makes a restart safe only if a repeated delivery is harmless (P13). The container prototype handed one pair off twice and found two copies of one id in the store, with no drop and no record (P26).
 - **R17**: a flood holds back only its sender (P09, condition (c)). One recipient's full disk or missing box must not hold up everyone behind it (P13).
 - **R18**: back-pressure reaches the sender as a refused send, never a silent drop (P12, P13). The amail policy already returns refusals as errors (§3.2).
 - **R19**: each doorbell makes the recipient re-read its whole context, about 0.7M cached tokens late in a cycle, so ten small messages cost ten of those (P11). Under R26 the recipient's primal daemon raises the notice, not the broker, so the recipient's notifier holds the interval, and the broker only carries the sender's urgent mark (P18).
@@ -199,15 +201,17 @@ Each requirement's reason, with its source. P and O numbers refer to section 14.
 - **R26**: replays after a restart, a lost notice, and notices raised and never delivered are one bug: a notice sent as an edge. Held as a level, a replay is harmless and a miss is asserted again at the next attach (P14, P16).
 - **R27**: an old mail clock's first start once marked waiting mail as seen (P14).
 - **R28**: a seat that read the newest of a list raced a second arrival. Ids oldest first fixed a real miss (P11, P12).
-- **R29**: a notice typed while a permission prompt waited landed in the prompt (P13). A sender's keystrokes went into a dialog nobody had listed (#854), and such dialogs keep turning up, so the gate is positive evidence of an idle prompt rather than a list of known dialogs (P16). MIS-0002-R21 (pd_MUST_report_waiting_on_person) is the natural first gate.
+- **R29**: a notice typed while a permission prompt waited landed in the prompt (P13). A sender's keystrokes went into a dialog nobody had listed (#854), and such dialogs keep turning up, so the gate is positive evidence of an idle prompt rather than a list of known dialogs (P16). MIS-0002-R21 (pd_MUST_report_waiting_on_person) is the natural first gate. The macOS prototype drove a throwaway session through 14 states, from idle and streaming to each dialog, the exit-with-background-work prompt, the rewind menu and a survey bar. The three signals together typed into no dialog and no busy session, and each signal alone had false types: the screen alone types under a running tool, whose box looks empty, and the turn check alone types into the exit prompt, where a return means "exit and stop tasks" (P25, P29). The turn check should skip a trailing interrupt record and local command records, which otherwise hold the gate until a person types; both gaps fail safe (P29).
+- **R39**: twice in the macOS catalog, a single return left the text in the box. Read back, a notice still in the box is retried; a dialog that opened is never typed into (P29).
+- **R40**: a survey bar reads as an empty box, and a digit answers it (P29).
 - **R30**: a listing prints the whole mailbox on every wake, so each notice costs the entire history (P13).
 - **R31**: a broker that is quiet because it is idle and one that is quiet because mail is stuck look the same to anyone not reading `pd status` (P01).
 - **R32**: Seats L and N each sat most of a day behind their own unanswered prompt while their mail counted as delivered (P11, P14). Under R04 the receiver keeps pulling while the session waits behind a prompt, so the unpulled age alone would never have fired for them. What aged was the oldest unread message, which the agent's primal daemon publishes in its status (P18). The outside watch alerts by a path independent of the recipient's session and of the broker (MIS-0002-R75 (outside_watch_MUST_alert_independently)).
 - **R33**: pf's `user` and iptables' `--uid-owner` match the socket's owner, so the rule holds on any network the host joins (P02, P03). It is an allow-list because a deny-list fails open for any account whose rule is missing (P03). A native mail client running as the operator's login opens the same ports, so the operator declares the human accounts the rule admits (P19). Loading the rule needs root, so it is the operator's install step, a container's start step, and the system daemon's status reports whether it is loaded (MIS-0007; P19, P20).
 - **R34**: a public certificate-authority compromise once left every client in a container accepting a forged chain (P13). The pin rotates by a declared procedure, because a pin that can't rotate turns a provider's certificate change into a mail outage (P15).
 - **R35**: one broker serves seats on different builds, and three builds of macf are in use on one host today (P10, P16).
-- **R36**: only the broker writes a message (P18).
-- **R37**: a recipient's group that may remove files from its box may also create them there, so the receiver checks the owner on the descriptor it opened. A hard link passes an owner check, and macOS has nothing that restricts one, so the link count must be one as well. A file that fails either check is set aside and reported under R20 (P20, P21, P22).
+- **R36**: only the broker writes a message (P18). In the container prototype R36 held partly because the broker's umask is 022, since the write path sets the mode by path after creating the file. Setting the mode on the descriptor before writing, or a declared umask per unit, makes it independent of the umask (P26).
+- **R37**: a recipient's group that may remove files from its box may also create them there, so the receiver checks the owner on the descriptor it opened. A hard link passes an owner check, and macOS has nothing that restricts one, so the link count must be one as well. A file that fails either check is set aside and reported under R20 (P20, P21, P22). In the container prototype, today's ingest read by path, and a pair the recipient's own account planted and a symlinked pair both entered its store as mail from the other seat; a hard link was refused only by the host's `fs.protected_hardlinks`, which no deployment promises (P26).
 - **R38**: a message fanned out by hard links would fail every recipient's link-count check under R37 (P22).
 
 **Rejected**
@@ -241,7 +245,7 @@ The protections a container gives a broker, one row each, with how a host meets 
 
 | Protection | In a container today | On a host |
 |---|---|---|
-| A login per reachable agent | a uid per agent | R05. The cost: on a shared-login host, the agent's home, its tools and the credentials it uses move to the agent's login, or are reached through a declared interface (P02). A login separates files, processes and keychains, not localhost TCP, so a service another login binds to the loopback must authenticate its callers; the broker socket is a Unix socket checked by peer uid, never TCP (P19, P20) |
+| A login per reachable agent | a uid per agent | R05. The cost: on a shared-login host, the agent's home, its tools and the credentials it uses move to the agent's login, or are reached through a declared interface (P02). A login separates files, processes and keychains, not localhost TCP, so a service another login binds to the loopback must authenticate its callers; the broker socket is a Unix socket checked by peer uid, never TCP (P19, P20). The macOS prototype found that a login of its own isolates only with all three of these: (a) loopback services that authenticate their callers, or a rule that keeps other accounts off them; (b) an agent account whose primary group is its own, or an operator home at 0700; (c) the re-grant list (P25). Creating and retiring an agent's account also manages its launchd user domain, which outlived the account's deletion until it was booted out (P29) |
 | A broker on an account no agent shares | the broker's service account | R02, under the system daemon (MIS-0007) |
 | Egress for the broker only | an owner-matched rule, today a deny-list | R33: pf `user` on macOS, iptables `--uid-owner` on Linux, as an allow-list |
 | An intake per declared peer | a shared filesystem as the wire | R09, R10 and R14 |
@@ -297,6 +301,8 @@ Detection alone stays allowed only where no agent has a reachable address. Addre
 | R36 | decidable | `macf/tests/test_amail_partition.py::test_box_files_not_group_writable` | planned |
 | R37 | decidable | `macf/tests/test_amail_partition.py::test_receiver_checks_owner_and_links`, with a hard link from outside and a file the recipient's group created, each set aside | planned |
 | R38 | decidable | `macf/tests/test_amail_handoff.py::test_one_copy_per_recipient` | planned |
+| R39 | decidable | `macf/tests/test_amail_notice.py::test_keystrokes_read_back` | planned |
+| R40 | decidable | `macf/tests/test_amail_notice.py::test_keystroke_notice_no_leading_digit` | planned |
 
 **Cold-reader trial**: not yet held.
 
@@ -306,14 +312,16 @@ Detection alone stays allowed only where no agent has a reachable address. Addre
 
 ### 12.1 The prototypes
 
-The operator's motion on #850 (P17) treats this revision as the working specification for two prototypes. It assigns each requirement to one of them, or holds it until after the deliberation closes on 2026-10-30.
+The operator's motion on #850 (P17) made the previous revision the working specification for two prototypes. Both reported before the window closed. What each showed, so the passes aren't read wider than they are:
 
-| Prototype | Who | Requirements | What it should show |
-|---|---|---|---|
-| Linux container | the container-management maintainer | R01, R02, R04, R07, R08 (local half), R10 to R28, R30 to R32, R33 (as an allow-list), R35 to R38 | One broker partitioned per agent, with R12's test run by a maintainer other than its author. A broker killed mid-intake loses nothing. Notices stay level-triggered through the channel, with no replay and no miss across a restart. A stuck recipient reaches a person. |
-| macOS host | the host-side maintainer | R02 (a system-domain job with `UserName`), R05, R29, R33 (a pf `user` rule, loaded with the operator), R35, R37 (macOS has no hard-link restriction) | A unit started as a service account under launchd, with only its declared environment. What R05 costs on a shared-login host. The keystroke fallback held back by positive evidence of an idle prompt. |
-| Both | both | R03, R06 | Neither prototype holds a per-agent secret in its broker, and both derive addresses from the identity file. |
-| Withheld | after the close on 2026-10-30 | R08 (between systems), R09, R34 | These need two systems, or the transport to the Internet, and neither prototype runs either. |
+| | Linux container (P24, P26) | macOS host (P25, P29) |
+|---|---|---|
+| Held as drafted | R13, R36 and R38 on real accounts (29,703 samples during a 200-message burst found nothing group-writable but a planted control); Q06's partition, refused and audited under the kernel's identity, with the genuine seat's own submit and status succeeding in the same run (R07, R12); R14, by construction, since the broker mints every id; R18 and R15's loss case, with the broker killed mid-burst and nothing lost, duplicated or delivered after a refusal | R29's three signals across 14 states, then ten doorbells delivered once each and answered in order; R33 as a pf anchor matched to the broker's account and one declared human, blocking root and an undeclared account; the status socket read-only (MIS-0007) |
+| Not met by today's code | R37 (ingest read by path), R16 (a repeated hand-off stored twice), R32 (`pending_pickup` counted only internet mail, and no age) | none |
+| Changed by the results | R15, and the rewrite at the shared hand-off | R29's turn check (two fail-safe gaps), R39, R40; section 10's R05 conditions |
+| Not exercised | R24 (no state-by-id verb), R25 to R28 (the notice path), R33 (no `iptables` in the image), R34, R35 | the keychain read from the system domain (Q02), the waiting-on signal under R29 (the session had no hooks) |
+
+R08 between systems, R09 and R34 were withheld from both and stay so. The untested rows stay planned in section 11.
 
 ### 12.2 The direct dependency: MIS-0007
 
@@ -329,6 +337,8 @@ The authors' inventory continues: one row per normative statement in the amail p
 
 This MIS lands by area, in several pull requests rather than one (P05, P09). Each pull request carries its requirements' Conformance rows and the old clause IDs it retires.
 
+The three receiver changes the container prototype found were opened at the operator's direction before this synthesis (P27): R37's ingest by descriptor (#862), R16's dropped repeat (#865), and the broker's half of R32, the pending count with agent bundles and its oldest age (#863). They change today's code to meet the drafted text, and they move no Conformance row: each row moves when its named test lands.
+
 ## 13 Open Questions
 
 - **Q01** Where does a host's egress rule live on a laptop that roams between networks? Preliminary answer: nowhere network-specific. R33 matches the socket's owner, and the host prototype loads one pf rule with the operator. (roaming_laptop_egress)
@@ -339,10 +349,11 @@ This MIS lands by area, in several pull requests rather than one (P05, P09). Eac
 - **Q06** Should there be one broker per system, or one per agent? Raised by the operator (P06). Preliminary answer: one per system, on its own account, as a unit of the system daemon (R01, R02), on the premise that R03 states. (broker_per_system_or_per_agent)
 - **Q07** On a host whose posture is detection alone, does the system's one broker still run as its own account? Answered by both authors: yes. One shape for both postures means a move to prevention changes the egress rule and the logins, not the broker, and it takes the contacts and the audit log out of the agents' reach (P19, P20). (detection_host_broker_account)
 - **Q08** Should a message carry proof of who composed it? Deferred. The amail policy leaves authorship undefended in v1 (§7.2). If it comes, the agent holds its key and signs before it submits, and the broker only verifies (P16). (authorship_signing)
+- **Q09** A sender's retry after the broker restarted between minting an id and the sender reading the reply gets a second id for the same message, which R16 can't catch. Should the submission carry the sender's own token, echoed back, so a broker recognizes a retry? Deferred to a follow-up by the host-side maintainer, who raised it (P28). (retry_after_restart_second_id)
 
 ## 14 Deliberation Record
 
-The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 hours, so it closes on 2026-10-31 at 02:18Z (22:18 EDT on 2026-10-30). The same day, the operator suspended it pending the two prototypes (P17). The synthesis will quote each position verbatim.
+The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 hours, and it closed on 2026-10-31 at 02:18Z (22:18 EDT on 2026-10-30). The same day it opened, the operator suspended it pending the two prototypes (P17), and both reported before the close (P24 to P29). The Secretary's synthesis on #850 quotes each position and proposes revise.
 
 - **P01** The container-management maintainer, [6459064091](https://github.com/cversek/MacEff/issues/850#issuecomment-6459064091): revise; split the processes by account; pulled hand-off; a declared peer list; the sweep as health; receipts; section 10 as a list. (thm_split_by_account)
 - **P02** The host-side maintainer, [6468749316](https://github.com/cversek/MacEff/issues/850#issuecomment-6468749316): revise; Q02's (a); egress matched by socket owner; the job's environment; raised kept apart from delivered. (ira_own_login_for_reachable)
@@ -366,9 +377,16 @@ The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 h
 - **P20** The container-management maintainer, [6481618179](https://github.com/cversek/MacEff/issues/850#issuecomment-6481618179): the schema accepted with five amendments; R33, Q07 and the loopback agreed; the receiver checks the owner. (thm_schema_amendments)
 - **P21** The host-side maintainer, [6482319998](https://github.com/cversek/MacEff/issues/850#issuecomment-6482319998): a box directory's group on macOS; a hard link passes the owner check, so the link count must be one. (ira_link_count)
 - **P22** The container-management maintainer, [6482591977](https://github.com/cversek/MacEff/issues/850#issuecomment-6482591977): both agreed; the broker writes one copy per recipient. (thm_one_copy_per_recipient)
+- **P23** The host-side maintainer, [6496466005](https://github.com/cversek/MacEff/issues/850#issuecomment-6496466005): neither revision misreads him; MIS-0007's Guide should follow the schema; R20's shutdown order on macOS is untested. (ira_no_misreading)
+- **P24** The container-management maintainer, [6510997994](https://github.com/cversek/MacEff/issues/850#issuecomment-6510997994): the container prototype's first report, on MIS-0007; root can't read a unit's marker, so a supervisor per unit stops it. (thm_container_report_sd)
+- **P25** The host-side maintainer, [6515533280](https://github.com/cversek/MacEff/issues/850#issuecomment-6515533280): the macOS prototype's first report; R05 isolates only with three conditions; R29 needs the transcript's turn. (ira_macos_report_one)
+- **P26** The container-management maintainer, [6522832199](https://github.com/cversek/MacEff/issues/850#issuecomment-6522832199): the container prototype's second report, on MIS-0004; the kernel-enforced parts hold; R37, R16 and R32 not met by today's code; R15 needs a decision. (thm_container_report_mail)
+- **P27** The container-management maintainer, [6537147162](https://github.com/cversek/MacEff/issues/850#issuecomment-6537147162): the operator's choice for R15, "from the broker's acceptance", relayed with proposed text; the three receiver changes opened now. (thm_r15_from_acceptance)
+- **P28** The host-side maintainer, [6538045269](https://github.com/cversek/MacEff/issues/850#issuecomment-6538045269): R15 agreed as worded; a retry after a restart gets a second id, left as a follow-up. (ira_r15_agreed)
+- **P29** The host-side maintainer, [6538604020](https://github.com/cversek/MacEff/issues/850#issuecomment-6538604020): the macOS prototype's second report; R29 safe as specified with two liveness gaps and two wording needs; R33 holds; launchd doesn't stop what a job started; R05's launchd footprint. (ira_macos_report_two)
 
 **Objections**
-- **O01** Seat M: "My objection is to how mail reaches a session, which this deliberation hasn't named." A notice typed into a terminal is input, not a notification (P13). R26 and R29 answer it in this draft, and the operator answers it in the Resolution. Seat M confirmed the slug through its host agent (P18; MIS-0001-R46 (objection_slug_MUST_come_from_objector)). (notice_typed_is_input)
+- **O01** Seat M: "My objection is to how mail reaches a session, which this deliberation hasn't named." A notice typed into a terminal is input, not a notification (P13). R26, R29, R39 and R40 answer it in this draft, and the operator answers it in the Resolution. Seat M confirmed the slug through its host agent (P18; MIS-0001-R46 (objection_slug_MUST_come_from_objector)). (notice_typed_is_input)
 
 ## 15 Revision History
 
@@ -385,6 +403,10 @@ The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 h
   - R13 lets the recipient's group remove what it has ingested, R19's interval moves to the recipient's notifier, R22's delivered is confirmed in the session's transcript, R32 also alerts on the oldest unread message, and R33 admits the human accounts the operator declares.
   - R36 to R38 are new: message files no group can write, the receiver's owner and link-count check, and one copy per recipient.
   - Q07 is answered and O01's slug is confirmed. Sections 9 and 10 gain the container's egress capability, the shared-login limit and the loopback cost.
+- 2026-10-31: the synthesis revision, by the Secretary, after the deliberation closed and both prototypes reported (P23 to P29). The Status is Final-Comment.
+  - R15 now runs from the broker's acceptance, and its slug becomes message_id_MUST_be_one_from_acceptance, the authors' (P27, P28).
+  - R29 adds the transcript's last turn to its signals. R39 (read the box back) and R40 (no leading digit) are new, from the macOS catalog (P29).
+  - Section 10's R05 cost gains the macOS conditions and the launchd user domain (P25, P29). Section 12.1 records what each prototype showed and left untested, and 12.4 the three receiver pull requests. Q09 is new and deferred (P28).
 
 ## Wiki-Links
 
