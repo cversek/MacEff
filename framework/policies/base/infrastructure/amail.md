@@ -3,6 +3,7 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.6.0 — §2.3: ingest believes only what the broker wrote. A box entry is taken only as a regular file the box's owner owns, with one link, checked on the open descriptor; anything else is refused and set aside as `.refused` (MIS-0004 R37). Minor: a new refusal an agent can meet.
 **Version**: 1.5.0 — adds §9: mail joins the knowledge web, each message and markdown attachment a temporal-record node, with its links in a `.wiki-links` sidecar under `amail/.links/` so a message's bytes stay as sent and no sender can supply its links. Minor: a new section a type policy owes the scholarship policy.
 **Version**: 1.4.2 — §2.3 says how a recipient learns where its pickup box is: provisioning names `handoff` and `agent` in its own `amail.json`, which its daemon needs, since an outer tier passes it no agent-configured variables. Patch.
 **Version**: 1.4.1 — §5.1 and §6b.1 say who mints the message id (the broker, on
@@ -319,6 +320,17 @@ custody transfer by ingesting into its own store, as itself. This holds for ever
 kind of mail — agent-to-agent, peer-inbound, and internet — and for refused mail,
 which is retained in a broker-owned store rather than anywhere inside the
 recipient's home.
+
+**The recipient believes only what the broker wrote.** The recipient's group may remove
+files from its box, so it may create them there too, and a name in the box proves nothing
+about who wrote it. Ingest opens the box once, by descriptor, and reads each entry relative
+to it without following a link. It takes an entry only if it is a regular file, owned by
+the box's owner (the broker's account), with a single link, all checked on the descriptor
+it opened (MIS-0004 R37). Any other entry is refused: a symlink, a second hard link, a file
+the recipient's own account wrote, a FIFO. It is renamed with a `.refused` suffix, so it is
+reported once and kept as evidence, and it is listed among ingest's failures. **A
+`.refused` file in your box is that record.** Read it before trusting anything in it, and
+remove it once it is explained.
 
 **Why this is a policy statement and not an implementation note.** The obvious
 design has the broker write each recipient's mailbox directly. That requires a
