@@ -1143,6 +1143,81 @@
           "newtype",
           "supply chain"
         ]
+      },
+      {
+        "name": "java_coding_standards",
+        "short_name": "JAVA_CODE",
+        "path": "lang/java/coding_standards.md",
+        "CEP_triggers": [
+          "Where does logic go in an Android app so it can be tested without a device?",
+          "What may wait on the main thread?",
+          "How do I keep a binary layout the same across every code base that reads it?",
+          "What do I check before putting a value into a fixed-width field?",
+          "Which clock does each timestamp come from, and which may be compared?",
+          "Which JDK does the build use, and how is that made certain?",
+          "Which style applies to code I touch, and what does Javadoc carry?"
+        ],
+        "keywords": [
+          "java",
+          "android",
+          "activity",
+          "main thread",
+          "anr",
+          "strictmode",
+          "lint",
+          "error prone",
+          "javadoc",
+          "jdk toolchain",
+          "sensor timestamp",
+          "wire format"
+        ]
+      },
+      {
+        "name": "java_testing",
+        "short_name": "JAVA_TEST",
+        "path": "lang/java/testing_java.md",
+        "CEP_triggers": [
+          "Local JVM test or device test: which, and why?",
+          "What must be on the test classpath, and what does returnDefaultValues hide?",
+          "Fakes, mocks or Robolectric: which first?",
+          "How do I keep a failing test without deleting or weakening it?"
+        ],
+        "keywords": [
+          "junit",
+          "junit4",
+          "robolectric",
+          "androidTest",
+          "local tests",
+          "@Ignore",
+          "test doubles",
+          "gradle testDebugUnitTest"
+        ]
+      },
+      {
+        "name": "cpp_coding_standards",
+        "short_name": "CPP_CODE",
+        "path": "lang/cpp/coding_standards.md",
+        "CEP_triggers": [
+          "Who owns this object, and what releases it?",
+          "When is a narrowing conversion allowed?",
+          "May two timestamps from different clocks be compared?",
+          "How thin is the JNI layer, and what must I do about references, exceptions and threads?",
+          "Why error codes rather than exceptions in code loaded through JNI?",
+          "How is native logic tested without a device?"
+        ],
+        "keywords": [
+          "c++",
+          "cpp",
+          "raii",
+          "core guidelines",
+          "jni",
+          "ndk",
+          "clock_monotonic",
+          "clock_boottime",
+          "googletest",
+          "hwasan",
+          "checkjni"
+        ]
       }
     ]
   },

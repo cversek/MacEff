@@ -1959,10 +1959,22 @@ class Broker:
                 to = str(meta.get("observed", {}).get("envelope_to", "")).lower()
                 if to == own_addr:
                     quarantined += 1
-        pending_pickup = 0
+        # Every message waiting in the box: agent bundles (*.amsg) as well as internet mail
+        # (*.eml). Counting only *.eml once read two waiting bundles as zero (MIS-0004 R32,
+        # the container prototype). The oldest one's age is what an alert on stuck mail reads.
+        pending_pickup, oldest_pending_s = 0, None
         hdir = self.config.inbound_handoff
         if hdir is not None and (hdir / agent).is_dir():
-            pending_pickup = len(list((hdir / agent).glob("*.eml")))
+            now = time.time()
+            for entry in (hdir / agent).iterdir():
+                if entry.suffix not in (".amsg", ".eml"):
+                    continue
+                try:
+                    age = now - entry.lstat().st_mtime
+                except FileNotFoundError:
+                    continue  # ingested between the listing and the stat
+                pending_pickup += 1
+                oldest_pending_s = max(oldest_pending_s or 0.0, age)
         counts = {
             "quarantined": quarantined,
             "pending_pickup": pending_pickup,
@@ -1996,7 +2008,9 @@ class Broker:
             # auditable fact, the breakdown is in the response.
             self.audit.read(agent=agent, operation="status",
                             count=sum(counts.values()))
-        return {"ok": True, **counts, "budget": budget}
+        # The age stays out of `counts` for the budget's reason: it is summed for the audit total.
+        return {"ok": True, **counts, "budget": budget,
+                "oldest_pending_s": None if oldest_pending_s is None else round(oldest_pending_s)}
 
     def identify(self, conn: socket.socket) -> "Identity":
         """Authenticate the connecting process from kernel-supplied credentials.
