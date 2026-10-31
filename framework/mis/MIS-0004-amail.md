@@ -52,15 +52,16 @@ The operator asked on 2026-10-05 for agent mail to be re-specified as an MIS who
 - Each host declares its security posture, and detection alone is allowed only on a host with no address reachable from the Internet. Giving a host such an address then forces prevention: the broker on its own account, an egress rule that only that account passes, and a login of its own for each reachable agent. (The operator's ruling of 2026-10-05, relayed by the host-side maintainer and confirmed on this pull request; the account and the login come from #850.)
 - Every agent's address is in one zone, `agents.<domain>`, with a local part made of the agent's calling-card name and short id, lowercased, for example `exampleagent_0a1b2c@agents.example.org`. There is no zone per deployment, and routes are the operator's to edit: no agent's token edits them. (The operator's ruling of 2026-10-05, relayed by the host-side maintainer and confirmed on this pull request.)
 - A sender is told what happened: each state of a message is reported by the holder that performed it.
+- Mail between MacEff agents is signed and attested. Each agent signs with its own key, and the operator declares every agent's public key. Mail from senders outside MacEff can't be required to sign, so it stays unverified. (The operator's review of this revision, 2026-10-31.)
 
 **Non-goals**
 - How a unit is started, supervised and scheduled, and how a session is woken. MIS-0002 decides those for primal daemons and MIS-0007 for the system daemon; this MIS depends on both without changing them. Push-wake stays there too: the broker raises a "mail arrived" notice, and MIS-0002-R43 (wake_MUST_use_notifier) governs how the notice reaches the session.
 - The mail route provider's own configuration, and the deployment's domain, which stay outside this repository.
-- Proving which agent composed a message. The amail policy leaves authorship undefended in v1 (§7.2), and Q08 keeps it open.
+- Proving who composed mail from outside MacEff. Inside MacEff a signature proves which account holds the signing key (R41 to R46); where agents share a login, that is the login, and receipts say so (R46).
 
 ## 4 Guide-Level Explanation
 
-A message from agent A to agent B on the same system goes like this. A submits it over the broker's socket. The broker takes A's identity from the socket's peer uid, checks B against A's contacts, gives the message one id, and queues it in A's queue. It writes the message into B's box, which the broker owns and only B's group can read. B's receiver, a unit of B's primal daemon running as B, pulls it into B's store, after checking on the open file that the broker owns it and that it has a single link, and then removes it from the box.
+A message from agent A to agent B on the same system goes like this. A signs it with its own key and submits it over the broker's socket. The broker verifies the signature against A's key in the operator's registry, and refuses the message if it doesn't verify. The broker takes A's identity from the socket's peer uid, checks B against A's contacts, gives the message one id, and queues it in A's queue. It writes the message into B's box, which the broker owns and only B's group can read. B's receiver, a unit of B's primal daemon running as B, pulls it into B's store, after checking on the open file that the broker owns it and that it has a single link, and then removes it from the box.
 
 While B has unread mail, B's notice stays asserted, naming the unread ids oldest first, and it clears when B's read cursor passes them. Each step sends A a receipt from the holder that did it: stored, taken, ingested, raised, delivered (B's transcript shows the notice), read. If B's session is down, A's receipt says so. If B's oldest unpulled message passes its declared age, the outside watch tells a person.
 
@@ -97,6 +98,9 @@ These are the terms the Specification uses beyond the glossary. Until MIS-0007 l
 - **asserted**: the state of a notice that stays raised until the reader's cursor passes the mail it names.
 - **read cursor**: the point in an agent's mail up to which the agent has read.
 - **calling card**: an agent's name and short id, as its identity file gives them.
+- **MacEff agent**: an agent whose address the operator declares in the key registry.
+- **key registry**: the operator's declaration of each MacEff agent's address, its public keys with their validity dates, and the account that holds each key; only the operator can write it.
+- **attested**: the trust state of a message whose signature verified against its sender's declared key; **suspect**, of one whose check was attempted and failed; **unverified**, of one no check applies to.
 - **identity file**: the file in an agent's home that holds the agent's identity, which its primal daemon reads (MIS-0002-R02 (pd_MUST-NOT_take_identity_from_env)).
 
 ## 6 Specification
@@ -170,6 +174,15 @@ The Secretary gathered these preliminary requirements from the positions on #850
 - **R34** [MUST · decidable: macf/tests/test_amail_transport.py::test_pinned_bundle] The broker's outbound transport MUST verify servers against a pinned trust bundle that the operator rotates by a declared procedure. (transport_MUST_pin_trust_bundle)
 - **R35** [MUST · decidable: macf/tests/test_amail_units.py::test_socket_version] The broker socket MUST carry a protocol version, and accept the previous version for a declared window after each change. (broker_socket_MUST_carry_version)
 
+### 6.10 Signing
+
+- **R41** [MUST · decidable: macf/tests/test_amail_signing.py::test_agent_signs_every_message] Each MacEff agent MUST sign every message it submits, with a key that only its own account can read. (agent_MUST_sign_its_messages)
+- **R42** [MUST · decidable: macf/tests/test_amail_signing.py::test_keys_declared_by_operator] Each MacEff agent's public key MUST be declared, with the account holding it, in a registry only the operator can write and every broker and receiver can read. (agent_key_MUST_be_declared_by_operator)
+- **R43** [MUST · decidable: macf/tests/test_amail_signing.py::test_broker_refuses_unsigned_agent_mail] The broker MUST refuse a MacEff agent's submission that carries no signature verifying against that agent's declared key. (broker_MUST_refuse_unsigned_agent_mail)
+- **R44** [MUST · decidable: macf/tests/test_amail_signing.py::test_receiver_marks_unsigned_agent_mail_suspect] A receiver MUST mark suspect a message whose sender address is in the registry, when its signature is missing or fails against that sender's declared keys. (receiver_MUST_flag_unsigned_agent_mail)
+- **R45** [MUST · decidable: macf/tests/test_amail_signing.py::test_rotation_keeps_old_signatures_verifiable] A retired key MUST verify only messages whose broker acceptance time falls inside its declared validity dates, and never sign new ones. (key_rotation_MUST_keep_signatures_verifiable)
+- **R46** [MUST · decidable: macf/tests/test_amail_signing.py::test_shared_login_attestation_labelled] A receiver MUST report a verified message as attested on a shared login when the signing key's account also holds another agent's key. (shared_login_attestation_MUST_be_labelled)
+
 ## 7 Rationale and Rejected Alternatives
 
 Each requirement's reason, with its source. P and O numbers refer to section 14.
@@ -204,6 +217,12 @@ Each requirement's reason, with its source. P and O numbers refer to section 14.
 - **R29**: a notice typed while a permission prompt waited landed in the prompt (P13). A sender's keystrokes went into a dialog nobody had listed (#854), and such dialogs keep turning up, so the gate is positive evidence of an idle prompt rather than a list of known dialogs (P16). MIS-0002-R21 (pd_MUST_report_waiting_on_person) is the natural first gate. The macOS prototype drove a throwaway session through 14 states, from idle and streaming to each dialog, the exit-with-background-work prompt, the rewind menu and a survey bar. The three signals together typed into no dialog and no busy session, and each signal alone had false types: the screen alone types under a running tool, whose box looks empty, and the turn check alone types into the exit prompt, where a return means "exit and stop tasks" (P25, P29). The turn check should skip a trailing interrupt record and local command records, which otherwise hold the gate until a person types; both gaps fail safe (P29).
 - **R39**: twice in the macOS catalog, a single return left the text in the box. Read back, a notice still in the box is retried; a dialog that opened is never typed into (P29).
 - **R40**: a survey bar reads as an empty box, and a digit answers it (P29).
+- **R41**: the operator asked that mail between MacEff agents always be attested, and Q08 no longer be deferred (P30). Most of the mechanism is already on main: Ed25519 signing and verification, contact entries that declare one key or several, and trust states that keep attested apart from suspect (P31). On macOS the private key is a file of mode 0600 in a 0700 directory of the agent's own account, outside any repository, synced folder or backup that leaves the machine. Not the login keychain: its access control is per application, so on one login every agent reads what one can, and its prompts are modal dialogs that stall an unattended session. Not the Secure Enclave, which holds P-256 keys only (P32). The broker never holds an agent's key (R03), and only verifies (P30).
+- **R42**: keys live today in each agent's own contacts file, which the agent can write, so the declaration moves out of the agent's reach. Its home is the operator-written, root-owned system declaration MIS-0007 drafts, so there is one registry, not two (P31, P32). The entry names the account that holds each key, which is what lets a receiver see a shared login (R46, P32). Each declaration and rotation is an operator step; that cost is the point (P32).
+- **R43**: the operator's draft carried it, and the operator confirmed it dropped from the posted review by mistake (P30). An unsigned local submission is no longer attested on the kernel's identity, because on a shared login the peer uid is the same for every agent and can't stand in for a signature; so "signed" means the same on every path (P31, P32).
+- **R44**: the receiver decides who is a MacEff agent from the registry: an address in it is held to its keys, and an address outside it is outside mail and stays unverified (P30, P31). Switching it on turns today's agent mail suspect until every key is declared, which is why landing declares first and enforces second (P31; section 12.4).
+- **R45**: validity dates alone don't stop a stolen retired key, whose thief can date a message inside the old window. R15's acceptance time is minted by the broker, so validity is checked against it (P32). Rotation runs: the agent generates a new key in its own account, the operator declares it with its start date, the agent switches to it, then the operator sets the old key's end date; the agent never signs with an undeclared key (P32). A suspected exposure, a change of account, or a move to another machine triggers it; a migration or restore generates a new key and never carries the old private key. After a compromise the end date is the last time the key is known safe (P32).
+- **R46**: where agents share one login, any process of that login can read every agent's key file, so a signature attests the login (P30, P32). The registry names each key's account, so a receiver can say so rather than leave it in prose. A login per agent is possible on macOS, at an operator root step per agent, and this MIS doesn't require it (P32).
 - **R30**: a listing prints the whole mailbox on every wake, so each notice costs the entire history (P13).
 - **R31**: a broker that is quiet because it is idle and one that is quiet because mail is stuck look the same to anyone not reading `pd status` (P01).
 - **R32**: Seats L and N each sat most of a day behind their own unanswered prompt while their mail counted as delivered (P11, P14). Under R04 the receiver keeps pulling while the session waits behind a prompt, so the unpulled age alone would never have fired for them. What aged was the oldest unread message, which the agent's primal daemon publishes in its status (P18). The outside watch alerts by a path independent of the recipient's session and of the broker (MIS-0002-R75 (outside_watch_MUST_alert_independently)).
@@ -255,6 +274,8 @@ The protections a container gives a broker, one row each, with how a host meets 
 
 **What one broker per system concentrates.** Every agent's contacts, limits, queues and audit records sit in one account. The broker's code keeps them apart (R12), and for boxes the operating system does (R13). The broker holds the route credentials by design and is not defended against its own compromise (amail §7.2). R03 keeps it from holding anything that belongs to one agent.
 
+**Authorship.** The amail policy lists authorship as not defended (§7.2). Between MacEff agents this MIS defends it: a signature proves which account holds the key (R41 to R46). A compromised broker can no longer alter agent mail undetected, though it still holds the route credentials by design. Outside mail stays undefended.
+
 **Shared logins.** The human accounts R33 admits include the operator's login, so on a shared login they admit the agents too. R33 separates anything only together with R05, and a shared-login host stays in detection posture until each reachable agent has a login of its own (P19).
 
 Detection alone stays allowed only where no agent has a reachable address. Addresses in this MIS and its deliberation are written `agents.<domain>`, or `example.org` in examples, because the deployment's domain stays out of every public text (the operator's ruling of 2026-10-05).
@@ -303,6 +324,12 @@ Detection alone stays allowed only where no agent has a reachable address. Addre
 | R38 | decidable | `macf/tests/test_amail_handoff.py::test_one_copy_per_recipient` | planned |
 | R39 | decidable | `macf/tests/test_amail_notice.py::test_keystrokes_read_back` | planned |
 | R40 | decidable | `macf/tests/test_amail_notice.py::test_keystroke_notice_no_leading_digit` | planned |
+| R41 | decidable | `macf/tests/test_amail_signing.py::test_agent_signs_every_message` | planned |
+| R42 | decidable | `macf/tests/test_amail_signing.py::test_keys_declared_by_operator` | planned |
+| R43 | decidable | `macf/tests/test_amail_signing.py::test_broker_refuses_unsigned_agent_mail` | planned |
+| R44 | decidable | `macf/tests/test_amail_signing.py::test_receiver_marks_unsigned_agent_mail_suspect` | planned |
+| R45 | decidable | `macf/tests/test_amail_signing.py::test_rotation_keeps_old_signatures_verifiable` | planned |
+| R46 | decidable | `macf/tests/test_amail_signing.py::test_shared_login_attestation_labelled` | planned |
 
 **Cold-reader trial**: not yet held.
 
@@ -339,6 +366,8 @@ This MIS lands by area, in several pull requests rather than one (P05, P09). Eac
 
 The three receiver changes the container prototype found were opened at the operator's direction before this synthesis (P27): R37's ingest by descriptor (#862), R16's dropped repeat (#865), and the broker's half of R32, the pending count with agent bundles and its oldest age (#863). They change today's code to meet the drafted text, and they move no Conformance row: each row moves when its named test lands.
 
+Signing lands in two steps, declare first and enforce second (P31, P32). First every agent generates its key and the operator declares it (R41, R42); only then do the broker's refusal (R43) and the receiver's suspect mark (R44) switch on, so that today's agent mail doesn't turn suspect in between.
+
 ## 13 Open Questions
 
 - **Q01** Where does a host's egress rule live on a laptop that roams between networks? Preliminary answer: nowhere network-specific. R33 matches the socket's owner, and the host prototype loads one pf rule with the operator. (roaming_laptop_egress)
@@ -348,7 +377,7 @@ The three receiver changes the container prototype found were opened at the oper
 - **Q05** Which peers may deliver to a broker, and who declares that list? Preliminary answer: the operator declares it, in a file no agent can write (R09). (broker_peer_list)
 - **Q06** Should there be one broker per system, or one per agent? Raised by the operator (P06). Preliminary answer: one per system, on its own account, as a unit of the system daemon (R01, R02), on the premise that R03 states. (broker_per_system_or_per_agent)
 - **Q07** On a host whose posture is detection alone, does the system's one broker still run as its own account? Answered by both authors: yes. One shape for both postures means a move to prevention changes the egress rule and the logins, not the broker, and it takes the contacts and the audit log out of the agents' reach (P19, P20). (detection_host_broker_account)
-- **Q08** Should a message carry proof of who composed it? Deferred. The amail policy leaves authorship undefended in v1 (§7.2). If it comes, the agent holds its key and signs before it submits, and the broker only verifies (P16). (authorship_signing)
+- **Q08** Should a message carry proof of who composed it? Answered by the operator's review (P30): every MacEff agent signs (R41 to R46), outside mail stays unverified, the agent holds its key and the broker only verifies (P16). (authorship_signing)
 - **Q09** A sender's retry after the broker restarted between minting an id and the sender reading the reply gets a second id for the same message, which R16 can't catch. Should the submission carry the sender's own token, echoed back, so a broker recognizes a retry? Deferred to a follow-up by the host-side maintainer, who raised it (P28). (retry_after_restart_second_id)
 
 ## 14 Deliberation Record
@@ -384,6 +413,9 @@ The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 h
 - **P27** The container-management maintainer, [6537147162](https://github.com/cversek/MacEff/issues/850#issuecomment-6537147162): the operator's choice for R15, "from the broker's acceptance", relayed with proposed text; the three receiver changes opened now. (thm_r15_from_acceptance)
 - **P28** The host-side maintainer, [6538045269](https://github.com/cversek/MacEff/issues/850#issuecomment-6538045269): R15 agreed as worded; a retry after a restart gets a second id, left as a follow-up. (ira_r15_agreed)
 - **P29** The host-side maintainer, [6538604020](https://github.com/cversek/MacEff/issues/850#issuecomment-6538604020): the macOS prototype's second report; R29 safe as specified with two liveness gaps and two wording needs; R33 holds; launchd doesn't stop what a job started; R05's launchd footprint. (ira_macos_report_two)
+- **P30** The operator, review [5723927799](https://github.com/cversek/MacEff/pull/520#pullrequestreview-5723927799) on #520, after the close: R15 approved as worded; signing required for every MacEff agent before the revision is approved; R41, R42, R44 and R45 proposed, and R43, dropped from the posted review by mistake, carried in at the operator's word on 2026-10-31. (owner_signing_required)
+- **P31** The container-management maintainer, [6546702449](https://github.com/cversek/MacEff/pull/520#issuecomment-6546702449) on #520: agrees; most of the mechanism exists; declare before enforcing; the registry in the system declaration; R44 by registered address; no attestation for an unsigned local submission; retired keys with validity dates; Q08 answered. (thm_signing_notes)
+- **P32** The host-side maintainer, [6546744158](https://github.com/cversek/MacEff/pull/520#issuecomment-6546744158) on #520: agrees with P31; a 0600 key file, not the keychain or the Secure Enclave; the registry names each key's account; rotation's order and triggers; validity checked against R15's acceptance time. (ira_signing_custody)
 
 **Objections**
 - **O01** Seat M: "My objection is to how mail reaches a session, which this deliberation hasn't named." A notice typed into a terminal is input, not a notification (P13). R26, R29, R39 and R40 answer it in this draft, and the operator answers it in the Resolution. Seat M confirmed the slug through its host agent (P18; MIS-0001-R46 (objection_slug_MUST_come_from_objector)). (notice_typed_is_input)
@@ -407,6 +439,7 @@ The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 h
   - R15 now runs from the broker's acceptance, and its slug becomes message_id_MUST_be_one_from_acceptance, the authors' (P27, P28).
   - R29 adds the transcript's last turn to its signals. R39 (read the box back) and R40 (no leading digit) are new, from the macOS catalog (P29).
   - Section 10's R05 cost gains the macOS conditions and the launchd user domain (P25, P29). Section 12.1 records what each prototype showed and left untested, and 12.4 the three receiver pull requests. Q09 is new and deferred (P28).
+- 2026-10-31: signing, at the operator's review (P30), with both authors' notes (P31, P32), folded in by the Secretary. Section 6.10 is new: R41 to R45 from the review, R43 carried in at the operator's word after it dropped from the posted text by mistake, and R46 new from P32. R42 names the account that holds each key, R44 is keyed to registered sender addresses, and R45 checks validity against R15's acceptance time. Q08 is answered; the Goals, Non-Goals, Guide, Terms, section 10 and section 12.4 follow. A requirement changed during Final-Comment, so the final comment period starts again.
 
 ## Wiki-Links
 
