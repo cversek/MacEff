@@ -418,6 +418,7 @@ The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 h
 - **P32** The host-side maintainer, [6546744158](https://github.com/cversek/MacEff/pull/520#issuecomment-6546744158) on #520: agrees with P31; a 0600 key file, not the keychain or the Secure Enclave; the registry names each key's account; rotation's order and triggers; validity checked against R15's acceptance time. (ira_signing_custody)
 - **P33** The container-management maintainer, [6547269330](https://github.com/cversek/MacEff/pull/520#issuecomment-6547269330) on #520: R43 checks a key valid at acceptance, so it agrees with R45 during a rotation; R45's acceptance time comes from the sending broker; R43's confirmation belongs on the pull request. (thm_signing_followup)
 - **P34** The host-side maintainer, [6549528945](https://github.com/cversek/MacEff/pull/520#issuecomment-6549528945) on #520: R41 to R46 read as meant, checked in the file itself; no wording changes. (ira_signing_confirmed)
+- **P35** The operator, review [5725092814](https://github.com/cversek/MacEff/pull/520#pullrequestreview-5725092814) on #520, at b05bca60: "R43 was dropped from my review by mistake; it belongs with the others. I approve the revision." (owner_revision_approved)
 
 **Objections**
 - **O01** Seat M: "My objection is to how mail reaches a session, which this deliberation hasn't named." A notice typed into a terminal is input, not a notification (P13). R26, R29, R39 and R40 answer it in this draft, and the operator answers it in the Resolution. Seat M confirmed the slug through its host agent (P18; MIS-0001-R46 (objection_slug_MUST_come_from_objector)). (notice_typed_is_input)
@@ -443,6 +444,7 @@ The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 h
   - Section 10's R05 cost gains the macOS conditions and the launchd user domain (P25, P29). Section 12.1 records what each prototype showed and left untested, and 12.4 the three receiver pull requests. Q09 is new and deferred (P28).
 - 2026-10-31: signing, at the operator's review (P30), with both authors' notes (P31, P32), folded in by the Secretary. Section 6.10 is new: R41 to R45 from the review, R43 carried in at the operator's word after it dropped from the posted text by mistake, and R46 new from P32. R42 names the account that holds each key, R44 is keyed to registered sender addresses, and R45 checks validity against R15's acceptance time. Q08 is answered; the Goals, Non-Goals, Guide, Terms, section 10 and section 12.4 follow. A requirement changed during Final-Comment, so the final comment period starts again.
 - 2026-10-31: R43 accepts any key declared for the agent and valid at the broker's acceptance time, so it agrees with R45 during a rotation, and R45's rationale says whose clock it trusts between systems (P33). P33 and P34 join the record.
+- 2026-10-31: the operator approved the revision at b05bca60 and confirmed R43 on this pull request (P35). Both maintainers have commented on it (P33, P34) and it has been revised once in answer, so the discussion closes under MIS-0001-R48 unless a maintainer raises a critical objection.
 
 ## Wiki-Links
 
