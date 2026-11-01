@@ -1302,7 +1302,8 @@ The sidecars sit apart from the mail because a bundle carried by hand (§6b.6) i
   success clears the entry's count. An entry handed off whose spool removal then fails
   isn't handed off again: the consumer writes a `.handed` marker before removing it, and
   a retry that finds the marker only finishes the removal, since nothing drops a repeated
-  `.eml` at ingest.
+  `.eml` at ingest. The marker is best effort: if it can't be written, the delivery still
+  completes, so an unwritable failures directory never repeats a clean delivery.
   Before this, one such entry ended every run, and everything behind it waited until a
   person cleared it.
 
