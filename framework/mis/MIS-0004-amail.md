@@ -289,7 +289,7 @@ Detection alone stays allowed only where no agent has a reachable address. Addre
 | R01 | decidable | `macf/tests/test_amail_placement.py::test_one_broker_per_system` | planned |
 | R02 | decidable | `macf/tests/test_amail_placement.py::test_broker_has_own_account` | planned |
 | R03 | judgment | the head maintainer, at review of each change to the broker | standing |
-| R04 | decidable | `macf/tests/test_amail_placement.py::test_receiver_runs_as_its_agent` | planned |
+| R04 | decidable | `macf/tests/test_amail_placement.py::test_receiver_runs_as_its_agent` | passing |
 | R05 | decidable | `macf/tests/test_amail_placement.py::test_reachable_agent_has_own_login` | planned |
 | R06 | decidable | `macf/tests/test_amail_address.py::test_address_from_identity_file` | planned |
 | R07 | decidable | `macf/tests/test_amail_address.py::test_origin_from_peer_uid` | planned |
@@ -310,12 +310,12 @@ Detection alone stays allowed only where no agent has a reachable address. Addre
 | R22 | decidable | `macf/tests/test_amail_receipts.py::test_delivered_needs_acknowledgement` | planned |
 | R23 | decidable | `macf/tests/test_amail_receipts.py::test_recipient_offline` | planned |
 | R24 | decidable | `macf/tests/test_amail_receipts.py::test_state_by_id` | planned |
-| R25 | decidable | `macf/tests/test_amail_notice.py::test_notice_follows_ingest` | planned |
+| R25 | decidable | `macf/tests/test_amail_notice.py::test_notice_follows_ingest` | passing |
 | R26 | decidable | `macf/tests/test_amail_notice.py::test_notice_level_triggered` | planned |
-| R27 | decidable | `macf/tests/test_amail_notice.py::test_restart_keeps_cursor` | planned |
+| R27 | decidable | `macf/tests/test_amail_notice.py::test_restart_keeps_cursor` | passing |
 | R28 | decidable | `macf/tests/test_amail_notice.py::test_notice_carries_ids` | planned |
 | R29 | decidable | `macf/tests/test_amail_notice.py::test_keystrokes_need_idle_prompt` | planned |
-| R30 | decidable | `macf/tests/test_amail_notice.py::test_listing_new_since_last_read` | planned |
+| R30 | decidable | `macf/tests/test_amail_notice.py::test_listing_new_since_last_read` | passing |
 | R31 | decidable | `macf/tests/test_amail_health.py::test_health_is_last_sweep` | planned |
 | R32 | decidable | `macf/tests/test_amail_health.py::test_stuck_mail_alerts` | planned |
 | R33 | decidable | `macf/tests/test_amail_egress.py::test_rule_allows_only_declared_accounts` | planned |
@@ -448,6 +448,7 @@ The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 h
 - 2026-10-31: R43 accepts any key declared for the agent and valid at the broker's acceptance time, so it agrees with R45 during a rotation, and R45's rationale says whose clock it trusts between systems (P33). P33 and P34 join the record.
 - 2026-10-31: the operator approved the revision at b05bca60 and confirmed R43 on this pull request (P35). Both maintainers have commented on it (P33, P34) and it has been revised once in answer, so the discussion closes under MIS-0001-R48 unless a maintainer raises a critical objection.
 - 2026-10-31: Accepted. The Secretary's last commit before the operator's merge: the decided Status, and a Resolution quoting the operator's decision comment on #520, which answers O01.
+- 2026-11-01: landing, receiver and read cursor (head maintainer). R04, R25, R27 and R30 are passing. The receiver is a duty of the agent's primal daemon that ingests the box each pass, from the box its own settings name; the read cursor is the store's Maildir `new` and `cur`. amail policy 1.9.0 says so (§2.3, §2.4).
 
 ## Wiki-Links
 
