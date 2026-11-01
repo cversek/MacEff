@@ -302,10 +302,10 @@ Detection alone stays allowed only where no agent has a reachable address. Addre
 | R14 | decidable | `macf/tests/test_amail_handoff.py::test_intake_names_unique` | passing |
 | R15 | decidable | `macf/tests/test_amail_handoff.py::test_one_id_end_to_end` | passing |
 | R16 | decidable | `macf/tests/test_amail_handoff.py::test_duplicate_dropped` | planned |
-| R17 | decidable | `macf/tests/test_amail_flow.py::test_queues_per_agent` | planned |
-| R18 | decidable | `macf/tests/test_amail_flow.py::test_refusal_reaches_sender` | planned |
+| R17 | decidable | `macf/tests/test_amail_flow.py::test_queues_per_agent` | passing |
+| R18 | decidable | `macf/tests/test_amail_flow.py::test_refusal_reaches_sender` | passing |
 | R19 | decidable | `macf/tests/test_amail_notice.py::test_doorbell_interval` | planned |
-| R20 | decidable | `macf/tests/test_amail_flow.py::test_quarantine` | planned |
+| R20 | decidable | `macf/tests/test_amail_flow.py::test_quarantine` | passing |
 | R21 | decidable | `macf/tests/test_amail_receipts.py::test_states_from_holders` | planned |
 | R22 | decidable | `macf/tests/test_amail_receipts.py::test_delivered_needs_acknowledgement` | planned |
 | R23 | decidable | `macf/tests/test_amail_receipts.py::test_recipient_offline` | planned |
@@ -452,6 +452,7 @@ The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 h
 - 2026-11-01: landing, hand-off area (container-management maintainer). R13, R14, R15, R36 and R38 are passing. R15 needed a change: the receiving broker of a shared hand-off kept no peer id and minted its own, so it now keeps a well-formed one, drops a pair whose id the recipient already holds from the same peer and sender, mints fresh on any other match (an id collision) and for quarantined mail. amail policy 1.10.0 says so (§2.1.1).
 - 2026-11-01: landing, signing area, the declare step (host-side maintainer). R41 is passing: an agent with a key signs every submission; the key is 0600 in a 0700 directory of its own account, outside any work tree or synced folder; an agent declared to sign refuses to send without one, and any other sends unsigned with a warning. Nothing on the receiving side changes. amail policy 1.11.0 says so (§3.2.2).
 - 2026-11-01: landing, the mail notice as a level (head maintainer). R26 is passing: a channel that takes mail is told at each attach while mail waits unread, and a mail notice still owed when the mail is read is withdrawn and recorded. While the operator silences mail to the session nothing is re-asserted; after an unsilence, still-unread mail is asserted on the next pass. amail policy 1.12.0 says so (§2.4).
+- 2026-11-01: landing, flow area (container-management maintainer). R17, R18 and R20 are passing. R20 and the spool half of R17 needed a change: one spool entry that failed unexpectedly ended every watcher run, so it is now counted per entry, the run goes on, and after `max_failures` the entry is quarantined with its last error. amail policy 1.13.0 says so.
 
 ## Wiki-Links
 

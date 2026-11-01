@@ -108,6 +108,13 @@ class InboundConfig:
     #: enabling push-wake is a deliberate deployment act, never a side
     #: effect of granting a contact.
     push_wake_enabled: bool = False
+    #: How many times one spool entry may fail unexpectedly before it is set
+    #: aside in quarantine with its last error (MIS-0004 R20). Counted per
+    #: entry and content, in the consumer's own `failures_dir`.
+    max_failures: int = 3
+    #: Where those counts live: the consumer's, never the spool, which has one
+    #: writer. Defaults to `.failures` inside the quarantine directory.
+    failures_dir: Optional[Path] = None
 
     #: Orphan-sweep age bounds, in seconds. A spool entry older than this
     #: was never processed (a dead consumer, or one that crashed mid-run); a
@@ -585,8 +592,62 @@ def process_spool(cfg: InboundConfig) -> List[Dict[str, Any]]:
                                 cfg.broker_config)
     results = []
     for eml, sidecar in _spool_entries(cfg.spool_dir):
-        results.append(process_entry(cfg, eml, sidecar))
+        # ONE ENTRY'S FAULT IS ONE ENTRY'S (MIS-0004 R17, R20). An unexpected
+        # error used to end the whole run, and the watcher's retry met the
+        # same entry first every cycle, so every message spooled behind it,
+        # for any agent, waited until a person cleared it. Now the entry's
+        # failure is counted and the run goes on; after `max_failures` the
+        # entry is set aside in quarantine with its last error, and reported.
+        try:
+            results.append(process_entry(cfg, eml, sidecar))
+        except Exception as e:  # noqa: BLE001 - per entry, so the rest of the spool still drains
+            results.append(_entry_failed(cfg, eml, sidecar, e))
     return results
+
+
+def _entry_failed(cfg: InboundConfig, eml: Path, sidecar: Path, error: Exception) -> Dict[str, Any]:
+    """Count one unexpected failure of a spool entry; set it aside at the limit."""
+    reason = f"{type(error).__name__}: {error}"
+    try:
+        sha = hashlib.sha256(eml.read_bytes()).hexdigest()
+    except OSError:
+        sha = ""
+    fdir = cfg.failures_dir or (cfg.quarantine_dir / ".failures")
+    fdir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    record = fdir / f"{eml.name}.json"
+    try:
+        held = json.loads(record.read_text())
+    except (OSError, json.JSONDecodeError):
+        held = {}
+    count = (held.get("count", 0) if held.get("sha256") == sha else 0) + 1
+    entry: Dict[str, Any] = {"entry": eml.name, "sha256": sha, "failures": count, "reason": reason}
+    audit = (AuditLog(cfg.broker_config.audit_path, tier=cfg.broker_config.tier)
+             if cfg.broker_config.audit_path else None)
+    if count >= cfg.max_failures:
+        why = f"failed {count} times, last: {reason}"
+        try:
+            _quarantine(cfg, eml, sidecar, why)
+        except OSError as qe:
+            # Can't even set it aside: keep counting, so the next run tries again and says so.
+            record.write_text(json.dumps({"sha256": sha, "count": count, "last": reason}))
+            print(f"⚠️ MACF: spool entry {eml.name} {why}, and quarantine failed ({qe})",
+                  file=sys.stderr)
+            entry.update(disposition="failed")
+            return entry
+        record.unlink(missing_ok=True)
+        if audit is not None:
+            audit.inbound(rung="internet", sender="unknown", recipient="unknown",
+                          message_id=sha, decision=QUARANTINED, reason=why)
+        entry.update(disposition=QUARANTINED, reason=why)
+        return entry
+    record.write_text(json.dumps({"sha256": sha, "count": count, "last": reason}))
+    if audit is not None:
+        audit.error(context="inbound", detail=(f"spool entry {eml.name} failed "
+                                               f"({count} of {cfg.max_failures}): {reason}"))
+    print(f"⚠️ MACF: spool entry {eml.name} failed ({count} of {cfg.max_failures}): {reason}; "
+          f"the rest of the spool goes on", file=sys.stderr)
+    entry.update(disposition="failed")
+    return entry
 
 
 # ------------------------------------------------------------- conservation
