@@ -313,7 +313,11 @@ def test_a_source_the_attached_channel_did_not_declare_stays_held(tmp_path, base
     assert not [d for d in _logged(nt.EVENT_DELIVERED) if d["arrival_id"] == ENTRY_ID]
 
     new = _connect(daemon, takes=TAKES)
-    assert [(r.source, r.arrival_id) for r in _records(new)] == [("pd_entry_due", ENTRY_ID)]
+    got = [(r.source, r.arrival_id) for r in _records(new)]
+    assert ("pd_entry_due", ENTRY_ID) in got
+    # The mail the old channel was told about is still unread, so the new attach asserts it
+    # again (MIS-0004 R26); nothing else reaches the new channel.
+    assert sorted(s for s, _ in got) == ["amail", "pd_entry_due"]
     assert _until(lambda: not _entry_owed(daemon))
     declared = _logged("pd_channel_declared")
     assert [sorted(d["takes"]) for d in declared] == [sorted(partial), sorted(TAKES)]
