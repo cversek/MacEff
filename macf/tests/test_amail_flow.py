@@ -175,6 +175,26 @@ def test_a_success_clears_the_entrys_failure_count(cfg, monkeypatch):
     assert not list((cfg.quarantine_dir / ".failures").glob("*.json"))
 
 
+def test_an_unwritable_failures_dir_does_not_repeat_a_clean_delivery(cfg):
+    """The marker is best effort: with nowhere to write it, a clean delivery still
+    completes once and isn't handed off again on the next run."""
+    blocked = cfg.quarantine_dir / "blocked"
+    blocked.mkdir(parents=True, mode=0o500)
+    cfg.failures_dir = blocked / "failures"
+    eml = _spool(cfg, "clean-0001", "beta")
+    try:
+        first = {r["entry"]: r for r in inbound.process_spool(cfg)}
+        assert first["clean-0001.eml"]["disposition"] == HANDED_OFF
+        assert not eml.exists()
+        box = cfg.handoff_dir / "beta"
+        assert len(list(box.glob("*.eml"))) == 1
+        for p in box.glob("*.eml"):      # the recipient ingests between runs
+            p.unlink()
+        assert inbound.process_spool(cfg) == [], "nothing is left to hand off again"
+    finally:
+        blocked.chmod(0o700)
+
+
 def test_a_failure_count_restarts_when_the_content_changes(poisoned):
     """The count belongs to the entry's content: a rewritten entry starts again."""
     poison = _spool(poisoned, "poison-0001", "alpha", body="one")

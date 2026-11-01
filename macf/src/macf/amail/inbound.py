@@ -595,11 +595,21 @@ def process_entry(cfg: InboundConfig, eml: Path, sidecar: Path) -> Dict[str, Any
 
     # Handoff COMPLETED; only now may the spool entry go. The marker says so first,
     # so a failure between here and the removal can't deliver it a second time.
-    handed.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    handed.write_text(sha + "\n")
+    # BEST EFFORT. The marker only guards a removal that fails after it; if the marker
+    # itself can't be written, the delivery must still complete, or an unwritable
+    # failures directory would turn every clean delivery into a repeated one.
+    try:
+        handed.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        handed.write_text(sha + "\n")
+    except OSError as e:
+        print(f"⚠️ MACF: hand-off marker for {eml.name} not written ({e}); removing the "
+              f"spool entry without it", file=sys.stderr)
     os.unlink(eml)
     os.unlink(sidecar)
-    handed.unlink(missing_ok=True)
+    try:
+        handed.unlink(missing_ok=True)
+    except OSError:
+        pass  # noqa: MACEFF003 - a marker left behind matches only this entry's content, now gone
     return terminal(HANDED_OFF, f"{outcome}: {reason}", recipient_agent)
 
 
