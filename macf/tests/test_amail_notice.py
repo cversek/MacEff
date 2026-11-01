@@ -236,3 +236,18 @@ def test_the_wake_names_unread_ids_from_a_real_ingest(home, box):
     assert store.unread_message_ids(home) == [a.message_id, b.message_id]
     store.mark_read(home, a.message_id, "Reader@abc123")
     assert store.unread_message_ids(home) == [b.message_id]
+
+
+@pytest.mark.parametrize("kind", ["bundle", "internet"])
+def test_a_message_without_its_sidecar_is_damage_not_taken(home, box, kind):
+    """Only a missing message is another ingest's work. The broker writes the sidecar first,
+    so a message whose sidecar is gone is damage or tampering, and is said as such, every
+    pass, until someone looks (the container-management maintainer, #871)."""
+    if kind == "bundle":
+        _put(box, "1", _msg())
+    else:
+        _put_eml(box, "1", b"From: x@example.com\r\nSubject: hi\r\n\r\nbody\r\n")
+    (box / "1.json").unlink()
+    [r] = client.ingest(home, box, agent="a")
+    assert not r.get("taken") and not r["ingested"]
+    assert "without its sidecar" in r["reason"]
