@@ -40,6 +40,8 @@ import hashlib
 import json
 import os
 import stat
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -159,6 +161,15 @@ def load_private_key(path: Path) -> Ed25519PrivateKey:
             f"signing key {p} is owned by uid {p.stat().st_uid}, not by this "
             f"process (uid {os.getuid()}). Refusing to use it."
         )
+    # THE DIRECTORY, TOO (MIS-0004 R41). A 0600 key in a directory another uid
+    # can write is a key that uid can rename away and replace, which is the
+    # same authorship denial as a writable key file, one level up.
+    if p.parent.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise SigningError(
+            f"signing key {p} sits in {p.parent}, which group or other can write. "
+            "Anyone who can write there can replace the key. Refusing to use it; "
+            "move it into a directory of mode 700."
+        )
     try:
         key = serialization.load_pem_private_key(p.read_bytes(), password=None)
     except Exception as e:  # noqa: BLE001 - any parse failure is a refusal
@@ -198,10 +209,104 @@ def public_key_line(private: Ed25519PrivateKey) -> str:
     return f"{ALGORITHM}:{_b64(raw)}"
 
 
-def generate_keypair(path: Path) -> str:
-    """Write a new private key at `path` (mode 600); return the public line."""
+#: Path components that put a file somewhere it leaves the machine. MIS-0004
+#: R41's rationale keeps the key "outside any repository, synced folder or
+#: backup that leaves the machine"; a key that syncs is a key on every device
+#: the sync reaches, and a key in a work tree is one `git add -A` from public.
+SYNCED_MARKERS = ("Dropbox", "OneDrive", "Google Drive", "Mobile Documents",
+                  "CloudStorage", "iCloud Drive")
+
+
+def key_location_problem(path: Path) -> str:
+    """Why `path` is no place for a private key, or "" when it is fine."""
+    p = Path(path).expanduser().absolute()
+    for part in p.parts:
+        if any(m in part for m in SYNCED_MARKERS):
+            return f"{p} is inside a synced folder ({part})"
+    for parent in p.parents:
+        if (parent / ".git").exists():
+            # The risk is a key one `git add -A` from public, which an ignored path isn't. An
+            # agent home that is itself a repository, with `.maceff` ignored, must still be able
+            # to hold a key. So git is asked, and a path it can't vouch for is refused.
+            try:
+                r = subprocess.run(["git", "-C", str(parent), "check-ignore", "-q", str(p)],
+                                   capture_output=True, timeout=10)
+            except (OSError, subprocess.SubprocessError) as e:
+                return f"{p} is inside a git work tree ({parent}), and git can't say it's ignored: {e}"
+            if r.returncode == 0:
+                return ""
+            return f"{p} is inside a git work tree ({parent}) and git doesn't ignore it"
+    return ""
+
+
+def key_dir_problem(directory: Path) -> str:
+    """Why `directory` can't hold a private key, or "" when only its owner gets in.
+
+    MIS-0004 R41: the key is a 0600 file in a 0700 directory of the agent's own
+    account. The file mode alone isn't enough: a directory another uid can
+    write lets that uid replace the key, and a directory it can list tells it
+    where the key is and when it changed.
+    """
+    d = Path(directory)
+    st = d.lstat()
+    if stat.S_ISLNK(st.st_mode):
+        return f"{d} is a symlink"
+    if st.st_uid != os.getuid():
+        return f"{d} is owned by uid {st.st_uid}, not this process (uid {os.getuid()})"
+    if st.st_mode & 0o077:
+        return f"{d} is mode {stat.S_IMODE(st.st_mode):o}; it must be 700"
+    return ""
+
+
+def key_custody(path: Path) -> Dict[str, Any]:
+    """Report how a signing key is held, without ever reading out its secret.
+
+    Every field is a fact a person can check with `ls -l`; `usable` says
+    whether `load_private_key` would accept it, and `problems` says why not.
+    `public` is the public line, present only when the key loads.
+    """
     p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
+    report: Dict[str, Any] = {"path": str(p), "exists": p.exists(),
+                              "problems": [], "warnings": [], "public": ""}
+    where = key_location_problem(p)
+    if where:
+        # A warning, not a problem: loading doesn't check the location, so a key already
+        # there still signs. Keygen is where a bad location is refused.
+        report["warnings"].append(where)
+    if p.parent.exists():
+        loose = key_dir_problem(p.parent)
+        if loose:
+            # A key in a loose directory still signs; R41's 0700 directory is
+            # what keeps it replaceable only by its owner. Loading refuses only
+            # the writable case, so an existing key keeps working while the
+            # operator moves it.
+            report["warnings"].append(loose)
+    if report["exists"]:
+        try:
+            report["public"] = public_key_line(load_private_key(p))
+        except SigningError as e:
+            report["problems"].append(str(e))
+    report["usable"] = bool(report["exists"] and not report["problems"])
+    return report
+
+
+def generate_keypair(path: Path) -> str:
+    """Write a new private key at `path` (mode 600); return the public line.
+
+    The parent directory is created 0700 when it doesn't exist, and an
+    existing one must already be 0700 and this process's own (MIS-0004 R41).
+    A path inside a synced folder or a git work tree is refused.
+    """
+    p = Path(path)
+    where = key_location_problem(p)
+    if where:
+        raise SigningError(f"refusing to write a private key there: {where}")
+    if not p.parent.exists():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(p.parent, 0o700)   # mkdir's mode is masked by the umask
+    loose = key_dir_problem(p.parent)
+    if loose:
+        raise SigningError(f"refusing to write a private key into {p.parent}: {loose}")
     key = Ed25519PrivateKey.generate()
     pem = key.private_bytes(
         encoding=serialization.Encoding.PEM,
@@ -218,6 +323,30 @@ def generate_keypair(path: Path) -> str:
 
 def sign(message: Any, private: Ed25519PrivateKey) -> str:
     return _b64(private.sign(signing_payload(message)))
+
+
+def sign_for_submission(message: Any, key_path: Optional[Path],
+                        required: bool = False) -> Optional[str]:
+    """The signature every submission carries (MIS-0004 R41), or None.
+
+    With a key, the message is signed, and a key that exists but can't be used
+    raises: sending unsigned when a correspondent expects signed mail is the
+    shape of an impersonation. Without one, `required` decides. An agent whose
+    declaration says it signs refuses to send; any other agent sends unsigned
+    and is told on stderr, because before every key is declared (the declare
+    step, MIS-0004 section 12.4) unsigned mail is still ordinary.
+    """
+    p = Path(key_path) if key_path else None
+    if p is not None and p.exists():
+        return sign(message, load_private_key(p))
+    if required:
+        raise SigningError(
+            f"no signing key at {p}, and this agent is declared to sign every "
+            "message. Refusing to send unsigned; run `macf_tools amail keygen`.")
+    print(f"⚠️ MACF: sending unsigned: no signing key at {p}. MIS-0004 R41 asks "
+          "every agent to sign; `macf_tools amail keygen` makes one.",
+          file=sys.stderr)
+    return None
 
 
 def verify(message: Any, signature: str, public_keys: List[str]) -> bool:
