@@ -13,6 +13,22 @@ from types import SimpleNamespace
 START_PY = Path(__file__).resolve().parents[2] / "docker" / "scripts" / "start.py"
 
 
+def _agent(username, primal_daemon=None, calling_card=None):
+    """A stand-in agent spec for the rendering mechanics these tests cover. One that declares
+    no ``primal_daemon`` stands for an agent opted out of the container default, which has none;
+    the default itself is covered on the real model in ``test_container_default_daemon``."""
+    return SimpleNamespace(
+        username=username, primal_daemon=primal_daemon, calling_card=calling_card,
+        primal_daemon_opt_out=None if primal_daemon is not None else "a stand-in that declares none",
+        has_daemon=lambda: primal_daemon is not None,
+        effective_calling_card=lambda key: calling_card,
+        effective_primal_daemon=lambda key, mail: primal_daemon)
+
+
+def _cfg(agents, services=None):
+    return SimpleNamespace(services=services or {}, agents=agents, runs_mail=lambda: False)
+
+
 def _start():
     spec = importlib.util.spec_from_file_location("maceff_start_outer_tier", START_PY)
     module = importlib.util.module_from_spec(spec)
@@ -121,7 +137,7 @@ def test_only_agents_with_a_rendered_declaration_get_a_daemon(tmp_path, monkeypa
     home_only.write_text(json.dumps({"units": []}))
     supervised = []
     monkeypatch.setattr(start, "supervise_primal_daemon", lambda user, home: supervised.append(user))
-    cfg = SimpleNamespace(services={}, agents={u: SimpleNamespace(username=u, primal_daemon=None) for u in ("pa_a", "pa_b", "pa_c")})
+    cfg = _cfg(agents={u: _agent(username=u, primal_daemon=None) for u in ("pa_a", "pa_b", "pa_c")})
     # pa_c's schedules would have no daemon (MIS-0002-R11): the step fails, naming it, after
     # pa_b's daemon has started
     import pytest
@@ -138,7 +154,7 @@ def _rendering(tmp_path, monkeypatch, primal_daemon):
     monkeypatch.setattr(pd_names, "agent_card", lambda home: "Resident@1a2b3c")
     (tmp_path / "home" / "pa_a").mkdir(parents=True)
     chowned = []
-    cfg = SimpleNamespace(services={}, agents={"a": SimpleNamespace(username="pa_a", primal_daemon=primal_daemon)})
+    cfg = _cfg(agents={"a": _agent(username="pa_a", primal_daemon=primal_daemon)})
     done = start.render_pd_declarations(cfg, root=tmp_path / "etc",
                                         chown=lambda p, u, g: chowned.append((str(p), u, g)))
     return SimpleNamespace(start=start, done=done, chowned=chowned)
@@ -187,7 +203,7 @@ def test_one_agents_broken_identity_costs_only_that_agents_rendering(tmp_path, m
     stale = tmp_path / "etc" / "pa_bad" / "declaration.json"
     stale.parent.mkdir(parents=True)
     stale.write_text("{}")
-    cfg = SimpleNamespace(services={}, agents={u: SimpleNamespace(username=u, primal_daemon={"units": [UNIT]})
+    cfg = _cfg(agents={u: _agent(username=u, primal_daemon={"units": [UNIT]})
                                   for u in ("pa_good", "pa_bad")})
     done = start.render_pd_declarations(cfg, root=tmp_path / "etc", chown=lambda p, u, g: None)
     assert done == ["pa_good"]
@@ -210,7 +226,7 @@ def test_one_agents_failed_write_costs_only_that_agents_rendering(tmp_path, monk
     def chown(path, uid, gid):
         if Path(path).parent.name == "pa_bad" and Path(path).name.endswith(".tmp"):
             raise PermissionError("chown refused")
-    cfg = SimpleNamespace(services={}, agents={u: SimpleNamespace(username=u, primal_daemon={"units": [UNIT]})
+    cfg = _cfg(agents={u: _agent(username=u, primal_daemon={"units": [UNIT]})
                                   for u in ("pa_bad", "pa_good")})
     done = start.render_pd_declarations(cfg, root=tmp_path / "etc", chown=chown)
     assert done == ["pa_good"]
@@ -296,8 +312,8 @@ def _carded(tmp_path, monkeypatch, cards, configs=None):
             (home / ".maceff" / "config.json").write_text(json.dumps(data))
             (home / ".maceff" / "config.json").chmod(mode)
     chowned = []
-    cfg = SimpleNamespace(services={}, agents={
-        u: SimpleNamespace(username=u, calling_card=card,
+    cfg = _cfg(agents={
+        u: _agent(username=u, calling_card=card,
                            primal_daemon={"units": [{**UNIT, "account": u}]}) for u, card in cards.items()})
     done = start.render_pd_declarations(cfg, root=tmp_path / "etc",
                                         chown=lambda p, u, g: chowned.append((Path(p).name, u, g)))
@@ -400,9 +416,9 @@ def test_an_agent_without_a_calling_card_gets_nothing_written(tmp_path, monkeypa
     (bare / ".maceff").mkdir(parents=True)
     (kept / ".maceff").mkdir(parents=True)
     (kept / ".maceff" / "config.json").write_text('{"agent_identity": {"calling_card": "Kept"}}')
-    cfg = SimpleNamespace(services={}, agents={
-        "bare": SimpleNamespace(username="pa_bare", calling_card=None, primal_daemon=None),
-        "kept": SimpleNamespace(username="pa_kept", primal_daemon=None)})
+    cfg = _cfg(agents={
+        "bare": _agent(username="pa_bare", calling_card=None, primal_daemon=None),
+        "kept": _agent(username="pa_kept", primal_daemon=None)})
     assert start.write_agent_cards(cfg) == {}
     assert not (bare / ".maceff" / "config.json").exists()
     assert (kept / ".maceff" / "config.json").read_text() == '{"agent_identity": {"calling_card": "Kept"}}'
