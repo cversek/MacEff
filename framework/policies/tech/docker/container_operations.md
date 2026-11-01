@@ -77,6 +77,10 @@ Docker container operations policy establishes best practices for building, runn
 - Cross-platform compatibility?
 - Testing on target platforms?
 
+**4.2 Agent sessions run under their primal daemons**
+- Who starts an agent's session in a MacEff container, and why must a deployment not start one itself?
+- How do I reach a session, and see whether it runs?
+
 **5 Development Workflow**
 - Live code mounting for development?
 - Rebuild vs restart decisions?
@@ -402,6 +406,12 @@ RUN apt-get install -y dumb-init
 ENTRYPOINT ["dumb-init", "--"]
 CMD ["python", "agent.py"]
 ```
+
+---
+
+### 4.2 Agent sessions run under their primal daemons
+
+In a MacEff container, start-up gives every agent that isn't vanilla a primal daemon, and the agent's Claude Code session runs as a unit of it, restarted when it ends. A deployment needs no daemon block to get this. It declares one only to change the default, and opts an agent out only with a reason (persistent_layer 10.1). So a deployment doesn't start sessions itself: a Makefile target or a typed command that does would start a second session beside the daemon's. To reach a session, use `macf_tools harness attach`. To see whether it runs, use `macf_tools pd status` as the agent.
 
 ---
 
