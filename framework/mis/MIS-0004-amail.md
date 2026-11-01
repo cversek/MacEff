@@ -298,9 +298,9 @@ Detection alone stays allowed only where no agent has a reachable address. Addre
 | R10 | decidable | `macf/tests/test_amail_handoff.py::test_next_holder_pulls` | planned |
 | R11 | decidable | `macf/tests/test_amail_handoff.py::test_copy_kept_until_next_holder_completes` | planned |
 | R12 | decidable | `macf/tests/test_amail_partition.py::test_two_accounts`, on two real accounts, with refusal and success in one run and multi-recipient and same-second sends, run by a maintainer other than its author | planned |
-| R13 | decidable | `macf/tests/test_amail_partition.py::test_box_permissions` | planned |
-| R14 | decidable | `macf/tests/test_amail_handoff.py::test_intake_names_unique` | planned |
-| R15 | decidable | `macf/tests/test_amail_handoff.py::test_one_id_end_to_end` | planned |
+| R13 | decidable | `macf/tests/test_amail_partition.py::test_box_permissions` | passing |
+| R14 | decidable | `macf/tests/test_amail_handoff.py::test_intake_names_unique` | passing |
+| R15 | decidable | `macf/tests/test_amail_handoff.py::test_one_id_end_to_end` | passing |
 | R16 | decidable | `macf/tests/test_amail_handoff.py::test_duplicate_dropped` | planned |
 | R17 | decidable | `macf/tests/test_amail_flow.py::test_queues_per_agent` | planned |
 | R18 | decidable | `macf/tests/test_amail_flow.py::test_refusal_reaches_sender` | planned |
@@ -321,9 +321,9 @@ Detection alone stays allowed only where no agent has a reachable address. Addre
 | R33 | decidable | `macf/tests/test_amail_egress.py::test_rule_allows_only_declared_accounts` | planned |
 | R34 | decidable | `macf/tests/test_amail_transport.py::test_pinned_bundle` | planned |
 | R35 | decidable | `macf/tests/test_amail_units.py::test_socket_version` | planned |
-| R36 | decidable | `macf/tests/test_amail_partition.py::test_box_files_not_group_writable` | planned |
+| R36 | decidable | `macf/tests/test_amail_partition.py::test_box_files_not_group_writable` | passing |
 | R37 | decidable | `macf/tests/test_amail_partition.py::test_receiver_checks_owner_and_links`, with a hard link from outside and a file the recipient's group created, each set aside | planned |
-| R38 | decidable | `macf/tests/test_amail_handoff.py::test_one_copy_per_recipient` | planned |
+| R38 | decidable | `macf/tests/test_amail_handoff.py::test_one_copy_per_recipient` | passing |
 | R39 | decidable | `macf/tests/test_amail_notice.py::test_keystrokes_read_back` | planned |
 | R40 | decidable | `macf/tests/test_amail_notice.py::test_keystroke_notice_no_leading_digit` | planned |
 | R41 | decidable | `macf/tests/test_amail_signing.py::test_agent_signs_every_message` | planned |
@@ -448,6 +448,7 @@ The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 h
 - 2026-10-31: R43 accepts any key declared for the agent and valid at the broker's acceptance time, so it agrees with R45 during a rotation, and R45's rationale says whose clock it trusts between systems (P33). P33 and P34 join the record.
 - 2026-10-31: the operator approved the revision at b05bca60 and confirmed R43 on this pull request (P35). Both maintainers have commented on it (P33, P34) and it has been revised once in answer, so the discussion closes under MIS-0001-R48 unless a maintainer raises a critical objection.
 - 2026-10-31: Accepted. The Secretary's last commit before the operator's merge: the decided Status, and a Resolution quoting the operator's decision comment on #520, which answers O01.
+- 2026-10-31: landing, hand-off area (container-management maintainer). R13, R14, R15, R36 and R38 are passing. R15 needed a change: the receiving broker of a shared hand-off kept no peer id and minted its own, so it now keeps a well-formed one, drops a pair whose id the recipient already holds, and mints fresh for quarantined mail. amail policy 1.8.0 says so (§2.1.1).
 
 ## Wiki-Links
 
