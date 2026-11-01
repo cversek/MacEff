@@ -47,7 +47,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from macf.notify.session import verify_incarnation
 from macf.pd import interface
-from macf.pd.health import read_liveness
+from macf.pd.health import SCHEDULE_EVENTS, broker_health, read_liveness, schedule_health
 from macf.platform import container_limits
 from macf.utils.streaming import iter_lines_reverse
 
@@ -58,7 +58,7 @@ LOOKBACK_S = 7 * 86400
 SEND_TIMEOUT_S = 30
 
 Verdict = Literal["ALIVE", "STALE", "GONE", "ABSENT", "UNREADABLE", "UNREACHABLE", "CHECK-FAILED", "DARK", "HELD", "UNREAD",
-                  "DRIFTED"]
+                  "DRIFTED", "SWEEP-FAILED"]
 
 #: Exit codes, worst wins (``service_supervision`` section 4.2): each state its own code.
 EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_UNREACHABLE, EXIT_CHECK_FAILED = 0, 1, 2, 3
@@ -66,7 +66,7 @@ EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_UNREACHABLE, EXIT_CHECK_FAILED = 0, 1, 2, 3
 #: alert was sent, on every pass while a channel was dark or a wake held.
 _EXIT_FOR = {"ALIVE": EXIT_HEALTHY, "STALE": EXIT_UNHEALTHY, "GONE": EXIT_UNHEALTHY,
              "ABSENT": EXIT_UNHEALTHY, "DARK": EXIT_UNHEALTHY, "HELD": EXIT_UNHEALTHY, "UNREAD": EXIT_UNHEALTHY,
-             "DRIFTED": EXIT_UNHEALTHY,
+             "DRIFTED": EXIT_UNHEALTHY, "SWEEP-FAILED": EXIT_UNHEALTHY,
              "UNREACHABLE": EXIT_UNREACHABLE,
              "UNREADABLE": EXIT_CHECK_FAILED, "CHECK-FAILED": EXIT_CHECK_FAILED}
 
@@ -230,6 +230,45 @@ def check_unread_mail(card: str, event: Optional[dict], now: float) -> Finding:
     return Finding(card, "mail", "UNREAD", f"{data.get('reason', 'mail unread past its threshold')}{age}")
 
 
+def mail_sweep_events(log_path: Path, card: str, schedule: str, now: float,
+                      lookback_s: float = LOOKBACK_S) -> List[dict]:
+    """The scheduler's events for agent *card*'s sweep schedule within the lookback, with the
+    daemon's starts, oldest first, as ``schedule_health`` reads them. A sweep whose last run
+    is older than the lookback has no run here, which reads as a missing sweep: unhealthy."""
+    cutoff = now - lookback_s
+    found: List[dict] = []
+    for line in iter_lines_reverse(log_path):
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        if event.get("event") not in SCHEDULE_EVENTS:
+            continue
+        data = event.get("data")
+        if not isinstance(data, dict) or data.get("agent") != card:
+            continue
+        if event.get("event") == interface.EVENT_DAEMON_START or data.get("schedule") == schedule:
+            found.append(event)
+    found.reverse()
+    return found
+
+
+def check_mail_broker(card: str, declaration: interface.Declaration, events: Sequence[dict],
+                      now: float) -> Finding:
+    """The mail broker this home runs, judged by its last sweep (MIS-0004-R31, R32): a broker
+    that stopped sweeping, or whose sweep keeps finding mail stuck past its declared age,
+    reaches a person through the watch, by a path that is neither the broker nor a session."""
+    name = declaration.mail_sweep_schedule
+    sweep = next((h for h in schedule_health(declaration, events, now) if h.schedule == name), None)
+    verdict = broker_health(sweep)
+    return Finding(card, "mail-broker", "ALIVE" if verdict.healthy else "SWEEP-FAILED", verdict.detail)
+
+
 #: How long a typed wake may be held, by a dialog or a draft in the session's pane, before
 #: the operator is told: rule 14 of the mail clock's list (on #552). A dialog waits on a
 #: person, and nothing in the session can say so.
@@ -365,6 +404,17 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
             findings.append(check_unread_mail(card, last_unread_mail_event(log_path, card, now), now))
         except FileNotFoundError:
             findings.append(check_unread_mail(card, None, now))
+    if declaration.mail_sweep_schedule is not None:   # a broker runs here, so watch its sweep
+        try:
+            sweeps = mail_sweep_events(log_path, card, declaration.mail_sweep_schedule, now)
+        except FileNotFoundError:
+            sweeps = []
+        except OSError as e:
+            sweeps = None
+            findings.append(Finding(card, "mail-broker", "CHECK-FAILED",
+                                    f"the event log cannot be read: {e.strerror}"))
+        if sweeps is not None:
+            findings.append(check_mail_broker(card, declaration, sweeps, now))
     return findings
 
 
