@@ -43,7 +43,7 @@ class StoreSource:
         self,
         store_dir: Path,
         name: str = "amail",
-        suffixes: tuple = STORE_SUFFIXES,
+        suffixes: Optional[tuple] = STORE_SUFFIXES,
         seen: Optional[Set[str]] = None,
     ):
         self.store_dir = Path(store_dir)
@@ -76,6 +76,9 @@ class StoreSource:
                 )
             return None
         self.poll_failures = 0
+        if self.suffixes is None:
+            # A Maildir's names carry no suffix; every name but a dot file is a message.
+            return {n for n in names if not n.startswith(".")}
         return {n for n in names if n.endswith(self.suffixes)}
 
     def prime(self) -> "StoreSource":
@@ -146,10 +149,14 @@ class StoreSource:
 
 
 def agent_store_source(agent_home: Path, name: str = "amail") -> StoreSource:
-    """A StoreSource over an agent's own pickup box, where the broker delivers its mail
-    (``macf.amail.pickup``), never a guessed path."""
-    from macf.amail.pickup import pickup_box
-    return StoreSource(pickup_box(Path(agent_home)), name=name)
+    """A StoreSource over the unread mail in an agent's own store, ``Maildir/new``.
+
+    Not the broker's pickup box: a notice names only mail the reader's own commands can
+    already read (MIS-0004 R25), and mail in the box can't be read until it is ingested.
+    The primal daemon's receiver ingests the box each pass, so an arrival reaches ``new``
+    within a pass of reaching the box."""
+    from macf.amail.store import maildir_for
+    return StoreSource(maildir_for(Path(agent_home)) / "new", name=name, suffixes=None)
 
 
 def notify_sink(deliver: Callable, session_id_of: Callable) -> Callable:

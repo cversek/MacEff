@@ -1,5 +1,6 @@
 """The keystroke wake, the notifier's fallback for a session with no MacEff channel
 (MIS-0002-R45, R77, R105, R43, R106), kept to the rules of the mail clock it replaces."""
+import json
 import socket
 import stat
 from datetime import date
@@ -16,8 +17,9 @@ from macf.utils.input_origin import WAKE_OPENING, opens_with_wake
 
 @pytest.fixture(autouse=True)
 def _mail_box_from_the_home(monkeypatch):
-    """These tests put mail in <home>/amail/pickup, the box chosen when nothing names one.
-    Inside a seat MACEFF_AGENT_NAME is set, which would point the daemon elsewhere."""
+    """These tests put unread mail straight into the store's `new`, with the sidecar ingest
+    writes, as the receiver would leave it (MIS-0004 R04, R25). With no amail settings there
+    is no receiver; inside a seat MACEFF_AGENT_NAME is set, which must not change that."""
     monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
     monkeypatch.delenv("MACF_AMAIL_HANDOFF", raising=False)
 
@@ -204,11 +206,15 @@ def test_the_daily_cap_is_recorded_once():
 # --- the notifier: channel first (R104, R105, R43) --------------------------------
 
 def _home_with_mail(tmp_path, *ids):
-    box = tmp_path / "agent" / "amail" / "pickup"
-    box.mkdir(parents=True)
-    for i in ids:
-        (box / f"1791990000-{i}.amsg").write_text("never read by the notifier")
-    return tmp_path / "agent"
+    home = tmp_path / "agent"
+    new, side = home / "Maildir" / "new", home / "Maildir" / "bundle_sidecars"
+    new.mkdir(parents=True)
+    side.mkdir(parents=True)
+    for n, i in enumerate(ids):
+        name = f"1791990000.{n}_1.host"
+        (new / name).write_text("never read by the notifier")
+        (side / f"{name}.json").write_text(json.dumps({"message_id": i}))
+    return home
 
 
 def test_wake_through_notifier(tmp_path, isolated_events_log):
