@@ -326,7 +326,7 @@ Detection alone stays allowed only where no agent has a reachable address. Addre
 | R38 | decidable | `macf/tests/test_amail_handoff.py::test_one_copy_per_recipient` | planned |
 | R39 | decidable | `macf/tests/test_amail_notice.py::test_keystrokes_read_back` | planned |
 | R40 | decidable | `macf/tests/test_amail_notice.py::test_keystroke_notice_no_leading_digit` | planned |
-| R41 | decidable | `macf/tests/test_amail_signing.py::test_agent_signs_every_message` | planned |
+| R41 | decidable | `macf/tests/test_amail_signing.py::test_agent_signs_every_message` | passing |
 | R42 | decidable | `macf/tests/test_amail_signing.py::test_keys_declared_by_operator` | planned |
 | R43 | decidable | `macf/tests/test_amail_signing.py::test_broker_refuses_unsigned_agent_mail` | planned |
 | R44 | decidable | `macf/tests/test_amail_signing.py::test_receiver_marks_unsigned_agent_mail_suspect` | planned |
@@ -448,6 +448,7 @@ The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 h
 - 2026-10-31: R43 accepts any key declared for the agent and valid at the broker's acceptance time, so it agrees with R45 during a rotation, and R45's rationale says whose clock it trusts between systems (P33). P33 and P34 join the record.
 - 2026-10-31: the operator approved the revision at b05bca60 and confirmed R43 on this pull request (P35). Both maintainers have commented on it (P33, P34) and it has been revised once in answer, so the discussion closes under MIS-0001-R48 unless a maintainer raises a critical objection.
 - 2026-10-31: Accepted. The Secretary's last commit before the operator's merge: the decided Status, and a Resolution quoting the operator's decision comment on #520, which answers O01.
+- 2026-11-01: landing, signing area, the declare step (host-side maintainer). R41 is passing: an agent with a key signs every submission; the key is 0600 in a 0700 directory of its own account, outside any work tree or synced folder; an agent declared to sign refuses to send without one, and any other sends unsigned with a warning. Nothing on the receiving side changes. amail policy 1.8.0 says so (§3.2.2).
 
 ## Wiki-Links
 

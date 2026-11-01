@@ -3,6 +3,7 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.8.0 — §3.2.2: the agent's signing key is a 0600 file in a 0700 directory of the agent's own account, outside any repository or synced folder; an agent declared to sign refuses to send without one, and any other sends unsigned with a warning (MIS-0004 R41). Minor: a new refusal an agent can meet, and a new verb, `amail key-status`.
 **Version**: 1.7.0 — §2.3: a message is held once. Ingest drops a copy whose id the store already holds, and records the drop in that message's sidecar as `duplicates_dropped` (MIS-0004 R16). Minor: a behavior an agent can meet in its store.
 **Version**: 1.6.0 — §2.3: ingest believes only what the broker wrote. A box entry is taken only as a regular file the box's owner owns, with one link, checked on the open descriptor; anything else is refused and set aside as `.refused` (MIS-0004 R37). Minor: a new refusal an agent can meet.
 **Version**: 1.5.0 — adds §9: mail joins the knowledge web, each message and markdown attachment a temporal-record node, with its links in a `.wiki-links` sidecar under `amail/.links/` so a message's bytes stay as sent and no sender can supply its links. Minor: a new section a type policy owes the scholarship policy.
@@ -564,6 +565,28 @@ The demonstration owed is a *break*, in both polarities — exposed and absent �
 with its paired acceptance in the same run. Inspecting a configuration file is not a
 demonstration of a refusal.
 
+### 3.2.2 The agent's signing key
+
+Every MacEff agent signs every message it submits, with a key only its own account
+can read (MIS-0004 R41). The key is the agent's, never the broker's: a signature then
+means something to a party that doesn't trust the broker.
+
+- The private key is a file of mode 0600 in a directory of mode 0700, both owned by
+  the agent's account. `amail keygen` creates the directory when it doesn't exist and
+  refuses one that is not already 0700 and the agent's own. The default place is
+  `.maceff/keys/` in the agent home; a key already directly under `.maceff` keeps
+  working, and `amail key-status` says to move it.
+- The key never lives in a git work tree or a synced folder. Keygen refuses both.
+- A key in a directory that group or other can write is refused at load, because
+  whoever can write the directory can replace the key.
+- `amail key-status` reports where the key is, how it and its directory are held,
+  whether it loads, and its public line for the operator to declare (MIS-0004 R42).
+  It never prints the private key.
+- **The declare step.** An agent whose configuration sets `signing_required` refuses
+  to send without a usable key. Any other agent without a key sends unsigned and is
+  told on stderr. Receivers classify mail exactly as before; refusing unsigned agent
+  mail (R43) and marking it suspect (R44) switch on only once every key is declared.
+
 ### 3.3 The audit record
 
 The broker MUST append a record for every submission and every inbound message,
@@ -1124,10 +1147,9 @@ and a refusal for every combination that would have meant something else.
 
 **Deferred, with reasons:**
 
-- **Per-message authorship signing.** Genuinely wanted, and §5.1 leaves room for a
-  signature field. Deferred because signing without key custody and rotation is
-  ceremony, and key management deserves its own decision rather than being smuggled
-  in beneath a mail spec.
+- **Per-message authorship signing.** Decided by MIS-0004 (R41 to R46). Key custody
+  is §3.2.2 (R41). Rotation (R45) and the shared-login label (R46) follow with the
+  key registry (R42).
 - **Encryption at rest and in transit beyond transport TLS.** Same reasoning.
 - **A dedicated task type for inbound mail.** Wanted so mail is tracked natively
   rather than becoming a generic task with hand-built structure. Deferred to
