@@ -88,8 +88,6 @@ HOLD_MAX_S = 24 * 3600
 #: checkpoint is one from before checkpoints came in, and the scan for one stops there.
 _DAEMON_START = "pd_daemon_start"
 
-#: A message id inside a pickup box's file name, ``<epoch>-<id>[-<local>].amsg``.
-_MESSAGE_IN_NAME = re.compile(r"msg-\d{10}-[0-9a-f]{12}")
 
 #: How long a notice waits for a channel before the keystroke fallback may type a wake.
 CHANNEL_GRACE_S = 60.0
@@ -178,6 +176,8 @@ class Notifier:
                  events: Optional[Callable[[], Iterable[dict]]] = None,
                  rules: Optional[Callable[[], object]] = None):
         self._append, self._clock = append, clock
+        #: The agent's home, whose store the wake names unread mail from.
+        self.home = Path(agent_home)
         self._events = events or (lambda: read_events(reverse=True, scope="all",
                                                       only=(EVENT_DETECTED, *SETTLED,
                                                             EVENT_NOTICES_OWED, _DAEMON_START)))
@@ -377,11 +377,10 @@ class Notifier:
         pending = self.waker.verify_by is not None
         if not pending and (not mail or self._clock() - mail[0].read_at < CHANNEL_GRACE_S):
             return False
-        names = set()
-        for source in self.sources:
-            if source.name == "amail":
-                names |= source.names() or set()
-        ids = sorted({m.group(0) for n in names for m in [_MESSAGE_IN_NAME.search(n)] if m})
+        # The ids come from the store's unread mail, by the sidecars ingest wrote: a Maildir's
+        # own names carry none, and the box is the receiver's to empty (MIS-0004 R04, R25).
+        from macf.amail.store import unread_message_ids
+        ids = unread_message_ids(self.home)
         if self.waker.tick(ids) != "sent":
             return False
         sent_at = self._clock()
