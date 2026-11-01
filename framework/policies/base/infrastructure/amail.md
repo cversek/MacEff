@@ -3,7 +3,9 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
-**Version**: 1.8.0 — §3.2.2: the agent's signing key is a 0600 file in a 0700 directory of the agent's own account, outside any repository or synced folder; an agent declared to sign refuses to send without one, and any other sends unsigned with a warning (MIS-0004 R41). Minor: a new refusal an agent can meet, and a new verb, `amail key-status`.
+**Version**: 1.11.0 — §3.2.2: the agent's signing key is a 0600 file in a 0700 directory of the agent's own account, outside any repository or synced folder; an agent declared to sign refuses to send without one, and any other sends unsigned with a warning (MIS-0004 R41). Minor: a new refusal an agent can meet, and a new verb, `amail key-status`.
+**Version**: 1.10.0 — §2.1.1: the message id crosses a shared hand-off unchanged. The receiving broker keeps a well-formed peer id, drops a pair whose id the recipient already holds from the same peer and sender and audits it as `duplicate-dropped`, treats any other held match as an `id-collision` and mints fresh, and mints a fresh id for anything else and for quarantined mail (MIS-0004 R15). Minor: a behavior an agent can meet in its ids and its audit.
+**Version**: 1.9.0 — §2.3 and §2.4: the agent's primal daemon ingests its mail each pass (MIS-0004 R04), from the box its own settings name, never the environment; one ingest runs at a time per store, and an entry another ingest took is not reported as damage. §2.4: the read cursor is the Maildir's `new` and `cur`; `amail read` moves what it printed and records who read it, notices follow `new` (R25), and `amail list` shows unread mail by default (R30). Minor: behaviors an agent meets in its store and its listing.
 **Version**: 1.7.0 — §2.3: a message is held once. Ingest drops a copy whose id the store already holds, and records the drop in that message's sidecar as `duplicates_dropped` (MIS-0004 R16). Minor: a behavior an agent can meet in its store.
 **Version**: 1.6.0 — §2.3: ingest believes only what the broker wrote. A box entry is taken only as a regular file the box's owner owns, with one link, checked on the open descriptor; anything else is refused and set aside as `.refused` (MIS-0004 R37). Minor: a new refusal an agent can meet.
 **Version**: 1.5.0 — adds §9: mail joins the knowledge web, each message and markdown attachment a temporal-record node, with its links in a `.wiki-links` sidecar under `amail/.links/` so a message's bytes stay as sent and no sender can supply its links. Minor: a new section a type policy owes the scholarship policy.
@@ -298,6 +300,21 @@ adding one declaration and one mount.
 judgement. The audit records `shared` at the sender and *via shared hand-off
 from <domain>* at the receiver.
 
+**The id crosses the mount unchanged.** The sending broker minted the message id
+when it accepted the message (§5.1), and the sender's own copy records it
+(§6b.1). The receiving broker keeps that id when it is well formed, so one message
+has one id from acceptance to the recipient's read (MIS-0004 R15). If the
+recipient already holds that id from the same peer and the same sender, the pair is
+the same message again: the broker drops it and audits `duplicate-dropped`, so the
+second copy never reaches the box. If the held id came by another route or from
+another sender, it is a collision, not a duplicate: the broker mints a fresh id,
+delivers, and audits `id-collision`. Otherwise a peer that learned another domain's
+id could claim it first and have the genuine message dropped. An
+id that is not a broker id is minted fresh, as internet mail always is: it is a
+sender's claim, and a claimed id can shadow a real message. Quarantined mail
+always gets a fresh id, so a repeated id can't overwrite earlier evidence; the
+peer's id is kept in the audit reason.
+
 The consequence worth stating plainly: adding a second host, moving an agent between
 hosts, or gaining and losing a private network changes **nothing** about addressing,
 contact lists, or stored messages. Only the broker's rung choice changes.
@@ -339,6 +356,18 @@ intake can hand the same message off again. Ingest drops a copy whose id the sto
 holds, removes it from the box, and records the drop in the held message's own sidecar,
 under `duplicates_dropped` (MIS-0004 R16). Ids are minted by the broker that accepts a
 message, so a repeated id is a repeated hand-off, never a second message.
+
+**Ingest runs under the agent's own primal daemon.** The receiver is a duty of the
+primal daemon's loop: each pass it ingests the box as the agent, through the same ingest
+`amail list` uses, so the checks above hold on one path (MIS-0004 R04). A listing still
+ingests first, so a stopped daemon never hides mail. One ingest runs at a time per store,
+under a lock in the store itself; a pass that finds the lock held tries again next pass.
+An entry gone between the listing and its open was taken by the other ingest, and is not
+reported as damage. Its first pass checks that the box can be listed and the store
+written, and raises a notice when either can't (MIS-0002-R65): on macOS the daemon's
+privacy grants are not the terminal's, and a container's daemon whose supplementary groups
+were cleared loses a box it reached through one, so the box's group should be the agent's
+primary group. Neither failure may read as an empty box.
 
 **Why this is a policy statement and not an implementation note.** The obvious
 design has the broker write each recipient's mailbox directly. That requires a
@@ -410,9 +439,11 @@ than creating or correcting it.
 
 **The recipient is told where its box is, by provisioning, in its own settings.** Each
 agent's `.maceff/amail.json` names `handoff` (the root the broker hands off into) and
-`agent` (its box's name under it). `amail list` and the agent's primal daemon find the box
-from these two keys, and fall back to `MACF_AMAIL_HANDOFF` and `MACEFF_AGENT_NAME` only
-when the file doesn't name it. A session has those variables from its shell, but a daemon
+`agent` (its box's name under it). `amail list` finds the box from these two keys, and falls
+back to `MACF_AMAIL_HANDOFF` and `MACEFF_AGENT_NAME` only when the file doesn't name it. The
+primal daemon's receiver never reads either variable: without an `agent` key it doesn't run,
+and without a `handoff` key it uses the fixed default. On a shared login every daemon can
+reach every box, and a variable naming another agent would move this agent's receiver to it. A session has those variables from its shell, but a daemon
 started by a container's outer tier has identity variables only, so a seat without the file
 would watch a guessed path and see no mail. A container's start script writes the two keys
 from the same addressing entry that provisions the box, keeps any other keys in the file,
@@ -435,6 +466,15 @@ Two constraints follow, and both are deliberate:
 - **Local storage is authoritative.** Where a remote service also holds copies, the
   local store is the record of truth. A deployment MUST be able to lose its
   transport provider without losing its correspondence.
+
+**The read cursor is the Maildir's own `new` and `cur`.** Mail waits unread in `new`.
+`amail read` moves the message it printed to `cur`, in the reading home's own store only,
+and records the reader's calling card and the time in the message's sidecar, so a notice
+that cleared can be explained afterwards. Nothing else moves a message, and a restart of
+any unit moves none (MIS-0004 R27). There is no second record of what was read: the store
+is it. Mail notices watch `new`, so a notice names only mail `amail read` can already find
+(R25). `amail list` shows unread mail by default with a count of the rest (R30); `--all`
+shows everything, and `--thread` shows a whole thread, since a reply needs its context.
 
 ---
 

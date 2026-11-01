@@ -11077,21 +11077,36 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
         ingested = ingest(home, box, contacts_path=cfg.get("contacts"),
                           agent=cfg.get("agent") or "")
         ok = sum(1 for r in ingested if r.get("ingested"))
-        stuck = [r for r in ingested if not r.get("ingested")]
+        # An entry another ingest took (the primal daemon's receiver) is in the store, not stuck.
+        stuck = [r for r in ingested if not r.get("ingested") and not r.get("taken")]
         if ok:
             print(f"📥 ingested {ok} message(s) from the pickup box")
         for r in stuck:
             print(f"⚠️  pickup entry NOT ingested: {r['name']}: {r['reason']}")
-    msgs = store.read_all(home)
+    # Unread is what waits in the store's `new` (the read cursor, MIS-0004 R26). The listing
+    # shows that by default, with a count of the rest, so a wake doesn't cost the whole
+    # mailbox (R30). A thread is shown whole, since a reply needs its context.
+    unread = set(store.unread_names(home))
+    every = getattr(args, "all", False) or bool(args.thread)
+    msgs = store.read_all(home, include_seen=every)
     if args.thread:
         msgs = [m for m in msgs if m.thread_id == args.thread]
     internet = list_delivered_internet(home)
+    read_count = (len(store.read_all(home)) - len(store.read_all(home, include_seen=False))
+                  + sum(1 for i in internet if i["name"] not in unread))
+    if not every:
+        internet = [i for i in internet if i["name"] in unread]
     if args.json:
         print(json.dumps({"messages": [m.to_dict() for m in msgs],
-                          "internet": internet}, indent=2))
+                          "internet": internet,
+                          "read_not_shown": 0 if every else read_count}, indent=2))
         return 0
     if not msgs and not internet:
-        print("(no messages)")
+        if every:
+            print("(no messages)")
+        else:
+            print("(no unread messages" + (f"; {read_count} read, `amail list --all` shows them)"
+                                           if read_count else ")"))
         return 0
     for m in msgs:
         print(f"{_term_safe(m.date)}  {_term_safe(m.sender)}  {_trust_badge(m)}")
@@ -11111,8 +11126,21 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
         print(f"    {_term_safe(str(obs.get('subject', '(no subject)')))}")
         print(f"    sha={_term_safe(str(sc.get('raw_sha256', '?'))[:16])} "
               f"class={_term_safe(str(authz.get('outcome', '?')))}")
-    print(f"\n{len(msgs)} bundle message(s), {len(internet)} internet message(s)")
+    print(f"\n{len(msgs)} bundle message(s), {len(internet)} internet message(s)"
+          + (f"; and {read_count} read, not shown (`amail list --all`)" if read_count and not every else ""))
     return 0
+
+
+def _reader_card(home: Path) -> str:
+    """The calling card of the home doing the read, from its identity file, for the record
+    of who moved the read cursor; never from the environment."""
+    from macf.pd.interface import IdentityError, agent_card
+    try:
+        return agent_card(home)
+    except IdentityError as e:
+        print(f"⚠️ MACF: amail: this home names no agent ({e}); the read is recorded as "
+              f"by an unknown reader", file=sys.stderr)
+        return "unknown"
 
 
 def cmd_amail_read(args: argparse.Namespace) -> int:
@@ -11159,6 +11187,7 @@ def cmd_amail_read(args: argparse.Namespace) -> int:
                   f"  reason={_term_safe(str(authz.get('reason', '?')))}")
             print(f"sha256={_term_safe(str(sc.get('raw_sha256', '?')))}")
             print(_term_safe(raw.decode("utf-8", "replace")))
+            store.mark_read(home, args.message_id, _reader_card(home))
             return 0
         print("❌ no such message")
         return 1
@@ -11167,13 +11196,16 @@ def cmd_amail_read(args: argparse.Namespace) -> int:
         if own is not None:
             doc["submission"] = own[1]
         print(json.dumps(doc, indent=2))
-        return 0
-    # The badge is printed from stored metadata BEFORE the message, and the
-    # message body is neutralised so it cannot redraw what was already shown.
-    # Both halves are needed: a label the body can forge is decorative, and a
-    # label the body can erase is worse.
-    print(_sent_badge(own[1]) if own is not None else _trust_badge(m))
-    print(_term_safe(m.serialize()))
+    else:
+        # The badge is printed from stored metadata BEFORE the message, and the
+        # message body is neutralised so it cannot redraw what was already shown.
+        # Both halves are needed: a label the body can forge is decorative, and a
+        # label the body can erase is worse.
+        print(_sent_badge(own[1]) if own is not None else _trust_badge(m))
+        print(_term_safe(m.serialize()))
+    if own is None:
+        # Printed, so read: the cursor passes it, in this home's own store only (R26).
+        store.mark_read(home, m.message_id, _reader_card(home))
     return 0
 
 
@@ -13528,7 +13560,9 @@ def _build_parser() -> argparse.ArgumentParser:
     amail_send.set_defaults(func=cmd_amail_send)
 
     amail_list = amail_sub.add_parser("list", help="list messages in this mailbox")
-    amail_list.add_argument("--thread", metavar="THREAD_ID", help="only this thread")
+    amail_list.add_argument("--thread", metavar="THREAD_ID", help="only this thread, read or not")
+    amail_list.add_argument("--all", action="store_true",
+                            help="read messages too; by default only unread ones are listed")
     amail_list.add_argument("--json", action="store_true", help="machine-readable output")
     amail_list.set_defaults(func=cmd_amail_list)
 

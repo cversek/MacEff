@@ -535,7 +535,7 @@ def test_channel_first(tmp_path, isolated_events_log, monkeypatch, capsys):
     monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)     # the box comes from the home
     monkeypatch.delenv("MACF_AMAIL_HANDOFF", raising=False)
     home = tmp_path / "agent"
-    box = home / "amail" / "pickup"
+    box = home / "Maildir" / "new"          # unread mail, where the receiver leaves it
     box.mkdir(parents=True)
     clock = [1000.0]
     n = nt.Notifier(home, {"amail": "agent", "pd_limit_exceeded": "agent"}, clock=lambda: clock[0])
@@ -557,7 +557,7 @@ def test_channel_first(tmp_path, isolated_events_log, monkeypatch, capsys):
     ours, theirs = socket.socketpair()
     theirs.settimeout(2)
     n.attach(ours, takes=TAKES)
-    (box / "1791990000-msg-1791990000-aaaaaaaaaaaa.amsg").write_text("never read by the notifier")
+    (box / "1791990000.1_1.host").write_text("never read by the notifier")
     n.poll()                                                    # the wake
     assert n.raise_notice("pd_limit_exceeded", "limit-worker-1")   # the notice
     clock[0] += nt.CHANNEL_GRACE_S + 3600

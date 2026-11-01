@@ -192,10 +192,20 @@ class Daemon:
         self.dark_channel = DarkChannel(self.card, connect_s) if connect_s else None
         #: Where a threshold is declared, mail left unread past it (R55): one notice per spell.
         threshold = self.core.declaration.unread_mail_threshold_s
-        self.unread_mail = UnreadMail(self.card, threshold, pickup_box(self.home),
+        from macf.amail.store import maildir_for
+        self.unread_mail = UnreadMail(self.card, threshold, maildir_for(self.home) / "new",
                                       self.notifier.raise_notice) if threshold else None
         #: Where the keystroke wake's window in force came from, for a status or a pace to say.
         self._wake_from = "the declaration"
+        #: Where the agent's settings name its mail, the receiver ingests it (MIS-0004 R04).
+        from macf.agent_events_log import append_event as _append
+        from macf.pd.receiver import Receiver, receiver_settings
+        mail = receiver_settings(self.home)
+        self.receiver = Receiver(self.card, self.home, mail["box"], mail["agent"], mail["contacts"],
+                                 _append, self.notifier.raise_notice) if mail else None
+        if mail is None and "amail" in self.core.declaration.notice_routes:
+            print("⚠️ MACF: pd: mail notices are routed but the agent's amail settings name no agent, "
+                  "so this daemon ingests no mail and a notice waits for `amail list`", file=sys.stderr)
         #: The build this daemon started from, said in every status (MacEff #816). Read once:
         #: the code it runs can't change under it, only the checkout beside it.
         from macf.pd.build import build_id
@@ -377,6 +387,8 @@ class Daemon:
                 self.core.tick()
                 self.scheduler.tick()
                 self._hellos_due()
+                if self.receiver is not None:
+                    self.receiver.tick(time.monotonic())
                 self.notifier.poll()
                 self.notifier.flush()
                 self.notifier.wake()
