@@ -66,8 +66,11 @@ EVENT_DETECTED = "store_arrival_detected"
 EVENT_DELIVERED = "pd_notice_delivered"
 #: One notice the operator's rules kept from the session: recorded, and so no longer owed.
 EVENT_SILENCED = "pd_notice_silenced"
+#: One mail notice no longer owed because the mail it named was read before it went out
+#: (MIS-0004 R26: the notice clears when the read cursor passes the mail).
+EVENT_WITHDRAWN = "pd_notice_withdrawn"
 #: What settles an owed notice: it was delivered, or the rules kept it from the session.
-SETTLED = (EVENT_DELIVERED, EVENT_SILENCED)
+SETTLED = (EVENT_DELIVERED, EVENT_SILENCED, EVENT_WITHDRAWN)
 #: Notices the daemon raises itself, about the agent's own units or its unread mail, not read
 #: from a store. Each is delivered only where the declaration routes it to the agent
 #: (MIS-0002-R42).
@@ -281,6 +284,47 @@ class Notifier:
         for source in self.sources:
             for d in source.poll():
                 self._detect(source.name, d.data["arrival_id"], d.data.get("count"), source.store_dir)
+        self._withdraw_read_mail()
+
+    # ------------------------------------------------------------------ mail as a level
+
+    def _unread_mail(self) -> Optional[set]:
+        """The names waiting unread in the store, or None with no mail source or an unreadable
+        store. Names only, as the source reads them."""
+        for source in self.sources:
+            if source.name == "amail":
+                return source.names()
+        return None
+
+    def _withdraw_read_mail(self) -> None:
+        """Settle every mail notice still owed once nothing is unread: the read cursor passed
+        the mail it named, so it is no longer true (MIS-0004 R26). Recorded, so a restart
+        doesn't owe it again; one whose record can't be written stays owed."""
+        mail = [a for a, o in self.owed.items() if o.source == "amail"]
+        if not mail or self._unread_mail() != set():
+            return
+        for aid in mail:
+            owed = self.owed[aid]
+            if self._append(EVENT_WITHDRAWN, {"source": "amail", "arrival_id": aid,
+                                              "read_at": owed.read_at, "withdrawn_at": self._clock(),
+                                              "reason": "no mail is unread", "notifier": NOTIFIER}):
+                del self.owed[aid]
+
+    def _reassert_mail(self, takes: Iterable[str]) -> None:
+        """A channel that takes mail has attached while mail waits unread and no mail notice is
+        owed: owe it one. Held as a level, a notice the last session missed is asserted again at
+        the next attach, and a replay is harmless, since it names only what is still unread
+        (MIS-0004 R26)."""
+        if "amail" not in takes or any(o.source == "amail" for o in self.owed.values()):
+            return
+        if not self.to_session("amail"):
+            return                       # the operator silenced mail to the session (MIS-0002-R152)
+        unread = self._unread_mail()
+        if not unread:
+            return
+        source = next(s for s in self.sources if s.name == "amail")
+        self._detect("amail", f"{burst_id('amail', unread)}-attach-{int(self._clock())}",
+                     len(unread), source.store_dir)
 
     def raise_notice(self, source: str, notice_id: str) -> bool:
         """Owe the agent a notice the daemon raised itself, such as a unit past its memory
@@ -322,11 +366,13 @@ class Notifier:
         only the sources ``takes`` names, which is none until its hello declares them."""
         self._channels.insert(0, conn)
         self._takes[conn] = frozenset(takes)
+        self._reassert_mail(self._takes[conn])
 
     def declare(self, conn: socket.socket, takes: Iterable[str]) -> None:
         """Record the sources an attached channel's hello declared (MIS-0002-R149)."""
         if conn in self._channels:
             self._takes[conn] = frozenset(takes)
+            self._reassert_mail(self._takes[conn])
 
     def declared(self, source: str) -> bool:
         """Whether some attached channel declared ``source``. Where none did, that source has
