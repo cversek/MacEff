@@ -498,6 +498,20 @@ def process_entry(cfg: InboundConfig, eml: Path, sidecar: Path) -> Dict[str, Any
              if cfg.broker_config.audit_path else None)
     raw = eml.read_bytes()
     sha = hashlib.sha256(raw).hexdigest()
+    handed = _handed_marker(cfg, eml)
+    try:
+        already = handed.read_text().strip() == sha
+    except OSError:
+        already = False
+    if already:
+        # A previous run handed this exact content off and then failed before the
+        # spool entry went. Delivering again would give the recipient a second copy,
+        # and nothing drops a repeated `.eml` at ingest. Finish the removal only.
+        os.unlink(eml)
+        sidecar.unlink(missing_ok=True)
+        handed.unlink(missing_ok=True)
+        return {"sha256": sha, "entry": eml.name, "disposition": HANDED_OFF,
+                "reason": "handed off by an earlier run; spool entry removed now"}
 
     def terminal(decision: str, reason: str, recipient: str = "") -> Dict[str, Any]:
         if audit is not None:
@@ -579,10 +593,19 @@ def process_entry(cfg: InboundConfig, eml: Path, sidecar: Path) -> Dict[str, Any
     summary["handed_off_to"] = str(base.with_suffix(".eml"))
     summary["delivery_class"] = outcome
 
-    # Handoff COMPLETED; only now may the spool entry go.
+    # Handoff COMPLETED; only now may the spool entry go. The marker says so first,
+    # so a failure between here and the removal can't deliver it a second time.
+    handed.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    handed.write_text(sha + "\n")
     os.unlink(eml)
     os.unlink(sidecar)
+    handed.unlink(missing_ok=True)
     return terminal(HANDED_OFF, f"{outcome}: {reason}", recipient_agent)
+
+
+def _handed_marker(cfg: InboundConfig, eml: Path) -> Path:
+    """The consumer's note that *eml* was handed off, kept until its spool entry is gone."""
+    return (cfg.failures_dir or (cfg.quarantine_dir / ".failures")) / f"{eml.name}.handed"
 
 
 def process_spool(cfg: InboundConfig) -> List[Dict[str, Any]]:
@@ -600,8 +623,21 @@ def process_spool(cfg: InboundConfig) -> List[Dict[str, Any]]:
         # entry is set aside in quarantine with its last error, and reported.
         try:
             results.append(process_entry(cfg, eml, sidecar))
+            # A success ends any count this entry had, so .failures holds live failures only.
+            try:
+                ((cfg.failures_dir or (cfg.quarantine_dir / ".failures"))
+                 / f"{eml.name}.json").unlink(missing_ok=True)
+            except OSError:
+                pass  # noqa: MACEFF003 - a stale count is keyed to content, so it is harmless
         except Exception as e:  # noqa: BLE001 - per entry, so the rest of the spool still drains
-            results.append(_entry_failed(cfg, eml, sidecar, e))
+            try:
+                results.append(_entry_failed(cfg, eml, sidecar, e))
+            except Exception as ce:  # noqa: BLE001 - counting must not end the run it protects
+                print(f"⚠️ MACF: spool entry {eml.name} failed ({type(e).__name__}: {e}), and its "
+                      f"count was not recorded ({type(ce).__name__}: {ce}); the rest of the "
+                      f"spool goes on", file=sys.stderr)
+                results.append({"entry": eml.name, "disposition": "failed",
+                                "reason": f"{type(e).__name__}: {e}; count not recorded"})
     return results
 
 

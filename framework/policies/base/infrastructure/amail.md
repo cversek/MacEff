@@ -1297,6 +1297,12 @@ The sidecars sit apart from the mail because a bundle carried by hand (§6b.6) i
   (default 3) it is quarantined with its last error and audited as `quarantined`. The
   count is kept per entry and content in the consumer's own `.failures` directory,
   never in the spool, which has one writer, and it starts again if the content changes.
+  The counting itself can fail (a failures directory that can't be written); the entry
+  is then reported `failed` with "count not recorded", and the run still goes on. A
+  success clears the entry's count. An entry handed off whose spool removal then fails
+  isn't handed off again: the consumer writes a `.handed` marker before removing it, and
+  a retry that finds the marker only finishes the removal, since nothing drops a repeated
+  `.eml` at ingest.
   Before this, one such entry ended every run, and everything behind it waited until a
   person cleared it.
 
