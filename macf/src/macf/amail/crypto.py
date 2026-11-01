@@ -40,6 +40,7 @@ import hashlib
 import json
 import os
 import stat
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -224,7 +225,17 @@ def key_location_problem(path: Path) -> str:
             return f"{p} is inside a synced folder ({part})"
     for parent in p.parents:
         if (parent / ".git").exists():
-            return f"{p} is inside a git work tree ({parent})"
+            # The risk is a key one `git add -A` from public, which an ignored path isn't. An
+            # agent home that is itself a repository, with `.maceff` ignored, must still be able
+            # to hold a key. So git is asked, and a path it can't vouch for is refused.
+            try:
+                r = subprocess.run(["git", "-C", str(parent), "check-ignore", "-q", str(p)],
+                                   capture_output=True, timeout=10)
+            except (OSError, subprocess.SubprocessError) as e:
+                return f"{p} is inside a git work tree ({parent}), and git can't say it's ignored: {e}"
+            if r.returncode == 0:
+                return ""
+            return f"{p} is inside a git work tree ({parent}) and git doesn't ignore it"
     return ""
 
 
@@ -259,7 +270,9 @@ def key_custody(path: Path) -> Dict[str, Any]:
                               "problems": [], "warnings": [], "public": ""}
     where = key_location_problem(p)
     if where:
-        report["problems"].append(where)
+        # A warning, not a problem: loading doesn't check the location, so a key already
+        # there still signs. Keygen is where a bad location is refused.
+        report["warnings"].append(where)
     if p.parent.exists():
         loose = key_dir_problem(p.parent)
         if loose:

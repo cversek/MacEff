@@ -576,9 +576,13 @@ means something to a party that doesn't trust the broker.
   refuses one that is not already 0700 and the agent's own. The default place is
   `.maceff/keys/` in the agent home; a key already directly under `.maceff` keeps
   working, and `amail key-status` says to move it.
-- The key never lives in a git work tree or a synced folder. Keygen refuses both.
+- The key never lives in a synced folder, or in a git work tree at a path git doesn't
+  ignore. Keygen refuses both; an agent home that is itself a repository keeps its key
+  under an ignored `.maceff`.
 - A key in a directory that group or other can write is refused at load, because
   whoever can write the directory can replace the key.
+  That refusal stops the agent's mail, so before this reaches a deployment, run
+  `amail key-status` on each agent and fix any warning first.
 - `amail key-status` reports where the key is, how it and its directory are held,
   whether it loads, and its public line for the operator to declare (MIS-0004 R42).
   It never prints the private key.

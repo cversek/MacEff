@@ -6,6 +6,7 @@ is told. Nothing here changes how a receiver classifies mail.
 """
 import os
 import stat
+import subprocess
 
 import pytest
 
@@ -60,9 +61,17 @@ def test_keygen_refuses_a_synced_folder_or_a_work_tree(tmp_path, where):
     base = tmp_path / where
     base.mkdir()
     if where == "repo":
-        (base / ".git").mkdir()
+        subprocess.run(["git", "init", "-q", str(base)], check=True)
     with pytest.raises(SigningError, match="synced folder|git work tree"):
         generate_keypair(base / "keys" / "signing.pem")
+
+
+def test_keygen_allows_a_path_git_ignores(tmp_path):
+    """An agent home that is itself a repository, with `.maceff` ignored, can hold its key."""
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text(".maceff/\n")
+    generate_keypair(tmp_path / ".maceff" / "keys" / "signing.pem")
+    assert (tmp_path / ".maceff" / "keys" / "signing.pem").exists()
 
 
 def test_a_key_in_a_directory_others_can_write_is_refused(tmp_path):
@@ -76,3 +85,19 @@ def test_a_key_in_a_directory_others_can_write_is_refused(tmp_path):
     with pytest.raises(SigningError, match="can write"):
         load_private_key(key)
     assert key_custody(key)["usable"] is False
+
+
+def test_key_status_warns_but_a_key_in_a_tracked_place_still_signs(tmp_path):
+    """Keygen refuses a tracked location; a key already there still signs, and key-status warns."""
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    key = repo / "keys" / "signing.pem"
+    key.parent.mkdir(mode=0o700)
+    os.chmod(key.parent, 0o700)
+    with pytest.raises(SigningError, match="git work tree"):
+        generate_keypair(key)
+    public = generate_keypair(tmp_path / "outside" / "k.pem")
+    os.replace(tmp_path / "outside" / "k.pem", key)
+    report = key_custody(key)
+    assert report["usable"] and any("git work tree" in w for w in report["warnings"])
+    assert verify(_msg(), sign_for_submission(_msg(), key), [public])
