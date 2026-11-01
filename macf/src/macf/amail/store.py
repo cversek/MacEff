@@ -544,6 +544,25 @@ def unread_names(home: Path) -> List[str]:
         return []
 
 
+def unread_message_ids(home: Path) -> List[str]:
+    """The ids of the agent messages waiting unread, oldest first, read from the sidecar
+    ingest wrote beside each one: the broker's metadata, never the message. Internet mail has
+    no message id and isn't listed."""
+    ids: List[str] = []
+    side = bundle_sidecars_for(home)
+    for name in unread_names(home):
+        try:
+            mid = json.loads((side / f"{name}.json").read_text()).get("message_id")
+        except FileNotFoundError:
+            continue  # noqa: MACEFF003 - internet mail, or mail ingested before sidecars: no id to name
+        except (OSError, ValueError) as e:
+            print(f"⚠️ MACF: unreadable sidecar for {name}, its id left out: {e}", file=sys.stderr)
+            continue
+        if mid and mid not in ids:
+            ids.append(mid)
+    return ids
+
+
 def mark_read(home: Path, ref: str, reader: str) -> Optional[str]:
     """Move one received message from ``new`` to ``cur``: the read cursor passing it.
 

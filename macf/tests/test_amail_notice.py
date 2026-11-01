@@ -222,3 +222,17 @@ def test_amail_read_moves_what_it_printed(home, box, monkeypatch, capsys):
     assert cli.cmd_amail_read(argparse.Namespace(message_id=a.message_id, json=False)) == 0
     assert "one" in capsys.readouterr().out
     assert [x.message_id for x in store.read_all(home, include_seen=False)] == [b.message_id]
+
+
+def test_the_wake_names_unread_ids_from_a_real_ingest(home, box):
+    """The keystroke wake (MIS-0002-R105) names what waits. A Maildir's names carry no id, so
+    the ids come from the sidecars ingest writes; read mail drops out."""
+    a, b = _msg("one"), _msg("two")
+    _put(box, "1", a)
+    client.ingest(home, box, agent="a")
+    time.sleep(1.05)                                    # Maildir names are second-granular
+    _put(box, "2", b)
+    client.ingest(home, box, agent="a")
+    assert store.unread_message_ids(home) == [a.message_id, b.message_id]
+    store.mark_read(home, a.message_id, "Reader@abc123")
+    assert store.unread_message_ids(home) == [b.message_id]
