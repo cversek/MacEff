@@ -193,3 +193,73 @@ def drift(existing: Dict[str, Any], default: Dict[str, Any]) -> List[str]:
         if source not in routes:
             out.append(f"notice_routes does not route {source} (the default routes it to {route})")
     return out
+
+
+# ============================================================================
+# A container agent's default
+# ============================================================================
+
+#: Where a container keeps its homes, its interpreter, and the PATH a container unit runs with.
+CONTAINER_HOME_ROOT = Path("/home")
+CONTAINER_PYTHON = Path("/opt/maceff-venv/bin/python")
+CONTAINER_PATH = ("/opt/maceff-venv/bin", "/usr/local/bin", "/usr/bin", "/bin")
+
+
+def container_body(*, account: str, harness_session: str, project_dir: Optional[str],
+                   channels: Sequence[str], mail: bool,
+                   memory_limit_mb: Optional[int] = None) -> Dict[str, Any]:
+    """The declaration body a container agent runs when agents.yaml writes none for it: the
+    host default's session unit (``build``), as a body without ``agent`` and ``version``, which
+    container start-up fills in (persistent_layer 10.1).
+
+    Only the session is declared. The host default's monitor and search are per-agent copies,
+    and search holds over a gigabyte each, which a container shared by several seats doesn't
+    multiply by default. The session states what the legacy launch set from the login shell:
+    its tmux session name, its project directory, its channels (the MacEff channel always
+    among them), a shell and a locale, and it
+    never attaches the host's API proxy, which no container can reach. *project_dir* None is
+    the agent's home."""
+    home = CONTAINER_HOME_ROOT / account
+    project = Path(project_dir) if project_dir else home
+    # The daemon's notices reach the session through the MacEff channel, so the session loads
+    # it whether or not the agent's own channels name it.
+    own = channel_flag(CHANNEL_PLUGIN, MARKETPLACE)
+    channels = list(channels) + ([own] if own not in channels else [])
+    parsed = [p for p in (parse_channel_flag(c) for c in channels) if p is not None]
+    telegram = next((p for p in parsed if p[0] == TELEGRAM[0]), None)
+    declaration = build("placeholder", agent_home=home, login_home=home, account=account,
+                        python=CONTAINER_PYTHON, project_dir=project, path_dirs=CONTAINER_PATH,
+                        mail=mail, telegram=telegram)
+    session = next(u for u in declaration["units"] if u.get("kind") == "session")
+    session["command"] += ["--agent", harness_session, "--no-proxy"]
+    session["environment"].update({
+        "SHELL": "/bin/bash", "LANG": "C.UTF-8",
+        "MACEFF_HARNESS_SESSION": harness_session,
+        "MACEFF_PROJECT_DIR": _placeheld(project, home),
+        "MACEFF_CHANNELS": " ".join(channels),
+    })
+    if memory_limit_mb is not None:
+        session["memory_limit_mb"] = memory_limit_mb
+    allowed = declaration["allowlisted_channels"]
+    for plugin, marketplace in parsed:
+        if {"plugin": plugin, "marketplace": marketplace} not in allowed:
+            allowed.append({"plugin": plugin, "marketplace": marketplace})
+    body = {k: v for k, v in declaration.items() if k not in ("version", "agent")}
+    body["units"] = [session]
+    return body
+
+
+def merged_body(default: Dict[str, Any], declared: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """What a container agent runs: the default with what agents.yaml declares laid over it.
+
+    A declared unit replaces the default unit it stands for (``_unit_key``: the session by kind),
+    and any other declared unit is added after the default's, in the order declared. Every other
+    declared key replaces the default's value whole, so a deployment states only what differs."""
+    if declared is None:
+        return default
+    out = {**default, **{k: v for k, v in declared.items() if k != "units"}}
+    if "units" in declared:
+        theirs = {_unit_key(u): u for u in declared["units"]}
+        units = [theirs.pop(_unit_key(u), u) for u in default["units"]]
+        out["units"] = units + [u for u in declared["units"] if _unit_key(u) in theirs]
+    return out
