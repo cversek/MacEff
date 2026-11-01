@@ -117,6 +117,64 @@ def test_quarantine(poisoned):
     assert not list((poisoned.quarantine_dir / ".failures").glob("*.json")), "the count is cleared"
 
 
+def test_a_count_that_cannot_be_recorded_still_lets_the_run_go_on(poisoned, monkeypatch):
+    """The counting itself can fail; the run it protects must still go on."""
+    def broken(*a, **k):
+        raise OSError("planted: the failures directory can't be written")
+    monkeypatch.setattr(inbound, "_entry_failed", broken)
+    _spool(poisoned, "poison-0001", "alpha")
+    _spool(poisoned, "zz-0002", "beta")
+    by_entry = {r["entry"]: r for r in inbound.process_spool(poisoned)}
+    assert "count not recorded" in by_entry["poison-0001.eml"]["reason"]
+    assert by_entry["zz-0002.eml"]["disposition"] == HANDED_OFF
+
+
+def test_a_failure_after_hand_off_does_not_deliver_twice(cfg, monkeypatch):
+    """The window the reviewer named: the entry is handed off, then removing it from
+    the spool fails. The retry must finish the removal, not hand it off again."""
+    import os as _os
+    eml = _spool(cfg, "late-0001", "alpha")
+    real_unlink = _os.unlink
+    calls = {"n": 0}
+
+    def flaky_unlink(path, *a, **k):
+        if str(path) == str(eml) and calls["n"] == 0:
+            calls["n"] += 1
+            raise PermissionError("planted: the spool entry can't be removed yet")
+        return real_unlink(path, *a, **k)
+
+    monkeypatch.setattr(inbound.os, "unlink", flaky_unlink)
+    first = {r["entry"]: r for r in inbound.process_spool(cfg)}
+    assert first["late-0001.eml"]["disposition"] == "failed"
+    box = cfg.handoff_dir / "alpha"
+    for p in box.glob("*.eml"):          # the recipient ingests between the runs
+        p.unlink()
+    second = {r["entry"]: r for r in inbound.process_spool(cfg)}
+    assert second["late-0001.eml"]["disposition"] == HANDED_OFF
+    assert not list(box.glob("*.eml")), "not handed off a second time"
+    assert not eml.exists()
+
+
+def test_a_success_clears_the_entrys_failure_count(cfg, monkeypatch):
+    """A record of earlier failures goes once the entry succeeds."""
+    eml = _spool(cfg, "once-0001", "alpha")
+    real = inbound.process_entry
+    calls = {"n": 0}
+
+    def fails_once(c, e, s):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("planted: fails the first time only")
+        return real(c, e, s)
+
+    monkeypatch.setattr(inbound, "process_entry", fails_once)
+    inbound.process_spool(cfg)
+    assert list((cfg.quarantine_dir / ".failures").glob("*.json"))
+    inbound.process_spool(cfg)
+    assert not eml.exists()
+    assert not list((cfg.quarantine_dir / ".failures").glob("*.json"))
+
+
 def test_a_failure_count_restarts_when_the_content_changes(poisoned):
     """The count belongs to the entry's content: a rewritten entry starts again."""
     poison = _spool(poisoned, "poison-0001", "alpha", body="one")
