@@ -11,6 +11,7 @@ import time
 from types import SimpleNamespace
 
 import pytest
+from pathlib import Path
 
 from macf.amail import store
 from macf.amail.models import Message
@@ -70,6 +71,9 @@ def test_the_box_comes_from_the_settings_never_the_environment(tmp_path, monkeyp
     monkeypatch.setenv("MACEFF_AGENT_NAME", "b")
     monkeypatch.setenv("MACF_AMAIL_HANDOFF", str(tmp_path / "elsewhere"))
     assert receiver_settings(home)["box"] == tmp_path / "handoff" / "a"
+    # Settings that name only the agent: the handoff is the fixed default, never the variable.
+    (home / ".maceff" / "amail.json").write_text(json.dumps({"agent": "a"}))
+    assert receiver_settings(home)["box"] == Path("/var/lib/amail/handoff") / "a"
 
 
 def test_no_agent_in_the_settings_means_no_receiver(tmp_path, monkeypatch):
