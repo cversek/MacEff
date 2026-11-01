@@ -437,16 +437,16 @@ def test_a_grant_names_each_uid_once():
 
 @pytest.fixture
 def mail_home(tmp_path, monkeypatch):
-    """A home whose mail is routed to the agent, in <home>/amail/pickup (no seat's name)."""
+    """A home whose mail is routed to the agent, unread in its store's `new` (no seat's name)."""
     monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
     monkeypatch.delenv("MACF_AMAIL_HANDOFF", raising=False)
     home = home_with(tmp_path, notice_routes={"amail": "agent"})
-    (home / "amail" / "pickup").mkdir(parents=True)
+    (home / "Maildir" / "new").mkdir(parents=True)
     return home
 
 
 def _mail(home, name):
-    (home / "amail" / "pickup" / f"{name}.amsg").write_text("never read by the notifier")
+    (home / "Maildir" / "new" / f"{name}.amsg").write_text("never read by the notifier")
 
 
 def _channel(daemon, monkeypatch):
