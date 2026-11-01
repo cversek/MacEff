@@ -1,0 +1,150 @@
+"""MIS-0004's flow rows: one agent's trouble stays its own, and nothing is dropped unseen.
+
+- R17 (queue_MUST_be_per_agent): an entry that keeps failing doesn't hold back the
+  mail spooled after it for other agents.
+- R18 (refusal_MUST_reach_the_sender): a refused submission comes back to its sender
+  with the reason, and is audited.
+- R20 (broker_MUST_quarantine_repeated_failure): an entry that can't be parsed is set
+  aside at once; one that fails unexpectedly is set aside after a declared number of
+  tries, with its last error, and reported.
+
+The unexpected failure is planted by making `process_entry` raise for one named
+entry, so the test controls exactly which entry fails and how often.
+"""
+import hashlib
+import json
+
+import pytest
+
+pytest.importorskip("cryptography", reason="amail requires the crypto extra")
+
+from conftest import _addressing
+
+from macf.amail import inbound
+from macf.amail.broker import Broker, BrokerConfig
+from macf.amail.inbound import HANDED_OFF, QUARANTINED, InboundConfig
+from macf.amail.models import Message
+
+AUTHORITY = "mx.test.example"
+HUMAN = "human@example.org"
+DOMAIN = "agents.test"
+
+
+def _raw(to_agent, body):
+    return (f"Authentication-Results: {AUTHORITY}; dmarc=pass header.from=example.org; spf=pass\r\n"
+            f"From: Someone <{HUMAN}>\r\nTo: {to_agent}@{DOMAIN}\r\nSubject: flow\r\n\r\n{body}").encode()
+
+
+def _spool(cfg, name, to_agent, body="hello"):
+    """Write one spool entry named *name*; return its .eml path."""
+    raw = _raw(to_agent, body)
+    eml = cfg.spool_dir / f"{name}.eml"
+    eml.write_bytes(raw)
+    eml.with_suffix(".json").write_text(json.dumps({
+        "raw_sha256": hashlib.sha256(raw).hexdigest(),
+        "observed": {"trusted": False, "envelope_to": f"{to_agent}@{DOMAIN}"},
+    }))
+    return eml
+
+
+@pytest.fixture
+def cfg(tmp_path):
+    """Two agents who both list the human, each with a provisioned box."""
+    contacts = tmp_path / "contacts.json"
+    contacts.write_text(_addressing({"alpha": [HUMAN], "beta": [HUMAN]}, domain=DOMAIN))
+    homes = {}
+    for a in ("alpha", "beta"):
+        homes[a] = tmp_path / "home" / a
+        (homes[a] / "Maildir").mkdir(parents=True)
+    c = InboundConfig(
+        broker_config=BrokerConfig(domain=DOMAIN, agent_homes=homes, contacts_path=contacts,
+                                   audit_path=tmp_path / "audit.jsonl"),
+        spool_dir=tmp_path / "spool", quarantine_dir=tmp_path / "quarantine",
+        handoff_dir=tmp_path / "handoff", verdict_authority=AUTHORITY)
+    c.spool_dir.mkdir()
+    for a in ("alpha", "beta"):
+        (c.handoff_dir / a).mkdir(mode=0o2770, parents=True)
+    return c
+
+
+@pytest.fixture
+def poisoned(cfg, monkeypatch):
+    """`process_entry` raises for any entry whose name starts with "poison"."""
+    real = inbound.process_entry
+
+    def flaky(c, eml, sidecar):
+        if eml.name.startswith("poison"):
+            raise RuntimeError("planted: handling fails for this entry")
+        return real(c, eml, sidecar)
+
+    monkeypatch.setattr(inbound, "process_entry", flaky)
+    return cfg
+
+
+def _audit(cfg):
+    return [json.loads(l) for l in cfg.broker_config.audit_path.read_text().splitlines()]
+
+
+def test_queues_per_agent(poisoned):
+    """alpha's failing entry sorts first, and beta's mail behind it still lands."""
+    _spool(poisoned, "poison-0001", "alpha")
+    _spool(poisoned, "zz-0002", "beta", body="for beta")
+    results = inbound.process_spool(poisoned)
+    by_entry = {r["entry"]: r for r in results}
+    assert by_entry["poison-0001.eml"]["disposition"] == "failed"
+    assert by_entry["zz-0002.eml"]["disposition"] == HANDED_OFF
+    assert len(list((poisoned.handoff_dir / "beta").glob("*.eml"))) == 1
+
+
+def test_quarantine(poisoned):
+    """An unexpected failure is retried up to the declared limit, then set aside
+    with its last error and audited; a corrupt entry is set aside at once."""
+    poison = _spool(poisoned, "poison-0001", "alpha")
+    corrupt = _spool(poisoned, "corrupt-0002", "beta")
+    corrupt.with_suffix(".json").write_text("{not json")
+    first = {r["entry"]: r for r in inbound.process_spool(poisoned)}
+    assert first["corrupt-0002.eml"]["disposition"] == QUARANTINED, "unparseable: set aside at once"
+    assert first["poison-0001.eml"]["failures"] == 1 and poison.exists()
+    second = {r["entry"]: r for r in inbound.process_spool(poisoned)}
+    assert second["poison-0001.eml"]["failures"] == 2 and poison.exists()
+    third = {r["entry"]: r for r in inbound.process_spool(poisoned)}
+    assert third["poison-0001.eml"]["disposition"] == QUARANTINED
+    assert not poison.exists()
+    reason = (poisoned.quarantine_dir / "poison-0001.reason").read_text()
+    assert "failed 3 times" in reason and "planted" in reason
+    assert any(r.get("decision") == QUARANTINED and "failed 3 times" in (r.get("reason") or "")
+               for r in _audit(poisoned))
+    assert not list((poisoned.quarantine_dir / ".failures").glob("*.json")), "the count is cleared"
+
+
+def test_a_failure_count_restarts_when_the_content_changes(poisoned):
+    """The count belongs to the entry's content: a rewritten entry starts again."""
+    poison = _spool(poisoned, "poison-0001", "alpha", body="one")
+    inbound.process_spool(poisoned)
+    inbound.process_spool(poisoned)
+    _spool(poisoned, "poison-0001", "alpha", body="two")
+    again = {r["entry"]: r for r in inbound.process_spool(poisoned)}
+    assert again["poison-0001.eml"]["failures"] == 1 and poison.exists()
+
+
+def test_refusal_reaches_sender(tmp_path):
+    """A submission the contact book refuses comes back with its reason, and is audited."""
+    contacts = tmp_path / "addressing.yaml"
+    contacts.write_text(_addressing({"alpha": [f"beta@{DOMAIN}"], "beta": [f"alpha@{DOMAIN}"]},
+                                    domain=DOMAIN))
+    handoff = tmp_path / "handoff"
+    for a in ("alpha", "beta"):
+        (handoff / a).mkdir(mode=0o2770, parents=True)
+        (tmp_path / "home" / a).mkdir(parents=True)
+    broker = Broker(BrokerConfig(
+        domain=DOMAIN, agent_homes={a: tmp_path / "home" / a for a in ("alpha", "beta")},
+        contacts_path=contacts, audit_path=tmp_path / "audit.jsonl",
+        dispositions_dir=tmp_path / "dispositions", inbound_quarantine=tmp_path / "q",
+        inbound_handoff=handoff))
+    r = broker.submit("alpha", Message(sender=f"alpha@{DOMAIN}", to=["stranger@elsewhere.test"],
+                                       subject="no", body="refused"))
+    assert r["ok"] is False
+    assert r["refused"] and any("stranger@elsewhere.test" in x for x in r["refused"])
+    recs = [json.loads(l) for l in (tmp_path / "audit.jsonl").read_text().splitlines()]
+    assert any(x.get("decision") == "refused" for x in recs)
+    assert not list((handoff / "beta").glob("*.amsg")), "nothing was delivered"

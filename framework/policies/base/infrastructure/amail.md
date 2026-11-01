@@ -3,6 +3,7 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.13.0 — the spool consumer: an entry that fails unexpectedly is counted and the run goes on; after `max_failures` (default 3) it is quarantined with its last error and audited (MIS-0004 R17, R20). Minor: an outcome an operator can meet in the quarantine.
 **Version**: 1.12.0 — §2.4: the mail notice is a level (MIS-0004 R26). A channel that takes mail is told at each attach while mail waits unread; a notice still owed when the mail is read is withdrawn, recorded as `pd_notice_withdrawn`; nothing is re-asserted while the operator silences mail to the session, and after an unsilence still-unread mail is told on the next pass. Minor: a notice an agent may now meet again in a new session.
 **Version**: 1.11.0 — §3.2.2: the agent's signing key is a 0600 file in a 0700 directory of the agent's own account, outside any repository or synced folder; an agent declared to sign refuses to send without one, and any other sends unsigned with a warning (MIS-0004 R41). Minor: a new refusal an agent can meet, and a new verb, `amail key-status`.
 **Version**: 1.10.0 — §2.1.1: the message id crosses a shared hand-off unchanged. The receiving broker keeps a well-formed peer id, drops a pair whose id the recipient already holds from the same peer and sender and audits it as `duplicate-dropped`, treats any other held match as an `id-collision` and mints fresh, and mints a fresh id for anything else and for quarantined mail (MIS-0004 R15). Minor: a behavior an agent can meet in its ids and its audit.
@@ -1288,6 +1289,16 @@ The sidecars sit apart from the mail because a bundle carried by hand (§6b.6) i
   whose acceptor (the receiver) must be coupled to its processor (the inbound
   watcher), and the orphan sweep's age bound is the mail-specific instance of the
   liveness signal that policy requires someone outside to read.
+
+  **One entry's failure is that entry's alone (MIS-0004 R17, R20).** The watcher handles
+  the spool one entry at a time. An entry it can't parse is quarantined at once, with
+  its reason. An entry whose handling fails unexpectedly is counted and the run goes on,
+  so mail spooled after it, for any agent, still lands. After `max_failures` tries
+  (default 3) it is quarantined with its last error and audited as `quarantined`. The
+  count is kept per entry and content in the consumer's own `.failures` directory,
+  never in the spool, which has one writer, and it starts again if the content changes.
+  Before this, one such entry ended every run, and everything behind it waited until a
+  person cleared it.
 
 ---
 
