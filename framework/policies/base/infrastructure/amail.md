@@ -3,6 +3,7 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.12.0 — §2.4: the mail notice is a level (MIS-0004 R26). A channel that takes mail is told at each attach while mail waits unread; a notice still owed when the mail is read is withdrawn, recorded as `pd_notice_withdrawn`; nothing is re-asserted while the operator silences mail to the session. Minor: a notice an agent may now meet again in a new session.
 **Version**: 1.11.0 — §3.2.2: the agent's signing key is a 0600 file in a 0700 directory of the agent's own account, outside any repository or synced folder; an agent declared to sign refuses to send without one, and any other sends unsigned with a warning (MIS-0004 R41). Minor: a new refusal an agent can meet, and a new verb, `amail key-status`.
 **Version**: 1.10.0 — §2.1.1: the message id crosses a shared hand-off unchanged. The receiving broker keeps a well-formed peer id, drops a pair whose id the recipient already holds from the same peer and sender and audits it as `duplicate-dropped`, treats any other held match as an `id-collision` and mints fresh, and mints a fresh id for anything else and for quarantined mail (MIS-0004 R15). Minor: a behavior an agent can meet in its ids and its audit.
 **Version**: 1.9.0 — §2.3 and §2.4: the agent's primal daemon ingests its mail each pass (MIS-0004 R04), from the box its own settings name, never the environment; one ingest runs at a time per store, and an entry another ingest took is not reported as damage. §2.4: the read cursor is the Maildir's `new` and `cur`; `amail read` moves what it printed and records who read it, notices follow `new` (R25), and `amail list` shows unread mail by default (R30). Minor: behaviors an agent meets in its store and its listing.
@@ -475,6 +476,15 @@ any unit moves none (MIS-0004 R27). There is no second record of what was read: 
 is it. Mail notices watch `new`, so a notice names only mail `amail read` can already find
 (R25). `amail list` shows unread mail by default with a count of the rest (R30); `--all`
 shows everything, and `--thread` shows a whole thread, since a reply needs its context.
+
+**The mail notice is a level, not an edge (MIS-0004 R26).** While mail waits unread, every
+channel that attaches and takes mail is told, even if an earlier session was told about the
+same mail: a session that missed a notice, or a channel that restarted, hears it again, and
+a repeat is harmless because it names only what is still unread. A notice still owed when the
+mail it named is read is withdrawn rather than delivered, and the withdrawal is recorded as
+`pd_notice_withdrawn`, so a restart doesn't owe it again. The operator's rules still
+decide: while mail is silenced to the session nothing is re-asserted, and once it is
+unsilenced, mail that is still unread is told at the next attach.
 
 ---
 
