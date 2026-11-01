@@ -3,6 +3,7 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.11.0 — §3.2.2: the agent's signing key is a 0600 file in a 0700 directory of the agent's own account, outside any repository or synced folder; an agent declared to sign refuses to send without one, and any other sends unsigned with a warning (MIS-0004 R41). Minor: a new refusal an agent can meet, and a new verb, `amail key-status`.
 **Version**: 1.10.0 — §2.1.1: the message id crosses a shared hand-off unchanged. The receiving broker keeps a well-formed peer id, drops a pair whose id the recipient already holds from the same peer and sender and audits it as `duplicate-dropped`, treats any other held match as an `id-collision` and mints fresh, and mints a fresh id for anything else and for quarantined mail (MIS-0004 R15). Minor: a behavior an agent can meet in its ids and its audit.
 **Version**: 1.9.0 — §2.3 and §2.4: the agent's primal daemon ingests its mail each pass (MIS-0004 R04), from the box its own settings name, never the environment; one ingest runs at a time per store, and an entry another ingest took is not reported as damage. §2.4: the read cursor is the Maildir's `new` and `cur`; `amail read` moves what it printed and records who read it, notices follow `new` (R25), and `amail list` shows unread mail by default (R30). Minor: behaviors an agent meets in its store and its listing.
 **Version**: 1.7.0 — §2.3: a message is held once. Ingest drops a copy whose id the store already holds, and records the drop in that message's sidecar as `duplicates_dropped` (MIS-0004 R16). Minor: a behavior an agent can meet in its store.
@@ -604,6 +605,32 @@ The demonstration owed is a *break*, in both polarities — exposed and absent �
 with its paired acceptance in the same run. Inspecting a configuration file is not a
 demonstration of a refusal.
 
+### 3.2.2 The agent's signing key
+
+Every MacEff agent signs every message it submits, with a key only its own account
+can read (MIS-0004 R41). The key is the agent's, never the broker's: a signature then
+means something to a party that doesn't trust the broker.
+
+- The private key is a file of mode 0600 in a directory of mode 0700, both owned by
+  the agent's account. `amail keygen` creates the directory when it doesn't exist and
+  refuses one that is not already 0700 and the agent's own. The default place is
+  `.maceff/keys/` in the agent home; a key already directly under `.maceff` keeps
+  working, and `amail key-status` says to move it.
+- The key never lives in a synced folder, or in a git work tree at a path git doesn't
+  ignore. Keygen refuses both; an agent home that is itself a repository keeps its key
+  under an ignored `.maceff`.
+- A key in a directory that group or other can write is refused at load, because
+  whoever can write the directory can replace the key.
+  That refusal stops the agent's mail, so before this reaches a deployment, run
+  `amail key-status` on each agent and fix any warning first.
+- `amail key-status` reports where the key is, how it and its directory are held,
+  whether it loads, and its public line for the operator to declare (MIS-0004 R42).
+  It never prints the private key.
+- **The declare step.** An agent whose configuration sets `signing_required` refuses
+  to send without a usable key. Any other agent without a key sends unsigned and is
+  told on stderr. Receivers classify mail exactly as before; refusing unsigned agent
+  mail (R43) and marking it suspect (R44) switch on only once every key is declared.
+
 ### 3.3 The audit record
 
 The broker MUST append a record for every submission and every inbound message,
@@ -1164,10 +1191,9 @@ and a refusal for every combination that would have meant something else.
 
 **Deferred, with reasons:**
 
-- **Per-message authorship signing.** Genuinely wanted, and §5.1 leaves room for a
-  signature field. Deferred because signing without key custody and rotation is
-  ceremony, and key management deserves its own decision rather than being smuggled
-  in beneath a mail spec.
+- **Per-message authorship signing.** Decided by MIS-0004 (R41 to R46). Key custody
+  is §3.2.2 (R41). Rotation (R45) and the shared-login label (R46) follow with the
+  key registry (R42).
 - **Encryption at rest and in transit beyond transport TLS.** Same reasoning.
 - **A dedicated task type for inbound mail.** Wanted so mail is tracked natively
   rather than becoming a generic task with hand-built structure. Deferred to

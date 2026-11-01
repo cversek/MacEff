@@ -326,7 +326,7 @@ Detection alone stays allowed only where no agent has a reachable address. Addre
 | R38 | decidable | `macf/tests/test_amail_handoff.py::test_one_copy_per_recipient` | passing |
 | R39 | decidable | `macf/tests/test_amail_notice.py::test_keystrokes_read_back` | planned |
 | R40 | decidable | `macf/tests/test_amail_notice.py::test_keystroke_notice_no_leading_digit` | planned |
-| R41 | decidable | `macf/tests/test_amail_signing.py::test_agent_signs_every_message` | planned |
+| R41 | decidable | `macf/tests/test_amail_signing.py::test_agent_signs_every_message` | passing |
 | R42 | decidable | `macf/tests/test_amail_signing.py::test_keys_declared_by_operator` | planned |
 | R43 | decidable | `macf/tests/test_amail_signing.py::test_broker_refuses_unsigned_agent_mail` | planned |
 | R44 | decidable | `macf/tests/test_amail_signing.py::test_receiver_marks_unsigned_agent_mail_suspect` | planned |
@@ -450,6 +450,7 @@ The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 h
 - 2026-10-31: Accepted. The Secretary's last commit before the operator's merge: the decided Status, and a Resolution quoting the operator's decision comment on #520, which answers O01.
 - 2026-11-01: landing, receiver and read cursor (head maintainer). R04, R25, R27 and R30 are passing. The receiver is a duty of the agent's primal daemon that ingests the box each pass, from the box its own settings name; the read cursor is the store's Maildir `new` and `cur`. amail policy 1.9.0 says so (§2.3, §2.4).
 - 2026-11-01: landing, hand-off area (container-management maintainer). R13, R14, R15, R36 and R38 are passing. R15 needed a change: the receiving broker of a shared hand-off kept no peer id and minted its own, so it now keeps a well-formed one, drops a pair whose id the recipient already holds from the same peer and sender, mints fresh on any other match (an id collision) and for quarantined mail. amail policy 1.10.0 says so (§2.1.1).
+- 2026-11-01: landing, signing area, the declare step (host-side maintainer). R41 is passing: an agent with a key signs every submission; the key is 0600 in a 0700 directory of its own account, outside any work tree or synced folder; an agent declared to sign refuses to send without one, and any other sends unsigned with a warning. Nothing on the receiving side changes. amail policy 1.11.0 says so (§3.2.2).
 
 ## Wiki-Links
 

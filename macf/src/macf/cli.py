@@ -10261,9 +10261,21 @@ def _amail_config() -> dict:
     # one does not give a compromised agent any reach it did not have. Keeping it
     # out of the broker is what lets a signature mean something to a party that
     # does not trust the broker.
-    cfg.setdefault("signing_key", os.environ.get(
-        "MACF_AMAIL_SIGNING_KEY",
-        str(Path(home) / ".maceff" / "amail_signing_key.pem") if home else ""))
+    #
+    # MIS-0004 R41 puts the key in a 0700 directory of its own. A new key goes
+    # to `.maceff/keys/`, which keygen creates 0700; a key already at the old
+    # place, directly under `.maceff`, keeps working, and `amail key-status`
+    # says to move it.
+    if home and not os.environ.get("MACF_AMAIL_SIGNING_KEY") and "signing_key" not in cfg:
+        legacy = Path(home) / ".maceff" / "amail_signing_key.pem"
+        cfg["signing_key"] = str(legacy if legacy.exists()
+                                 else Path(home) / ".maceff" / "keys" / "amail_signing_key.pem")
+    cfg.setdefault("signing_key", os.environ.get("MACF_AMAIL_SIGNING_KEY", ""))
+    # Whether this agent is declared to sign every message (MIS-0004 R41). When
+    # true, a send with no key is refused; otherwise it goes out unsigned with
+    # a warning, which is the declare step's allowance.
+    cfg.setdefault("signing_required", os.environ.get(
+        "MACF_AMAIL_SIGNING_REQUIRED", "") in ("1", "true", "yes"))
     for k in ("domain", "socket", "agent"):
         if os.environ.get(f"MACF_AMAIL_{k.upper()}"):
             cfg[k] = os.environ[f"MACF_AMAIL_{k.upper()}"]
@@ -10785,6 +10797,37 @@ def cmd_amail_keygen(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_amail_key_status(args: argparse.Namespace) -> int:
+    """Report how this agent's signing key is held (MIS-0004 R41); never its secret."""
+    from macf.amail import key_custody
+
+    cfg = _amail_config()
+    target = Path(args.path) if args.path else Path(cfg.get("signing_key") or "")
+    if not str(target):
+        print("❌ cannot determine where the key would be; pass --path")
+        return 1
+    report = key_custody(target)
+    report["required"] = bool(cfg.get("signing_required"))
+    if args.json:
+        print(json.dumps(report, indent=2))
+        return 0 if report["usable"] or not (report["exists"] or report["required"]) else 1
+    if not report["exists"]:
+        mark = "❌" if report["required"] else "⚠️"
+        print(f"{mark} no signing key at {target}; mail goes out "
+              f"{'refused' if report['required'] else 'unsigned'}. Run `macf_tools amail keygen`.")
+    elif report["usable"]:
+        print(f"✅ signing key at {target} is usable")
+        print(f"   public key, for the operator to declare: {report['public']}")
+    for problem in report["problems"]:
+        print(f"❌ {problem}")
+    for warning in report["warnings"]:
+        print(f"⚠️ {warning}. Move the key into a directory of mode 700 (MIS-0004 R41).")
+    print(f"   declared to sign every message: {'yes' if report['required'] else 'no'}")
+    if report["exists"] and not report["usable"]:
+        return 1
+    return 1 if (report["required"] and not report["exists"]) else 0
+
+
 def _broker_socket_ready(sock: Path, timeout: float = 0.0) -> bool:
     """True when something answers on the broker socket (within timeout)."""
     import socket as _socket
@@ -10916,15 +10959,15 @@ def cmd_amail_send(args: argparse.Namespace) -> int:
     # sending unsigned when the correspondent expects signed is exactly the shape
     # of an impersonation.
     keypath = Path(cfg["signing_key"]) if cfg.get("signing_key") else None
-    if keypath and keypath.exists():
-        from macf.amail import SigningError, load_private_key, sign
-        try:
-            msg.signature = sign(msg, load_private_key(keypath))
-        except SigningError as e:
-            print(f"❌ cannot sign with {keypath}: {e}")
-            print("   Refusing to send unsigned: a correspondent who has your key "
-                  "treats unsigned mail as suspect.")
-            return 1
+    from macf.amail import SigningError, sign_for_submission
+    try:
+        msg.signature = sign_for_submission(
+            msg, keypath, required=bool(cfg.get("signing_required")))
+    except SigningError as e:
+        print(f"❌ cannot sign: {e}")
+        print("   Refusing to send unsigned: a correspondent who has your key "
+              "treats unsigned mail as suspect.")
+        return 1
 
     # SEND BY COPY. The agent keeps its own canonical record BEFORE the broker
     # is asked — amail spec O5c.6 "the-sent-copy-is-written-before-submission" — so a
@@ -13531,8 +13574,15 @@ def _build_parser() -> argparse.ArgumentParser:
     amail_keygen = amail_sub.add_parser(
         "keygen", help="generate this agent's authorship signing key")
     amail_keygen.add_argument("--path", help="where to write the private key "
-                                            "(default: ~/.maceff/amail_signing_key.pem)")
+                                            "(default: .maceff/keys/amail_signing_key.pem "
+                                            "in the agent home, in a directory of mode 700)")
     amail_keygen.set_defaults(func=cmd_amail_keygen)
+
+    amail_key_status = amail_sub.add_parser(
+        "key-status", help="report how this agent's signing key is held, never its secret")
+    amail_key_status.add_argument("--path", help="the key to check (default: the configured one)")
+    amail_key_status.add_argument("--json", action="store_true", help="machine-readable output")
+    amail_key_status.set_defaults(func=cmd_amail_key_status)
 
     amail_preflight = amail_sub.add_parser(
         "preflight", help="scan a hand-carried bundle before it leaves the host",
