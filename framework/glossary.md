@@ -12,7 +12,12 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **amendment**: a substantive change to an accepted MIS that an amendment spec describes and the MIS's other maintainers sign off, made in the MIS itself.
 - **amendment spec**: an MIS of Type Amendment that gives the old and new text of each requirement an amendment changes, the reason, and the sign-off record.
 - **architecture across components**: how MacEff's responsibilities are divided among its components and how the components talk to each other; a change moves a responsibility, or changes a file format, a protocol or a shared store between two components.
+- **asserted**: the state of a notice that stays raised until the reader's cursor passes the mail it names.
+- **attested**: the trust state of a message whose signature verified against its sender's declared key.
 - **author**: an agent or the operator who writes an MIS and answers for its content.
+- **box**: the place where the broker puts one agent's mail on its own system; the amail policy's pickup box.
+- **broker**: the unit that accepts agents' submissions, enforces their contacts and limits, holds the route credentials, and moves mail between boxes and intakes.
+- **calling card**: an agent's name and short id, as its identity file gives them.
 - **capability**: something an agent can do because the framework or its deployment allows it.
 - **check**: the means by which a requirement is verified: a named test or hook (decidable), or a named reviewer (judgment).
 - **cold reader**: an agent with no memory of an MIS's design or deliberation, who is given only the landed policy and this glossary.
@@ -23,30 +28,43 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **critical objection**: an objection that the maintainer raising it declares critical; it keeps an MIS's discussion open, and the operator answers it before the merge.
 - **decidable**: a check that a tool can always run without human judgment, such as a test or a hook.
 - **declaration**: the file that lists one agent's managed units and schedules, with how each starts, its restart policy and its limits.
+- **declared map**: the operator's declaration of which addresses live on this system, and which peer serves each of the others.
 - **deliberation**: an issue the operator convenes on which agents argue a design question in public before it is decided (`public_voice` policy).
+- **delivered**: the receipt state for a notice whose id the session's transcript monitor has seen in the session's transcript. Seat K used "delivered" for a message that the recipient's box has ingested; that state is **ingested** here.
 - **deployment**: a set of containers, agents and configuration that runs MacEff for one purpose.
 - **development flag**: a harness's option that loads a channel its allowlist does not name; in Claude Code it asks a person to confirm at every start.
 - **deviation**: a departure from a SHOULD requirement, recorded with the requirement's ID and the reason.
 - **disposition**: the outcome the Secretary proposes in a synthesis: accept, revise, defer or reject.
+- **doorbell**: one mail notice to a recipient.
 - **editorial**: a change to an MIS or the glossary that alters no requirement's meaning, keyword, check, scope, ID or slug, and no term's meaning.
+- **egress rule**: the system's firewall rule for the mail ports.
+- **entry**: an agent's own schedule, made from its live session and held by its primal daemon as events: a wake or a check.
+- **event stream**: one merged stream of the persistent layer's own events, published as they are recorded, for subscribers to read.
 - **final**: the status of an accepted Standards or Process MIS that has landed and been proven: every decidable requirement passes its check, every judgment review is recorded, and a cold-reader trial has succeeded. An Informational MIS never becomes final.
 - **final comment period**: the time, set by the initiator and starting when every maintainer has posted a first comment, in which anyone may object before the operator ratifies.
 - **harness adapter**: the part of the persistent layer that launches, wakes and reads one harness, such as Claude Code, Codex CLI or Hermes Agent.
 - **harness channel**: a transport the harness provides that delivers events into a live session and sets each event's source from the transport, never from the text, such as a Claude Code channel.
 - **health**: proof that the work that fell due actually ran: runs owed against runs done, derived from events when read; never only that a process answers.
 - **host agent**: an agent that runs on the operator's own machine.
+- **identity file**: the file in an agent's home that holds the agent's identity, which its primal daemon reads (MIS-0002-R02 (pd_MUST-NOT_take_identity_from_env)).
+- **inbound consumer**: the unit that takes mail arriving from outside the system and hands it to the broker.
+- **ingested**: the receipt state for a message that the recipient's receiver has taken into the recipient's store.
 - **initiator**: whoever convenes a deliberation, usually the operator; the initiator sets its final comment period.
+- **intake**: the place where a broker writes mail for one peer on another system to pull.
 - **invitation**: the observed agent's grant that lets one onlooker receive an observation stream until either side, the operator or a lease ends it.
 - **isolated session**: a fresh session that a schedule starts for one run, with no access to the agent's live conversation.
 - **judgment**: a check that a named person or agent makes by review, because no tool can decide it.
+- **key registry**: the operator's declaration of each MacEff agent's address, its public keys with their validity dates, and the account that holds each key; only the operator can write it.
 - **landing**: putting an accepted MIS's normative text into policy, with its code and tests, in a pull request.
 - **lease**: a claim held for a bounded time. On a schedule, the claim one run holds while it runs, so that the run cannot start twice; on an invitation, the declared time at which the invitation ends.
 - **live session**: the agent's current conversation in its supervised session.
 - **liveness event**: an event in an agent's event log by which a managed unit shows that it is alive, keyed by the agent's identity and naming its process.
+- **MacEff agent**: an agent whose address the operator declares in the key registry.
 - **MacEff channel**: the harness channel through which a primal daemon delivers notices and wakes into its agent's live session.
 - **maintainer**: an agent that the operator has designated to maintain MacEff.
 - **major architectural change**: a change that adds a subsystem or changes architecture across components.
 - **managed unit**: one process or one schedule that a primal daemon runs for its agent, such as the session, the transcript monitor, the notifier or a mail clock.
+- **marked**: said of an entry made while its session's context held untrusted input. A marked entry is acted on with care: what it asks beyond what the agent would do unprompted is reported, not done.
 - **MIS**: MacEff Improvement Specification: a numbered proposal and decision record for a change to MacEff, kept in `framework/mis/`.
 - **missed-run policy**: what a schedule does about runs owed while it was down: skip them, run once, run once inside a window, or report them only.
 - **MQI**: Many Questions Interview: one or more rounds in which an agent asks the operator multiple-choice questions (in Claude Code, the AskUserQuestion dialog), each with options drawn from the agent's research and its recommended option first, and the operator picks an option or writes in an answer. After each round the agent thinks through what the answers mean for the work, then asks another round or stops when the operator's direction is clear. Roadmap and experiment drafting encourage it where trade-offs exist. It needs the operator at the agent's own terminal, because the dialog does not reach a remote channel; under USER_REMOTE the agent asks the same questions in a channel message instead.
@@ -62,34 +80,48 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **organization allowlist**: the list of channel plugins that an organization's administrator permits, which replaces a harness's default allowlist for that organization's sessions.
 - **outer tier**: the operating system's own service manager that keeps each primal daemon running: a systemd user unit on Linux, a per-user LaunchAgent on macOS, or a container's init.
 - **outside watch**: a check of the primal daemons that runs outside their outer tier and alerts a person through a credential independent of every agent's channel.
+- **peer list**: the part of the declared map that names the other systems' brokers whose intakes this broker reads.
 - **persistent layer**: the subsystem this MIS specifies: the outer tier, every primal daemon, their declarations, schedules, notices and the outside watch.
 - **platform adapter**: the part of the persistent layer that renders declarations for one outer tier.
 - **policy**: a document under `framework/policies/` that states what agents must do and why; MacEff's normative source.
 - **position**: one participant's argued view in a deliberation, posted as a comment.
+- **posture**: a system's declared security mode, either prevention or detection alone.
 - **presence state**: the derived state that says who watches a session and which operator surface is present, read from the agent's event log.
 - **primal daemon**: the one process per agent that starts, stops, restarts, checks and schedules that agent's managed units; it manages their lifecycles only, and never reads, writes or decides the agent's work.
+- **quarantined**: the receipt state for a message that the broker set aside (R20).
 - **quiet window**: a time an agent declares in which the layer does not restart or compact its session.
+- **raised**: the receipt state for a notice that the recipient's primal daemon has raised through the notifier.
 - **ratify**: to accept, reject or defer an MIS by the operator's merge, with a resolution.
+- **read cursor**: the point in an agent's mail up to which the agent has read.
 - **readout**: what a command or a display reports about the persistent layer's state.
+- **receipt**: a report to a message's sender of one state of that message: stored, taken, ingested, raised, delivered, read or quarantined.
+- **receiver**: the unit that ingests an agent's mail into that agent's store, running as that agent.
 - **repo owner**: the person who owns the repository an MIS lands in and has the final say on changes to it; for MacEff, the owner of the MacEff repository. An installation's operator is not the repo owner unless they also own the repository.
 - **requirement**: one normative sentence in an MIS's Specification, with an ID, one keyword and a check.
 - **resolution**: the operator's recorded decision on an MIS, which answers each recorded objection by name.
 - **revision**: a substantive change to an accepted MIS that the repo owner asked its Secretary for, made in the MIS itself by pull request; it takes no MIS number.
+- **route**: the operator's entry for how mail to an address leaves its system, with the credential that path needs.
 - **run done**: an event recording that a run owed ran, with its result.
 - **run owed**: a time at which a schedule must run.
+- **rung**: one step of the amail policy's delivery ladder.
 - **schedule**: a recurring or one-time obligation held outside any session, so that it survives restarts: declared by the operator, or an agent's own entry.
-- **entry**: an agent's own schedule, made from its live session and held by its primal daemon as events: a wake or a check.
-- **marked**: said of an entry made while its session's context held untrusted input. A marked entry is acted on with care: what it asks beyond what the agent would do unprompted is reported, not done.
 - **scheduler**: the part of a primal daemon that runs its agent's schedules, and fires its agent's wake and check entries into that agent's session.
-- **event stream**: one merged stream of the persistent layer's own events, published as they are recorded, for subscribers to read.
-- **subscriber**: a reader of the event stream that chose the sources it takes: the MacEff channel, the tray, or a bridge to the operator.
 - **Secretary**: the agent the operator designates for an MIS before it leaves Draft, with or without a deliberation, who confirms its number, edits it to the language standard, keeps this glossary, writes the synthesis and tracks conformance.
 - **semantic slug**: a short name made of ASCII letters, digits, hyphens and underscores, given in parentheses at the end of a requirement line, that states the requirement's subject and strength, for example `req_MUST_have_30_words_max`.
 - **shared budget**: the limits in force for a whole container that several agents share, such as its memory and processor limits.
+- **subscriber**: a reader of the event stream that chose the sources it takes: the MacEff channel, the tray, or a bridge to the operator.
 - **substantive**: any change to an accepted MIS that is not editorial; it is made in the MIS itself, as a revision or an amendment.
 - **subsystem**: a long-lived process, a store of agent state, a command group, or a channel to or from an agent.
+- **suspect**: the trust state of a message whose signature check was attempted and failed.
+- **sweep**: the broker's scheduled pass over its boxes and intakes (MIS-0002-R54 (periodic_mail_clock_MUST_be_schedule)).
 - **synthesis**: the Secretary's comment that quotes and links every position, names agreements and disagreements, and proposes a disposition.
+- **system**: one host, or one container, with one system daemon.
+- **system daemon**: the one root-run supervisor per system that starts each of its units as the account its declaration names (MIS-0007, draft).
+- **transcript monitor**: the primal-daemon unit that follows a session's transcript (MIS-0002).
 - **tray**: an optional desktop display of the persistent layer, one icon per agent, that asks primal daemons to act and acts on nothing itself.
+- **unit**: a managed unit (glossary), of a primal daemon or of the system daemon.
+- **unverified**: the trust state of a message that no signature check applies to.
+- **urgent mark**: a sender's mark on a message asking for a doorbell inside the recipient's interval, which the recipient's declared policy allows or not.
 - **use trial**: a trial in which the people or agents an MIS's capabilities are for use them for real work, recorded with the evidence, and judged shown or not shown by the operator or a maintainer other than the Secretary.
 - **waiting on a person**: the state of a managed unit, the session included, blocked on a prompt that only a person can answer.
 - **wake**: the delivery of a notice into a live session.
