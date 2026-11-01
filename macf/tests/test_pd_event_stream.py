@@ -512,17 +512,23 @@ def test_a_silenced_source_never_reaches_the_session_and_is_not_owed(mail_home, 
     # thread: the record can appear a moment before the owed entry goes, and a slow runner once
     # read that moment. Wait for the second step, as for the first.
     assert _until(lambda: not daemon.notifier.owed), "a silenced notice stayed owed"
+    assert not _logged(nt.EVENT_DELIVERED), "a silenced notice reached the session"
     assert stream_rule(daemon, "unsilence", "amail")["ok"]
-    assert _received(conn, TAIL_BOUND_S) == b"", "a silenced notice reached the session"
-    assert not _logged(nt.EVENT_DELIVERED)
+    # Unsilenced, m1 is still unread, so the channel that stayed attached is told on the next
+    # pass, as a level (MIS-0004 R26), not only at an attach that may never come.
+    (told,) = _records_in(_received(conn, 2 * TAIL_BOUND_S))
+    assert (told.source, told.count) == ("amail", 1) and "-asserted-" in told.arrival_id
 
     daemons.stop(daemon)
     again = daemons.start(mail_home, base)
     assert not again.notifier.owed, "a restart owed a silenced notice again"
     conn2 = _channel(again, monkeypatch)
     _mail(mail_home, "m2")
-    (record,) = _records_in(_received(conn2, 2 * TAIL_BOUND_S))
-    assert (record.source, record.arrival_id, record.count) == ("amail", burst_id("amail", ["m2.amsg"]), 1)
+    # m1 is still unread, so the restarted daemon asserts it to the new channel (MIS-0004 R26).
+    # Then m2 arrives as its own notice.
+    reassert, arrival = _records_in(_received(conn2, 2 * TAIL_BOUND_S))
+    assert (reassert.source, reassert.count) == ("amail", 1) and "-asserted-" in reassert.arrival_id
+    assert (arrival.source, arrival.arrival_id, arrival.count) == ("amail", burst_id("amail", ["m2.amsg"]), 1)
 
 
 def _owe_mail_and_an_entry(home):
@@ -576,7 +582,9 @@ def test_a_forged_carried_line_reaches_the_session_as_no_text(mail_home, base, d
     daemons.stop(daemon)
     again = daemons.start(mail_home, base)
     data = _received(_channel(again, monkeypatch), TAIL_BOUND_S)
-    assert b"FORGED" not in data and data == b"", "a restart read a forged line into a notice"
+    assert b"FORGED" not in data, "a restart read a forged line into a notice"
+    # m1 is still unread, so the new attach asserts it again (MIS-0004 R26), as a closed record.
+    assert [(r.source, r.count) for r in _records_in(data)] == [("amail", 1)]
 
 
 def test_no_stream_subscriber_takes_the_sessions_name(tmp_path, base, daemons):
