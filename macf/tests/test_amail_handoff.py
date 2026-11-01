@@ -177,6 +177,55 @@ def test_a_kept_id_never_overwrites_quarantined_evidence(tmp_path, host):
                for x in recs if x.get("decision") == "quarantined")
 
 
+EVIL = "evil.local"
+
+
+def _repoint_pair(amsg, new_id):
+    """Rewrite an intake pair's message id, keeping its sidecar hash true."""
+    import hashlib
+    message = Message.deserialize(amsg.read_text())
+    message.message_id = new_id
+    payload = message.serialize().encode("utf-8")
+    amsg.write_bytes(payload)
+    side = amsg.with_suffix(".json")
+    meta = json.loads(side.read_text())
+    meta["raw_sha256"] = hashlib.sha256(payload).hexdigest()
+    side.write_text(json.dumps(meta))
+
+
+def test_a_peer_cannot_claim_another_domains_id_first(tmp_path, host):
+    """A second declared peer that learned the host's id (say, from a message
+    copied to it) delivers its own message under that id first. The genuine
+    message must still arrive: a held id is a duplicate only for the route and
+    sender that first brought it. Anything else is a collision, minted fresh."""
+    box = _broker(tmp_path / "box", BOX, {"sparrow": [f"ira@{HOST}", f"mallory@{EVIL}"]},
+                  {HOST: host.config.inbound_handoff,
+                   EVIL: tmp_path / "evil" / "handoff"})
+    peer_intake(box.config.inbound_handoff, HOST).mkdir(parents=True, mode=0o2770)
+    peer_intake(box.config.inbound_handoff, EVIL).mkdir(parents=True, mode=0o2770)
+    evil = _broker(tmp_path / "evil", EVIL, {"mallory": [f"sparrow@{BOX}"]},
+                   {BOX: box.config.inbound_handoff})
+    genuine = host.submit("ira", _msg(f"ira@{HOST}", f"sparrow@{BOX}", body="genuine"))
+    target = genuine["message_id"]
+    host_intake = peer_intake(box.config.inbound_handoff, HOST)
+    held_back = tmp_path / "held_back"
+    held_back.mkdir()
+    for p in list(host_intake.iterdir()):
+        p.rename(held_back / p.name)
+    evil.submit("mallory", _msg(f"mallory@{EVIL}", f"sparrow@{BOX}", body="impostor"))
+    [evil_amsg] = peer_intake(box.config.inbound_handoff, EVIL).glob("*.amsg")
+    _repoint_pair(evil_amsg, target)
+    assert [s["decision"] for s in box.sweep_shared()] == ["delivered"]
+    for p in list(held_back.iterdir()):
+        p.rename(host_intake / p.name)
+    assert [s["decision"] for s in box.sweep_shared()] == ["delivered"], \
+        "the genuine message is delivered, not dropped as the impostor's duplicate"
+    bodies = sorted(Message.deserialize(p.read_text()).body for p in _box_pairs(box, "sparrow"))
+    assert bodies == ["genuine", "impostor"]
+    recs = [json.loads(l) for l in box.config.audit_path.read_text().splitlines()]
+    assert any("id-collision" in (x.get("detail") or "") for x in recs)
+
+
 # ---------------------------------------------------------------- R14
 
 def test_intake_names_unique(local, monkeypatch):

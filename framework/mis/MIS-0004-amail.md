@@ -448,7 +448,7 @@ The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 h
 - 2026-10-31: R43 accepts any key declared for the agent and valid at the broker's acceptance time, so it agrees with R45 during a rotation, and R45's rationale says whose clock it trusts between systems (P33). P33 and P34 join the record.
 - 2026-10-31: the operator approved the revision at b05bca60 and confirmed R43 on this pull request (P35). Both maintainers have commented on it (P33, P34) and it has been revised once in answer, so the discussion closes under MIS-0001-R48 unless a maintainer raises a critical objection.
 - 2026-10-31: Accepted. The Secretary's last commit before the operator's merge: the decided Status, and a Resolution quoting the operator's decision comment on #520, which answers O01.
-- 2026-10-31: landing, hand-off area (container-management maintainer). R13, R14, R15, R36 and R38 are passing. R15 needed a change: the receiving broker of a shared hand-off kept no peer id and minted its own, so it now keeps a well-formed one, drops a pair whose id the recipient already holds, and mints fresh for quarantined mail. amail policy 1.8.0 says so (§2.1.1).
+- 2026-10-31: landing, hand-off area (container-management maintainer). R13, R14, R15, R36 and R38 are passing. R15 needed a change: the receiving broker of a shared hand-off kept no peer id and minted its own, so it now keeps a well-formed one, drops a pair whose id the recipient already holds from the same peer and sender, mints fresh on any other match (an id collision) and for quarantined mail. amail policy 1.8.0 says so (§2.1.1).
 
 ## Wiki-Links
 
