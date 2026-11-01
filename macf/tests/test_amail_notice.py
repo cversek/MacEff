@@ -314,3 +314,36 @@ def test_notice_level_triggered(home, box, monkeypatch):
     restarted = nt.Notifier(home, {"amail": "agent"})
     restarted.boot()
     assert not restarted.owed, "a restart owed a withdrawn notice again"
+
+
+def test_unsilenced_mail_reaches_a_channel_that_stayed_attached(home, box, monkeypatch):
+    """Silenced, the notice is settled without telling the session. Unsilenced, the same
+    attached channel is told on the next pass, not only at an attach that may never come;
+    once told, it isn't told again every pass (the container-management maintainer, #874)."""
+    from macf.channels.maceff_channel import TAKES
+    from macf.pd import notifier as nt
+    monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
+    silenced = [True]
+
+    class Rules:
+        def delivers(self, source, subscriber):
+            return not silenced[0]
+
+    n = nt.Notifier(home, {"amail": "agent"}, rules=lambda: Rules())
+    n.boot()
+    ours, theirs = _channel_pair()
+    n.attach(ours, takes=TAKES)
+    _put(box, "1", _msg())
+    client.ingest(home, box, agent="a")
+    n.poll()
+    n.flush()
+    assert _sources_sent(theirs) == [], "silenced mail reached the session"
+    silenced[0] = False
+    n.poll()
+    n.flush()
+    assert _sources_sent(theirs) == ["amail"]
+    for _ in range(3):
+        n.poll()
+        n.flush()
+    assert _sources_sent(theirs) == [], "a told channel was told again every pass"
+

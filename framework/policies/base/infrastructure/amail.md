@@ -3,7 +3,7 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
-**Version**: 1.12.0 — §2.4: the mail notice is a level (MIS-0004 R26). A channel that takes mail is told at each attach while mail waits unread; a notice still owed when the mail is read is withdrawn, recorded as `pd_notice_withdrawn`; nothing is re-asserted while the operator silences mail to the session. Minor: a notice an agent may now meet again in a new session.
+**Version**: 1.12.0 — §2.4: the mail notice is a level (MIS-0004 R26). A channel that takes mail is told at each attach while mail waits unread; a notice still owed when the mail is read is withdrawn, recorded as `pd_notice_withdrawn`; nothing is re-asserted while the operator silences mail to the session, and after an unsilence still-unread mail is told on the next pass. Minor: a notice an agent may now meet again in a new session.
 **Version**: 1.10.0 — §2.1.1: the message id crosses a shared hand-off unchanged. The receiving broker keeps a well-formed peer id, drops a pair whose id the recipient already holds from the same peer and sender and audits it as `duplicate-dropped`, treats any other held match as an `id-collision` and mints fresh, and mints a fresh id for anything else and for quarantined mail (MIS-0004 R15). Minor: a behavior an agent can meet in its ids and its audit.
 **Version**: 1.9.0 — §2.3 and §2.4: the agent's primal daemon ingests its mail each pass (MIS-0004 R04), from the box its own settings name, never the environment; one ingest runs at a time per store, and an entry another ingest took is not reported as damage. §2.4: the read cursor is the Maildir's `new` and `cur`; `amail read` moves what it printed and records who read it, notices follow `new` (R25), and `amail list` shows unread mail by default (R30). Minor: behaviors an agent meets in its store and its listing.
 **Version**: 1.7.0 — §2.3: a message is held once. Ingest drops a copy whose id the store already holds, and records the drop in that message's sidecar as `duplicates_dropped` (MIS-0004 R16). Minor: a behavior an agent can meet in its store.
@@ -483,7 +483,8 @@ a repeat is harmless because it names only what is still unread. A notice still 
 mail it named is read is withdrawn rather than delivered, and the withdrawal is recorded as
 `pd_notice_withdrawn`, so a restart doesn't owe it again. The operator's rules still
 decide: while mail is silenced to the session nothing is re-asserted, and once it is
-unsilenced, mail that is still unread is told at the next attach.
+unsilenced, mail that is still unread is told on the daemon's next pass, to the channel
+already attached. A channel once told isn't told again while the same mail stays unread.
 
 ---
 
