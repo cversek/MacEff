@@ -391,6 +391,15 @@ def _read_box_file(box_fd: int, name: str, broker_uid: int) -> bytes:
         os.close(fd)
 
 
+def _in_box(box_fd: int, name: str) -> bool:
+    """Whether *name* is still in the box, without following a link."""
+    try:
+        os.stat(name, dir_fd=box_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
+
+
 def _set_aside(box_fd: int, names, reason: str) -> None:
     """Rename a refused pair out of the box's globs, so it is reported once and kept as evidence."""
     for name in names:
@@ -425,10 +434,15 @@ def _ingest_eml(home: Path, eml: Path, box_fd: int, broker_uid: int) -> dict:
         _set_aside(box_fd, [eml.name, sidecar.name], str(e))
         entry.update(ingested=False, refused=True, reason=str(e))
         return entry
-    except FileNotFoundError:
-        # Gone between the listing and the open: another ingest took it (or the box's owner
-        # cleared it). It is in a store, not damaged, so it isn't reported as damage.
-        entry.update(ingested=False, taken=True, reason="taken by another ingest")
+    except FileNotFoundError as e:
+        if not _in_box(box_fd, eml.name):
+            # The message itself is gone: another ingest took the pair between the listing
+            # and the open. It is in a store, not damaged, so it isn't reported as damage.
+            entry.update(ingested=False, taken=True, reason="taken by another ingest")
+            return entry
+        # The message is here and its sidecar isn't. The broker writes the sidecar first, so
+        # this is damage or tampering, never another ingest's work: said as such.
+        entry.update(ingested=False, reason=f"message without its sidecar: {e}")
         return entry
     except (OSError, json.JSONDecodeError) as e:
         entry.update(ingested=False, reason=f"unreadable pair: {e}")
@@ -487,10 +501,15 @@ def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str, box_fd: in
         _set_aside(box_fd, [amsg.name, sidecar.name], str(e))
         entry.update(ingested=False, refused=True, reason=str(e))
         return entry
-    except FileNotFoundError:
-        # Gone between the listing and the open: another ingest took it (or the box's owner
-        # cleared it). It is in a store, not damaged, so it isn't reported as damage.
-        entry.update(ingested=False, taken=True, reason="taken by another ingest")
+    except FileNotFoundError as e:
+        if not _in_box(box_fd, amsg.name):
+            # The message itself is gone: another ingest took the pair between the listing
+            # and the open. It is in a store, not damaged, so it isn't reported as damage.
+            entry.update(ingested=False, taken=True, reason="taken by another ingest")
+            return entry
+        # The message is here and its sidecar isn't. The broker writes the sidecar first, so
+        # this is damage or tampering, never another ingest's work: said as such.
+        entry.update(ingested=False, reason=f"message without its sidecar: {e}")
         return entry
     except (OSError, json.JSONDecodeError) as e:
         entry.update(ingested=False, reason=f"unreadable pair: {e}")
