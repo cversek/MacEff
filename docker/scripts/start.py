@@ -266,23 +266,45 @@ def write_agent_card(username: str, card_name: str, home: Path, *, chown=os.chow
     return True
 
 
+def home_agent_name(home: Path) -> Optional[str]:
+    """The agent name the home's ``.maceff/config.json`` already holds, its calling card or its
+    moniker, as ``pd.names.agent_card`` reads it; None when it holds none or can't be read. A home
+    that can't be read is left to the render, which refuses that agent by name."""
+    path = home / '.maceff' / 'config.json'
+    try:
+        identity = json.loads(path.read_text()).get('agent_identity') or {}
+    except (OSError, ValueError, AttributeError):
+        return None  # noqa: MACEFF003 - an unreadable home is left to the render, which refuses that agent by name
+    if not isinstance(identity, dict):
+        return None
+    return next((identity[k].strip() for k in ('calling_card', 'moniker')
+                 if isinstance(identity.get(k), str) and identity[k].strip()), None)
+
+
 def write_agent_cards(agents_config: AgentsConfig, *, chown=os.chown) -> Dict[str, str]:
     """Write every declared agent calling card into its agent's home (``write_agent_card``), at
-    every start, before any declaration renders. An agent that declares none gets nothing
-    written. Returns, by account, why each refused agent's identity wasn't settled: one agent's
+    every start, before any declaration renders. An agent with a daemon that declares none keeps
+    the name its home holds, and a home that holds none takes the agent's key. Any other agent
+    that declares none gets nothing written. Returns, by account, why each refused agent's identity wasn't settled: one agent's
     conflict costs that agent its daemon, never the others'."""
     refused = {}
     for key, spec in agents_config.agents.items():
-        # An agent with a daemon goes by its key when it declares no card (persistent_layer 10.1).
-        # Without one, the home's own card is read when the declaration renders, and a home with
-        # none costs only that agent its daemon, said by name there.
-        card_name = spec.effective_calling_card(key) if spec.has_daemon() else spec.calling_card
+        home = HOME_ROOT / spec.username
+        card_name, source = spec.calling_card, "declared in agents.yaml"
+        if card_name is None and spec.has_daemon():
+            # An agent with only the default keeps the name its home already holds, its card or
+            # its moniker, whatever the case of its key; only a home that names no agent takes the
+            # key (persistent_layer 10.1). A home with no usable name costs only that agent its
+            # daemon, said by name when the declaration renders.
+            if home_agent_name(home) is not None:
+                continue
+            card_name, source = spec.effective_calling_card(key), "from its key in agents.yaml"
         if card_name is None:
             continue
-        home = HOME_ROOT / spec.username
         try:
             if write_agent_card(spec.username, card_name, home, chown=chown):
-                log(f"calling card of {spec.username}: {card_name} written to {home / '.maceff' / 'config.json'}")
+                log(f"calling card of {spec.username}: {card_name} ({source}) written to "
+                    f"{home / '.maceff' / 'config.json'}")
         except (AgentIdentityConflict, OSError, KeyError) as e:
             refused[spec.username] = str(e)
             log(f"calling card of {spec.username}: refused; its daemon won't be rendered or started. {e}")
