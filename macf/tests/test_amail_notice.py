@@ -251,3 +251,66 @@ def test_a_message_without_its_sidecar_is_damage_not_taken(home, box, kind):
     [r] = client.ingest(home, box, agent="a")
     assert not r.get("taken") and not r["ingested"]
     assert "without its sidecar" in r["reason"]
+
+
+def _channel_pair():
+    import socket
+    ours, theirs = socket.socketpair()
+    theirs.settimeout(0.5)
+    return ours, theirs
+
+
+def _sources_sent(conn):
+    import socket
+    from macf.channels.maceff_channel import parse_record
+    data = b""
+    try:
+        while True:
+            chunk = conn.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+    except socket.timeout:
+        pass
+    return [parse_record(line).source for line in data.decode().splitlines() if line]
+
+
+def test_notice_level_triggered(home, box, monkeypatch):
+    """R26: while unread mail exists the notice stays asserted, so each channel that attaches
+    is told; once the cursor passes the mail, an owed notice is withdrawn, not delivered."""
+    from macf.channels.maceff_channel import TAKES
+    from macf.pd import notifier as nt
+    monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
+    m = _msg()
+    _put(box, "1", m)
+    client.ingest(home, box, agent="a")
+    n = nt.Notifier(home, {"amail": "agent"})
+    n.boot()                                    # one notice owed for what waits at start
+    first, first_end = _channel_pair()
+    n.attach(first, takes=TAKES)
+    n.flush()
+    assert _sources_sent(first_end) == ["amail"]
+    assert not n.owed
+    n.detach(first)
+    # a new session's channel, the mail still unread: asserted again
+    second, second_end = _channel_pair()
+    n.attach(second, takes=TAKES)
+    n.flush()
+    assert _sources_sent(second_end) == ["amail"]
+    n.detach(second)
+    # with no channel, a new arrival is owed; reading everything withdraws it
+    _put(box, "2", _msg("two"))
+    client.ingest(home, box, agent="a")
+    n.poll()
+    assert [o.source for o in n.owed.values()] == ["amail"]
+    for x in store.read_all(home, include_seen=False):
+        store.mark_read(home, x.message_id, "Reader@abc123")
+    n.poll()
+    assert not n.owed, "a notice for mail already read stayed owed"
+    third, third_end = _channel_pair()
+    n.attach(third, takes=TAKES)
+    n.flush()
+    assert _sources_sent(third_end) == [], "read mail was asserted"
+    restarted = nt.Notifier(home, {"amail": "agent"})
+    restarted.boot()
+    assert not restarted.owed, "a restart owed a withdrawn notice again"
