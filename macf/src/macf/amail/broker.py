@@ -913,7 +913,8 @@ class Broker:
                 continue
         return False
 
-    def hand_off(self, agent: str, message: Message, trust: str) -> Path:
+    def hand_off(self, agent: str, message: Message, trust: str,
+                 via: str = "") -> Path:
         """Hand a delivered message into the recipient's pickup box.
 
         UNIFIED DELIVERY. This replaced a direct write into the recipient's
@@ -976,7 +977,7 @@ class Broker:
         # The one place every delivery to a local box passes (rung 1, the
         # internet path's accept_inbound, the peer-intake sweep), so it is
         # where "this agent has this message" is written down.
-        self.record_seen(agent, message, "received")
+        self.record_seen(agent, message, "received", via=via)
         return written
 
     @staticmethod
@@ -1680,8 +1681,27 @@ class Broker:
         # keep it (`keep_peer_id`), after checking that the pair came through
         # a declared peer's intake and that its sender is under that domain.
         peer_id = message.message_id if keep_peer_id else ""
+        held_via = f"shared:{via}" if keep_peer_id else ""
         if peer_id and _ID_RE.match(peer_id):
-            if self.seen(agent, peer_id) is not None:
+            held = self.seen(agent, peer_id)
+            if held is not None and not (held.get("direction") == "received"
+                                         and held.get("via") == held_via
+                                         and held.get("sender") == remote_sender):
+                # SAME ID, NOT THE SAME MESSAGE. The held record came by another
+                # route or from another sender. A peer that learned another
+                # domain's id (a message copied to it) could otherwise claim the
+                # id first and have the genuine copy dropped as a duplicate. So
+                # an id is a duplicate only for the route and sender that first
+                # brought it; anything else is a collision, minted fresh.
+                if self.audit:
+                    self.audit.error(context="peer-intake",
+                                     detail=(f"id-collision: {peer_id} for '{agent}' is held "
+                                             f"from {held.get('via') or held.get('direction')} "
+                                             f"by {held.get('sender')}; minted fresh for "
+                                             f"{remote_sender} via {via}"))
+                message.message_id = new_id("msg")
+                peer_id = ""
+            elif held is not None:
                 # Already handed to this recipient: the same message again,
                 # never a second one. Dropped, and recorded so it is visible.
                 if self.audit:
@@ -1803,7 +1823,7 @@ class Broker:
 
         # Same unified path: inbound peer mail is handed off, not written
         # across the boundary.
-        self.hand_off(agent, message, message.trust or "")
+        self.hand_off(agent, message, message.trust or "", via=held_via)
         if self.audit:
             self.audit.inbound(sender=message.sender, recipient=recipient,
                                message_id=message.message_id, decision="delivered",
