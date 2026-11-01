@@ -18,14 +18,16 @@ from test_primal_daemon import base, make_home, run_daemon  # noqa: F401 - fixtu
 
 @pytest.fixture(autouse=True)
 def _mail_box_from_the_home(monkeypatch):
-    """These tests put mail in <home>/amail/pickup, the box chosen when nothing names one.
-    Inside a seat MACEFF_AGENT_NAME is set, which would point the daemon elsewhere."""
+    """These tests put unread mail straight into the store's `new`, where the receiver would
+    have ingested it (MIS-0004 R04) and where notices look (R25). With no amail settings
+    there is no receiver; inside a seat MACEFF_AGENT_NAME is set, which must not change that."""
     monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
     monkeypatch.delenv("MACF_AMAIL_HANDOFF", raising=False)
 
 
 def _box(home):
-    box = home / "amail" / "pickup"
+    """The store's unread mail, ``Maildir/new``: what a notice is about."""
+    box = home / "Maildir" / "new"
     box.mkdir(parents=True, exist_ok=True)
     return box
 
@@ -514,9 +516,9 @@ class _Rig:
 
 
 def _unread(home, threshold=600.0, now=10_000.0, events=()) -> _Rig:
-    from macf.pd.unread_mail import UnreadMail, pickup_box
+    from macf.pd.unread_mail import UnreadMail
     said, notices, clock = [], [], _Clock(now)
-    tracker = UnreadMail("Resident@1a2b3c", threshold, pickup_box(home),
+    tracker = UnreadMail("Resident@1a2b3c", threshold, _box(home),
                          lambda source, nid: notices.append((source, nid)),
                          append=lambda e, d: said.append((e, d)) or True, wall=clock,
                          events=lambda: list(events))
@@ -683,8 +685,8 @@ def test_no_notice_goes_out_without_its_record(tmp_path):
 
 
 def test_the_oldest_entry_is_named(tmp_path):
-    """An entry `amail list` can't take in stays in the box and holds the spell open; the
-    event and its reason name the oldest, so a person can find it."""
+    """The oldest unread message holds the spell open; the event and its reason name it, so
+    a person can find it."""
     home = _home(tmp_path)
     r = _unread(home)
     _arrive(home, "newer", 1_500)

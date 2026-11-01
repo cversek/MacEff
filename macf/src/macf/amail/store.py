@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from .models import Message
+from .models import Message, _now_iso
 
 SUBDIRS = ("tmp", "new", "cur")
 
@@ -531,6 +531,99 @@ def find(home: Path, message_id: str) -> Optional[Message]:
         if m.message_id == message_id:
             return m
     return None
+
+
+def unread_names(home: Path) -> List[str]:
+    """The names of the messages waiting in ``new``, oldest first by name (a Maildir name
+    starts with its delivery second). Unread means in ``new``: the read cursor is Maildir's
+    own ``new``/``cur`` (MIS-0004 R26), so it is the store itself, not a second record."""
+    d = maildir_for(home) / "new"
+    try:
+        return sorted(n for n in os.listdir(d) if not n.startswith("."))
+    except FileNotFoundError:
+        return []
+
+
+def unread_message_ids(home: Path) -> List[str]:
+    """The ids of the agent messages waiting unread, oldest first, read from the sidecar
+    ingest wrote beside each one: the broker's metadata, never the message. Internet mail has
+    no message id and isn't listed."""
+    ids: List[str] = []
+    side = bundle_sidecars_for(home)
+    for name in unread_names(home):
+        try:
+            mid = json.loads((side / f"{name}.json").read_text()).get("message_id")
+        except FileNotFoundError:
+            continue  # noqa: MACEFF003 - internet mail, or mail ingested before sidecars: no id to name
+        except (OSError, ValueError) as e:
+            print(f"⚠️ MACF: unreadable sidecar for {name}, its id left out: {e}", file=sys.stderr)
+            continue
+        if mid and mid not in ids:
+            ids.append(mid)
+    return ids
+
+
+def mark_read(home: Path, ref: str, reader: str) -> Optional[str]:
+    """Move one received message from ``new`` to ``cur``: the read cursor passing it.
+
+    ``ref`` is a bundle's message id, or an internet delivery's name or content-sha prefix,
+    as ``amail read`` takes them. Only this store's ``new`` is searched, so a reader resolved
+    to another agent's home can't mark this agent's mail read. The move is recorded in the
+    message's sidecar with ``reader``, the calling card of the home that read it, so a notice
+    that cleared can be explained afterwards. Returns the name moved, or None when the
+    message isn't waiting in ``new`` (already read, or not this store's).
+    """
+    d = maildir_for(home)
+    new = d / "new"
+    if not new.is_dir():
+        return None
+    side = d / "sidecars"
+    internet = {sc.stem: sc for sc in side.glob("*.json")} if side.is_dir() else {}
+    name, sidecar = None, None
+    for n in sorted(os.listdir(new)):
+        if n.startswith("."):
+            continue
+        if n in internet:
+            try:
+                sha = str(json.loads(internet[n].read_text()).get("raw_sha256", ""))
+            except (OSError, ValueError):
+                sha = ""
+            if n == ref or (ref and sha.startswith(ref)):
+                name, sidecar = n, internet[n]
+                break
+            continue
+        try:
+            m = Message.deserialize((new / n).read_text())
+        except (OSError, ValueError):
+            continue        # a malformed file is skipped, as read_all skips it
+        if m.message_id == ref:
+            name, sidecar = n, bundle_sidecars_for(home) / f"{n}.json"
+            break
+    if name is None:
+        return None
+    md_fd = _open_dir(str(d))
+    try:
+        new_fd = _open_dir("new", dir_fd=md_fd)
+        cur_fd = _open_dir("cur", dir_fd=md_fd)
+        try:
+            os.rename(name, name, src_dir_fd=new_fd, dst_dir_fd=cur_fd)
+        except FileNotFoundError:
+            return None  # noqa: MACEFF003 - read by another process between the listing and the move: not waiting in new, the documented None
+        finally:
+            os.close(new_fd)
+            os.close(cur_fd)
+    finally:
+        os.close(md_fd)
+    try:
+        meta = json.loads(sidecar.read_text()) if sidecar.is_file() else {"message_id": ref}
+        meta["read"] = {"by": reader, "at": _now_iso()}
+        sidecar.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        sidecar.write_text(json.dumps(meta, indent=1))
+        sidecar.chmod(0o600)
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: {name} was marked read, but who read it couldn't be recorded in "
+              f"{sidecar.name}: {e}", file=sys.stderr)
+    return name
 
 
 def find_sent(home: Path, message_id: str) -> Optional[Tuple[Message, Optional[dict]]]:
