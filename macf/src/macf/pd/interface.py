@@ -419,6 +419,9 @@ class Declaration(_Closed):
     #: How long mail may sit in the agent's pickup box, while its session runs, before the
     #: daemon raises the ``pd_unread_mail`` notice (MIS-0002-R55). None: no notice.
     unread_mail_threshold_s: Optional[float] = Field(default=None, gt=0)
+    #: The schedule that runs this account's mail broker sweep, whose last run is the broker's
+    #: health (MIS-0004-R31), and which the outside watch reads (R32). None: no broker here.
+    mail_sweep_schedule: Optional[str] = None
     #: How long the keystroke wake rests after each wake, until the agent paces it otherwise
     #: over the control socket (persistent_layer 1.9).
     wake_refractory_s: float = Field(default=DEFAULT_WAKE_REFRACTORY_S, gt=0, allow_inf_nan=False)
@@ -493,6 +496,16 @@ class Declaration(_Closed):
     def half_served_routes(self) -> List[str]:
         """Sources routed to `both` whose operator half nothing serves yet: every one but unread mail."""
         return sorted(s for s, r in self.notice_routes.items() if r == "both" and s != UNREAD_MAIL_SOURCE)
+
+    @model_validator(mode="after")
+    def _mail_sweep_is_a_declared_schedule(self) -> "Declaration":
+        # A health read from a schedule that is not declared would never have a run, so the
+        # broker would read unhealthy forever for a typo; it is refused at load instead.
+        names = [s.name for s in self.schedules]
+        if self.mail_sweep_schedule is not None and self.mail_sweep_schedule not in names:
+            raise ValueError(f"mail_sweep_schedule names {self.mail_sweep_schedule!r}, which is not a "
+                             f"declared schedule; declare the sweep under schedules, or remove it")
+        return self
 
     @model_validator(mode="after")
     def _unread_mail_notice_is_routed(self) -> "Declaration":

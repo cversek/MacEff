@@ -316,8 +316,8 @@ Detection alone stays allowed only where no agent has a reachable address. Addre
 | R28 | decidable | `macf/tests/test_amail_notice.py::test_notice_carries_ids` | planned |
 | R29 | decidable | `macf/tests/test_amail_notice.py::test_keystrokes_need_idle_prompt` | planned |
 | R30 | decidable | `macf/tests/test_amail_notice.py::test_listing_new_since_last_read` | passing |
-| R31 | decidable | `macf/tests/test_amail_health.py::test_health_is_last_sweep` | planned |
-| R32 | decidable | `macf/tests/test_amail_health.py::test_stuck_mail_alerts` | planned |
+| R31 | decidable | `macf/tests/test_amail_health.py::test_health_is_last_sweep` | passing |
+| R32 | decidable | `macf/tests/test_amail_health.py::test_stuck_mail_alerts` | passing |
 | R33 | decidable | `macf/tests/test_amail_egress.py::test_rule_allows_only_declared_accounts` | planned |
 | R34 | decidable | `macf/tests/test_amail_transport.py::test_pinned_bundle` | planned |
 | R35 | decidable | `macf/tests/test_amail_units.py::test_socket_version` | planned |
@@ -453,6 +453,7 @@ The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 h
 - 2026-11-01: landing, signing area, the declare step (host-side maintainer). R41 is passing: an agent with a key signs every submission; the key is 0600 in a 0700 directory of its own account, outside any work tree or synced folder; an agent declared to sign refuses to send without one, and any other sends unsigned with a warning. Nothing on the receiving side changes. amail policy 1.11.0 says so (§3.2.2).
 - 2026-11-01: landing, the mail notice as a level (head maintainer). R26 is passing: a channel that takes mail is told at each attach while mail waits unread, and a mail notice still owed when the mail is read is withdrawn and recorded. While the operator silences mail to the session nothing is re-asserted; after an unsilence, still-unread mail is asserted on the next pass. amail policy 1.12.0 says so (§2.4).
 - 2026-11-01: landing, flow area (container-management maintainer). R17, R18 and R20 are passing. R20 and the spool half of R17 needed a change: one spool entry that failed unexpectedly ended every watcher run, so it is now counted per entry, the run goes on, and after `max_failures` the entry is quarantined with its last error. amail policy 1.13.0 says so.
+- 2026-11-01: landing, health area (container-management maintainer). R31 and R32 are passing. R31 needed a change: nothing judged the broker by its sweep, so a deployment now names its sweep schedule in the broker account's declaration (`mail_sweep_schedule`), and the broker is healthy only when that sweep's last run ended ok; a failed, overdue or missing sweep is not. R32's broker half needed the outside watch to read that verdict and alert as `mail-broker: SWEEP-FAILED`; mail stuck past its pickup bound fails the sweep, and an agent's mail unread past its threshold already alerted as `mail: UNREAD`. amail policy 1.14.0 says so (§3.4).
 
 ## Wiki-Links
 
