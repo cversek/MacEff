@@ -72,8 +72,13 @@ class Receiver:
             return
         self._next = now + INGEST_S
         if not self._checked:
-            self._checked = True
+            if not os.path.lexists(self.box):
+                # Not made yet: the broker creates it with the first mail. The check waits for
+                # it, or a box made later with a group this daemon can't use would never be said.
+                return
             self.refused = self._access()
+            # A box removed between the two looks is not yet checked, not refused.
+            self._checked = self.refused is not None or os.path.lexists(self.box)
             if self.refused:
                 print(f"⚠️ MACF: pd: the receiver can't ingest {self.agent}'s mail, so none is "
                       f"ingested by this daemon: {self.refused}", file=sys.stderr)
@@ -118,7 +123,7 @@ class Receiver:
         try:
             os.listdir(self.box)
         except FileNotFoundError:
-            return None  # noqa: MACEFF003 - not made yet, which refuses nothing: the broker creates it with the first mail
+            return None  # noqa: MACEFF003 - removed since tick saw it; tick checks again next pass
         except OSError as e:
             return f"the pickup box {self.box} can't be listed ({e.strerror}){self._group_hint()}"
         try:

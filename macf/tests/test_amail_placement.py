@@ -135,3 +135,23 @@ def test_one_pass_records_what_it_moved(tmp_path):
     assert [(e, d["ingested"]) for e, d in rig.events] == [("pd_mail_ingested", 1)]
     rig.receiver.tick(10.0)
     assert len(rig.events) == 1, "a pass that moved nothing writes nothing"
+
+
+def test_a_box_made_later_is_still_checked(tmp_path):
+    """The check waits for the box: one the broker makes after the daemon started, with a
+    group this daemon can't use, is said when it appears (the host-side maintainer, #871)."""
+    if os.geteuid() == 0:
+        pytest.skip("root lists any directory")
+    home = tmp_path / "home"
+    _settings(home, tmp_path / "handoff", "a")
+    rig = _receiver(home)
+    rig.receiver.tick(0.0)
+    assert rig.notices == [] and not rig.receiver.refused, "no box yet is nothing to refuse"
+    box = tmp_path / "handoff" / "a"
+    box.mkdir(parents=True)
+    box.chmod(0o000)
+    try:
+        rig.receiver.tick(10.0)
+        assert [n[0] for n in rig.notices] == ["pd_grant_denied"]
+    finally:
+        box.chmod(0o770)
