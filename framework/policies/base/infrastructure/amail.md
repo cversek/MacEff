@@ -3,6 +3,7 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.10.0 — §2.1.1: the message id crosses a shared hand-off unchanged. The receiving broker keeps a well-formed peer id, drops a pair whose id the recipient already holds from the same peer and sender and audits it as `duplicate-dropped`, treats any other held match as an `id-collision` and mints fresh, and mints a fresh id for anything else and for quarantined mail (MIS-0004 R15). Minor: a behavior an agent can meet in its ids and its audit.
 **Version**: 1.9.0 — §2.3 and §2.4: the agent's primal daemon ingests its mail each pass (MIS-0004 R04), from the box its own settings name, never the environment; one ingest runs at a time per store, and an entry another ingest took is not reported as damage. §2.4: the read cursor is the Maildir's `new` and `cur`; `amail read` moves what it printed and records who read it, notices follow `new` (R25), and `amail list` shows unread mail by default (R30). Minor: behaviors an agent meets in its store and its listing.
 **Version**: 1.7.0 — §2.3: a message is held once. Ingest drops a copy whose id the store already holds, and records the drop in that message's sidecar as `duplicates_dropped` (MIS-0004 R16). Minor: a behavior an agent can meet in its store.
 **Version**: 1.6.0 — §2.3: ingest believes only what the broker wrote. A box entry is taken only as a regular file the box's owner owns, with one link, checked on the open descriptor; anything else is refused and set aside as `.refused` (MIS-0004 R37). Minor: a new refusal an agent can meet.
@@ -297,6 +298,21 @@ adding one declaration and one mount.
 `rung: local`, because that write *is* rung 1 — its own broker, its own
 judgement. The audit records `shared` at the sender and *via shared hand-off
 from <domain>* at the receiver.
+
+**The id crosses the mount unchanged.** The sending broker minted the message id
+when it accepted the message (§5.1), and the sender's own copy records it
+(§6b.1). The receiving broker keeps that id when it is well formed, so one message
+has one id from acceptance to the recipient's read (MIS-0004 R15). If the
+recipient already holds that id from the same peer and the same sender, the pair is
+the same message again: the broker drops it and audits `duplicate-dropped`, so the
+second copy never reaches the box. If the held id came by another route or from
+another sender, it is a collision, not a duplicate: the broker mints a fresh id,
+delivers, and audits `id-collision`. Otherwise a peer that learned another domain's
+id could claim it first and have the genuine message dropped. An
+id that is not a broker id is minted fresh, as internet mail always is: it is a
+sender's claim, and a claimed id can shadow a real message. Quarantined mail
+always gets a fresh id, so a repeated id can't overwrite earlier evidence; the
+peer's id is kept in the audit reason.
 
 The consequence worth stating plainly: adding a second host, moving an agent between
 hosts, or gaining and losing a private network changes **nothing** about addressing,
