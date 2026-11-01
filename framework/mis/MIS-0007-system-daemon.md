@@ -48,6 +48,61 @@ The operator installs the system daemon once per system, as root, with a system 
 
 In a container, it also parents each seat's primal daemon, so it reads each one's exit status. On macOS, a primal daemon has to stay a LaunchAgent in the operator's GUI session, so the system daemon watches it instead: it reads its liveness and reports when it is down, but doesn't start it. Agents read the system daemon's state through a socket that answers status only. Each system daemon is checked by an outside watch that doesn't run under it.
 
+**How the grouping layer connects, as the deliberation stands.** This diagram is provisional: it draws the positions on #867 so far, including MQTT at the fleet hop, and the revision after the synthesis replaces it. Solid arrows carry data up, which every reader weighs. Thick arrows carry the operator's signed input down, the only thing that travels down. Dotted arrows are supervision. Inside a system the kernel names every caller; past its edge, a key does.
+
+```mermaid
+flowchart TB
+  subgraph FLEET["Fleet layer"]
+    MB["MQTT broker<br/>fleet unit on its own account<br/>TLS listeners only, ACL per identity"]
+    TOOLS["Dashboards, devices, a remote server<br/>stock MQTT clients"]
+    OPC["Operator's client<br/>signs input: target, expiry, nonce"]
+  end
+
+  subgraph SYS["One system: a host or a container"]
+    ROOT["System daemon, root process<br/>starts, stops and reaps units, nothing else"]
+    subgraph UNITS["Feature units, each on its own non-root account"]
+      ROUTER["Router<br/>keeps counters and offsets, never the record"]
+      STATUS["Status unit<br/>entries received by push, each with its age"]
+      BRIDGE["MQTT bridge<br/>outbound client with a client certificate"]
+      DOOR["Door<br/>authenticates connections, holds the transport key<br/>parses no protocol"]
+      MAILB["amail broker, MIS-0004"]
+    end
+    subgraph AGENT["Each agent"]
+      PD["Primal daemon<br/>its event log is the only store"]
+      CH["MacEff channel"]
+      SES["Agent session"]
+    end
+    EGR{{"Egress rule, matched on the socket's owner<br/>only the bridge account reaches the broker"}}
+  end
+
+  PEER["Another system's door"]
+
+  ROOT -. supervises .-> ROUTER
+  ROOT -. supervises .-> STATUS
+  ROOT -. supervises .-> BRIDGE
+  ROOT -. supervises .-> DOOR
+  ROOT -. supervises .-> MAILB
+  ROOT -. "parents in a container, watches on a host" .-> PD
+
+  PD -- "events pushed over a Unix socket, source from peer uid" --> ROUTER
+  PD -- "status pushed over a Unix socket" --> STATUS
+  ROUTER -- "declared event types only" --> BRIDGE
+  STATUS -- "retained status, with an expiry" --> BRIDGE
+  BRIDGE -- "mutual TLS, publishes under its own system prefix" --> EGR
+  EGR --> MB
+  MB -- "per-identity ACL" --> TOOLS
+
+  OPC == "signed input, never retained" ==> MB
+  MB == "this system's input topic only" ==> BRIDGE
+  BRIDGE == "retained dropped, operator-input route" ==> PD
+  PD == "verified here: signature, target, expiry, nonce" ==> CH
+  PD -- "notices" --> CH
+  CH --> SES
+
+  PEER -- "declared peers, key-authenticated" --> DOOR
+  DOOR -- "forwarded per route over a local socket" --> MAILB
+```
+
 To place a new unit, ask three questions:
 - **Whose secret does it hold?** That decides its account.
 - **How many agents does it serve?** That decides its supervisor.
@@ -262,6 +317,7 @@ The operator convened the deliberation on #867 on 2026-10-31, for 72 hours, with
   - Q05 is new: who reads whether the egress rule is loaded.
   - The Guide follows #856 at 9059a177, section 9 gains the account footprint on macOS, and section 12.1 records what each prototype showed and left untested.
 - 2026-10-31: the operator convened the deliberation on #867, widening the scope to MacEff's grouping layer, and made the requirements MIS-0004 depends on tentative and buildable now. The Status is Deliberation.
+- 2026-11-01: at the operator's request, a provisional diagram of the grouping layer's networking in the Guide, drawn from the positions on #867 up to the MQTT answers (the Secretary's comment 6559131553). No requirement changed.
 
 ## Wiki-Links
 
