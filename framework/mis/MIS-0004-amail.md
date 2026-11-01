@@ -2,7 +2,7 @@
 
 **Number**: 0004
 **Type**: Standards
-**Status**: Final-Comment
+**Status**: Accepted
 **Authors**: the container-management maintainer and the host-side maintainer
 **Secretary**: the head maintainer
 **Deliberation**: https://github.com/cversek/MacEff/issues/850
@@ -10,7 +10,7 @@
 **Updates**: MIS-0002: R56 (mail_SHOULD_report_state_to_sender)
 **Supersedes**: none
 **Lands-in**: framework/policies/base/infrastructure/amail.md, rewritten as ordinary policy whose rules cite this MIS (planned); the mail system under macf/src/macf/amail/ and its tests (planned); framework/glossary.md (planned)
-**Resolution**: none
+**Resolution**: Accepted by the operator on #520 ([comment 6549666455](https://github.com/cversek/MacEff/pull/520#issuecomment-6549666455)), verbatim: "I accept MIS-0004. O01 (notice_typed_is_input), Seat M: agreed, a typed notice is input. Notices go through the channel. Keystrokes are only a fallback, typed when no dialog waits, the box is empty and the turn has ended, read back, and never starting with a digit (R26, R29, R39, R40)." The revision was approved at b05bca60 (P35). Q09 (retry_after_restart_second_id) stays deferred and blocks no requirement.
 
 ---
 
@@ -100,7 +100,9 @@ These are the terms the Specification uses beyond the glossary. Until MIS-0007 l
 - **calling card**: an agent's name and short id, as its identity file gives them.
 - **MacEff agent**: an agent whose address the operator declares in the key registry.
 - **key registry**: the operator's declaration of each MacEff agent's address, its public keys with their validity dates, and the account that holds each key; only the operator can write it.
-- **attested**: the trust state of a message whose signature verified against its sender's declared key; **suspect**, of one whose check was attempted and failed; **unverified**, of one no check applies to.
+- **attested**: the trust state of a message whose signature verified against its sender's declared key.
+- **suspect**: the trust state of a message whose signature check was attempted and failed.
+- **unverified**: the trust state of a message that no signature check applies to.
 - **identity file**: the file in an agent's home that holds the agent's identity, which its primal daemon reads (MIS-0002-R02 (pd_MUST-NOT_take_identity_from_env)).
 
 ## 6 Specification
@@ -445,6 +447,7 @@ The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 h
 - 2026-10-31: signing, at the operator's review (P30), with both authors' notes (P31, P32), folded in by the Secretary. Section 6.10 is new: R41 to R45 from the review, R43 carried in at the operator's word after it dropped from the posted text by mistake, and R46 new from P32. R42 names the account that holds each key, R44 is keyed to registered sender addresses, and R45 checks validity against R15's acceptance time. Q08 is answered; the Goals, Non-Goals, Guide, Terms, section 10 and section 12.4 follow. A requirement changed during Final-Comment, so the final comment period starts again.
 - 2026-10-31: R43 accepts any key declared for the agent and valid at the broker's acceptance time, so it agrees with R45 during a rotation, and R45's rationale says whose clock it trusts between systems (P33). P33 and P34 join the record.
 - 2026-10-31: the operator approved the revision at b05bca60 and confirmed R43 on this pull request (P35). Both maintainers have commented on it (P33, P34) and it has been revised once in answer, so the discussion closes under MIS-0001-R48 unless a maintainer raises a critical objection.
+- 2026-10-31: Accepted. The Secretary's last commit before the operator's merge: the decided Status, and a Resolution quoting the operator's decision comment on #520, which answers O01.
 
 ## Wiki-Links
 
