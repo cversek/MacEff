@@ -311,7 +311,7 @@ Detection alone stays allowed only where no agent has a reachable address. Addre
 | R23 | decidable | `macf/tests/test_amail_receipts.py::test_recipient_offline` | planned |
 | R24 | decidable | `macf/tests/test_amail_receipts.py::test_state_by_id` | planned |
 | R25 | decidable | `macf/tests/test_amail_notice.py::test_notice_follows_ingest` | passing |
-| R26 | decidable | `macf/tests/test_amail_notice.py::test_notice_level_triggered` | planned |
+| R26 | decidable | `macf/tests/test_amail_notice.py::test_notice_level_triggered` | passing |
 | R27 | decidable | `macf/tests/test_amail_notice.py::test_restart_keeps_cursor` | passing |
 | R28 | decidable | `macf/tests/test_amail_notice.py::test_notice_carries_ids` | planned |
 | R29 | decidable | `macf/tests/test_amail_notice.py::test_keystrokes_need_idle_prompt` | planned |
@@ -451,6 +451,7 @@ The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 h
 - 2026-11-01: landing, receiver and read cursor (head maintainer). R04, R25, R27 and R30 are passing. The receiver is a duty of the agent's primal daemon that ingests the box each pass, from the box its own settings name; the read cursor is the store's Maildir `new` and `cur`. amail policy 1.9.0 says so (§2.3, §2.4).
 - 2026-11-01: landing, hand-off area (container-management maintainer). R13, R14, R15, R36 and R38 are passing. R15 needed a change: the receiving broker of a shared hand-off kept no peer id and minted its own, so it now keeps a well-formed one, drops a pair whose id the recipient already holds from the same peer and sender, mints fresh on any other match (an id collision) and for quarantined mail. amail policy 1.10.0 says so (§2.1.1).
 - 2026-11-01: landing, signing area, the declare step (host-side maintainer). R41 is passing: an agent with a key signs every submission; the key is 0600 in a 0700 directory of its own account, outside any work tree or synced folder; an agent declared to sign refuses to send without one, and any other sends unsigned with a warning. Nothing on the receiving side changes. amail policy 1.11.0 says so (§3.2.2).
+- 2026-11-01: landing, the mail notice as a level (head maintainer). R26 is passing: a channel that takes mail is told at each attach while mail waits unread, and a mail notice still owed when the mail is read is withdrawn and recorded. While the operator silences mail to the session nothing is re-asserted; after an unsilence, still-unread mail is asserted on the next pass. amail policy 1.12.0 says so (§2.4).
 
 ## Wiki-Links
 
