@@ -3,6 +3,7 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.14.0 — §3.4: the broker's health is its last sweep (MIS-0004 R31). A deployment names the schedule that runs the inbound `sweep` in its declaration's `mail_sweep_schedule`; the broker is healthy only when that sweep's last run ended ok, and the outside watch alerts as `mail-broker: SWEEP-FAILED` when it failed, is overdue, or never ran, so stuck mail reaches a person (R32). Minor: a new declaration field and a new alert an operator can meet.
 **Version**: 1.13.0 — the spool consumer: an entry that fails unexpectedly is counted and the run goes on; after `max_failures` (default 3) it is quarantined with its last error and audited (MIS-0004 R17, R20). Minor: an outcome an operator can meet in the quarantine.
 **Version**: 1.12.0 — §2.4: the mail notice is a level (MIS-0004 R26). A channel that takes mail is told at each attach while mail waits unread; a notice still owed when the mail is read is withdrawn, recorded as `pd_notice_withdrawn`; nothing is re-asserted while the operator silences mail to the session, and after an unsilence still-unread mail is told on the next pass. Minor: a notice an agent may now meet again in a new session.
 **Version**: 1.11.0 — §3.2.2: the agent's signing key is a 0600 file in a 0700 directory of the agent's own account, outside any synced folder and any git work tree path git does not ignore; an agent declared to sign refuses to send without one, and any other sends unsigned with a warning (MIS-0004 R41). Minor: a new refusal an agent can meet, and a new verb, `amail key-status`.
@@ -93,6 +94,7 @@ becomes tractable once the address stops encoding how the message travels.
   one, and what does a custody check report on absent input?
 - What must the audit record contain, and why is it mandatory?
 - How does the audit say the way a submitting identity was established, and why are there two words for it?
+- How is the broker's health known, and who hears when mail is stuck?
 
 **4 Contact Lists**
 - What is the default contact list for an agent?
@@ -667,6 +669,48 @@ silence is indistinguishable from working.
 
 The log is append-only. Refusals are as important as deliveries — they are the
 evidence the control fired.
+
+### 3.4 The broker's health is its last sweep
+
+A broker that is quiet because nothing arrived and one that is quiet because mail is
+stuck look the same from its socket. What tells them apart is the **sweep**: the
+scheduled run of `python -m macf.amail.daemons.inbound sweep`, which ages the spool and
+the pickup boxes against their declared bounds (`spool_age_bound_s`,
+`pickup_age_bound_s`) and exits non-zero on anything stuck past them.
+
+**The broker's health is that sweep's last verdict** [MIS-0004-R31
+(broker_health_MUST_be_its_sweep)], read from the scheduler's own records of the run, never
+from anything the broker says about itself:
+
+- the last sweep that ended ended `ok`, an empty one included: healthy, so an idle
+  broker is not a failing one;
+- it ended any other way (failed, killed at its limit, stopped, abandoned, never
+  started): unhealthy;
+- no sweep has ended, or the next one is overdue, or the daemon does not run it:
+  unhealthy, because a missing sweep is no verdict.
+
+A sweep in flight, or due and not yet late, leaves the last ended one's verdict standing.
+
+**Stuck mail reaches a person** [MIS-0004-R32 (stuck_mail_MUST_reach_a_person)] through the
+outside watch (persistent_layer §7.1), which reads that verdict for every home that
+declares a sweep and alerts once per stretch as `mail-broker: SWEEP-FAILED`, by a path
+that is neither the broker nor any session. Mail an agent leaves unread past its own
+threshold reaches the same watch as `mail: UNREAD` (persistent_layer, the unread-mail
+notice).
+
+**What a deployment must do:** declare the sweep as a schedule of the broker account's
+primal daemon, and name it in that declaration's `mail_sweep_schedule`. A name that no
+schedule declares is refused when the declaration loads, since it would read unhealthy
+forever. A deployment that names no sweep gets no broker verdict and no alert: the watch
+says nothing about a broker it was not told of, so leaving the field out is a choice to be
+unwatched, not a default that covers you.
+
+**What to do with a SWEEP-FAILED alert:** read the alert's detail, which says how the last
+sweep ended. For a failed one, run the sweep by hand as the broker account to see what it
+found: an aged spool entry it moved to quarantine, or an aged pickup entry, which names the
+box whose recipient is not draining it. An overdue or missing sweep
+means the broker account's daemon is not running it: check that daemon and its schedule.
+The stretch closes at the first clean sweep.
 
 ---
 
