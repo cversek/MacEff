@@ -272,8 +272,11 @@ def write_agent_cards(agents_config: AgentsConfig, *, chown=os.chown) -> Dict[st
     written. Returns, by account, why each refused agent's identity wasn't settled: one agent's
     conflict costs that agent its daemon, never the others'."""
     refused = {}
-    for spec in agents_config.agents.values():
-        card_name = getattr(spec, 'calling_card', None)
+    for key, spec in agents_config.agents.items():
+        # An agent with a daemon goes by its key when it declares no card (persistent_layer 10.1).
+        # Without one, the home's own card is read when the declaration renders, and a home with
+        # none costs only that agent its daemon, said by name there.
+        card_name = spec.effective_calling_card(key) if spec.has_daemon() else spec.calling_card
         if card_name is None:
             continue
         home = HOME_ROOT / spec.username
@@ -292,8 +295,11 @@ def daemon_accounts(agents_config: AgentsConfig) -> List[tuple]:
     processes under its uid, as the mail broker's account does for the broker, its inbound
     watcher and the aged sweep (MIS-0002-R53 (mail_broker_MUST_be_managed)). A service that
     declares none has no home here, since it has no daemon to read one."""
-    accounts = [(a.username, a.primal_daemon, HOME_ROOT / a.username, None)
-                for a in agents_config.agents.values()]
+    # Every agent that isn't vanilla and doesn't opt out gets the container default, with its own
+    # primal_daemon laid over it (persistent_layer 10.1).
+    mail = agents_config.runs_mail()
+    accounts = [(a.username, a.effective_primal_daemon(key, mail=mail), HOME_ROOT / a.username, None)
+                for key, a in agents_config.agents.items()]
     for name, spec in agents_config.services.items():
         declared = spec.primal_daemon is not None
         accounts.append((name, spec.primal_daemon, service_home(name) if declared else None,
@@ -2769,6 +2775,10 @@ def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] 
     chown(root, 0, 0)
     os.chmod(root, 0o755)
     rendered = []
+    for spec in agents_config.agents.values():
+        if spec.primal_daemon_opt_out is not None:
+            log(f"primal daemon of {spec.username}: opted out in agents.yaml, so it runs without "
+                f"one; the reason given: {spec.primal_daemon_opt_out}")
     refused = write_agent_cards(agents_config, chown=chown)
     for account, body, home, card_name in daemon_accounts(agents_config):
         target_dir = root / account
@@ -2776,7 +2786,7 @@ def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] 
         if body is None:
             if target.exists():
                 target.unlink()
-                log(f"primal daemon of {account}: agents.yaml declares none; "
+                log(f"primal daemon of {account}: none (vanilla, opted out, or a service that declares none); "
                     f"its earlier rendering was removed")
             continue
         tmp = target_dir / '.declaration.json.tmp'
@@ -2842,7 +2852,16 @@ def start_primal_daemons(agents_config: AgentsConfig) -> List[str]:
         started.append(account)
         log(f"primal daemon of {account}: started under the container outer tier")
     if not started:
-        log("primal daemons: no agent declares one (primal_daemon in agents.yaml); none started")
+        log("primal daemons: none started")
+    # Every agent that isn't vanilla and doesn't opt out has a daemon by default; one that couldn't
+    # be rendered (its card refused or unusable, or its write failed) is a failed step, named, so
+    # an agent left without supervision isn't a line that scrolls past (persistent_layer 10.1).
+    unrendered = sorted(spec.username for spec in agents_config.agents.values()
+                        if spec.has_daemon() and spec.username not in started)
+    if unrendered:
+        raise RuntimeError(f"no primal daemon for {', '.join(unrendered)}, which should have one by "
+                           f"default: the log above says why for each; fix it, or opt the agent out "
+                           f"with primal_daemon_opt_out and a reason")
     if home_only:
         # Their units and schedules have no daemon to run them (MIS-0002-R11): a failed step, so the
         # start log's summary names it, not a line that scrolls past.
