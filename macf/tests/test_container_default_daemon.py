@@ -181,3 +181,28 @@ def test_start_renders_the_default_and_names_an_agent_left_without_one(tmp_path,
             break
         time.sleep(0.01)
     assert supervised == ["pa_res"]
+
+
+def test_a_home_keeps_the_name_it_holds_and_only_a_nameless_home_takes_the_key(tmp_path, monkeypatch):
+    """The second maintainer's case: a seat keyed ``resident`` whose home holds moniker
+    ``Resident`` keeps that name and renders under it, never refused for the key's case. A home
+    that names no agent takes the key. A declared card is still written as declared."""
+    import os
+    start = _start()
+    monkeypatch.setattr(start, "HOME_ROOT", tmp_path / "home")
+    monkeypatch.setattr(start, "account_ids", lambda name: (os.getuid(), os.getgid()))
+    named = _home(tmp_path, "pa_res", "1a2b3c4d-0000")
+    (named / ".maceff").mkdir()
+    held = json.dumps({"agent_identity": {"moniker": "Resident"}, "other": 1})
+    (named / ".maceff" / "config.json").write_text(held)
+    bare = _home(tmp_path, "pa_bare", "9f8e7d6c-0000")
+    config = _config({"resident": _agent(), "Bare": _agent(username="pa_bare", uid=21101)})
+    from macf.pd import names as pd_names
+    monkeypatch.setattr(pd_names, "RENDERED_DECLARATIONS", tmp_path / "etc")
+    rendered = start.render_pd_declarations(config, root=tmp_path / "etc", chown=lambda p, u, g: None)
+    assert sorted(rendered) == ["pa_bare", "pa_res"]
+    assert (named / ".maceff" / "config.json").read_text() == held          # untouched
+    assert json.loads((tmp_path / "etc" / "pa_res" / "declaration.json").read_text())["agent"] \
+        == "Resident@1a2b3c"
+    assert json.loads((bare / ".maceff" / "config.json").read_text())["agent_identity"]["calling_card"] == "Bare"
+    assert start.home_agent_name(bare) == "Bare" and start.home_agent_name(tmp_path / "none") is None
