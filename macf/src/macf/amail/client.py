@@ -240,8 +240,40 @@ def reconcile_sent(home: Path, dispositions_dir: Optional[Path]) -> Dict[str, An
 # realigned when the unprivileged broker made them impossible to execute.
 
 
+class IngestBusy(Exception):
+    """Another ingest holds this store's lock, and the caller asked not to wait."""
+
+
+#: The lock every ingest into one store takes, inside the store, which only its agent writes.
+INGEST_LOCK = ".ingest.lock"
+
+
+def _ingest_lock(home: Path, wait: bool) -> int:
+    """Take the store's ingest lock and return its descriptor, or raise IngestBusy.
+
+    Two ingesters now share a box: the primal daemon's receiver (MIS-0004 R04) and
+    `amail list`. Unlocked, the second opens a pair the first already removed and reports a
+    race as an unreadable pair, and an internet message read by both before either removes
+    it is stored twice, since nothing drops a repeated `.eml`. The lock file holds nothing
+    and is never read; on a shared login any process of the login can take it, which at
+    worst delays an ingest."""
+    import fcntl
+    from . import store
+    d = store.ensure_maildir(home)
+    fd = os.open(d / INGEST_LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+    except BlockingIOError:
+        os.close(fd)
+        raise IngestBusy(f"another ingest into {d} is running") from None
+    except OSError:
+        os.close(fd)
+        raise
+    return fd
+
+
 def ingest(home: Path, pickup_box: Path, contacts_path: Optional[Path] = None,
-           agent: str = "") -> list:
+           agent: str = "", *, wait: bool = True) -> list:
     """Execute the custody transfer: move handed-off mail from the broker's
     pickup box into the caller's OWN store, as the caller.
 
@@ -254,14 +286,27 @@ def ingest(home: Path, pickup_box: Path, contacts_path: Optional[Path] = None,
     completion-before-deletion rule the broker applies at the spool).
 
     Returns one result dict per pickup entry, including failures — an entry
-    that cannot be ingested stays in the box, visibly, with its reason.
-    """
-    import hashlib
-    from . import store
+    that cannot be ingested stays in the box, visibly, with its reason. An
+    entry another ingest took between the listing and the open is marked
+    ``taken``: it is in the store, not damaged.
 
+    One ingest at a time per store (``_ingest_lock``). With ``wait`` false a
+    held lock raises IngestBusy instead of waiting, for a caller that will
+    simply try again on its next pass.
+    """
     results = []
     if not pickup_box.is_dir():
         return results
+    lock = _ingest_lock(home, wait)
+    try:
+        return _ingest_locked(home, pickup_box, contacts_path, agent)
+    finally:
+        os.close(lock)
+
+
+def _ingest_locked(home: Path, pickup_box: Path, contacts_path: Optional[Path],
+                   agent: str) -> list:
+    results = []
     try:
         box_fd = os.open(pickup_box, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     except OSError as e:
@@ -380,6 +425,11 @@ def _ingest_eml(home: Path, eml: Path, box_fd: int, broker_uid: int) -> dict:
         _set_aside(box_fd, [eml.name, sidecar.name], str(e))
         entry.update(ingested=False, refused=True, reason=str(e))
         return entry
+    except FileNotFoundError:
+        # Gone between the listing and the open: another ingest took it (or the box's owner
+        # cleared it). It is in a store, not damaged, so it isn't reported as damage.
+        entry.update(ingested=False, taken=True, reason="taken by another ingest")
+        return entry
     except (OSError, json.JSONDecodeError) as e:
         entry.update(ingested=False, reason=f"unreadable pair: {e}")
         return entry
@@ -436,6 +486,11 @@ def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str, box_fd: in
     except BoxEntryRefused as e:
         _set_aside(box_fd, [amsg.name, sidecar.name], str(e))
         entry.update(ingested=False, refused=True, reason=str(e))
+        return entry
+    except FileNotFoundError:
+        # Gone between the listing and the open: another ingest took it (or the box's owner
+        # cleared it). It is in a store, not damaged, so it isn't reported as damage.
+        entry.update(ingested=False, taken=True, reason="taken by another ingest")
         return entry
     except (OSError, json.JSONDecodeError) as e:
         entry.update(ingested=False, reason=f"unreadable pair: {e}")
