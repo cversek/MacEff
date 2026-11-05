@@ -438,7 +438,13 @@ def harness_hosted_sessions() -> list:
 
 
 def live_sessions() -> list:
-    """Every session with a sidecar whose process is still alive."""
+    """Every session with a sidecar whose process is still alive.
+
+    A sidecar outlives its process, and its number can come back: pids start over when a
+    container is recreated, and /proc answers for a thread id too, though no process listing
+    shows one. So a process with that number counts only if it started when the sidecar says.
+    A sidecar with no usable start time stays counted, as before: the callers that guard a
+    second client would rather wait than start beside a session they can't rule out."""
     out = []
     try:
         names = os.listdir(sessions_dir())
@@ -452,11 +458,16 @@ def live_sessions() -> list:
             pid = int(name[: -len(".json")])
         except ValueError:
             continue
-        if proc_start(pid) is None:
+        actual = proc_start(pid)
+        if actual is None:
             continue
         info = read_session_info(pid)
-        if info is not None:
-            out.append(info)
+        if info is None:
+            continue
+        declared = proc_start_key(info.proc_start) if info.proc_start else None
+        if declared is not None and declared != proc_start_key(actual):
+            continue
+        out.append(info)
     return sorted(out, key=lambda i: i.pid)
 
 

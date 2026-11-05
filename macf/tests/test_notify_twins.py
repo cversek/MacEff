@@ -50,9 +50,10 @@ def test_twins_are_detected_and_the_newest_is_chosen(home, monkeypatch, capsys):
     live = os.getpid()
     start = session.proc_start(live)
     _sidecar(home, live, "conv-twin", start)
-    _sidecar(home, live + 1, "conv-twin", session.proc_start_from_key(session.proc_start_key(start) + 500))
+    newer = session.proc_start_from_key(session.proc_start_key(start) + 500)
+    _sidecar(home, live + 1, "conv-twin", newer)
     # Both pids report as live; the fixture cannot fork a real second process.
-    monkeypatch.setattr(session, "proc_start", lambda pid: start)
+    monkeypatch.setattr(session, "proc_start", lambda pid: newer if pid == live + 1 else start)
 
     chosen, candidates = session.resolve_target("conv-twin")
     assert len(candidates) == 2, "both twins must be seen, not one"
@@ -76,6 +77,34 @@ def test_a_dead_twin_does_not_make_a_conversation_ambiguous(home):
     chosen, candidates = session.resolve_target("conv-mixed")
     assert len(candidates) == 1
     assert chosen.pid == live
+
+
+def test_a_sidecar_whose_number_came_back_is_not_a_live_session(home):
+    """Pids start over when a container is recreated, so an old sidecar's number can come back.
+
+    Seen on a recreate: three old sidecars named pids that had become threads of an unrelated
+    service. The daemon took them for clients started by hand and held the seat's session down
+    for as long as those threads lived. The start time in the sidecar tells them apart.
+    """
+    live = os.getpid()
+    other_start = session.proc_start_key(session.proc_start(live)) + 500
+    _sidecar(home, live, "conv-old", session.proc_start_from_key(other_start))
+    assert session.live_sessions() == []
+
+
+def test_a_sidecar_with_no_start_time_still_counts_as_live(home):
+    """Unknown isn't stale: a guard against a second client must not start beside this one."""
+    live = os.getpid()
+    (home / f"{live}.json").write_text(json.dumps({
+        "sessionId": "conv-nostart", "status": "idle", "updatedAt": 0,
+    }))
+    assert [s.pid for s in session.live_sessions()] == [live]
+
+
+def test_a_sidecar_whose_start_matches_is_a_live_session(home):
+    live = os.getpid()
+    _sidecar(home, live, "conv-here", session.proc_start(live))
+    assert [s.pid for s in session.live_sessions()] == [live]
 
 
 def test_an_unknown_conversation_yields_no_target_rather_than_a_guess(home):
@@ -144,7 +173,7 @@ def test_a_supervisor_CLAIM_beats_the_newest_start_ordering(home, monkeypatch, c
     live, ticks = os.getpid(), 100
     _sidecar(home, live, "conv-sup", ticks)
     _sidecar(home, live + 1, "conv-sup", ticks + 500)   # newer
-    monkeypatch.setattr(session, "proc_start", lambda pid: str(ticks))
+    monkeypatch.setattr(session, "proc_start", lambda pid: str(ticks + 500 if pid == live + 1 else ticks))
     monkeypatch.setattr(session, "supervised_child_pids", lambda: {live})
 
     chosen, candidates = session.resolve_target("conv-sup")
@@ -162,7 +191,7 @@ def test_it_falls_back_to_newest_start_when_no_supervisor_claims_one(home, monke
     live, ticks = os.getpid(), 100
     _sidecar(home, live, "conv-nosup", ticks)
     _sidecar(home, live + 1, "conv-nosup", ticks + 500)
-    monkeypatch.setattr(session, "proc_start", lambda pid: str(ticks))
+    monkeypatch.setattr(session, "proc_start", lambda pid: str(ticks + 500 if pid == live + 1 else ticks))
     monkeypatch.setattr(session, "supervised_child_pids", lambda: set())
 
     chosen, _ = session.resolve_target("conv-nosup")
