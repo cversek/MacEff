@@ -198,10 +198,11 @@ def test_a_non_sticky_directory_above_the_root_writable_by_all_is_refused(roots,
         a.parent.chmod(0o755)
 
 
-def test_a_symlink_out_of_the_root_into_an_open_directory_refuses_the_root(roots, monkeypatch, tmp_path, capsys):
+def test_a_symlink_out_of_the_root_is_never_read_and_the_rest_of_the_root_is(roots, monkeypatch, tmp_path, capsys):
     """The swap through a link (#592 review): the link's target is this user's and not
     writable, but its directory is open and not sticky, so any account could unlink the
-    target and put its own file there. A root's policies are the files in the root."""
+    target and put its own file there. A root's policies are the files in the root. That
+    reason covers the linked file, so it is the file that's refused, by every way of reading."""
     open_dir = tmp_path / "open"
     open_dir.mkdir()
     target = open_dir / "target.md"
@@ -212,11 +213,14 @@ def test_a_symlink_out_of_the_root_into_an_open_directory_refuses_the_root(roots
     (a / "linked.md").symlink_to(target)
     _set(monkeypatch, f"agentcad={a}")
     try:
-        assert mf.extra_policy_roots() == []
-        assert mf.find_policy_file("agentcad-usage") is None
+        assert [r.name for r in mf.extra_policy_roots()] == ["agentcad"]
+        assert mf.find_policy_file("agentcad-usage") is not None
+        assert mf.find_policy_file("linked") is None
+        assert mf.find_policy_file("agentcad:linked") is None
+        assert not [p for p in mf.list_policy_files() if p.get("name") == "linked"]
         err = capsys.readouterr().err
-        assert "policy root 'agentcad' skipped" in err
-        assert f"{a / 'linked.md'} is a symlink to {target.resolve()}, outside the root" in err
+        assert f"policy {a / 'linked.md'} skipped: a symlink to {target.resolve()}" in err
+        assert "policy root 'agentcad' skipped" not in err
     finally:
         open_dir.chmod(0o755)
 
