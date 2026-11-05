@@ -20,6 +20,7 @@ try:
 except ImportError:
     DEPS_AVAILABLE = False
 
+from ..utils.manifest import root_policy_files
 from .base_indexer import BaseIndexer
 from .extractors.policy_extractor import PolicyExtractor
 
@@ -130,7 +131,7 @@ class PolicyIndexer:
         """Each policy file to index, with the name it is indexed under, once per name."""
         seen = set()
         for prefix, root in [("", policies_dir), *((f"{n}:", p) for n, p in extra_roots)]:
-            for path in sorted(root.glob("**/*.md")):
+            for path in sorted(root_policy_files(root) if prefix else root.glob("**/*.md")):
                 name = f"{prefix}{path.stem}"
                 if name not in seen and self.extractor.should_index(path):
                     seen.add(name)

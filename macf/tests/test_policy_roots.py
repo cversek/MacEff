@@ -225,6 +225,21 @@ def test_a_symlink_out_of_the_root_is_never_read_and_the_rest_of_the_root_is(roo
         open_dir.chmod(0o755)
 
 
+def test_search_and_the_index_leave_out_a_symlink_out_of_the_root(roots, monkeypatch, tmp_path):
+    """The reach this branch adds must not read what the root refuses: the linked text is
+    someone else's to change, and search and recommend would put it in front of the agent."""
+    from macf.hybrid_search.policy_indexer import PolicyIndexer
+    target = tmp_path / "elsewhere.md"
+    target.write_text("# kept elsewhere\nquokkaword\n")
+    (roots.a / "linked.md").symlink_to(target)
+    _set(monkeypatch, f"agentcad={roots.a}")
+    assert mf.policy_content_matches("quokkaword") == []
+    indexer = PolicyIndexer.__new__(PolicyIndexer)
+    indexer.extractor = type("All", (), {"should_index": staticmethod(lambda p: True)})()
+    names = [n for _, n in indexer._sources(tmp_path / "no_framework", [("agentcad", roots.a)])]
+    assert "agentcad:linked" not in names and names, names
+
+
 def test_a_symlink_that_stays_inside_the_root_is_allowed(roots, monkeypatch):
     a = roots.a
     (a / "alias.md").symlink_to(a / "cad" / "agentcad-export.md")

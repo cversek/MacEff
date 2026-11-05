@@ -190,7 +190,7 @@ def policy_content_matches(keyword: str, maceff_root: Optional[Path] = None) -> 
     needle = keyword.lower()
     found = []
     for root in policy_roots(maceff_root):
-        for md_file in root.path.rglob("*.md"):
+        for md_file in _files_of(root):
             try:
                 text = md_file.read_text(encoding="utf-8", errors="replace")
             except OSError as e:
@@ -214,7 +214,7 @@ def policies_newer_than_index(db_path: Path, maceff_root: Optional[Path] = None)
         return []
     newer = []
     for root in policy_roots(maceff_root):
-        for md_file in root.path.rglob("*.md"):
+        for md_file in _files_of(root):
             try:
                 if md_file.stat().st_mtime > built:
                     newer.append(md_file.stem if root.framework else f"{root.name}:{md_file.stem}")
