@@ -155,7 +155,8 @@ def personal_policy_root(extras: List[PolicyRoot]) -> Optional[PolicyRoot]:
     ``MACEFF_POLICY_ROOTS`` entry with this name or this directory takes its place."""
     path = find_agent_home() / "agent" / "policies" / "personal"
     try:
-        if not path.is_dir() or not any(path.rglob("*.md")):
+        # README.md is the template provisioning installs in every seat's directory, not a policy.
+        if not path.is_dir() or not any(p.name != "README.md" for p in path.rglob("*.md")):
             return None
     except OSError as e:
         _report_once(f"personal policy root skipped: {path} cannot be read ({e})")
