@@ -83,12 +83,13 @@ You don't need to read everything. You need to recognize WHEN you need something
 
 4 Policy Layers and Precedence
 - What policy layers exist?
-- Which layer overrides which?
+- How do the layers relate?
 - Where do different policies live?
 
 4.1 Personal Policies
 - Where are my personal policies?
-- How do they override others?
+- Do they replace a framework policy?
+- How do I make one surface when it applies?
 - What's agent-personal wisdom?
 
 4.2 Project Policies
@@ -301,27 +302,23 @@ CEP Navigation Guides provide:
 
 ## 4. Policy Layers and Precedence
 
-### 4.1 Personal Policies (Highest Precedence)
+### 4.1 Personal Policies (Augment, Never Replace)
 
-**Location**: `~/agent/policies/personal/` (for Primary Agents)
+**Location**: `~/agent/policies/personal/` (for Primary Agents). Read as `personal:<name>`.
 
-Your earned wisdom overrides all other policies. As you learn patterns and develop expertise, document them here.
+As you learn patterns and develop expertise, document them here. **A personal policy augments the framework; it never replaces it.** A name the framework has always reads the framework's copy, and `personal:<name>` reads yours. On how you work, your policy guides you. It never lifts a boundary: if a file you can write could replace a rule, the rule would bind nothing.
 
-**Example Personal Manifest**:
+**Say when it applies.** `manifest.json` in that directory declares which policies surface when a task of a given type starts, as the framework's own are surfaced:
+
 ```json
 {
-  "version": "1.0.0",
-  "extends": "/opt/maceff/framework/policies/manifest.json",
   "personal_policies": [
-    {
-      "name": "earned_wisdom",
-      "path": "~/agent/policies/personal/my_wisdom.md",
-      "CEP_triggers": ["What did I learn about X?"],
-      "keywords": ["experience", "learned", "pattern"]
-    }
+    {"name": "my_merge_rules", "task_types": ["GH_PR"]}
   ]
 }
 ```
+
+A declaration naming a policy that isn't there, or a malformed one, is reported rather than dropped.
 
 ### 4.2 Project Policies (Middle Precedence)
 
@@ -348,7 +345,7 @@ Framework foundation policies:
 - **Development** (`dev/`): Optional git, testing policies
 - **Language** (`lang/`): Language-specific guidance
 
-**Precedence Order**: Personal > Project > Core
+**How they relate**: Core is the foundation. A project's manifest selects which layers apply. A personal policy adds to them and never replaces one.
 
 ### 4.4 Package Policy Sets (Extra Roots)
 
@@ -457,7 +454,7 @@ To:
 3. Jump to sections: `grep "3.2" POLICY.md`
 
 **Policy Layers**:
-1. Personal (`~/agent/policies/personal/`) - Highest precedence
+1. Personal (`~/agent/policies/personal/`) - Augments; never replaces
 2. Project (`.maceff/policies/manifest.json`) - Middle precedence
 3. Core (`/opt/maceff/framework/policies/current/`) - Framework foundation
 

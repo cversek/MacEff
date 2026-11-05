@@ -1282,7 +1282,7 @@ def create_agent_tree(username: str, agent_spec: AgentSpec, defaults_config: Opt
 
 
 def create_personal_policies(username: str) -> None:
-    """Create personal policies directory with templates (highest precedence layer)."""
+    """Create personal policies directory with templates (the policy_awareness personal layer)."""
     home = Path(f'/home/{username}')
     policies_dir = home / 'agent' / 'policies' / 'personal'
 
