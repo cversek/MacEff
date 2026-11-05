@@ -509,6 +509,36 @@ def test_a_session_that_cannot_log_in_alerts_while_its_liveness_is_fresh(tmp_pat
     assert "recovered: Resident@1a2b3c session: ALIVE" in sink.read_text()
 
 
+def test_a_failure_stands_only_for_the_process_recorded_failed(tmp_path):
+    """Started by hand after the core marked it failed, a new pid beats and no new state is
+    written. It must not read FAILED for up to a week. An older beat from another process, or a
+    newer one from the failed process, leaves the failure standing."""
+    home = _home(tmp_path, units=(("broker", 15.0),))
+    _record(tmp_path / "run")
+    _state(home, "broker", age_s=300, state="failed", reason="over its memory limit")
+    _stamp(home, "broker", age_s=400, pid=9999, start="999")
+    verdict = lambda: watch.check_home(home, NOW, tmp_path / "run", ALL_RUNNING)[1].verdict
+    assert verdict() == "FAILED", "a beat older than the failure proves nothing"
+    _stamp(home, "broker", age_s=5)
+    assert verdict() == "FAILED", "the process recorded failed is still the one beating"
+    _stamp(home, "broker", age_s=4, pid=4242, start="778")
+    assert verdict() != "FAILED", "the same number with another start is another process"
+    _stamp(home, "broker", age_s=3, pid=9999, start="999")
+    assert verdict() != "FAILED", "another process has taken over"
+
+
+def test_states_that_cannot_be_read_are_never_healthy(tmp_path, monkeypatch):
+    home = _home(tmp_path, units=(("broker", 15.0),))
+    _record(tmp_path / "run")
+    _stamp(home, "broker", age_s=5)
+    def unreadable(*_a, **_k):
+        raise OSError(5, "Input/output error")
+    monkeypatch.setattr(watch, "last_unit_state", unreadable)
+    findings = watch.check_home(home, NOW, tmp_path / "run", ALL_RUNNING)
+    assert [f.verdict for f in findings if f.subject == "home"] == ["CHECK-FAILED"]
+    assert not [f for f in findings if f.subject == "broker"]
+
+
 def test_a_failed_unit_for_another_reason_reads_failed_with_its_reason(tmp_path):
     home = _home(tmp_path, units=(("broker", 15.0),))
     _record(tmp_path / "run")
