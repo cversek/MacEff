@@ -443,3 +443,99 @@ def test_a_real_index_holds_both_tables_named_by_root(roots, tmp_path):
     questions = db.open_table("questions").to_arrow().column("policy_name").to_pylist()
     assert "personal:merging" in docs and "task_management" in docs
     assert set(questions) == {"personal:merging"}
+
+
+# --- an agent declares its own triggers ------------------------------------------------------------
+
+
+def _declare(root, *entries):
+    import json
+    (root / "manifest.json").write_text(json.dumps({"personal_policies": list(entries)}))
+
+
+def _manifest(mapping):
+    return {"task_type_policies": {"mappings": mapping}}
+
+
+def test_a_declared_policy_surfaces_after_the_frameworks_for_its_task_type(roots):
+    root = _personal()
+    _declare(root, {"name": "merging", "task_types": ["GH_PR", "TASK"]})
+    assert mf.get_policies_for_task_type("TASK", _manifest({"TASK": ["task_management"]})) == [
+        "task_management", "personal:merging"]
+    assert mf.get_policies_for_task_type("GH_PR", _manifest({})) == ["personal:merging"]  # no framework mapping
+    assert mf.get_policies_for_task_type("BUG", _manifest({"BUG": ["x"]})) == ["x"]
+    assert mf.find_policy_file("personal:merging") == root / "merging.md"
+
+
+def test_a_bad_declaration_is_reported_not_dropped(roots, capsys):
+    root = _personal()
+    _declare(root, {"name": "not_here", "task_types": ["TASK"]}, {"task_types": ["TASK"]}, "nonsense",
+             {"name": "merging", "task_types": ["TASK"]})
+    assert mf.personal_task_policies("TASK") == ["personal:merging"]
+    err = capsys.readouterr().err
+    assert "declares 'not_here'" in err and "needs a name" in err and "nonsense" in err
+
+
+def test_a_broken_manifest_is_reported_and_surfaces_nothing(roots, capsys):
+    root = _personal()
+    (root / "manifest.json").write_text("{ not json")
+    assert mf.personal_task_policies("TASK") == []
+    assert "can't be used" in capsys.readouterr().err
+    mf._reported.clear()
+    (root / "manifest.json").write_text('{"personal_policies": 5}')
+    assert mf.personal_task_policies("TASK") == []
+    assert "not a list" in capsys.readouterr().err
+
+
+def test_no_manifest_or_no_root_surfaces_nothing_quietly(roots, capsys):
+    assert mf.personal_task_policies("TASK") == []     # no root
+    _personal()
+    assert mf.personal_task_policies("TASK") == []     # a root, no manifest
+    assert capsys.readouterr().err == ""
+
+
+def test_a_manifest_others_can_write_refuses_the_root(roots, capsys):
+    root = _personal()
+    _declare(root, {"name": "merging", "task_types": ["TASK"]})
+    (root / "manifest.json").chmod(0o666)
+    try:
+        assert mf.personal_task_policies("TASK") == []
+        assert "writable by every account" in capsys.readouterr().err
+    finally:
+        (root / "manifest.json").chmod(0o644)
+
+
+def test_a_renamed_root_keeps_its_triggers_under_its_name(roots, monkeypatch):
+    root = _personal()
+    _declare(root, {"name": "merging", "task_types": ["TASK"]})
+    _set(monkeypatch, f"mine={root}")
+    assert mf.personal_task_policies("TASK") == ["mine:merging"]
+
+
+def test_task_start_surfaces_a_declared_policy_once_a_cycle(roots):
+    """The real cmd_task_start, as test_task_start_stale_resume drives it: the activation event is
+    what the hook delivers from, so seeing it is seeing the trigger fire."""
+    import argparse
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock, patch
+    from macf.cli import cmd_task_start
+    root = _personal()
+    _declare(root, {"name": "merging", "task_types": ["TASK"]})
+    crumb = "s_abc12345/c_25/p_def67890/t_2000"
+    task = MagicMock(status="pending")
+    task.mtmd = SimpleNamespace(updates=[], started_breadcrumb=None, creation_breadcrumb=crumb,
+                                task_type="TASK", plan_ca_ref=None)
+    task.description_with_updated_mtmd.return_value = "<!-- updated -->"
+    reader = MagicMock(session_path="/tmp/session")
+    reader.read_task.return_value = task
+
+    def activated(already):
+        with patch("macf.task.TaskReader", return_value=reader), patch("macf.task.update_task_file"), \
+             patch("macf.task.reader.unhide_task_file"), patch("macf.cli.append_event") as event, \
+             patch("macf.utils.breadcrumbs.get_breadcrumb", return_value=crumb), \
+             patch("macf.event_queries.get_policies_surfaced_this_cycle", return_value=already):
+            assert cmd_task_start(argparse.Namespace(task_id="10")) == 0
+        return [c.args[1]["policy_name"] for c in event.call_args_list if c.args[0] == "policy_injection_activated"]
+
+    assert "personal:merging" in activated({})
+    assert "personal:merging" not in activated({"personal:merging": "9"})

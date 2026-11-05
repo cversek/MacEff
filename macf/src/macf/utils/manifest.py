@@ -98,7 +98,7 @@ def _writable_by_others(root: Path) -> str:
             target = p.resolve()
             if not target.is_relative_to(root):
                 return f"{p} is a symlink to {target}, outside the root"
-        if p.is_dir() or p.suffix == ".md":
+        if p.is_dir() or p.suffix in (".md", ".json"):   # a manifest says what gets surfaced
             reason = why(p, ancestor=False)
             if reason:
                 return reason
@@ -593,6 +593,38 @@ def load_merged_manifest(maceff_root: Optional[Path] = None) -> Dict[str, Any]:
 
     return manifest
 
+def personal_task_policies(task_type: str) -> List[str]:
+    """The agent's own policies it declared for this task type, as ``<root>:<name>``.
+
+    ``personal/manifest.json`` holds ``personal_policies``, each ``{"name", "task_types"}``. A bad
+    entry, or one naming a policy that isn't there, is reported once and left out, never dropped
+    silently: a trigger that doesn't fire looks exactly like a rule nobody needed."""
+    default = find_agent_home() / "agent" / "policies" / "personal"
+    root = next((r for r in policy_roots() if not r.framework and
+                 (r.name == PERSONAL_ROOT_NAME or r.path.resolve() == default.resolve())), None)
+    path = root.path / "manifest.json" if root else None
+    if path is None or not path.exists():
+        return []
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8")).get("personal_policies", [])
+        if not isinstance(entries, list):
+            raise ValueError("personal_policies is not a list")
+    except (OSError, ValueError, AttributeError) as e:
+        _report_once(f"{path} can't be used: {e}")
+        return []
+    found = []
+    for entry in entries:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        types = entry.get("task_types", []) if isinstance(entry, dict) else None
+        if not isinstance(name, str) or not isinstance(types, list):
+            _report_once(f"{path}: an entry needs a name and a task_types list: {entry!r}")
+        elif not _find_in(root.path, f"{name}.md", None):
+            _report_once(f"{path} declares {name!r}, and {root.path} has no {name}.md")
+        elif task_type in types:
+            found.append(f"{root.name}:{name}")
+    return found
+
+
 def get_policies_for_task_type(task_type: str, manifest: Optional[Dict[str, Any]] = None) -> list:
     """
     Look up policies to auto-inject for a given task type.
@@ -620,11 +652,12 @@ def get_policies_for_task_type(task_type: str, manifest: Optional[Dict[str, Any]
         return []
 
     policies = mappings.get(task_type)
-    if policies is None:
+    personal = personal_task_policies(task_type)
+    if policies is None and not personal:
         print(f"[manifest] ⚠️ No mapping for task type '{task_type}'", file=sys.stderr)
         return []
 
-    return policies
+    return (policies or []) + personal
 
 
 def filter_active_policies(manifest: Dict[str, Any]) -> Dict[str, Any]:
