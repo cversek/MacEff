@@ -406,9 +406,14 @@ def test_recommend_says_when_the_index_is_older_than_a_policy(roots, monkeypatch
 def test_build_index_passes_this_agents_roots_unless_a_directory_is_named(roots, monkeypatch, tmp_path):
     pytest.importorskip("lancedb")
     pytest.importorskip("sentence_transformers")
+    import importlib
     from argparse import Namespace
     from macf import cli
-    import macf.hybrid_search as hybrid_search
+    # By name, as cli's own imports resolve them: other tests clear sys.modules, so what this
+    # file imported at the top may no longer be the module the command will see.
+    hybrid_search = importlib.import_module("macf.hybrid_search")
+    live = importlib.import_module("macf.utils.manifest")
+    monkeypatch.setattr(live, "get_framework_policies_path", lambda maceff_root=None: roots.fw)
     root = _personal()
     seen = []
 
