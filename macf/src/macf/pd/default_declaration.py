@@ -207,7 +207,8 @@ CONTAINER_PATH = ("/opt/maceff-venv/bin", "/usr/local/bin", "/usr/bin", "/bin")
 
 def container_body(*, account: str, harness_session: str, project_dir: Optional[str],
                    channels: Sequence[str], mail: bool,
-                   memory_limit_mb: Optional[int] = None) -> Dict[str, Any]:
+                   memory_limit_mb: Optional[int] = None,
+                   timezone: Optional[str] = None) -> Dict[str, Any]:
     """The declaration body a container agent runs when agents.yaml writes none for it: the
     host default's session unit (``build``), as a body without ``agent`` and ``version``, which
     container start-up fills in (persistent_layer 10.1).
@@ -216,9 +217,10 @@ def container_body(*, account: str, harness_session: str, project_dir: Optional[
     and search holds over a gigabyte each, which a container shared by several seats doesn't
     multiply by default. The session states what the legacy launch set from the login shell:
     its tmux session name, its project directory, its channels (the MacEff channel always
-    among them), a shell and a locale, and it
+    among them), a shell, a locale and the deployment's time zone, and it
     never attaches the host's API proxy, which no container can reach. *project_dir* None is
-    the agent's home."""
+    the agent's home. *timezone* None leaves ``TZ`` unset, so the session runs on the
+    container's clock, UTC in the framework's image."""
     home = CONTAINER_HOME_ROOT / account
     project = Path(project_dir) if project_dir else home
     # The daemon's notices reach the session through the MacEff channel, so the session loads
@@ -238,6 +240,8 @@ def container_body(*, account: str, harness_session: str, project_dir: Optional[
         "MACEFF_PROJECT_DIR": _placeheld(project, home),
         "MACEFF_CHANNELS": " ".join(channels),
     })
+    if timezone:
+        session["environment"]["TZ"] = timezone
     if memory_limit_mb is not None:
         session["memory_limit_mb"] = memory_limit_mb
     allowed = declaration["allowlisted_channels"]
