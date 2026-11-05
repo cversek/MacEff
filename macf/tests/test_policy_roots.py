@@ -539,3 +539,81 @@ def test_task_start_surfaces_a_declared_policy_once_a_cycle(roots):
 
     assert "personal:merging" in activated({})
     assert "personal:merging" not in activated({"personal:merging": "9"})
+
+
+# --- the format check ------------------------------------------------------------------------------
+
+GOOD_POLICY = """# Good
+
+**Type**: Personal Policy
+**Scope**: One agent
+**Status**: ACTIVE
+
+---
+
+## Purpose
+
+Why.
+
+## CEP Navigation Guide
+
+**1 First**
+- What?
+
+**1.1 Deeper**
+- What else?
+
+=== CEP_NAV_BOUNDARY ===
+
+## 1 First
+
+### 1.1 Deeper
+
+## 2 Integration with Other Policies
+"""
+
+
+def test_a_well_formed_policy_has_no_findings():
+    assert mf.policy_format_findings(GOOD_POLICY) == []
+    assert mf.policy_format_findings(GOOD_POLICY.replace("## 1 First", "## 1. First")) == []
+    plain = GOOD_POLICY.replace("**1 First**", "1 First").replace("**1.1 Deeper**", "1.1 Deeper")
+    assert mf.policy_format_findings(plain) == []
+
+
+@pytest.mark.parametrize("old,new,expected", [
+    ("**Type**: Personal Policy\n", "", "no **Type**"),
+    ("**Scope**: One agent\n", "", "no **Scope**"),
+    ("**Status**: ACTIVE\n", "", "no **Status**"),
+    ("=== CEP_NAV_BOUNDARY ===\n", "", "no === CEP_NAV_BOUNDARY"),
+    ("## CEP Navigation Guide", "## A Guide", "no CEP Navigation Guide"),
+    ("### 1.1 Deeper", "### 1.2 Deeper", "promises 1.1"),
+    ("**1 First**\n- What?\n\n**1.1 Deeper**\n- What else?\n", "", "no numbered topics"),
+])
+def test_each_thing_a_policy_can_lack_is_found(old, new, expected):
+    assert old in GOOD_POLICY
+    assert any(expected in f for f in mf.policy_format_findings(GOOD_POLICY.replace(old, new)))
+
+
+def test_check_covers_one_policy_or_every_root_and_skips_the_readme(roots):
+    root = _personal()
+    (root / "README.md").write_text("# not a policy\n")
+    (root / "merging.md").write_text(GOOD_POLICY)
+    assert mf.check_policies("personal:merging") == {"personal:merging": []}
+    results = mf.check_policies()
+    assert set(results) == {"task_management", "personal:merging"}
+    assert results["task_management"] and results["personal:merging"] == []
+    with pytest.raises(LookupError):
+        mf.check_policies("personal:absent")
+
+
+def test_the_cli_exit_code_says_whether_it_passed(roots, capsys):
+    from argparse import Namespace
+    from macf import cli
+    root = _personal()
+    (root / "merging.md").write_text(GOOD_POLICY)
+    assert cli.cmd_policy_check(Namespace(policy_name="personal:merging")) == 0
+    assert "1 of 1 pass" in capsys.readouterr().out
+    (root / "merging.md").write_text("# Bare\n")
+    assert cli.cmd_policy_check(Namespace(policy_name="personal:merging")) == 1
+    assert "no **Type**" in capsys.readouterr().out
+    assert cli.cmd_policy_check(Namespace(policy_name="personal:absent")) == 2
