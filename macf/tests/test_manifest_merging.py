@@ -292,6 +292,11 @@ class TestLoadMergedManifest:
 class TestGetPoliciesForTaskType:
     """Tests for task_type → policy mapping from manifest."""
 
+    @pytest.fixture(autouse=True)
+    def _no_personal_policies(self, monkeypatch):
+        """The running agent's own manifest would otherwise add its declared policies here."""
+        monkeypatch.setattr("macf.utils.manifest.personal_task_policies", lambda task_type: [])
+
     def test_mission_returns_expected_policies(self):
         """MISSION type should return roadmaps_following, coding_standards, task_management."""
         manifest = {
