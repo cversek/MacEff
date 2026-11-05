@@ -76,6 +76,13 @@ def test_the_session_starts_where_the_login_shell_always_did():
     assert _session(_body(session_memory_mb=28672))["memory_limit_mb"] == 28672
 
 
+def test_a_time_zone_that_does_not_resolve_is_reported_not_declared(monkeypatch, capsys):
+    """The C library falls back to UTC without a word, so a typo would look like the old bug."""
+    monkeypatch.setenv("MACEFF_TZ", "America/New_Yrok")
+    assert "TZ" not in _session(_body())["environment"]
+    assert "America/New_Yrok" in capsys.readouterr().err
+
+
 def test_the_session_keeps_the_deployments_time_zone(monkeypatch):
     """A unit inherits nothing, so the login shell's TZ doesn't reach it. Without this the seat's
     clock moves to UTC when it moves onto its daemon, while its login shells stay on local time."""
