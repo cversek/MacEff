@@ -264,6 +264,7 @@ def test_no_policies_means_no_root_and_no_noise(roots, capsys):
     root = mf.find_agent_home() / "agent" / "policies" / "personal"
     root.mkdir(parents=True)
     (root / "manifest.json").write_text("{}")
+    (root / "README.md").write_text("# The template provisioning installs\n")
     root.chmod(0o777)              # unsafe, and it doesn't matter: nothing here to read
     assert [r.name for r in mf.policy_roots()] == ["framework"]
     root.chmod(0o755)
