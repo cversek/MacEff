@@ -17,7 +17,9 @@ Every unit is started with the declared environment and nothing inherited (persi
 10.2), so each names ``PATH`` and ``HOME``.
 """
 import json
+import os
 import sys
+import zoneinfo
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -203,6 +205,24 @@ def drift(existing: Dict[str, Any], default: Dict[str, Any]) -> List[str]:
 CONTAINER_HOME_ROOT = Path("/home")
 CONTAINER_PYTHON = Path("/opt/maceff-venv/bin/python")
 CONTAINER_PATH = ("/opt/maceff-venv/bin", "/usr/local/bin", "/usr/bin", "/bin")
+
+
+def deployment_timezone() -> Optional[str]:
+    """The time zone a container session declares: the deployment's ``MACEFF_TZ``, which its
+    login shells also follow. It comes from the environment of whatever renders the
+    declaration: compose's at container start-up. Any other renderer without the variable gets
+    a body with no ``TZ``. A name that doesn't resolve is reported and left out, because the C
+    library would otherwise fall back to UTC without a word."""
+    name = os.environ.get("MACEFF_TZ")
+    if not name:
+        return None
+    try:
+        zoneinfo.ZoneInfo(name)
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError, OSError) as e:
+        print(f"⚠️ MACF: MACEFF_TZ {name!r} is not a usable time zone ({e!r}); the session "
+              f"declares none and runs on the container's clock", file=sys.stderr)
+        return None
+    return name
 
 
 def container_body(*, account: str, harness_session: str, project_dir: Optional[str],
