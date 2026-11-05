@@ -5,6 +5,7 @@ Models correspond to the YAML structure documented in:
 docs/arch_v0.3_named_agents/05_implementation_guide.md (lines 48-125)
 """
 
+import os
 import re
 from enum import Enum
 from typing import Any, ClassVar, Dict, List, Optional
@@ -636,7 +637,9 @@ class AgentSpec(BaseModel):
         """The declaration body a container renders for this agent: the default session
         (``pd.default_declaration.container_body``) with whatever ``primal_daemon`` declares laid
         over it (``merged_body``). None for a vanilla account or an opt-out. *mail* is whether the
-        deployment runs a mail broker, so the daemon routes mail notices to the agent."""
+        deployment runs a mail broker, so the daemon routes mail notices to the agent. The time
+        zone is the deployment's ``MACEFF_TZ``, which login shells also follow: a unit inherits
+        nothing, so the session has it only if declared."""
         if not self.has_daemon():
             return None
         from macf.pd.default_declaration import container_body, merged_body
@@ -646,7 +649,8 @@ class AgentSpec(BaseModel):
                                        if self.assigned_projects else None)
         default = container_body(account=self.username, harness_session=self.harness_session or key,
                                  project_dir=project, channels=channels, mail=mail,
-                                 memory_limit_mb=self.session_memory_mb)
+                                 memory_limit_mb=self.session_memory_mb,
+                                 timezone=os.environ.get("MACEFF_TZ"))
         return merged_body(default, self.primal_daemon)
 
     @model_validator(mode='after')
