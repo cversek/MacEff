@@ -25,11 +25,12 @@ def home(tmp_path, monkeypatch):
     return d
 
 
-def _sidecar(directory, pid, session_id, proc_start, status="idle"):
+def _sidecar(directory, pid, session_id, proc_start, status="idle", started_at_ms=None):
     (directory / f"{pid}.json").write_text(json.dumps({
         "pid": pid,
         "sessionId": session_id,
         "procStart": str(proc_start),
+        **({"startedAt": started_at_ms} if started_at_ms else {}),
         "status": status,
         "kind": "interactive",
         "cwd": "/somewhere",
@@ -84,12 +85,32 @@ def test_a_sidecar_whose_number_came_back_is_not_a_live_session(home):
 
     Seen on a recreate: three old sidecars named pids that had become threads of an unrelated
     service. The daemon took them for clients started by hand and held the seat's session down
-    for as long as those threads lived. The start time in the sidecar tells them apart.
+    for as long as those threads lived. This test process began long after the recorded session.
     """
     live = os.getpid()
     other_start = session.proc_start_key(session.proc_start(live)) + 500
-    _sidecar(home, live, "conv-old", session.proc_start_from_key(other_start))
+    _sidecar(home, live, "conv-old", session.proc_start_from_key(other_start), started_at_ms=1000)
     assert session.live_sessions() == []
+
+
+def test_a_differing_start_with_no_proof_of_order_stays_live(home):
+    """A false mismatch would start a second client beside a live session, so a differing start
+    alone isn't enough: the process must also have begun after the session did."""
+    live = os.getpid()
+    other_start = session.proc_start_key(session.proc_start(live)) + 500
+    other = session.proc_start_from_key(other_start)
+    far_future_ms = 4102444800000
+    _sidecar(home, live, "conv-order", other, started_at_ms=far_future_ms)
+    assert [s.pid for s in session.live_sessions()] == [live]
+    _sidecar(home, live, "conv-order", other)  # no startedAt at all
+    assert [s.pid for s in session.live_sessions()] == [live]
+
+
+def test_the_start_epoch_is_when_this_process_began():
+    """Ticks count from boot, so comparing them with the wall clock means converting them."""
+    import time
+    began = session._start_epoch(session.proc_start(os.getpid()))
+    assert began is not None and 0 <= time.time() - began < 86400 * 30
 
 
 def test_a_sidecar_with_no_start_time_still_counts_as_live(home):
