@@ -456,6 +456,8 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
         return findings + [Finding(card, "home", "CHECK-FAILED", f"the event log cannot be read: {e.strerror}")]
     try:
         states = last_unit_state(log_path, card, [u.name for u in declaration.units], now)
+    except FileNotFoundError:
+        states = {u.name: None for u in declaration.units}
     except OSError as e:
         # Unknown is never healthy: without the states, liveness alone could say ALIVE.
         return findings + [Finding(card, "home", "CHECK-FAILED", f"the event log cannot be read: {e.strerror}")]
