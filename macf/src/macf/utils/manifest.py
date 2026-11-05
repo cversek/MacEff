@@ -7,7 +7,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 from .paths import find_agent_home, find_maceff_root
 
 #: Extra policy roots, os.pathsep-separated, each ``path`` or ``name=path`` (#592). A package
@@ -65,9 +65,8 @@ def _writable_by_others(root: Path) -> str:
     every directory above it. Each must be owned by this user or root, and not writable by
     others or by a group with anyone else in it. A directory above the root may be writable
     by others if it is sticky (/tmp): there no one else can rename or replace the root.
-    A symlink under the root whose target lies outside it is refused: a root's policies are
-    the files in the root, and a target's own directory is not checked, so whoever can write
-    there could replace the file the link names."""
+    A symlink out of the root doesn't count against the root: it isn't one of the root's
+    policies, and ``root_policy_files`` leaves it out, so its target is never read."""
     import stat
     uid = os.getuid()
     private: Dict[int, bool] = {}   # gid -> _private_group, asked once per walk
@@ -97,7 +96,7 @@ def _writable_by_others(root: Path) -> str:
         if p.is_symlink():
             target = p.resolve()
             if not target.is_relative_to(root):
-                return f"{p} is a symlink to {target}, outside the root"
+                continue
         if p.is_dir() or p.suffix in (".md", ".json"):   # a manifest says what gets surfaced
             reason = why(p, ancestor=False)
             if reason:
@@ -191,7 +190,7 @@ def policy_content_matches(keyword: str, maceff_root: Optional[Path] = None) -> 
     needle = keyword.lower()
     found = []
     for root in policy_roots(maceff_root):
-        for md_file in root.path.rglob("*.md"):
+        for md_file in _files_of(root):
             try:
                 text = md_file.read_text(encoding="utf-8", errors="replace")
             except OSError as e:
@@ -215,7 +214,7 @@ def policies_newer_than_index(db_path: Path, maceff_root: Optional[Path] = None)
         return []
     newer = []
     for root in policy_roots(maceff_root):
-        for md_file in root.path.rglob("*.md"):
+        for md_file in _files_of(root):
             try:
                 if md_file.stat().st_mtime > built:
                     newer.append(md_file.stem if root.framework else f"{root.name}:{md_file.stem}")
@@ -282,11 +281,32 @@ def get_framework_policies_path(maceff_root: Optional[Path] = None) -> Optional[
     return None
 
 
-def _find_in(root: Path, name: str, parents: Optional[List[str]]) -> Optional[Path]:
+def root_policy_files(root: Path) -> List[Path]:
+    """The ``.md`` files of an extra root. A root's policies are the files in the root: a link's
+    target lives in a directory the root's check never reaches, so whoever can write there could
+    replace the file the link names. Such a file is left out and reported once, and the rest of
+    the root is used, since the rule's reason covers that file and no other (#592 review)."""
+    resolved = root.resolve()
+    files = []
     for md_file in root.rglob('*.md'):
+        target = md_file.resolve()
+        if target.is_relative_to(resolved):
+            files.append(md_file)
+        else:
+            _report_once(f"policy {md_file} skipped: a symlink to {target}, outside its root. "
+                         f"A root's policies are the files in the root (policy_awareness 4.4)")
+    return files
+
+
+def _files_of(root: PolicyRoot) -> Iterable[Path]:
+    return root.path.rglob('*.md') if root.framework else root_policy_files(root.path)
+
+
+def _find_in(root: PolicyRoot, name: str, parents: Optional[List[str]]) -> Optional[Path]:
+    for md_file in _files_of(root):
         if md_file.name == name:
             if parents:
-                path_parts = md_file.relative_to(root).parts[:-1]
+                path_parts = md_file.relative_to(root.path).parts[:-1]
                 if all(p in path_parts for p in parents):
                     return md_file
             else:
@@ -357,13 +377,13 @@ def find_policy_file(
     if root_name is not None:
         for root in roots:
             if root.name == root_name:
-                return _find_in(root.path, name, parents)
+                return _find_in(root, name, parents)
         return None
 
     framework_hit = None
     extra_hits = []
     for root in roots:
-        hit = _find_in(root.path, name, parents)
+        hit = _find_in(root, name, parents)
         if hit is None:
             continue
         if root.framework:
@@ -413,7 +433,7 @@ def _list_root(root: PolicyRoot, tier: Optional[str], category: Optional[str],
                include_tier: bool) -> List[Dict[str, Any]]:
     base_path = root.path
     policies = []
-    for md_file in base_path.rglob('*.md'):
+    for md_file in _files_of(root):
         rel_path = md_file.relative_to(base_path)
         path_parts = rel_path.parts
 
@@ -593,6 +613,10 @@ def load_merged_manifest(maceff_root: Optional[Path] = None) -> Dict[str, Any]:
 
     return manifest
 
+#: Keys a manifest can hold that declare nothing about triggers.
+MANIFEST_METADATA_KEYS = {"version", "description", "extends", "comment"}
+
+
 def personal_task_policies(task_type: str) -> List[str]:
     """The agent's own policies it declared for this task type, as ``<root>:<name>``.
 
@@ -605,20 +629,32 @@ def personal_task_policies(task_type: str) -> List[str]:
     path = root.path / "manifest.json" if root else None
     if path is None or not path.exists():
         return []
+    if not path.resolve().is_relative_to(root.path.resolve()):
+        _report_once(f"{path} skipped: a symlink out of its root. A manifest says what gets "
+                     f"surfaced, so it must be a file in the root (policy_awareness 4.4)")
+        return []
     try:
-        entries = json.loads(path.read_text(encoding="utf-8")).get("personal_policies", [])
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        entries = manifest.get("personal_policies", [])
         if not isinstance(entries, list):
             raise ValueError("personal_policies is not a list")
     except (OSError, ValueError, AttributeError) as e:
         _report_once(f"{path} can't be used: {e}")
         return []
+    if "personal_policies" not in manifest and set(manifest) - MANIFEST_METADATA_KEYS:
+        _report_once(f"{path} declares no triggers: it has {sorted(manifest)} and no "
+                     f"personal_policies. Each entry is {{\"name\": ..., \"task_types\": [...]}}")
     found = []
     for entry in entries:
+        # An entry with no task_types is an older template's listing, which declares no trigger.
+        # Reporting it here would repeat on every task start; `policy check` says it once.
+        if isinstance(entry, dict) and "task_types" not in entry:
+            continue
         name = entry.get("name") if isinstance(entry, dict) else None
-        types = entry.get("task_types", []) if isinstance(entry, dict) else None
+        types = entry.get("task_types") if isinstance(entry, dict) else None
         if not isinstance(name, str) or not isinstance(types, list):
             _report_once(f"{path}: an entry needs a name and a task_types list: {entry!r}")
-        elif not _find_in(root.path, f"{name}.md", None):
+        elif not _find_in(root, f"{name}.md", None):
             _report_once(f"{path} declares {name!r}, and {root.path} has no {name}.md")
         elif task_type in types:
             found.append(f"{root.name}:{name}")

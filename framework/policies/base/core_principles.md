@@ -479,9 +479,11 @@ Why the hooks diff at all: a block that is ninety percent unchanged trains the e
 ### 5.1 Policy Governance
 
 **Policy Layers**:
-1. **Personal**: Your earned wisdom, augmenting the rest; it never replaces a policy or lifts a boundary
-2. **Project**: Project-specific customizations
-3. **Core**: Framework foundation (mandatory + optional)
+- **Core**: Framework foundation (mandatory + optional)
+- **Project**: Project-specific customizations
+- **Personal**: Your earned wisdom, augmenting the rest; it never replaces a policy or lifts a boundary
+
+Core is the foundation. A project's manifest selects which layers apply. A personal policy adds to them and never replaces one.
 
 **Mandatory vs Optional**:
 - **Mandatory** (4 policies): Always active, must understand
@@ -490,7 +492,7 @@ Why the hooks diff at all: a block that is ninety percent unchanged trains the e
 
 **Constitutional Authority**:
 - Core policies provide framework governance
-- Personal policies are yours to write and keep, and guide how you work within that governance
+- An agent's personal policies are its own, and guide how it works within that governance. Others don't edit them without the agent and the operator
 
 ### 5.2 Git Discipline
 
