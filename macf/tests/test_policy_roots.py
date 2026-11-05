@@ -198,10 +198,11 @@ def test_a_non_sticky_directory_above_the_root_writable_by_all_is_refused(roots,
         a.parent.chmod(0o755)
 
 
-def test_a_symlink_out_of_the_root_into_an_open_directory_refuses_the_root(roots, monkeypatch, tmp_path, capsys):
+def test_a_symlink_out_of_the_root_is_never_read_and_the_rest_of_the_root_is(roots, monkeypatch, tmp_path, capsys):
     """The swap through a link (#592 review): the link's target is this user's and not
     writable, but its directory is open and not sticky, so any account could unlink the
-    target and put its own file there. A root's policies are the files in the root."""
+    target and put its own file there. A root's policies are the files in the root. That
+    reason covers the linked file, so it is the file that's refused, by every way of reading."""
     open_dir = tmp_path / "open"
     open_dir.mkdir()
     target = open_dir / "target.md"
@@ -212,13 +213,31 @@ def test_a_symlink_out_of_the_root_into_an_open_directory_refuses_the_root(roots
     (a / "linked.md").symlink_to(target)
     _set(monkeypatch, f"agentcad={a}")
     try:
-        assert mf.extra_policy_roots() == []
-        assert mf.find_policy_file("agentcad-usage") is None
+        assert [r.name for r in mf.extra_policy_roots()] == ["agentcad"]
+        assert mf.find_policy_file("agentcad-usage") is not None
+        assert mf.find_policy_file("linked") is None
+        assert mf.find_policy_file("agentcad:linked") is None
+        assert not [p for p in mf.list_policy_files() if p.get("name") == "linked"]
         err = capsys.readouterr().err
-        assert "policy root 'agentcad' skipped" in err
-        assert f"{a / 'linked.md'} is a symlink to {target.resolve()}, outside the root" in err
+        assert f"policy {a / 'linked.md'} skipped: a symlink to {target.resolve()}" in err
+        assert "policy root 'agentcad' skipped" not in err
     finally:
         open_dir.chmod(0o755)
+
+
+def test_search_and_the_index_leave_out_a_symlink_out_of_the_root(roots, monkeypatch, tmp_path):
+    """The reach this branch adds must not read what the root refuses: the linked text is
+    someone else's to change, and search and recommend would put it in front of the agent."""
+    from macf.hybrid_search.policy_indexer import PolicyIndexer
+    target = tmp_path / "elsewhere.md"
+    target.write_text("# kept elsewhere\nquokkaword\n")
+    (roots.a / "linked.md").symlink_to(target)
+    _set(monkeypatch, f"agentcad={roots.a}")
+    assert mf.policy_content_matches("quokkaword") == []
+    indexer = PolicyIndexer.__new__(PolicyIndexer)
+    indexer.extractor = type("All", (), {"should_index": staticmethod(lambda p: True)})()
+    names = [n for _, n in indexer._sources(tmp_path / "no_framework", [("agentcad", roots.a)])]
+    assert "agentcad:linked" not in names and names, names
 
 
 def test_a_symlink_that_stays_inside_the_root_is_allowed(roots, monkeypatch):
@@ -456,6 +475,41 @@ def test_a_real_index_holds_both_tables_named_by_root(roots, tmp_path):
 def _declare(root, *entries):
     import json
     (root / "manifest.json").write_text(json.dumps({"personal_policies": list(entries)}))
+
+
+def test_a_manifest_in_another_shape_is_reported_naming_what_it_found(roots, capsys):
+    """Read as empty it would look exactly like an agent that declared nothing."""
+    import json
+    root = _personal()
+    (root / "manifest.json").write_text(json.dumps({"version": "1", "policies": [{"file": "merging.md"}]}))
+    assert mf.personal_task_policies("TASK") == []
+    err = capsys.readouterr().err
+    assert "declares no triggers" in err and "policies" in err and "task_types" in err
+
+
+def test_a_manifest_of_metadata_alone_is_quiet(roots, capsys):
+    import json
+    (_personal() / "manifest.json").write_text(json.dumps({"version": "1", "description": "mine"}))
+    assert mf.personal_task_policies("TASK") == []
+    assert "MACF" not in capsys.readouterr().err
+
+
+def test_an_older_template_entry_declares_no_trigger_and_is_quiet_at_task_start(roots, capsys):
+    """It would otherwise report on every task start, since each CLI call is a new process."""
+    _declare(_personal(), {"path": "merging.md", "CEP_triggers": ["merge"]},
+             {"name": "merging", "task_types": ["TASK"]})
+    assert mf.personal_task_policies("TASK") == ["personal:merging"]
+    assert "MACF" not in capsys.readouterr().err
+
+
+def test_a_manifest_linked_out_of_the_root_declares_nothing(roots, tmp_path, capsys):
+    """A manifest says what gets surfaced, and whoever can write the target could change that."""
+    import json
+    elsewhere = tmp_path / "elsewhere.json"
+    elsewhere.write_text(json.dumps({"personal_policies": [{"name": "merging", "task_types": ["TASK"]}]}))
+    (_personal() / "manifest.json").symlink_to(elsewhere)
+    assert mf.personal_task_policies("TASK") == []
+    assert "symlink out of its root" in capsys.readouterr().err
 
 
 def _manifest(mapping):
