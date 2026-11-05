@@ -11,7 +11,7 @@ Uses BaseIndexer for the generic documents table.
 
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 try:
     import lancedb
@@ -75,12 +75,18 @@ class PolicyIndexer:
         self,
         policies_dir: Path,
         db_path: Path,
+        extra_roots: Sequence[tuple[str, Path]] = (),
     ) -> dict[str, Any]:
         """Build complete policy index with documents and questions tables.
+
+        The index stays in the agent's own home, and ``extra_roots`` are this agent's: a
+        personal policy never reaches another agent's index.
 
         Args:
             policies_dir: Directory containing policy markdown files
             db_path: Output LanceDB directory path
+            extra_roots: (name, directory) of each further root. Its policies are indexed as
+                ``name:policy``, so a recommendation can be pasted into ``policy navigate``.
 
         Returns:
             Stats dict with:
@@ -92,12 +98,16 @@ class PolicyIndexer:
         start_time = time.time()
 
         # Step 1: Use BaseIndexer for documents table
-        print("=== Phase 1: Building documents table (via BaseIndexer) ===")
-        doc_stats = self.base_indexer.build_index(policies_dir, db_path)
+        print("=== Phase 1: Building documents table ===")
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        documents = self.collect_documents(policies_dir, extra_roots)
+        if not documents:
+            raise ValueError(f"No documents found in {policies_dir}")
+        doc_stats = self.base_indexer.index_documents(documents, str(db_path), progress=True)
 
         # Step 2: Build questions table (policy-specific)
         print("\n=== Phase 2: Building questions table (policy-specific) ===")
-        questions_stats = self._build_questions_table(policies_dir, db_path)
+        questions_stats = self._build_questions_table(policies_dir, db_path, extra_roots)
 
         total_time = time.time() - start_time
 
@@ -116,10 +126,34 @@ class PolicyIndexer:
 
         return stats
 
+    def _sources(self, policies_dir: Path, extra_roots: Sequence[tuple[str, Path]]):
+        """Each policy file to index, with the name it is indexed under, once per name."""
+        seen = set()
+        for prefix, root in [("", policies_dir), *((f"{n}:", p) for n, p in extra_roots)]:
+            for path in sorted(root.glob("**/*.md")):
+                name = f"{prefix}{path.stem}"
+                if name not in seen and self.extractor.should_index(path):
+                    seen.add(name)
+                    yield path, name
+
+    def collect_documents(self, policies_dir: Path,
+                          extra_roots: Sequence[tuple[str, Path]] = ()) -> list[dict[str, Any]]:
+        """Every policy as a document ready to embed, named by its root outside the framework."""
+        documents = []
+        for path, name in self._sources(policies_dir, extra_roots):
+            try:
+                doc = {**self.extractor.extract_document(path), "policy_name": name}
+            except (IOError, KeyError) as e:
+                print(f"Error indexing {path}: {e}")
+                continue
+            documents.append({**doc, "content": self.extractor.generate_embedding_text(doc)})
+        return documents
+
     def _build_questions_table(
         self,
         policies_dir: Path,
         db_path: Path,
+        extra_roots: Sequence[tuple[str, Path]] = (),
     ) -> dict[str, Any]:
         """Build questions table for CEP section targeting.
 
@@ -135,17 +169,11 @@ class PolicyIndexer:
         """
         start_time = time.time()
 
-        # Find all policy files
-        policy_files = list(policies_dir.glob("**/*.md"))
-        policy_files = [f for f in policy_files if self.extractor.should_index(f)]
-
-        # Extract questions from all policies
+        # Find all policy files, and extract their questions
+        policy_files = list(self._sources(policies_dir, extra_roots))
         all_questions = []
-        for pf in policy_files:
+        for pf, policy_name in policy_files:
             content = pf.read_text(encoding="utf-8")
-            policy_name = pf.stem
-
-            # Use extractor's question extraction
             questions = self.extractor.extract_questions(content, policy_name)
             all_questions.extend(questions)
 

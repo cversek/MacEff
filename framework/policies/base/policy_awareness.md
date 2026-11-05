@@ -371,7 +371,7 @@ A root that fails is refused once, naming the path and why. The framework's own 
 
 **What is refused at the root.** An entry whose directory is missing or unreadable, whose name is empty, contains `/` or `:`, or is `framework`, or repeats an earlier entry's name, or that someone else could write, or that holds a symlink out of it (above), is reported once and left out. It's never skipped silently, because "no policies found" and "this root couldn't be read" send a reader to different places.
 
-**Not covered yet:** `macf_tools policy search` and the search index read the framework's manifest, which extra roots don't have. A package's policies are found by name and by `list`, not by keyword search.
+**Search reaches every root.** `macf_tools policy search` also reports which policies say the word, in any root this agent reads. `policy build_index` indexes every root, so `policy recommend` can return `<root>:<policy>`, ready to paste into `navigate`. The index is the agent's own, in its home, so one agent's personal policies never appear in another's results. An index older than a policy says so when `recommend` runs; rebuild it with `policy build_index`.
 
 **Every agent has one root without asking: its own.** `{agent_home}/agent/policies/personal` is a root named `personal`, with no configuration. Read its policies as `personal:<policy>`. A directory with no policy in it is silent, since most agents have none. One that holds policies meets the same bar as any root, and a refusal says why. An explicit `MACEFF_POLICY_ROOTS` entry with this name or this directory takes its place.
 
