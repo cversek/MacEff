@@ -182,6 +182,47 @@ def policy_roots(maceff_root: Optional[Path] = None) -> List[PolicyRoot]:
     return roots + ([personal] if personal else []) + extras
 
 
+def policy_content_matches(keyword: str, maceff_root: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """Which policies say ``keyword``, across every root this agent reads, most mentions first.
+
+    Each result: ``root``, ``name`` (qualified outside the framework, so it can be pasted into
+    ``policy navigate``), ``count``, and ``line``, the first line that says it."""
+    needle = keyword.lower()
+    found = []
+    for root in policy_roots(maceff_root):
+        for md_file in root.path.rglob("*.md"):
+            try:
+                text = md_file.read_text(encoding="utf-8", errors="replace")
+            except OSError as e:
+                _report_once(f"policy search could not read {md_file} ({e})")
+                continue
+            lines = [line.strip() for line in text.splitlines() if needle in line.lower()]
+            if lines:
+                name = md_file.stem if root.framework else f"{root.name}:{md_file.stem}"
+                found.append({"root": root.name, "name": name, "count": len(lines), "line": lines[0]})
+    return sorted(found, key=lambda f: (-f["count"], f["name"]))
+
+
+def policies_newer_than_index(db_path: Path, maceff_root: Optional[Path] = None) -> List[str]:
+    """Policies changed since the index at ``db_path`` was built, by name. A missing index says
+    nothing here: the search that needs it reports that itself."""
+    try:
+        built = max((p.stat().st_mtime for p in db_path.iterdir()), default=None)
+    except OSError:
+        return []
+    if built is None:
+        return []
+    newer = []
+    for root in policy_roots(maceff_root):
+        for md_file in root.path.rglob("*.md"):
+            try:
+                if md_file.stat().st_mtime > built:
+                    newer.append(md_file.stem if root.framework else f"{root.name}:{md_file.stem}")
+            except OSError as e:
+                _report_once(f"could not check {md_file} against the policy index ({e})")
+    return sorted(newer)
+
+
 def get_framework_policies_path(maceff_root: Optional[Path] = None) -> Optional[Path]:
     """
     Get the framework policies root path for container or host.

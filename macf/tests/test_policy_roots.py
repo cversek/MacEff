@@ -314,3 +314,131 @@ def test_the_cli_lists_and_reads_the_agents_own_root(roots, tmp_path):
     read = run("policy", "read", "personal:merging")
     assert read.returncode == 0, read.stderr
     assert "Mine" in read.stdout
+
+
+# --- search and the index reach every root, and only this agent's ----------------------------------
+
+
+def test_search_finds_a_word_in_any_root_and_names_it_so_it_can_be_pasted(roots, monkeypatch):
+    a = roots.a
+    (a / "agentcad-usage.md").write_text("# agentcad usage\nPin the head: Match-Head-Commit\n")
+    _set(monkeypatch, f"agentcad={a}")
+    (roots.fw / "base" / "development" / "task_management.md").write_text("no such word\n")
+    matches = mf.policy_content_matches("match-head-commit")
+    assert [m["name"] for m in matches] == ["agentcad:agentcad-usage"]
+    assert matches[0]["count"] == 1 and "Pin the head" in matches[0]["line"]
+    assert mf.find_policy_file(matches[0]["name"]) == a / "agentcad-usage.md"
+
+
+def test_search_ranks_by_mentions_and_finds_framework_words_too(roots):
+    root = _personal()
+    (root / "merging.md").write_text("pin\npin\n")
+    (roots.fw / "base" / "development" / "task_management.md").write_text("pin\n")
+    assert [m["name"] for m in mf.policy_content_matches("pin")] == ["personal:merging", "task_management"]
+
+
+def test_another_agents_policies_are_not_searched_or_found(roots, tmp_path):
+    """Search reads this agent's roots. Another agent's home is not one of them."""
+    _personal()
+    other = tmp_path / "other_agent" / "agent" / "policies" / "personal"
+    other.mkdir(parents=True)
+    (other / "secret.md").write_text("# the other agents rule: zebra\n")
+    assert mf.policy_content_matches("zebra") == []
+    assert mf.find_policy_file("secret") is None
+    assert mf.find_policy_file("personal:secret") is None
+
+
+def test_policies_newer_than_the_index_are_named(roots, tmp_path):
+    root = _personal()
+    db = tmp_path / "index.lance"
+    assert mf.policies_newer_than_index(db) == []          # no index: not this function's report
+    (db / "documents.lance").mkdir(parents=True)
+    built = (db / "documents.lance").stat().st_mtime
+    for f in [root / "merging.md", roots.fw / "base" / "development" / "task_management.md"]:
+        os.utime(f, (built - 10, built - 10))
+    assert mf.policies_newer_than_index(db) == []
+    os.utime(root / "merging.md", (built + 10, built + 10))
+    assert mf.policies_newer_than_index(db) == ["personal:merging"]
+
+
+def test_the_index_names_each_policy_by_its_root_and_holds_only_this_agents(roots):
+    pytest.importorskip("lancedb")
+    pytest.importorskip("sentence_transformers")
+    from macf.hybrid_search.policy_indexer import PolicyIndexer
+    root = _personal()
+    (root / "task_management.md").write_text("# My own task rules\n")
+    indexer = PolicyIndexer()
+    names = [d["policy_name"] for d in indexer.collect_documents(roots.fw, [("personal", root)])]
+    assert sorted(names) == ["personal:merging", "personal:task_management", "task_management"]
+    assert all("content" in d for d in indexer.collect_documents(roots.fw, [("personal", root)]))
+    assert [d["policy_name"] for d in indexer.collect_documents(roots.fw)] == ["task_management"]
+
+
+def test_the_cli_search_prints_who_says_it(roots, capsys):
+    from argparse import Namespace
+    from macf import cli
+    root = _personal()
+    (root / "merging.md").write_text("Pin it with match-head-commit\n")
+    assert cli.cmd_policy_search(Namespace(keyword="match-head-commit")) == 0
+    out = capsys.readouterr().out
+    assert "personal:merging (1): Pin it with match-head-commit" in out
+    assert "No matches found" not in out
+
+
+def test_recommend_says_when_the_index_is_older_than_a_policy(roots, monkeypatch, capsys):
+    from argparse import Namespace
+    from macf import cli
+    from macf import search_service
+    root = _personal()
+    db = mf.find_agent_home() / ".maceff" / "policy_index.lance"
+    (db / "documents.lance").mkdir(parents=True)
+    built = (db / "documents.lance").stat().st_mtime
+    os.utime(roots.fw / "base" / "development" / "task_management.md", (built - 10, built - 10))
+    os.utime(root / "merging.md", (built + 10, built + 10))
+    monkeypatch.setattr("macf.search_service.client.query_search_service",
+                        lambda *a, **k: {"formatted": "ok", "explanations": []})
+    cli.cmd_policy_recommend(Namespace(query="about to merge a pull request", limit=5, explain=False, json_output=False))
+    err = capsys.readouterr().err
+    assert "personal:merging" in err and "macf_tools policy build_index" in err
+
+
+def test_build_index_passes_this_agents_roots_unless_a_directory_is_named(roots, monkeypatch, tmp_path):
+    pytest.importorskip("lancedb")
+    pytest.importorskip("sentence_transformers")
+    from argparse import Namespace
+    from macf import cli
+    import macf.hybrid_search as hybrid_search
+    root = _personal()
+    seen = []
+
+    class Fake:
+        def __init__(self, manifest_path=None):
+            pass
+
+        def build_index(self, policies_dir, db_path, extra_roots=()):
+            seen.append(list(extra_roots))
+            return {}
+
+    monkeypatch.setattr(hybrid_search, "PolicyIndexer", Fake)
+    db = str(tmp_path / "x.lance")
+    cli.cmd_policy_build_index(Namespace(policies_dir=None, db_path=db, json_output=True))
+    cli.cmd_policy_build_index(Namespace(policies_dir=str(roots.fw), db_path=db, json_output=True))
+    assert seen == [[("personal", root)], []]
+
+
+def test_a_real_index_holds_both_tables_named_by_root(roots, tmp_path):
+    pytest.importorskip("lancedb")
+    pytest.importorskip("sentence_transformers")
+    import lancedb
+    from macf.hybrid_search.policy_indexer import PolicyIndexer
+    root = _personal()
+    (root / "merging.md").write_text(
+        "# Merging\n\n## CEP Navigation Guide\n\n**1 Authority**\n- May I merge this?\n\n"
+        "=== CEP_NAV_BOUNDARY ===\n\n## 1 Authority\n\nYes.\n")
+    db_path = tmp_path / "index.lance"
+    PolicyIndexer().build_index(roots.fw, db_path, extra_roots=[("personal", root)])
+    db = lancedb.connect(str(db_path))
+    docs = db.open_table("documents").to_arrow().column("policy_name").to_pylist()
+    questions = db.open_table("questions").to_arrow().column("policy_name").to_pylist()
+    assert "personal:merging" in docs and "task_management" in docs
+    assert set(questions) == {"personal:merging"}
