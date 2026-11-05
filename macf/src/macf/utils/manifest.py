@@ -593,6 +593,51 @@ def load_merged_manifest(maceff_root: Optional[Path] = None) -> Dict[str, Any]:
 
     return manifest
 
+def policy_format_findings(text: str) -> List[str]:
+    """What a policy lacks against the policy_writing format, so ``navigate`` can find its way:
+    the header, the CEP guide and its boundary, and a section for each number the guide promises.
+    A section the guide doesn't name is fine: Integration and Anti-Patterns usually aren't."""
+    import re
+    findings = []
+    head = text[:800]
+    for field in ("Type", "Scope", "Status"):
+        if not re.search(rf"^\*\*{field}\*\*:", head, re.M):
+            findings.append(f"header has no **{field}**")
+    if "=== CEP_NAV_BOUNDARY ===" not in text:
+        if "## CEP Navigation Guide" not in text:
+            findings.append("no CEP Navigation Guide")
+        findings.append("no === CEP_NAV_BOUNDARY ===, so navigate reads the whole policy")
+        return findings
+    guide, body = text.split("=== CEP_NAV_BOUNDARY ===", 1)
+    if "## CEP Navigation Guide" not in guide:
+        findings.append("no CEP Navigation Guide")
+    promised = re.findall(r"^(?:\*\*)?(\d+(?:\.\d+)*) ", guide, re.M)   # bold or plain: both navigate
+    if not promised:
+        findings.append("the CEP guide has no numbered topics")
+    sections = set(re.findall(r"^#{2,4} (\d+(?:\.\d+)*)\.? ", body, re.M))
+    for number in promised:
+        if number not in sections:
+            findings.append(f"the CEP guide promises {number}, and no section has that number")
+    return findings
+
+
+def check_policies(name: Optional[str] = None, maceff_root: Optional[Path] = None) -> Dict[str, List[str]]:
+    """Format findings by policy, for one policy or every policy this agent reads. An empty list
+    means it passed. README.md isn't a policy, and a name that resolves to nothing raises."""
+    if name is not None:
+        path = find_policy_file(name, maceff_root=maceff_root)
+        if path is None:
+            raise LookupError(f"policy not found: {name}")
+        return {name: policy_format_findings(path.read_text(encoding="utf-8", errors="replace"))}
+    results = {}
+    for root in policy_roots(maceff_root):
+        for md_file in sorted(root.path.rglob("*.md")):
+            if md_file.name != "README.md":
+                label = md_file.stem if root.framework else f"{root.name}:{md_file.stem}"
+                results[label] = policy_format_findings(md_file.read_text(encoding="utf-8", errors="replace"))
+    return results
+
+
 def personal_task_policies(task_type: str) -> List[str]:
     """The agent's own policies it declared for this task type, as ``<root>:<name>``.
 
