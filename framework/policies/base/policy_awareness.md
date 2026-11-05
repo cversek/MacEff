@@ -373,6 +373,8 @@ A root that fails is refused once, naming the path and why. The framework's own 
 
 **Not covered yet:** `macf_tools policy search` and the search index read the framework's manifest, which extra roots don't have. A package's policies are found by name and by `list`, not by keyword search.
 
+**Every agent has one root without asking: its own.** `{agent_home}/agent/policies/personal` is a root named `personal`, with no configuration. Read its policies as `personal:<policy>`. A directory with no policy in it is silent, since most agents have none. One that holds policies meets the same bar as any root, and a refusal says why. An explicit `MACEFF_POLICY_ROOTS` entry with this name or this directory takes its place.
+
 **Prefix your files.** A set whose files share a prefix (`agentcad-*.md`) never meets the ambiguity refusal, and its names say where they came from.
 
 ## 5. Practical Usage

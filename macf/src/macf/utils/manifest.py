@@ -8,7 +8,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from .paths import find_maceff_root
+from .paths import find_agent_home, find_maceff_root
 
 #: Extra policy roots, os.pathsep-separated, each ``path`` or ``name=path`` (#592). A package
 #: that ships policy in MacEff's format is read where it lives, never copied into the
@@ -18,12 +18,16 @@ POLICY_ROOTS_ENV = "MACEFF_POLICY_ROOTS"
 #: The framework root's name, for a qualified ``framework:<policy>``. No extra root may take it.
 FRAMEWORK_ROOT_NAME = "framework"
 
+#: The root every agent has without configuring one: its own policies, read as personal:<policy>.
+PERSONAL_ROOT_NAME = "personal"
+
 
 @dataclass(frozen=True)
 class PolicyRoot:
     name: str
     path: Path
     framework: bool = False
+    source: str = POLICY_ROOTS_ENV
 
 
 class PolicyAmbiguous(LookupError):
@@ -142,13 +146,40 @@ def extra_policy_roots(environ=None) -> List[PolicyRoot]:
     return roots
 
 
+def personal_policy_root(extras: List[PolicyRoot]) -> Optional[PolicyRoot]:
+    """The agent's own policies, ``{agent_home}/agent/policies/personal``, with no configuration.
+
+    A directory with no policy in it is silent, since most agents have none, and that test comes
+    first so a shared home without personal policies isn't warned about on every hook. One that
+    holds policies must meet the bar every root meets, and a refusal says why. An explicit
+    ``MACEFF_POLICY_ROOTS`` entry with this name or this directory takes its place."""
+    path = find_agent_home() / "agent" / "policies" / "personal"
+    try:
+        if not path.is_dir() or not any(path.rglob("*.md")):
+            return None
+    except OSError as e:
+        _report_once(f"personal policy root skipped: {path} cannot be read ({e})")
+        return None
+    if any(r.name == PERSONAL_ROOT_NAME or r.path.resolve() == path.resolve() for r in extras):
+        return None
+    unsafe = _writable_by_others(path)
+    if unsafe:
+        _report_once(f"personal policy root skipped: {unsafe}. A policy read from a root becomes the "
+                     f"agent's instructions, so only this user (or root) may be able to write it "
+                     f"(policy_awareness 4.4)")
+        return None
+    return PolicyRoot(PERSONAL_ROOT_NAME, path, source="this agent's home")
+
+
 def policy_roots(maceff_root: Optional[Path] = None) -> List[PolicyRoot]:
-    """Every root policies are read from: the framework's first, then the extra roots."""
+    """Every root policies are read from: the framework's, the agent's own, then the extra roots."""
     roots = []
     framework = get_framework_policies_path(maceff_root)
     if framework:
         roots.append(PolicyRoot(FRAMEWORK_ROOT_NAME, framework, framework=True))
-    return roots + extra_policy_roots()
+    extras = extra_policy_roots()
+    personal = personal_policy_root(extras)
+    return roots + ([personal] if personal else []) + extras
 
 
 def get_framework_policies_path(maceff_root: Optional[Path] = None) -> Optional[Path]:

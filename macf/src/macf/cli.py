@@ -3516,9 +3516,10 @@ def cmd_policy_list(args: argparse.Namespace) -> int:
         else:
             print("All Policies")
         print("=" * 50)
-        from .utils.manifest import extra_policy_roots
-        for root in extra_policy_roots():
-            print(f"  root {root.name}: {root.path} (MACEFF_POLICY_ROOTS; read as {root.name}:<policy>)")
+        from .utils.manifest import policy_roots
+        for root in policy_roots():
+            if not root.framework:
+                print(f"  root {root.name}: {root.path} ({root.source}; read as {root.name}:<policy>)")
 
         if not policies:
             # "None found" and "cannot look" are different facts, and reporting
