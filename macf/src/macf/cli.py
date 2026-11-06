@@ -9292,23 +9292,32 @@ def _gh_issue_closeout(task_id: int, mtmd, args, breadcrumb: str) -> None:
         print("   ⚠️  gh CLI timed out — skipping issue close")
 
 
-def _find_sprint_log(plan_ca_ref: str):
-    """Return Path to sprint_log.md given plan_ca_ref directory, or None."""
+def _find_run_log(plan_ca_ref: str, name: str):
+    """Return Path to the log ``name`` beside a task's plan_ca_ref, or None.
+
+    ``task create`` stores plan_ca_ref relative to the agent home, so a relative one is read
+    against that home, never the working directory. The CLI often runs from a project
+    directory, where the relative path names nothing, and the close used to skip the log
+    without a word. plan_ca_ref may be a file (sprint_log.md) or a directory.
+    """
     from pathlib import Path
+    from macf.utils.paths import find_agent_home
     p = Path(plan_ca_ref)
-    # plan_ca_ref may be a file (roadmap.md) or a directory
+    if not p.is_absolute():
+        p = find_agent_home() / p
     folder = p if p.is_dir() else p.parent
-    candidate = folder / "sprint_log.md"
+    candidate = folder / name
     return candidate if candidate.exists() else None
+
+
+def _find_sprint_log(plan_ca_ref: str):
+    """Return Path to sprint_log.md given plan_ca_ref, or None."""
+    return _find_run_log(plan_ca_ref, "sprint_log.md")
 
 
 def _find_play_log(plan_ca_ref: str):
-    """Return Path to play_log.md given plan_ca_ref directory, or None."""
-    from pathlib import Path
-    p = Path(plan_ca_ref)
-    folder = p if p.is_dir() else p.parent
-    candidate = folder / "play_log.md"
-    return candidate if candidate.exists() else None
+    """Return Path to play_log.md given plan_ca_ref, or None."""
+    return _find_run_log(plan_ca_ref, "play_log.md")
 
 
 def _write_final_synthesis(log_path, aggregate: str, open_children) -> None:
@@ -9802,6 +9811,10 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         if _plan_ref:
             try:
                 _log_path = _find_sprint_log(_plan_ref)
+                if not _log_path:
+                    import sys as _sys
+                    print(f"⚠️ MACF: no sprint_log.md beside {_plan_ref} under the agent home; "
+                          f"its Final Synthesis was not filled", file=_sys.stderr)
                 if _log_path:
                     _write_final_synthesis(_log_path, _aggregate, _open_children if '_open_children' in dir() else [])
                     _fill_scoped_table(_log_path, reader, _scoped)
@@ -9871,6 +9884,10 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
         if _plan_ref:
             try:
                 _log_path = _find_play_log(_plan_ref)
+                if not _log_path:
+                    import sys as _sys
+                    print(f"⚠️ MACF: no play_log.md beside {_plan_ref} under the agent home; "
+                          f"its Final Synthesis was not filled", file=_sys.stderr)
                 if _log_path:
                     _write_final_synthesis(_log_path, _aggregate, [])
             except (OSError, ValueError) as e:
@@ -10244,9 +10261,21 @@ def _amail_config() -> dict:
     # one does not give a compromised agent any reach it did not have. Keeping it
     # out of the broker is what lets a signature mean something to a party that
     # does not trust the broker.
-    cfg.setdefault("signing_key", os.environ.get(
-        "MACF_AMAIL_SIGNING_KEY",
-        str(Path(home) / ".maceff" / "amail_signing_key.pem") if home else ""))
+    #
+    # MIS-0004 R41 puts the key in a 0700 directory of its own. A new key goes
+    # to `.maceff/keys/`, which keygen creates 0700; a key already at the old
+    # place, directly under `.maceff`, keeps working, and `amail key-status`
+    # says to move it.
+    if home and not os.environ.get("MACF_AMAIL_SIGNING_KEY") and "signing_key" not in cfg:
+        legacy = Path(home) / ".maceff" / "amail_signing_key.pem"
+        cfg["signing_key"] = str(legacy if legacy.exists()
+                                 else Path(home) / ".maceff" / "keys" / "amail_signing_key.pem")
+    cfg.setdefault("signing_key", os.environ.get("MACF_AMAIL_SIGNING_KEY", ""))
+    # Whether this agent is declared to sign every message (MIS-0004 R41). When
+    # true, a send with no key is refused; otherwise it goes out unsigned with
+    # a warning, which is the declare step's allowance.
+    cfg.setdefault("signing_required", os.environ.get(
+        "MACF_AMAIL_SIGNING_REQUIRED", "") in ("1", "true", "yes"))
     for k in ("domain", "socket", "agent"):
         if os.environ.get(f"MACF_AMAIL_{k.upper()}"):
             cfg[k] = os.environ[f"MACF_AMAIL_{k.upper()}"]
@@ -10768,6 +10797,37 @@ def cmd_amail_keygen(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_amail_key_status(args: argparse.Namespace) -> int:
+    """Report how this agent's signing key is held (MIS-0004 R41); never its secret."""
+    from macf.amail import key_custody
+
+    cfg = _amail_config()
+    target = Path(args.path) if args.path else Path(cfg.get("signing_key") or "")
+    if not str(target):
+        print("❌ cannot determine where the key would be; pass --path")
+        return 1
+    report = key_custody(target)
+    report["required"] = bool(cfg.get("signing_required"))
+    if args.json:
+        print(json.dumps(report, indent=2))
+        return 0 if report["usable"] or not (report["exists"] or report["required"]) else 1
+    if not report["exists"]:
+        mark = "❌" if report["required"] else "⚠️"
+        print(f"{mark} no signing key at {target}; mail goes out "
+              f"{'refused' if report['required'] else 'unsigned'}. Run `macf_tools amail keygen`.")
+    elif report["usable"]:
+        print(f"✅ signing key at {target} is usable")
+        print(f"   public key, for the operator to declare: {report['public']}")
+    for problem in report["problems"]:
+        print(f"❌ {problem}")
+    for warning in report["warnings"]:
+        print(f"⚠️ {warning}. Move the key into a directory of mode 700 (MIS-0004 R41).")
+    print(f"   declared to sign every message: {'yes' if report['required'] else 'no'}")
+    if report["exists"] and not report["usable"]:
+        return 1
+    return 1 if (report["required"] and not report["exists"]) else 0
+
+
 def _broker_socket_ready(sock: Path, timeout: float = 0.0) -> bool:
     """True when something answers on the broker socket (within timeout)."""
     import socket as _socket
@@ -10899,15 +10959,15 @@ def cmd_amail_send(args: argparse.Namespace) -> int:
     # sending unsigned when the correspondent expects signed is exactly the shape
     # of an impersonation.
     keypath = Path(cfg["signing_key"]) if cfg.get("signing_key") else None
-    if keypath and keypath.exists():
-        from macf.amail import SigningError, load_private_key, sign
-        try:
-            msg.signature = sign(msg, load_private_key(keypath))
-        except SigningError as e:
-            print(f"❌ cannot sign with {keypath}: {e}")
-            print("   Refusing to send unsigned: a correspondent who has your key "
-                  "treats unsigned mail as suspect.")
-            return 1
+    from macf.amail import SigningError, sign_for_submission
+    try:
+        msg.signature = sign_for_submission(
+            msg, keypath, required=bool(cfg.get("signing_required")))
+    except SigningError as e:
+        print(f"❌ cannot sign: {e}")
+        print("   Refusing to send unsigned: a correspondent who has your key "
+              "treats unsigned mail as suspect.")
+        return 1
 
     # SEND BY COPY. The agent keeps its own canonical record BEFORE the broker
     # is asked — amail spec O5c.6 "the-sent-copy-is-written-before-submission" — so a
@@ -11017,21 +11077,36 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
         ingested = ingest(home, box, contacts_path=cfg.get("contacts"),
                           agent=cfg.get("agent") or "")
         ok = sum(1 for r in ingested if r.get("ingested"))
-        stuck = [r for r in ingested if not r.get("ingested")]
+        # An entry another ingest took (the primal daemon's receiver) is in the store, not stuck.
+        stuck = [r for r in ingested if not r.get("ingested") and not r.get("taken")]
         if ok:
             print(f"📥 ingested {ok} message(s) from the pickup box")
         for r in stuck:
             print(f"⚠️  pickup entry NOT ingested: {r['name']}: {r['reason']}")
-    msgs = store.read_all(home)
+    # Unread is what waits in the store's `new` (the read cursor, MIS-0004 R26). The listing
+    # shows that by default, with a count of the rest, so a wake doesn't cost the whole
+    # mailbox (R30). A thread is shown whole, since a reply needs its context.
+    unread = set(store.unread_names(home))
+    every = getattr(args, "all", False) or bool(args.thread)
+    msgs = store.read_all(home, include_seen=every)
     if args.thread:
         msgs = [m for m in msgs if m.thread_id == args.thread]
     internet = list_delivered_internet(home)
+    read_count = (len(store.read_all(home)) - len(store.read_all(home, include_seen=False))
+                  + sum(1 for i in internet if i["name"] not in unread))
+    if not every:
+        internet = [i for i in internet if i["name"] in unread]
     if args.json:
         print(json.dumps({"messages": [m.to_dict() for m in msgs],
-                          "internet": internet}, indent=2))
+                          "internet": internet,
+                          "read_not_shown": 0 if every else read_count}, indent=2))
         return 0
     if not msgs and not internet:
-        print("(no messages)")
+        if every:
+            print("(no messages)")
+        else:
+            print("(no unread messages" + (f"; {read_count} read, `amail list --all` shows them)"
+                                           if read_count else ")"))
         return 0
     for m in msgs:
         print(f"{_term_safe(m.date)}  {_term_safe(m.sender)}  {_trust_badge(m)}")
@@ -11051,8 +11126,21 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
         print(f"    {_term_safe(str(obs.get('subject', '(no subject)')))}")
         print(f"    sha={_term_safe(str(sc.get('raw_sha256', '?'))[:16])} "
               f"class={_term_safe(str(authz.get('outcome', '?')))}")
-    print(f"\n{len(msgs)} bundle message(s), {len(internet)} internet message(s)")
+    print(f"\n{len(msgs)} bundle message(s), {len(internet)} internet message(s)"
+          + (f"; and {read_count} read, not shown (`amail list --all`)" if read_count and not every else ""))
     return 0
+
+
+def _reader_card(home: Path) -> str:
+    """The calling card of the home doing the read, from its identity file, for the record
+    of who moved the read cursor; never from the environment."""
+    from macf.pd.interface import IdentityError, agent_card
+    try:
+        return agent_card(home)
+    except IdentityError as e:
+        print(f"⚠️ MACF: amail: this home names no agent ({e}); the read is recorded as "
+              f"by an unknown reader", file=sys.stderr)
+        return "unknown"
 
 
 def cmd_amail_read(args: argparse.Namespace) -> int:
@@ -11099,6 +11187,7 @@ def cmd_amail_read(args: argparse.Namespace) -> int:
                   f"  reason={_term_safe(str(authz.get('reason', '?')))}")
             print(f"sha256={_term_safe(str(sc.get('raw_sha256', '?')))}")
             print(_term_safe(raw.decode("utf-8", "replace")))
+            store.mark_read(home, args.message_id, _reader_card(home))
             return 0
         print("❌ no such message")
         return 1
@@ -11107,13 +11196,16 @@ def cmd_amail_read(args: argparse.Namespace) -> int:
         if own is not None:
             doc["submission"] = own[1]
         print(json.dumps(doc, indent=2))
-        return 0
-    # The badge is printed from stored metadata BEFORE the message, and the
-    # message body is neutralised so it cannot redraw what was already shown.
-    # Both halves are needed: a label the body can forge is decorative, and a
-    # label the body can erase is worse.
-    print(_sent_badge(own[1]) if own is not None else _trust_badge(m))
-    print(_term_safe(m.serialize()))
+    else:
+        # The badge is printed from stored metadata BEFORE the message, and the
+        # message body is neutralised so it cannot redraw what was already shown.
+        # Both halves are needed: a label the body can forge is decorative, and a
+        # label the body can erase is worse.
+        print(_sent_badge(own[1]) if own is not None else _trust_badge(m))
+        print(_term_safe(m.serialize()))
+    if own is None:
+        # Printed, so read: the cursor passes it, in this home's own store only (R26).
+        store.mark_read(home, m.message_id, _reader_card(home))
     return 0
 
 
@@ -11160,7 +11252,7 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
             _resp = _status(sock)
             if _resp.get("ok"):
                 counts = {k: _resp.get(k) for k in
-                          ("quarantined", "pending_pickup", "budget")}
+                          ("quarantined", "pending_pickup", "oldest_pending_s", "budget")}
             else:
                 # An explicit refusal is not the same fact as an unreachable
                 # broker, and swallowing it made the two indistinguishable —
@@ -11204,8 +11296,10 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
     # transfer — the one count that calls for an action, so it gets its own
     # line rather than a slot in the summary.
     if counts is not None and counts.get("pending_pickup"):
+        _age = counts.get("oldest_pending_s")
         print(f"📬 {counts['pending_pickup']} message(s) waiting in your pickup "
-              f"box — `amail list` ingests them into your own store.")
+              f"box" + (f", the oldest for {_age // 60} min" if _age is not None else "")
+              + " — `amail list` ingests them into your own store.")
     # THE BUDGET, BEFORE THE WALL (amail spec O5b.6b). The threat case for the
     # rate limit is the well-intentioned under-scoped sender, and a control
     # aimed at good faith that good faith cannot see is discoverable only by
@@ -12103,6 +12197,13 @@ def cmd_knowledge_link(args: argparse.Namespace) -> int:
     else:
         print(f"ℹ️  {r.target}: nothing to change")
     print(f"   Concepts: {', '.join(r.concepts) if r.concepts else '(none)'}")
+    if r.kind == "mail":
+        from .knowledge_web import sidecar_path
+        print(f"   Links kept in {sidecar_path(Path(r.target))}; a message is never edited (amail policy)")
+        if r.still_inline:
+            print(f"   ⚠️  the message itself links {', '.join(r.still_inline)}, so it stays linked; "
+                  f"a sent message keeps its bytes")
+        return 0
     if r.still_inline:
         print(f"   ⚠️  still used inline in the prose, so still linked: {', '.join(r.still_inline)} "
               f"(inline uses are the author's; edit the passage if the link should go)")
@@ -13459,7 +13560,9 @@ def _build_parser() -> argparse.ArgumentParser:
     amail_send.set_defaults(func=cmd_amail_send)
 
     amail_list = amail_sub.add_parser("list", help="list messages in this mailbox")
-    amail_list.add_argument("--thread", metavar="THREAD_ID", help="only this thread")
+    amail_list.add_argument("--thread", metavar="THREAD_ID", help="only this thread, read or not")
+    amail_list.add_argument("--all", action="store_true",
+                            help="read messages too; by default only unread ones are listed")
     amail_list.add_argument("--json", action="store_true", help="machine-readable output")
     amail_list.set_defaults(func=cmd_amail_list)
 
@@ -13471,8 +13574,15 @@ def _build_parser() -> argparse.ArgumentParser:
     amail_keygen = amail_sub.add_parser(
         "keygen", help="generate this agent's authorship signing key")
     amail_keygen.add_argument("--path", help="where to write the private key "
-                                            "(default: ~/.maceff/amail_signing_key.pem)")
+                                            "(default: .maceff/keys/amail_signing_key.pem "
+                                            "in the agent home, in a directory of mode 700)")
     amail_keygen.set_defaults(func=cmd_amail_keygen)
+
+    amail_key_status = amail_sub.add_parser(
+        "key-status", help="report how this agent's signing key is held, never its secret")
+    amail_key_status.add_argument("--path", help="the key to check (default: the configured one)")
+    amail_key_status.add_argument("--json", action="store_true", help="machine-readable output")
+    amail_key_status.set_defaults(func=cmd_amail_key_status)
 
     amail_preflight = amail_sub.add_parser(
         "preflight", help="scan a hand-carried bundle before it leaves the host",

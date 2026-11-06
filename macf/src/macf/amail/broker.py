@@ -913,7 +913,8 @@ class Broker:
                 continue
         return False
 
-    def hand_off(self, agent: str, message: Message, trust: str) -> Path:
+    def hand_off(self, agent: str, message: Message, trust: str,
+                 via: str = "") -> Path:
         """Hand a delivered message into the recipient's pickup box.
 
         UNIFIED DELIVERY. This replaced a direct write into the recipient's
@@ -976,7 +977,7 @@ class Broker:
         # The one place every delivery to a local box passes (rung 1, the
         # internet path's accept_inbound, the peer-intake sweep), so it is
         # where "this agent has this message" is written down.
-        self.record_seen(agent, message, "received")
+        self.record_seen(agent, message, "received", via=via)
         return written
 
     @staticmethod
@@ -1622,7 +1623,8 @@ class Broker:
         return TrustClass.DOMAIN_AUTH if domain_authenticated else TrustClass.UNVERIFIED
 
     def accept_inbound(self, message: Message, recipient: str,
-                       via: str = "", *, rung: str = "shared") -> Dict[str, Any]:
+                       via: str = "", *, rung: str = "shared",
+                       keep_peer_id: bool = False) -> Dict[str, Any]:
         # `rung` goes into the audit record (amail.md §3.3). Its one production
         # caller is the shared-rung intake, hence the default; a new inbound path
         # must pass its own.
@@ -1666,7 +1668,51 @@ class Broker:
         strip_inbound_headers(message)
 
         remote_sender = message.sender
-        message.message_id = new_id("msg")
+        # ONE ID FROM ACCEPTANCE TO READ (MIS-0004 R15). On the shared rung the
+        # id was minted by the peer BROKER that accepted the message from its
+        # sender, and that sender's custody copy records it. Re-minting here
+        # gave one message two ids, so the sender's receipt could not be
+        # joined to the recipient's copy, and a pair accepted twice (an
+        # intake unlink that failed) arrived as two messages the receiver's
+        # duplicate drop (R16) could not recognise. So a well-formed peer id
+        # is kept. Anything else is minted fresh, as internet mail always is:
+        # an id from outside MacEff is a sender's claim, and a claimed id can
+        # shadow a real message in find(). Only the peer-intake sweep asks to
+        # keep it (`keep_peer_id`), after checking that the pair came through
+        # a declared peer's intake and that its sender is under that domain.
+        peer_id = message.message_id if keep_peer_id else ""
+        held_via = f"shared:{via}" if keep_peer_id else ""
+        if peer_id and _ID_RE.match(peer_id):
+            held = self.seen(agent, peer_id)
+            if held is not None and not (held.get("direction") == "received"
+                                         and held.get("via") == held_via
+                                         and held.get("sender") == remote_sender):
+                # SAME ID, NOT THE SAME MESSAGE. The held record came by another
+                # route or from another sender. A peer that learned another
+                # domain's id (a message copied to it) could otherwise claim the
+                # id first and have the genuine copy dropped as a duplicate. So
+                # an id is a duplicate only for the route and sender that first
+                # brought it; anything else is a collision, minted fresh.
+                if self.audit:
+                    self.audit.error(context="peer-intake",
+                                     detail=(f"id-collision: {peer_id} for '{agent}' is held "
+                                             f"from {held.get('via') or held.get('direction')} "
+                                             f"by {held.get('sender')}; minted fresh for "
+                                             f"{remote_sender} via {via}"))
+                message.message_id = new_id("msg")
+                peer_id = ""
+            elif held is not None:
+                # Already handed to this recipient: the same message again,
+                # never a second one. Dropped, and recorded so it is visible.
+                if self.audit:
+                    self.audit.inbound(sender=remote_sender, recipient=recipient,
+                                       message_id=peer_id, decision="duplicate-dropped",
+                                       rung=rung, reason=(f"id already held for '{agent}'"
+                                                          + (f"; via {via}" if via else "")))
+                return {"ok": True, "decision": "duplicate-dropped",
+                        "reason": f"id {peer_id} already held for '{agent}'"}
+        else:
+            message.message_id = new_id("msg")
         message.date = _now_iso()
 
         # BOUND EVERY SIGNATURE-COVERED FIELD *BEFORE* THE LABEL IS MINTED.
@@ -1711,6 +1757,11 @@ class Broker:
             # hostile by assumption, and a reader inspecting it should not find
             # it threaded against a real conversation.
             message.parent, message.thread_id = None, new_id("thr")
+            # The id too, even a peer's well-formed one: quarantine names its
+            # files by id and second, so a kept id sent twice would overwrite
+            # the first copy of the evidence. The peer's id goes in the reason.
+            if peer_id and message.message_id == peer_id:
+                message.message_id = new_id("msg")
             # ASKED OF THE CONTACT BOOK rather than composed here. A refusal
             # message built at the call site cannot know WHY the address was
             # refused, so a REVOKED sender — the case worth alerting on —
@@ -1729,7 +1780,9 @@ class Broker:
                 self.audit.inbound(sender=message.sender, recipient=recipient,
                                    message_id=message.message_id,
                                    decision="quarantined", rung=rung,
-                                   reason=(f"{reason}; via {via}" if via else reason),
+                                   reason="; ".join(x for x in (
+                                       reason, f"via {via}" if via else "",
+                                       f"peer id {peer_id}" if peer_id else "") if x),
                                    trust=message.trust)
             return {"ok": True, "decision": "quarantined", "reason": reason}
 
@@ -1770,7 +1823,7 @@ class Broker:
 
         # Same unified path: inbound peer mail is handed off, not written
         # across the boundary.
-        self.hand_off(agent, message, message.trust or "")
+        self.hand_off(agent, message, message.trust or "", via=held_via)
         if self.audit:
             self.audit.inbound(sender=message.sender, recipient=recipient,
                                message_id=message.message_id, decision="delivered",
@@ -1886,7 +1939,8 @@ class Broker:
                           f"speak for its own domain")
         try:
             outcome = self.accept_inbound(message, recipient,
-                                         via=f"shared hand-off from {dom}", rung="shared")
+                                         via=f"shared hand-off from {dom}", rung="shared",
+                                         keep_peer_id=True)
         except Exception as e:  # noqa: BLE001 - the pair must not vanish on an unexpected error
             return reject(f"{type(e).__name__}: {e}")
         try:
@@ -1959,10 +2013,22 @@ class Broker:
                 to = str(meta.get("observed", {}).get("envelope_to", "")).lower()
                 if to == own_addr:
                     quarantined += 1
-        pending_pickup = 0
+        # Every message waiting in the box: agent bundles (*.amsg) as well as internet mail
+        # (*.eml). Counting only *.eml once read two waiting bundles as zero (MIS-0004 R32,
+        # the container prototype). The oldest one's age is what an alert on stuck mail reads.
+        pending_pickup, oldest_pending_s = 0, None
         hdir = self.config.inbound_handoff
         if hdir is not None and (hdir / agent).is_dir():
-            pending_pickup = len(list((hdir / agent).glob("*.eml")))
+            now = time.time()
+            for entry in (hdir / agent).iterdir():
+                if entry.suffix not in (".amsg", ".eml"):
+                    continue
+                try:
+                    age = now - entry.lstat().st_mtime
+                except FileNotFoundError:
+                    continue  # ingested between the listing and the stat
+                pending_pickup += 1
+                oldest_pending_s = max(oldest_pending_s or 0.0, age)
         counts = {
             "quarantined": quarantined,
             "pending_pickup": pending_pickup,
@@ -1996,7 +2062,9 @@ class Broker:
             # auditable fact, the breakdown is in the response.
             self.audit.read(agent=agent, operation="status",
                             count=sum(counts.values()))
-        return {"ok": True, **counts, "budget": budget}
+        # The age stays out of `counts` for the budget's reason: it is summed for the audit total.
+        return {"ok": True, **counts, "budget": budget,
+                "oldest_pending_s": None if oldest_pending_s is None else round(oldest_pending_s)}
 
     def identify(self, conn: socket.socket) -> "Identity":
         """Authenticate the connecting process from kernel-supplied credentials.

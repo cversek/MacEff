@@ -1,8 +1,11 @@
 """Mail left unread past the agent's declared threshold, derived each pass (MIS-0002-R55).
 
-Mail is unread while it sits in the agent's pickup box: ingesting a message takes it out.
-An unread spell starts when the oldest message in the box has waited longer than
-``unread_mail_threshold_s``, and ends when the box is empty. More mail during a spell adds
+Mail is unread while it waits in ``new`` in the agent's own store: reading it moves it to
+``cur``, which is the read cursor (MIS-0004 R26). It was the pickup box once, when nothing
+ingested but the agent's own listing; the primal daemon's receiver now empties the box each
+pass, so the box would hardly ever hold anything to age (MIS-0004 R32, the agent's half).
+An unread spell starts when the oldest unread message has waited longer than
+``unread_mail_threshold_s``, and ends when none is unread. More mail during a spell adds
 nothing, so each declared route hears one notice per spell, not one per message.
 
 **The wait is counted in the recipient's own active time.** A message's wait starts at its
@@ -28,7 +31,6 @@ from typing import Callable, Dict, Iterable, Optional
 
 from macf.agent_events_log import append_event, read_events
 from macf.pd.interface import EVENT_UNREAD_MAIL, EVENT_UNREAD_MAIL_CLEARED, UNREAD_MAIL_SOURCE
-from macf.transcript_monitor.sources import STORE_SUFFIXES
 
 #: ``active_since`` when the agent declares no session: every wait counts from arrival.
 ALWAYS_ACTIVE = float("-inf")
@@ -41,8 +43,9 @@ def pickup_box(agent_home: Path) -> Path:
 
 
 def unread_arrivals(box: Path) -> Optional[Dict[str, float]]:
-    """Each message in *box* by name, with its arrival time (mtime), or None when the box
-    can't be read. A box that doesn't exist yet is empty. Names and times only, never contents."""
+    """Each message in *box* (the store's ``new``) by name, with its arrival time (mtime), or
+    None when it can't be read. One that doesn't exist yet is empty. Names and times only,
+    never contents. A Maildir name has no suffix, so every name but a dot file counts."""
     try:
         entries = list(os.scandir(box))
     except FileNotFoundError:
@@ -53,7 +56,7 @@ def unread_arrivals(box: Path) -> Optional[Dict[str, float]]:
         return None
     times = {}
     for entry in entries:
-        if not entry.name.endswith(STORE_SUFFIXES):
+        if entry.name.startswith("."):
             continue
         try:
             times[entry.name] = entry.stat().st_mtime
@@ -100,7 +103,7 @@ class UnreadMail:
         # goes out that the log (and the operator's watch) doesn't hold. An event that fails
         # to record is tried again next pass.
         if not arrivals:
-            if self.in_spell and self._say(EVENT_UNREAD_MAIL_CLEARED, 0, 0.0, None, "the pickup box is empty"):
+            if self.in_spell and self._say(EVENT_UNREAD_MAIL_CLEARED, 0, 0.0, None, "no mail is unread"):
                 self.in_spell = False
             return
         if self.in_spell or active_since is None:
@@ -110,9 +113,7 @@ class UnreadMail:
         waited = now - max(arrivals[oldest], active_since)
         if waited < self.threshold_s:
             return
-        # The oldest entry is named, since one that `amail list` can't take in (an unreadable
-        # pair, a hash mismatch) stays in the box and holds the spell open: only a person
-        # can clear it, and the name is what they need.
+        # The oldest entry is named, so a person can find the message holding the spell open.
         reason = (f"{len(arrivals)} message(s) unread; the oldest, {oldest}, has waited {waited:.0f} s "
                   f"while the agent ran, past its threshold of {self.threshold_s:g} s")
         if self._say(EVENT_UNREAD_MAIL, len(arrivals), waited, oldest, reason):

@@ -18,14 +18,16 @@ from test_primal_daemon import base, make_home, run_daemon  # noqa: F401 - fixtu
 
 @pytest.fixture(autouse=True)
 def _mail_box_from_the_home(monkeypatch):
-    """These tests put mail in <home>/amail/pickup, the box chosen when nothing names one.
-    Inside a seat MACEFF_AGENT_NAME is set, which would point the daemon elsewhere."""
+    """These tests put unread mail straight into the store's `new`, where the receiver would
+    have ingested it (MIS-0004 R04) and where notices look (R25). With no amail settings
+    there is no receiver; inside a seat MACEFF_AGENT_NAME is set, which must not change that."""
     monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
     monkeypatch.delenv("MACF_AMAIL_HANDOFF", raising=False)
 
 
 def _box(home):
-    box = home / "amail" / "pickup"
+    """The store's unread mail, ``Maildir/new``: what a notice is about."""
+    box = home / "Maildir" / "new"
     box.mkdir(parents=True, exist_ok=True)
     return box
 
@@ -311,7 +313,11 @@ def test_a_source_the_attached_channel_did_not_declare_stays_held(tmp_path, base
     assert not [d for d in _logged(nt.EVENT_DELIVERED) if d["arrival_id"] == ENTRY_ID]
 
     new = _connect(daemon, takes=TAKES)
-    assert [(r.source, r.arrival_id) for r in _records(new)] == [("pd_entry_due", ENTRY_ID)]
+    got = [(r.source, r.arrival_id) for r in _records(new)]
+    assert ("pd_entry_due", ENTRY_ID) in got
+    # The mail the old channel was told about is still unread, so the new attach asserts it
+    # again (MIS-0004 R26); nothing else reaches the new channel.
+    assert sorted(s for s, _ in got) == ["amail", "pd_entry_due"]
     assert _until(lambda: not _entry_owed(daemon))
     declared = _logged("pd_channel_declared")
     assert [sorted(d["takes"]) for d in declared] == [sorted(partial), sorted(TAKES)]
@@ -514,9 +520,9 @@ class _Rig:
 
 
 def _unread(home, threshold=600.0, now=10_000.0, events=()) -> _Rig:
-    from macf.pd.unread_mail import UnreadMail, pickup_box
+    from macf.pd.unread_mail import UnreadMail
     said, notices, clock = [], [], _Clock(now)
-    tracker = UnreadMail("Resident@1a2b3c", threshold, pickup_box(home),
+    tracker = UnreadMail("Resident@1a2b3c", threshold, _box(home),
                          lambda source, nid: notices.append((source, nid)),
                          append=lambda e, d: said.append((e, d)) or True, wall=clock,
                          events=lambda: list(events))
@@ -683,8 +689,8 @@ def test_no_notice_goes_out_without_its_record(tmp_path):
 
 
 def test_the_oldest_entry_is_named(tmp_path):
-    """An entry `amail list` can't take in stays in the box and holds the spell open; the
-    event and its reason name the oldest, so a person can find it."""
+    """The oldest unread message holds the spell open; the event and its reason name it, so
+    a person can find it."""
     home = _home(tmp_path)
     r = _unread(home)
     _arrive(home, "newer", 1_500)
@@ -728,12 +734,18 @@ def test_a_daemon_with_a_threshold_notices_unread_mail(tmp_path, base, run_daemo
     _mail(home, "waiting")
     daemon = run_daemon(home, base)
     assert daemon.unread_mail is not None and daemon.core.session_active_since() == float("-inf")
+
+    def owed():  # a snapshot: the daemon's thread writes this dict while the test reads it
+        return [o.source for o in list(daemon.notifier.owed.values())]
+
+    # The tracker appends the event and only then raises the notice, so wait for both: a loaded
+    # runner can look between the two.
     deadline = time.time() + 5
-    while time.time() < deadline and not list(read_events(only=(EVENT_UNREAD_MAIL,))):
+    while time.time() < deadline and not (list(read_events(only=(EVENT_UNREAD_MAIL,))) and "pd_unread_mail" in owed()):
         time.sleep(0.1)                                   # the serve loop ticks on its own
     [event] = list(read_events(only=(EVENT_UNREAD_MAIL,)))
     assert event["data"]["agent"] == "Tester@abc123" and event["data"]["count"] == 1
-    assert any(o.source == "pd_unread_mail" for o in daemon.notifier.owed.values())
+    assert "pd_unread_mail" in owed()
 
 
 from test_primal_daemon import _crash, drive, make_core, make_unit, script  # noqa: E402,F401 - fixtures
