@@ -617,7 +617,7 @@ def cmd_mis_check(args: argparse.Namespace) -> int:
 def cmd_budget_status(args: argparse.Namespace) -> int:
     from macf import budget
     def go() -> int:
-        st = budget.status()
+        st = budget.status(detail=True)
         print(json.dumps(st, indent=2) if args.json else budget.format_status(st, brief=args.brief))
         return 0
     return _budget_run(go)
