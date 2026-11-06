@@ -54,6 +54,7 @@ from .trust import TrustClass
 from .crypto import (
 
     SigningError, generate_keypair, load_private_key, public_key_line, sign, verify,
+    key_custody, sign_for_submission,
 )
 from .contacts import ContactBook, ContactListError
 from . import models, audit, trust, crypto, ratelimit, transport

@@ -3,6 +3,15 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.14.0 — §3.4: the broker's health is its last sweep (MIS-0004 R31). A deployment names the schedule that runs the inbound `sweep` in its declaration's `mail_sweep_schedule`; the broker is healthy only when that sweep's last run ended ok, and the outside watch alerts as `mail-broker: SWEEP-FAILED` when it failed, is overdue, or never ran, so stuck mail reaches a person (R32). Minor: a new declaration field and a new alert an operator can meet.
+**Version**: 1.13.0 — the spool consumer: an entry that fails unexpectedly is counted and the run goes on; after `max_failures` (default 3) it is quarantined with its last error and audited (MIS-0004 R17, R20). Minor: an outcome an operator can meet in the quarantine.
+**Version**: 1.12.0 — §2.4: the mail notice is a level (MIS-0004 R26). A channel that takes mail is told at each attach while mail waits unread; a notice still owed when the mail is read is withdrawn, recorded as `pd_notice_withdrawn`; nothing is re-asserted while the operator silences mail to the session, and after an unsilence still-unread mail is told on the next pass. Minor: a notice an agent may now meet again in a new session.
+**Version**: 1.11.0 — §3.2.2: the agent's signing key is a 0600 file in a 0700 directory of the agent's own account, outside any synced folder and any git work tree path git does not ignore; an agent declared to sign refuses to send without one, and any other sends unsigned with a warning (MIS-0004 R41). Minor: a new refusal an agent can meet, and a new verb, `amail key-status`.
+**Version**: 1.10.0 — §2.1.1: the message id crosses a shared hand-off unchanged. The receiving broker keeps a well-formed peer id, drops a pair whose id the recipient already holds from the same peer and sender and audits it as `duplicate-dropped`, treats any other held match as an `id-collision` and mints fresh, and mints a fresh id for anything else and for quarantined mail (MIS-0004 R15). Minor: a behavior an agent can meet in its ids and its audit.
+**Version**: 1.9.0 — §2.3 and §2.4: the agent's primal daemon ingests its mail each pass (MIS-0004 R04), from the box its own settings name, never the environment; one ingest runs at a time per store, and an entry another ingest took is not reported as damage. §2.4: the read cursor is the Maildir's `new` and `cur`; `amail read` moves what it printed and records who read it, notices follow `new` (R25), and `amail list` shows unread mail by default (R30). Minor: behaviors an agent meets in its store and its listing.
+**Version**: 1.7.0 — §2.3: a message is held once. Ingest drops a copy whose id the store already holds, and records the drop in that message's sidecar as `duplicates_dropped` (MIS-0004 R16). Minor: a behavior an agent can meet in its store.
+**Version**: 1.6.0 — §2.3: ingest believes only what the broker wrote. A box entry is taken only as a regular file the box's owner owns, with one link, checked on the open descriptor; anything else is refused and set aside as `.refused` (MIS-0004 R37). Minor: a new refusal an agent can meet.
+**Version**: 1.5.0 — adds §9: mail joins the knowledge web, each message and markdown attachment a temporal-record node, with its links in a `.wiki-links` sidecar under `amail/.links/` so a message's bytes stay as sent and no sender can supply its links. Minor: a new section a type policy owes the scholarship policy.
 **Version**: 1.4.2 — §2.3 says how a recipient learns where its pickup box is: provisioning names `handoff` and `agent` in its own `amail.json`, which its daemon needs, since an outer tier passes it no agent-configured variables. Patch.
 **Version**: 1.4.1 — §5.1 and §6b.1 say who mints the message id (the broker, on
 acceptance) and what that means for the sender's copy: it keeps the id the sender
@@ -85,6 +94,7 @@ becomes tractable once the address stops encoding how the message travels.
   one, and what does a custody check report on absent input?
 - What must the audit record contain, and why is it mandatory?
 - How does the audit say the way a submitting identity was established, and why are there two words for it?
+- How is the broker's health known, and who hears when mail is stuck?
 
 **4 Contact Lists**
 - What is the default contact list for an agent?
@@ -137,6 +147,12 @@ becomes tractable once the address stops encoding how the message travels.
 **8 Resolved and Deferred Questions**
 - Which previously open questions does this specification settle?
 - What is deliberately left for later, and why?
+
+**9 Knowledge Web Participation**
+- Which mail joins the knowledge web, and what is the unit of a node?
+- Which node class and provenance does mail carry?
+- What should a message link, and what must it never link?
+- Why do a message's links live in a sidecar under `.links/`, and never in the message or beside it?
 
 === CEP_NAV_BOUNDARY ===
 
@@ -288,6 +304,21 @@ adding one declaration and one mount.
 judgement. The audit records `shared` at the sender and *via shared hand-off
 from <domain>* at the receiver.
 
+**The id crosses the mount unchanged.** The sending broker minted the message id
+when it accepted the message (§5.1), and the sender's own copy records it
+(§6b.1). The receiving broker keeps that id when it is well formed, so one message
+has one id from acceptance to the recipient's read (MIS-0004 R15). If the
+recipient already holds that id from the same peer and the same sender, the pair is
+the same message again: the broker drops it and audits `duplicate-dropped`, so the
+second copy never reaches the box. If the held id came by another route or from
+another sender, it is a collision, not a duplicate: the broker mints a fresh id,
+delivers, and audits `id-collision`. Otherwise a peer that learned another domain's
+id could claim it first and have the genuine message dropped. An
+id that is not a broker id is minted fresh, as internet mail always is: it is a
+sender's claim, and a claimed id can shadow a real message. Quarantined mail
+always gets a fresh id, so a repeated id can't overwrite earlier evidence; the
+peer's id is kept in the audit reason.
+
 The consequence worth stating plainly: adding a second host, moving an agent between
 hosts, or gaining and losing a private network changes **nothing** about addressing,
 contact lists, or stored messages. Only the broker's rung choice changes.
@@ -312,6 +343,35 @@ custody transfer by ingesting into its own store, as itself. This holds for ever
 kind of mail — agent-to-agent, peer-inbound, and internet — and for refused mail,
 which is retained in a broker-owned store rather than anywhere inside the
 recipient's home.
+
+**The recipient believes only what the broker wrote.** The recipient's group may remove
+files from its box, so it may create them there too, and a name in the box proves nothing
+about who wrote it. Ingest opens the box once, by descriptor, and reads each entry relative
+to it without following a link. It takes an entry only if it is a regular file, owned by
+the box's owner (the broker's account), with a single link, all checked on the descriptor
+it opened (MIS-0004 R37). Any other entry is refused: a symlink, a second hard link, a file
+the recipient's own account wrote, a FIFO. It is renamed with a `.refused` suffix, so it is
+reported once and kept as evidence, and it is listed among ingest's failures. **A
+`.refused` file in your box is that record.** Read it before trusting anything in it, and
+remove it once it is explained.
+
+**A message is held once.** A broker restarted between writing the box and clearing its
+intake can hand the same message off again. Ingest drops a copy whose id the store already
+holds, removes it from the box, and records the drop in the held message's own sidecar,
+under `duplicates_dropped` (MIS-0004 R16). Ids are minted by the broker that accepts a
+message, so a repeated id is a repeated hand-off, never a second message.
+
+**Ingest runs under the agent's own primal daemon.** The receiver is a duty of the
+primal daemon's loop: each pass it ingests the box as the agent, through the same ingest
+`amail list` uses, so the checks above hold on one path (MIS-0004 R04). A listing still
+ingests first, so a stopped daemon never hides mail. One ingest runs at a time per store,
+under a lock in the store itself; a pass that finds the lock held tries again next pass.
+An entry gone between the listing and its open was taken by the other ingest, and is not
+reported as damage. Its first pass checks that the box can be listed and the store
+written, and raises a notice when either can't (MIS-0002-R65): on macOS the daemon's
+privacy grants are not the terminal's, and a container's daemon whose supplementary groups
+were cleared loses a box it reached through one, so the box's group should be the agent's
+primary group. Neither failure may read as an empty box.
 
 **Why this is a policy statement and not an implementation note.** The obvious
 design has the broker write each recipient's mailbox directly. That requires a
@@ -383,9 +443,11 @@ than creating or correcting it.
 
 **The recipient is told where its box is, by provisioning, in its own settings.** Each
 agent's `.maceff/amail.json` names `handoff` (the root the broker hands off into) and
-`agent` (its box's name under it). `amail list` and the agent's primal daemon find the box
-from these two keys, and fall back to `MACF_AMAIL_HANDOFF` and `MACEFF_AGENT_NAME` only
-when the file doesn't name it. A session has those variables from its shell, but a daemon
+`agent` (its box's name under it). `amail list` finds the box from these two keys, and falls
+back to `MACF_AMAIL_HANDOFF` and `MACEFF_AGENT_NAME` only when the file doesn't name it. The
+primal daemon's receiver never reads either variable: without an `agent` key it doesn't run,
+and without a `handoff` key it uses the fixed default. On a shared login every daemon can
+reach every box, and a variable naming another agent would move this agent's receiver to it. A session has those variables from its shell, but a daemon
 started by a container's outer tier has identity variables only, so a seat without the file
 would watch a guessed path and see no mail. A container's start script writes the two keys
 from the same addressing entry that provisions the box, keeps any other keys in the file,
@@ -408,6 +470,25 @@ Two constraints follow, and both are deliberate:
 - **Local storage is authoritative.** Where a remote service also holds copies, the
   local store is the record of truth. A deployment MUST be able to lose its
   transport provider without losing its correspondence.
+
+**The read cursor is the Maildir's own `new` and `cur`.** Mail waits unread in `new`.
+`amail read` moves the message it printed to `cur`, in the reading home's own store only,
+and records the reader's calling card and the time in the message's sidecar, so a notice
+that cleared can be explained afterwards. Nothing else moves a message, and a restart of
+any unit moves none (MIS-0004 R27). There is no second record of what was read: the store
+is it. Mail notices watch `new`, so a notice names only mail `amail read` can already find
+(R25). `amail list` shows unread mail by default with a count of the rest (R30); `--all`
+shows everything, and `--thread` shows a whole thread, since a reply needs its context.
+
+**The mail notice is a level, not an edge (MIS-0004 R26).** While mail waits unread, every
+channel that attaches and takes mail is told, even if an earlier session was told about the
+same mail: a session that missed a notice, or a channel that restarted, hears it again, and
+a repeat is harmless because it names only what is still unread. A notice still owed when the
+mail it named is read is withdrawn rather than delivered, and the withdrawal is recorded as
+`pd_notice_withdrawn`, so a restart doesn't owe it again. The operator's rules still
+decide: while mail is silenced to the session nothing is re-asserted, and once it is
+unsilenced, mail that is still unread is told on the daemon's next pass, to the channel
+already attached. A channel once told isn't told again while the same mail stays unread.
 
 ---
 
@@ -538,6 +619,32 @@ The demonstration owed is a *break*, in both polarities — exposed and absent �
 with its paired acceptance in the same run. Inspecting a configuration file is not a
 demonstration of a refusal.
 
+### 3.2.2 The agent's signing key
+
+Every MacEff agent signs every message it submits, with a key only its own account
+can read (MIS-0004 R41). The key is the agent's, never the broker's: a signature then
+means something to a party that doesn't trust the broker.
+
+- The private key is a file of mode 0600 in a directory of mode 0700, both owned by
+  the agent's account. `amail keygen` creates the directory when it doesn't exist and
+  refuses one that is not already 0700 and the agent's own. The default place is
+  `.maceff/keys/` in the agent home; a key already directly under `.maceff` keeps
+  working, and `amail key-status` says to move it.
+- The key never lives in a synced folder, or in a git work tree at a path git doesn't
+  ignore. Keygen refuses both; an agent home that is itself a repository keeps its key
+  under an ignored `.maceff`.
+- A key in a directory that group or other can write is refused at load, because
+  whoever can write the directory can replace the key.
+  That refusal stops the agent's mail, so before this reaches a deployment, run
+  `amail key-status` on each agent and fix any warning first.
+- `amail key-status` reports where the key is, how it and its directory are held,
+  whether it loads, and its public line for the operator to declare (MIS-0004 R42).
+  It never prints the private key.
+- **The declare step.** An agent whose configuration sets `signing_required` refuses
+  to send without a usable key. Any other agent without a key sends unsigned and is
+  told on stderr. Receivers classify mail exactly as before; refusing unsigned agent
+  mail (R43) and marking it suspect (R44) switch on only once every key is declared.
+
 ### 3.3 The audit record
 
 The broker MUST append a record for every submission and every inbound message,
@@ -562,6 +669,48 @@ silence is indistinguishable from working.
 
 The log is append-only. Refusals are as important as deliveries — they are the
 evidence the control fired.
+
+### 3.4 The broker's health is its last sweep
+
+A broker that is quiet because nothing arrived and one that is quiet because mail is
+stuck look the same from its socket. What tells them apart is the **sweep**: the
+scheduled run of `python -m macf.amail.daemons.inbound sweep`, which ages the spool and
+the pickup boxes against their declared bounds (`spool_age_bound_s`,
+`pickup_age_bound_s`) and exits non-zero on anything stuck past them.
+
+**The broker's health is that sweep's last verdict** [MIS-0004-R31
+(broker_health_MUST_be_its_sweep)], read from the scheduler's own records of the run, never
+from anything the broker says about itself:
+
+- the last sweep that ended ended `ok`, an empty one included: healthy, so an idle
+  broker is not a failing one;
+- it ended any other way (failed, killed at its limit, stopped, abandoned, never
+  started): unhealthy;
+- no sweep has ended, or the next one is overdue, or the daemon does not run it:
+  unhealthy, because a missing sweep is no verdict.
+
+A sweep in flight, or due and not yet late, leaves the last ended one's verdict standing.
+
+**Stuck mail reaches a person** [MIS-0004-R32 (stuck_mail_MUST_reach_a_person)] through the
+outside watch (persistent_layer §7.1), which reads that verdict for every home that
+declares a sweep and alerts once per stretch as `mail-broker: SWEEP-FAILED`, by a path
+that is neither the broker nor any session. Mail an agent leaves unread past its own
+threshold reaches the same watch as `mail: UNREAD` (persistent_layer, the unread-mail
+notice).
+
+**What a deployment must do:** declare the sweep as a schedule of the broker account's
+primal daemon, and name it in that declaration's `mail_sweep_schedule`. A name that no
+schedule declares is refused when the declaration loads, since it would read unhealthy
+forever. A deployment that names no sweep gets no broker verdict and no alert: the watch
+says nothing about a broker it was not told of, so leaving the field out is a choice to be
+unwatched, not a default that covers you.
+
+**What to do with a SWEEP-FAILED alert:** read the alert's detail, which says how the last
+sweep ended. For a failed one, run the sweep by hand as the broker account to see what it
+found: an aged spool entry it moved to quarantine, or an aged pickup entry, which names the
+box whose recipient is not draining it. An overdue or missing sweep
+means the broker account's daemon is not running it: check that daemon and its schedule.
+The stretch closes at the first clean sweep.
 
 ---
 
@@ -1098,10 +1247,9 @@ and a refusal for every combination that would have meant something else.
 
 **Deferred, with reasons:**
 
-- **Per-message authorship signing.** Genuinely wanted, and §5.1 leaves room for a
-  signature field. Deferred because signing without key custody and rotation is
-  ceremony, and key management deserves its own decision rather than being smuggled
-  in beneath a mail spec.
+- **Per-message authorship signing.** Decided by MIS-0004 (R41 to R46). Key custody
+  is §3.2.2 (R41). Rotation (R45) and the shared-login label (R46) follow with the
+  key registry (R42).
 - **Encryption at rest and in transit beyond transport TLS.** Same reasoning.
 - **A dedicated task type for inbound mail.** Wanted so mail is tracked natively
   rather than becoming a generic task with hand-built structure. Deferred to
@@ -1110,6 +1258,28 @@ and a refusal for every combination that would have meant something else.
 - **Notification on arrival.** The mailbox does not announce itself. Deferred
   because the right mechanism depends on how agents come to be running, which varies
   by deployment.
+
+---
+
+## 9 Knowledge Web Participation
+
+Definitions of class and provenance live in `../consciousness/scholarship.md` and are cited here, not restated. This section answers the four questions that policy asks of every artifact type, and one more that mail alone raises: where the links can live when the artifact may not be edited.
+
+**What is walked.** The `amail` folder under the agent tree: its `inbox/` and `outbox/` thread folders, kept from the superseded v0 convention and by bundles carried by hand (§6b.6). Sealed `.zip` bundles are not walked. The authoritative Maildir (§2.4) is outside the agent tree by design and is not part of the web; bringing it in would be its own decision, not a consequence of this one.
+
+**Unit of a node.** Each message, and each markdown attachment. A message is a `*msg.md` or `*msg.html` file in a thread folder, or a one-file message lying directly in `inbox/` or `outbox/`. HTML is walked only for messages: an `index.html` or an HTML page sent as an attachment is not a node. HTML messages are walked at all because most early mail is HTML only, and a rule that read markdown alone would leave that correspondence unreachable by concept. A thread's `003_msg.md` and `003_msg.html` are two nodes, `amail:<thread>/003_msg` and `amail:<thread>/003_msg.html`. A message without links is not a node and appears in the knowledge doctor's orphan census, which is honest.
+
+**Class.** Temporal record. A message says what one correspondent told another at a moment; "the PR is unmerged" was true when it was sent, and the message is not wrong once it is merged. The question mail answers is "which correspondence touched X, and what was said then".
+
+**Provenance.** Lived. Sent and received mail are both a record of this agent's correspondence. A received message's *claims* are its sender's and remain untrusted input (§6.2); the node records that it was said, not that it is so. A correspondence archive carried in from a predecessor lineage is inherited, and is marked by a banner beside it in its folder, never inside a message (scholarship: the banner frames, it never edits).
+
+**What a message links.** The domains the correspondence is about, as a checkpoint tags the domains a cycle worked on: two or three concepts, chosen by querying the web first (`macf_tools knowledge query`). Link the message where a subject was proposed, decided or handed over, not every reply that mentions it. Never a correspondent's name or address, a thread id or a message number: a concept minted from an identifier connects to nothing. An attachment links what it is about, as the artifact type it resembles would (a specification draft links what it specifies).
+
+**Where the links live, and why not in the message or beside it.** In a sidecar under the amail folder's `.links/`, at the message's own path with `.wiki-links` appended (`.links/outbox/<thread>/003_msg.md.wiki-links`, `.links/inbox/<thread>/001_msg.html.wiki-links`): one concept per line, bare or as `[[concept]]`, normalized as every other link is. Declined concepts go on one `<!-- not linked: ... -->` line in the same file. A sidecar is never a node itself. A message is a record of what was sent, and its bytes stay as sent: an edited sent copy disagrees with the copy its recipient holds, and an edited received message is no longer the evidence §6.2 tells the agent to treat it as. An HTML message has no Wiki-Links section to write into in any case. So a message's own bytes are read for links only when it is markdown this agent sent, where its `[[links]]` are its own. A received message's text was written by its sender, and inbound mail is untrusted input (§6.2), so another agent's words never add concepts to this agent's web: a received message's links, and an HTML message's, are its sidecar's alone.
+
+The sidecars sit apart from the mail because a bundle carried by hand (§6b.6) is a folder of files its sender named. A sidecar beside a received message could be the sender's, and honoring it would hand the sender the very concepts this section refuses them, under a second file name. So the web reads sidecars only under the `.links/` of the amail folder it walks (`amail` directly under the agent's private or public tree, or a subagent's), which no bundle unpacks into, and ignores a sidecar-named file anywhere else under it. That includes a bundle that brings its own `amail/.links/` inside a received thread: an `amail` folder anywhere else is only a folder, so its messages' links still come from the walked root's `.links/` alone. The same rule decides what is mail at all: a folder named `amail` elsewhere, such as in source code, is not. The knowledge doctor names each such file as a stray mail sidecar, since one inside a received thread may be an attempt to steer what the agent is shown. Read it before trusting any of it.
+
+**How to add them.** `macf_tools knowledge link <message path or node id> <concept> ...` writes or extends the sidecar under `.links/`, creating its folders, and never opens the message or its manifest for writing; `knowledge unlink` removes from the sidecar, and a sidecar left empty is deleted, with any folders it leaves empty. A concept the message itself carries in markdown survives an unlink, and the verb says so rather than editing the message. A suggestion `knowledge gaps` keeps making and a curator has judged wrong goes in the sidecar's `not linked` line through `knowledge gaps --reject`, as for every type (scholarship: declining a suggested concept).
 
 ---
 
@@ -1164,12 +1334,30 @@ and a refusal for every combination that would have meant something else.
   watcher), and the orphan sweep's age bound is the mail-specific instance of the
   liveness signal that policy requires someone outside to read.
 
+  **One entry's failure is that entry's alone (MIS-0004 R17, R20).** The watcher handles
+  the spool one entry at a time. An entry it can't parse is quarantined at once, with
+  its reason. An entry whose handling fails unexpectedly is counted and the run goes on,
+  so mail spooled after it, for any agent, still lands. After `max_failures` tries
+  (default 3) it is quarantined with its last error and audited as `quarantined`. The
+  count is kept per entry and content in the consumer's own `.failures` directory,
+  never in the spool, which has one writer, and it starts again if the content changes.
+  The counting itself can fail (a failures directory that can't be written); the entry
+  is then reported `failed` with "count not recorded", and the run still goes on. A
+  success clears the entry's count. An entry handed off whose spool removal then fails
+  isn't handed off again: the consumer writes a `.handed` marker before removing it, and
+  a retry that finds the marker only finishes the removal, since nothing drops a repeated
+  `.eml` at ingest. The marker is best effort: if it can't be written, the delivery still
+  completes, so an unwritable failures directory never repeats a clean delivery.
+  Before this, one such entry ended every run, and everything behind it waited until a
+  person cleared it.
+
 ---
 
 ## Wiki-Links
 
 <!-- NORMATIVE node, INHERITED provenance (see the scholarship policy on node
      classes and provenance). Links are what this policy governs — agent mail
-     identity, the broker boundary, and the contact restriction. -->
+     identity, the broker boundary, the contact restriction, and how mail
+     joins the knowledge web without its messages being edited. -->
 
-[[amail]] [[capability_boundary]] [[security]] [[inter_agent_messaging]] [[egress]]
+[[amail]] [[capability_boundary]] [[security]] [[inter_agent_messaging]] [[egress]] [[knowledge_web]]
