@@ -472,6 +472,25 @@ def segment_decisions(command: str, rules: List[Tuple[str, str, Path]]) -> List[
 UNATTENDED = ("USER_IDLE", "USER_REMOTE")
 
 
+def full_autonomy_denial(modes, play_time_active: bool, permission_mode: Optional[str]) -> Optional[str]:
+    """Why an open dialog should be denied at once, or None (autonomous_operation 5.5).
+
+    AUTO_MODE alone says nothing: operators stay in it while attending, and a dialog is fine then.
+    It takes a sign that nobody will answer. In the default permission mode nearly every write
+    prompts, so denying there would block the agent's own work."""
+    if "AUTO_MODE" not in modes or permission_mode == "default":
+        return None
+    if "USER_REMOTE" in modes or "USER_IDLE" in modes:
+        who = "the operator is away"
+    elif "SPRINT" in modes or play_time_active:
+        who = "a sprint or play time is running"
+    else:
+        return None
+    return (f"Denied at once: {who}, so this dialog would wait with nobody to answer it. Note what "
+            f"needed the operator on your task and go on with other work. See: macf_tools policy "
+            f"navigate autonomous_operation")
+
+
 def unattended_refusal(tool: str, tool_input, modes, project_dir: str, home: Path,
                        environ=None) -> Optional[str]:
     """Why a call should be refused instead of left to stop at a dialog, or None.
