@@ -739,9 +739,10 @@ time is in active scope.
 - **The state is derived.** There is no flag to arm or forget: the modes and the scope
   decide, and if they can't be read the dialog stays up.
 - **The default permission mode is exempt**, because nearly every write prompts there
-  and denying would block the agent's own work.
+  and denying would block the agent's own work. A mode the client doesn't report is
+  treated the same way.
 - **A question is a dialog too.** `AskUserQuestion` is denied under the same conditions,
-  which is the point: nobody would answer it. USER_IDLE starts after
+  and its reason says to ask on the operator's channel. USER_IDLE starts after
   `MACF_USER_IDLE_TIMEOUT_MINS` without a message, so an operator reading quietly can
   see one open and close; ask again in text, or raise the timeout.
 

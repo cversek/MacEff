@@ -472,13 +472,15 @@ def segment_decisions(command: str, rules: List[Tuple[str, str, Path]]) -> List[
 UNATTENDED = ("USER_IDLE", "USER_REMOTE")
 
 
-def full_autonomy_denial(modes, play_time_active: bool, permission_mode: Optional[str]) -> Optional[str]:
+def full_autonomy_denial(modes, play_time_active: bool, permission_mode: Optional[str],
+                         tool: Optional[str] = None) -> Optional[str]:
     """Why an open dialog should be denied at once, or None (autonomous_operation 5.5).
 
     AUTO_MODE alone says nothing: operators stay in it while attending, and a dialog is fine then.
     It takes a sign that nobody will answer. In the default permission mode nearly every write
-    prompts, so denying there would block the agent's own work."""
-    if "AUTO_MODE" not in modes or permission_mode == "default":
+    prompts, so denying there would block the agent's own work; a mode the client did not report
+    could be that one, so unknown leaves the dialog up too."""
+    if "AUTO_MODE" not in modes or permission_mode in (None, "default"):
         return None
     if "USER_REMOTE" in modes or "USER_IDLE" in modes:
         who = "the operator is away"
@@ -486,6 +488,9 @@ def full_autonomy_denial(modes, play_time_active: bool, permission_mode: Optiona
         who = "a sprint or play time is running"
     else:
         return None
+    if tool == "AskUserQuestion":
+        return (f"Denied at once: {who}, so this question would wait with nobody to answer it. Ask it "
+                f"on the operator's channel instead. See: macf_tools policy navigate autonomous_operation")
     return (f"Denied at once: {who}, so this dialog would wait with nobody to answer it. Note what "
             f"needed the operator on your task and go on with other work. See: macf_tools policy "
             f"navigate autonomous_operation")

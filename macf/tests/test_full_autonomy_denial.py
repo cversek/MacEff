@@ -54,3 +54,14 @@ def test_a_failed_check_leaves_the_dialog_up(monkeypatch, isolated_events_log):
 
     monkeypatch.setattr(hook, "_autonomy_state", broken)
     assert "hookSpecificOutput" not in hook.run(json.dumps({"tool_name": "Bash", "permission_mode": "auto"}))
+
+
+def test_an_unknown_permission_mode_leaves_the_dialog_up():
+    assert pw.full_autonomy_denial({"AUTO_MODE", "USER_IDLE"}, False, None) is None
+
+
+def test_a_question_is_sent_to_the_operators_channel():
+    why = pw.full_autonomy_denial({"AUTO_MODE", "USER_REMOTE"}, False, "auto", tool="AskUserQuestion")
+    assert "operator's channel" in why and "go on with other work" not in why
+    other = pw.full_autonomy_denial({"AUTO_MODE", "USER_REMOTE"}, False, "auto", tool="Bash")
+    assert "go on with other work" in other

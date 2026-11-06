@@ -80,7 +80,6 @@ def _send_permission_preview(tool_name, tool_input, send_notification, send_docu
         send_notification(msg, parse_mode="HTML")
 
 
-@shared_event_reads
 def _deny_enabled() -> bool:
     """Opt-in: the agent's deployment must have chosen this (autonomous_operation 5.5)."""
     from macf.config import resolve_setting
@@ -102,12 +101,13 @@ def _denial_reason(session_id: str, data: Dict[str, Any]):
             return None
         from macf.permission_watch import full_autonomy_denial
         modes, play_time_active = _autonomy_state(session_id)
-        return full_autonomy_denial(modes, play_time_active, data.get("permission_mode"))
+        return full_autonomy_denial(modes, play_time_active, data.get("permission_mode"), data.get("tool_name"))
     except Exception as e:
         emit_warning(Warning(source="permission_request", kind="full_autonomy_check_failed", detail=str(e)))
         return None
 
 
+@shared_event_reads
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
     Run PermissionRequest hook logic.
