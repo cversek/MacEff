@@ -553,6 +553,19 @@ def test_a_week_that_reset_since_the_sample_is_not_reported_as_current(log, monk
     assert "week 95% (window reset 1h ago, after this sample)" in budget.format_status(st)
 
 
+def test_no_projection_once_the_window_has_reset_even_with_a_measured_pace(log, monkeypatch, opus):
+    """A pace is what made the wrong number: "-86.8% at reset" for a window that had reset 51 hours before (#852)."""
+    clock = {"t": T0}
+    monkeypatch.setattr(budget.time, "time", lambda: clock["t"])
+    budget.sample(fetch=lambda: reply_ahead(10, 50, 1, hours=10), fresh=True)
+    clock["t"] += 3600
+    budget.sample(fetch=lambda: reply_ahead(10, 55, 1, hours=10), fresh=True)
+    clock["t"] += 3600 * 60
+    week = next(r for r in budget.status()["limits"] if r["kind"] == "weekly_all")
+    assert week["rate_window"] is not None, "needs a pace, or this test can't catch the defect"
+    assert week["reset_since_sample"] and week["projected_at_reset"] is None
+
+
 def test_status_says_when_the_refresh_last_failed_and_when_it_asks_again(log, monkeypatch, opus):
     clock = {"t": T0}
     monkeypatch.setattr(budget.time, "time", lambda: clock["t"])
@@ -560,10 +573,26 @@ def test_status_says_when_the_refresh_last_failed_and_when_it_asks_again(log, mo
     monkeypatch.setattr(budget, "fetch_reply", throttled([]))
     clock["t"] += 600
     budget.hook_lines("wall")
-    st = budget.status()
+    st = budget.status(detail=True)
     assert st["last_failure"]["reason"] == "endpoint 429" and st["next_try"] == clock["t"] + 600
     text = budget.format_status(st)
     assert "last refresh failed at" in text and "budget sample --manual" in text
+
+
+def test_the_hook_path_does_not_pay_for_what_only_the_cli_shows(log, monkeypatch, opus):
+    """A failed refresh and the next try each walk the event log, and the hooks call status() on every tool call."""
+    clock = {"t": T0}
+    monkeypatch.setattr(budget.time, "time", lambda: clock["t"])
+    budget.sample(fetch=lambda: reply_ahead(10, 40, 1), fresh=True)
+
+    def must_not_run(*_a, **_k):
+        raise AssertionError("the hook path walked the log for a field only the CLI shows")
+
+    monkeypatch.setattr(budget, "failures_since", must_not_run)
+    monkeypatch.setattr(budget, "next_autosample", must_not_run)
+    assert "last_failure" not in budget.status()
+    with pytest.raises(AssertionError):
+        budget.status(detail=True)
 
 
 def test_retry_after_reads_seconds_and_dates():

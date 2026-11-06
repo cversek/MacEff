@@ -69,6 +69,9 @@ def keychain_accounts() -> list[str]:
     There can be more than one. Claude Code names the item's account after the login it runs as, and a session started
     without USER files its refreshed token under "unknown". The item it was first given is then never written again,
     and its token expires while it is still the first match for the service name (#852). The newest is the one in use.
+
+    `security dump-keychain` without -d reads attributes only, so no secret passes through it. It does read the
+    service and account names of every item in the keychain search list, on every fetch.
     """
     try:
         r = subprocess.run(["security", "dump-keychain"], capture_output=True, text=True, timeout=10)
@@ -389,7 +392,9 @@ def format_rate(rate: float) -> str:
     return f"{v:.{max(0, digits(v))}f}" if v > 0 else "0"
 
 
-def status(now: Optional[float] = None) -> dict:
+def status(now: Optional[float] = None, detail: bool = False) -> dict:
+    """The current readings. ``detail`` adds the last failed refresh and the next try, which only `budget status`
+    shows: each walks the event log again, and the hooks call this on every tool call."""
     now = now or time.time()
     hist = samples(now=now)
     if not hist:
@@ -431,9 +436,12 @@ def status(now: Optional[float] = None) -> dict:
     family = model["display"].split(" ")[0].lower() if model["id"] != "unknown" else None
     for r in rows:  # the limits this agent's own work is filling right now
         r["spending"] = r["kind"] != "weekly_scoped" or (family is not None and r["label"].lower().startswith(family))
-    failure = next(iter(failures_since(latest["t"], now)), None)
-    return {"sampled_at": latest["t"], "age_min": round((now - latest["t"]) / 60, 1), "source": latest["source"],
-            "model": model, "mode": mode, "limits": rows, "last_failure": failure, "next_try": next_autosample(now)}
+    st = {"sampled_at": latest["t"], "age_min": round((now - latest["t"]) / 60, 1), "source": latest["source"],
+          "model": model, "mode": mode, "limits": rows}
+    if detail:
+        st["last_failure"] = next(iter(failures_since(latest["t"], now)), None)
+        st["next_try"] = next_autosample(now)
+    return st
 
 
 def _clock(t: float) -> str:
