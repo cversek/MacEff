@@ -226,6 +226,11 @@ class SharedHandoff:
     uid: Optional[int] = None
     gid: Optional[int] = None
     note: str = ""
+    #: The peer's agents under the shared zone: box name -> calling card (MIS-0004 R08).
+    #: Under one zone the domain no longer says which broker holds a mailbox, so the
+    #: declared map does. A stand-in for the system daemon's declaration (MIS-0007), and
+    #: like the rest of this record it lives in the broker's own configuration.
+    agents: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -406,6 +411,20 @@ class BrokerConfig:
     def address_for(self, agent: str) -> str:
         return f"{agent}@{self.domain}"
 
+    def zone_address_for(self, agent: str) -> Optional[str]:
+        """*agent*'s address under the zone (R06), from its declared card or else its home;
+        None without a zone or a usable card."""
+        if not self.zone:
+            return None
+        from .zone import local_part_from_card, zone_local_part
+        from ..pd.names import IdentityError
+        try:
+            card = self.agent_cards.get(agent)
+            local = local_part_from_card(card) if card else zone_local_part(self.agent_homes[agent])
+        except (IdentityError, ValueError, KeyError):
+            return None  # noqa: MACEFF003 - None is the stated answer "no zone address"; a zone deployment refuses to start without usable cards (_require_zone_cards)
+        return f"{local}@{self.zone.strip().lower()}"
+
     def may_create_pickup_box(self, agent: str) -> bool:
         """Whether this broker may create ``agent``'s missing pickup box itself (amail.md
         §2.3): only when it runs as a uid bound to that agent in its own authentication
@@ -455,6 +474,20 @@ class BrokerConfig:
                 return name
         return None
 
+    def _zone_peer(self, local: str) -> Optional[SharedRoute]:
+        """The declared peer that lists the agent *local* names under the zone (R08); the
+        route carries the peer's box name for it. A card no peer lists has no route here:
+        the zone decides nothing, and an unparseable declared card matches nothing."""
+        from .zone import local_part_from_card
+        for dom, decl in sorted(self.shared_handoffs.items()):
+            for box, card in decl.agents.items():
+                try:
+                    if local_part_from_card(card) == local:
+                        return SharedRoute(domain=dom, local=box, decl=decl)
+                except ValueError:
+                    continue
+        return None
+
     def shared_for(self, address: str) -> Optional[SharedRoute]:
         """The route when *address* is under a peer deployment reachable
         through a declared shared hand-off; else None.
@@ -467,6 +500,8 @@ class BrokerConfig:
         local, _, dom = addr.partition("@")  # noqa: MACEFF005 - str.partition's (before, sep, after) contract is fixed by the stdlib; there is no callee whose order can change
         if not local or not dom or dom == self.domain.lower():
             return None
+        if self.zone and dom == self.zone.strip().lower():
+            return self._zone_peer(local)
         decl = self.shared_handoffs.get(dom)
         if decl is None:
             return None
@@ -1304,7 +1339,9 @@ class Broker:
 
         # CHECKED
         expected = self.config.address_for(sender)
-        if message.sender and message.sender.strip() != expected:
+        # The agent's zone address is also its own (R06), byte-identical as well.
+        zoned = self.config.zone_address_for(sender)
+        if message.sender and message.sender.strip() not in (expected, zoned):
             # BYTE-IDENTICAL, not case-insensitively equal.
             #
             # This used to accept a case variant and then REWRITE the field to
@@ -1325,7 +1362,8 @@ class Broker:
                            f"authenticated sender '{expected}' exactly. The From "
                            "field is covered by the signature, so the broker "
                            "cannot correct it without invalidating authorship.")
-        message.sender = expected
+        # A From the agent wrote as its zone address stays as written (it is signature-covered).
+        message.sender = message.sender.strip() if zoned and message.sender and message.sender.strip() == zoned else expected
 
         # MINTED — a submitter-chosen message_id can shadow another message in
         # store.find(), splice threads, and collide audit records.
@@ -1961,7 +1999,14 @@ class Broker:
         if not self.config.agent_for(recipient):
             return reject(f"recipient '{recipient}' is not a mailbox of this deployment")
         sender_dom = message.sender.rpartition("@")[2].lower()  # noqa: MACEFF005 - str.rpartition's (before, sep, after) contract is fixed by the stdlib
-        if sender_dom != dom:
+        if self.config.zone and sender_dom == self.config.zone.strip().lower():
+            # Under the zone the domain names no broker, so the declared map does (R08): the
+            # peer whose intake carried this may speak only for agents it is declared to hold.
+            route = self.config._zone_peer(message.sender.rpartition("@")[0].lower())  # noqa: MACEFF005 - stdlib contract
+            if route is None or route.domain != dom:
+                return reject(f"sender '{message.sender}' is not an agent '{dom}' is declared "
+                              f"to hold; a peer may only speak for its own agents")
+        elif sender_dom != dom:
             return reject(f"sender '{message.sender}' is not under '{dom}', the "
                           f"domain whose intake carried it; a peer may only "
                           f"speak for its own domain")

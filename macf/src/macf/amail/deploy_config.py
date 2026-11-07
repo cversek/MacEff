@@ -346,6 +346,30 @@ def _require_zone_cards(addressing: "AddressingConfig") -> None:
             f"provisioning writes it (MIS-0004 R06); without it their zone mail is refused.")
 
 
+def _refuse_double_claims(addressing: "AddressingConfig", peers: Dict[str, Any]) -> None:
+    """One zone address, one holder (R08): refuse a start where two declarations claim the same
+    zone local part, whether two peers, one peer twice, or a peer and one of our own agents.
+    Routing would otherwise pick one by sort order and say nothing."""
+    from .zone import local_part_from_card, zone_local_part
+    from ..pd.names import IdentityError
+    claims: Dict[str, List[str]] = {}
+    for name, b in addressing.agents.items():
+        try:
+            local = local_part_from_card(b.card) if b.card else zone_local_part(b.home)
+        except (IdentityError, ValueError):
+            continue   # _require_zone_cards has already refused this agent
+        claims.setdefault(local, []).append(f"local agent '{name}'")
+    for dom, decl in sorted(peers.items()):
+        for box, card in decl.agents.items():
+            claims.setdefault(local_part_from_card(card), []).append(f"peer '{dom}' box '{box}'")
+    doubled = {k: v for k, v in claims.items() if len(v) > 1}
+    if doubled:
+        raise ConfigError(
+            "these zone addresses are claimed more than once: " + "; ".join(
+                f"{k} by {', '.join(v)}" for k, v in sorted(doubled.items()))
+            + ". One zone address has one holder (MIS-0004 R08); remove the wrong declaration.")
+
+
 class AddressingConfig(BaseModel):
     """The amail deployment's identity: its domain, its agents, their contacts.
 
@@ -476,6 +500,21 @@ class SharedHandoffDecl(BaseModel):
                     "Verified before every write, and applied to the pair "
                     "when the box is not setgid. This broker must be a member "
                     "of it on this side of the mount.")
+    agents: Dict[str, str] = Field(
+        default_factory=dict,
+        description="the peer's agents under the shared zone, box name -> calling card "
+                    "(Name@shortid), as the peer's operator provisioned them (MIS-0004 R08). "
+                    "Under one zone the domain does not say which broker holds a mailbox; "
+                    "this map does. Retired when the system daemon declares it (MIS-0007).")
+
+    @field_validator("agents")
+    @classmethod
+    def _cards_are_cards(cls, v: Dict[str, str]):
+        from .zone import local_part_from_card
+        for box, card in v.items():
+            local_part_from_card(card)   # ValueError names the bad card
+        return v
+
     note: str = Field(
         default="",
         description="operator's note: which deployment this is, where the "
@@ -647,9 +686,11 @@ class BrokerDeployConfig(BaseModel):
                     f"deployment's domain. Refusing rather than let two rungs "
                     f"claim the same mailboxes.")
             shared[key] = SharedHandoff(handoff=decl.handoff, uid=decl.uid,
-                                        gid=decl.gid, note=decl.note)
+                                        gid=decl.gid, note=decl.note,
+                                        agents=dict(decl.agents))
         if addressing.zone:
             _require_zone_cards(addressing)
+            _refuse_double_claims(addressing, self.shared_handoffs)
         return BrokerConfig(
             domain=addressing.domain,
             zone=addressing.zone,
