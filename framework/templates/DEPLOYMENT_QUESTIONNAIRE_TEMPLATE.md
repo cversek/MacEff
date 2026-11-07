@@ -14,7 +14,7 @@ Replace these placeholders before administering:
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `{PROJECT_NAME}` | Project identifier | OrchardMacEff, ClientProject |
-| `{DOMAIN}` | Primary domain/application area | Orchard, E-commerce, Analytics |
+| `{DOMAIN}` | Primary domain/application area | Scientific computing, E-commerce, Analytics |
 | `{ASSIGNED_REPOS}` | Git repositories agent manages | `org/repo1`, `org/repo2` |
 | `{PRIMARY_TECH_STACK}` | Core technologies | Python/Docker, TypeScript/React |
 | `{DEPLOYMENT_ENV}` | Target environment | Container, Cloud, Hybrid |
@@ -123,7 +123,7 @@ How do project policies override or extend framework policies for {PROJECT_NAME}
 
 ---
 
-## Example: OrchardMacEff/Orchard
+## Example: a scientific computing deployment
 
 Below is a filled example for reference:
 
@@ -133,7 +133,7 @@ Below is a filled example for reference:
 ## Section 1: Project Identity
 
 ### Q1.1: Mission Statement
-OrchardMacEff deploys the MacEff framework for the Orchard scientific computing project.
+This deployment runs the MacEff framework for the Orchard scientific computing project.
 Primary mission: Enable AI-assisted development of neuroscience data pipelines.
 
 ### Q1.2: Repository Structure
