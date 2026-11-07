@@ -1,7 +1,7 @@
 """Zone addresses (MIS-0004 R06): an agent's address under the shared mail zone.
 
 The local part is the calling card from the agent's identity file, ``name_shortid``, lower-cased:
-``RustyTrombone@15b944`` is ``rustytrombone_15b944@<zone>``. It is never taken from
+``WrenTuba@3c9d1e`` is ``wrentuba_3c9d1e@<zone>``. It is never taken from
 ``MACEFF_AGENT_NAME``, because a seat may set that variable to its short name, and an address built
 from it would name a mailbox no broker holds.
 
