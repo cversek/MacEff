@@ -291,7 +291,7 @@ Detection alone stays allowed only where no agent has a reachable address. Addre
 | R03 | judgment | the head maintainer, at review of each change to the broker | standing |
 | R04 | decidable | `macf/tests/test_amail_placement.py::test_receiver_runs_as_its_agent` | passing |
 | R05 | decidable | `macf/tests/test_amail_placement.py::test_reachable_agent_has_own_login` | planned |
-| R06 | decidable | `macf/tests/test_amail_address.py::test_address_from_identity_file` | passing |
+| R06 | decidable | `macf/tests/test_amail_address.py::test_address_from_identity_file` | planned |
 | R07 | decidable | `macf/tests/test_amail_address.py::test_origin_from_peer_uid` | planned |
 | R08 | decidable | `macf/tests/test_amail_routing.py::test_rung_from_declared_map` | planned |
 | R09 | decidable | `macf/tests/test_amail_routing.py::test_only_declared_peers` | planned |

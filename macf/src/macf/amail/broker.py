@@ -287,6 +287,9 @@ class BrokerConfig:
     #: (amail.zone), so the zone needs no table of its own. None: this broker answers
     #: only for domain.
     zone: Optional[str] = None
+    #: Agent name -> calling card, as declared in the addressing file (R06). Used before the
+    #: home, which the broker's account normally cannot read.
+    agent_cards: Dict[str, str] = field(default_factory=dict)
     contacts_path: Optional[Path] = None
     audit_path: Optional[Path] = None
     socket_path: Path = Path(DEFAULT_SOCKET)
@@ -437,15 +440,19 @@ class BrokerConfig:
 
     def _zone_agent(self, local: str) -> Optional[str]:
         """The local agent whose home's card gives *local* under the zone (R06). A home that
-        names no agent matches nothing: it has no card, so it has no zone address."""
-        from .zone import zone_local_part
+        names no agent and declares no card matches nothing."""
+        from .zone import local_part_from_card, zone_local_part
         from ..pd.names import IdentityError
         for name, home in self.agent_homes.items():
             try:
-                if zone_local_part(home) == local:
-                    return name
-            except IdentityError:
+                card = self.agent_cards.get(name)
+                mine = local_part_from_card(card) if card else zone_local_part(home)
+            except (IdentityError, ValueError):
+                # The deployment config refuses to start a zone with such an agent, so
+                # this is a hand-built config; it still never matches.
                 continue
+            if mine == local:
+                return name
         return None
 
     def shared_for(self, address: str) -> Optional[SharedRoute]:
