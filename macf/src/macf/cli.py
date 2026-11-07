@@ -3458,8 +3458,11 @@ def cmd_policy_search(args: argparse.Namespace) -> int:
                 for ref in policy_refs:
                     section_matches.append((index_key, ref))
 
+        from .utils.manifest import policy_content_matches
+        content_matches = policy_content_matches(keyword)
+
         # Display results
-        total = len(policy_matches) + len(section_matches)
+        total = len(policy_matches) + len(section_matches) + len(content_matches)
         print(f"Search results for '{keyword}': {total} matches")
         print("=" * 50)
 
@@ -3473,7 +3476,14 @@ def cmd_policy_search(args: argparse.Namespace) -> int:
             for index_key, ref in section_matches:
                 print(f"  [{index_key}] → {ref}")
 
-        if not policy_matches and not section_matches:
+        if content_matches:
+            print("\n📄 Policies That Say It:")
+            for match in content_matches[:15]:
+                print(f"  {match['name']} ({match['count']}): {match['line'][:90]}")
+            if len(content_matches) > 15:
+                print(f"  ... and {len(content_matches) - 15} more")
+
+        if not policy_matches and not section_matches and not content_matches:
             print("No matches found")
             print("\n💡 Try:")
             print("  macf_tools policy list              # Browse all policies")
@@ -3654,6 +3664,13 @@ def cmd_policy_recommend(args: argparse.Namespace) -> int:
         print("⚠️ Query too short (minimum 10 characters)")
         return 1
 
+    from .utils.manifest import policies_newer_than_index
+    from .utils.paths import find_agent_home
+    stale = policies_newer_than_index(find_agent_home() / ".maceff" / "policy_index.lance")
+    if stale:
+        print(f"⚠️ {len(stale)} policies changed since the index was built ({', '.join(stale[:3])}"
+              f"{', ...' if len(stale) > 3 else ''}). Rebuild: macf_tools policy build_index", file=sys.stderr)
+
     # Try warm service first (fast path)
     result = query_search_service("policy", query, limit=limit, timeout_s=1.0)
 
@@ -3746,9 +3763,13 @@ def cmd_policy_build_index(args: argparse.Namespace) -> int:
         # Build index
         manifest_path = policies_dir / "manifest.json"
         indexer = PolicyIndexer(manifest_path=manifest_path if manifest_path.exists() else None)
+        # The agent's other roots, unless a directory was named: then that directory is the index.
+        from .utils.manifest import policy_roots
+        extra_roots = [] if args.policies_dir else [(r.name, r.path) for r in policy_roots() if not r.framework]
         stats = indexer.build_index(
             policies_dir=policies_dir,
             db_path=db_path,
+            extra_roots=extra_roots,
         )
 
         # Output
