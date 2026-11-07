@@ -71,7 +71,7 @@ macf_tools env --json    # Machine-readable JSON output
 
 | Category | Information |
 |----------|-------------|
-| **Agent ID** | Persistent identity: `{DisplayName}@{uuid}` (e.g., `MannyMacEff@a3f7c2`) |
+| **Agent ID** | Persistent identity: `{DisplayName}@{uuid}` (e.g., `OrchardMacEff@a3f7c2`) |
 | **Versions** | MACF version, Claude Code version, Python interpreter path + version |
 | **Time** | Current time (local + UTC), timezone name |
 | **Paths** | Agent home, framework root, event log, hooks dir, policies dir |
@@ -84,7 +84,7 @@ macf_tools env --json    # Machine-readable JSON output
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Agent ID
-  MannyMacEff@a3f7c2
+  OrchardMacEff@a3f7c2
 
 Versions
   MACF:         0.3.3

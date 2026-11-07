@@ -27,21 +27,21 @@ from macf.utils.identity import (
 def test_agent_spec_display_name_optional():
     """AgentSpec accepts optional display_name field."""
     agent = AgentSpec(
-        username="pa_manny",
+        username="pa_orchard",
         uid=21100,
-        personality="../agents/manny.md",
-        display_name="Manny MacEff"
+        personality="../agents/orchard.md",
+        display_name="Orchard MacEff"
     )
 
-    assert agent.display_name == "Manny MacEff"
+    assert agent.display_name == "Orchard MacEff"
 
 
 def test_agent_spec_display_name_defaults_to_none():
     """AgentSpec display_name defaults to None when not provided."""
     agent = AgentSpec(
-        username="pa_manny",
+        username="pa_orchard",
         uid=21100,
-        personality="../agents/manny.md"
+        personality="../agents/orchard.md"
     )
 
     assert agent.display_name is None
@@ -61,20 +61,20 @@ def test_get_agent_identity_format(mock_uuid, mock_gecos, _mock_config):
     config layer (added per cversek/MacEff#96 Phase 1) and exercises the
     GECOS path the test originally covered.
     """
-    mock_gecos.return_value = "MannyMacEff"
+    mock_gecos.return_value = "OrchardMacEff"
     mock_uuid.return_value = ("a3f7c2", "global")
 
     with patch.dict(os.environ, {}, clear=False) as env:
         env.pop("MACEFF_AGENT_NAME", None)
         identity = get_agent_identity()
 
-    assert identity == "MannyMacEff@a3f7c2"
+    assert identity == "OrchardMacEff@a3f7c2"
 
 
 @patch('macf.utils.identity._get_config_identity_name', return_value=None)
 @patch('macf.utils.identity._get_gecos_name')
 @patch('macf.utils.identity._resolve_uuid_prefix')
-@patch.dict(os.environ, {'USER': 'pa_manny'})
+@patch.dict(os.environ, {'USER': 'pa_orchard'})
 def test_get_agent_identity_fallback_missing_gecos(mock_uuid, mock_gecos, _mock_config):
     """get_agent_identity() uses username when GECOS unavailable.
 
@@ -88,27 +88,27 @@ def test_get_agent_identity_fallback_missing_gecos(mock_uuid, mock_gecos, _mock_
         env.pop("MACEFF_AGENT_NAME", None)
         identity = get_agent_identity()
 
-    assert identity == "pa_manny@a3f7c2"
+    assert identity == "pa_orchard@a3f7c2"
 
 
 @patch('macf.utils.identity._get_config_identity_name', return_value=None)
 @patch('macf.utils.identity._get_gecos_name')
 @patch('macf.utils.identity._resolve_uuid_prefix')
-@patch.dict(os.environ, {'USER': 'pa_manny'})
+@patch.dict(os.environ, {'USER': 'pa_orchard'})
 def test_get_agent_identity_fallback_missing_uuid(mock_uuid, mock_gecos, _mock_config):
     """get_agent_identity() uses 'unknown' when UUID file missing.
 
     Config layer patched to None so the GECOS path is exercised as
     originally written.
     """
-    mock_gecos.return_value = "MannyMacEff"
+    mock_gecos.return_value = "OrchardMacEff"
     mock_uuid.return_value = ("unknown", "global")
 
     with patch.dict(os.environ, {}, clear=False) as env:
         env.pop("MACEFF_AGENT_NAME", None)
         identity = get_agent_identity()
 
-    assert identity == "MannyMacEff@unknown"
+    assert identity == "OrchardMacEff@unknown"
 
 
 # ============================================================================

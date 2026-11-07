@@ -4,7 +4,7 @@
 
 **Reported**: 2025-12-22
 **Resolved**: 2025-12-24 (Cycle 42 DETOUR)
-**Source**: MannyMacEff container deployment
+**Source**: OrchardMacEff container deployment
 **Severity**: Medium (warning noise, potential misconfigurations)
 
 ### Symptom
@@ -56,7 +56,7 @@ Three-way path semantics implemented:
 
 ### Related
 
-- MannyMacEff FP#1 (deployment-side - needs submodule sync)
+- OrchardMacEff FP#1 (deployment-side - needs submodule sync)
 - `macf/src/macf/utils/paths.py` (path resolution logic)
 - `docker/scripts/start.py` (env var setup)
 

@@ -380,9 +380,9 @@ def test_the_channel_names_its_daemon_by_the_homes_card_not_the_environment(tmp_
     from macf.channels.maceff_channel import channel_card
     (tmp_path / ".maceff").mkdir()
     (tmp_path / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": "Seat2"}}))
-    (tmp_path / ".maceff_primary_agent.id").write_text("78e0aa00-0000-0000-0000-000000000000\n")
+    (tmp_path / ".maceff_primary_agent.id").write_text("f0a1b200-0000-0000-0000-000000000000\n")
     env = {"MACEFF_AGENT_HOME_DIR": str(tmp_path), "MACEFF_AGENT_NAME": "seat2"}
-    assert channel_card(env) == "Seat2@78e0aa"
+    assert channel_card(env) == "Seat2@f0a1b2"
 
 
 def test_main_starts_the_channel_with_the_homes_card(tmp_path, monkeypatch):
@@ -391,14 +391,14 @@ def test_main_starts_the_channel_with_the_homes_card(tmp_path, monkeypatch):
     from macf.channels import maceff_channel
     (tmp_path / ".maceff").mkdir()
     (tmp_path / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": "Seat2"}}))
-    (tmp_path / ".maceff_primary_agent.id").write_text("78e0aa00-0000-0000-0000-000000000000\n")
+    (tmp_path / ".maceff_primary_agent.id").write_text("f0a1b200-0000-0000-0000-000000000000\n")
     # The seat's shape: the identity file is home-wide (HOME is the agent home), which is
     # where get_agent_identity() lets MACEFF_AGENT_NAME win.
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path))
     monkeypatch.setenv("MACEFF_AGENT_NAME", "seat2")
     from macf.utils.identity import get_agent_identity
-    assert get_agent_identity() == "seat2@78e0aa", "the fixture must reproduce the seat's mismatch"
+    assert get_agent_identity() == "seat2@f0a1b2", "the fixture must reproduce the seat's mismatch"
     started = []
 
     class _Recorded:
@@ -409,4 +409,4 @@ def test_main_starts_the_channel_with_the_homes_card(tmp_path, monkeypatch):
             pass
     monkeypatch.setattr(maceff_channel, "Channel", _Recorded)
     assert maceff_channel.main() == 0
-    assert started == ["Seat2@78e0aa"]
+    assert started == ["Seat2@f0a1b2"]

@@ -277,8 +277,8 @@ class TestProfileExemptions:
         return p
 
     def test_named_cards_pass_a_strangers_fragment_does_not(self, repo, tmp_path):
-        install_hook(repo, self._profile(tmp_path, ["@63e6b2", "@15b944"]))
-        (repo / "reviews.md").write_text("reviewed by Alpha@63e6b2 and Beta@15b944\n")
+        install_hook(repo, self._profile(tmp_path, ["@d4e5f6", "@c7d8e9"]))
+        (repo / "reviews.md").write_text("reviewed by Alpha@d4e5f6 and Beta@c7d8e9\n")
         _git(repo, "add", "reviews.md")
         r = _git(repo, "commit", "-m", "record two reviews", check=False)
         assert r.returncode == 0, r.stdout + r.stderr
@@ -289,8 +289,8 @@ class TestProfileExemptions:
         assert "[agent uuid] '@abcdef'" in r.stdout + r.stderr
 
     def test_an_exemption_never_covers_a_secret(self, repo, tmp_path):
-        install_hook(repo, self._profile(tmp_path, ["@63e6b2", r"ghp_.*"]))
-        (repo / "notes.md").write_text("Alpha@63e6b2 says token = ghp_" + "A" * 36 + "\n")
+        install_hook(repo, self._profile(tmp_path, ["@d4e5f6", r"ghp_.*"]))
+        (repo / "notes.md").write_text("Alpha@d4e5f6 says token = ghp_" + "A" * 36 + "\n")
         _git(repo, "add", "notes.md")
         r = _git(repo, "commit", "-m", "secret beside a card", check=False)
         out = r.stdout + r.stderr
@@ -299,10 +299,10 @@ class TestProfileExemptions:
 
     def test_scan_text_applies_the_same_exemption(self):
         from macf.opsec import scan_text
-        prof = {"hard": [], "soft": [], "exempt": ["@63e6b2"]}
-        t = "Alpha@63e6b2 met Gamma@abcdef"
+        prof = {"hard": [], "soft": [], "exempt": ["@d4e5f6"]}
+        t = "Alpha@d4e5f6 met Gamma@abcdef"
         labels = [(f.label, t[f.start:f.end]) for f in scan_text(t, profile=prof).findings]
-        assert ("agent uuid", "@abcdef") in labels and ("agent uuid", "@63e6b2") not in labels
+        assert ("agent uuid", "@abcdef") in labels and ("agent uuid", "@d4e5f6") not in labels
 
 
 def _merge_in_a_leak_from_main(repo, profile, published=True):

@@ -430,7 +430,7 @@ class AgentSpec(BaseModel):
 
     display_name: Optional[str] = Field(
         default=None,
-        description="Human-readable display name for GECOS field and statusline (e.g., 'Manny MacEff')"
+        description="Human-readable display name for GECOS field and statusline (e.g., 'Orchard MacEff')"
     )
 
     harness_session: Optional[str] = Field(

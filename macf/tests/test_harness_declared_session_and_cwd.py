@@ -26,7 +26,7 @@ from macf.models.agent_spec import AgentSpec
 from macf.utils.harness import HarnessParams, render_start
 
 
-def _params(tmp_path, project_dir=None, agent="manny1"):
+def _params(tmp_path, project_dir=None, agent="orchard1"):
     return HarnessParams(
         agent=agent,
         home=tmp_path,
