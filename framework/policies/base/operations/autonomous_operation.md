@@ -1,6 +1,6 @@
 # Autonomous Operation Policy
 
-**Version**: 1.8
+**Version**: 1.9
 **Tier**: CORE
 **Category**: Operations
 **Status**: ACTIVE
@@ -73,6 +73,7 @@ Applies to all Primary Agents (PA) and Subagents (SA) capable of extended autono
 - `inject compact` refused because my input box holds text: may I clear it myself, how, and what must I never clear?
 
 **5.5 A Prompt Nobody Is Answering**
+- When is a dialog nobody can answer denied at once, and when does it stay up?
 - What does a permission dialog do to the rest of the session, including its scheduled prompts?
 - Why can the waiting session not report its own wait, and where must the watch run instead?
 - What does `macf_tools permissions watch` send, when, and when does it stop?
@@ -724,6 +725,26 @@ when nobody can answer.
   two minutes after their one-word reply held a session for ten minutes: "You need to avoid
   AskUserQuestion when USER_IDLE is active", and "It should be in the autonomous operation
   policy too".
+
+**Denying a dialog nobody can answer.** The refusal above acts on calls an Ask rule
+matches. A dialog can still open for other reasons, and when
+`permissions.deny_under_full_autonomy` is true (default false;
+`MACF_DENY_UNDER_FULL_AUTONOMY` overrides it), the PermissionRequest hook denies it at
+once, with a reason, and records `permission_auto_denied` in the event log. It applies
+in AUTO_MODE when the operator is away (USER_IDLE or USER_REMOTE) or a sprint or play
+time is in active scope.
+
+- **AUTO_MODE alone does not trigger it.** Operators stay in AUTO_MODE while attending,
+  and then a dialog is fine.
+- **The state is derived.** There is no flag to arm or forget: the modes and the scope
+  decide, and if they can't be read the dialog stays up.
+- **The default permission mode is exempt**, because nearly every write prompts there
+  and denying would block the agent's own work. A mode the client doesn't report is
+  treated the same way.
+- **A question is a dialog too.** `AskUserQuestion` is denied under the same conditions,
+  and its reason says to ask on the operator's channel. USER_IDLE starts after
+  `MACF_USER_IDLE_TIMEOUT_MINS` without a message, so an operator reading quietly can
+  see one open and close; ask again in text, or raise the timeout.
 
 **Why the watch lives outside.** The PermissionRequest hook tells the operator
 once, when the dialog opens (a Telegram preview of the command, where Telegram
