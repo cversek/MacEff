@@ -346,6 +346,30 @@ def _require_zone_cards(addressing: "AddressingConfig") -> None:
             f"provisioning writes it (MIS-0004 R06); without it their zone mail is refused.")
 
 
+def _refuse_double_claims(addressing: "AddressingConfig", peers: Dict[str, Any]) -> None:
+    """One zone address, one holder (R08): refuse a start where two declarations claim the same
+    zone local part, whether two peers, one peer twice, or a peer and one of our own agents.
+    Routing would otherwise pick one by sort order and say nothing."""
+    from .zone import local_part_from_card, zone_local_part
+    from ..pd.names import IdentityError
+    claims: Dict[str, List[str]] = {}
+    for name, b in addressing.agents.items():
+        try:
+            local = local_part_from_card(b.card) if b.card else zone_local_part(b.home)
+        except (IdentityError, ValueError):
+            continue   # _require_zone_cards has already refused this agent
+        claims.setdefault(local, []).append(f"local agent '{name}'")
+    for dom, decl in sorted(peers.items()):
+        for box, card in decl.agents.items():
+            claims.setdefault(local_part_from_card(card), []).append(f"peer '{dom}' box '{box}'")
+    doubled = {k: v for k, v in claims.items() if len(v) > 1}
+    if doubled:
+        raise ConfigError(
+            "these zone addresses are claimed more than once: " + "; ".join(
+                f"{k} by {', '.join(v)}" for k, v in sorted(doubled.items()))
+            + ". One zone address has one holder (MIS-0004 R08); remove the wrong declaration.")
+
+
 class AddressingConfig(BaseModel):
     """The amail deployment's identity: its domain, its agents, their contacts.
 
@@ -666,6 +690,7 @@ class BrokerDeployConfig(BaseModel):
                                         agents=dict(decl.agents))
         if addressing.zone:
             _require_zone_cards(addressing)
+            _refuse_double_claims(addressing, self.shared_handoffs)
         return BrokerConfig(
             domain=addressing.domain,
             zone=addressing.zone,
