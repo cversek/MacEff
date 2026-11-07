@@ -198,10 +198,11 @@ def test_a_non_sticky_directory_above_the_root_writable_by_all_is_refused(roots,
         a.parent.chmod(0o755)
 
 
-def test_a_symlink_out_of_the_root_into_an_open_directory_refuses_the_root(roots, monkeypatch, tmp_path, capsys):
+def test_a_symlink_out_of_the_root_is_never_read_and_the_rest_of_the_root_is(roots, monkeypatch, tmp_path, capsys):
     """The swap through a link (#592 review): the link's target is this user's and not
     writable, but its directory is open and not sticky, so any account could unlink the
-    target and put its own file there. A root's policies are the files in the root."""
+    target and put its own file there. A root's policies are the files in the root. That
+    reason covers the linked file, so it is the file that's refused, by every way of reading."""
     open_dir = tmp_path / "open"
     open_dir.mkdir()
     target = open_dir / "target.md"
@@ -212,11 +213,14 @@ def test_a_symlink_out_of_the_root_into_an_open_directory_refuses_the_root(roots
     (a / "linked.md").symlink_to(target)
     _set(monkeypatch, f"agentcad={a}")
     try:
-        assert mf.extra_policy_roots() == []
-        assert mf.find_policy_file("agentcad-usage") is None
+        assert [r.name for r in mf.extra_policy_roots()] == ["agentcad"]
+        assert mf.find_policy_file("agentcad-usage") is not None
+        assert mf.find_policy_file("linked") is None
+        assert mf.find_policy_file("agentcad:linked") is None
+        assert not [p for p in mf.list_policy_files() if p.get("name") == "linked"]
         err = capsys.readouterr().err
-        assert "policy root 'agentcad' skipped" in err
-        assert f"{a / 'linked.md'} is a symlink to {target.resolve()}, outside the root" in err
+        assert f"policy {a / 'linked.md'} skipped: a symlink to {target.resolve()}" in err
+        assert "policy root 'agentcad' skipped" not in err
     finally:
         open_dir.chmod(0o755)
 
@@ -238,3 +242,80 @@ def test_a_group_is_asked_about_once_per_walk(roots, monkeypatch):
     _set(monkeypatch, f"agentcad={a}")
     assert [r.name for r in mf.extra_policy_roots()] == ["agentcad"]
     assert len(asked) == len(set(asked)) == 1, asked
+
+
+# --- the agent's own root: personal policies, with no configuration ------------------------------
+
+
+def _personal(home_name="merging"):
+    """A policy in this test's agent home, the place every agent's own policies live."""
+    root = mf.find_agent_home() / "agent" / "policies" / "personal"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / f"{home_name}.md").write_text("# Mine\n")
+    return root
+
+
+def test_an_agents_own_policies_are_a_root_with_no_configuration(roots):
+    root = _personal()
+    assert [r.name for r in mf.policy_roots()] == ["framework", "personal"]
+    assert mf.find_policy_file("personal:merging") == root / "merging.md"
+    assert mf.find_policy_file("merging") == root / "merging.md"
+    assert {p["name"]: p["root"] for p in mf.list_policy_files()}["merging"] == "personal"
+
+
+def test_no_policies_means_no_root_and_no_noise(roots, capsys):
+    assert [r.name for r in mf.policy_roots()] == ["framework"]    # no directory
+    root = mf.find_agent_home() / "agent" / "policies" / "personal"
+    root.mkdir(parents=True)
+    (root / "manifest.json").write_text("{}")
+    (root / "README.md").write_text("# The template provisioning installs\n")
+    root.chmod(0o777)              # unsafe, and it doesn't matter: nothing here to read
+    assert [r.name for r in mf.policy_roots()] == ["framework"]
+    root.chmod(0o755)
+    assert capsys.readouterr().err == ""
+
+
+def test_an_unsafe_personal_root_is_refused_once_saying_why(roots, capsys):
+    root = _personal()
+    root.chmod(0o777)
+    try:
+        assert [r.name for r in mf.policy_roots()] == ["framework"]
+        mf.policy_roots()
+        err = capsys.readouterr().err
+        assert err.count("personal policy root skipped") == 1 and "writable by every account" in err
+        assert mf.find_policy_file("personal:merging") is None
+    finally:
+        root.chmod(0o755)
+
+
+def test_the_framework_keeps_a_name_and_the_prefix_reaches_the_agents_copy(roots):
+    root = _personal("task_management")
+    fw = roots.fw
+    assert mf.find_policy_file("task_management") == fw / "base" / "development" / "task_management.md"
+    assert mf.find_policy_file("personal:task_management") == root / "task_management.md"
+
+
+def test_an_explicit_root_takes_the_place_of_the_default(roots, monkeypatch):
+    root = _personal()
+    a = roots.a
+    _set(monkeypatch, f"mine={root}")          # the same directory, renamed: not listed twice
+    assert [r.name for r in mf.policy_roots()] == ["framework", "mine"]
+    assert mf.find_policy_file("merging") == root / "merging.md"       # and never ambiguous with itself
+    _set(monkeypatch, f"personal={a}")         # the name, elsewhere: the operator's word wins
+    assert [(r.name, r.path) for r in mf.policy_roots()] == [("framework", roots.fw), ("personal", a)]
+
+
+def test_the_cli_lists_and_reads_the_agents_own_root(roots, tmp_path):
+    root = _personal()
+    src = Path(mf.__file__).resolve().parents[2]
+    env = dict(os.environ, PYTHONPATH=str(src), MACF_EVENTS_LOG_PATH=str(tmp_path / "events.jsonl"),
+               MACEFF_AGENT_HOME_DIR=str(mf.find_agent_home()))
+    env.pop(mf.POLICY_ROOTS_ENV, None)
+    run = lambda *argv: subprocess.run([sys.executable, "-m", "macf.cli", *argv],
+                                       capture_output=True, text=True, env=env, timeout=120)
+    listed = run("policy", "list")
+    assert listed.returncode == 0, listed.stderr
+    assert f"root personal: {root}" in listed.stdout and "this agent's home" in listed.stdout
+    read = run("policy", "read", "personal:merging")
+    assert read.returncode == 0, read.stderr
+    assert "Mine" in read.stdout
