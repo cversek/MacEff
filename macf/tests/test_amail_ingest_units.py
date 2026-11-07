@@ -185,3 +185,90 @@ def test_nothing_configured_says_so_for_each(start):
     start._check_inbound_units(_cfg({}))
     assert any("receiver: none configured" in l for l in start.logs)
     assert any("tunnel: none configured (deployment choice)" in l for l in start.logs)
+
+
+# --------------------------------------------------------------------------- review round 1
+
+def test_a_requested_stop_is_a_clean_exit(capsys):
+    """SIGTERM from the daemon is a stop, not a failure, in the exit code and in the log."""
+    code = tunnel.supervise(_Child(exit_after=1, code=143), "x", 60, probe=lambda m: (True, ""),
+                            sleep=lambda s: None, stopping=lambda: True)
+    assert code == 0
+    assert "stopped on request" in capsys.readouterr().out
+
+
+def test_receiver_exits_when_its_server_thread_dies():
+    from macf.amail.daemons.receiver import watch_health
+    alive = iter([True, True, False])
+    ticks = []
+    assert watch_health(lambda: next(alive), lambda: True, lambda: ticks.append(1),
+                        lambda s: None, 0) == 1
+    assert len(ticks) == 2
+
+
+def test_receiver_exits_after_consecutive_failed_probes_and_a_success_resets_the_count():
+    from macf.amail.daemons.receiver import watch_health
+    answers = [False, False, True, False, False, False]
+    asked = []
+
+    def probe():
+        asked.append(1)
+        return answers[len(asked) - 1]
+    ticks = []
+    assert watch_health(lambda: True, probe, lambda: ticks.append(1),
+                        lambda s: None, 0, failures_to_exit=3) == 1
+    assert len(ticks) == 1
+    # The success reset the count: the exit comes on the sixth probe, three failures after it,
+    # not on the fourth, which a count carried across the success would give.
+    assert len(asked) == 6
+
+
+def test_importing_the_receiver_reads_no_env_file(tmp_path, monkeypatch):
+    import importlib
+    import os
+    f = tmp_path / "receiver.env"
+    f.write_text("INGEST_AUD=from-file\n")
+    monkeypatch.setenv("AMAIL_INGEST_ENV_FILE", str(f))
+    monkeypatch.delenv("INGEST_AUD", raising=False)
+    from macf.amail.daemons import receiver
+    importlib.reload(receiver)
+    assert "INGEST_AUD" not in os.environ and receiver.AUD == ""
+
+
+@pytest.mark.skipif(not __import__("sys").platform.startswith("linux"), reason="PR_SET_PDEATHSIG")
+def test_a_killed_wrapper_takes_cloudflared_with_it(tmp_path):
+    """The child is started with die_with_parent, so SIGKILL on the wrapper ends it too."""
+    import os
+    import signal
+    import subprocess
+    import sys
+    import time
+    pidfile = tmp_path / "child.pid"
+    wrapper = subprocess.Popen([sys.executable, "-c", (
+        "import subprocess, sys, time\n"
+        "from macf.amail.daemons.tunnel import die_with_parent\n"
+        "c = subprocess.Popen(['sleep', '60'], preexec_fn=die_with_parent)\n"
+        f"open({str(pidfile)!r}, 'w').write(str(c.pid))\n"
+        "time.sleep(60)\n")], env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)})
+    for _ in range(100):
+        if pidfile.exists() and pidfile.read_text():
+            break
+        time.sleep(0.05)
+    child = int(pidfile.read_text())
+    wrapper.send_signal(signal.SIGKILL)
+    wrapper.wait()
+    for _ in range(100):
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            break
+        # A dead child the init process has not reaped yet still answers; read its state.
+        try:
+            if open(f"/proc/{child}/stat").read().split(")")[-1].split()[0] == "Z":
+                break
+        except OSError:
+            break
+        time.sleep(0.05)
+    else:
+        os.kill(child, signal.SIGKILL)
+        pytest.fail("the child outlived its killed parent")

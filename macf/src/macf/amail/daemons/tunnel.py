@@ -56,20 +56,42 @@ def ready(metrics: str, timeout: float = 3.0) -> Tuple[bool, str]:
     return (n > 0), (f"{n} edge connection(s)" if n > 0 else "no edge connections")
 
 
+PR_SET_PDEATHSIG = 1
+
+
+def die_with_parent() -> None:
+    """In the child, before exec: have the kernel send SIGTERM when this wrapper dies.
+
+    The daemon stops a unit by its process group, which takes cloudflared with it. A wrapper killed
+    any other way (the kernel's OOM killer, a SIGKILL from a person) would otherwise leave an
+    orphaned cloudflared holding the tunnel and the metrics port, so the restarted wrapper's
+    /ready would answer for the orphan. Linux only; elsewhere the process group is the cover."""
+    if not sys.platform.startswith("linux"):
+        return
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
+
+
 def supervise(child: "subprocess.Popen", metrics: str, startup_s: float,
               tick: Optional[Callable[[], None]] = None,
               probe: Callable[[str], Tuple[bool, str]] = ready,
               sleep: Callable[[float], None] = time.sleep,
-              clock: Callable[[], float] = time.monotonic) -> int:
-    """Poll the child's readiness until it exits; tick on each ready answer. Returns its exit code."""
+              clock: Callable[[], float] = time.monotonic,
+              stopping: Callable[[], bool] = lambda: False) -> int:
+    """Poll the child's readiness until it exits; tick on each ready answer. Returns its exit code,
+    or 0 when the exit followed a stop this wrapper was asked for."""
     began = clock()
     connected = warned = False
     while True:
         code = child.poll()
         if code is not None:
+            if stopping():
+                print(f"amail tunnel stopped on request (cloudflared exited with {code})", flush=True)
+                return 0
             print(f"amail tunnel: cloudflared exited with {code}; the daemon restarts this unit",
                   file=sys.stderr, flush=True)
-            return code if code != 0 else 1   # a tunnel that stops is never a clean exit
+            return code if code != 0 else 1   # a tunnel that stops unasked is never a clean exit
         ok, why = probe(metrics)
         if ok:
             if tick:
@@ -104,9 +126,11 @@ def main(argv=None) -> int:
         print(f"refusing to start: cloudflared is not installed at {args.binary}", file=sys.stderr)
         return 78
     child = subprocess.Popen([args.binary, "tunnel", "--config", args.config,
-                              "--metrics", args.metrics, "run"])
+                              "--metrics", args.metrics, "run"], preexec_fn=die_with_parent)
+    asked = []
 
     def stop(signum, _frame):
+        asked.append(signum)
         child.send_signal(signum)
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
@@ -114,7 +138,7 @@ def main(argv=None) -> int:
     heartbeat = heartbeat_from_env()   # already started when this runs as a declared unit
     try:
         return supervise(child, args.metrics, args.startup_s,
-                         tick=heartbeat.tick if heartbeat else None)
+                         tick=heartbeat.tick if heartbeat else None, stopping=lambda: bool(asked))
     finally:
         if heartbeat is not None:
             heartbeat.stop()
