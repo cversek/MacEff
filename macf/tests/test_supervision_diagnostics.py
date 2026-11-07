@@ -267,6 +267,10 @@ def test_the_daemon_is_asked_by_the_homes_card_not_a_short_agent_name(monkeypatc
     assert asked == ["Seat@1a2b3c"]
     # A home that names no agent falls back to the identifier's card.
     assert supervision._daemon_card("Seat@9f8e7d", {"MACEFF_AGENT_HOME_DIR": str(tmp_path / "none")}) == "Seat@9f8e7d"
+    # With no home variable, the home is found as the session-start hook finds it, not the login's.
+    monkeypatch.setattr("macf.utils.paths.find_agent_home", lambda: tmp_path)
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "login")
+    assert supervision._daemon_card("Other@000000", {}) == "Seat@1a2b3c"
 
 
 def test_without_the_session_variables_there_is_no_daemon_claim():
