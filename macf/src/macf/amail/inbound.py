@@ -32,10 +32,12 @@ from __future__ import annotations
 import email
 import email.policy
 import email.utils
+import errno
 import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 import time
 from dataclasses import dataclass, field
@@ -481,12 +483,50 @@ def _quarantine(cfg: InboundConfig, eml: Path, sidecar: Path, reason: str) -> Pa
     qdir = cfg.quarantine_dir
     qdir.mkdir(mode=0o700, parents=True, exist_ok=True)
     dest = qdir / eml.name
-    os.rename(eml, dest)  # same filesystem by deployment contract
+    _move_into(eml, dest)
     side_dest = qdir / sidecar.name
     if sidecar.exists():
-        os.rename(sidecar, side_dest)
+        _move_into(sidecar, side_dest)
     (qdir / f"{eml.stem}.reason").write_text(reason + "\n")
     return dest
+
+
+def _move_into(src: Path, dest: Path) -> None:
+    """Move *src* to *dest*, copying when the two are on different filesystems.
+
+    A deployment that keeps the receiving account and the broker apart may give
+    the spool and the quarantine separate volumes, and then a rename fails with
+    EXDEV. The copy is written under a hidden name in the destination's own
+    directory, synced, and only then given its real name, so the quarantine never
+    holds a partial message under a final name. The source is removed last: a
+    failure at any step leaves the message in at least one place, and a rerun
+    replaces an identical copy rather than making a second one.
+    """
+    try:
+        os.rename(src, dest)
+        return
+    except OSError as e:
+        if e.errno != errno.EXDEV:
+            raise
+    tmp = dest.with_name(f".{dest.name}.partial")
+    try:
+        shutil.copyfile(src, tmp)
+        shutil.copymode(src, tmp)
+        fd = os.open(tmp, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, dest)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    dfd = os.open(dest.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+    os.unlink(src)
 
 
 def process_entry(cfg: InboundConfig, eml: Path, sidecar: Path) -> Dict[str, Any]:

@@ -271,6 +271,58 @@ def test_hash_mismatch_is_quarantined_as_corruption(deploy):
     assert (deploy.quarantine_dir / eml.name).exists()
 
 
+def _rename_across_volumes(monkeypatch):
+    """Make every rename fail as it does between two filesystems. A test's temp
+    directory is one filesystem, so without this the copy path never runs."""
+    import errno
+    import os
+
+    def cross_device(src, dst, *a, **kw):
+        raise OSError(errno.EXDEV, "Invalid cross-device link", str(src))
+    monkeypatch.setattr(os, "rename", cross_device)
+
+
+def test_quarantine_crosses_volumes_by_copy(deploy, monkeypatch):
+    _rename_across_volumes(monkeypatch)
+    raw = make_raw(sender="stranger@example.org")
+    eml, sidecar = spool(deploy, raw)
+    side_bytes = sidecar.read_bytes()
+    result = inbound.process_entry(deploy, eml, sidecar)
+    assert result["disposition"] == QUARANTINED
+    assert (deploy.quarantine_dir / eml.name).read_bytes() == raw
+    assert (deploy.quarantine_dir / sidecar.name).read_bytes() == side_bytes
+    assert not eml.exists() and not sidecar.exists()
+    assert not list(deploy.quarantine_dir.glob(".*.partial"))
+
+
+def test_a_failed_cross_volume_copy_leaves_the_spool_entry(deploy, monkeypatch):
+    _rename_across_volumes(monkeypatch)
+
+    # Fail AFTER the partial copy exists, so the test sees whether it is cleaned up.
+    def fails_after_copy(*a, **kw):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(inbound.shutil, "copymode", fails_after_copy)
+    eml, sidecar = spool(deploy, make_raw(sender="stranger@example.org"))
+    with pytest.raises(OSError):
+        inbound.process_entry(deploy, eml, sidecar)
+    assert eml.exists() and sidecar.exists()
+    assert not (deploy.quarantine_dir / eml.name).exists()
+    assert not list(deploy.quarantine_dir.glob(".*.partial"))
+
+
+def test_a_rename_error_other_than_cross_volume_is_not_copied_around(deploy, monkeypatch):
+    import os
+
+    def denied(*a, **kw):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(os, "rename", denied)
+    eml, sidecar = spool(deploy, make_raw(sender="stranger@example.org"))
+    with pytest.raises(PermissionError):
+        inbound.process_entry(deploy, eml, sidecar)
+    assert eml.exists()
+    assert not (deploy.quarantine_dir / eml.name).exists()
+
+
 def test_mail_for_unknown_recipient_is_quarantined(deploy):
     raw = make_raw()
     result = inbound.process_entry(
