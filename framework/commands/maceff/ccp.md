@@ -12,10 +12,10 @@ Create a consciousness checkpoint (CCP) following MacEff framework policies for 
 
 ## 🧭 Personal Policy Discovery
 
-Before drafting, check for an agent-specific augmentation policy at the predictable path:
+Before drafting, check for an agent-specific augmentation policy:
 
-```
-agent/policies/personal/checkpoint.md
+```bash
+macf_tools policy read personal:checkpoint
 ```
 
 If present, read it. It contains the agent's CEP questions and PEP for this checkpoint practice. Apply its requirements alongside the framework's base CCP structure (e.g., add any extra sections it specifies, follow any extra reading steps it mandates).

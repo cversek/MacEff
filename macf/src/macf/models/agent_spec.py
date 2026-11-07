@@ -636,17 +636,20 @@ class AgentSpec(BaseModel):
         """The declaration body a container renders for this agent: the default session
         (``pd.default_declaration.container_body``) with whatever ``primal_daemon`` declares laid
         over it (``merged_body``). None for a vanilla account or an opt-out. *mail* is whether the
-        deployment runs a mail broker, so the daemon routes mail notices to the agent."""
+        deployment runs a mail broker, so the daemon routes mail notices to the agent. A unit
+        inherits nothing, so the session has a time zone only if declared
+        (``deployment_timezone``)."""
         if not self.has_daemon():
             return None
-        from macf.pd.default_declaration import container_body, merged_body
+        from macf.pd.default_declaration import container_body, deployment_timezone, merged_body
         channels = (self.claude_config.channels if self.claude_config and self.claude_config.channels
                     else [])
         project = self.project_dir or (f"/home/{self.username}/active_project"
                                        if self.assigned_projects else None)
         default = container_body(account=self.username, harness_session=self.harness_session or key,
                                  project_dir=project, channels=channels, mail=mail,
-                                 memory_limit_mb=self.session_memory_mb)
+                                 memory_limit_mb=self.session_memory_mb,
+                                 timezone=deployment_timezone())
         return merged_body(default, self.primal_daemon)
 
     @model_validator(mode='after')

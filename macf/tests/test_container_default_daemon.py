@@ -63,6 +63,16 @@ def test_an_agent_that_declares_nothing_gets_the_default_session():
     assert _session(_body())["environment"]["MACEFF_HARNESS_SESSION"] == "Resident"
 
 
+def test_the_agents_own_bin_comes_ahead_of_the_system_on_the_session_path():
+    """An agent's gh wrapper is in ~/.local/bin. Behind the system's directories, or absent, a plain
+    gh is the system binary, under another identity or none and without the publish gate."""
+    dirs = _session(_body())["environment"]["PATH"].split(":")
+    own = dirs.index("/home/pa_res/.local/bin")
+    assert all(own < dirs.index(d) for d in ("/usr/local/bin", "/usr/bin", "/bin"))
+    # The framework's interpreter stays first, so nothing in a home stands in for it.
+    assert dirs[0] == "/opt/maceff-venv/bin"
+
+
 def test_the_session_starts_where_the_login_shell_always_did():
     """A seat moved onto its daemon continues the same conversation only if its session starts in
     the same directory: the active_project link with assigned projects, else the home, and an
@@ -74,6 +84,24 @@ def test_the_session_starts_where_the_login_shell_always_did():
     assert project(assigned_projects=["Orchard"], project_dir="/home/pa_res/workspace/Orchard") \
         == "/home/pa_res/workspace/Orchard"
     assert _session(_body(session_memory_mb=28672))["memory_limit_mb"] == 28672
+
+
+def test_a_time_zone_that_does_not_resolve_is_reported_not_declared(monkeypatch, capsys):
+    """The C library falls back to UTC without a word, so a typo would look like the old bug."""
+    monkeypatch.setenv("MACEFF_TZ", "America/New_Yrok")
+    assert "TZ" not in _session(_body())["environment"]
+    assert "America/New_Yrok" in capsys.readouterr().err
+
+
+def test_the_session_keeps_the_deployments_time_zone(monkeypatch):
+    """A unit inherits nothing, so the login shell's TZ doesn't reach it. Without this the seat's
+    clock moves to UTC when it moves onto its daemon, while its login shells stay on local time."""
+    monkeypatch.setenv("MACEFF_TZ", "America/New_York")
+    assert _session(_body())["environment"]["TZ"] == "America/New_York"
+    Declaration(version=1, agent="Resident@1a2b3c", **_body())
+    for unset in (lambda: monkeypatch.delenv("MACEFF_TZ"), lambda: monkeypatch.setenv("MACEFF_TZ", "")):
+        unset()
+        assert "TZ" not in _session(_body())["environment"]
 
 
 def test_a_declared_block_is_laid_over_the_default():
