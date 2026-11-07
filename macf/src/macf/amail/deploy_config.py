@@ -327,6 +327,12 @@ class AddressingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     domain: str = Field(description="the address domain this deployment owns")
+    zone: Optional[str] = Field(
+        default=None,
+        description="the shared mail zone this deployment's broker also answers for "
+                    "(MIS-0004 R06). An address under it is derived from each agent's "
+                    "calling card, so the zone needs no table; the name stays in the "
+                    "deployment's own file, never in the repository.")
     tier: Literal["container", "host"] = Field(
         default="container",
         description="which tier this deployment runs under (amail.md §7.5). "
@@ -612,6 +618,7 @@ class BrokerDeployConfig(BaseModel):
                                         gid=decl.gid, note=decl.note)
         return BrokerConfig(
             domain=addressing.domain,
+            zone=addressing.zone,
             shared_handoffs=shared,
             shared_sweep_seconds=self.shared_sweep_seconds,
             agent_homes={name: b.home for name, b in addressing.agents.items()},

@@ -281,6 +281,12 @@ class BrokerConfig:
 
     domain: str
     agent_homes: Dict[str, Path] = field(default_factory=dict)
+
+    #: The shared mail zone this broker also answers for (MIS-0004 R06), from deployment
+    #: configuration. An address under it names an agent by the card in its home
+    #: (amail.zone), so the zone needs no table of its own. None: this broker answers
+    #: only for domain.
+    zone: Optional[str] = None
     contacts_path: Optional[Path] = None
     audit_path: Optional[Path] = None
     socket_path: Path = Path(DEFAULT_SOCKET)
@@ -412,6 +418,8 @@ class BrokerConfig:
         """Local agent owning this address, or None if it is not ours."""
         addr = address.strip().lower()
         local, _, dom = addr.partition("@")  # noqa: MACEFF005 - str.partition's (before, sep, after) contract is fixed by the stdlib; there is no callee whose order can change
+        if self.zone and dom == self.zone.strip().lower():
+            return self._zone_agent(local)
         if dom != self.domain.lower():
             return None
         # The local part is case-insensitive; the declared key keeps the case
@@ -425,6 +433,19 @@ class BrokerConfig:
         for name in self.agent_homes:
             if name.lower() == local:
                 return name
+        return None
+
+    def _zone_agent(self, local: str) -> Optional[str]:
+        """The local agent whose home's card gives *local* under the zone (R06). A home that
+        names no agent matches nothing: it has no card, so it has no zone address."""
+        from .zone import zone_local_part
+        from ..pd.names import IdentityError
+        for name, home in self.agent_homes.items():
+            try:
+                if zone_local_part(home) == local:
+                    return name
+            except IdentityError:
+                continue
         return None
 
     def shared_for(self, address: str) -> Optional[SharedRoute]:
