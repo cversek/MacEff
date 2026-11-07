@@ -294,7 +294,7 @@ Detection alone stays allowed only where no agent has a reachable address. Addre
 | R06 | decidable | `macf/tests/test_amail_address.py::test_address_from_identity_file` | planned |
 | R07 | decidable | `macf/tests/test_amail_address.py::test_origin_from_peer_uid` | planned |
 | R08 | decidable | `macf/tests/test_amail_routing.py::test_rung_from_declared_map` | planned |
-| R09 | decidable | `macf/tests/test_amail_routing.py::test_only_declared_peers` | planned |
+| R09 | decidable | `macf/tests/test_amail_routing.py::test_only_declared_peers` | passing |
 | R10 | decidable | `macf/tests/test_amail_handoff.py::test_next_holder_pulls` | planned |
 | R11 | decidable | `macf/tests/test_amail_handoff.py::test_copy_kept_until_next_holder_completes` | planned |
 | R12 | decidable | `macf/tests/test_amail_partition.py::test_two_accounts`, on two real accounts, with refusal and success in one run and multi-recipient and same-second sends, run by a maintainer other than its author | planned |
@@ -355,6 +355,12 @@ R08 between systems, R09 and R34 were withheld from both and stay so. The untest
 ### 12.2 The direct dependency: MIS-0007
 
 The system daemon's requirements are in MIS-0007 (draft), at the operator's addendum to the motion (P17), so that mail and the system daemon can be developed in parallel without breaking the basis for reconciling them. R01, R02 and the rows of section 10 that name the system daemon wait on it. Until it lands, a container's start step stands in for it, as it does today.
+
+**The declared map's stand-in, and its retirement.** Until MIS-0007 lands, R08's map is declared in each broker's own configuration, a file no agent can write. Under each shared hand-off, `agents` lists the peer's agents by box name and calling card, and each agent's own card is the addressing file's `card`. Retiring the stand-in takes four steps:
+1. The system daemon declares, per system, the agents it holds with their cards. The broker reads its local agents and each peer's agents from those declarations. When both a declaration and the stand-in are present, it reports any disagreement at start-up.
+2. A release in which the declaration wins, the stand-in is still accepted, and each use of the stand-in is logged as deprecated.
+3. The next release refuses a configuration that still carries `agents` or `card`, and names the field to remove.
+4. R08's Conformance row moves to passing only then, with a test that the rung comes from the daemon's declaration. Until then it stays planned.
 
 ### 12.3 Carried to MIS-0006
 
