@@ -57,6 +57,9 @@ def ready(metrics: str, timeout: float = 3.0) -> Tuple[bool, str]:
 
 
 PR_SET_PDEATHSIG = 1
+# Read in the wrapper at import, before any fork, so the child can tell whether its parent
+# is still the wrapper that started it.
+_WRAPPER_PID = os.getpid()
 
 
 def die_with_parent() -> None:
@@ -65,12 +68,21 @@ def die_with_parent() -> None:
     The daemon stops a unit by its process group, which takes cloudflared with it. A wrapper killed
     any other way (the kernel's OOM killer, a SIGKILL from a person) would otherwise leave an
     orphaned cloudflared holding the tunnel and the metrics port, so the restarted wrapper's
-    /ready would answer for the orphan. Linux only; elsewhere the process group is the cover."""
+    /ready would answer for the orphan. Linux only; elsewhere the process group is the cover.
+
+    The signal follows the THREAD that forked, not the process: if the Popen ran on a worker
+    thread, the child would be killed when that thread exited, with the wrapper still alive. Keep
+    the Popen on the main thread. A wrapper that died between the fork and this call would never
+    send the signal, so the child checks that its parent is still the one that started it."""
     if not sys.platform.startswith("linux"):
         return
     import ctypes
     libc = ctypes.CDLL(None, use_errno=True)
-    libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
+    if libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0) != 0:
+        err = ctypes.get_errno()
+        raise OSError(err, "prctl(PR_SET_PDEATHSIG) failed: " + os.strerror(err))
+    if os.getppid() != _WRAPPER_PID:
+        os._exit(1)  # the wrapper is already gone; don't start an orphaned tunnel
 
 
 def supervise(child: "subprocess.Popen", metrics: str, startup_s: float,

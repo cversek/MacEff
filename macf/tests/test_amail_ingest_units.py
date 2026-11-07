@@ -272,3 +272,20 @@ def test_a_killed_wrapper_takes_cloudflared_with_it(tmp_path):
     else:
         os.kill(child, signal.SIGKILL)
         pytest.fail("the child outlived its killed parent")
+
+
+@pytest.mark.skipif(not __import__("sys").platform.startswith("linux"), reason="PR_SET_PDEATHSIG")
+@pytest.mark.parametrize("parent_is_wrapper, status", [(True, 0), (False, 1)])
+def test_a_child_whose_wrapper_already_died_does_not_start(monkeypatch, parent_is_wrapper, status):
+    """The death signal only covers a wrapper that dies after it is set. A child whose parent is
+    no longer the wrapper that started it must exit before exec, not run as an orphan."""
+    import os
+    monkeypatch.setattr(tunnel, "_WRAPPER_PID", os.getpid() if parent_is_wrapper else 1)
+    pid = os.fork()
+    if pid == 0:
+        try:
+            tunnel.die_with_parent()
+        finally:
+            os._exit(0)
+    _, raw = os.waitpid(pid, 0)
+    assert os.waitstatus_to_exitcode(raw) == status
