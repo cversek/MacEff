@@ -7,8 +7,8 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-from .paths import find_maceff_root
+from typing import Any, Dict, Iterable, List, Optional
+from .paths import find_agent_home, find_maceff_root
 
 #: Extra policy roots, os.pathsep-separated, each ``path`` or ``name=path`` (#592). A package
 #: that ships policy in MacEff's format is read where it lives, never copied into the
@@ -18,12 +18,16 @@ POLICY_ROOTS_ENV = "MACEFF_POLICY_ROOTS"
 #: The framework root's name, for a qualified ``framework:<policy>``. No extra root may take it.
 FRAMEWORK_ROOT_NAME = "framework"
 
+#: The root every agent has without configuring one: its own policies, read as personal:<policy>.
+PERSONAL_ROOT_NAME = "personal"
+
 
 @dataclass(frozen=True)
 class PolicyRoot:
     name: str
     path: Path
     framework: bool = False
+    source: str = POLICY_ROOTS_ENV
 
 
 class PolicyAmbiguous(LookupError):
@@ -61,9 +65,8 @@ def _writable_by_others(root: Path) -> str:
     every directory above it. Each must be owned by this user or root, and not writable by
     others or by a group with anyone else in it. A directory above the root may be writable
     by others if it is sticky (/tmp): there no one else can rename or replace the root.
-    A symlink under the root whose target lies outside it is refused: a root's policies are
-    the files in the root, and a target's own directory is not checked, so whoever can write
-    there could replace the file the link names."""
+    A symlink out of the root doesn't count against the root: it isn't one of the root's
+    policies, and ``root_policy_files`` leaves it out, so its target is never read."""
     import stat
     uid = os.getuid()
     private: Dict[int, bool] = {}   # gid -> _private_group, asked once per walk
@@ -93,7 +96,7 @@ def _writable_by_others(root: Path) -> str:
         if p.is_symlink():
             target = p.resolve()
             if not target.is_relative_to(root):
-                return f"{p} is a symlink to {target}, outside the root"
+                continue
         if p.is_dir() or p.suffix == ".md":
             reason = why(p, ancestor=False)
             if reason:
@@ -142,13 +145,41 @@ def extra_policy_roots(environ=None) -> List[PolicyRoot]:
     return roots
 
 
+def personal_policy_root(extras: List[PolicyRoot]) -> Optional[PolicyRoot]:
+    """The agent's own policies, ``{agent_home}/agent/policies/personal``, with no configuration.
+
+    A directory with no policy in it is silent, since most agents have none, and that test comes
+    first so a shared home without personal policies isn't warned about on every hook. One that
+    holds policies must meet the bar every root meets, and a refusal says why. An explicit
+    ``MACEFF_POLICY_ROOTS`` entry with this name or this directory takes its place."""
+    path = find_agent_home() / "agent" / "policies" / "personal"
+    try:
+        # README.md is the template provisioning installs in every seat's directory, not a policy.
+        if not path.is_dir() or not any(p.name != "README.md" for p in path.rglob("*.md")):
+            return None
+    except OSError as e:
+        _report_once(f"personal policy root skipped: {path} cannot be read ({e})")
+        return None
+    if any(r.name == PERSONAL_ROOT_NAME or r.path.resolve() == path.resolve() for r in extras):
+        return None
+    unsafe = _writable_by_others(path)
+    if unsafe:
+        _report_once(f"personal policy root skipped: {unsafe}. A policy read from a root becomes the "
+                     f"agent's instructions, so only this user (or root) may be able to write it "
+                     f"(policy_awareness 4.4)")
+        return None
+    return PolicyRoot(PERSONAL_ROOT_NAME, path, source="this agent's home")
+
+
 def policy_roots(maceff_root: Optional[Path] = None) -> List[PolicyRoot]:
-    """Every root policies are read from: the framework's first, then the extra roots."""
+    """Every root policies are read from: the framework's, the agent's own, then the extra roots."""
     roots = []
     framework = get_framework_policies_path(maceff_root)
     if framework:
         roots.append(PolicyRoot(FRAMEWORK_ROOT_NAME, framework, framework=True))
-    return roots + extra_policy_roots()
+    extras = extra_policy_roots()
+    personal = personal_policy_root(extras)
+    return roots + ([personal] if personal else []) + extras
 
 
 def get_framework_policies_path(maceff_root: Optional[Path] = None) -> Optional[Path]:
@@ -209,11 +240,32 @@ def get_framework_policies_path(maceff_root: Optional[Path] = None) -> Optional[
     return None
 
 
-def _find_in(root: Path, name: str, parents: Optional[List[str]]) -> Optional[Path]:
+def root_policy_files(root: Path) -> List[Path]:
+    """The ``.md`` files of an extra root. A root's policies are the files in the root: a link's
+    target lives in a directory the root's check never reaches, so whoever can write there could
+    replace the file the link names. Such a file is left out and reported once, and the rest of
+    the root is used, since the rule's reason covers that file and no other (#592 review)."""
+    resolved = root.resolve()
+    files = []
     for md_file in root.rglob('*.md'):
+        target = md_file.resolve()
+        if target.is_relative_to(resolved):
+            files.append(md_file)
+        else:
+            _report_once(f"policy {md_file} skipped: a symlink to {target}, outside its root. "
+                         f"A root's policies are the files in the root (policy_awareness 4.4)")
+    return files
+
+
+def _files_of(root: PolicyRoot) -> Iterable[Path]:
+    return root.path.rglob('*.md') if root.framework else root_policy_files(root.path)
+
+
+def _find_in(root: PolicyRoot, name: str, parents: Optional[List[str]]) -> Optional[Path]:
+    for md_file in _files_of(root):
         if md_file.name == name:
             if parents:
-                path_parts = md_file.relative_to(root).parts[:-1]
+                path_parts = md_file.relative_to(root.path).parts[:-1]
                 if all(p in path_parts for p in parents):
                     return md_file
             else:
@@ -284,13 +336,13 @@ def find_policy_file(
     if root_name is not None:
         for root in roots:
             if root.name == root_name:
-                return _find_in(root.path, name, parents)
+                return _find_in(root, name, parents)
         return None
 
     framework_hit = None
     extra_hits = []
     for root in roots:
-        hit = _find_in(root.path, name, parents)
+        hit = _find_in(root, name, parents)
         if hit is None:
             continue
         if root.framework:
@@ -340,7 +392,7 @@ def _list_root(root: PolicyRoot, tier: Optional[str], category: Optional[str],
                include_tier: bool) -> List[Dict[str, Any]]:
     base_path = root.path
     policies = []
-    for md_file in base_path.rglob('*.md'):
+    for md_file in _files_of(root):
         rel_path = md_file.relative_to(base_path)
         path_parts = rel_path.parts
 
