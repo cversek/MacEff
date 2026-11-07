@@ -225,7 +225,7 @@ def _get_gecos_name() -> Optional[str]:
     Extract display name from GECOS field.
 
     Removes spaces from GECOS field to create display name.
-    Example: "Manny MacEff" -> "MannyMacEff"
+    Example: "Orchard MacEff" -> "OrchardMacEff"
 
     Platform-aware:
     - Linux: `getent passwd $USER` (5th colon-delimited field)

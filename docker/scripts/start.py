@@ -348,7 +348,7 @@ def provision_agent_identity(username: str, home_dir: str, display_name: Optiona
     Args:
         username: Linux username (e.g., 'pa_manny')
         home_dir: Agent's home directory path
-        display_name: Human-readable name from agents.yaml (e.g., 'Manny MacEff')
+        display_name: Human-readable name from agents.yaml (e.g., 'Orchard MacEff')
         agent_key: Agent dictionary key (e.g., 'manny') for fallback
 
     Returns:

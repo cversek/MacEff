@@ -7,7 +7,7 @@ similarity to match Whisper output against known vocabulary.
 Examples:
   "Jotur" → "JOTEWR"
   "EPIS dock" → "EPIST_DOC"
-  "Manny Mika F" → "MannyMacEff"
+  "Orchard Mac F" → "OrchardMacEff"
   "the mini rename" → "demini-rename"
 """
 

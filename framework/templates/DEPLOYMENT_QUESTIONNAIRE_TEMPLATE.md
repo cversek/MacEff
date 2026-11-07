@@ -13,7 +13,7 @@ Replace these placeholders before administering:
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `{PROJECT_NAME}` | Project identifier | MannyMacEff, ClientProject |
+| `{PROJECT_NAME}` | Project identifier | OrchardMacEff, ClientProject |
 | `{DOMAIN}` | Primary domain/application area | Scientific computing, E-commerce, Analytics |
 | `{ASSIGNED_REPOS}` | Git repositories agent manages | `org/repo1`, `org/repo2` |
 | `{PRIMARY_TECH_STACK}` | Core technologies | Python/Docker, TypeScript/React |
@@ -128,7 +128,7 @@ How do project policies override or extend framework policies for {PROJECT_NAME}
 Below is a filled example for reference:
 
 ```markdown
-# Deployment Questionnaire: MannyMacEff
+# Deployment Questionnaire: OrchardMacEff
 
 ## Section 1: Project Identity
 
@@ -137,7 +137,7 @@ This deployment runs the MacEff framework for the Orchard scientific computing p
 Primary mission: Enable AI-assisted development of neuroscience data pipelines.
 
 ### Q1.2: Repository Structure
-- `MannyMacEff/` - Parent deployment repository
+- `OrchardMacEff/` - Parent deployment repository
   - `MacEff/` - Framework submodule
   - `framework/` - Project-specific overlay (agents.yaml, projects.yaml)
   - `docker/` - Container configurations

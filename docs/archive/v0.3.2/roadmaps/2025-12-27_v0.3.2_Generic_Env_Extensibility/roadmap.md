@@ -17,7 +17,7 @@ Make MacEff's `bash_init.sh` a simple dispatcher that sources `/opt/maceff/frame
 ## The Mechanism
 
 ```
-MannyMacEff/framework/env.d/10-conda.sh     (parent creates)
+OrchardMacEff/framework/env.d/10-conda.sh     (parent creates)
     ↓ (maceff-init --force-overwrite)
 MacEff/.maceff/framework/env.d/10-conda.sh  (overlay populated)
     ↓ (docker-compose mounts .maceff/framework/ → /opt/maceff/framework/)
@@ -99,14 +99,14 @@ fi
 
 ---
 
-## Phase 4: Create MannyMacEff env.d scripts
+## Phase 4: Create OrchardMacEff env.d scripts
 
-**Location**: `MannyMacEff/framework/env.d/`
+**Location**: `OrchardMacEff/framework/env.d/`
 
 **10-conda.sh**:
 ```bash
 #!/bin/bash
-# MannyMacEff: Conda activation
+# OrchardMacEff: Conda activation
 if [ -f /opt/miniforge3/etc/profile.d/conda.sh ]; then
     . /opt/miniforge3/etc/profile.d/conda.sh
     conda activate "orchard_data" 2>/dev/null || true
@@ -116,14 +116,14 @@ fi
 **20-path.sh**:
 ```bash
 #!/bin/bash
-# MannyMacEff: PATH setup
+# OrchardMacEff: PATH setup
 if [ -d "$HOME/.local/bin" ]; then
     export PATH="$HOME/.local/bin:$PATH"
 fi
 ```
 
 **Success Criteria**:
-- [ ] Scripts created in MannyMacEff/framework/env.d/
+- [ ] Scripts created in OrchardMacEff/framework/env.d/
 - [ ] Scripts are executable (chmod +x)
 
 ---
@@ -154,7 +154,7 @@ Document for deployment operators:
 
 ## Phase 6: Verification
 
-1. Run maceff-init in MannyMacEff
+1. Run maceff-init in OrchardMacEff
 2. Rebuild container
 3. SSH in, verify `which python` = conda python
 4. Verify scripts sourced in order (add echo debug if needed)
@@ -176,4 +176,4 @@ Document for deployment operators:
 | `macf/src/macf/models/agent_spec.py` | Remove conda_env field |
 | `maceff_tools/maceff-init` | Add env.d overlay copying |
 | `docs/OPERATORS.md` | Document env.d mechanism |
-| `MannyMacEff/framework/env.d/*.sh` | NEW deployment scripts |
+| `OrchardMacEff/framework/env.d/*.sh` | NEW deployment scripts |
