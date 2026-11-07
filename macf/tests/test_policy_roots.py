@@ -512,6 +512,29 @@ def test_a_manifest_linked_out_of_the_root_declares_nothing(roots, tmp_path, cap
     assert "symlink out of its root" in capsys.readouterr().err
 
 
+def test_the_whole_tree_check_survives_a_file_it_cannot_read(roots, monkeypatch):
+    """One unreadable file must not end the check, or the rest of the report goes with it."""
+    from pathlib import Path
+    root = _personal()
+    bad = root / "merging.md"
+    real = Path.read_text
+    def read_text(self, *a, **k):
+        if self == bad:
+            raise PermissionError(13, "Permission denied")
+        return real(self, *a, **k)
+    monkeypatch.setattr(Path, "read_text", read_text)
+    results = mf.check_policies()
+    assert any("cannot be read" in f for f in results["personal:merging"])
+    assert len(results) > 1
+
+
+def test_the_check_says_once_what_an_older_manifest_entry_lacks(roots):
+    _declare(_personal(), {"path": "merging.md", "CEP_triggers": ["merge"]},
+             {"name": "merging", "task_types": ["TASK"]})
+    found = mf.check_policies()["personal:manifest.json"]
+    assert len(found) == 1 and "declares no trigger" in found[0] and "CEP_triggers" in found[0]
+
+
 def _manifest(mapping):
     return {"task_type_policies": {"mappings": mapping}}
 
@@ -598,3 +621,81 @@ def test_task_start_surfaces_a_declared_policy_once_a_cycle(roots):
 
     assert "personal:merging" in activated({})
     assert "personal:merging" not in activated({"personal:merging": "9"})
+
+
+# --- the format check ------------------------------------------------------------------------------
+
+GOOD_POLICY = """# Good
+
+**Type**: Personal Policy
+**Scope**: One agent
+**Status**: ACTIVE
+
+---
+
+## Purpose
+
+Why.
+
+## CEP Navigation Guide
+
+**1 First**
+- What?
+
+**1.1 Deeper**
+- What else?
+
+=== CEP_NAV_BOUNDARY ===
+
+## 1 First
+
+### 1.1 Deeper
+
+## 2 Integration with Other Policies
+"""
+
+
+def test_a_well_formed_policy_has_no_findings():
+    assert mf.policy_format_findings(GOOD_POLICY) == []
+    assert mf.policy_format_findings(GOOD_POLICY.replace("## 1 First", "## 1. First")) == []
+    plain = GOOD_POLICY.replace("**1 First**", "1 First").replace("**1.1 Deeper**", "1.1 Deeper")
+    assert mf.policy_format_findings(plain) == []
+
+
+@pytest.mark.parametrize("old,new,expected", [
+    ("**Type**: Personal Policy\n", "", "no **Type**"),
+    ("**Scope**: One agent\n", "", "no **Scope**"),
+    ("**Status**: ACTIVE\n", "", "no **Status**"),
+    ("=== CEP_NAV_BOUNDARY ===\n", "", "no === CEP_NAV_BOUNDARY"),
+    ("## CEP Navigation Guide", "## A Guide", "no CEP Navigation Guide"),
+    ("### 1.1 Deeper", "### 1.2 Deeper", "promises 1.1"),
+    ("**1 First**\n- What?\n\n**1.1 Deeper**\n- What else?\n", "", "no numbered topics"),
+])
+def test_each_thing_a_policy_can_lack_is_found(old, new, expected):
+    assert old in GOOD_POLICY
+    assert any(expected in f for f in mf.policy_format_findings(GOOD_POLICY.replace(old, new)))
+
+
+def test_check_covers_one_policy_or_every_root_and_skips_the_readme(roots):
+    root = _personal()
+    (root / "README.md").write_text("# not a policy\n")
+    (root / "merging.md").write_text(GOOD_POLICY)
+    assert mf.check_policies("personal:merging") == {"personal:merging": []}
+    results = mf.check_policies()
+    assert set(results) == {"task_management", "personal:merging"}
+    assert results["task_management"] and results["personal:merging"] == []
+    with pytest.raises(LookupError):
+        mf.check_policies("personal:absent")
+
+
+def test_the_cli_exit_code_says_whether_it_passed(roots, capsys):
+    from argparse import Namespace
+    from macf import cli
+    root = _personal()
+    (root / "merging.md").write_text(GOOD_POLICY)
+    assert cli.cmd_policy_check(Namespace(policy_name="personal:merging")) == 0
+    assert "1 of 1 pass" in capsys.readouterr().out
+    (root / "merging.md").write_text("# Bare\n")
+    assert cli.cmd_policy_check(Namespace(policy_name="personal:merging")) == 1
+    assert "no **Type**" in capsys.readouterr().out
+    assert cli.cmd_policy_check(Namespace(policy_name="personal:absent")) == 2
