@@ -543,9 +543,9 @@ def _agents_yaml(services):
 
 def _amail_step(start, tmp_path, monkeypatch):
     """Run the amail step against temporary paths, recording every process it launches itself
-    and every start of the receiver. Provisioning that needs root fails and is logged, as on a
+    and every check of the inbound units. Provisioning that needs root fails and is logged, as on a
     host; that half is not what these tests are about."""
-    launched = {"popen": [], "receiver": 0}
+    launched = {"popen": [], "inbound_check": 0}
     for name, attr in (("broker_config.yaml", "AMAIL_BROKER_CONFIG"),
                        ("inbound_config.yaml", "AMAIL_INBOUND_CONFIG")):
         (tmp_path / name).write_text("{}")
@@ -553,8 +553,8 @@ def _amail_step(start, tmp_path, monkeypatch):
     monkeypatch.setattr(start, "broker_cfg_handoff_root", lambda config: str(tmp_path / "handoff"))
     monkeypatch.setattr(start, "provision_pickup_boxes", lambda *a: None)
     monkeypatch.setattr(start.shutil, "chown", lambda *a, **k: None)
-    monkeypatch.setattr(start, "_start_inbound_transport",
-                        lambda interp: launched.__setitem__("receiver", launched["receiver"] + 1))
+    monkeypatch.setattr(start, "_check_inbound_units",
+                        lambda cfg: launched.__setitem__("inbound_check", launched["inbound_check"] + 1))
     monkeypatch.setattr(start.subprocess, "Popen", lambda *a, **k: launched["popen"].append(a))
     return launched
 
@@ -598,13 +598,13 @@ def test_mail_units(tmp_path, monkeypatch):
 
     launched = _amail_step(start, tmp_path, monkeypatch)
     start.start_amail_services(cfg)
-    assert launched == {"popen": [], "receiver": 1}
+    assert launched == {"popen": [], "inbound_check": 1}
 
     bare = _agents_yaml({"amail_broker": {}, "amail_ingest": {}})
     launched = _amail_step(start, tmp_path, monkeypatch)
     with pytest.raises(RuntimeError, match="R53"):
         start.start_amail_services(bare)
-    assert launched == {"popen": [], "receiver": 1}
+    assert launched == {"popen": [], "inbound_check": 1}
 
     with pytest.raises(ValidationError, match="only as the service account"):
         _agents_yaml({"amail_broker": {"calling_card": "AmailBroker", "primal_daemon": {

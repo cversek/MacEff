@@ -54,6 +54,37 @@ from pathlib import Path
 import jwt as pyjwt
 from jwt import PyJWKClient
 
+from macf.pd.liveness import heartbeat_from_env
+
+
+def load_env_file(path: Path, environ=os.environ) -> int:
+    """Set each KEY=value from *path* that *environ* does not already hold; the count set.
+
+    As a primal daemon's unit the receiver gets only its declaration's environment, so the
+    deployment's verification parameters (team domain, audience, pin) are read from the file
+    start-up places for this account, ``AMAIL_INGEST_ENV_FILE``. A missing file sets nothing;
+    the checks in ``main`` then refuse to listen."""
+    try:
+        text = path.read_text()
+    except OSError:
+        return 0
+    n = 0
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            if key.strip() not in environ:
+                environ[key.strip()] = value.strip()
+                n += 1
+    return n
+
+
+ENV_FILE = Path(os.environ.get("AMAIL_INGEST_ENV_FILE", "/opt/amail_ingest/receiver.env"))
+load_env_file(ENV_FILE)
+
+#: The loopback probe the unit's liveness rests on: answered 200, never logged.
+HEALTH_PATH = "/healthz"
+
 TEAM_DOMAIN = os.environ.get("INGEST_TEAM_DOMAIN", "").rstrip("/")
 AUD = os.environ.get("INGEST_AUD", "")
 PIN_CN = os.environ.get("INGEST_PIN_COMMON_NAME") or None
@@ -346,8 +377,13 @@ class IngestHandler(BaseHTTPRequestHandler):
         # affect delivery. The coupling is an alarm, not a gate.
         check_drain()
 
-    # Anything that is not POST /inbound is refused loudly.
+    # Anything that is not POST /inbound is refused loudly, except the health probe.
     def do_GET(self):
+        if self.path == HEALTH_PATH:
+            # The unit's own liveness probe (main). Not logged: it runs every interval, and it
+            # says nothing about mail. Through the tunnel it sits behind the same Access policy
+            # as /inbound, and it reveals only that the receiver answers.
+            return self._reply(200, {"ok": True})
         self._refuse(405, "POST only")
     do_PUT = do_DELETE = do_PATCH = do_GET
 
@@ -366,11 +402,37 @@ def main() -> int:
     print(f"amail ingest receiver on http://{BIND[0]}:{BIND[1]} "
           f"(aud {AUD[:12]}..., jwks {JWKS_URL}, "
           f"pin_cn {PIN_CN or 'none'})", flush=True)
+    heartbeat = heartbeat_from_env()
+    if heartbeat is None:
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        return 0
+    # As a declared unit, liveness is a request answered, not a process alive: the server runs
+    # on a thread and this loop asks it over loopback, ticking only on a 200 (MIS-0002-R14).
+    import threading
+    threading.Thread(target=server.serve_forever, name="ingest-serve", daemon=True).start()
+    url = f"http://{BIND[0]}:{BIND[1]}{HEALTH_PATH}"
     try:
-        server.serve_forever()
+        while True:
+            if probe_health(url):
+                heartbeat.tick()
+            time.sleep(min(heartbeat.interval_s / 2, 15))
     except KeyboardInterrupt:
-        pass
-    return 0
+        return 0
+    finally:
+        heartbeat.stop()
+        server.shutdown()
+
+
+def probe_health(url: str, timeout: float = 5.0) -> bool:
+    """Whether the receiver answers its health path with 200."""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return r.status == 200
+    except (OSError, ValueError):
+        return False
 
 
 if __name__ == "__main__":
