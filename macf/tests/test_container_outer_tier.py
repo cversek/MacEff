@@ -328,13 +328,13 @@ def test_a_declared_card_is_written_into_a_home_without_one_and_the_daemon_rende
     config.json gets one holding just the declared card, the agent's own, mode 0600, and the
     declaration names the card the daemon will read from that home."""
     import os
-    r = _carded(tmp_path, monkeypatch, {"pa_sparrow": "Sparrow1"})
-    config = r.config("pa_sparrow")
-    assert json.loads(config.read_text()) == {"agent_identity": {"calling_card": "Sparrow1"}}
+    r = _carded(tmp_path, monkeypatch, {"pa_orchard": "Orchard1"})
+    config = r.config("pa_orchard")
+    assert json.loads(config.read_text()) == {"agent_identity": {"calling_card": "Orchard1"}}
     assert oct(config.stat().st_mode)[-3:] == "600"
     assert ("config.json.tmp", os.getuid(), os.getgid()) in r.chowned
-    assert r.done == ["pa_sparrow"]
-    assert json.loads(r.rendered("pa_sparrow").read_text())["agent"] == "Sparrow1@0a2b3c"
+    assert r.done == ["pa_orchard"]
+    assert json.loads(r.rendered("pa_orchard").read_text())["agent"] == "Orchard1@0a2b3c"
 
 
 def test_writing_the_card_keeps_every_other_key_and_the_files_owner_and_mode(tmp_path, monkeypatch):
@@ -344,33 +344,33 @@ def test_writing_the_card_keeps_every_other_key_and_the_files_owner_and_mode(tmp
     import os
     existing = {"task_store": {"mode": "home", "path": "agent/public/tasks"},
                 "agent_identity": {"display_name": "Orchard MacEff"}}
-    r = _carded(tmp_path, monkeypatch, {"pa_sparrow": "Sparrow1"}, {"pa_sparrow": (existing, 0o640)})
-    config = r.config("pa_sparrow")
+    r = _carded(tmp_path, monkeypatch, {"pa_orchard": "Orchard1"}, {"pa_orchard": (existing, 0o640)})
+    config = r.config("pa_orchard")
     assert json.loads(config.read_text()) == {
         "task_store": {"mode": "home", "path": "agent/public/tasks"},
-        "agent_identity": {"display_name": "Orchard MacEff", "calling_card": "Sparrow1"}}
+        "agent_identity": {"display_name": "Orchard MacEff", "calling_card": "Orchard1"}}
     assert oct(config.stat().st_mode)[-3:] == "640"
     st = config.stat()
     assert ("config.json.tmp", st.st_uid, st.st_gid) in r.chowned
-    assert r.done == ["pa_sparrow"]
+    assert r.done == ["pa_orchard"]
 
 
 def test_a_home_already_holding_the_card_is_left_untouched(tmp_path, monkeypatch):
     """At every start after the first the card is already there: the file isn't rewritten, so
     its inode and contents stay exactly as they were, and the daemon still renders."""
-    existing = {"agent_identity": {"calling_card": "Sparrow1"}, "z": 1}
-    home_config = tmp_path / "home" / "pa_sparrow" / ".maceff" / "config.json"
+    existing = {"agent_identity": {"calling_card": "Orchard1"}, "z": 1}
+    home_config = tmp_path / "home" / "pa_orchard" / ".maceff" / "config.json"
     start = _start()
     monkeypatch.setattr(start, "HOME_ROOT", tmp_path / "home")
     home_config.parent.mkdir(parents=True)
     home_config.write_text(json.dumps(existing))
     before = (home_config.stat().st_ino, home_config.read_text())
-    assert start.write_agent_card("pa_sparrow", "Sparrow1", tmp_path / "home" / "pa_sparrow",
+    assert start.write_agent_card("pa_orchard", "Orchard1", tmp_path / "home" / "pa_orchard",
                                   chown=lambda *a: None) is False
     assert (home_config.stat().st_ino, home_config.read_text()) == before
     home_config.unlink()
-    r = _carded(tmp_path / "again", monkeypatch, {"pa_sparrow": "Sparrow1"}, {"pa_sparrow": (existing, 0o600)})
-    assert not any(name == "config.json.tmp" for name, *_ in r.chowned) and r.done == ["pa_sparrow"]
+    r = _carded(tmp_path / "again", monkeypatch, {"pa_orchard": "Orchard1"}, {"pa_orchard": (existing, 0o600)})
+    assert not any(name == "config.json.tmp" for name, *_ in r.chowned) and r.done == ["pa_orchard"]
 
 
 def test_a_different_card_in_the_home_is_refused_and_costs_only_that_agent(tmp_path, monkeypatch, capsys):

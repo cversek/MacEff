@@ -22,11 +22,11 @@ def test_the_agents_amail_settings_name_the_box(tmp_path):
 
 
 def test_without_settings_the_environment_names_it(tmp_path):
-    env = {"MACEFF_AGENT_NAME": "sparrow2"}
-    assert pk.resolve_pickup_box(tmp_path, env) == (pk.Path("/var/lib/amail/handoff/sparrow2"),
+    env = {"MACEFF_AGENT_NAME": "orchard2"}
+    assert pk.resolve_pickup_box(tmp_path, env) == (pk.Path("/var/lib/amail/handoff/orchard2"),
                                                     pk.FROM_ENVIRONMENT)
     env["MACF_AMAIL_HANDOFF"] = str(tmp_path / "h")
-    assert pk.pickup_box(tmp_path, env) == tmp_path / "h" / "sparrow2"
+    assert pk.pickup_box(tmp_path, env) == tmp_path / "h" / "orchard2"
 
 
 def test_each_key_is_resolved_on_its_own(tmp_path):

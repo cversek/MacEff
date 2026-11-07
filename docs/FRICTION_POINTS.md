@@ -4,7 +4,7 @@ Running log of deployment friction discovered during operations. Informs fixes a
 
 **Repositories**:
 - MacEff: https://github.com/cversek/MacEff
-- OrchardMacEff: https://github.com/sparrow-dev-exampleorg/OrchardMacEff
+- a private container deployment (its repository is not public)
 
 ---
 
@@ -16,7 +16,7 @@ Running log of deployment friction discovered during operations. Informs fixes a
 
 **Root Cause**: Scripts hardcode container name instead of deriving dynamically
 
-**Fix**: [OrchardMacEff@8724cb2](https://github.com/sparrow-dev-exampleorg/OrchardMacEff/commit/8724cb2) - Dynamic detection via `docker compose ps` with fallback pattern matching
+**Fix** (in that deployment's repository) - Dynamic detection via `docker compose ps` with fallback pattern matching
 
 **Prevention**: All scripts should derive container name from docker-compose
 

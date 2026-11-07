@@ -52,7 +52,7 @@ def tools(tmp_path):
     (bin_ / "docker").chmod(0o755)
     log = tmp_path / "init.log"
     env = dict(os.environ, PATH=f"{bin_}:{os.environ['PATH']}", INIT_LOG=str(log), CONTAINER_NAME="c",
-               AGENTS="sparrow\\tmaceff\\nsparrow2\\tmaceff\\nvisitor\\tvanilla\\n")
+               AGENTS="orchard\\tmaceff\\norchard2\\tmaceff\\nvisitor\\tvanilla\\n")
     env.pop("PA", None)
 
     def run(*args, script="preamble-upgrade", **extra):
@@ -66,18 +66,18 @@ def tools(tmp_path):
 def test_all_agents_upgrades_every_declared_maceff_agent_and_names_each(tools):
     r, inits = tools("--all-agents", "--confirm-all-agents")
     assert r.returncode == 0, r.stderr
-    assert inits == ["sparrow", "sparrow2"]
-    assert "upgraded: sparrow\n" in r.stdout and "upgraded: sparrow2\n" in r.stdout
+    assert inits == ["orchard", "orchard2"]
+    assert "upgraded: orchard\n" in r.stdout and "upgraded: orchard2\n" in r.stdout
     assert "skipped:  visitor (vanilla)" in r.stdout
     assert "Preambles: 2 upgraded, 0 failed, 1 vanilla skipped." in r.stdout
 
 
 def test_one_failure_does_not_stop_the_rest_and_is_named(tools):
-    r, inits = tools("--all-agents", "--confirm-all-agents", FAIL_USER="sparrow")
+    r, inits = tools("--all-agents", "--confirm-all-agents", FAIL_USER="orchard")
     assert r.returncode != 0
-    assert inits == ["sparrow", "sparrow2"]
-    assert "FAILED:   sparrow" in r.stdout and "upgraded: sparrow2" in r.stdout
-    assert "      agent init: no writable home for sparrow\n" in r.stdout   # the reason, under its verdict
+    assert inits == ["orchard", "orchard2"]
+    assert "FAILED:   orchard" in r.stdout and "upgraded: orchard2" in r.stdout
+    assert "      agent init: no writable home for orchard\n" in r.stdout   # the reason, under its verdict
 
 
 def test_the_breadth_needs_confirming_when_nobody_is_at_a_terminal(tools):
@@ -87,8 +87,8 @@ def test_the_breadth_needs_confirming_when_nobody_is_at_a_terminal(tools):
 
 
 def test_one_named_agent_needs_no_confirmation(tools):
-    r, inits = tools("sparrow2")
-    assert r.returncode == 0 and inits == ["sparrow2"]
+    r, inits = tools("orchard2")
+    assert r.returncode == 0 and inits == ["orchard2"]
     # vanilla accounts were never in scope of a single-agent call, so the summary does not count them
     assert "Preambles: 1 upgraded, 0 failed.\n" in r.stdout and "vanilla" not in r.stdout
 
@@ -96,7 +96,7 @@ def test_one_named_agent_needs_no_confirmation(tools):
 def test_no_agent_is_assumed(tools):
     r, inits = tools()
     assert r.returncode == 2 and inits == []
-    assert "sparrow" in r.stderr and "visitor (vanilla: never upgraded)" in r.stderr
+    assert "orchard" in r.stderr and "visitor (vanilla: never upgraded)" in r.stderr
 
 
 def test_a_vanilla_account_or_an_undeclared_name_is_refused(tools):
@@ -108,7 +108,7 @@ def test_a_vanilla_account_or_an_undeclared_name_is_refused(tools):
 def test_framework_upgrade_upgrades_every_agent(tools):
     r, inits = tools(script="framework-upgrade")
     assert r.returncode == 0, r.stdout + r.stderr
-    assert inits == ["sparrow", "sparrow2"]
+    assert inits == ["orchard", "orchard2"]
 
 
 def test_the_preflight_refuses_a_declaration_with_no_maceff_agent(tools):
@@ -116,15 +116,15 @@ def test_the_preflight_refuses_a_declaration_with_no_maceff_agent(tools):
     assert r.returncode == 1 and "declares no MacEff agent" in r.stderr
 
 
-NO_VANILLA = "sparrow\\tmaceff\\nsparrow2\\tmaceff\\n"
+NO_VANILLA = "orchard\\tmaceff\\norchard2\\tmaceff\\n"
 
 
-@pytest.mark.parametrize("args", [("--all-agents", "--confirm-all-agents"), ("sparrow",)])
+@pytest.mark.parametrize("args", [("--all-agents", "--confirm-all-agents"), ("orchard",)])
 def test_a_deployment_with_no_vanilla_account(tools, args):
     """The common case. Empty arrays must expand to nothing on every bash (see the next test)."""
     r, inits = tools(*args, AGENTS=NO_VANILLA)
     assert r.returncode == 0, r.stderr
-    assert inits == (["sparrow", "sparrow2"] if len(args) == 2 else ["sparrow"])
+    assert inits == (["orchard", "orchard2"] if len(args) == 2 else ["orchard"])
 
 
 def test_a_declaration_with_only_a_vanilla_account_lists_it(tools):
@@ -158,7 +158,7 @@ def test_the_enumeration_runs_under_python_as_bash_hands_it_over(tmp_path, scrip
     assert "AgentsConfig" in code
     decl = tmp_path / "agents.yaml"
     decl.write_text("ids:\n  base: 21000\n"
-                    "agents:\n  sparrow:\n    username: pa_sparrow\n    uid: 21100\n    personality: p.md\n"
+                    "agents:\n  orchard:\n    username: pa_orchard\n    uid: 21100\n    personality: p.md\n"
                     "  visitor:\n    username: visitor\n    uid: 21101\n    flavor: vanilla\nsubagents: {}\n")
     code = code.replace("/etc/maceff/agents.yaml", str(decl))
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
