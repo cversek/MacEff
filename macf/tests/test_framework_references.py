@@ -22,7 +22,8 @@ SLASH_NAME = re.compile(r"(?<![\w/.])/(maceff[:\-][A-Za-z0-9_:\-]*[A-Za-z0-9_])"
 SKILL_CALL = re.compile(r"""Skill\(\s*skill:\s*["']([^"']+)["']""")
 # `maceff-delegation` in prose names a skill, or a tool such as `maceff-init`.
 TICKED_NAME = re.compile(r"`(maceff-[a-z][a-z0-9-]*[a-z0-9])`")
-POLICY_CMD = re.compile(r"macf_tools policy (?:navigate|read|inject) ([a-z_]+)")
+# A name qualified by its root (personal:<name>) lives outside this tree, so it can't be checked here.
+POLICY_CMD = re.compile(r"macf_tools policy (?:navigate|read|inject) ([a-z_]+)\b(?!:)")
 
 
 def _skills():
@@ -96,6 +97,7 @@ def test_a_name_that_does_not_exist_is_reported_and_one_that_does_is_not():
         "The `maceff-no-such-helper` skill, and macf_tools policy read no_such_policy.\n"
         "Then /maceff:ccp, `maceff-delegation`, `maceff-init` and\n"
         "macf_tools policy navigate scholarship. See framework/commands/maceff/ccp.md.\n"
+        "macf_tools policy read personal:anything_of_the_agents_own.\n"
     )
     assert _dangling(text, _skills(), _commands(), _policies(), _tools()) == [
         "maceff:no-such-command",
