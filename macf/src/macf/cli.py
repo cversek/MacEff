@@ -2973,7 +2973,6 @@ def _agent_init_preamble(args: argparse.Namespace, pa_home: Path, config):
             manifest_data = {
                 "version": "1.0.0",
                 "description": f"{config.agent_name} Personal Policies",
-                "extends": "/opt/maceff/policies/manifest.json",
                 "personal_policies": []
             }
             with open(personal_manifest, 'w') as f:
