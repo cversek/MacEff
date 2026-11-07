@@ -10,7 +10,7 @@
 ### Symptom
 
 ```
-⚠️ MACF: Using cwd fallback: /home/pa_manny/workspace/NeuroVEP
+⚠️ MACF: Using cwd fallback: /home/pa_manny/workspace/Orchard
    Reasons: no markers found walking up from __file__; no markers found walking up from cwd
    Fix: Set MACEFF_ROOT_DIR to MacEff framework location
 ```

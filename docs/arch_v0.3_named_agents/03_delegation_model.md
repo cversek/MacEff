@@ -121,7 +121,7 @@ This document describes how delegation works in practice.
 ### Example Task Specification
 
 ```markdown
-# Task: Deploy NeuroVEP Data Pipeline
+# Task: Deploy Orchard Data Pipeline
 
 **Assigned**: 2025-10-18 14:25:00
 **Deadline**: 2025-10-18 16:00:00
@@ -129,7 +129,7 @@ This document describes how delegation works in practice.
 
 ## Objective
 
-Deploy updated NeuroVEP data pipeline to production container.
+Deploy updated Orchard data pipeline to production container.
 
 ## Requirements
 
@@ -179,7 +179,7 @@ User has meeting at 4 PM, needs demo-ready pipeline. Previous deployment had mem
 ### Example Delegation Trail
 
 ```markdown
-# Delegation Trail: Deploy NeuroVEP Pipeline
+# Delegation Trail: Deploy Orchard Pipeline
 
 **Assigned**: 2025-10-18 14:25:00
 **Started**: 2025-10-18 14:30:00
@@ -207,7 +207,7 @@ User has meeting at 4 PM, needs demo-ready pipeline. Previous deployment had mem
 ## Infrastructure Changes
 
 - docker-compose.yml: memory limit 4GB → 8GB
-- Added bind mount: /host/data → /container/shared_workspace/NeuroVEP/data
+- Added bind mount: /host/data → /container/shared_workspace/Orchard/data
 
 ## Lessons Learned
 
@@ -219,19 +219,19 @@ Memory profiling revealed 4GB limit caused OOM kills. Pipeline peak usage ~6.5GB
 ### Step 1: PA Creates Task Specification
 
 ```bash
-# PA working in ~/workspace/NeuroVEP
+# PA working in ~/workspace/Orchard
 # Needs DevOpsEng to handle infrastructure task
 
 # Create task specification in SA workspace
-cat > /home/pa_manny/agent/subagents/devops_eng/assigned/2025-10-18_142500_Deploy_NeuroVEP_Pipeline.md <<EOF
-# Task: Deploy NeuroVEP Data Pipeline
+cat > /home/pa_manny/agent/subagents/devops_eng/assigned/2025-10-18_142500_Deploy_Orchard_Pipeline.md <<EOF
+# Task: Deploy Orchard Data Pipeline
 
 **Assigned**: 2025-10-18 14:25:00
 **Deadline**: 2025-10-18 16:00:00
 **Priority**: High
 
 ## Objective
-Deploy updated NeuroVEP data pipeline to production container.
+Deploy updated Orchard data pipeline to production container.
 
 ## Requirements
 - Update Docker Compose configuration
@@ -255,7 +255,7 @@ EOF
 
 ```
 PA: "Use the Task tool with devops_eng to deploy the pipeline.
-     Read the task specification in assigned/2025-10-18_142500_Deploy_NeuroVEP_Pipeline.md"
+     Read the task specification in assigned/2025-10-18_142500_Deploy_Orchard_Pipeline.md"
 ```
 
 **Claude Code**:
@@ -273,7 +273,7 @@ pwd
 # Output: /home/pa_manny/agent/subagents/devops_eng
 
 # Read assigned task (using relative path)
-cat ./assigned/2025-10-18_142500_Deploy_NeuroVEP_Pipeline.md
+cat ./assigned/2025-10-18_142500_Deploy_Orchard_Pipeline.md
 
 # Execute work based on task requirements
 # - Update docker-compose.yml
@@ -291,8 +291,8 @@ cat ./assigned/2025-10-18_142500_Deploy_NeuroVEP_Pipeline.md
 
 ```bash
 # SA creates delegation trail in own workspace
-cat > ./public/delegation_trails/2025-10-18_143000_Deploy_NeuroVEP_Pipeline_trail.md <<EOF
-# Delegation Trail: Deploy NeuroVEP Pipeline
+cat > ./public/delegation_trails/2025-10-18_143000_Deploy_Orchard_Pipeline_trail.md <<EOF
+# Delegation Trail: Deploy Orchard Pipeline
 
 **Assigned**: 2025-10-18 14:25:00
 **Started**: 2025-10-18 14:30:00
@@ -316,7 +316,7 @@ cat > ./public/delegation_trails/2025-10-18_143000_Deploy_NeuroVEP_Pipeline_trai
 
 ## Infrastructure Changes
 - docker-compose.yml: memory limit 4GB → 8GB
-- Added bind mount: /host/data → /container/shared_workspace/NeuroVEP/data
+- Added bind mount: /host/data → /container/shared_workspace/Orchard/data
 
 ## Lessons Learned
 Memory profiling revealed 4GB limit caused OOM kills. Pipeline peak usage ~6.5GB.
@@ -329,7 +329,7 @@ EOF
 # PA session resumes after SA completes
 
 # Read delegation trail from SA workspace
-cat /home/pa_manny/agent/subagents/devops_eng/public/delegation_trails/2025-10-18_143000_Deploy_NeuroVEP_Pipeline_trail.md
+cat /home/pa_manny/agent/subagents/devops_eng/public/delegation_trails/2025-10-18_143000_Deploy_Orchard_Pipeline_trail.md
 
 # Verify success criteria met
 # - Pipeline runs successfully ✅

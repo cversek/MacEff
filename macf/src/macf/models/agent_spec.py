@@ -1019,7 +1019,7 @@ class AgentsConfig(BaseModel):
             username: pa_manny
             personality: ../custom/agents/manny_personality.md
             subagents: [DevOpsEng, TestEng]
-            assigned_projects: [NeuroVEP]
+            assigned_projects: [Orchard]
 
         subagents:
           DevOpsEng:

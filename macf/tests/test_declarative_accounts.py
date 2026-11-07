@@ -309,7 +309,7 @@ class TestBackwardCompatibility:
                     "display_name": "Manny MacEff",
                     "personality": "agents/manny_personality.md",
                     "subagents": ["DevOpsEng"],
-                    "assigned_projects": ["NeuroVEP"],
+                    "assigned_projects": ["Orchard"],
                 }
             },
             "subagents": {

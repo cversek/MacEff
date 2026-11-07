@@ -84,7 +84,7 @@ def format_statusline(
         Formatted statusline: "agent | project | env | tokens CL level"
 
     Example:
-        "manny | NeuroVEP | Container Linux | 60k/200k CL 70"
+        "manny | Orchard | Container Linux | 60k/200k CL 70"
     """
     # Format tokens
     tokens_str = f"{format_tokens(tokens_used)}/{format_tokens(tokens_total)}"

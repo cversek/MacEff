@@ -109,7 +109,7 @@ fi
 # MannyMacEff: Conda activation
 if [ -f /opt/miniforge3/etc/profile.d/conda.sh ]; then
     . /opt/miniforge3/etc/profile.d/conda.sh
-    conda activate "neurovep_data" 2>/dev/null || true
+    conda activate "orchard_data" 2>/dev/null || true
 fi
 ```
 
