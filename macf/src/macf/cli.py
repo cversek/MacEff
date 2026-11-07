@@ -3734,6 +3734,23 @@ def cmd_policy_recommend(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_policy_check(args: argparse.Namespace) -> int:
+    """Report what a policy lacks against policy_writing's format. Exit 1 on any finding."""
+    from .utils.manifest import check_policies
+    try:
+        results = check_policies(getattr(args, "policy_name", None))
+    except LookupError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 2
+    failing = {name: found for name, found in results.items() if found}
+    for name, found in sorted(failing.items()):
+        print(name)
+        for finding in found:
+            print(f"  {finding}")
+    print(f"{len(results) - len(failing)} of {len(results)} pass")
+    return 1 if failing else 0
+
+
 def cmd_policy_build_index(args: argparse.Namespace) -> int:
     """Build hybrid FTS5 + semantic index from policy files."""
     try:
@@ -12817,6 +12834,11 @@ def _build_parser() -> argparse.ArgumentParser:
     recommend_parser.add_argument("--limit", type=int, default=5,
                                   help="max results to show (default: 5)")
     recommend_parser.set_defaults(func=cmd_policy_recommend)
+
+    # policy check
+    check_parser = policy_sub.add_parser("check", help="report what a policy lacks against the policy_writing format")
+    check_parser.add_argument("policy_name", nargs="?", help="one policy, or every root's policies if omitted")
+    check_parser.set_defaults(func=cmd_policy_check)
 
     # policy build_index
     build_index_parser = policy_sub.add_parser("build_index", help="build hybrid FTS5 + semantic index")

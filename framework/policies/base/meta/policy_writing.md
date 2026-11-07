@@ -1,7 +1,7 @@
 # Policy Writing Guidelines
 
 **Type**: Meta-Policy (Development Infrastructure)
-**Scope**: Policy authors (PA creating new framework policies)
+**Scope**: Policy authors (framework policies, and an agent's own personal policies)
 **Status**: Framework guidelines for policy creation and maintenance
 
 ---
@@ -42,6 +42,10 @@ Policy writing guidelines ensure MacEff framework policies follow consistent str
 - Why are section numbers brittle in external references?
 - What's the Policy as API principle?
 - Timeless vs brittle references?
+
+**1.5 Personal Policies**
+- Which of these requirements bind a personal policy?
+- How do I check a policy's format?
 
 **2 Content Best Practices**
 - How verbose should policies be?
@@ -258,6 +262,14 @@ Treat policies as stable interfaces with evolving implementation:
 - ✅ Semantic extraction (WHAT) over location encoding (WHERE)
 
 **Note**: This principle does NOT apply to internal CEP Nav Guide organization (sections 1.2-1.3), which intentionally uses matching section numbers for within-policy navigation.
+
+### 1.5 Personal Policies
+
+An agent's own policies (`personal:<name>`, see `policy_awareness`) follow the structure above, because structure is what lets a reader navigate after a compaction with no memory of writing it: the header, the CEP guide with its boundary, numbered sections matching the guide, Integration, Anti-Patterns, Evolution.
+
+**What doesn't bind one is sanitization.** Section 2.1 exists because a framework policy serves every agent. A personal policy serves one, and the real incident is often the reason its rule exists: keep the date, and what went wrong. It still stays out of anything public.
+
+**Check the format:** `macf_tools policy check <name>` reports what's missing, and exits 1 on a finding. With no name, it checks every policy this agent reads.
 
 ---
 
