@@ -17,8 +17,8 @@ from macf.amail.models import Message
 
 ZONE = "agents.example.org"
 HOST, BOX = "host.local", "box.local"
-IRA, MANNY = "IraTest@a1a1a1", "WrenTuba@3c9d1e"
-IRA_Z, MANNY_Z = f"iratest_a1a1a1@{ZONE}", f"wrentuba_3c9d1e@{ZONE}"
+IRA, WREN = "IraTest@a1a1a1", "WrenTuba@3c9d1e"
+IRA_Z, WREN_Z = f"iratest_a1a1a1@{ZONE}", f"wrentuba_3c9d1e@{ZONE}"
 
 
 def _deployment(tmp_path, name, domain, agent, card, contacts, peers):
@@ -37,11 +37,11 @@ def _deployment(tmp_path, name, domain, agent, card, contacts, peers):
     return Broker(cfg)
 
 
-def _pair(tmp_path, host_lists=(("manny", MANNY),)):
+def _pair(tmp_path, host_lists=(("wren", WREN),)):
     host_root, box_root = tmp_path / "host" / "handoff", tmp_path / "box" / "handoff"
-    host = _deployment(tmp_path, "host", HOST, "ira", IRA, [MANNY_Z],
+    host = _deployment(tmp_path, "host", HOST, "ira", IRA, [WREN_Z],
                        {BOX: SharedHandoff(handoff=box_root, agents=dict(host_lists))})
-    box = _deployment(tmp_path, "box", BOX, "manny", MANNY, [IRA_Z],
+    box = _deployment(tmp_path, "box", BOX, "wren", WREN, [IRA_Z],
                       {HOST: SharedHandoff(handoff=host_root, agents={"ira": IRA})})
     peer_intake(host_root, BOX).mkdir(parents=True, mode=0o2770)
     peer_intake(box_root, HOST).mkdir(parents=True, mode=0o2770)
@@ -51,33 +51,33 @@ def _pair(tmp_path, host_lists=(("manny", MANNY),)):
 def test_rung_from_declared_map(tmp_path):
     host, _ = _pair(tmp_path)
     assert host._rung(IRA_Z) == "local"
-    assert host._rung(MANNY_Z) == "shared"
-    route = host.config.shared_for(MANNY_Z.upper())
-    assert (route.domain, route.local) == (BOX, "manny"), "the peer's box name, not the zone local part"
+    assert host._rung(WREN_Z) == "shared"
+    route = host.config.shared_for(WREN_Z.upper())
+    assert (route.domain, route.local) == (BOX, "wren"), "the peer's box name, not the zone local part"
     # Under the zone, an agent no declared peer lists is relay: the domain decides nothing.
     assert host._rung(f"stranger_ffffff@{ZONE}") == "relay"
     # The peer's own domain still routes as before.
-    assert host._rung(f"manny@{BOX}") == "shared"
+    assert host._rung(f"wren@{BOX}") == "shared"
 
 
 def test_an_unlisted_agent_of_a_declared_peer_is_not_shared(tmp_path):
     host, _ = _pair(tmp_path, host_lists=())
-    assert host._rung(MANNY_Z) == "relay"
+    assert host._rung(WREN_Z) == "relay"
 
 
 def test_zone_mail_crosses_the_mount_and_the_peer_delivers_it(tmp_path):
     host, box = _pair(tmp_path)
-    r = host.submit("ira", Message(sender=IRA_Z, to=[MANNY_Z], subject="zone", body="hello"))
+    r = host.submit("ira", Message(sender=IRA_Z, to=[WREN_Z], subject="zone", body="hello"))
     assert r["ok"], r
     assert r["delivered"][0]["rung"] == "shared"
     pairs = sorted(peer_intake(box.config.inbound_handoff, HOST).glob("*.amsg"))
     assert len(pairs) == 1
     # The hand-off names the box as the peer files it (its own domain); the message keeps the zone address.
-    assert json.loads(pairs[0].with_suffix(".json").read_text())["recipient"] == f"manny@{BOX}"
+    assert json.loads(pairs[0].with_suffix(".json").read_text())["recipient"] == f"wren@{BOX}"
     results = box.sweep_shared()
     assert results and results[0]["accepted"] is True, results
-    boxed = list((box.config.inbound_handoff / "manny").glob("*.amsg"))
-    assert len(boxed) == 1 and MANNY_Z in boxed[0].read_text()
+    boxed = list((box.config.inbound_handoff / "wren").glob("*.amsg"))
+    assert len(boxed) == 1 and WREN_Z in boxed[0].read_text()
 
 
 def test_only_declared_peers(tmp_path):
@@ -99,11 +99,11 @@ def test_a_peer_may_only_speak_for_the_agents_it_is_declared_to_hold(tmp_path):
     not declared to hold is rejected, kept as evidence, and never reaches the box."""
     host, box = _pair(tmp_path)
     box.config.shared_handoffs[HOST].agents.clear()
-    assert host.submit("ira", Message(sender=IRA_Z, to=[MANNY_Z], subject="z", body="b"))["ok"]
+    assert host.submit("ira", Message(sender=IRA_Z, to=[WREN_Z], subject="z", body="b"))["ok"]
     results = box.sweep_shared()
     assert results and results[0]["accepted"] is False
     assert "declared" in results[0]["reason"]
-    assert not list((box.config.inbound_handoff / "manny").glob("*.amsg"))
+    assert not list((box.config.inbound_handoff / "wren").glob("*.amsg"))
     assert list((peer_intake(box.config.inbound_handoff, HOST) / "rejected").glob("*.amsg"))
 
 
@@ -111,10 +111,10 @@ def test_the_deployment_file_declares_a_peers_agents_and_refuses_a_bad_card(tmp_
     import pytest
     from pydantic import ValidationError
     from macf.amail.deploy_config import SharedHandoffDecl
-    decl = SharedHandoffDecl(handoff=tmp_path, agents={"manny": MANNY})
-    assert decl.agents == {"manny": MANNY}
+    decl = SharedHandoffDecl(handoff=tmp_path, agents={"wren": WREN})
+    assert decl.agents == {"wren": WREN}
     with pytest.raises(ValidationError, match="not a calling card"):
-        SharedHandoffDecl(handoff=tmp_path, agents={"manny": "WrenTuba"})
+        SharedHandoffDecl(handoff=tmp_path, agents={"wren": "WrenTuba"})
 
 
 def test_a_zone_address_claimed_twice_refuses_the_start(tmp_path):
@@ -133,10 +133,10 @@ def test_a_zone_address_claimed_twice_refuses_the_start(tmp_path):
             "inbound_quarantine": str(tmp_path / "q"), "inbound_handoff": str(tmp_path / "h"),
             "shared_handoffs": peers}).to_broker_config()
 
-    assert start({BOX: {"handoff": str(tmp_path / "b"), "agents": {"manny": MANNY}}})
-    for peers in ({BOX: {"handoff": str(tmp_path / "b"), "agents": {"manny": MANNY}},
-                   "other.local": {"handoff": str(tmp_path / "o"), "agents": {"m": MANNY}}},
-                  {BOX: {"handoff": str(tmp_path / "b"), "agents": {"manny": MANNY, "m2": MANNY}}},
+    assert start({BOX: {"handoff": str(tmp_path / "b"), "agents": {"wren": WREN}}})
+    for peers in ({BOX: {"handoff": str(tmp_path / "b"), "agents": {"wren": WREN}},
+                   "other.local": {"handoff": str(tmp_path / "o"), "agents": {"m": WREN}}},
+                  {BOX: {"handoff": str(tmp_path / "b"), "agents": {"wren": WREN, "w2": WREN}}},
                   {BOX: {"handoff": str(tmp_path / "b"), "agents": {"fake_ira": IRA}}}):
         with pytest.raises(ConfigError, match="claimed more than once"):
             start(peers)
