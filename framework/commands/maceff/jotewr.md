@@ -15,10 +15,10 @@ Create a **JOTEWR** (Jump Off The Edge While Reflecting) - a cycle-closing refle
 
 ## 🧭 Personal Policy Discovery
 
-Before drafting, check for an agent-specific augmentation policy at the predictable path:
+Before drafting, check for an agent-specific augmentation policy:
 
-```
-agent/policies/personal/reflection.md
+```bash
+macf_tools policy read personal:reflection
 ```
 
 If present, read it. It contains the agent's CEP questions and PEP for this reflection practice. Apply its requirements alongside the framework's base JOTEWR structure (e.g., add any extra sections it specifies, edit other artifacts it points at, commit alongside the JOTEWR).
