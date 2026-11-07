@@ -63,6 +63,16 @@ def test_an_agent_that_declares_nothing_gets_the_default_session():
     assert _session(_body())["environment"]["MACEFF_HARNESS_SESSION"] == "Resident"
 
 
+def test_the_agents_own_bin_comes_ahead_of_the_system_on_the_session_path():
+    """An agent's gh wrapper is in ~/.local/bin. Behind the system's directories, or absent, a plain
+    gh is the system binary, under another identity or none and without the publish gate."""
+    dirs = _session(_body())["environment"]["PATH"].split(":")
+    own = dirs.index("/home/pa_res/.local/bin")
+    assert all(own < dirs.index(d) for d in ("/usr/local/bin", "/usr/bin", "/bin"))
+    # The framework's interpreter stays first, so nothing in a home stands in for it.
+    assert dirs[0] == "/opt/maceff-venv/bin"
+
+
 def test_the_session_starts_where_the_login_shell_always_did():
     """A seat moved onto its daemon continues the same conversation only if its session starts in
     the same directory: the active_project link with assigned projects, else the home, and an
