@@ -27,9 +27,9 @@ from macf.utils.identity import (
 def test_agent_spec_display_name_optional():
     """AgentSpec accepts optional display_name field."""
     agent = AgentSpec(
-        username="pa_sparrow",
+        username="pa_orchard",
         uid=21100,
-        personality="../agents/sparrow.md",
+        personality="../agents/orchard.md",
         display_name="Orchard MacEff"
     )
 
@@ -39,9 +39,9 @@ def test_agent_spec_display_name_optional():
 def test_agent_spec_display_name_defaults_to_none():
     """AgentSpec display_name defaults to None when not provided."""
     agent = AgentSpec(
-        username="pa_sparrow",
+        username="pa_orchard",
         uid=21100,
-        personality="../agents/sparrow.md"
+        personality="../agents/orchard.md"
     )
 
     assert agent.display_name is None
@@ -74,7 +74,7 @@ def test_get_agent_identity_format(mock_uuid, mock_gecos, _mock_config):
 @patch('macf.utils.identity._get_config_identity_name', return_value=None)
 @patch('macf.utils.identity._get_gecos_name')
 @patch('macf.utils.identity._resolve_uuid_prefix')
-@patch.dict(os.environ, {'USER': 'pa_sparrow'})
+@patch.dict(os.environ, {'USER': 'pa_orchard'})
 def test_get_agent_identity_fallback_missing_gecos(mock_uuid, mock_gecos, _mock_config):
     """get_agent_identity() uses username when GECOS unavailable.
 
@@ -88,13 +88,13 @@ def test_get_agent_identity_fallback_missing_gecos(mock_uuid, mock_gecos, _mock_
         env.pop("MACEFF_AGENT_NAME", None)
         identity = get_agent_identity()
 
-    assert identity == "pa_sparrow@a3f7c2"
+    assert identity == "pa_orchard@a3f7c2"
 
 
 @patch('macf.utils.identity._get_config_identity_name', return_value=None)
 @patch('macf.utils.identity._get_gecos_name')
 @patch('macf.utils.identity._resolve_uuid_prefix')
-@patch.dict(os.environ, {'USER': 'pa_sparrow'})
+@patch.dict(os.environ, {'USER': 'pa_orchard'})
 def test_get_agent_identity_fallback_missing_uuid(mock_uuid, mock_gecos, _mock_config):
     """get_agent_identity() uses 'unknown' when UUID file missing.
 

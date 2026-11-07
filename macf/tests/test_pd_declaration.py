@@ -72,7 +72,7 @@ def test_an_unlimited_container_reads_no_limit_and_an_unreadable_file_reads_unkn
 
 
 def test_a_summary_carries_no_command_and_no_environment(tmp_path):
-    home = tmp_path / "pa_sparrow2"
+    home = tmp_path / "pa_orchard2"
     decl = _declaration(units=[_unit("broker", env={"API_KEY": "s3cret"}), _unit("session", kind="session")])
     path = sv.publish(home, decl, now=1.0)
     text = path.read_text()
@@ -84,7 +84,7 @@ def test_a_summary_carries_no_command_and_no_environment(tmp_path):
 def test_every_agents_units_are_seen_and_none_controlled(tmp_path):
     """MIS-0002-R62: each agent's units appear in the view; the view offers no act."""
     homes = tmp_path / "home"
-    for user, card in (("pa_sparrow", "A@1a2b3c"), ("pa_sparrow2", "B@4d5e6f")):
+    for user, card in (("pa_orchard", "A@1a2b3c"), ("pa_orchard2", "B@4d5e6f")):
         (homes / user / "agent" / "public").mkdir(parents=True)
         sv.publish(homes / user, _declaration(agent=card, units=[_unit("broker", memory=512)]), now=1.0)
     (homes / "student" / "agent" / "public").mkdir(parents=True)        # a home that published nothing
@@ -124,7 +124,7 @@ def test_a_summary_that_does_not_parse_is_unreadable_never_empty(tmp_path):
 def test_a_summary_another_account_owns_is_not_believed(tmp_path, monkeypatch):
     """Only the owner writes its public tree; a reader still checks, so a file planted by
     another account (a misprovisioned tree, a copy) never speaks for this home's agent."""
-    home = tmp_path / "pa_sparrow2"
+    home = tmp_path / "pa_orchard2"
     path = sv.publish(home, _declaration(), now=1.0)
     real_stat = type(path).stat
 
@@ -223,14 +223,14 @@ def test_the_view_prints_each_summarys_age(tmp_path):
     """A summary outlives the daemon that wrote it, so the view says how old each one is: one
     left by a stopped daemon days ago doesn't read as current."""
     homes = tmp_path / "home"
-    for user, card, at in (("pa_sparrow", "Sparrow@e3f4a5", 1000.0), ("pa_sparrow2", "Sparrow2@f0a1b2", 1000.0 - 3 * 86400)):
+    for user, card, at in (("pa_orchard", "Orchard@e3f4a5", 1000.0), ("pa_orchard2", "Orchard2@f0a1b2", 1000.0 - 3 * 86400)):
         (homes / user / "agent" / "public").mkdir(parents=True)
         sv.publish(homes / user, _declaration(agent=card), now=at)
     text = sv.render(sv.read_agents(homes), sv.read_budget(_cgroup(tmp_path)), now=1045.0)
-    assert "Sparrow@e3f4a5: summary published 45s ago" in text
-    assert "Sparrow2@f0a1b2: summary published 3d ago" in text
+    assert "Orchard@e3f4a5: summary published 45s ago" in text
+    assert "Orchard2@f0a1b2: summary published 3d ago" in text
     # A stamp ahead of the reader's clock is said as such, never shown as a negative age.
-    assert "Sparrow@e3f4a5: summary stamped 75s ahead of this clock" in sv.render(
+    assert "Orchard@e3f4a5: summary stamped 75s ahead of this clock" in sv.render(
         sv.read_agents(homes), sv.Budget(), now=925.0)
 
 
@@ -608,7 +608,7 @@ def test_mail_units(tmp_path, monkeypatch):
 
     with pytest.raises(ValidationError, match="only as the service account"):
         _agents_yaml({"amail_broker": {"calling_card": "AmailBroker", "primal_daemon": {
-            "units": [_mail_unit("broker", "macf.amail.daemons.broker", account="pa_sparrow")]}}})
+            "units": [_mail_unit("broker", "macf.amail.daemons.broker", account="pa_orchard")]}}})
     with pytest.raises(ValidationError, match="together"):
         _agents_yaml({"amail_broker": {"calling_card": "AmailBroker"}})
 
