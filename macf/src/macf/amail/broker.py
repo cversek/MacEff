@@ -55,7 +55,7 @@ from dataclasses import dataclass, field
 
 from macf.agent_events_log import append_event
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .audit import AuditLog
 from .contacts import ContactBook, ContactListError
@@ -230,7 +230,8 @@ class SharedHandoff:
     #: Under one zone the domain no longer says which broker holds a mailbox, so the
     #: declared map does. A stand-in for the system daemon's declaration (MIS-0007), and
     #: like the rest of this record it lives in the broker's own configuration.
-    agents: Dict[str, str] = field(default_factory=dict)
+    #: A value is the card alone, or ``(card, zone_token)`` once the peer's agents carry tokens.
+    agents: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -295,6 +296,12 @@ class BrokerConfig:
     #: Agent name -> calling card, as declared in the addressing file (R06). Used before the
     #: home, which the broker's account normally cannot read.
     agent_cards: Dict[str, str] = field(default_factory=dict)
+    #: Agent name -> zone token, the random part of its zone address after the card, declared at
+    #: provisioning and never derived from its identity, so the public card alone is not an address.
+    agent_zone_tokens: Dict[str, str] = field(default_factory=dict)
+    #: Zone tokens that have been exposed. An address carrying one is refused at once, ours or a
+    #: peer's: rotation is a hard cut, with no window in which the old address still works.
+    revoked_zone_tokens: Set[str] = field(default_factory=set)
     contacts_path: Optional[Path] = None
     audit_path: Optional[Path] = None
     socket_path: Path = Path(DEFAULT_SOCKET)
@@ -416,14 +423,23 @@ class BrokerConfig:
         None without a zone or a usable card."""
         if not self.zone:
             return None
-        from .zone import local_part_from_card, zone_local_part
-        from ..pd.names import IdentityError
+        local = self._own_local(agent)
+        return f"{local}@{self.zone.strip().lower()}" if local else None
+
+    def _own_local(self, agent: str) -> Optional[str]:
+        """*agent*'s zone local part: its declared card, or else its home's, then its token when it
+        has one. None when no card is usable or the token is revoked; a zone deployment refuses to
+        start in either case (_require_zone_cards), so this is only ever a hand-built config."""
+        from .zone import local_part_from_card
+        from ..pd.names import IdentityError, agent_card
+        token = self.agent_zone_tokens.get(agent)
+        if token is not None and token in self.revoked_zone_tokens:
+            return None
         try:
-            card = self.agent_cards.get(agent)
-            local = local_part_from_card(card) if card else zone_local_part(self.agent_homes[agent])
+            card = self.agent_cards.get(agent) or agent_card(Path(self.agent_homes[agent]))
+            return local_part_from_card(card, token)
         except (IdentityError, ValueError, KeyError):
-            return None  # noqa: MACEFF003 - None is the stated answer "no zone address"; a zone deployment refuses to start without usable cards (_require_zone_cards)
-        return f"{local}@{self.zone.strip().lower()}"
+            return None  # noqa: MACEFF003 - None is the stated answer "no zone address"; a zone deployment refuses to start without one
 
     def may_create_pickup_box(self, agent: str) -> bool:
         """Whether this broker may create ``agent``'s missing pickup box itself (amail.md
@@ -460,17 +476,8 @@ class BrokerConfig:
     def _zone_agent(self, local: str) -> Optional[str]:
         """The local agent whose home's card gives *local* under the zone (R06). A home that
         names no agent and declares no card matches nothing."""
-        from .zone import local_part_from_card, zone_local_part
-        from ..pd.names import IdentityError
-        for name, home in self.agent_homes.items():
-            try:
-                card = self.agent_cards.get(name)
-                mine = local_part_from_card(card) if card else zone_local_part(home)
-            except (IdentityError, ValueError):
-                # The deployment config refuses to start a zone with such an agent, so
-                # this is a hand-built config; it still never matches.
-                continue
-            if mine == local:
+        for name in self.agent_homes:
+            if self._own_local(name) == local:
                 return name
         return None
 
@@ -480,9 +487,12 @@ class BrokerConfig:
         the zone decides nothing, and an unparseable declared card matches nothing."""
         from .zone import local_part_from_card
         for dom, decl in sorted(self.shared_handoffs.items()):
-            for box, card in decl.agents.items():
+            for box, held in decl.agents.items():
+                card, token = held if isinstance(held, tuple) else (held, None)
+                if token is not None and token in self.revoked_zone_tokens:
+                    continue
                 try:
-                    if local_part_from_card(card) == local:
+                    if local_part_from_card(card, token) == local:
                         return SharedRoute(domain=dom, local=box, decl=decl)
                 except ValueError:
                     continue
