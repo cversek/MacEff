@@ -70,9 +70,9 @@ def test_the_session_starts_where_the_login_shell_always_did():
     def project(**extra):
         return _session(_body(**extra))["environment"]["MACEFF_PROJECT_DIR"]
     assert project() == "{agent_home}"
-    assert project(assigned_projects=["NeuroVEP"]) == "/home/pa_res/active_project"
-    assert project(assigned_projects=["NeuroVEP"], project_dir="/home/pa_res/workspace/NeuroVEP") \
-        == "/home/pa_res/workspace/NeuroVEP"
+    assert project(assigned_projects=["Orchard"]) == "/home/pa_res/active_project"
+    assert project(assigned_projects=["Orchard"], project_dir="/home/pa_res/workspace/Orchard") \
+        == "/home/pa_res/workspace/Orchard"
     assert _session(_body(session_memory_mb=28672))["memory_limit_mb"] == 28672
 
 

@@ -114,7 +114,7 @@ agents:
     uid: 21100
     personality: ../custom/agents/manny_personality.md
     subagents: [devops_eng, test_eng]
-    assigned_projects: [NeuroVEP, DataPipeline]
+    assigned_projects: [Orchard, DataPipeline]
     consciousness_artifacts:
       private: [checkpoints, reflections, learnings]
       public: [roadmaps, reports, observations]
@@ -263,16 +263,16 @@ projects:
 
 ```yaml
 projects:
-  NeuroVEP:
-    context: ../custom/projects/NeuroVEP_context.md
+  Orchard:
+    context: ../custom/projects/Orchard_context.md
     repos:
-      - url: git@github.com:user/neurovep_analysis.git
-        path: repos/neurovep_analysis
-      - url: git@github.com:user/neurovep_viz.git
-        path: repos/neurovep_viz
+      - url: git@github.com:user/orchard_analysis.git
+        path: repos/orchard_analysis
+      - url: git@github.com:user/orchard_viz.git
+        path: repos/orchard_viz
     data_mounts:
       - type: bind
-        source: /Users/user/Dropbox/NeuroVEP
+        source: /Users/user/Dropbox/Orchard
         target: data
         read_only: false
     commands:

@@ -69,7 +69,7 @@ agents:
 
     # Project assignments
     assigned_projects:
-      - NeuroVEP
+      - Orchard
       - Research
 
     # Consciousness artifact configuration
@@ -133,21 +133,21 @@ defaults:
 # MacEff v0.3.0 Project Configuration
 
 projects:
-  NeuroVEP:
+  Orchard:
     # Project context file (Project layer CLAUDE.md source)
-    context: ../custom/projects/NeuroVEP_context.md
+    context: ../custom/projects/Orchard_context.md
 
     # Git repositories to clone
     repos:
-      - url: git@github.com:user/neurovep_analysis.git
-        path: repos/neurovep_analysis
-      - url: git@github.com:user/neurovep_data_pipeline.git
-        path: repos/neurovep_data_pipeline
+      - url: git@github.com:user/orchard_analysis.git
+        path: repos/orchard_analysis
+      - url: git@github.com:user/orchard_data_pipeline.git
+        path: repos/orchard_data_pipeline
 
     # Data mounts (bind mounts from host)
     data_mounts:
       - type: bind
-        source: /Users/user/Dropbox/NeuroVEP
+        source: /Users/user/Dropbox/Orchard
         target: data
         read_only: false
 
@@ -175,7 +175,7 @@ projects:
 
 **Template**:
 ```markdown
-# Manny - NeuroVEP Analysis Specialist
+# Manny - Orchard Analysis Specialist
 
 **Agent**: Manny (pa_manny)
 **Specialization**: Neuroscience data analysis and VEP signal processing
@@ -210,11 +210,11 @@ projects:
 
 ### Project Context File
 
-**Location**: `custom/projects/NeuroVEP_context.md`
+**Location**: `custom/projects/Orchard_context.md`
 
 **Template**:
 ```markdown
-# NeuroVEP Project Context
+# Orchard Project Context
 
 **Project**: Visual Evoked Potential Analysis System
 **Domain**: Neuroscience / Signal Processing
@@ -222,10 +222,10 @@ projects:
 
 ## Repository Structure
 
-- `repos/neurovep_analysis/` - Core analysis code
-- `repos/neurovep_data_pipeline/` - ETL and preprocessing
-- `repos/neurovep_modeling/` - Statistical models
-- `repos/neurovep_visualization/` - Plotting and dashboards
+- `repos/orchard_analysis/` - Core analysis code
+- `repos/orchard_data_pipeline/` - ETL and preprocessing
+- `repos/orchard_modeling/` - Statistical models
+- `repos/orchard_visualization/` - Plotting and dashboards
 
 ## Domain Knowledge
 
@@ -422,7 +422,7 @@ ls /home/pa_manny/.claude/hooks/
 ls -la /home/pa_manny/workspace/
 
 # Expected output:
-# lrwxrwxrwx  NeuroVEP -> /shared_workspace/NeuroVEP
+# lrwxrwxrwx  Orchard -> /shared_workspace/Orchard
 # lrwxrwxrwx  Research -> /shared_workspace/Research
 ```
 
@@ -457,7 +457,7 @@ EOF
 
 ```bash
 # Start Claude Code session
-cd /home/pa_manny/workspace/NeuroVEP
+cd /home/pa_manny/workspace/Orchard
 claude -c
 
 # In Claude Code session:
@@ -538,7 +538,7 @@ Successfully set up Named Agents v0.3 with pa_manny agent.
 - Ready for production work
 
 ## Next Actions
-- Begin NeuroVEP analysis work
+- Begin Orchard analysis work
 - Create roadmap for upcoming projects
 - Establish regular checkpoint rhythm
 EOF

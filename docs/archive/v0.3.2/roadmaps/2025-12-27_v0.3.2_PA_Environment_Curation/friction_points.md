@@ -3,8 +3,8 @@
 
 **Symptom**: pip-installed scripts require full path
 ```
-> neurovep_process --help
-/bin/bash: line 1: neurovep_process: command not found
+> orchard_process --help
+/bin/bash: line 1: orchard_process: command not found
 ```
 
 **Root Cause**: `~/.bash_init.sh` doesn't add `~/.local/bin` to PATH
@@ -22,5 +22,5 @@ export PATH="$HOME/.local/bin:$PATH"
 
 **Root Cause**: `MACEFF_CONDA_ENV` not set, so conditional activation never triggers
 
-**Fix**: Set default conda env from agents.yaml or hardcode neurovep_data activation
+**Fix**: Set default conda env from agents.yaml or hardcode orchard_data activation
 

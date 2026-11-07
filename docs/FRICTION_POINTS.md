@@ -123,14 +123,14 @@ Running log of deployment friction discovered during operations. Informs fixes a
 
 **Date Discovered**: 2026-02-05
 
-**Symptom**: `make install` only clones NeuroVEP repos. VoxelCAD declared in `projects.yaml` but never cloned or given worktrees.
+**Symptom**: `make install` only clones Orchard repos. VoxelCAD declared in `projects.yaml` but never cloned or given worktrees.
 
 **Root Cause**: Two issues:
-1. `deploy.py install` hardcodes `"NeuroVEP"` for clone and worktree steps (lines 639-651) instead of iterating `projects.yaml`
-2. `agents.yaml` `assigned_projects` only listed `[NeuroVEP]` — `start.py` only creates workspaces for assigned projects
+1. `deploy.py install` hardcodes `"Orchard"` for clone and worktree steps (lines 639-651) instead of iterating `projects.yaml`
+2. `agents.yaml` `assigned_projects` only listed `[Orchard]` — `start.py` only creates workspaces for assigned projects
 
 **Fix**:
-1. `agents.yaml`: Added VoxelCAD to `assigned_projects: [NeuroVEP, VoxelCAD]`
+1. `agents.yaml`: Added VoxelCAD to `assigned_projects: [Orchard, VoxelCAD]`
 2. `deploy.py`: Replaced hardcoded project name with iteration over `projects_config.projects.keys()` — uses existing `clone_all_projects()` pattern
 
 **Key Learning**: `start.py` correctly iterates projects from YAML config. `deploy.py` was written before multi-project support and never updated. The `clone_all_projects()` method already existed but wasn't wired into the `install` command.

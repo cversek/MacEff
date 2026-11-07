@@ -32,7 +32,7 @@ PRIORITY_TERMS = [
     # Concepts
     "breadcrumb", "compaction", "consciousness artifact",
     # Projects
-    "NeuroFieldz", "neurovep", "VoxelCAD",
+    "VoxelCAD",
     # Protocol terms
     "DELEG_DRV", "DEV_DRV", "INST_LANG",
     # Mode/state

@@ -703,7 +703,7 @@ def validate_ca_metadata(ca_type, filepath):
 ## Next Steps
 
 - **Learn implementation steps**: [05. Implementation Guide →](./05_implementation_guide.md)
-- **See complete examples**: [02. Filesystem Structure - Complete Example](./02_filesystem_structure.md#complete-example-pa_manny-with-neurovep)
+- **See complete examples**: [02. Filesystem Structure - Complete Example](./02_filesystem_structure.md#complete-example-pa_manny-with-orchard)
 - **Understand delegation**: [03. Delegation Model](./03_delegation_model.md)
 
 ---
