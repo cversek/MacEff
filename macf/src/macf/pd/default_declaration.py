@@ -204,7 +204,15 @@ def drift(existing: Dict[str, Any], default: Dict[str, Any]) -> List[str]:
 #: Where a container keeps its homes, its interpreter, and the PATH a container unit runs with.
 CONTAINER_HOME_ROOT = Path("/home")
 CONTAINER_PYTHON = Path("/opt/maceff-venv/bin/python")
-CONTAINER_PATH = ("/opt/maceff-venv/bin", "/usr/local/bin", "/usr/bin", "/bin")
+CONTAINER_SYSTEM_PATH = ("/usr/local/bin", "/usr/bin", "/bin")
+
+
+def container_path(home: Path) -> List[str]:
+    """The PATH directories of a container agent's unit. The agent's ``~/.local/bin`` comes ahead
+    of the system's, as it does in a login shell and in the host default: that is where an agent's
+    ``gh`` wrapper lives (git_discipline), so without it a plain ``gh`` is the system binary, with
+    another identity or none, and no publish gate."""
+    return [str(CONTAINER_PYTHON.parent), str(home / ".local" / "bin"), *CONTAINER_SYSTEM_PATH]
 
 
 def deployment_timezone() -> Optional[str]:
@@ -250,7 +258,7 @@ def container_body(*, account: str, harness_session: str, project_dir: Optional[
     parsed = [p for p in (parse_channel_flag(c) for c in channels) if p is not None]
     telegram = next((p for p in parsed if p[0] == TELEGRAM[0]), None)
     declaration = build("placeholder", agent_home=home, login_home=home, account=account,
-                        python=CONTAINER_PYTHON, project_dir=project, path_dirs=CONTAINER_PATH,
+                        python=CONTAINER_PYTHON, project_dir=project, path_dirs=container_path(home),
                         mail=mail, telegram=telegram)
     session = next(u for u in declaration["units"] if u.get("kind") == "session")
     session["command"] += ["--agent", harness_session, "--no-proxy"]
