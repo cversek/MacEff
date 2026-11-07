@@ -476,6 +476,21 @@ class SharedHandoffDecl(BaseModel):
                     "Verified before every write, and applied to the pair "
                     "when the box is not setgid. This broker must be a member "
                     "of it on this side of the mount.")
+    agents: Dict[str, str] = Field(
+        default_factory=dict,
+        description="the peer's agents under the shared zone, box name -> calling card "
+                    "(Name@shortid), as the peer's operator provisioned them (MIS-0004 R08). "
+                    "Under one zone the domain does not say which broker holds a mailbox; "
+                    "this map does. Retired when the system daemon declares it (MIS-0007).")
+
+    @field_validator("agents")
+    @classmethod
+    def _cards_are_cards(cls, v: Dict[str, str]):
+        from .zone import local_part_from_card
+        for box, card in v.items():
+            local_part_from_card(card)   # ValueError names the bad card
+        return v
+
     note: str = Field(
         default="",
         description="operator's note: which deployment this is, where the "
@@ -647,7 +662,8 @@ class BrokerDeployConfig(BaseModel):
                     f"deployment's domain. Refusing rather than let two rungs "
                     f"claim the same mailboxes.")
             shared[key] = SharedHandoff(handoff=decl.handoff, uid=decl.uid,
-                                        gid=decl.gid, note=decl.note)
+                                        gid=decl.gid, note=decl.note,
+                                        agents=dict(decl.agents))
         if addressing.zone:
             _require_zone_cards(addressing)
         return BrokerConfig(
