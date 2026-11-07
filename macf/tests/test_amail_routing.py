@@ -18,6 +18,7 @@ from macf.amail.models import Message
 ZONE = "agents.example.org"
 HOST, BOX = "host.local", "box.local"
 IRA, WREN = "IraTest@a1a1a1", "WrenTuba@3c9d1e"
+T_IRA, T_WREN = "111122223333", "444455556666"   # made-up zone tokens
 IRA_Z, WREN_Z = f"iratest_a1a1a1@{ZONE}", f"wrentuba_3c9d1e@{ZONE}"
 
 
@@ -125,7 +126,8 @@ def test_a_zone_address_claimed_twice_refuses_the_start(tmp_path):
     from macf.amail.deploy_config import BrokerDeployConfig, ConfigError
     addr = tmp_path / "addressing.yaml"
     addr.write_text(yaml.safe_dump({"domain": HOST, "zone": ZONE, "agents": {
-        "ira": {"home": str(tmp_path / "ira"), "uid": 1002, "contacts": [], "card": IRA}}}))
+        "ira": {"home": str(tmp_path / "ira"), "uid": 1002, "contacts": [], "card": IRA, "zone_token": T_IRA}}}))
+    wren = {"card": WREN, "zone_token": T_WREN}
 
     def start(peers):
         return BrokerDeployConfig.model_validate({
@@ -133,10 +135,10 @@ def test_a_zone_address_claimed_twice_refuses_the_start(tmp_path):
             "inbound_quarantine": str(tmp_path / "q"), "inbound_handoff": str(tmp_path / "h"),
             "shared_handoffs": peers}).to_broker_config()
 
-    assert start({BOX: {"handoff": str(tmp_path / "b"), "agents": {"wren": WREN}}})
-    for peers in ({BOX: {"handoff": str(tmp_path / "b"), "agents": {"wren": WREN}},
-                   "other.local": {"handoff": str(tmp_path / "o"), "agents": {"m": WREN}}},
-                  {BOX: {"handoff": str(tmp_path / "b"), "agents": {"wren": WREN, "w2": WREN}}},
-                  {BOX: {"handoff": str(tmp_path / "b"), "agents": {"fake_ira": IRA}}}):
+    assert start({BOX: {"handoff": str(tmp_path / "b"), "agents": {"wren": wren}}})
+    for peers in ({BOX: {"handoff": str(tmp_path / "b"), "agents": {"wren": wren}},
+                   "other.local": {"handoff": str(tmp_path / "o"), "agents": {"m": wren}}},
+                  {BOX: {"handoff": str(tmp_path / "b"), "agents": {"wren": wren, "w2": wren}}},
+                  {BOX: {"handoff": str(tmp_path / "b"), "agents": {"fake_ira": {"card": IRA, "zone_token": T_IRA}}}}):
         with pytest.raises(ConfigError, match="claimed more than once"):
             start(peers)
