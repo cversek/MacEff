@@ -2973,7 +2973,6 @@ def _agent_init_preamble(args: argparse.Namespace, pa_home: Path, config):
             manifest_data = {
                 "version": "1.0.0",
                 "description": f"{config.agent_name} Personal Policies",
-                "extends": "/opt/maceff/policies/manifest.json",
                 "personal_policies": []
             }
             with open(personal_manifest, 'w') as f:
@@ -3458,8 +3457,11 @@ def cmd_policy_search(args: argparse.Namespace) -> int:
                 for ref in policy_refs:
                     section_matches.append((index_key, ref))
 
+        from .utils.manifest import policy_content_matches
+        content_matches = policy_content_matches(keyword)
+
         # Display results
-        total = len(policy_matches) + len(section_matches)
+        total = len(policy_matches) + len(section_matches) + len(content_matches)
         print(f"Search results for '{keyword}': {total} matches")
         print("=" * 50)
 
@@ -3473,7 +3475,14 @@ def cmd_policy_search(args: argparse.Namespace) -> int:
             for index_key, ref in section_matches:
                 print(f"  [{index_key}] → {ref}")
 
-        if not policy_matches and not section_matches:
+        if content_matches:
+            print("\n📄 Policies That Say It:")
+            for match in content_matches[:15]:
+                print(f"  {match['name']} ({match['count']}): {match['line'][:90]}")
+            if len(content_matches) > 15:
+                print(f"  ... and {len(content_matches) - 15} more")
+
+        if not policy_matches and not section_matches and not content_matches:
             print("No matches found")
             print("\n💡 Try:")
             print("  macf_tools policy list              # Browse all policies")
@@ -3516,9 +3525,10 @@ def cmd_policy_list(args: argparse.Namespace) -> int:
         else:
             print("All Policies")
         print("=" * 50)
-        from .utils.manifest import extra_policy_roots
-        for root in extra_policy_roots():
-            print(f"  root {root.name}: {root.path} (MACEFF_POLICY_ROOTS; read as {root.name}:<policy>)")
+        from .utils.manifest import policy_roots
+        for root in policy_roots():
+            if not root.framework:
+                print(f"  root {root.name}: {root.path} ({root.source}; read as {root.name}:<policy>)")
 
         if not policies:
             # "None found" and "cannot look" are different facts, and reporting
@@ -3653,6 +3663,13 @@ def cmd_policy_recommend(args: argparse.Namespace) -> int:
         print("⚠️ Query too short (minimum 10 characters)")
         return 1
 
+    from .utils.manifest import policies_newer_than_index
+    from .utils.paths import find_agent_home
+    stale = policies_newer_than_index(find_agent_home() / ".maceff" / "policy_index.lance")
+    if stale:
+        print(f"⚠️ {len(stale)} policies changed since the index was built ({', '.join(stale[:3])}"
+              f"{', ...' if len(stale) > 3 else ''}). Rebuild: macf_tools policy build_index", file=sys.stderr)
+
     # Try warm service first (fast path)
     result = query_search_service("policy", query, limit=limit, timeout_s=1.0)
 
@@ -3717,6 +3734,23 @@ def cmd_policy_recommend(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_policy_check(args: argparse.Namespace) -> int:
+    """Report what a policy lacks against policy_writing's format. Exit 1 on any finding."""
+    from .utils.manifest import check_policies
+    try:
+        results = check_policies(getattr(args, "policy_name", None))
+    except LookupError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 2
+    failing = {name: found for name, found in results.items() if found}
+    for name, found in sorted(failing.items()):
+        print(name)
+        for finding in found:
+            print(f"  {finding}")
+    print(f"{len(results) - len(failing)} of {len(results)} pass")
+    return 1 if failing else 0
+
+
 def cmd_policy_build_index(args: argparse.Namespace) -> int:
     """Build hybrid FTS5 + semantic index from policy files."""
     try:
@@ -3745,9 +3779,13 @@ def cmd_policy_build_index(args: argparse.Namespace) -> int:
         # Build index
         manifest_path = policies_dir / "manifest.json"
         indexer = PolicyIndexer(manifest_path=manifest_path if manifest_path.exists() else None)
+        # The agent's other roots, unless a directory was named: then that directory is the index.
+        from .utils.manifest import policy_roots
+        extra_roots = [] if args.policies_dir else [(r.name, r.path) for r in policy_roots() if not r.framework]
         stats = indexer.build_index(
             policies_dir=policies_dir,
             db_path=db_path,
+            extra_roots=extra_roots,
         )
 
         # Output
@@ -12796,6 +12834,11 @@ def _build_parser() -> argparse.ArgumentParser:
     recommend_parser.add_argument("--limit", type=int, default=5,
                                   help="max results to show (default: 5)")
     recommend_parser.set_defaults(func=cmd_policy_recommend)
+
+    # policy check
+    check_parser = policy_sub.add_parser("check", help="report what a policy lacks against the policy_writing format")
+    check_parser.add_argument("policy_name", nargs="?", help="one policy, or every root's policies if omitted")
+    check_parser.set_defaults(func=cmd_policy_check)
 
     # policy build_index
     build_index_parser = policy_sub.add_parser("build_index", help="build hybrid FTS5 + semantic index")

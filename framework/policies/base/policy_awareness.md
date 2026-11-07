@@ -83,12 +83,13 @@ You don't need to read everything. You need to recognize WHEN you need something
 
 4 Policy Layers and Precedence
 - What policy layers exist?
-- Which layer overrides which?
+- How do the layers relate?
 - Where do different policies live?
 
 4.1 Personal Policies
 - Where are my personal policies?
-- How do they override others?
+- Do they replace a framework policy?
+- How do I make one surface when it applies?
 - What's agent-personal wisdom?
 
 4.2 Project Policies
@@ -301,27 +302,23 @@ CEP Navigation Guides provide:
 
 ## 4. Policy Layers and Precedence
 
-### 4.1 Personal Policies (Highest Precedence)
+### 4.1 Personal Policies (Augment, Never Replace)
 
-**Location**: `~/agent/policies/personal/` (for Primary Agents)
+**Location**: `~/agent/policies/personal/` (for Primary Agents). Read as `personal:<name>`.
 
-Your earned wisdom overrides all other policies. As you learn patterns and develop expertise, document them here.
+As you learn patterns and develop expertise, document them here. **A personal policy augments the framework; it never replaces it.** A name the framework has always reads the framework's copy, and `personal:<name>` reads yours. On how you work, your policy guides you. It never lifts a boundary: if a file you can write could replace a rule, the rule would bind nothing.
 
-**Example Personal Manifest**:
+**Say when it applies.** `manifest.json` in that directory declares which policies surface when a task of a given type starts, as the framework's own are surfaced:
+
 ```json
 {
-  "version": "1.0.0",
-  "extends": "/opt/maceff/framework/policies/manifest.json",
   "personal_policies": [
-    {
-      "name": "earned_wisdom",
-      "path": "~/agent/policies/personal/my_wisdom.md",
-      "CEP_triggers": ["What did I learn about X?"],
-      "keywords": ["experience", "learned", "pattern"]
-    }
+    {"name": "my_merge_rules", "task_types": ["GH_PR"]}
   ]
 }
 ```
+
+A declaration naming a policy that isn't there, or a malformed one, is reported rather than dropped.
 
 ### 4.2 Project Policies (Middle Precedence)
 
@@ -348,7 +345,7 @@ Framework foundation policies:
 - **Development** (`dev/`): Optional git, testing policies
 - **Language** (`lang/`): Language-specific guidance
 
-**Precedence Order**: Personal > Project > Core
+**How they relate**: Core is the foundation. A project's manifest selects which layers apply. A personal policy adds to them and never replaces one.
 
 ### 4.4 Package Policy Sets (Extra Roots)
 
@@ -365,13 +362,16 @@ A package that ships its own policies in MacEff's format (policy ships with the 
 - the root, every directory and `.md` file under it, and every directory above it are owned by this user or by root;
 - none is writable by every account, or by a group that has any account besides this user. A user-private group, whose only member is the user, grants nobody else anything, so its write bit is allowed;
 - a directory above the root may be writable by everyone if it is sticky, like `/tmp`, because there no one else can rename or replace the root.
-- no symlink under the root points outside it. A root's policies are the files in the root: a link's target lives in a directory the check above never reaches, so whoever can write that directory could unlink the target and put their own file in its place. Copy the file into the root instead, or name the directory that holds it as a root of its own. A link that stays inside the root is allowed, since its target is checked with the rest.
+
+**A symlink out of the root is refused, and only that file.** A root's policies are the files in the root: a link's target lives in a directory the check above never reaches, so whoever can write that directory could unlink the target and put their own file in its place. Every way of reading a root leaves such a file out and reports it once, and the rest of the root is used. Copy the file into the root instead, or name the directory that holds it as a root of its own. A link that stays inside the root is allowed, since its target is checked with the rest.
 
 A root that fails is refused once, naming the path and why. The framework's own tree meets this bar differently, through a group of policy editors someone granted on purpose. A root shared with an editors' group is not supported yet: grant it as the framework's tree is, and ask for that form if a package needs it.
 
-**What is refused at the root.** An entry whose directory is missing or unreadable, whose name is empty, contains `/` or `:`, or is `framework`, or repeats an earlier entry's name, or that someone else could write, or that holds a symlink out of it (above), is reported once and left out. It's never skipped silently, because "no policies found" and "this root couldn't be read" send a reader to different places.
+**What is refused at the root.** An entry whose directory is missing or unreadable, whose name is empty, contains `/` or `:`, or is `framework`, or repeats an earlier entry's name, or that someone else could write, is reported once and left out. It's never skipped silently, because "no policies found" and "this root couldn't be read" send a reader to different places.
 
-**Not covered yet:** `macf_tools policy search` and the search index read the framework's manifest, which extra roots don't have. A package's policies are found by name and by `list`, not by keyword search.
+**Search reaches every root.** `macf_tools policy search` also reports which policies say the word, in any root this agent reads. `policy build_index` indexes every root, so `policy recommend` can return `<root>:<policy>`, ready to paste into `navigate`. The index is the agent's own, in its home, so one agent's personal policies never appear in another's results. An index older than a policy says so when `recommend` runs; rebuild it with `policy build_index`.
+
+**Every agent has one root without asking: its own.** `{agent_home}/agent/policies/personal` is a root named `personal`, with no configuration. Read its policies as `personal:<policy>`. A directory with no policy in it is silent, since most agents have none. One that holds policies meets the same bar as any root, and a refusal says why. An explicit `MACEFF_POLICY_ROOTS` entry with this name or this directory takes its place.
 
 **Prefix your files.** A set whose files share a prefix (`agentcad-*.md`) never meets the ambiguity refusal, and its names say where they came from.
 
@@ -455,7 +455,7 @@ To:
 3. Jump to sections: `grep "3.2" POLICY.md`
 
 **Policy Layers**:
-1. Personal (`~/agent/policies/personal/`) - Highest precedence
+1. Personal (`~/agent/policies/personal/`) - Augments; never replaces
 2. Project (`.maceff/policies/manifest.json`) - Middle precedence
 3. Core (`/opt/maceff/framework/policies/current/`) - Framework foundation
 

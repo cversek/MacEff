@@ -17,7 +17,9 @@ Every unit is started with the declared environment and nothing inherited (persi
 10.2), so each names ``PATH`` and ``HOME``.
 """
 import json
+import os
 import sys
+import zoneinfo
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -213,9 +215,28 @@ def container_path(home: Path) -> List[str]:
     return [str(CONTAINER_PYTHON.parent), str(home / ".local" / "bin"), *CONTAINER_SYSTEM_PATH]
 
 
+def deployment_timezone() -> Optional[str]:
+    """The time zone a container session declares: the deployment's ``MACEFF_TZ``, which its
+    login shells also follow. It comes from the environment of whatever renders the
+    declaration: compose's at container start-up. Any other renderer without the variable gets
+    a body with no ``TZ``. A name that doesn't resolve is reported and left out, because the C
+    library would otherwise fall back to UTC without a word."""
+    name = os.environ.get("MACEFF_TZ")
+    if not name:
+        return None
+    try:
+        zoneinfo.ZoneInfo(name)
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError, OSError) as e:
+        print(f"⚠️ MACF: MACEFF_TZ {name!r} is not a usable time zone ({e!r}); the session "
+              f"declares none and runs on the container's clock", file=sys.stderr)
+        return None
+    return name
+
+
 def container_body(*, account: str, harness_session: str, project_dir: Optional[str],
                    channels: Sequence[str], mail: bool,
-                   memory_limit_mb: Optional[int] = None) -> Dict[str, Any]:
+                   memory_limit_mb: Optional[int] = None,
+                   timezone: Optional[str] = None) -> Dict[str, Any]:
     """The declaration body a container agent runs when agents.yaml writes none for it: the
     host default's session unit (``build``), as a body without ``agent`` and ``version``, which
     container start-up fills in (persistent_layer 10.1).
@@ -224,9 +245,10 @@ def container_body(*, account: str, harness_session: str, project_dir: Optional[
     and search holds over a gigabyte each, which a container shared by several seats doesn't
     multiply by default. The session states what the legacy launch set from the login shell:
     its tmux session name, its project directory, its channels (the MacEff channel always
-    among them), a shell and a locale, and it
+    among them), a shell, a locale and the deployment's time zone, and it
     never attaches the host's API proxy, which no container can reach. *project_dir* None is
-    the agent's home."""
+    the agent's home. *timezone* None leaves ``TZ`` unset, so the session runs on the
+    container's clock, UTC in the framework's image."""
     home = CONTAINER_HOME_ROOT / account
     project = Path(project_dir) if project_dir else home
     # The daemon's notices reach the session through the MacEff channel, so the session loads
@@ -246,6 +268,8 @@ def container_body(*, account: str, harness_session: str, project_dir: Optional[
         "MACEFF_PROJECT_DIR": _placeheld(project, home),
         "MACEFF_CHANNELS": " ".join(channels),
     })
+    if timezone:
+        session["environment"]["TZ"] = timezone
     if memory_limit_mb is not None:
         session["memory_limit_mb"] = memory_limit_mb
     allowed = declaration["allowlisted_channels"]
