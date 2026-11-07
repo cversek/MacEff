@@ -292,6 +292,12 @@ class AgentAddressing(AgentBinding):
     """
 
     contacts: List[Any] = Field(default_factory=list)
+    card: Optional[str] = Field(
+        default=None,
+        description="the agent's calling card, Name@shortid, written at provisioning from "
+                    "the identity file in its home (MIS-0004 R06). The broker's account "
+                    "cannot read that file (the home is closed to it by design, R05), so "
+                    "under a zone the address is derived from this declaration.")
     shared_uid: bool = Field(
         default=False,
         description="this agent's uid names more than one agent (amail.md §1.3). "
@@ -314,6 +320,32 @@ _RETIRED_SUPERVISION_VALUES = {
 }
 
 
+def _require_zone_cards(addressing: "AddressingConfig") -> None:
+    """Under a zone every agent needs a card the broker can use, or its zone mail would be
+    refused as not ours with no word at all. Refuse the start and name them instead."""
+    from .zone import local_part_from_card
+    from ..pd.names import IdentityError, agent_card
+    missing = []
+    for name, b in addressing.agents.items():
+        if b.card:
+            try:
+                local_part_from_card(b.card)
+                continue
+            except ValueError as e:
+                missing.append(f"{name} ({e})")
+                continue
+        try:
+            agent_card(b.home)
+        except IdentityError:
+            missing.append(f"{name} (no 'card' declared, and the home's identity file is "
+                           f"not readable from here)")
+    if missing:
+        raise ConfigError(
+            f"zone '{addressing.zone}' is declared, but these agents have no usable calling "
+            f"card: {', '.join(missing)}. Declare 'card: Name@shortid' for each, as "
+            f"provisioning writes it (MIS-0004 R06); without it their zone mail is refused.")
+
+
 class AddressingConfig(BaseModel):
     """The amail deployment's identity: its domain, its agents, their contacts.
 
@@ -327,6 +359,12 @@ class AddressingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     domain: str = Field(description="the address domain this deployment owns")
+    zone: Optional[str] = Field(
+        default=None,
+        description="the shared mail zone this deployment's broker also answers for "
+                    "(MIS-0004 R06). An address under it is derived from each agent's "
+                    "calling card, so the zone needs no table; the name stays in the "
+                    "deployment's own file, never in the repository.")
     tier: Literal["container", "host"] = Field(
         default="container",
         description="which tier this deployment runs under (amail.md §7.5). "
@@ -610,11 +648,15 @@ class BrokerDeployConfig(BaseModel):
                     f"claim the same mailboxes.")
             shared[key] = SharedHandoff(handoff=decl.handoff, uid=decl.uid,
                                         gid=decl.gid, note=decl.note)
+        if addressing.zone:
+            _require_zone_cards(addressing)
         return BrokerConfig(
             domain=addressing.domain,
+            zone=addressing.zone,
             shared_handoffs=shared,
             shared_sweep_seconds=self.shared_sweep_seconds,
             agent_homes={name: b.home for name, b in addressing.agents.items()},
+            agent_cards={name: b.card for name, b in addressing.agents.items() if b.card},
             contacts_path=self.addressing_path,
             audit_path=self.audit_path,
             socket_path=self.socket_path,

@@ -281,6 +281,15 @@ class BrokerConfig:
 
     domain: str
     agent_homes: Dict[str, Path] = field(default_factory=dict)
+
+    #: The shared mail zone this broker also answers for (MIS-0004 R06), from deployment
+    #: configuration. An address under it names an agent by the card in its home
+    #: (amail.zone), so the zone needs no table of its own. None: this broker answers
+    #: only for domain.
+    zone: Optional[str] = None
+    #: Agent name -> calling card, as declared in the addressing file (R06). Used before the
+    #: home, which the broker's account normally cannot read.
+    agent_cards: Dict[str, str] = field(default_factory=dict)
     contacts_path: Optional[Path] = None
     audit_path: Optional[Path] = None
     socket_path: Path = Path(DEFAULT_SOCKET)
@@ -412,6 +421,8 @@ class BrokerConfig:
         """Local agent owning this address, or None if it is not ours."""
         addr = address.strip().lower()
         local, _, dom = addr.partition("@")  # noqa: MACEFF005 - str.partition's (before, sep, after) contract is fixed by the stdlib; there is no callee whose order can change
+        if self.zone and dom == self.zone.strip().lower():
+            return self._zone_agent(local)
         if dom != self.domain.lower():
             return None
         # The local part is case-insensitive; the declared key keeps the case
@@ -424,6 +435,23 @@ class BrokerConfig:
         # test_amail_shared_rung.py is what keeps it from a third time.
         for name in self.agent_homes:
             if name.lower() == local:
+                return name
+        return None
+
+    def _zone_agent(self, local: str) -> Optional[str]:
+        """The local agent whose home's card gives *local* under the zone (R06). A home that
+        names no agent and declares no card matches nothing."""
+        from .zone import local_part_from_card, zone_local_part
+        from ..pd.names import IdentityError
+        for name, home in self.agent_homes.items():
+            try:
+                card = self.agent_cards.get(name)
+                mine = local_part_from_card(card) if card else zone_local_part(home)
+            except (IdentityError, ValueError):
+                # The deployment config refuses to start a zone with such an agent, so
+                # this is a hand-built config; it still never matches.
+                continue
+            if mine == local:
                 return name
         return None
 

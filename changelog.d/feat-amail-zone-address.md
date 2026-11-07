@@ -1,0 +1,3 @@
+### Added
+
+- **A broker answers for the shared mail zone by each agent's calling card** (`amail/zone.py`, `BrokerConfig.zone` and `agent_cards`, the addressing file's `zone` and per-agent `card`, MIS-0004 R06): an agent's zone address is `name_shortid@<zone>`, lower-cased, from its calling card, never from `MACEFF_AGENT_NAME`. Because the broker's account cannot read a seat's home, the card is declared per agent in the addressing file at provisioning. A deployment that declares a zone refuses to start while any agent has no usable card, and names it. The zone name stays in each deployment's addressing file.
