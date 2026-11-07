@@ -248,6 +248,27 @@ def test_the_sessions_claim_alone_does_not_confirm_it(report, said):
     assert "unconfirmed" in out and "NONE running" in out
 
 
+def test_the_daemon_is_asked_by_the_homes_card_not_a_short_agent_name(monkeypatch, tmp_path):
+    """A container seat sets MACEFF_AGENT_NAME to its short name. env asked the daemon by that
+    name, the daemon answered for another agent, and a session it runs read NONE (Nov 7)."""
+    from macf.utils import supervision
+    (tmp_path / ".maceff").mkdir()
+    (tmp_path / ".maceff" / "config.json").write_text('{"agent_identity": {"calling_card": "Seat"}}')
+    (tmp_path / ".maceff_primary_agent.id").write_text("1a2b3c4d-0000\n")
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path))
+    monkeypatch.setenv("MACEFF_AGENT_NAME", "Seat")
+    # What a seat's session resolves: its short name, from that variable.
+    monkeypatch.setattr("macf.utils.harness.resolve_agent", lambda agent=None: ("Seat", "MACEFF_AGENT_NAME"))
+    asked = []
+    monkeypatch.setattr(supervision, "primal_daemon_unit", lambda card, *a, **k: asked.append(card))
+    monkeypatch.setattr(supervision, "live_supervisors", lambda: [])
+    monkeypatch.setattr("macf.supervisor._find_own_supervisor", lambda: None)
+    supervision.diagnose()
+    assert asked == ["Seat@1a2b3c"]
+    # A home that names no agent falls back to the identifier's card.
+    assert supervision._daemon_card("Seat@9f8e7d", {"MACEFF_AGENT_HOME_DIR": str(tmp_path / "none")}) == "Seat@9f8e7d"
+
+
 def test_without_the_session_variables_there_is_no_daemon_claim():
     from macf.utils import supervision
     assert supervision.primal_daemon_unit("A@1a2b3c", {}, ask=lambda: 1 / 0) is None
