@@ -115,3 +115,28 @@ def test_the_deployment_file_declares_a_peers_agents_and_refuses_a_bad_card(tmp_
     assert decl.agents == {"manny": MANNY}
     with pytest.raises(ValidationError, match="not a calling card"):
         SharedHandoffDecl(handoff=tmp_path, agents={"manny": "WrenTuba"})
+
+
+def test_a_zone_address_claimed_twice_refuses_the_start(tmp_path):
+    """Two peers, one peer twice, or a peer and one of our own: the start names the address and
+    every claimant instead of routing by sort order."""
+    import pytest
+    import yaml
+    from macf.amail.deploy_config import BrokerDeployConfig, ConfigError
+    addr = tmp_path / "addressing.yaml"
+    addr.write_text(yaml.safe_dump({"domain": HOST, "zone": ZONE, "agents": {
+        "ira": {"home": str(tmp_path / "ira"), "uid": 1002, "contacts": [], "card": IRA}}}))
+
+    def start(peers):
+        return BrokerDeployConfig.model_validate({
+            "addressing_path": str(addr), "audit_path": str(tmp_path / "a.jsonl"),
+            "inbound_quarantine": str(tmp_path / "q"), "inbound_handoff": str(tmp_path / "h"),
+            "shared_handoffs": peers}).to_broker_config()
+
+    assert start({BOX: {"handoff": str(tmp_path / "b"), "agents": {"manny": MANNY}}})
+    for peers in ({BOX: {"handoff": str(tmp_path / "b"), "agents": {"manny": MANNY}},
+                   "other.local": {"handoff": str(tmp_path / "o"), "agents": {"m": MANNY}}},
+                  {BOX: {"handoff": str(tmp_path / "b"), "agents": {"manny": MANNY, "m2": MANNY}}},
+                  {BOX: {"handoff": str(tmp_path / "b"), "agents": {"fake_ira": IRA}}}):
+        with pytest.raises(ConfigError, match="claimed more than once"):
+            start(peers)
