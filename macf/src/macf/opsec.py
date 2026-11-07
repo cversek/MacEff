@@ -454,7 +454,7 @@ def main():
     # their reviews with their calling cards; the built-in "agent uuid" rule is
     # right for every public target and wrong for the one repository those
     # agents are the subject of. The exemption is a list of regexes matched
-    # against the TEXT the rule caught, so `[A-Za-z]+@63e6b2` exempts one
+    # against the TEXT the rule caught, so `[A-Za-z]+@d4e5f6` exempts one
     # deployment's cards and nothing else; a secret-class label is never exempt.
     exempt = [re.compile(p) for p in profile.get("exempt", [])]
     def exempted(label, tok):

@@ -303,10 +303,10 @@ class TestBackwardCompatibility:
         legacy = {
             "ids": {"base": 21000},
             "agents": {
-                "manny": {
-                    "username": "pa_manny",
+                "orchard": {
+                    "username": "pa_orchard",
                     "uid": 21100,
-                    "display_name": "Manny MacEff",
+                    "display_name": "Orchard MacEff",
                     "personality": "agents/manny_personality.md",
                     "subagents": ["DevOpsEng"],
                     "assigned_projects": ["Orchard"],
@@ -321,10 +321,10 @@ class TestBackwardCompatibility:
             "defaults": {"container_env": {"MACF_CONTEXT_WINDOW": "1000000"}},
         }
         config = AgentsConfig(**legacy)
-        manny = config.agents["manny"]
-        assert manny.flavor == AgentFlavor.MACEFF
-        assert manny.is_vanilla is False
-        assert manny.ssh_keys is None
+        orchard = config.agents["orchard"]
+        assert orchard.flavor == AgentFlavor.MACEFF
+        assert orchard.is_vanilla is False
+        assert orchard.ssh_keys is None
         assert config.defaults.admin_ssh_keys is None
 
     def test_mixed_flavor_deployment_validates(self):

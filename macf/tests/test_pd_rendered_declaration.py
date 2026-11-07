@@ -99,12 +99,12 @@ def test_an_agent_daemon_needs_a_calling_card_when_agents_yaml_loads():
 
     def agents_yaml(**fields):
         return AgentsConfig.model_validate({"ids": {"base": 21000}, "subagents": {}, "agents": {
-            "manny1": {"username": "pa_manny", "uid": 21100, "personality": "p.md", **fields}}})
-    with pytest.raises(ValueError, match=r"'pa_manny' declares primal_daemon without calling_card"):
+            "orchard1": {"username": "pa_orchard", "uid": 21100, "personality": "p.md", **fields}}})
+    with pytest.raises(ValueError, match=r"'pa_orchard' declares primal_daemon without calling_card"):
         agents_yaml(primal_daemon={"units": []})
-    assert agents_yaml(calling_card="Manny1").agents["manny1"].calling_card == "Manny1"
-    assert agents_yaml(calling_card="Manny1", primal_daemon={"units": []}).agents["manny1"].primal_daemon
-    for bad in ("1Manny", "Manny@1", "Manny One", "M" * 49):
+    assert agents_yaml(calling_card="Orchard1").agents["orchard1"].calling_card == "Orchard1"
+    assert agents_yaml(calling_card="Orchard1", primal_daemon={"units": []}).agents["orchard1"].primal_daemon
+    for bad in ("1Manny", "Orchard@1", "Orchard One", "M" * 49):
         with pytest.raises(ValueError, match="calling_card"):
             agents_yaml(calling_card=bad)
     with pytest.raises(ValueError, match="vanilla and declares calling_card"):

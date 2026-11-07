@@ -302,7 +302,7 @@ def _launch_detached_tmux(tmux_session: str, cmd: list) -> bool:
     # its own idempotency test caught it on the first run.
     #
     # `=name` is exact-match: without it tmux prefix-matches, so "manny" would
-    # silently satisfy a check for a session named "manny1".
+    # silently satisfy a check for a session named "orchard1".
     if subprocess.run(["tmux", "has-session", "-t", f"={tmux_session}"],
                       capture_output=True).returncode == 0:
         return True

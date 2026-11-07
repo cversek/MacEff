@@ -37,8 +37,8 @@ def _read(home):
 
 
 def test_a_new_file_names_the_box_and_is_the_agents_own(start_module, chowns, tmp_path):
-    start_module.write_amail_settings(tmp_path, Path("/var/lib/amail/handoff"), "manny2", 1002, 1002)
-    assert _read(tmp_path) == {"handoff": "/var/lib/amail/handoff", "agent": "manny2"}
+    start_module.write_amail_settings(tmp_path, Path("/var/lib/amail/handoff"), "orchard2", 1002, 1002)
+    assert _read(tmp_path) == {"handoff": "/var/lib/amail/handoff", "agent": "orchard2"}
     assert chowns == [("amail.json.tmp", 1002, 1002)]
     assert stat.S_IMODE((tmp_path / ".maceff" / "amail.json").stat().st_mode) == 0o600
 
@@ -46,9 +46,9 @@ def test_a_new_file_names_the_box_and_is_the_agents_own(start_module, chowns, tm
 def test_other_keys_are_kept_and_the_two_names_corrected(start_module, chowns, tmp_path):
     (tmp_path / ".maceff").mkdir()
     (tmp_path / ".maceff" / "amail.json").write_text(json.dumps(
-        {"domain": "manny.local", "agent": "old", "socket": "/run/amail/broker.sock"}))
-    start_module.write_amail_settings(tmp_path, Path("/h"), "manny2", 1, 1)
-    assert _read(tmp_path) == {"domain": "manny.local", "agent": "manny2",
+        {"domain": "orchard.local", "agent": "old", "socket": "/run/amail/broker.sock"}))
+    start_module.write_amail_settings(tmp_path, Path("/h"), "orchard2", 1, 1)
+    assert _read(tmp_path) == {"domain": "orchard.local", "agent": "orchard2",
                                "socket": "/run/amail/broker.sock", "handoff": "/h"}
 
 
@@ -67,11 +67,11 @@ def test_a_file_that_is_not_an_object_is_left_alone(start_module, chowns, tmp_pa
 
 
 def test_provisioning_writes_it_for_each_addressed_agent(start_module, chowns, tmp_path):
-    homes = {"pa_manny2": tmp_path / "pa_manny2", "pa_manny3": tmp_path / "pa_manny3"}
+    homes = {"pa_orchard2": tmp_path / "pa_orchard2", "pa_orchard3": tmp_path / "pa_orchard3"}
     for h in homes.values():
         h.mkdir()
     addressing = tmp_path / "addressing.yaml"
-    addressing.write_text("agents:\n  manny2: {account: pa_manny2}\n  manny3: {account: pa_manny3}\n")
+    addressing.write_text("agents:\n  orchard2: {account: pa_orchard2}\n  orchard3: {account: pa_orchard3}\n")
     broker = tmp_path / "broker.yaml"
     broker.write_text(f"addressing_path: {addressing}\n")
     handoff = tmp_path / "handoff"
@@ -83,5 +83,5 @@ def test_provisioning_writes_it_for_each_addressed_agent(start_module, chowns, t
 
     with patch.object(start_module.pwd, "getpwnam", side_effect=getpwnam):
         start_module.provision_pickup_boxes(broker, handoff)
-    assert _read(homes["pa_manny2"]) == {"handoff": str(handoff), "agent": "manny2"}
-    assert _read(homes["pa_manny3"]) == {"handoff": str(handoff), "agent": "manny3"}
+    assert _read(homes["pa_orchard2"]) == {"handoff": str(handoff), "agent": "orchard2"}
+    assert _read(homes["pa_orchard3"]) == {"handoff": str(handoff), "agent": "orchard3"}

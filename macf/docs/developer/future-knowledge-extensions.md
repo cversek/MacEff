@@ -62,7 +62,7 @@ macf/hybrid_search/indexers/
 
 ### 3. Cross-Repository Search
 
-**What**: Search across multiple agent repositories (e.g., ClaudeTheBuilder + MannyMacEff)
+**What**: Search across multiple agent repositories (e.g., ClaudeTheBuilder + OrchardMacEff)
 
 **Value**:
 - Find solutions discovered by other agents
