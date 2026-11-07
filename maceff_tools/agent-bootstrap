@@ -30,7 +30,7 @@ Arguments:
 Examples:
   $0 maceff_test
   $0 maceff_sparrow "sparrow@example.com"
-  $0 maceff_sparrow "sparrow@example.com" "Sparrow - ExampleOrg Development PA"
+  $0 maceff_sparrow "sparrow@example.com" "Sparrow - Example Development PA"
 
 Environment:
   CONTAINER_NAME    Override container name (default: maceff-sandbox)
