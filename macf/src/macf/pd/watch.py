@@ -45,7 +45,7 @@ from typing import Callable, Dict, List, Literal, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from macf.notify.session import verify_incarnation
+from macf.notify.session import proc_start_key, verify_incarnation
 from macf.pd import interface
 from macf.pd.health import SCHEDULE_EVENTS, broker_health, read_liveness, schedule_health
 from macf.platform import container_limits
@@ -58,7 +58,7 @@ LOOKBACK_S = 7 * 86400
 SEND_TIMEOUT_S = 30
 
 Verdict = Literal["ALIVE", "STALE", "GONE", "ABSENT", "UNREADABLE", "UNREACHABLE", "CHECK-FAILED", "DARK", "HELD", "UNREAD",
-                  "DRIFTED", "SWEEP-FAILED"]
+                  "DRIFTED", "SWEEP-FAILED", "FAILED", "AUTH-FAILED"]
 
 #: Exit codes, worst wins (``service_supervision`` section 4.2): each state its own code.
 EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_UNREACHABLE, EXIT_CHECK_FAILED = 0, 1, 2, 3
@@ -67,6 +67,7 @@ EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_UNREACHABLE, EXIT_CHECK_FAILED = 0, 1, 2, 3
 _EXIT_FOR = {"ALIVE": EXIT_HEALTHY, "STALE": EXIT_UNHEALTHY, "GONE": EXIT_UNHEALTHY,
              "ABSENT": EXIT_UNHEALTHY, "DARK": EXIT_UNHEALTHY, "HELD": EXIT_UNHEALTHY, "UNREAD": EXIT_UNHEALTHY,
              "DRIFTED": EXIT_UNHEALTHY, "SWEEP-FAILED": EXIT_UNHEALTHY,
+             "FAILED": EXIT_UNHEALTHY, "AUTH-FAILED": EXIT_UNHEALTHY,
              "UNREACHABLE": EXIT_UNREACHABLE,
              "UNREADABLE": EXIT_CHECK_FAILED, "CHECK-FAILED": EXIT_CHECK_FAILED}
 
@@ -156,6 +157,72 @@ def last_liveness(log_path: Path, card: str, units: Sequence[str], now: float,
             found[unit] = event
             wanted.discard(unit)
     return found
+
+
+def last_unit_state(log_path: Path, card: str, units: Sequence[str], now: float,
+                    lookback_s: float = LOOKBACK_S) -> Dict[str, Optional[dict]]:
+    """The newest ``pd_unit_state`` record of each named unit of agent *card*, or None if
+    there is none within the lookback. Read the same way as ``last_liveness``: newest first,
+    this agent's events only, stopping at the lookback or once every unit is found."""
+    wanted = set(units)
+    found: Dict[str, Optional[dict]] = dict.fromkeys(units)
+    cutoff = now - lookback_s
+    for line in iter_lines_reverse(log_path):
+        if not wanted:
+            break
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        if event.get("event") != interface.EVENT_STATE:
+            continue
+        data = event.get("data")
+        if not isinstance(data, dict) or data.get("agent") != card:
+            continue
+        unit = data.get("unit")
+        if isinstance(unit, str) and unit in wanted:
+            found[unit] = event
+            wanted.discard(unit)
+    return found
+
+
+def _beats_from_another_process(state: dict, data: dict, beat: Optional[dict]) -> bool:
+    """Whether *beat* came after the failed record, from a process other than the one recorded
+    failed: a unit the core marked failed and someone then started outside it. The same process
+    still beating is the auth case, where the failure stands however fresh the beat is."""
+    beat_data = beat.get("data") if isinstance(beat, dict) else None
+    if not isinstance(beat_data, dict):
+        return False
+    stamps = (state.get("timestamp"), beat.get("timestamp"))
+    if not all(isinstance(s, (int, float)) for s in stamps) or stamps[1] <= stamps[0]:
+        return False
+    if data.get("pid") is None:
+        return True  # the failure recorded no process, and something has beaten since
+    return (beat_data.get("pid") != data.get("pid")
+            or proc_start_key(beat_data.get("proc_start")) != proc_start_key(data.get("proc_start")))
+
+
+def check_unit_state(card: str, unit: interface.Unit, event: Optional[dict],
+                     beat: Optional[dict] = None) -> Optional[Finding]:
+    """A failed unit is unhealthy even while its liveness is fresh. A session that can't
+    authenticate keeps running, so it keeps beating, and a watch reading liveness alone
+    called it ALIVE while it could do no work (MIS-0002-R19 (auth_failure_MUST_read_failed)).
+    None when the unit's newest state isn't ``failed``, or when *beat* shows another process
+    has taken over since: liveness then decides alone."""
+    data = event.get("data") if isinstance(event, dict) else None
+    if not isinstance(data, dict) or data.get("state") != "failed":
+        return None
+    if _beats_from_another_process(event, data, beat):
+        return None
+    reason = data.get("reason") if isinstance(data.get("reason"), str) else "no reason recorded"
+    if reason.startswith(interface.AUTH_FAILED_REASON):
+        return Finding(card, unit.name, "AUTH-FAILED", f"needs /login in its session: {reason}")
+    return Finding(card, unit.name, "FAILED", reason)
 
 
 def last_channel_event(log_path: Path, card: str, now: float,
@@ -387,7 +454,17 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
         events = {u.name: None for u in declaration.units}
     except OSError as e:
         return findings + [Finding(card, "home", "CHECK-FAILED", f"the event log cannot be read: {e.strerror}")]
-    findings += [check_unit(card, u, events[u.name], now, probe) for u in declaration.units]
+    try:
+        states = last_unit_state(log_path, card, [u.name for u in declaration.units], now)
+    except FileNotFoundError:
+        states = {u.name: None for u in declaration.units}
+    except OSError as e:
+        # Unknown is never healthy: without the states, liveness alone could say ALIVE.
+        return findings + [Finding(card, "home", "CHECK-FAILED", f"the event log cannot be read: {e.strerror}")]
+    # A unit's recorded failure outranks its fresh liveness; otherwise liveness decides.
+    findings += [check_unit_state(card, u, states[u.name], events[u.name])
+                 or check_unit(card, u, events[u.name], now, probe)
+                 for u in declaration.units]
     if any(u.kind == "session" for u in declaration.units):   # a session the fallback types into
         try:
             findings.append(check_wake(card, last_wake_event(log_path, card, now), now))
