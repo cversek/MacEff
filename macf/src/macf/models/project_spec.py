@@ -169,15 +169,15 @@ class ProjectsConfig(BaseModel):
 
     Example:
         projects:
-          NeuroVEP:
-            context: ../custom/projects/NeuroVEP_context.md
+          Orchard:
+            context: ../custom/projects/Orchard_context.md
             repos:
-              - url: git@github.com:user/neurovep_analysis.git
-                name: neurovep_analysis  # Optional, defaults to 'neurovep_analysis' from URL
+              - url: git@github.com:user/orchard_analysis.git
+                name: orchard_analysis  # Optional, defaults to 'orchard_analysis' from URL
                 worktree: true  # Default, creates git worktree
             data_mounts:
               - type: bind
-                source: /Users/user/Dropbox/NeuroVEP
+                source: /Users/user/Dropbox/Orchard
                 target: data
                 read_only: false
             commands:

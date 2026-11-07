@@ -111,7 +111,7 @@ def test_agents_config_valid():
                 uid=21100,
                 personality="../custom/agents/manny.md",
                 subagents=["DevOpsEng"],
-                assigned_projects=["NeuroVEP"]
+                assigned_projects=["Orchard"]
             )
         },
         subagents={

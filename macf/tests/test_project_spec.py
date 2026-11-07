@@ -26,12 +26,12 @@ from macf.models.project_spec import (
 def test_repo_mount_valid():
     """Valid RepoMount with required url field."""
     repo = RepoMount(
-        url="git@github.com:user/neurovep_analysis.git",
-        name="neurovep_analysis"
+        url="git@github.com:user/orchard_analysis.git",
+        name="orchard_analysis"
     )
 
-    assert repo.url == "git@github.com:user/neurovep_analysis.git"
-    assert repo.name == "neurovep_analysis"
+    assert repo.url == "git@github.com:user/orchard_analysis.git"
+    assert repo.name == "orchard_analysis"
     assert repo.worktree is True  # Default value
 
 
@@ -56,12 +56,12 @@ def test_data_mount_valid():
     """Valid DataMount with required fields."""
     mount = DataMount(
         type="bind",
-        source="/Users/user/Dropbox/NeuroVEP",
+        source="/Users/user/Dropbox/Orchard",
         target="data"
     )
 
     assert mount.type == "bind"
-    assert mount.source == "/Users/user/Dropbox/NeuroVEP"
+    assert mount.source == "/Users/user/Dropbox/Orchard"
     assert mount.target == "data"
     assert mount.read_only is False  # Default value
 
@@ -81,10 +81,10 @@ def test_data_mount_read_only_explicit():
 def test_project_spec_minimal():
     """Valid ProjectSpec with only required field."""
     project = ProjectSpec(
-        context="../custom/projects/NeuroVEP_context.md"
+        context="../custom/projects/Orchard_context.md"
     )
 
-    assert project.context == "../custom/projects/NeuroVEP_context.md"
+    assert project.context == "../custom/projects/Orchard_context.md"
     assert project.repos == []  # Default empty list
     assert project.data_mounts == []  # Default empty list
     assert project.commands is None
@@ -93,19 +93,19 @@ def test_project_spec_minimal():
 def test_project_spec_full():
     """Valid ProjectSpec with all optional fields."""
     project = ProjectSpec(
-        context="../custom/projects/NeuroVEP_context.md",
+        context="../custom/projects/Orchard_context.md",
         repos=[
             RepoMount(
-                url="git@github.com:user/neurovep_analysis.git"
+                url="git@github.com:user/orchard_analysis.git"
             ),
             RepoMount(
-                url="git@github.com:user/neurovep_pipeline.git"
+                url="git@github.com:user/orchard_pipeline.git"
             )
         ],
         data_mounts=[
             DataMount(
                 type="bind",
-                source="/Users/user/Dropbox/NeuroVEP",
+                source="/Users/user/Dropbox/Orchard",
                 target="data",
                 read_only=False
             )
@@ -126,11 +126,11 @@ def test_projects_config_valid():
     """Valid ProjectsConfig with multiple projects."""
     config = ProjectsConfig(
         projects={
-            "NeuroVEP": ProjectSpec(
-                context="../custom/projects/NeuroVEP_context.md",
+            "Orchard": ProjectSpec(
+                context="../custom/projects/Orchard_context.md",
                 repos=[
                     RepoMount(
-                        url="git@github.com:user/neurovep_analysis.git"
+                        url="git@github.com:user/orchard_analysis.git"
                     )
                 ]
             ),
@@ -140,9 +140,9 @@ def test_projects_config_valid():
         }
     )
 
-    assert "NeuroVEP" in config.projects
+    assert "Orchard" in config.projects
     assert "Research" in config.projects
-    assert len(config.projects["NeuroVEP"].repos) == 1
+    assert len(config.projects["Orchard"].repos) == 1
     assert len(config.projects["Research"].repos) == 0
 
 

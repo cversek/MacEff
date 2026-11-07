@@ -33,7 +33,7 @@ A **Primary Agent (PA)** is the main agent with:
 - Ability to delegate work to specialized Subagents
 - Project assignments via workspace symlinks
 
-**Example**: `pa_manny` is a Primary Agent working on the NeuroVEP project with access to data analysis repositories.
+**Example**: `pa_manny` is a Primary Agent working on the Orchard project with access to data analysis repositories.
 
 ### Subagents (SA)
 
@@ -300,14 +300,14 @@ Claude Code natively supports hierarchical context loading. Named Agents leverag
 
 **Invocation**:
 ```bash
-cd ~/workspace/NeuroVEP
+cd ~/workspace/Orchard
 claude -c
 ```
 
 **Claude Code automatically loads** (in order):
 1. `~/.claude/CLAUDE.md` (System: MacEff framework)
 2. `~/CLAUDE.md` (Identity: Agent personality)
-3. `~/workspace/NeuroVEP/CLAUDE.md` (Project: NeuroVEP context)
+3. `~/workspace/Orchard/CLAUDE.md` (Project: Orchard context)
 4. `~/.claude/agents/*.md` (Subagent definitions for delegation)
 
 **Result**: Full context stack ready for work without manual specification.

@@ -13,7 +13,6 @@ OPSEC_PATTERNS=(
     "reverse.engineer"
     "ClaudeTheBuilder"
     "MannyMacEff"
-    "neurovep"
     "NeuroFieldz"
     "EPIST_DOC"
     "demini"
@@ -84,7 +83,6 @@ IDENTITY_PATTERNS=(
     "SiloMacEff"
     "Project.Almanac"
     "NeuroFieldz"
-    "neurovep"
 )
 
 FRAMEWORK_FILES=$(git diff --cached --diff-filter=ACMR --name-only | grep -E '^framework/(policies|skills)/')

@@ -85,7 +85,7 @@ This document describes the complete filesystem layout for Primary Agents, Subag
 │       └── data_scientist/                        # Similar structure
 │
 ├── workspace/                                     # Project assignments
-│   ├── NeuroVEP/ -> /shared_workspace/NeuroVEP   # Symlink to shared project
+│   ├── Orchard/ -> /shared_workspace/Orchard   # Symlink to shared project
 │   └── Research/ -> /shared_workspace/Research   # Symlink to shared project
 │
 └── .ssh/                                          # SSH keys for git
@@ -344,7 +344,7 @@ agent/subagents/devops_eng/
 
 **Example**:
 ```bash
-~/workspace/NeuroVEP -> /shared_workspace/NeuroVEP
+~/workspace/Orchard -> /shared_workspace/Orchard
 ~/workspace/Research -> /shared_workspace/Research
 ```
 
@@ -376,7 +376,7 @@ In v0.3, Subagents run as same user as their PA. For future multi-user architect
 ### Project Directory Layout
 
 ```
-/shared_workspace/NeuroVEP/                        # Project directory
+/shared_workspace/Orchard/                        # Project directory
 ├── CLAUDE.md                                      # Project-layer context
 │
 ├── .claude/
@@ -385,10 +385,10 @@ In v0.3, Subagents run as same user as their PA. For future multi-user architect
 │       └── run_pipeline.md
 │
 ├── repos/                                         # Git repositories
-│   ├── neurovep_analysis/
-│   ├── neurovep_data_pipeline/
-│   ├── neurovep_modeling/
-│   └── neurovep_visualization/
+│   ├── orchard_analysis/
+│   ├── orchard_data_pipeline/
+│   ├── orchard_modeling/
+│   └── orchard_visualization/
 │
 └── data/                                          # Project data (often bind mount)
     └── (datasets from host system)
@@ -424,7 +424,7 @@ In v0.3, Subagents run as same user as their PA. For future multi-user architect
 
 **Access**: Read-only for most use cases, timestamped outputs for write operations
 
-## Complete Example: pa_manny with NeuroVEP
+## Complete Example: pa_manny with Orchard
 
 ### Realistic Filesystem Tree
 
@@ -450,7 +450,7 @@ In v0.3, Subagents run as same user as their PA. For future multi-user architect
 ├── agent/
 │   ├── private/
 │   │   ├── checkpoints/
-│   │   │   └── 2025-10-18_143022_NeuroVEP_Analysis_Complete_CCP.md
+│   │   │   └── 2025-10-18_143022_Orchard_Analysis_Complete_CCP.md
 │   │   ├── reflections/
 │   │   │   ├── 2025-10-18_150315_Data_Pipeline_Insights_reflection.md
 │   │   │   └── 2025-10-18_224500_Weekly_JOTEWR_reflection.md
@@ -459,7 +459,7 @@ In v0.3, Subagents run as same user as their PA. For future multi-user architect
 │   │
 │   ├── public/
 │   │   ├── roadmaps/
-│   │   │   └── 2025-10-15_100000_NeuroVEP_Defect_Labeling/
+│   │   │   └── 2025-10-15_100000_Orchard_Defect_Labeling/
 │   │   │       ├── roadmap.md
 │   │   │       └── delegation_plans/
 │   │   │           ├── 2025-10-15_100500_Phase1_Data_DataScientist.md
@@ -499,23 +499,23 @@ In v0.3, Subagents run as same user as their PA. For future multi-user architect
 │       └── data_scientist/                        # Similar structure
 │
 ├── workspace/
-│   └── NeuroVEP -> /shared_workspace/NeuroVEP
+│   └── Orchard -> /shared_workspace/Orchard
 │
 └── .ssh/
     ├── id_ed25519
     └── id_ed25519.pub
 
-/shared_workspace/NeuroVEP/
-├── CLAUDE.md                                      # NeuroVEP project context
+/shared_workspace/Orchard/
+├── CLAUDE.md                                      # Orchard project context
 ├── .claude/
 │   └── commands/
 │       ├── analyze_vep.md
 │       └── run_pipeline.md
 ├── repos/
-│   ├── neurovep_analysis/
-│   ├── neurovep_data_pipeline/
-│   ├── neurovep_modeling/
-│   └── neurovep_visualization/
+│   ├── orchard_analysis/
+│   ├── orchard_data_pipeline/
+│   ├── orchard_modeling/
+│   └── orchard_visualization/
 └── data/                                          # Bind mount to host
     └── (datasets)
 ```
@@ -527,7 +527,7 @@ In v0.3, Subagents run as same user as their PA. For future multi-user architect
 ssh pa_manny@maceff-container
 
 # Navigate to assigned project
-cd ~/workspace/NeuroVEP
+cd ~/workspace/Orchard
 
 # Invoke Claude Code
 claude -c
@@ -535,10 +535,10 @@ claude -c
 # Claude Code auto-loads:
 # 1. ~/.claude/CLAUDE.md (System: MacEff framework)
 # 2. ~/CLAUDE.md (Identity: Manny personality)
-# 3. ~/workspace/NeuroVEP/CLAUDE.md (Project: NeuroVEP context)
+# 3. ~/workspace/Orchard/CLAUDE.md (Project: Orchard context)
 # 4. ~/.claude/agents/*.md (Subagent definitions)
 
-# Work on NeuroVEP with full context and delegation capability
+# Work on Orchard with full context and delegation capability
 ```
 
 ## Naming Conventions
