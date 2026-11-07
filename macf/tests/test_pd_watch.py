@@ -481,3 +481,76 @@ def test_a_drift_found_after_a_failed_check_is_still_an_alert(tmp_path):
     text = sink.read_text()
     assert "ALERT: seat-1 limits check: CHECK-FAILED" in text and "ALERT: seat-1 limits: DRIFTED" in text
 
+
+
+def _state(home, unit, age_s, state, reason, agent=CARD):
+    log = home / ".maceff" / "agent_events_log.jsonl"
+    data = {"agent": agent, "unit": unit, "state": state, "pid": 4242, "proc_start": "777", "reason": reason}
+    with log.open("a") as fh:
+        fh.write(json.dumps({"timestamp": NOW - age_s, "event": pdi.EVENT_STATE, "data": data}) + "\n")
+
+
+def test_a_session_that_cannot_log_in_alerts_while_its_liveness_is_fresh(tmp_path):
+    """An expired login leaves the session running and beating, so liveness alone read it
+    ALIVE for hours while it could do no work. Its recorded failure decides instead."""
+    home, base, sink = _home(tmp_path, units=(("session", 120.0),)), tmp_path / "run", tmp_path / "sink.txt"
+    _record(base)
+    _state(home, "session", age_s=600, state="failed",
+           reason=f"{pdi.AUTH_FAILED_REASON}: Login expired · Please run /login")
+    _stamp(home, "session", age_s=5, interval_s=120.0)
+    config = _config(tmp_path, [home], sink)
+    assert watch.run_pass(config, now=NOW, base=base, probe=ALL_RUNNING) == watch.EXIT_UNHEALTHY
+    assert sink.read_text().count("ALERT") == 1
+    assert "Resident@1a2b3c session: AUTH-FAILED, needs /login" in sink.read_text()
+    # Logged in again: the core records running, and the watch sends one recovery.
+    _state(home, "session", age_s=-60, state="running", reason="authenticated again")
+    _stamp(home, "session", age_s=-90, interval_s=120.0)
+    assert watch.run_pass(config, now=NOW + 120, base=base, probe=ALL_RUNNING) == watch.EXIT_HEALTHY
+    assert "recovered: Resident@1a2b3c session: ALIVE" in sink.read_text()
+
+
+def test_a_failure_stands_only_for_the_process_recorded_failed(tmp_path):
+    """Started by hand after the core marked it failed, a new pid beats and no new state is
+    written. It must not read FAILED for up to a week. An older beat from another process, or a
+    newer one from the failed process, leaves the failure standing."""
+    home = _home(tmp_path, units=(("broker", 15.0),))
+    _record(tmp_path / "run")
+    _state(home, "broker", age_s=300, state="failed", reason="over its memory limit")
+    _stamp(home, "broker", age_s=400, pid=9999, start="999")
+    verdict = lambda: watch.check_home(home, NOW, tmp_path / "run", ALL_RUNNING)[1].verdict
+    assert verdict() == "FAILED", "a beat older than the failure proves nothing"
+    _stamp(home, "broker", age_s=5)
+    assert verdict() == "FAILED", "the process recorded failed is still the one beating"
+    _stamp(home, "broker", age_s=4, pid=4242, start="778")
+    assert verdict() != "FAILED", "the same number with another start is another process"
+    _stamp(home, "broker", age_s=3, pid=9999, start="999")
+    assert verdict() != "FAILED", "another process has taken over"
+
+
+def test_states_that_cannot_be_read_are_never_healthy(tmp_path, monkeypatch):
+    home = _home(tmp_path, units=(("broker", 15.0),))
+    _record(tmp_path / "run")
+    _stamp(home, "broker", age_s=5)
+    def unreadable(*_a, **_k):
+        raise OSError(5, "Input/output error")
+    monkeypatch.setattr(watch, "last_unit_state", unreadable)
+    findings = watch.check_home(home, NOW, tmp_path / "run", ALL_RUNNING)
+    assert [f.verdict for f in findings if f.subject == "home"] == ["CHECK-FAILED"]
+    assert not [f for f in findings if f.subject == "broker"]
+
+
+def test_a_failed_unit_for_another_reason_reads_failed_with_its_reason(tmp_path):
+    home = _home(tmp_path, units=(("broker", 15.0),))
+    _record(tmp_path / "run")
+    _state(home, "broker", age_s=30, state="failed", reason="exited 1 five times in a row")
+    _stamp(home, "broker", age_s=5)
+    unit = watch.check_home(home, NOW, tmp_path / "run", ALL_RUNNING)[1]
+    assert (unit.verdict, unit.detail) == ("FAILED", "exited 1 five times in a row")
+
+
+def test_another_agents_failure_in_the_same_log_is_not_this_agents(tmp_path):
+    home = _home(tmp_path)
+    _record(tmp_path / "run")
+    _state(home, "broker", age_s=30, state="failed", reason="authentication failed: x", agent="Other@9f9f9f")
+    _stamp(home, "broker", age_s=5)
+    assert watch.check_home(home, NOW, tmp_path / "run", ALL_RUNNING)[1].verdict == "ALIVE"
