@@ -134,9 +134,8 @@ def primal_daemon_unit(card: Optional[str], environ=None, ask=None) -> Optional[
         found["why"] = "no calling card was resolved, so no daemon could be asked"
         return found
     if ask is None:
-        from pathlib import Path
         from ..pd.client import status
-        home = Path(env.get("MACEFF_AGENT_HOME_DIR") or Path.home())
+        home = _session_home(env)
         ask = lambda: status(home, card)  # noqa: E731
     try:
         report = ask()
@@ -160,18 +159,26 @@ def primal_daemon_unit(card: Optional[str], environ=None, ask=None) -> Optional[
     return found
 
 
+def _session_home(env):
+    """The agent home a session's daemon is asked in: ``MACEFF_AGENT_HOME_DIR``, else the
+    agent home found as the session-start hook finds it. Not the login's home: where agents
+    share a login, that can name another agent."""
+    from pathlib import Path
+    from .paths import find_agent_home
+    return Path(env["MACEFF_AGENT_HOME_DIR"]) if env.get("MACEFF_AGENT_HOME_DIR") else find_agent_home()
+
+
 def _daemon_card(expected: Optional[str], environ=None) -> Optional[str]:
     """The card this session's primal daemon goes by: the home's own (``pd.names.agent_card``),
     as the session-start hook asks it. A daemon names its socket from the home, never from
     ``MACEFF_AGENT_NAME``, which a container seat may set to its short name. Asked by that
     name, a daemon that runs this very session answered for another agent, and env read the
     session as unsupervised. The identifier's card is the fallback for a home that names no agent."""
-    from pathlib import Path
     from ..pd.names import IdentityError, agent_card
     from .identity import calling_card_from_identifier
     env = os.environ if environ is None else environ
     try:
-        return agent_card(Path(env.get("MACEFF_AGENT_HOME_DIR") or Path.home()))
+        return agent_card(_session_home(env))
     except IdentityError:
         return calling_card_from_identifier(expected) if expected else None
 
