@@ -50,8 +50,8 @@ class TestFormatStatusline:
 
     def test_full_statusline_with_project(self):
         """Full statusline with all fields."""
-        result = format_statusline("manny", "Orchard", "Container Linux", 60000, 200000, 70)
-        assert result == "manny | Orchard | Container Linux | 60k/200k CL 70"
+        result = format_statusline("sparrow", "Orchard", "Container Linux", 60000, 200000, 70)
+        assert result == "sparrow | Orchard | Container Linux | 60k/200k CL 70"
 
     def test_statusline_without_project(self):
         """Project field omitted when None."""
@@ -161,7 +161,7 @@ class TestGetStatuslineData:
         actual context window usage from event log.
         """
         # Setup mocks
-        mock_agent_id.return_value = "manny"
+        mock_agent_id.return_value = "sparrow"
         mock_detect_project.return_value = "Orchard"
         mock_detect_env.return_value = "Container Linux"
         mock_token_info.return_value = {
@@ -173,7 +173,7 @@ class TestGetStatuslineData:
         cc_json = {"tokens_used": 999999, "tokens_total": 999999, "cl": 99}
         result = get_statusline_data(cc_json)
 
-        assert result["agent_name"] == "manny"
+        assert result["agent_name"] == "sparrow"
         assert result["project"] == "Orchard"
         # Tokens come from mock_token_info, NOT cc_json
         assert result["tokens_used"] == 120000

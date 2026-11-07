@@ -73,7 +73,7 @@ IDENTITY_PATTERNS=(
     "Craig"
     "Versek"
     "cversek"
-    "Manny"
+    "Sparrow"
     "Alma"
     "ClaudeTheBuilder"
     "SiloMacEff"

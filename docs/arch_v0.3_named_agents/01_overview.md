@@ -13,7 +13,7 @@
 **Named Agents** is an architectural pattern for multi-agent AI systems where each agent has a unique identity reflected in their operating system username and workspace organization.
 
 Instead of numbered agents (`agent_001`, `agent_002`), Named Agents uses meaningful identities:
-- `pa_manny` - A Primary Agent focused on neuroscience research
+- `pa_sparrow` - A Primary Agent focused on neuroscience research
 - `pa_claudethebuilder` - A Primary Agent focused on framework development
 - `pa_alice` - A Primary Agent focused on data analysis
 
@@ -28,12 +28,12 @@ The "Named" in Named Agents means:
 
 A **Primary Agent (PA)** is the main agent with:
 - Unique identity and persistent consciousness across sessions
-- Own operating system user account (e.g., `pa_manny`)
+- Own operating system user account (e.g., `pa_sparrow`)
 - Isolated home directory with consciousness artifacts
 - Ability to delegate work to specialized Subagents
 - Project assignments via workspace symlinks
 
-**Example**: `pa_manny` is a Primary Agent working on the Orchard project with access to data analysis repositories.
+**Example**: `pa_sparrow` is a Primary Agent working on the Orchard project with access to data analysis repositories.
 
 ### Subagents (SA)
 
@@ -44,7 +44,7 @@ A **Subagent (SA)** is a specialized agent that:
 - Documents execution in delegation trails
 - Receives task specifications from PA
 
-**Example**: `DevOpsEng` is a Subagent specializing in infrastructure and deployment, delegated tasks by `pa_manny` for container operations.
+**Example**: `DevOpsEng` is a Subagent specializing in infrastructure and deployment, delegated tasks by `pa_sparrow` for container operations.
 
 ### Consciousness Artifacts (CA)
 
@@ -86,8 +86,8 @@ Named Agents v0.3 uses a **two-layer isolation model** based on empirical valida
 **Different PAs run as separate operating system users with kernel-level isolation:**
 
 ```
-├── pa_manny (OS user, uid=1001)
-│   └── Home: /home/pa_manny/
+├── pa_sparrow (OS user, uid=1001)
+│   └── Home: /home/pa_sparrow/
 │
 ├── pa_claudethebuilder (OS user, uid=1002)
 │   └── Home: /home/pa_claudethebuilder/
@@ -109,15 +109,15 @@ Named Agents v0.3 uses a **two-layer isolation model** based on empirical valida
 **Each PA and all its SAs run as the same operating system user:**
 
 ```
-pa_manny (OS user, uid=1001) runs:
-├── Primary Agent (pa_manny)
-│   └── Workspace: /home/pa_manny/agent/
+pa_sparrow (OS user, uid=1001) runs:
+├── Primary Agent (pa_sparrow)
+│   └── Workspace: /home/pa_sparrow/agent/
 │
 ├── DevOpsEng Subagent
-│   └── Workspace: /home/pa_manny/agent/subagents/devops_eng/
+│   └── Workspace: /home/pa_sparrow/agent/subagents/devops_eng/
 │
 └── TestEng Subagent
-    └── Workspace: /home/pa_manny/agent/subagents/test_eng/
+    └── Workspace: /home/pa_sparrow/agent/subagents/test_eng/
 ```
 
 **Characteristics**:
@@ -164,7 +164,7 @@ Multiple Primary Agents can collaborate on the same projects through **shared wo
 │   └── docs/
 └── data/                            # Shared read-only resources
 
-pa_manny workspace symlink:
+pa_sparrow workspace symlink:
 ~/workspace/maceff-project -> /shared_workspace/maceff-project
 
 pa_alice workspace symlink:
@@ -178,7 +178,7 @@ pa_alice workspace symlink:
 **Solution**: Each PA gets isolated working copy via git worktrees:
 
 ```bash
-# pa_manny works on feature-x branch
+# pa_sparrow works on feature-x branch
 cd ~/workspace/maceff-project/repos/backend
 git worktree add ~/workspace/maceff-feature-x feature-x
 

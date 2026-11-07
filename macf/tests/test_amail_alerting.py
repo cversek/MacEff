@@ -21,7 +21,7 @@ def test_THE_INCIDENT_no_longer_pages(tmp_path):
     Nine hours, 36 pages, for two messages belonging to agents with no session
     ever started. Wall-clock said 'overdue'; the recipient's own clock said zero.
     """
-    f = a.classify_aged_pickup("pa_manny2", "msg.eml", age_s=32400, bound_s=900,
+    f = a.classify_aged_pickup("pa_sparrow2", "msg.eml", age_s=32400, bound_s=900,
                                liveness=a.INACTIVE)
     assert f.kind == a.EXPECTED_STATE
     assert f.route == a.NOBODY

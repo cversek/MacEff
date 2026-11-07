@@ -307,7 +307,7 @@ class TestBackwardCompatibility:
                     "username": "pa_orchard",
                     "uid": 21100,
                     "display_name": "Orchard MacEff",
-                    "personality": "agents/manny_personality.md",
+                    "personality": "agents/sparrow_personality.md",
                     "subagents": ["DevOpsEng"],
                     "assigned_projects": ["Orchard"],
                 }

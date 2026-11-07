@@ -45,7 +45,7 @@ This document describes how delegation works in practice.
 ### Directory Pattern
 
 ```
-/home/pa_manny/agent/subagents/devops_eng/
+/home/pa_sparrow/agent/subagents/devops_eng/
 ├── assigned/                          # PA writes tasks here
 │   └── YYYY-MM-DD_HHMMSS_task_spec.md
 │
@@ -73,7 +73,7 @@ This document describes how delegation works in practice.
 
 **Critical**: Subagents operate within their own workspace subdirectory.
 
-**SA workspace root**: `/home/pa_manny/agent/subagents/devops_eng/`
+**SA workspace root**: `/home/pa_sparrow/agent/subagents/devops_eng/`
 
 **When SA session starts**:
 - Working directory is SA workspace root (not PA home)
@@ -83,21 +83,21 @@ This document describes how delegation works in practice.
 **Correct path references for SA**:
 ```bash
 # ✅ Correct: Absolute path to SA workspace
-/home/pa_manny/agent/subagents/devops_eng/assigned/
+/home/pa_sparrow/agent/subagents/devops_eng/assigned/
 
 # ✅ Correct: Relative to SA workspace root
 ./assigned/
 ./public/delegation_trails/
 
 # ❌ Wrong: Tilde expands to PA home
-~/assigned/  # This is /home/pa_manny/assigned/ (doesn't exist!)
+~/assigned/  # This is /home/pa_sparrow/assigned/ (doesn't exist!)
 ```
 
 ## Task Specification Format
 
 ### Location
 
-`/home/pa_manny/agent/subagents/{role}/assigned/YYYY-MM-DD_HHMMSS_{task_name}.md`
+`/home/pa_sparrow/agent/subagents/{role}/assigned/YYYY-MM-DD_HHMMSS_{task_name}.md`
 
 **Created by**: PA (writes to SA assigned/ directory)
 
@@ -153,7 +153,7 @@ User has meeting at 4 PM, needs demo-ready pipeline. Previous deployment had mem
 
 ### Location
 
-`/home/pa_manny/agent/subagents/{role}/public/delegation_trails/YYYY-MM-DD_HHMMSS_{task_name}_trail.md`
+`/home/pa_sparrow/agent/subagents/{role}/public/delegation_trails/YYYY-MM-DD_HHMMSS_{task_name}_trail.md`
 
 **Created by**: SA (writes to own delegation_trails/ directory)
 
@@ -223,7 +223,7 @@ Memory profiling revealed 4GB limit caused OOM kills. Pipeline peak usage ~6.5GB
 # Needs DevOpsEng to handle infrastructure task
 
 # Create task specification in SA workspace
-cat > /home/pa_manny/agent/subagents/devops_eng/assigned/2025-10-18_142500_Deploy_Orchard_Pipeline.md <<EOF
+cat > /home/pa_sparrow/agent/subagents/devops_eng/assigned/2025-10-18_142500_Deploy_Orchard_Pipeline.md <<EOF
 # Task: Deploy Orchard Data Pipeline
 
 **Assigned**: 2025-10-18 14:25:00
@@ -261,16 +261,16 @@ PA: "Use the Task tool with devops_eng to deploy the pipeline.
 **Claude Code**:
 1. Loads `.claude/agents/devops_eng.md` (Subagent definition)
 2. Spawns new agent session with DevOpsEng context
-3. SA session starts in `/home/pa_manny/agent/subagents/devops_eng/`
+3. SA session starts in `/home/pa_sparrow/agent/subagents/devops_eng/`
 4. Tool access controls from definition file enforced
 
 ### Step 3: SA Executes Work
 
 **SA session starts in own workspace**:
 ```bash
-# SA working directory: /home/pa_manny/agent/subagents/devops_eng/
+# SA working directory: /home/pa_sparrow/agent/subagents/devops_eng/
 pwd
-# Output: /home/pa_manny/agent/subagents/devops_eng
+# Output: /home/pa_sparrow/agent/subagents/devops_eng
 
 # Read assigned task (using relative path)
 cat ./assigned/2025-10-18_142500_Deploy_Orchard_Pipeline.md
@@ -329,7 +329,7 @@ EOF
 # PA session resumes after SA completes
 
 # Read delegation trail from SA workspace
-cat /home/pa_manny/agent/subagents/devops_eng/public/delegation_trails/2025-10-18_143000_Deploy_Orchard_Pipeline_trail.md
+cat /home/pa_sparrow/agent/subagents/devops_eng/public/delegation_trails/2025-10-18_143000_Deploy_Orchard_Pipeline_trail.md
 
 # Verify success criteria met
 # - Pipeline runs successfully ✅
@@ -347,7 +347,7 @@ cat /home/pa_manny/agent/subagents/devops_eng/public/delegation_trails/2025-10-1
 
 Each Subagent has a definition file that specifies role, capabilities, policies, and **tool access controls**.
 
-**Location**: `/home/pa_manny/agent/subagents/{role}/SUBAGENT_DEF.md`
+**Location**: `/home/pa_sparrow/agent/subagents/{role}/SUBAGENT_DEF.md`
 
 **Symlinked**: From `.claude/agents/{role}.md` for Claude Code auto-loading
 
@@ -392,7 +392,7 @@ Each Subagent has a definition file that specifies role, capabilities, policies,
 ## Workspace Policies
 
 **MUST operate within own workspace**:
-- Working directory: `/home/pa_manny/agent/subagents/devops_eng/`
+- Working directory: `/home/pa_sparrow/agent/subagents/devops_eng/`
 - Use absolute paths or paths relative to workspace root
 - **MUST NOT** use `~/` shortcuts (expands to PA home)
 
@@ -410,11 +410,11 @@ Each Subagent has a definition file that specifies role, capabilities, policies,
 - `./public/observations/` - Empirical discoveries
 
 **MAY read** (outside own workspace):
-- `/home/pa_manny/agent/public/` - PA public artifacts for context
+- `/home/pa_sparrow/agent/public/` - PA public artifacts for context
 - Other PAs' public artifacts (rare, when collaboration needed)
 
 **MUST NOT access**:
-- `/home/pa_manny/agent/private/` - PA private consciousness
+- `/home/pa_sparrow/agent/private/` - PA private consciousness
 - Other Subagents' private/ directories
 - Other Subagents' assigned/ directories
 - Other Subagents' delegation_trails/ (cannot modify other SA logs)
@@ -481,7 +481,7 @@ Each Subagent has a definition file that specifies role, capabilities, policies,
 ## Workspace Policies
 
 **MUST operate within own workspace**:
-- Working directory: `/home/pa_manny/agent/subagents/test_eng/`
+- Working directory: `/home/pa_sparrow/agent/subagents/test_eng/`
 - Use absolute paths or paths relative to workspace root
 - **MUST NOT** use `~/` shortcuts
 
@@ -500,11 +500,11 @@ Each Subagent has a definition file that specifies role, capabilities, policies,
 - Project test directories (outside agent workspace, as specified in tasks)
 
 **MAY read**:
-- `/home/pa_manny/agent/public/` - PA public artifacts
+- `/home/pa_sparrow/agent/public/` - PA public artifacts
 - Project source code (for test development)
 
 **MUST NOT access**:
-- `/home/pa_manny/agent/private/` - PA private consciousness
+- `/home/pa_sparrow/agent/private/` - PA private consciousness
 - Other Subagents' private/ or assigned/ directories
 
 **CANNOT create**:
@@ -608,7 +608,7 @@ In v0.3, PA and all SAs run as **same operating system user**. This means:
 ### Subagent Workspace Boundaries
 
 **SAs MUST operate within own workspace root**:
-- Working directory: `/home/pa_manny/agent/subagents/{role}/`
+- Working directory: `/home/pa_sparrow/agent/subagents/{role}/`
 - Use absolute paths to workspace or relative paths from workspace root
 - **MUST NOT** use `~/` (expands to PA home, causes violations)
 
@@ -638,7 +638,7 @@ In v0.3, PA and all SAs run as **same operating system user**. This means:
 
 ```bash
 # This will fail (chmod prevents directory creation)
-mkdir /home/pa_manny/agent/subagents/devops_eng/new_folder
+mkdir /home/pa_sparrow/agent/subagents/devops_eng/new_folder
 # Permission denied (parent directory owned by root with restricted permissions)
 ```
 

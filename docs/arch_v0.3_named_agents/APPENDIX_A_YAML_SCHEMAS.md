@@ -50,7 +50,7 @@ defaults:  # Optional
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `username` | string | Linux username for the agent (e.g., `pa_manny`) |
+| `username` | string | Linux username for the agent (e.g., `pa_sparrow`) |
 | `uid` | int | The agent's uid (its own group takes the same gid), in the agent slots `ids.base + 100` to `+ 899`; unique per deployment |
 | `personality` | string | Path to personality file (Identity layer CLAUDE.md source) |
 
@@ -109,10 +109,10 @@ ids:
   base: 21000
 
 agents:
-  manny:
-    username: pa_manny
+  sparrow:
+    username: pa_sparrow
     uid: 21100
-    personality: ../custom/agents/manny_personality.md
+    personality: ../custom/agents/sparrow_personality.md
     subagents: [devops_eng, test_eng]
     assigned_projects: [Orchard, DataPipeline]
     consciousness_artifacts:
@@ -122,7 +122,7 @@ agents:
       enabled: [session_start, stop, user_prompt_submit]
     # Optional: what to change in this agent's primal daemon, which it has by default; the body
     # of a declaration without agent or version, laid over the container default.
-    # Start-up renders it owned by root to /etc/maceff/pd/pa_manny/declaration.json, which the
+    # Start-up renders it owned by root to /etc/maceff/pd/pa_sparrow/declaration.json, which the
     # daemon reads; the agent can't change it (persistent_layer 10.1, MIS-0002-R33).
     # calling_card is required with it: the name the daemon goes by. Start-up writes it into
     # the home's .maceff/config.json at every start, and refuses to overwrite a different one.
@@ -134,7 +134,7 @@ agents:
           command: ["/opt/maceff-venv/bin/python", "-m", "macf.cli", "harness", "unit",
                     "--agent", "orchard1", "--home", "{agent_home}", "--project-dir", "{agent_home}",
                     "--no-proxy"]
-          account: pa_manny
+          account: pa_sparrow
           restart: always
           liveness_interval_s: 120
           memory_limit_mb: 16384
@@ -335,7 +335,7 @@ projects:
 ```
 ValidationError: 1 validation error for AgentSpec
 personality
-  Field required [type=missing, input_value={'username': 'pa_manny'}, input_type=dict]
+  Field required [type=missing, input_value={'username': 'pa_sparrow'}, input_type=dict]
 ```
 
 **Solution**: Add the missing required field to your YAML configuration.

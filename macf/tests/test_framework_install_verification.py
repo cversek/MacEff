@@ -309,7 +309,7 @@ def test_pruning_never_touches_an_agents_own_files(fake_framework_root, capsys):
     commands_dir = Path.cwd() / ".claude" / "commands"
     commands_dir.mkdir(parents=True)
     # A real file, not a link.
-    (commands_dir / "manny_gist.md").write_text("# my own command\n")
+    (commands_dir / "sparrow_gist.md").write_text("# my own command\n")
     # A broken link the framework does not own.
     (commands_dir / "my_scratch.md").symlink_to("/nonexistent/my_scratch.md")
     # A framework-named link that RESOLVES — must not be pruned either.
@@ -319,8 +319,8 @@ def test_pruning_never_touches_an_agents_own_files(fake_framework_root, capsys):
     result = _run_install()
 
     assert result == 0
-    assert (commands_dir / "manny_gist.md").is_file(), "a real file was deleted"
-    assert (commands_dir / "manny_gist.md").read_text() == "# my own command\n"
+    assert (commands_dir / "sparrow_gist.md").is_file(), "a real file was deleted"
+    assert (commands_dir / "sparrow_gist.md").read_text() == "# my own command\n"
     assert (commands_dir / "my_scratch.md").is_symlink(), "a non-framework link was deleted"
     assert (commands_dir / "maceff_live.md").is_symlink(), "a resolving link was deleted"
 

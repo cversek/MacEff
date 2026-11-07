@@ -414,7 +414,7 @@ class AgentSpec(BaseModel):
 
     username: str = Field(
         ...,
-        description="Linux username for the agent (e.g., pa_manny)"
+        description="Linux username for the agent (e.g., pa_sparrow)"
     )
 
     uid: int = Field(
@@ -1015,9 +1015,9 @@ class AgentsConfig(BaseModel):
 
     Example:
         agents:
-          manny:
-            username: pa_manny
-            personality: ../custom/agents/manny_personality.md
+          sparrow:
+            username: pa_sparrow
+            personality: ../custom/agents/sparrow_personality.md
             subagents: [DevOpsEng, TestEng]
             assigned_projects: [Orchard]
 

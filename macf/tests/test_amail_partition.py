@@ -26,18 +26,18 @@ DOMAIN = "host.local"
 
 @pytest.fixture
 def broker(tmp_path):
-    """One deployment; ira may write to manny."""
+    """One deployment; ira may write to sparrow."""
     addressing = tmp_path / "addressing.yaml"
-    addressing.write_text(_addressing({"ira": [f"manny@{DOMAIN}"], "manny": [f"ira@{DOMAIN}"]},
+    addressing.write_text(_addressing({"ira": [f"sparrow@{DOMAIN}"], "sparrow": [f"ira@{DOMAIN}"]},
                                       domain=DOMAIN))
     handoff = tmp_path / "handoff"
     handoff.mkdir()
-    for a in ("ira", "manny"):
+    for a in ("ira", "sparrow"):
         (handoff / a).mkdir(mode=0o2770)
         (tmp_path / "home" / a).mkdir(parents=True)
     return Broker(BrokerConfig(
         domain=DOMAIN,
-        agent_homes={a: tmp_path / "home" / a for a in ("ira", "manny")},
+        agent_homes={a: tmp_path / "home" / a for a in ("ira", "sparrow")},
         contacts_path=addressing,
         audit_path=tmp_path / "audit.jsonl",
         dispositions_dir=tmp_path / "dispositions",
@@ -48,11 +48,11 @@ def broker(tmp_path):
 
 @pytest.fixture
 def delivered(broker):
-    """manny's box after one delivery from ira: the box, and every file in it."""
-    r = broker.submit("ira", Message(sender=f"ira@{DOMAIN}", to=[f"manny@{DOMAIN}"],
+    """sparrow's box after one delivery from ira: the box, and every file in it."""
+    r = broker.submit("ira", Message(sender=f"ira@{DOMAIN}", to=[f"sparrow@{DOMAIN}"],
                                      subject="box", body="box"))
     assert r["ok"], r
-    return broker.config.inbound_handoff / "manny"
+    return broker.config.inbound_handoff / "sparrow"
 
 
 def test_box_permissions(delivered):

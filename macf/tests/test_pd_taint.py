@@ -25,7 +25,7 @@ COMPACTED = {"event": "compaction_detected", "data": {"session_id": "s"}}
     (tool("Bash", "gh api repos/o/r/issues/552/comments"), "a Bash call that names a host"),
     (tool("Bash", "curl -s https://example.com/x"), "a Bash call that names a host"),
     (tool("Bash", "git -C repo fetch origin"), "a Bash call that names a host"),
-    (tool("Bash", "ping manny.local"), "a Bash call that names a host"),
+    (tool("Bash", "ping sparrow.local"), "a Bash call that names a host"),
     (prompt('<channel source="telegram" chat_id="1">hello</channel>'), "a message by telegram"),
 ])
 def test_each_kind_of_untrusted_input_taints_the_context(event, says):

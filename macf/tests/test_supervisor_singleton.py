@@ -51,7 +51,7 @@ def test_name_scoped_distinct_names_never_collide(monkeypatch, tmp_path):
     s = _reload_supervisor(monkeypatch, tmp_path)
     _make_live(monkeypatch, s)
     _register(s, 111, "claude")
-    assert s.find_live_supervisor_by_name("manny") is None
+    assert s.find_live_supervisor_by_name("sparrow") is None
 
 
 def test_excludes_self(monkeypatch, tmp_path):

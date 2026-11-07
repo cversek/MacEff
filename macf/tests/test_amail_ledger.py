@@ -210,16 +210,16 @@ class TestTheReverseDirectionOfRungOneS:
                                inbound_handoff=handoff,
                                shared_handoffs={d: SharedHandoff(handoff=p) for d, p in peers.items()})
             return Broker(cfg), root
-        host, hroot = deployment("host", HOST, {"ira": [f"manny@{BOX}"]}, {BOX: tmp_path / "box" / "handoff"})
-        box, broot = deployment("box", BOX, {"manny": [f"ira@{HOST}"]}, {HOST: tmp_path / "host" / "handoff"})
+        host, hroot = deployment("host", HOST, {"ira": [f"sparrow@{BOX}"]}, {BOX: tmp_path / "box" / "handoff"})
+        box, broot = deployment("box", BOX, {"sparrow": [f"ira@{HOST}"]}, {HOST: tmp_path / "host" / "handoff"})
         peer_intake(hroot / "handoff", BOX).mkdir(parents=True, mode=0o2770)
         peer_intake(broot / "handoff", HOST).mkdir(parents=True, mode=0o2770)
-        assert host.submit("ira", _msg(f"ira@{HOST}", f"manny@{BOX}"))["ok"]
-        manny_home = broot / "home" / "manny"
-        os.chmod(manny_home, 0)
+        assert host.submit("ira", _msg(f"ira@{HOST}", f"sparrow@{BOX}"))["ok"]
+        sparrow_home = broot / "home" / "sparrow"
+        os.chmod(sparrow_home, 0)
         try:
             res = box.sweep_shared()
         finally:
-            os.chmod(manny_home, 0o700)
+            os.chmod(sparrow_home, 0o700)
         assert res and res[0]["accepted"] is True and res[0]["decision"] == "delivered", res
-        assert list((broot / "handoff" / "manny").glob("*.amsg"))
+        assert list((broot / "handoff" / "sparrow").glob("*.amsg"))

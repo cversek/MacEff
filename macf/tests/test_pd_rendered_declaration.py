@@ -104,7 +104,7 @@ def test_an_agent_daemon_needs_a_calling_card_when_agents_yaml_loads():
         agents_yaml(primal_daemon={"units": []})
     assert agents_yaml(calling_card="Orchard1").agents["orchard1"].calling_card == "Orchard1"
     assert agents_yaml(calling_card="Orchard1", primal_daemon={"units": []}).agents["orchard1"].primal_daemon
-    for bad in ("1Manny", "Orchard@1", "Orchard One", "M" * 49):
+    for bad in ("1Sparrow", "Orchard@1", "Orchard One", "M" * 49):
         with pytest.raises(ValueError, match="calling_card"):
             agents_yaml(calling_card=bad)
     with pytest.raises(ValueError, match="vanilla and declares calling_card"):

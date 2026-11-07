@@ -60,7 +60,7 @@ Implement a native MacEff statusline feature for Claude Code that displays consc
 
 | Field | Source | Fallback | Example |
 |-------|--------|----------|---------|
-| `agent_name` | `.maceff/config.json` → `agent_identity.moniker` | "unknown" | "manny" |
+| `agent_name` | `.maceff/config.json` → `agent_identity.moniker` | "unknown" | "sparrow" |
 | `project` | MACF_PROJECT env → workspace detection | omit field | "Orchard" |
 | `environment` | `environment.py` detection | "Unknown" | "Container Linux" |
 | `tokens` | CC JSON stdin OR JSONL scan | "?k" | "60k/200k" |
@@ -79,7 +79,7 @@ def format_tokens(value: int) -> str:
 ### Example Outputs
 
 ```
-manny | Orchard | Container Linux | 60k/200k CLUAC 70
+sparrow | Orchard | Container Linux | 60k/200k CLUAC 70
 unknown | Host Darwin | 9500/200k CLUAC 95
 ```
 

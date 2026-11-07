@@ -5,7 +5,7 @@ Provides pm2-style process listing with stats.
 
 Usage:
     macf_tools auto-restart launch -- claude -c
-    macf_tools auto-restart launch --name manny -- ssh pa_manny@localhost
+    macf_tools auto-restart launch --name sparrow -- ssh pa_sparrow@localhost
     macf_tools auto-restart list                 # ps-style listing
     macf_tools auto-restart restart <pid>        # trigger restart
     macf_tools auto-restart disable <pid>        # stop auto-restart
@@ -301,7 +301,7 @@ def _launch_detached_tmux(tmux_session: str, cmd: list) -> bool:
     # not a terminal". The first version of this function used that form and
     # its own idempotency test caught it on the first run.
     #
-    # `=name` is exact-match: without it tmux prefix-matches, so "manny" would
+    # `=name` is exact-match: without it tmux prefix-matches, so "sparrow" would
     # silently satisfy a check for a session named "orchard1".
     if subprocess.run(["tmux", "has-session", "-t", f"={tmux_session}"],
                       capture_output=True).returncode == 0:
@@ -413,7 +413,7 @@ def find_live_supervisor_by_name(name: str, exclude_pid: int = 0) -> dict | None
     documented was three ``claude -c`` clients under one name, and two live
     supervisors sharing a name is precisely the state in which two clients write
     one task store. Distinct names are distinct services (``claude`` vs
-    ``manny``) and never collide here.
+    ``sparrow``) and never collide here.
 
     ``exclude_pid`` skips the caller's own entry so a supervisor calling this to
     check for a *pre-existing* twin never matches itself. Liveness is decided by

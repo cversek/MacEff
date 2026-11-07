@@ -11,7 +11,7 @@
 
 **Named Agents** is an architectural pattern for multi-agent AI systems where:
 
-- **Primary Agents (PAs)** have unique identities and run as separate OS users (`pa_manny`, `pa_claudethebuilder`, etc.)
+- **Primary Agents (PAs)** have unique identities and run as separate OS users (`pa_sparrow`, `pa_claudethebuilder`, etc.)
 - Each PA delegates work to specialized **Subagents (SAs)** running in the same user context
 - **Consciousness Artifacts (CAs)** preserve agent memory across sessions using structured filesystem conventions
 
@@ -23,10 +23,10 @@ This architecture enables **real isolation between Primary Agents** (kernel-leve
 
 ```
 MacEff System
-├── pa_manny/               # OS user: pa_manny (isolated from other PAs)
-│   ├── Primary Agent       # Main agent (runs as pa_manny)
-│   ├── DevOpsEng SA        # Runs as pa_manny (same user, different workspace)
-│   └── TestEng SA          # Runs as pa_manny (same user, different workspace)
+├── pa_sparrow/               # OS user: pa_sparrow (isolated from other PAs)
+│   ├── Primary Agent       # Main agent (runs as pa_sparrow)
+│   ├── DevOpsEng SA        # Runs as pa_sparrow (same user, different workspace)
+│   └── TestEng SA          # Runs as pa_sparrow (same user, different workspace)
 │
 ├── pa_claudethebuilder/    # OS user: pa_claudethebuilder (isolated from other PAs)
 │   ├── Primary Agent       # Main agent (runs as pa_claudethebuilder)
@@ -128,13 +128,13 @@ MacEff System
 ### Two-Layer Isolation Model
 
 **Layer 1: Between Primary Agents** (OS-level isolation)
-- Each PA runs as separate OS user (`pa_manny`, `pa_claudethebuilder`, etc.)
+- Each PA runs as separate OS user (`pa_sparrow`, `pa_claudethebuilder`, etc.)
 - Kernel-level filesystem permissions enforce boundaries
 - PA-to-PA access controlled by standard Linux permissions/ACLs
 - True multi-tenant isolation for different agent identities
 
 **Layer 2: Within PA + Subagent Team** (conventional boundaries)
-- PA and all its SAs run as same OS user (e.g., all under `pa_manny`)
+- PA and all its SAs run as same OS user (e.g., all under `pa_sparrow`)
 - Directory structure defines workspace separation
 - Agents respect boundaries through conventional policies
 - Validated to work with Claude Code's Task tool delegation
@@ -142,7 +142,7 @@ MacEff System
 ### Naming Convention
 
 **Primary Agents**: `pa_<name>` where `<name>` is the agent's identity
-- Examples: `pa_manny`, `pa_claudethebuilder`, `pa_researchbot`
+- Examples: `pa_sparrow`, `pa_claudethebuilder`, `pa_researchbot`
 - **NOT** sequential numbers: System works without ordering assumptions
 - Each PA name creates corresponding OS user and home directory
 

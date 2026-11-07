@@ -11,7 +11,7 @@
 
 ### What are Named Agents?
 
-Named Agents is an architectural pattern where each AI agent has a unique identity (like `pa_manny`, `pa_claudethebuilder`) instead of sequential numbers. This enables persistent consciousness, delegation to specialized Subagents, and multi-agent collaboration.
+Named Agents is an architectural pattern where each AI agent has a unique identity (like `pa_sparrow`, `pa_claudethebuilder`) instead of sequential numbers. This enables persistent consciousness, delegation to specialized Subagents, and multi-agent collaboration.
 
 **Learn more**: [Overview - What are Named Agents?](./01_overview.md#what-are-named-agents)
 
@@ -20,7 +20,7 @@ Named Agents is an architectural pattern where each AI agent has a unique identi
 Names provide:
 - **Identity over enumeration** - Persistent personas, not temporary assignments
 - **No ordering assumptions** - System works without sequential numbering
-- **Searchable** - Easy to find in logs (`ps aux | grep pa_manny`)
+- **Searchable** - Easy to find in logs (`ps aux | grep pa_sparrow`)
 - **Human-readable** - Clear who is doing what
 
 **Learn more**: [Overview - Core Concepts](./01_overview.md#core-concepts)
@@ -29,7 +29,7 @@ Names provide:
 
 **Primary Agent (PA)**:
 - Main agent with persistent identity
-- Runs as separate OS user (`pa_manny`)
+- Runs as separate OS user (`pa_sparrow`)
 - Has consciousness artifacts (checkpoints, reflections)
 - Delegates work to specialized Subagents
 
@@ -114,12 +114,12 @@ Reports are the public equivalent (curated knowledge FOR others).
 
 **Critical**: Subagents MUST NOT use `~/` shortcuts!
 
-**Why**: `~/` expands to PA home (`/home/pa_manny/`), not SA workspace
+**Why**: `~/` expands to PA home (`/home/pa_sparrow/`), not SA workspace
 
 **Correct for SA**:
-- ✅ Absolute: `/home/pa_manny/agent/subagents/devops_eng/assigned/`
+- ✅ Absolute: `/home/pa_sparrow/agent/subagents/devops_eng/assigned/`
 - ✅ Relative: `./assigned/` (from SA workspace root)
-- ❌ Wrong: `~/assigned/` (this is `/home/pa_manny/assigned/` - doesn't exist!)
+- ❌ Wrong: `~/assigned/` (this is `/home/pa_sparrow/assigned/` - doesn't exist!)
 
 **Learn more**: [Delegation Model - Subagent Working Directory](./03_delegation_model.md#subagent-working-directory)
 
@@ -240,7 +240,7 @@ Create test task → Invoke SA via Task tool → Check delegation trail created
 
 ```bash
 # Create test task
-cat > /home/pa_manny/agent/subagents/devops_eng/assigned/test.md <<EOF
+cat > /home/pa_sparrow/agent/subagents/devops_eng/assigned/test.md <<EOF
 # Task: Test Delegation
 ...
 EOF
@@ -248,7 +248,7 @@ EOF
 # In Claude Code: "Use Task tool with devops_eng"
 
 # Verify trail created
-ls /home/pa_manny/agent/subagents/devops_eng/public/delegation_trails/
+ls /home/pa_sparrow/agent/subagents/devops_eng/public/delegation_trails/
 ```
 
 **Learn more**: [Implementation Guide - Test Delegation](./05_implementation_guide.md#step-6-test-delegation)
@@ -301,7 +301,7 @@ macf_tools hooks test
 ```bash
 ls -la ~/.claude/agents/devops_eng.md
 readlink ~/.claude/agents/devops_eng.md
-cat /home/pa_manny/agent/subagents/devops_eng/SUBAGENT_DEF.md
+cat /home/pa_sparrow/agent/subagents/devops_eng/SUBAGENT_DEF.md
 ```
 
 **Learn more**: [Implementation Guide - Delegation Fails](./05_implementation_guide.md#delegation-fails)

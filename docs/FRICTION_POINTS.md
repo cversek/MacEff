@@ -106,7 +106,7 @@ Running log of deployment friction discovered during operations. Informs fixes a
 
 **Date Discovered**: 2026-02-05
 
-**Symptom**: Container `start.py` crash-loops with Pydantic validation error: `projects.VoxelCAD.context - Field required`. User `pa_manny` never created, all subsequent commands fail with "no matching entries in passwd file".
+**Symptom**: Container `start.py` crash-loops with Pydantic validation error: `projects.VoxelCAD.context - Field required`. User `pa_sparrow` never created, all subsequent commands fail with "no matching entries in passwd file".
 
 **Root Cause**: `ProjectsConfig` Pydantic model requires `context` field for every project, but it was commented out in `projects.yaml` with a TODO. The validation runs before user creation, so the entire startup fails silently in a retry loop.
 

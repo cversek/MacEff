@@ -23,14 +23,14 @@ Usage: $0 <agent_name> [email] [description]
 Creates a fully configured agent in the MacEff container.
 
 Arguments:
-  agent_name    Required. Agent username (e.g., maceff_manny)
+  agent_name    Required. Agent username (e.g., maceff_sparrow)
   email         Optional. Agent email (default: <agent_name>@maceff.local)
   description   Optional. Agent description (default: "MacEff Primary Agent")
 
 Examples:
   $0 maceff_test
-  $0 maceff_manny "manny@example.com"
-  $0 maceff_manny "manny@example.com" "Manny - Example Development PA"
+  $0 maceff_sparrow "sparrow@example.com"
+  $0 maceff_sparrow "sparrow@example.com" "Sparrow - Example Development PA"
 
 Environment:
   CONTAINER_NAME    Override container name (default: maceff-sandbox)

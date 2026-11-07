@@ -24,8 +24,8 @@
 **Problem**: Running `macf_tools env` produces stderr warnings:
 ```
 ⚠️ MACF: JSON file not found (config.json)
-⚠️ MACF: JSON read failed (config.json): JSON file not found: /home/pa_manny/.maceff/config.json
-⚠️ MACF: Config auto_mode read failed: JSON file not found: /home/pa_manny/.maceff/config.json
+⚠️ MACF: JSON read failed (config.json): JSON file not found: /home/pa_sparrow/.maceff/config.json
+⚠️ MACF: Config auto_mode read failed: JSON file not found: /home/pa_sparrow/.maceff/config.json
 ```
 
 **Cause**: `detect_auto_mode()` tries to read `.maceff/config.json` which doesn't exist in fresh deployments.

@@ -21,13 +21,13 @@ from macf.models.agent_spec import (
 def test_agent_spec_valid_minimal():
     """Valid AgentSpec with only required fields."""
     agent = AgentSpec(
-        username="pa_manny",
+        username="pa_sparrow",
         uid=21100,
-        personality="../custom/agents/manny_personality.md"
+        personality="../custom/agents/sparrow_personality.md"
     )
 
-    assert agent.username == "pa_manny"
-    assert agent.personality == "../custom/agents/manny_personality.md"
+    assert agent.username == "pa_sparrow"
+    assert agent.personality == "../custom/agents/sparrow_personality.md"
     assert agent.subagents == []  # Default empty list
     assert agent.assigned_projects == []  # Default empty list
     assert agent.consciousness_artifacts is None
@@ -58,12 +58,12 @@ def test_agent_spec_missing_required_field():
     """AgentSpec fails when required field missing."""
     # Missing uid: a declared field, never assigned by creation order
     with pytest.raises(ValidationError) as exc_info:
-        AgentSpec(personality="../agents/manny.md", username="pa_manny")
+        AgentSpec(personality="../agents/sparrow.md", username="pa_sparrow")
     assert "uid" in str(exc_info.value)
 
     # Missing personality (required on the default maceff flavor)
     with pytest.raises(ValidationError) as exc_info:
-        AgentSpec(username="pa_manny", uid=21100)  # Missing personality
+        AgentSpec(username="pa_sparrow", uid=21100)  # Missing personality
 
     error = exc_info.value
     assert "personality" in str(error)
@@ -106,10 +106,10 @@ def test_agents_config_valid():
     config = AgentsConfig(
         ids=IdBlock(base=21000),
         agents={
-            "manny": AgentSpec(
-                username="pa_manny",
+            "sparrow": AgentSpec(
+                username="pa_sparrow",
                 uid=21100,
-                personality="../custom/agents/manny.md",
+                personality="../custom/agents/sparrow.md",
                 subagents=["DevOpsEng"],
                 assigned_projects=["Orchard"]
             )
@@ -122,7 +122,7 @@ def test_agents_config_valid():
         }
     )
 
-    assert "manny" in config.agents
+    assert "sparrow" in config.agents
     assert "DevOpsEng" in config.subagents
     assert config.defaults is None
 
@@ -132,7 +132,7 @@ def test_agents_config_with_defaults():
     config = AgentsConfig(
         ids=IdBlock(base=21000),
         agents={
-            "manny": AgentSpec(username="pa_manny", uid=21100, personality="../agents/manny.md")
+            "sparrow": AgentSpec(username="pa_sparrow", uid=21100, personality="../agents/sparrow.md")
         },
         subagents={
             "DevOpsEng": SubagentSpec(role="DevOps", tool_access="Read, Bash")
@@ -166,7 +166,7 @@ def test_agents_config_missing_required_sections():
         AgentsConfig(
             ids=IdBlock(base=21000),
             agents={
-                "manny": AgentSpec(username="pa_manny", uid=21100, personality="../agents/manny.md")
+                "sparrow": AgentSpec(username="pa_sparrow", uid=21100, personality="../agents/sparrow.md")
             }
         )
     assert "subagents" in str(exc_info.value)
@@ -175,7 +175,7 @@ def test_agents_config_missing_required_sections():
     with pytest.raises(ValidationError) as exc_info:
         AgentsConfig(
             agents={
-                "manny": AgentSpec(username="pa_manny", uid=21100, personality="../agents/manny.md")
+                "sparrow": AgentSpec(username="pa_sparrow", uid=21100, personality="../agents/sparrow.md")
             },
             subagents={
                 "DevOpsEng": SubagentSpec(role="DevOps", tool_access="Read")

@@ -346,10 +346,10 @@ def provision_agent_identity(username: str, home_dir: str, display_name: Optiona
     Create persistent identity file and set GECOS field.
 
     Args:
-        username: Linux username (e.g., 'pa_manny')
+        username: Linux username (e.g., 'pa_sparrow')
         home_dir: Agent's home directory path
         display_name: Human-readable name from agents.yaml (e.g., 'Orchard MacEff')
-        agent_key: Agent dictionary key (e.g., 'manny') for fallback
+        agent_key: Agent dictionary key (e.g., 'sparrow') for fallback
 
     Returns:
         str: The 6-character agent UUID (existing or newly generated)
@@ -796,8 +796,8 @@ def create_bash_init(username: str, agent_name: str, channels: list = None,
     scripts in /opt/maceff/framework/env.d/*.sh, which are sourced in alphanumeric order.
 
     Args:
-        username: Linux username (e.g., 'pa_manny')
-        agent_name: Agent identity name (e.g., 'manny')
+        username: Linux username (e.g., 'pa_sparrow')
+        agent_name: Agent identity name (e.g., 'sparrow')
         channels: Optional list of channel plugin strings for --channels flag
         harness_session: Declared tmux session name (agents.yaml harness_session).
             Separate from agent_name on purpose: remote attach helpers bind to

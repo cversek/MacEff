@@ -12,7 +12,7 @@
 Implement unified PA environment configuration that works for SSH sessions, Claude Code Bash tool (non-interactive shells), and any other shell contexts. Fix the documentation gap where OPERATORS.md describes `.bash_init.sh` but start.py doesn't create it.
 
 **The Problem**:
-1. docker-compose.yml sets `BASH_ENV=/home/pa_manny/.bash_init.sh`
+1. docker-compose.yml sets `BASH_ENV=/home/pa_sparrow/.bash_init.sh`
 2. SSH sessions don't inherit docker-compose env vars (they read `/etc/environment`)
 3. start.py doesn't create `.bash_init.sh` (documentation gap)
 4. Claude Code shows `BASH_ENV: (not set)` in `macf_tools env`

@@ -54,12 +54,12 @@ This guide provides step-by-step instructions for implementing Named Agents v0.3
 # MacEff v0.3.0 Agent Configuration
 
 agents:
-  manny:
+  sparrow:
     # Linux username (framework adds pa_ prefix)
-    username: pa_manny
+    username: pa_sparrow
 
     # Personality file (Identity layer CLAUDE.md source)
-    personality: ../custom/agents/manny_personality.md
+    personality: ../custom/agents/sparrow_personality.md
 
     # Subagent assignments
     subagents:
@@ -171,13 +171,13 @@ projects:
 
 ### Agent Personality File
 
-**Location**: `custom/agents/manny_personality.md`
+**Location**: `custom/agents/sparrow_personality.md`
 
 **Template**:
 ```markdown
-# Manny - Orchard Analysis Specialist
+# Sparrow - Orchard Analysis Specialist
 
-**Agent**: Manny (pa_manny)
+**Agent**: Sparrow (pa_sparrow)
 **Specialization**: Neuroscience data analysis and VEP signal processing
 **Mission**: Advance understanding of visual evoked potentials through rigorous analysis
 
@@ -379,22 +379,22 @@ docker ps
 
 ```bash
 # SSH as primary agent
-ssh pa_manny@maceff-container
+ssh pa_sparrow@maceff-container
 ```
 
 ### Verify Directory Structure
 
 ```bash
 # Check agent directory structure
-ls -la /home/pa_manny/agent/
+ls -la /home/pa_sparrow/agent/
 
 # Expected output:
-# drwxr-xr-x  root pa_manny  private/
-# drwxr-xr-x  root pa_manny  public/
-# drwxr-xr-x  root pa_manny  subagents/
+# drwxr-xr-x  root pa_sparrow  private/
+# drwxr-xr-x  root pa_sparrow  public/
+# drwxr-xr-x  root pa_sparrow  subagents/
 
 # Check .claude/ autogeneration
-ls -la /home/pa_manny/.claude/
+ls -la /home/pa_sparrow/.claude/
 
 # Expected output:
 # lrwxrwxrwx  CLAUDE.md -> /opt/maceff/framework/templates/SYSTEM_PREAMBLE.md
@@ -410,7 +410,7 @@ ls -la /home/pa_manny/.claude/
 macf_tools hooks install --local
 
 # Verify installation
-ls /home/pa_manny/.claude/hooks/
+ls /home/pa_sparrow/.claude/hooks/
 # Expected: session_start.py, user_prompt_submit.py, pre_tool_use.py,
 #           post_tool_use.py, stop.py, subagent_stop.py
 ```
@@ -419,7 +419,7 @@ ls /home/pa_manny/.claude/hooks/
 
 ```bash
 # Check project assignments
-ls -la /home/pa_manny/workspace/
+ls -la /home/pa_sparrow/workspace/
 
 # Expected output:
 # lrwxrwxrwx  Orchard -> /shared_workspace/Orchard
@@ -432,7 +432,7 @@ ls -la /home/pa_manny/workspace/
 
 ```bash
 # Create simple task for DevOpsEng
-cat > /home/pa_manny/agent/subagents/devops_eng/assigned/2025-10-19_160000_Test_Task.md <<EOF
+cat > /home/pa_sparrow/agent/subagents/devops_eng/assigned/2025-10-19_160000_Test_Task.md <<EOF
 # Task: Test Delegation System
 
 **Assigned**: 2025-10-19 16:00:00
@@ -457,7 +457,7 @@ EOF
 
 ```bash
 # Start Claude Code session
-cd /home/pa_manny/workspace/Orchard
+cd /home/pa_sparrow/workspace/Orchard
 claude -c
 
 # In Claude Code session:
@@ -468,10 +468,10 @@ claude -c
 
 ```bash
 # Check delegation trail was created
-ls -la /home/pa_manny/agent/subagents/devops_eng/public/delegation_trails/
+ls -la /home/pa_sparrow/agent/subagents/devops_eng/public/delegation_trails/
 
 # Read delegation trail
-cat /home/pa_manny/agent/subagents/devops_eng/public/delegation_trails/2025-10-19_*.md
+cat /home/pa_sparrow/agent/subagents/devops_eng/public/delegation_trails/2025-10-19_*.md
 ```
 
 ## Step 7: Configure MACF Tools
@@ -484,8 +484,8 @@ macf_tools config init
 
 # This creates ~/.maceff/config.json with:
 # {
-#   "moniker": "manny",
-#   "agent_root": "/home/pa_manny/agent",
+#   "moniker": "sparrow",
+#   "agent_root": "/home/pa_sparrow/agent",
 #   "auto_mode": false
 # }
 ```
@@ -512,7 +512,7 @@ macf_tools hooks status
 
 ```bash
 # Create test checkpoint
-cd /home/pa_manny/agent/private/checkpoints/
+cd /home/pa_sparrow/agent/private/checkpoints/
 
 cat > 2025-10-19_170000_Initial_Setup_CCP.md <<EOF
 # Initial Setup CCP
@@ -522,7 +522,7 @@ cat > 2025-10-19_170000_Initial_Setup_CCP.md <<EOF
 **Mode**: MANUAL_MODE
 
 ## Mission Accomplished
-Successfully set up Named Agents v0.3 with pa_manny agent.
+Successfully set up Named Agents v0.3 with pa_sparrow agent.
 
 ## What Was Accomplished
 - Created agents.yaml and projects.yaml configuration
@@ -548,14 +548,14 @@ EOF
 
 ```bash
 # Create setup report
-cd /home/pa_manny/agent/public/reports/
+cd /home/pa_sparrow/agent/public/reports/
 
 cat > 2025-10-19_170500_Named_Agents_Setup_Success_report.md <<EOF
 # Named Agents v0.3 Setup Success Report
 
 **Date**: 2025-10-19
 **Audience**: MacEff users
-**Author**: pa_manny
+**Author**: pa_sparrow
 
 ## Executive Summary
 Successfully deployed Named Agents v0.3 architecture with full delegation capabilities and consciousness infrastructure.
@@ -587,7 +587,7 @@ EOF
 
 ```yaml
 agents:
-  manny:
+  sparrow:
     # ... existing configuration ...
 
   builder:
@@ -640,7 +640,7 @@ docker exec -u root maceff_container /opt/maceff/scripts/setup_agents.sh
 **Solution**:
 ```bash
 # Verify hook installation
-ls -la /home/pa_manny/.claude/hooks/
+ls -la /home/pa_sparrow/.claude/hooks/
 
 # Check hook logs
 macf_tools hooks logs
@@ -659,17 +659,17 @@ macf_tools hooks test
 **Solution**:
 ```bash
 # Verify subagent definition exists
-ls -la /home/pa_manny/.claude/agents/
+ls -la /home/pa_sparrow/.claude/agents/
 
 # Check symlink
-readlink /home/pa_manny/.claude/agents/devops_eng.md
+readlink /home/pa_sparrow/.claude/agents/devops_eng.md
 # Should point to: ../../agent/subagents/devops_eng/SUBAGENT_DEF.md
 
 # Verify SUBAGENT_DEF.md exists
-cat /home/pa_manny/agent/subagents/devops_eng/SUBAGENT_DEF.md
+cat /home/pa_sparrow/agent/subagents/devops_eng/SUBAGENT_DEF.md
 
 # Check tool access controls are valid
-grep "Tool Access" /home/pa_manny/agent/subagents/devops_eng/SUBAGENT_DEF.md
+grep "Tool Access" /home/pa_sparrow/agent/subagents/devops_eng/SUBAGENT_DEF.md
 ```
 
 ### Tool Access Denied

@@ -34,7 +34,7 @@ Named Agents defines **seven consciousness artifact types**, organized into priv
 ```
 2025-10-18_143022_Phase1A_Complete_CCP.md
 2025-10-18_150315_Subagent_Privacy_Architecture_reflection.md
-2025-10-18_163045_Manny_Bootstrap_Success_report.md
+2025-10-18_163045_Sparrow_Bootstrap_Success_report.md
 2025-10-18_171200_Context_Scaling_observation.md
 ```
 
@@ -291,7 +291,7 @@ See `delegation_plans/` for detailed subagent assignments.
 
 **Distinction from reflection**: Reports are FOR others (teaching), reflections are FOR self (growth).
 
-**Example**: `2025-10-13_123631_Manny_Bootstrap_Success_report.md`
+**Example**: `2025-10-13_123631_Sparrow_Bootstrap_Success_report.md`
 
 ### 6. Observations
 
@@ -703,7 +703,7 @@ def validate_ca_metadata(ca_type, filepath):
 ## Next Steps
 
 - **Learn implementation steps**: [05. Implementation Guide →](./05_implementation_guide.md)
-- **See complete examples**: [02. Filesystem Structure - Complete Example](./02_filesystem_structure.md#complete-example-pa_manny-with-orchard)
+- **See complete examples**: [02. Filesystem Structure - Complete Example](./02_filesystem_structure.md#complete-example-pa_sparrow-with-orchard)
 - **Understand delegation**: [03. Delegation Model](./03_delegation_model.md)
 
 ---
