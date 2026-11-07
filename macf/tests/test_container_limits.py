@@ -14,7 +14,7 @@ MERGED = {"mem_limit": "68719476736", "memswap_limit": "68719476736", "cpus": 24
           "deploy": {"resources": {"reservations": {"devices": [{"driver": "nvidia"}]}}}}
 INSPECT = {"HostConfig": {"Memory": 64 * GIB, "MemorySwap": 64 * GIB, "NanoCpus": 24_000_000_000},
            "Config": {"Labels": {cl.CONFIG_FILES_LABEL: "/d/docker-compose.yml,/d/docker-compose.override.yml",
-                                 cl.SERVICE_LABEL: "manny-maceff"}}}
+                                 cl.SERVICE_LABEL: "orchard-maceff"}}}
 
 
 def test_limits_checked_after_recreate():
@@ -36,8 +36,8 @@ def test_the_check_reads_every_config_file_the_container_was_made_from():
         calls.append(argv)
         if argv[:2] == ["docker", "inspect"]:
             return json.dumps([INSPECT])
-        return json.dumps({"services": {"manny-maceff": MERGED}})
-    assert cl.check_container("manny-maceff", run=run) == []
+        return json.dumps({"services": {"orchard-maceff": MERGED}})
+    assert cl.check_container("orchard-maceff", run=run) == []
     assert calls[1][:6] == ["docker", "compose", "-f", "/d/docker-compose.yml", "-f", "/d/docker-compose.override.yml"]
     base_only = cl.declared({"deploy": {"resources": {"reservations": {}}}})
     assert cl.compare(base_only, cl.in_force(INSPECT)) == [
