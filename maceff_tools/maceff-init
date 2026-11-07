@@ -332,7 +332,7 @@ if [[ ! -f "$OVERRIDE_FILE" ]]; then
 # Use this for environment-specific volumes, ports, or configuration
 #
 # IMPORTANT: Replace <your-service-name> with the actual service name
-# from your docker-compose.yml (e.g., maceff-manny, aero-maceff)
+# from your docker-compose.yml (e.g., maceff-manny, example-maceff)
 #
 # Uncomment and customize as needed:
 #
