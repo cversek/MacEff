@@ -76,3 +76,39 @@ def test_a_system_daemons_member_findings_chain_up_as_a_summary():
     out = summarize(r)
     assert out["data"] == {"findings": [f"{M2}: offline"]}
     assert "secret" not in json.dumps(out)
+
+
+def test_links_start_at_the_end_of_a_log_that_has_history(tmp_path):
+    """A member with months of log exported every old unit state at its first connect and
+    flooded its association (seen live, Nov 8); its own publisher read the whole log in one
+    pass. Both now follow from the log's end: only what is appended after start goes out."""
+    from macf.pd.broker_link import BrokerLink, ExportLink
+    from macf.pd.interface import AssociationLink, BrokerSection
+
+    class Client:
+        def __init__(self):
+            self.sent = []
+
+        def publish(self, topic, payload, qos=0, properties=None, retain=False):
+            self.sent.append(topic)
+            return type("Info", (), {"rc": 0})()
+
+    log = tmp_path / "events.jsonl"
+    with open(log, "w") as f:
+        for n in range(50):
+            f.write(json.dumps({"event": "pd_unit_state", "timestamp": 1.0, "data": {"unit": f"old{n}"}}) + "\n")
+    section = BrokerSection(port=18830, certificate_authority_file="a", server_certificate_file="b",
+                            server_key_file="c", client_certificate_file="d", client_key_file="e")
+    link = AssociationLink(port=18831, certificate_authority_file="a", client_certificate_file="d",
+                           client_key_file="e")
+    own, up = Client(), Client()
+    broker = BrokerLink(M1, log, section, {}, client=own)
+    export = ExportLink(M1, log, link, {}, client=up)
+    broker.tick()
+    export.tick()
+    assert own.sent == [] and up.sent == [], "nothing old goes out"
+    with open(log, "a") as f:
+        f.write(json.dumps({"event": "pd_unit_state", "timestamp": 2.0, "data": {"unit": "new"}}) + "\n")
+    broker.tick()
+    export.tick()
+    assert len(own.sent) == 1 and len(up.sent) == 1, "what is appended after start does"

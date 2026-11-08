@@ -244,6 +244,19 @@ class EventStream:
                 self._own.popitem(last=False)
         self._pending_own.clear()
 
+    def start_at_end(self) -> None:
+        """Follow from what the log holds now, not from its start: for a publisher or an
+        exporter, whose readers catch up from the log by replay. Without it, the first pass
+        read the whole log in one go (hundreds of megabytes on a long-lived host), published
+        it, and flooded an association with every export ever recorded (seen live, Nov 8)."""
+        try:
+            st = self.log_path.stat()
+        except FileNotFoundError:
+            return      # noqa: MACEFF003 - no log yet: its first line is new, followed from 0
+        # From the end as it stands. A line half-written at this moment is finished after
+        # it; its tail isn't JSON, so the next pass skips it as it skips any such line.
+        self._ino, self.identity, self.offset = st.st_ino, log_identity(self.log_path, st.st_ino), st.st_size
+
     def _follow(self) -> Tuple[List[Tuple[int, int, bytes]], Optional[Tuple[Position, Position]]]:
         """The complete lines appended since the last pass, as (start, end, line), and a gap
         when the log was replaced under them."""

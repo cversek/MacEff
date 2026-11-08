@@ -138,6 +138,7 @@ class BrokerLink:
         self.member_messages: Deque[Tuple[str, bytes]] = collections.deque(maxlen=1000)
         self.client = client if client is not None else self._client(section, placeholders)
         self.stream = EventStream(card, log_path)
+        self.stream.start_at_end()      # readers catch up by replay; the past isn't re-published
         publish = nowait_publish(self.client)
         self.publisher = b.Publisher(self.stream, publish)
         self.responder = b.ReplayResponder(self.stream, publish, section.readers)
@@ -249,8 +250,9 @@ class ExportLink:
                  prober: Callable[[str, int], Optional[OSError]] = probe):
         self.card, self.link = card, link
         self.client = client if client is not None else self._client(card, link, placeholders)
-        self.exporter = assoc.Exporter(card, EventStream(card, log_path), nowait_publish(self.client),
-                                       link.exports)
+        stream = EventStream(card, log_path)
+        stream.start_at_end()           # exports what happens from now; the past stays home
+        self.exporter = assoc.Exporter(card, stream, nowait_publish(self.client), link.exports)
         self.client.on_connect = self._on_connect
         self.client.on_connect_fail = self._on_connect_fail
         self.on_unreachable = on_unreachable
