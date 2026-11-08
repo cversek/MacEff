@@ -680,3 +680,26 @@ def test_a_broker_left_by_a_killed_wrapper_is_ended_at_the_next_start(tmp_path):
             orphan.terminate()
             orphan.wait()
     assert end_orphan(tmp_path / "absent.pid") is None
+
+
+def test_a_refused_start_holds_before_it_exits_so_keepalive_is_paced(tmp_path, monkeypatch):
+    """#921: launchd's KeepAlive relaunches a job whatever its exit status, every ten seconds, so a
+    refused daemon wrote the same refusal six times a minute. A refused start now holds before it
+    exits: a minute unless MACF_PD_REFUSED_HOLD_S says otherwise."""
+    import macf.pd.broker_defaults as bd
+    from macf.pd.__main__ import REFUSED_HOLD_S, main
+    from test_primal_daemon import make_home
+    monkeypatch.setattr(bd, "missing_dependencies", lambda: ["paho-mqtt"])
+    home = make_home(tmp_path, [])
+    import os
+    held = []
+    # main() sets the agent home and drops the log path in os.environ; these restore both after.
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(home))
+    monkeypatch.setenv("MACF_EVENTS_LOG_PATH", os.environ.get("MACF_EVENTS_LOG_PATH", str(tmp_path / "e.jsonl")))
+    monkeypatch.delenv("MACF_PD_REFUSED_HOLD_S", raising=False)
+    assert main([str(home)], hold=held.append) == 78
+    assert held == [REFUSED_HOLD_S] and REFUSED_HOLD_S >= 60
+    monkeypatch.setenv("MACF_PD_REFUSED_HOLD_S", "5")
+    assert main([str(home)], hold=held.append) == 78 and held[-1] == 5.0
+    monkeypatch.setenv("MACF_PD_REFUSED_HOLD_S", "soon")
+    assert main([str(home)], hold=held.append) == 78 and held[-1] == REFUSED_HOLD_S

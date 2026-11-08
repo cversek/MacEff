@@ -50,6 +50,13 @@ SAMPLE_TIMEZONE = "America/New_York"
 
 
 @pytest.fixture(autouse=True)
+def _a_refused_daemon_exits_at_once_in_tests(monkeypatch):
+    """A refused daemon start holds a minute before exiting, to pace launchd's KeepAlive (#921).
+    A test, or a daemon a test starts as a process, has no reason to wait."""
+    monkeypatch.setenv("MACF_PD_REFUSED_HOLD_S", "0")
+
+
+@pytest.fixture(autouse=True)
 def _no_test_reads_the_hosts_rendered_declarations(tmp_path, monkeypatch):
     """The root-rendered declarations live under /etc/maceff/pd on a host that runs a system
     daemon. A test that read them saw the host's real daemons, unreadable or extra, and failed there

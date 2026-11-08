@@ -11,19 +11,35 @@ a restart through the outer tier restarts the daemon alone.
 Exit codes: 0 after a clean stop, 75 when the agent's daemon already runs (another
 start will not help), 78 when the home or its declaration is unusable (nothing a
 restart can fix).
+
+A start that ends with 75 or 78 holds for ``MACF_PD_REFUSED_HOLD_S`` seconds (60 by default)
+before it exits. launchd's KeepAlive relaunches a job whatever its exit status, every
+ThrottleInterval, so without the hold a refused daemon was started again every ten seconds,
+each time writing the same refusal (#921). The hold paces any outer tier the same way.
 """
 import argparse
 import os
 import signal
 import sys
+import time
 from pathlib import Path
+
+#: How long a refused start waits before exiting, unless the environment says otherwise.
+REFUSED_HOLD_S = 60.0
+
+
+def refused_hold_s(environ=os.environ) -> float:
+    try:
+        return max(0.0, float(environ.get("MACF_PD_REFUSED_HOLD_S", REFUSED_HOLD_S)))
+    except ValueError:
+        return REFUSED_HOLD_S
 
 from macf.pd.core import POLICY_POINTER, DeclarationRefused
 from macf.pd.daemon import AlreadyRunning, Daemon
 from macf.pd.names import name_this_process
 
 
-def main(argv=None) -> int:
+def main(argv=None, hold=time.sleep) -> int:
     parser = argparse.ArgumentParser(prog="python -m macf.pd",
                                      description="Run an agent's primal daemon.")
     parser.add_argument("agent_home", type=Path, help="the agent's home directory")
@@ -42,9 +58,11 @@ def main(argv=None) -> int:
         daemon.start()
     except AlreadyRunning as e:
         print(f"maceff_pd: {e}\n{POLICY_POINTER}", file=sys.stderr)
+        hold(refused_hold_s())
         return 75
     except (DeclarationRefused, OSError) as e:
         print(f"maceff_pd: cannot start for {home}: {e}\n{POLICY_POINTER}", file=sys.stderr)
+        hold(refused_hold_s())
         return 78
 
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):

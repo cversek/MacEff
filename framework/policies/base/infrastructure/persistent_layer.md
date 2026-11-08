@@ -325,7 +325,7 @@ The transcript monitor makes these records. **The primal daemon turns the monito
 **On macOS each primal daemon runs as a per-user LaunchAgent** [MIS-0002-R05 (macos_MUST_render_LaunchAgent)], in the user's GUI session (`LimitLoadToSessionType: Aqua`), never as a LaunchDaemon that runs as root on someone's behalf.
 
 - **Its label is `maceff_pd.<id>`** [MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd)], where `<id>` is the calling card exactly [MIS-0002-R160]: `maceff_pd.IraMacEff_ee9a78`. Several agents can share one login, so every name carries the agent.
-- **launchd is the outer tier here.** `KeepAlive` and `RunAtLoad` restart the daemon whenever it exits.
+- **launchd is the outer tier here.** `KeepAlive` and `RunAtLoad` restart the daemon whenever it exits. launchd restarts it whatever its exit status, every ten seconds, so a daemon that can't start (exit 78) or finds itself already running (75) holds for a minute before it exits (`MACF_PD_REFUSED_HOLD_S`). The refusal in its error log is then written once a minute, not six times.
 - **The identity never travels in the environment.** The program is `python -m macf.pd <agent home>`, and the daemon reads its card from the identity file in that home.
 - **Install, remove and restart go through `launchctl bootstrap`, `bootout` and `kickstart`** against `gui/<uid>`. The legacy `load` and `unload` are not offered.
 - **Removal finishes even when nothing is loaded.** A boot-out of a service launchd does not have exits 3 ("No such process"), which happens after a failed bootstrap, after a reboot outside the GUI session, or on a second removal. The removal counts that as done and removes the plist.
