@@ -247,3 +247,78 @@ def test_a_writable_ancestor_is_refused(tmp_path):
         Registry(p, root_uid=os.getuid()).load()
     os.chmod(open_dir, 0o1777)          # sticky: no one can rename another's entry
     Registry(p, root_uid=os.getuid()).load()
+
+
+# --- R45 and R46: rotation against the broker's own acceptance time, and shared logins -------
+
+def _signed(key_path, card="Alice_0a1b2c"):
+    from macf.amail.crypto import sign
+    m = Message(sender=f"{card.lower()}@example.test", to=["bob@example.test"], subject="s", body="b")
+    m.signature = sign(m, load_private_key(key_path))
+    return m
+
+
+def _utc(*a):
+    import datetime
+    return datetime.datetime(*a, tzinfo=datetime.timezone.utc)
+
+
+def test_rotation_keeps_old_signatures_verifiable(tmp_path):
+    """MIS-0004 R45: a retired key verifies only what the receiving broker accepted inside its
+    window, by that broker's own record, and never signs. A backdated message id is no record."""
+    from macf.amail.attest import acceptance_time, may_sign, registry_verdict
+    from macf.amail.registry import Registry
+    old, new = _public_line(tmp_path, "old"), _public_line(tmp_path, "new")
+    reg = Registry(_registry(tmp_path, f"""
+agents:
+  Alice_0a1b2c:
+    account: alice
+    keys:
+      - key: "{old}"
+        valid_from: 2026-01-01T00:00:00Z
+        valid_until: 2026-06-01T00:00:00Z
+      - key: "{new}"
+        valid_from: 2026-06-01T00:00:00Z
+"""), root_uid=os.getuid())
+    m = _signed(tmp_path / "old")
+    # Accepted inside the old key's window: still attested after it retired.
+    assert registry_verdict(m, "Alice_0a1b2c", reg, accepted_at=_utc(2026, 3, 1))["trust"] == "attested"
+    # The thief's case: a new message signed with the retired key, accepted after retirement.
+    late = registry_verdict(m, "Alice_0a1b2c", reg, accepted_at=_utc(2026, 7, 1))
+    assert late["trust"] == "suspect"
+    # No record of acceptance: current signing keys only, never a retired one, and a message id
+    # dated inside the old window (a peer's mint, or anyone's) changes nothing.
+    m.message_id = "msg-1772000000-0123456789ab"      # 2026-02-25, inside the old window
+    assert registry_verdict(m, "Alice_0a1b2c", reg, accepted_at=None)["trust"] == "suspect"
+    assert registry_verdict(_signed(tmp_path / "new"), "Alice_0a1b2c", reg, accepted_at=None)["trust"] == "attested"
+    # A retired key never signs; the current one does.
+    assert may_sign("Alice_0a1b2c", old, reg) is False and may_sign("Alice_0a1b2c", new, reg) is True
+    # The acceptance time is the receiving broker's own hand-off record, and only its own.
+    own = {"rung": "local", "origin_domain": "here.test", "handed_off_at": "2026-03-01T12:00:00+00:00"}
+    assert acceptance_time(own, "here.test") == _utc(2026, 3, 1, 12)
+    assert acceptance_time({**own, "origin_domain": "peer.test"}, "here.test") is None
+    assert acceptance_time({**own, "rung": "shared"}, "here.test") is None
+    assert acceptance_time({**own, "handed_off_at": "yesterday"}, "here.test") is None
+    assert acceptance_time({**own, "handed_off_at": "2026-03-01T12:00:00"}, "here.test") is None   # naive
+
+
+def test_shared_login_attestation_labelled(tmp_path):
+    """MIS-0004 R46: where the signing key's account also holds another agent's key, a verified
+    message attests the login, and the receiver says so and names who shares it."""
+    from macf.amail.attest import registry_verdict
+    from macf.amail.registry import Registry
+    a, b, c = (_public_line(tmp_path, n) for n in "abc")
+    reg = Registry(_registry(tmp_path, f"""
+agents:
+  Alice_0a1b2c: {{account: shared, keys: ["{a}"]}}
+  Bob_1b2c3d: {{account: shared, keys: ["{b}"]}}
+  Carol_2c3d4e: {{account: carol, keys: ["{c}"]}}
+"""), root_uid=os.getuid())
+    shared = registry_verdict(_signed(tmp_path / "a"), "Alice_0a1b2c", reg, accepted_at=None)
+    assert shared["trust"] == "attested" and shared["attests"] == "login"
+    assert shared["shared_with"] == ["Bob_1b2c3d"] and "shared login" in shared["reason"]
+    alone = registry_verdict(_signed(tmp_path / "c", "Carol_2c3d4e"), "Carol_2c3d4e", reg, accepted_at=None)
+    assert alone["trust"] == "attested" and alone["attests"] == "agent" and alone["shared_with"] == []
+    # Only a verified message is labelled: a failed one attests nothing.
+    forged = registry_verdict(_signed(tmp_path / "c"), "Alice_0a1b2c", reg, accepted_at=None)
+    assert forged["trust"] == "suspect" and forged["attests"] is None
