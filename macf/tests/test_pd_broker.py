@@ -6,6 +6,7 @@ import pytest
 
 from macf.pd.broker import (BrokerRefused, GapTracker, cert_name, grant_filters, render_access_rules,
                              render_conf, source_topic)
+from test_primal_daemon import base  # noqa: F401 - a fixture: the short runtime dir daemon tests share
 
 SYS = "SystemDaemon_0a1b2c"
 AGENT = "ExampleAgent_1a2b3c"
@@ -620,7 +621,7 @@ def test_a_silenced_source_is_not_published(tmp_path):
     assert [m.topic for m in sent] == [source_topic(AGENT, "pd_unit_state")]
 
 
-def test_a_daemon_whose_interpreter_lacks_the_brokers_dependencies_is_refused_naming_the_fix(tmp_path, monkeypatch):
+def test_a_daemon_whose_interpreter_lacks_the_brokers_dependencies_is_refused_naming_the_fix(tmp_path, base, monkeypatch):
     """An editable install made before paho-mqtt and cryptography were core dependencies doesn't
     gain them when its checkout updates. Such a daemon is refused at start with the command that
     installs them into its own interpreter, rather than dying on an import inside its start."""
@@ -633,7 +634,7 @@ def test_a_daemon_whose_interpreter_lacks_the_brokers_dependencies_is_refused_na
     assert bd.missing_dependencies() == []
     monkeypatch.setattr(bd, "missing_dependencies", lambda: ["paho-mqtt"])
     with pytest.raises(DeclarationRefused) as refused:
-        Daemon(make_home(tmp_path, []), base=tmp_path / "run")
+        Daemon(make_home(tmp_path, []), base=base)      # a short runtime dir: macOS caps a socket path at 103 bytes
     import sys
     assert "paho-mqtt" in str(refused.value) and f"{sys.executable} -m pip install" in str(refused.value)
 
