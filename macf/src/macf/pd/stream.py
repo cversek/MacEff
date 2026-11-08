@@ -43,6 +43,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from macf.pd.interface import (CHANNEL_SUBSCRIBER, EVENT_STREAM_RULE, STREAM_SUBSCRIBER_NAME, StreamGrant,
                                StreamRule)
+from macf import calling_card
 from macf.utils.peercred import peer_credentials
 
 #: How long a new connection has to send its hello.
@@ -131,7 +132,7 @@ class Rules:
                 rule = StreamRule.model_validate(event.get("data") or {})
             except ValidationError:
                 continue    # noqa: MACEFF003 - a line that isn't a rule sets none
-            if rule.agent == card:
+            if calling_card.is_agent(rule.agent, card):    # a rule stored under the old card still holds (R166)
                 self.apply(rule.act, rule.target, rule.subscriber)
         return self
 

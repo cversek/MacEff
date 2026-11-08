@@ -1364,6 +1364,6 @@ def operator_channels(isolated_agent_home):
         from macf.utils import input_origin
         path = declaration_path(isolated_agent_home)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"version": 1, "agent": "Resident@1a2b3c", "operator_channels": list(names)}))
+        path.write_text(json.dumps({"version": 1, "agent": "Resident_1a2b3c", "operator_channels": list(names)}))
         input_origin._DECLARED.clear()
     return declare

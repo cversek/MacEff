@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from macf.pd import interface as pdi
 
-CARD = "TheHarborMaster@ee5cd8"
+CARD = "TheHarborMaster_ee5cd8"
 EXAMPLE = Path(__file__).resolve().parents[1] / "docs" / "developer" / "examples" / "pd_declaration.json"
 
 
@@ -174,7 +174,7 @@ def test_the_card_comes_from_the_named_home_and_never_the_environment(tmp_path, 
     """R02: a daemon started by the outer tier has no MACEFF_AGENT_NAME; a session may.
     Both must name the same sockets, so the environment is never read."""
     monkeypatch.setenv("MACEFF_AGENT_NAME", "SomeoneElse")
-    assert pdi.agent_card(_home(tmp_path)) == "Resident@1a2b3c"
+    assert pdi.agent_card(_home(tmp_path)) == "Resident_1a2b3c"
 
 
 def test_a_home_that_names_no_agent_is_refused(tmp_path):

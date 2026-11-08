@@ -65,10 +65,10 @@ def test_an_older_cli_still_reads_this_daemons_status(tmp_path, base, run_daemon
 ])
 def test_pd_status_says_when_the_daemon_and_the_cli_drift(monkeypatch, capsys, daemon_build, says):
     here = build.build_id()
-    report = client.StatusReport(card="Tester@abc123", source="daemon", why="its record and its socket agree",
+    report = client.StatusReport(card="Tester_abc123", source="daemon", why="its record and its socket agree",
                                  daemon_build=here if daemon_build is None else daemon_build, cli_build=here)
     monkeypatch.setattr(client, "status", lambda home, card: report)
-    monkeypatch.setattr("macf.pd.daemon.card_for_home", lambda home: "Tester@abc123")
+    monkeypatch.setattr("macf.pd.daemon.card_for_home", lambda home: "Tester_abc123")
     parser = argparse.ArgumentParser()
     cli.add_pd_parser(parser.add_subparsers(dest="cmd"))
     args = parser.parse_args(["pd", "status"])

@@ -58,7 +58,7 @@ def test_an_agent_that_declares_nothing_gets_the_default_session():
     assert env["MACEFF_CHANNELS"] == f"{TELEGRAM} plugin:maceff-channel@maceff"
     assert {"plugin": "maceff-channel", "marketplace": "maceff"} in body["allowlisted_channels"]
     assert body["operator_channels"] == ["plugin:telegram:telegram"]
-    Declaration(version=1, agent="Resident@1a2b3c", **body)
+    Declaration(version=1, agent="Resident_1a2b3c", **body)
     # The tmux name falls back to the agent's key, as provisioning's does.
     assert _session(_body())["environment"]["MACEFF_HARNESS_SESSION"] == "Resident"
 
@@ -98,7 +98,7 @@ def test_the_session_keeps_the_deployments_time_zone(monkeypatch):
     clock moves to UTC when it moves onto its daemon, while its login shells stay on local time."""
     monkeypatch.setenv("MACEFF_TZ", "America/New_York")
     assert _session(_body())["environment"]["TZ"] == "America/New_York"
-    Declaration(version=1, agent="Resident@1a2b3c", **_body())
+    Declaration(version=1, agent="Resident_1a2b3c", **_body())
     for unset in (lambda: monkeypatch.delenv("MACEFF_TZ"), lambda: monkeypatch.setenv("MACEFF_TZ", "")):
         unset()
         assert "TZ" not in _session(_body())["environment"]
@@ -191,7 +191,7 @@ def test_start_renders_the_default_and_names_an_agent_left_without_one(tmp_path,
     rendered = start.render_pd_declarations(config, root=tmp_path / "etc", chown=lambda p, u, g: None)
     assert rendered == ["pa_res"], said
     declaration = json.loads((tmp_path / "etc" / "pa_res" / "declaration.json").read_text())
-    assert declaration["agent"] == "Resident@1a2b3c"
+    assert declaration["agent"] == "Resident_1a2b3c"
     assert [u["name"] for u in declaration["units"]] == ["session"]
     assert any("pa_off" in line and "moves Thursday" in line for line in said)
     assert not (tmp_path / "etc" / "pa_off").exists()
@@ -231,6 +231,6 @@ def test_a_home_keeps_the_name_it_holds_and_only_a_nameless_home_takes_the_key(t
     assert sorted(rendered) == ["pa_bare", "pa_res"]
     assert (named / ".maceff" / "config.json").read_text() == held          # untouched
     assert json.loads((tmp_path / "etc" / "pa_res" / "declaration.json").read_text())["agent"] \
-        == "Resident@1a2b3c"
+        == "Resident_1a2b3c"
     assert json.loads((bare / ".maceff" / "config.json").read_text())["agent_identity"]["calling_card"] == "Bare"
     assert start.home_agent_name(bare) == "Bare" and start.home_agent_name(tmp_path / "none") is None

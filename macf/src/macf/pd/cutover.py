@@ -23,6 +23,7 @@ from pydantic import ValidationError
 from macf.pd.interface import Declaration, declaration_path
 from macf.pd.names import systemd_unit
 from macf.pd.session_unit import PANE_GRACE_S, tmux_socket
+from macf import calling_card
 
 #: Where a declaration with the session unit is staged before the move.
 STAGED_SUFFIX = ".cutover"
@@ -135,7 +136,11 @@ def _staged_check(path: Path, card: str, runtime: Optional[str], init: str = "sy
                      f"none at {path}: stage the declaration with the session unit there first")
     except (OSError, ValidationError) as e:
         return Check("staged declaration", False, f"{path} doesn't validate: {e}")
-    if declaration.agent != card:
+    try:
+        calling_card.read_declared(declaration.agent)
+    except calling_card.CardError as e:
+        return Check("staged declaration", False, f"{path}: {e}")
+    if not calling_card.same(declaration.agent, card):
         return Check("staged declaration", False, f"{path} declares {declaration.agent}, not {card}")
     session = next((u for u in declaration.units if u.kind == "session"), None)
     if session is None:

@@ -50,6 +50,7 @@ from macf.pd import interface
 from macf.pd.health import SCHEDULE_EVENTS, broker_health, read_liveness, schedule_health
 from macf.platform import container_limits
 from macf.utils.streaming import iter_lines_reverse
+from macf import calling_card
 
 #: How far back a unit's last stamp is looked for. Older than this reads ABSENT: the
 #: verdict names the window, so it never claims more than was read.
@@ -150,7 +151,7 @@ def last_liveness(log_path: Path, card: str, units: Sequence[str], now: float,
         if event.get("event") != interface.EVENT_LIVENESS:
             continue
         data = event.get("data")
-        if not isinstance(data, dict) or data.get("agent") != card:
+        if not isinstance(data, dict) or not calling_card.is_agent(data.get("agent"), card):
             continue
         unit = data.get("unit")
         if isinstance(unit, str) and unit in wanted:   # a list or a dict would raise in the set
@@ -182,7 +183,7 @@ def last_unit_state(log_path: Path, card: str, units: Sequence[str], now: float,
         if event.get("event") != interface.EVENT_STATE:
             continue
         data = event.get("data")
-        if not isinstance(data, dict) or data.get("agent") != card:
+        if not isinstance(data, dict) or not calling_card.is_agent(data.get("agent"), card):
             continue
         unit = data.get("unit")
         if isinstance(unit, str) and unit in wanted:
@@ -243,7 +244,7 @@ def last_channel_event(log_path: Path, card: str, now: float,
         if event.get("event") not in (interface.EVENT_CHANNEL_DARK, interface.EVENT_CHANNEL_BACK):
             continue
         data = event.get("data")
-        if isinstance(data, dict) and data.get("agent") == card:
+        if isinstance(data, dict) and calling_card.is_agent(data.get("agent"), card):
             return event
     return None
 
@@ -280,7 +281,7 @@ def last_unread_mail_event(log_path: Path, card: str, now: float,
         if event.get("event") not in (interface.EVENT_UNREAD_MAIL, interface.EVENT_UNREAD_MAIL_CLEARED):
             continue
         data = event.get("data")
-        if isinstance(data, dict) and data.get("agent") == card:
+        if isinstance(data, dict) and calling_card.is_agent(data.get("agent"), card):
             return event
     return None
 
@@ -317,7 +318,7 @@ def mail_sweep_events(log_path: Path, card: str, schedule: str, now: float,
         if event.get("event") not in SCHEDULE_EVENTS:
             continue
         data = event.get("data")
-        if not isinstance(data, dict) or data.get("agent") != card:
+        if not isinstance(data, dict) or not calling_card.is_agent(data.get("agent"), card):
             continue
         if event.get("event") == interface.EVENT_DAEMON_START or data.get("schedule") == schedule:
             found.append(event)
@@ -387,7 +388,7 @@ def _wake_events(log_path: Path, card: str, cutoff: float):
         if event.get("event") not in _WAKE_EVENTS:
             continue
         data = event.get("data")
-        if isinstance(data, dict) and data.get("agent") == card:
+        if isinstance(data, dict) and calling_card.is_agent(data.get("agent"), card):
             yield event
 
 

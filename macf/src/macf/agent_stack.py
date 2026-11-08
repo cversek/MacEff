@@ -582,22 +582,12 @@ def step_task_store(ctx: Context) -> Result:
     return Result("task-store", DONE, str(store))
 
 
-#: A calling card's name holds only what the session identifier keeps verbatim (agent_harness
-#: §2.2), so the card and the session and unit names derived from it map back and forth.
-_CARD_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
-
-
 def card_name_problem(name: str) -> Optional[str]:
-    """Why *name* can't be a calling card's name, or None."""
+    """Why *name* can't be a calling card's name, or None (MIS-0002-R158, one rule for all)."""
+    from .calling_card import name_problem
     if not name:
         return "no name given"
-    if "@" in name:
-        return (f"{name!r} carries an '@': give the name alone; the @<uuid6> half comes from "
-                f"the agent id file")
-    if not _CARD_NAME.fullmatch(name):
-        return (f"{name!r} must be letters, digits, '-' or '_', starting with a letter or digit, "
-                f"so the session and unit names derived from it are the card's own")
-    return None
+    return name_problem(name)
 
 
 def step_calling_card(ctx: Context) -> Result:

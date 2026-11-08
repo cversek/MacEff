@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from macf import calling_card
 from macf.utils.identity import session_identifier
 
 #: MIS-0002-R06: every process, unit, label and socket name of a primal daemon carries it.
@@ -53,16 +54,20 @@ def agent_card(agent_home: Path) -> str:
     if not name or len(uuid) < 6:
         raise IdentityError(f"{home} names no agent: config.json needs agent_identity.calling_card "
                             f"and .maceff_primary_agent.id a UUID")
-    return f"{name}@{uuid[:6]}"
+    try:
+        return calling_card.build(name, uuid)
+    except calling_card.CardError as e:
+        raise IdentityError(f"{home} names no agent: {e}") from e
 
 
 def pd_id(card: str) -> str:
-    """The per-agent part of every name: ``TheHarborMaster@ee5cd8`` -> ``TheHarborMaster_ee5cd8``.
+    """The per-agent part of every name: the card exactly, ``TheHarborMaster_ee5cd8``.
 
-    Several agents can share one login user, so every name carries the agent; and the
-    card's ``@`` is substituted because systemd spells a template instance that way.
+    Several agents can share one login user, so every name carries the agent. A card's form
+    already suits a systemd template instance, a launchd label, a socket and a path, so the
+    name keeps the card's case (MIS-0002-R160).
     """
-    return session_identifier(card)
+    return calling_card.derived(session_identifier(card))
 
 
 def systemd_unit(card: str) -> str:

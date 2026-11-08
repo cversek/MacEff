@@ -128,7 +128,7 @@ comment, a commit message, or a host agent's comment in a deliberation the
 operator convenes (§2.4), and nowhere else**:
 
 ```
-[Moniker@idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
+[Moniker_idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
 ```
 
 Nothing follows it. Any tooling trailer (`Co-Authored-By:` and the like) sits
@@ -167,7 +167,7 @@ signs it, rather than narrating which internal work item produced each paragraph
 
 Co-Authored-By: <model> <noreply@anthropic.com>
 
-[Moniker@idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
+[Moniker_idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
 ```
 
 A commit message is the most durable public artifact an agent produces - it
@@ -286,7 +286,7 @@ represents it. That host agent:
 
 <the agent's text, unchanged>
 
-[Moniker@idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
+[Moniker_idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
 ```
 
 A pseudonym does not echo an identity that is already public, and a set of

@@ -63,21 +63,28 @@ def default_branch_push_forbidden(config: Optional[dict] = None) -> bool:
     return bool((cfg.get("git") or {}).get("forbid_default_branch_push", False))
 
 
+#: Whether the footer cut-over of MIS-0002's landing step 8 is still open. It ends when the
+#: last maintainer has changed their footer and its local hook, as recorded on #552; set it
+#: False then, and the old spelling stops signing (R168).
+CUTOVER_OPEN = True
+
+
 def card_line_pattern(card: str) -> "re.Pattern[str]":
     """The card as a line: ``[Card: scope#id breadcrumb]``, bare or in italics.
 
     Anchored to the agent's OWN card: a line carrying another agent's card, or a
     card-shaped placeholder, is not a sign-off by this agent.
 
-    While the card's separator changes from ``@`` to ``_`` (the MIS-0002 revision on
-    calling cards), the agent's own card is accepted in either spelling,
-    ``Name@shortid`` or ``Name_shortid``, so an agent can sign with the new form
-    before its identity files are cut over. Only the separator varies: the name and
-    the short id must still be this agent's.
+    While the footer cut-over is open, the agent's own card is accepted in either
+    spelling, ``Name_shortid`` or ``Name@shortid`` (MIS-0002-R167), so a maintainer
+    whose hooks haven't changed yet can still sign. After it ends, only
+    ``Name_shortid`` signs (R168). Only the separator varies: the name and the
+    short id must still be this agent's.
     """
     sep = "@" if "@" in card else "_"
     name, found, shortid = card.rpartition(sep)
-    own = re.escape(name) + r"[@_]" + re.escape(shortid) if found else re.escape(card)
+    either = r"[@_]" if CUTOVER_OPEN else "_"
+    own = re.escape(name) + either + re.escape(shortid) if found else re.escape(card)
     return re.compile(
         r"^\*?\[" + own + r": [A-Za-z_]+#[0-9A-Za-z]+ [^\]\n]*\]\*?\s*$"
     )
@@ -93,9 +100,10 @@ def last_line(text: str, strip_git_comments: bool = False) -> str:
 
 
 def _card() -> Optional[str]:
+    from .calling_card import is_unknown
     from .utils.identity import get_agent_identity
     card = get_agent_identity()
-    return None if not card or card.endswith("@unknown") else card
+    return None if not card or is_unknown(card) else card
 
 
 def missing_card(text: str, what: str, strip_git_comments: bool = False) -> Optional[str]:

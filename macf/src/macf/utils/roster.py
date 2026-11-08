@@ -46,6 +46,8 @@ from typing import Callable, Dict, List, Literal, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from .. import calling_card
+
 #: The endpoint name of this machine's own roster. A remote's entries carry its name.
 LOCAL = "local"
 
@@ -114,9 +116,10 @@ class RosterEntry(BaseModel):
 
 
 def card_parts(card: str) -> Tuple[str, Optional[str]]:
-    """``Lumen2MacEff@3f9a1c`` -> ``("Lumen2MacEff", "3f9a1c")``; no ``@``, no uuid."""
-    moniker, sep, uuid = card.rpartition("@")
-    return (moniker, uuid) if sep and moniker and uuid else (card, None)
+    """``Lumen2MacEff_3f9a1c`` -> ``("Lumen2MacEff", "3f9a1c")``; not a card, no uuid. A card in
+    the old ``Name@shortid`` spelling is read as history and mapped (MIS-0002-R166)."""
+    current = calling_card.from_history(card)
+    return calling_card.split(current) if calling_card.is_card(current) else (card, None)
 
 
 def _entry(card: Optional[str], **fields) -> RosterEntry:
@@ -449,7 +452,10 @@ def _declared_card(home: Optional[str], name: str) -> Tuple[Optional[str], str]:
             return None, f"agents.yaml declares {name!r}, but {path} can't be read: {e}"
     if not _UUID6.match(uuid):
         return None, f"agents.yaml declares {name!r}, but {path} holds no uuid"
-    return f"{name}@{uuid}", ""
+    try:
+        return calling_card.build(name, uuid), ""
+    except calling_card.CardError as e:
+        return None, f"agents.yaml declares {name!r}, which can't make a calling card: {e}"
 
 
 def _with_deployment_names(entry: RosterEntry, names: Dict[str, Tuple[str, Optional[str], Optional[str]]],
@@ -701,8 +707,12 @@ def match(entries: Sequence[RosterEntry], query: str) -> MatchResult:
         return MatchResult(NONE, q, list(entries))
     folded = q.casefold()
     bare = q[1:] if q.startswith("@") else q
+    # A card typed in the old Name@shortid spelling still finds its agent: a query is a lookup,
+    # not a declaration, so it is mapped the way history is (MIS-0002-R166).
+    as_card = calling_card.from_history(q)
 
-    tier1 = [e for e in named if e.card == q or e.identifier == q or (e.uuid and e.uuid == bare)]
+    tier1 = [e for e in named
+             if e.card in (q, as_card) or e.identifier == q or (e.uuid and e.uuid == bare)]
     if tier1:
         return _decide(q, tier1, 1)
     tier2 = [e for e in named

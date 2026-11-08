@@ -36,6 +36,7 @@ sys.path.insert(0, '/opt/macf_tools/src')
 
 from macf.models.agent_spec import AgentsConfig, AgentSpec, SubagentSpec, ClaudeCodeConfig, ConsciousnessArtifactsConfig
 from macf.models.project_spec import ProjectsConfig, ProjectSpec
+from macf.homes import HomesRefused, check_identity, check_volume, may_create_home
 
 
 # Configuration paths
@@ -341,7 +342,8 @@ def check_service_paths(ids) -> None:
                 f"run the renumber step before this start (container_operations policy)")
 
 
-def provision_agent_identity(username: str, home_dir: str, display_name: Optional[str], agent_key: str) -> str:
+def provision_agent_identity(username: str, home_dir: str, display_name: Optional[str], agent_key: str,
+                             short_id: Optional[str] = None) -> str:
     """
     Create persistent identity file and set GECOS field.
 
@@ -350,14 +352,28 @@ def provision_agent_identity(username: str, home_dir: str, display_name: Optiona
         home_dir: Agent's home directory path
         display_name: Human-readable name from agents.yaml (e.g., 'Orchard MacEff')
         agent_key: Agent dictionary key (e.g., 'sparrow') for fallback
+        short_id: The short id agents.yaml declares for an agent minted ahead (MIS-0002-R162).
+            Written as a new home's identity file; a home whose identity file holds another
+            value is refused, so an edit to the declaration can't relabel a home.
 
     Returns:
         str: The 6-character agent UUID (existing or newly generated)
     """
     identity_file = Path(home_dir) / '.maceff_primary_agent.id'
 
+    if short_id is not None:
+        check_identity(Path(home_dir), short_id)
+        if identity_file.exists():
+            log(f"Identity preserved: {username} -> {short_id}")
+            agent_uuid = short_id
+        else:
+            identity_file.write_text(short_id)
+            identity_file.chmod(0o444)
+            run_command(['chown', 'root:root', str(identity_file)])
+            log(f"Identity written from agents.yaml: {username} -> {short_id}")
+            agent_uuid = short_id
     # Check if identity file already exists (preserve continuity)
-    if identity_file.exists():
+    elif identity_file.exists():
         try:
             agent_uuid = identity_file.read_text().strip()
             log(f"Identity preserved: {username} -> {agent_uuid}")
@@ -603,8 +619,10 @@ def vanilla_home_violations(home: Path) -> List[str]:
     return violations
 
 
-def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Optional[Dict] = None) -> None:
-    """Create Primary Agent Linux user."""
+def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Optional[Dict] = None,
+                   homes_volume: Optional[str] = None) -> None:
+    """Create Primary Agent Linux user. A missing home is created only for an agent minted ahead,
+    on the homes volume agents.yaml declares (MIS-0002-R162, ``macf.homes``)."""
     username = agent_spec.username
     uid = agent_spec.uid
 
@@ -616,6 +634,13 @@ def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Option
         raise DeclaredIdMismatch(
             f"account {username} is uid {existing.pw_uid} gid {existing.pw_gid}, but agents.yaml "
             f"declares {uid}; run the renumber step for this deployment (container_operations policy)")
+    # Before anything is created: a missing home only for a minted agent on the declared volume,
+    # and a present one only if its identity is the declared one (MIS-0002-R162).
+    if not (HOME_ROOT / username).exists():
+        may_create_home(HOME_ROOT, HOME_ROOT / username, declared=homes_volume,
+                        short_id=agent_spec.short_id)
+    elif agent_spec.short_id is not None:
+        check_identity(HOME_ROOT / username, agent_spec.short_id)
     if existing is None:
         # /etc/passwd is the image's and starts fresh at every recreate, while /home persists:
         # a home still owned by another number belongs to the account's old uid, and creating
@@ -639,7 +664,8 @@ def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Option
 
     # Provision persistent agent identity (UUID + GECOS field)
     display_name = getattr(agent_spec, 'display_name', None)
-    agent_uuid = provision_agent_identity(username, str(home_dir), display_name, agent_name)
+    agent_uuid = provision_agent_identity(username, str(home_dir), display_name, agent_name,
+                                          short_id=agent_spec.short_id)
 
     # Install every declared SSH key (falls back to /keys/{username}.pub when undeclared)
     install_ssh_key(username, getattr(agent_spec, 'ssh_keys', None))
@@ -2952,6 +2978,8 @@ def main() -> int:
         # Every account and group takes its number from the deployment's id block, so groups
         # are created only once agents.yaml has said which block that is.
         ids = agents_config.ids
+        # The homes root is the declared volume, or start stops before touching an account.
+        check_volume(HOME_ROOT, agents_config.homes_volume)
         check_image_ids(ids)
         check_service_paths(ids)
         ensure_group('agents_all', ids.slot('agents_all'))
@@ -2988,7 +3016,8 @@ def main() -> int:
             log(f"Setting up PA: {agent_spec.username} (flavor={flavor_label})")
 
             # Create user — both flavors get home, SSH, mailbox, shell env, settings
-            create_pa_user(agent_name, agent_spec, defaults_dict)
+            create_pa_user(agent_name, agent_spec, defaults_dict,
+                           homes_volume=agents_config.homes_volume)
 
             # Everything below this line IS the MacEff footprint. A vanilla account
             # is defined by receiving none of it: no agent/ tree, no consciousness
@@ -3114,7 +3143,7 @@ def main() -> int:
         # Wait on sshd (keeps container alive)
         sshd_proc.wait()
 
-    except DeclaredIdMismatch as e:
+    except (DeclaredIdMismatch, HomesRefused) as e:
         log(f"REFUSED: {e}")
         return 1
     except Exception as e:

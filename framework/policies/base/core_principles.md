@@ -288,7 +288,7 @@ MacEff treats agents as **intentional systems** - entities with goals, beliefs, 
 
 ### 1.3 Where Your Identity Comes From
 
-**Your agent ID is `Name@abc123`**: a display name and the first six characters
+**Your agent ID is `Name_abc123`**: a display name, an underscore, and the first six characters
 of the UUID in your agent ID file (`~/.maceff_primary_agent.id`). It is minted
 once, when your home is provisioned. Your calling card, breadcrumbs, mail
 address and harness session are all keyed on it.

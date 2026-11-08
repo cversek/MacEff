@@ -14,7 +14,7 @@ from macf.pd import interface as pdi
 from macf.pd import watch
 
 NOW = 1_800_000_000.0
-CARD = "Resident@1a2b3c"
+CARD = "Resident_1a2b3c"
 
 
 def _home(root, name="Resident", uuid="1a2b3c4d-0000", units=(("broker", 15.0),)):
@@ -62,14 +62,14 @@ def test_a_stopped_daemon_alerts_once_then_recovers_once(tmp_path):
     # Stopped: no record. One alert, through the configured command and nothing else.
     assert watch.run_pass(config, now=NOW, base=base, probe=ALL_RUNNING) == watch.EXIT_UNHEALTHY
     assert sink.read_text().count("ALERT") == 1
-    assert "Resident@1a2b3c daemon: ABSENT" in sink.read_text()
+    assert "Resident_1a2b3c daemon: ABSENT" in sink.read_text()
     # Still stopped on the next pass: the stretch is open, nothing more is sent.
     watch.run_pass(config, now=NOW + 120, base=base, probe=ALL_RUNNING)
     assert sink.read_text().count("ALERT") == 1
     # Started again: one recovery line naming the stretch's length.
     _record(base)
     assert watch.run_pass(config, now=NOW + 240, base=base, probe=ALL_RUNNING) == watch.EXIT_HEALTHY
-    assert "recovered: Resident@1a2b3c daemon: ALIVE" in sink.read_text()
+    assert "recovered: Resident_1a2b3c daemon: ALIVE" in sink.read_text()
     assert "(after 4 min)" in sink.read_text()
 
 
@@ -133,13 +133,13 @@ def test_each_external_state_has_its_own_exit_code(tmp_path):
 def test_every_verdict_has_an_exit_code(verdict):
     """A verdict added without a code made the pass raise after its alert was sent, on every
     pass while a channel was dark or a wake held. Only ALIVE is healthy."""
-    code = watch.exit_code([watch.Finding("Resident@1a2b3c", "subject", verdict, "why")])
+    code = watch.exit_code([watch.Finding("Resident_1a2b3c", "subject", verdict, "why")])
     assert (code == watch.EXIT_HEALTHY) == (verdict == "ALIVE")
 
 
 def test_a_dark_channel_pass_exits_unhealthy_after_its_alert(tmp_path):
-    findings = [watch.check_channel("Resident@1a2b3c", {"event": pdi.EVENT_CHANNEL_DARK, "timestamp": NOW - 60,
-                                                         "data": {"agent": "Resident@1a2b3c", "reason": "dropped"}}, NOW)]
+    findings = [watch.check_channel("Resident_1a2b3c", {"event": pdi.EVENT_CHANNEL_DARK, "timestamp": NOW - 60,
+                                                         "data": {"agent": "Resident_1a2b3c", "reason": "dropped"}}, NOW)]
     assert [f.verdict for f in findings] == ["DARK"]
     assert watch.exit_code(findings) == watch.EXIT_UNHEALTHY
 
@@ -164,8 +164,8 @@ def test_an_unprobed_home_gets_no_guessed_daemon_verdict(tmp_path):
 
 
 def test_a_subject_no_longer_checked_closes_its_stretch(tmp_path):
-    lines, after = watch.transitions([], {"Resident@1a2b3c/broker": {"since": NOW - 300, "verdict": "STALE"}}, NOW)
-    assert lines == ["closed: Resident@1a2b3c/broker is no longer checked (was STALE for 5 min)"]
+    lines, after = watch.transitions([], {"Resident_1a2b3c/broker": {"since": NOW - 300, "verdict": "STALE"}}, NOW)
+    assert lines == ["closed: Resident_1a2b3c/broker is no longer checked (was STALE for 5 min)"]
     assert after == {}
 
 
@@ -211,7 +211,7 @@ def test_an_alert_whose_push_failed_is_sent_again(tmp_path):
     assert watch.run_pass(failing, now=NOW, base=base, probe=ALL_RUNNING) == watch.EXIT_UNHEALTHY
     assert not sink.exists()
     watch.run_pass(config, now=NOW + 120, base=base, probe=ALL_RUNNING)
-    assert "ALERT: Resident@1a2b3c broker: STALE" in sink.read_text()
+    assert "ALERT: Resident_1a2b3c broker: STALE" in sink.read_text()
     # Delivered now: the next pass is quiet, and the one record holds both attempts.
     watch.run_pass(config, now=NOW + 240, base=base, probe=ALL_RUNNING)
     assert sink.read_text().count("ALERT") == 1
@@ -223,7 +223,7 @@ def test_an_alert_whose_push_failed_is_sent_again(tmp_path):
 def test_another_agents_liveness_in_the_same_log_is_not_this_agents(tmp_path):
     home = _home(tmp_path)
     log = home / ".maceff" / "agent_events_log.jsonl"
-    other = {"agent": "Neighbor@9f8e7d", "unit": "broker", "pid": 4242, "proc_start": "777", "interval_s": 15.0}
+    other = {"agent": "Neighbor_9f8e7d", "unit": "broker", "pid": 4242, "proc_start": "777", "interval_s": 15.0}
     log.write_text(json.dumps({"timestamp": NOW - 5, "event": pdi.EVENT_LIVENESS, "data": other}) + "\n")
     _record(tmp_path / "run")
     unit = watch.check_home(home, NOW, tmp_path / "run", ALL_RUNNING)[1]
@@ -250,12 +250,12 @@ def test_a_row_whose_unit_is_not_a_name_does_not_stop_the_watch(tmp_path):
     still finds the unit's good row behind it."""
     log, now = tmp_path / "events.jsonl", time.time()
     good = {"timestamp": now - 5, "event": pdi.EVENT_LIVENESS,
-            "data": {"agent": "Resident@1a2b3c", "unit": "broker", "pid": 4242, "proc_start": "777",
+            "data": {"agent": "Resident_1a2b3c", "unit": "broker", "pid": 4242, "proc_start": "777",
                      "interval_s": 15.0}}
     bad = {"timestamp": now - 1, "event": pdi.EVENT_LIVENESS,
            "data": dict(good["data"], unit=["broker"])}
     log.write_text(json.dumps(good) + "\n" + json.dumps(bad) + "\n")
-    found = watch.last_liveness(log, "Resident@1a2b3c", ["broker"], now)
+    found = watch.last_liveness(log, "Resident_1a2b3c", ["broker"], now)
     assert found["broker"]["data"]["pid"] == 4242
 
 
@@ -501,12 +501,12 @@ def test_a_session_that_cannot_log_in_alerts_while_its_liveness_is_fresh(tmp_pat
     config = _config(tmp_path, [home], sink)
     assert watch.run_pass(config, now=NOW, base=base, probe=ALL_RUNNING) == watch.EXIT_UNHEALTHY
     assert sink.read_text().count("ALERT") == 1
-    assert "Resident@1a2b3c session: AUTH-FAILED, needs /login" in sink.read_text()
+    assert "Resident_1a2b3c session: AUTH-FAILED, needs /login" in sink.read_text()
     # Logged in again: the core records running, and the watch sends one recovery.
     _state(home, "session", age_s=-60, state="running", reason="authenticated again")
     _stamp(home, "session", age_s=-90, interval_s=120.0)
     assert watch.run_pass(config, now=NOW + 120, base=base, probe=ALL_RUNNING) == watch.EXIT_HEALTHY
-    assert "recovered: Resident@1a2b3c session: ALIVE" in sink.read_text()
+    assert "recovered: Resident_1a2b3c session: ALIVE" in sink.read_text()
 
 
 def test_a_failure_stands_only_for_the_process_recorded_failed(tmp_path):
@@ -551,6 +551,6 @@ def test_a_failed_unit_for_another_reason_reads_failed_with_its_reason(tmp_path)
 def test_another_agents_failure_in_the_same_log_is_not_this_agents(tmp_path):
     home = _home(tmp_path)
     _record(tmp_path / "run")
-    _state(home, "broker", age_s=30, state="failed", reason="authentication failed: x", agent="Other@9f9f9f")
+    _state(home, "broker", age_s=30, state="failed", reason="authentication failed: x", agent="Other_9f9f9f")
     _stamp(home, "broker", age_s=5)
     assert watch.check_home(home, NOW, tmp_path / "run", ALL_RUNNING)[1].verdict == "ALIVE"

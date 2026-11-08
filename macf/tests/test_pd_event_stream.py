@@ -360,7 +360,7 @@ def test_each_record_names_its_source_agent_and_time(tmp_path, base, daemons):
     sub = Sub(daemon, ["pd_*"])
     assert sub.welcome()
     forge({"timestamp": 1700000000.5, "event": "pd_carried",
-           "data": {"agent": "Mallory@000000", "time": 42, "mark": "forged"}, "hook_input": {}})
+           "data": {"agent": "Mallory_000000", "time": 42, "mark": "forged"}, "hook_input": {}})
     got = sub.read(marked("forged"))
     assert got["origin"] == "log" and got["agent"] == CARD and got["source"] == "pd_carried"
     assert got["time"] == 1700000000.5

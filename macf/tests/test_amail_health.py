@@ -16,7 +16,7 @@ from macf.pd import watch
 from macf.pd.health import START_GRACE_S, broker_health, schedule_health
 from macf.pd.interface import CommandRun, Declaration, MissedRunPolicy, Schedule
 
-CARD = "Broker@1a2b3c"
+CARD = "Broker_1a2b3c"
 SWEEP = "mail-sweep"
 H10 = 1792231200.0   # 2026-10-17T10:00:00Z, a firing of the hourly cron
 ISO = "2026-10-17T10:00:00+00:00"
@@ -85,7 +85,7 @@ def test_health_is_last_sweep():
     assert not late.healthy and "OVERDUE" in late.detail
 
     # Another agent's clean sweep is not this broker's.
-    other = [_run(k["event"], k["timestamp"], card="Other@000000", **{
+    other = [_run(k["event"], k["timestamp"], card="Other_000000", **{
         f: v for f, v in k["data"].items() if f not in ("agent", "schedule")}) for k in _ended("ok: x")]
     assert not _health(other, H10 + 600).healthy
 
@@ -143,7 +143,7 @@ def test_stuck_mail_alerts(tmp_path):
     _log(home, _ended("failed: exit 1"))   # the sweep found mail past its pickup bound
     assert _pass(tmp_path, home, sink, H10 + 600) == watch.EXIT_UNHEALTHY
     text = sink.read_text()
-    assert text.count("ALERT") == 1 and "Broker@1a2b3c mail-broker: SWEEP-FAILED" in text
+    assert text.count("ALERT") == 1 and "Broker_1a2b3c mail-broker: SWEEP-FAILED" in text
     assert "failed: exit 1" in text
     _pass(tmp_path, home, sink, H10 + 720)                      # still failing: no second alert
     assert sink.read_text().count("ALERT") == 1
@@ -152,7 +152,7 @@ def test_stuck_mail_alerts(tmp_path):
     _log(home, [_run("pd_run_started", H10 + 3601, scheduled_for=next_iso),
                 _run("pd_run_done", H10 + 3603, scheduled_for=next_iso, outcome="ok: nothing to say")])
     assert _pass(tmp_path, home, sink, H10 + 3700) == watch.EXIT_HEALTHY
-    assert "recovered: Broker@1a2b3c mail-broker: ALIVE" in sink.read_text()
+    assert "recovered: Broker_1a2b3c mail-broker: ALIVE" in sink.read_text()
 
     # A broker that stops sweeping alerts as well, once its next sweep is overdue.
     stopped = _mail_findings(home, H10 + 2 * 3600 + START_GRACE_S + 1)

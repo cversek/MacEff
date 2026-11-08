@@ -22,7 +22,7 @@ def no_real_remotes(tmp_path, monkeypatch):
     """Candidates read the user's declared remotes; a test must never reach a real one."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "no-config"))
 
-CARDS = ["LumenMacEff@a1b2c3", "Lumen2MacEff@d4e5f6", "Lumen3MacEff@0a1b2c", "Lumen4MacEff@3c4d5e"]
+CARDS = ["LumenMacEff_a1b2c3", "Lumen2MacEff_d4e5f6", "Lumen3MacEff_0a1b2c", "Lumen4MacEff_3c4d5e"]
 
 
 def _small_parser():
@@ -80,8 +80,8 @@ def test_candidates_include_monikers_and_uuids(monkeypatch, capsys):
 
 def test_zsh_candidates_carry_the_endpoint_as_description(monkeypatch, capsys):
     _fake_lister(monkeypatch, seats())
-    out = _candidates(capsys, "--describe", "--prefix", "Lumen2MacEff@")
-    assert out == ["Lumen2MacEff@d4e5f6:local"]
+    out = _candidates(capsys, "--describe", "--prefix", "Lumen2MacEff_")
+    assert out == ["Lumen2MacEff_d4e5f6:local"]
 
 
 def test_a_describe_line_escapes_colons_in_the_word():
@@ -122,9 +122,9 @@ def test_the_candidates_command_passes_its_timeout_to_each_remote(monkeypatch, c
         return seats("dolph")
 
     monkeypatch.setattr(roster, "remote_fetchers", lambda: [remote])
-    out = _candidates(capsys, "--describe", "--remote-timeout", "0.5", "--prefix", "Lumen2MacEff@")
+    out = _candidates(capsys, "--describe", "--remote-timeout", "0.5", "--prefix", "Lumen2MacEff_")
     assert seen == [0.5]
-    assert out == ["Lumen2MacEff@d4e5f6:local"]      # one word, offered once, first endpoint first
+    assert out == ["Lumen2MacEff_d4e5f6:local"]      # one word, offered once, first endpoint first
 
 
 def test_completion_prints_a_script_for_each_shell(capsys):
@@ -190,7 +190,7 @@ def test_bash_trims_a_candidate_to_the_part_after_the_at(tmp_path):
     line = "macf_tools harness attach Lumen2MacEff@d4"
     driver_words = ["macf_tools", "harness", "attach", "Lumen2MacEff", "@", "d4"]
     fake = tmp_path / "macf_tools"
-    fake.write_text("#!/bin/sh\necho Lumen2MacEff@d4e5f6\n")
+    fake.write_text("#!/bin/sh\necho Lumen2MacEff_d4e5f6\n")
     fake.chmod(0o755)
     script = tmp_path / "c.bash"
     script.write_text(render_bash(command_tree(_small_parser())))

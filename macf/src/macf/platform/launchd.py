@@ -35,13 +35,14 @@ RELOAD_POLL_S = 0.25
 
 def pd_label(card: str) -> str:
     """The launchd label for one agent's primal daemon, as the step-1 interface names it
-    (``launchd_label``): ``maceff_pd.<pd_id>``, so ``IraMacEff@ee9a78`` becomes
-    ``maceff_pd.IraMacEff_ee9a78``. MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd); the
+    (``launchd_label``): ``maceff_pd.<pd_id>``, the card exactly (MIS-0002-R160), so
+    ``IraMacEff_ee9a78`` is ``maceff_pd.IraMacEff_ee9a78``. MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd); the
     card comes from the identity file, never the environment (MIS-0002-R02). A string
     that is not a calling card is refused here rather than rendered into a label.
     """
-    if not card or "@" not in card or "/" in card:
-        raise ValueError(f"not a calling card: {card!r} (expected Name@hexid)")
+    from macf.calling_card import is_card
+    if not is_card(card):
+        raise ValueError(f"not a calling card: {card!r} (expected Name_shortid)")
     return launchd_label(card)
 
 

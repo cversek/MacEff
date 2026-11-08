@@ -294,7 +294,7 @@ class AgentAddressing(AgentBinding):
     contacts: List[Any] = Field(default_factory=list)
     card: Optional[str] = Field(
         default=None,
-        description="the agent's calling card, Name@shortid, written at provisioning from "
+        description="the agent's calling card, Name_shortid, written at provisioning from "
                     "the identity file in its home (MIS-0004 R06). The broker's account "
                     "cannot read that file (the home is closed to it by design, R05), so "
                     "under a zone the address is derived from this declaration.")
@@ -362,7 +362,7 @@ def _require_zone_cards(addressing: "AddressingConfig") -> None:
     if missing:
         raise ConfigError(
             f"zone '{addressing.zone}' is declared, but these agents have no usable calling "
-            f"card and zone token: {', '.join(missing)}. Declare 'card: Name@shortid' and a "
+            f"card and zone token: {', '.join(missing)}. Declare 'card: Name_shortid' and a "
             f"fresh 'zone_token' for each, as provisioning writes them (MIS-0004 R06); without "
             f"them their zone mail is refused.")
 

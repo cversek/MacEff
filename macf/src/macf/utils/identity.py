@@ -40,15 +40,18 @@ def get_agent_identity() -> str:
     agent's display name.
 
     Returns:
-        str: Agent identity (e.g., 'Card@abcdef') or fallback
+        str: Agent identity (e.g., 'Card_abcdef') or fallback
 
     Examples:
         >>> get_agent_identity()
-        'Card@abcdef'
+        'Card_abcdef'
     """
     uuid_prefix, uuid_scope = _resolve_uuid_prefix()
     display_name, _source = _resolve_name(uuid_prefix, uuid_scope)
-    return f"{display_name}@{uuid_prefix}"
+    # Joined unchecked: the name may be a fallback and the prefix may be 'unknown', and this
+    # function's contract is a best effort (MIS-0002-R157 governs a declared card's form).
+    from macf.calling_card import join
+    return join(display_name, uuid_prefix)
 
 
 def agent_name_source() -> str:
@@ -132,7 +135,8 @@ def session_identifier(calling_card: Optional[str] = None) -> str:
     session name and a tool holding the session name could not recover the
     Calling Card. The identifier is now a pure function of identity.
 
-    ``TheHarborMaster@ee5cd8`` becomes ``TheHarborMaster_ee5cd8``.
+    A card in its current form passes through unchanged: ``TheHarborMaster_ee5cd8``
+    (MIS-0002-R160). A fallback name carrying other characters is substituted.
 
     Collisions are possible in principle — two Calling Cards differing only in a
     substituted character map to one identifier — and are not resolved here.
@@ -168,15 +172,13 @@ def session_identifier(calling_card: Optional[str] = None) -> str:
 def calling_card_from_identifier(identifier: str) -> str:
     """Recover the Calling Card from a session identifier.
 
-    Reversible by convention, not by escaping: a Calling Card is
-    ``Moniker@uuidprefix``, so the LAST separator is the one that was an '@'.
-    Splitting on the last one keeps monikers that legitimately contain '_'.
+    A Calling Card is ``Name_shortid`` (MIS-0002-R157), which is already a
+    session identifier, so the identifier is the card and comes back unchanged.
 
     This direction is what lets ``harness status`` name the agent behind a
     session it found, instead of reporting on an identifier nobody can trace.
     """
-    head, sep, tail = identifier.rpartition(_IDENTIFIER_SEPARATOR)
-    return f"{head}@{tail}" if sep else identifier
+    return identifier
 
 
 def _get_config_identity_name() -> Optional[str]:

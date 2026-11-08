@@ -14,7 +14,7 @@ SEATS = Remote(name="seats", host="box", port=2224, login="seat", list_login="pa
 
 
 def _entry(**over):
-    fields = {"card": "Lumen2MacEff@3f9a1c", "moniker": "Lumen2MacEff", "uuid": "3f9a1c", "account": "pa_two",
+    fields = {"card": "Lumen2MacEff_3f9a1c", "moniker": "Lumen2MacEff", "uuid": "3f9a1c", "account": "pa_two",
               "display_name": "Lumen2", "session_kind": "daemon", "state": "running", "home": "/home/pa_two"}
     fields.update(over)
     return fields
@@ -43,14 +43,14 @@ def test_a_roster_is_asked_non_interactively_and_marked_as_the_remotes():
     entries = fetch_roster(SEATS, 1.0, run=run)
     assert seen["argv"][:3] == ["ssh", "-o", "BatchMode=yes"]
     assert seen["argv"][-7:] == ["-l", "pa_one", "-p", "2224", "--", "box", "macf_tools harness list --json --local"]
-    assert [(e.card, e.endpoint) for e in entries] == [("Lumen2MacEff@3f9a1c", "seats")]
+    assert [(e.card, e.endpoint) for e in entries] == [("Lumen2MacEff_3f9a1c", "seats")]
 
 
 def test_a_remote_a_version_ahead_still_lists():
     def run(argv, **kw):
         return SimpleNamespace(returncode=0, stdout=json.dumps([{**_entry(), "new_field": 1}]), stderr="")
 
-    assert [e.card for e in fetch_roster(SEATS, 1.0, run=run)] == ["Lumen2MacEff@3f9a1c"]
+    assert [e.card for e in fetch_roster(SEATS, 1.0, run=run)] == ["Lumen2MacEff_3f9a1c"]
 
 
 def test_an_unreachable_or_too_old_remote_is_said_never_empty():
@@ -62,9 +62,9 @@ def test_an_unreachable_or_too_old_remote_is_said_never_empty():
 
     with pytest.raises(RemoteTooOld, match=r"ssh -t -l pa_one -p 2224 -- box macf_tools harness attach"):
         fetch_roster(SEATS, 1.0, run=too_old)
-    local = [RosterEntry.model_validate({**_entry(), "card": "Here@aaaaaa", "endpoint": "local"})]
+    local = [RosterEntry.model_validate({**_entry(), "card": "Here_aaaaaa", "endpoint": "local"})]
     entries, unanswered = gather(local, [Fetcher(SEATS, run=unreachable)], timeout=2.0)
-    assert [e.card for e in entries] == ["Here@aaaaaa"]
+    assert [e.card for e in entries] == ["Here_aaaaaa"]
     assert len(unanswered) == 1 and "unreachable" in unanswered[0] and "refused" in unanswered[0]
 
 
@@ -72,7 +72,7 @@ def test_the_handoff_carries_the_card_and_logs_in_as_the_seat():
     entry = RosterEntry.model_validate({**_entry(), "endpoint": "seats"})
     argv = handoff_argv(SEATS, entry, default_control=True)
     assert argv[:8] == ["ssh", "-t", "-l", "pa_two", "-p", "2224", "--", "box"]
-    assert shlex.split(argv[8]) == ["macf_tools", "harness", "attach", "--card", "Lumen2MacEff@3f9a1c",
+    assert shlex.split(argv[8]) == ["macf_tools", "harness", "attach", "--card", "Lumen2MacEff_3f9a1c",
                                     "--control"]
     fixed = Remote(name="host", host="box", login="me", control=False)
     argv = handoff_argv(fixed, entry, default_control=True, read_only=True)
@@ -81,7 +81,7 @@ def test_the_handoff_carries_the_card_and_logs_in_as_the_seat():
 
 
 @pytest.mark.parametrize("field,value", [("account", "-oProxyCommand=touch /tmp/x"),
-                                         ("account", "pa two"), ("card", "-oProxyCommand=x@abcdef")])
+                                         ("account", "pa two"), ("card", "-oProxyCommand=x_abcdef")])
 def test_a_roster_name_that_could_be_an_ssh_option_is_refused(field, value):
     """A roster is the remote's data; its account becomes the hand-off's login. One that
     begins with ``-o`` would run a command on the operator's machine (CTB on #806)."""

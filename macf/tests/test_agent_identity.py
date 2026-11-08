@@ -68,7 +68,7 @@ def test_get_agent_identity_format(mock_uuid, mock_gecos, _mock_config):
         env.pop("MACEFF_AGENT_NAME", None)
         identity = get_agent_identity()
 
-    assert identity == "OrchardMacEff@a3f7c2"
+    assert identity == "OrchardMacEff_a3f7c2"
 
 
 @patch('macf.utils.identity._get_config_identity_name', return_value=None)
@@ -88,7 +88,7 @@ def test_get_agent_identity_fallback_missing_gecos(mock_uuid, mock_gecos, _mock_
         env.pop("MACEFF_AGENT_NAME", None)
         identity = get_agent_identity()
 
-    assert identity == "pa_orchard@a3f7c2"
+    assert identity == "pa_orchard_a3f7c2"
 
 
 @patch('macf.utils.identity._get_config_identity_name', return_value=None)
@@ -108,7 +108,7 @@ def test_get_agent_identity_fallback_missing_uuid(mock_uuid, mock_gecos, _mock_c
         env.pop("MACEFF_AGENT_NAME", None)
         identity = get_agent_identity()
 
-    assert identity == "OrchardMacEff@unknown"
+    assert identity == "OrchardMacEff_unknown"
 
 
 # ============================================================================
@@ -189,7 +189,7 @@ def test_project_scope_config_outranks_global_env(tmp_path):
          patch('macf.utils.identity.Path.home', return_value=home), \
          patch('macf.utils.identity._get_config_identity_name', return_value="ProjectAgent"), \
          patch('macf.utils.identity._get_gecos_name', return_value="HostOwner"):
-        assert get_agent_identity() == "ProjectAgent@abc123"
+        assert get_agent_identity() == "ProjectAgent_abc123"
 
 
 @patch.dict(os.environ, {'MACEFF_AGENT_NAME': 'GlobalName', 'USER': 'someuser'})
@@ -201,7 +201,7 @@ def test_project_scope_gecos_outranks_global_env(tmp_path):
          patch('macf.utils.identity.Path.home', return_value=home), \
          patch('macf.utils.identity._get_config_identity_name', return_value=None), \
          patch('macf.utils.identity._get_gecos_name', return_value="HostOwner"):
-        assert get_agent_identity() == "HostOwner@abc123"
+        assert get_agent_identity() == "HostOwner_abc123"
 
 
 @patch.dict(os.environ, {'MACEFF_AGENT_NAME': 'GlobalName', 'USER': 'someuser'})
@@ -215,7 +215,7 @@ def test_project_scope_env_last_resort_warns(tmp_path, capsys):
          patch('macf.utils.identity._get_gecos_name', return_value=None):
         identity = get_agent_identity()
 
-    assert identity == "GlobalName@abc123"
+    assert identity == "GlobalName_abc123"
     assert "identity scope mismatch" in capsys.readouterr().err
 
 
@@ -230,5 +230,5 @@ def test_global_scope_env_still_wins(tmp_path, capsys):
          patch('macf.utils.identity._get_gecos_name', return_value="HostOwner"):
         identity = get_agent_identity()
 
-    assert identity == "GlobalName@fedcba"
+    assert identity == "GlobalName_fedcba"
     assert "identity scope mismatch" not in capsys.readouterr().err

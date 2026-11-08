@@ -146,7 +146,7 @@ def _operator_heard(home, log, routes):
     from macf.pd import watch
     from macf.pd.interface import Declaration, declaration_path
     declaration_path(home).write_text(Declaration(
-        version=1, agent="Tester@abc123", unread_mail_threshold_s=600,
+        version=1, agent="Tester_abc123", unread_mail_threshold_s=600,
         notice_routes=routes).model_dump_json())
     if log.exists():
         shutil.copy(log, home / ".maceff" / "agent_events_log.jsonl")
@@ -173,7 +173,7 @@ def test_each_route_reaches_its_audience_and_no_other(tmp_path, isolated_events_
     n.poll()
     n.raise_notice("pd_limit_exceeded", "limit-worker-1")
     n.raise_notice("pd_unread_mail", "unread-mail-1")
-    append_event(EVENT_UNREAD_MAIL, {"agent": "Tester@abc123", "count": 1, "reason": "1 message(s) unread"})
+    append_event(EVENT_UNREAD_MAIL, {"agent": "Tester_abc123", "count": 1, "reason": "1 message(s) unread"})
     ours, theirs = _pair()
     n.attach(ours, takes=TAKES)
     n.flush()
@@ -188,9 +188,9 @@ def test_a_route_outside_the_declared_ones_is_refused_at_load():
     daemon must notice on (unread mail past a threshold) cannot be left unrouted."""
     from macf.pd.interface import Declaration
     with pytest.raises(ValueError):
-        Declaration(version=1, agent="Tester@abc123", notice_routes={"amail": "nobody"})
+        Declaration(version=1, agent="Tester_abc123", notice_routes={"amail": "nobody"})
     with pytest.raises(ValueError, match="pd_unread_mail"):
-        Declaration(version=1, agent="Tester@abc123", unread_mail_threshold_s=600,
+        Declaration(version=1, agent="Tester_abc123", unread_mail_threshold_s=600,
                     notice_routes={"amail": "agent"})
 
 
@@ -522,7 +522,7 @@ class _Rig:
 def _unread(home, threshold=600.0, now=10_000.0, events=()) -> _Rig:
     from macf.pd.unread_mail import UnreadMail
     said, notices, clock = [], [], _Clock(now)
-    tracker = UnreadMail("Resident@1a2b3c", threshold, _box(home),
+    tracker = UnreadMail("Resident_1a2b3c", threshold, _box(home),
                          lambda source, nid: notices.append((source, nid)),
                          append=lambda e, d: said.append((e, d)) or True, wall=clock,
                          events=lambda: list(events))
@@ -554,7 +554,7 @@ def test_unread_mail_notice(tmp_path):
     tracker.tick(0.0)
     assert len(notices) == 1 and notices[0][0] == "pd_unread_mail"
     assert [e for e, _ in said] == [EVENT_UNREAD_MAIL]
-    assert said[0][1]["count"] == 2 and said[0][1]["agent"] == "Resident@1a2b3c"
+    assert said[0][1]["count"] == 2 and said[0][1]["agent"] == "Resident_1a2b3c"
     # read, then a new arrival past the threshold: a second spell, a second notice
     for name in "abc":
         (_box(home) / f"{name}.amsg").unlink()
@@ -586,7 +586,7 @@ def test_unread_mail_reaches_the_routes_declared_for_it(tmp_path, base, run_daem
     home = make_home(tmp_path, [])
     routes = {"pd_unread_mail": route}
     declaration_path(home).write_text(Declaration(
-        version=1, agent="Tester@abc123", unread_mail_threshold_s=0.2,
+        version=1, agent="Tester_abc123", unread_mail_threshold_s=0.2,
         notice_routes=routes).model_dump_json())
     _mail(home, "waiting")
     daemon = run_daemon(home, base)
@@ -598,7 +598,7 @@ def test_unread_mail_reaches_the_routes_declared_for_it(tmp_path, base, run_daem
         time.sleep(0.1)                                   # the serve loop ticks on its own
     time.sleep(0.3)                                       # a notice owed in error has time to show
     [event] = list(read_events(only=(EVENT_UNREAD_MAIL,)))
-    assert event["data"]["agent"] == "Tester@abc123"
+    assert event["data"]["agent"] == "Tester_abc123"
     assert any(o.source == "pd_unread_mail" for o in daemon.notifier.owed.values()) == to_agent
     to_operator = _operator_heard(home, isolated_events_log, routes)
     assert to_operator == (["UNREAD"] if route in ("operator", "both") else [])
@@ -636,14 +636,14 @@ def test_a_restarted_daemon_does_not_notice_an_open_spell_again(tmp_path):
     from macf.pd.interface import EVENT_UNREAD_MAIL, EVENT_UNREAD_MAIL_CLEARED
     home = _home(tmp_path)
     _arrive(home, "a", 1_000)
-    opened = [{"event": EVENT_UNREAD_MAIL, "data": {"agent": "Other@000000"}},
-              {"event": EVENT_UNREAD_MAIL, "data": {"agent": "Resident@1a2b3c"}}]
+    opened = [{"event": EVENT_UNREAD_MAIL, "data": {"agent": "Other_000000"}},
+              {"event": EVENT_UNREAD_MAIL, "data": {"agent": "Resident_1a2b3c"}}]
     r = _unread(home, events=opened)
     tracker, said, notices, clock = r.tracker, r.said, r.notices, r.clock
     tracker.tick(0.0)
     assert notices == [] and said == []
-    closed = [{"event": EVENT_UNREAD_MAIL_CLEARED, "data": {"agent": "Resident@1a2b3c"}},
-              {"event": EVENT_UNREAD_MAIL, "data": {"agent": "Resident@1a2b3c"}}]
+    closed = [{"event": EVENT_UNREAD_MAIL_CLEARED, "data": {"agent": "Resident_1a2b3c"}},
+              {"event": EVENT_UNREAD_MAIL, "data": {"agent": "Resident_1a2b3c"}}]
     r = _unread(home, events=closed)
     tracker, said, notices, clock = r.tracker, r.said, r.notices, r.clock
     tracker.tick(0.0)
@@ -703,8 +703,8 @@ def test_the_oldest_entry_is_named(tmp_path):
 def test_a_threshold_must_be_routed(tmp_path):
     from macf.pd.interface import Declaration
     with pytest.raises(ValueError, match="pd_unread_mail"):
-        Declaration(version=1, agent="Resident@1a2b3c", unread_mail_threshold_s=600)
-    d = Declaration(version=1, agent="Resident@1a2b3c", unread_mail_threshold_s=600,
+        Declaration(version=1, agent="Resident_1a2b3c", unread_mail_threshold_s=600)
+    d = Declaration(version=1, agent="Resident_1a2b3c", unread_mail_threshold_s=600,
                     notice_routes={"pd_unread_mail": "both"})
     assert d.unread_mail_threshold_s == 600
 
@@ -729,7 +729,7 @@ def test_a_daemon_with_a_threshold_notices_unread_mail(tmp_path, base, run_daemo
     from macf.pd.interface import Declaration, EVENT_UNREAD_MAIL, declaration_path
     home = make_home(tmp_path, [])
     declaration_path(home).write_text(Declaration(
-        version=1, agent="Tester@abc123", unread_mail_threshold_s=0.2,
+        version=1, agent="Tester_abc123", unread_mail_threshold_s=0.2,
         notice_routes={"pd_unread_mail": "agent"}).model_dump_json())
     _mail(home, "waiting")
     daemon = run_daemon(home, base)
@@ -744,7 +744,7 @@ def test_a_daemon_with_a_threshold_notices_unread_mail(tmp_path, base, run_daemo
     while time.time() < deadline and not (list(read_events(only=(EVENT_UNREAD_MAIL,))) and "pd_unread_mail" in owed()):
         time.sleep(0.1)                                   # the serve loop ticks on its own
     [event] = list(read_events(only=(EVENT_UNREAD_MAIL,)))
-    assert event["data"]["agent"] == "Tester@abc123" and event["data"]["count"] == 1
+    assert event["data"]["agent"] == "Tester_abc123" and event["data"]["count"] == 1
     assert "pd_unread_mail" in owed()
 
 
@@ -843,17 +843,17 @@ def test_a_route_that_reaches_nobody_is_refused_at_load(route):
     from pydantic import ValidationError
     from macf.pd import interface
     with pytest.raises(ValidationError, match="route it to 'agent'"):
-        interface.Declaration(version=1, agent="Tester@abc123", notice_routes={"pd_carried": route})
-    interface.Declaration(version=1, agent="Tester@abc123", notice_routes={"pd_carried": "agent"})
+        interface.Declaration(version=1, agent="Tester_abc123", notice_routes={"pd_carried": route})
+    interface.Declaration(version=1, agent="Tester_abc123", notice_routes={"pd_carried": "agent"})
     if route != "held_until_present":
-        interface.Declaration(version=1, agent="Tester@abc123", notice_routes={"pd_unread_mail": route})
+        interface.Declaration(version=1, agent="Tester_abc123", notice_routes={"pd_unread_mail": route})
 
 
 def test_both_keeps_its_agent_half_and_the_rest_is_said(tmp_path, isolated_events_log):
     """CTB on #552: a source routed to `both` is half served, so it loads, its notice reaches the
     agent, and the daemon names it as reaching the agent only. Unread mail's `both` is whole."""
     from macf.pd import interface
-    d = interface.Declaration(version=1, agent="Tester@abc123",
+    d = interface.Declaration(version=1, agent="Tester_abc123",
                               notice_routes={"pd_run_failed": "both", "pd_unread_mail": "both"})
     assert d.half_served_routes() == ["pd_run_failed"]
     assert nt.Notifier(_home(tmp_path), d.notice_routes).raise_notice("pd_run_failed", "run-1") is True
@@ -871,7 +871,7 @@ def test_a_half_served_both_is_said_at_start(tmp_path, capsys):
     (home / ".maceff_primary_agent.id").write_text("abc123def4567890\n")
     (home / ".maceff" / "config.json").write_text('{"agent_identity": {"moniker": "Tester"}}')
     interface.declaration_path(home).write_text(interface.Declaration(
-        version=1, agent="Tester@abc123", notice_routes={"pd_run_failed": "both"}).model_dump_json())
+        version=1, agent="Tester_abc123", notice_routes={"pd_run_failed": "both"}).model_dump_json())
     base = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))
     try:
         Daemon(home, base=base)
@@ -902,7 +902,7 @@ def test_the_daemon_wires_its_core_and_scheduler_notices_to_its_notifier(tmp_pat
     (home / ".maceff_primary_agent.id").write_text("abc123def4567890\n")
     (home / ".maceff" / "config.json").write_text('{"agent_identity": {"moniker": "Tester"}}')
     interface.declaration_path(home).write_text(
-        interface.Declaration(version=1, agent="Tester@abc123").model_dump_json())
+        interface.Declaration(version=1, agent="Tester_abc123").model_dump_json())
     base = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))
     try:
         daemon = Daemon(home, base=base)
@@ -992,7 +992,7 @@ def test_a_session_with_no_operator_channels_is_warned_at_start(tmp_path, capsys
                           account=__import__("pwd").getpwuid(os.getuid()).pw_name,
                           restart="always", liveness_interval_s=10, memory_limit_mb=64)
     interface.declaration_path(home).write_text(interface.Declaration(
-        version=1, agent="Tester@abc123", units=[unit], notice_routes={"pd_carried": "agent"},
+        version=1, agent="Tester_abc123", units=[unit], notice_routes={"pd_carried": "agent"},
         operator_channels=channels).model_dump_json())
     base = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))
     try:
@@ -1057,7 +1057,7 @@ def test_a_crash_loop_is_one_notice_per_unit_with_its_count(tmp_path, script, ba
     daemon = run_daemon(make_home(tmp_path, [flaky, steady]), base)
     assert wait_for(lambda: daemon.core.failures("flaky") >= 4, timeout=10)
     reply = ask(daemon, {"op": "stop", "unit": "flaky", "reason": "the loop has been seen",
-                         "asked_by": {"kind": "operator", "card": "Operator@000000"}})
+                         "asked_by": {"kind": "operator", "card": "Operator_000000"}})
     assert reply["ok"]
     assert wait_for(lambda: daemon.core.state("flaky") == "stopped")
     loops = max(int(d["arrival_id"].split(":")[1]) for d in _logged(nt.EVENT_DETECTED)

@@ -97,7 +97,7 @@ def test_the_monitor_reads_the_session_unit_and_its_pid(tmp_path):
     home = _home(tmp_path)
     found = lv.session_unit_from_env({lv.ENV_HOME: str(home), lv.ENV_SESSION_UNIT: "session",
                                       lv.ENV_SESSION_INTERVAL: "30", lv.ENV_SESSION_PID: "4321"})
-    assert (found.card, found.unit, found.interval_s, found.pid) == ("Resident@1a2b3c", "session", 30.0, 4321)
+    assert (found.card, found.unit, found.interval_s, found.pid) == ("Resident_1a2b3c", "session", 30.0, 4321)
     assert lv.session_unit_from_env({lv.ENV_HOME: str(home)}) is None
 
 
@@ -112,7 +112,7 @@ def test_a_partial_session_setting_gives_no_liveness(tmp_path, capsys):
 
 def test_a_session_beat_names_the_units_pid_not_the_monitors(tmp_path):
     events = []
-    hb = lv.Heartbeat("Resident@1a2b3c", "session", 0.05,
+    hb = lv.Heartbeat("Resident_1a2b3c", "session", 0.05,
                       append=lambda n, d: events.append((n, d)) or True, pid=os.getppid()).start()
     hb.tick()
     deadline = time.monotonic() + 2
@@ -233,8 +233,8 @@ exit 0
                 ready_timeout=10)
     assert rc == 0
     window, pane, titles, string, allow = out.read_text().strip().split("|")
-    assert window == "Resident@1a2b3c"
-    assert string == "Resident@1a2b3c" and titles == "1"
+    assert window == "Resident_1a2b3c"
+    assert string == "Resident_1a2b3c" and titles == "1"
     # A tmux without allow-set-title prints nothing for it and can't keep the pane's title;
     # there the window and the terminal title are what name the agent.
     if allow:
