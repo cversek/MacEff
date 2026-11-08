@@ -15,10 +15,21 @@ WHAT LOADING REFUSES, before anything reads a key from it:
 - a file not owned by root, or one that group or others can write;
 - a directory holding it that someone other than root could write, since whoever can write the
   directory can replace the file;
+- an ancestor directory, up to ``/``, that someone other than root could write without the sticky
+  bit, since whoever can write an ancestor can swap the path beneath it;
 - a card that isn't ``Name_shortid`` (MIS-0002 R165), the same card twice in any case, an entry
-  without its account or its keys, or a key that isn't ``ed25519:<base64>``;
+  without its account or its keys, a key that isn't ``ed25519:<base64>``, the same key twice in an
+  entry, or a validity window that isn't timezone-aware or ends before it starts;
 - a certificate entry with anything but ``name``, ``serial`` and ``not_after``, so no key or secret
   can be filed there by mistake.
+
+WHY KEYS CARRY WINDOWS (MIS-0004 R45). A key is either a bare ``ed25519:<base64>`` string, valid
+from the start and not retired, or a mapping with ``valid_from`` and ``valid_until``. A key with
+``valid_until`` is retired: it never signs, and it verifies only what the broker accepted inside its
+window. The times are timezone-aware, because the broker's acceptance time is compared against them.
+
+WHY AN ACCOUNT MAPS TO SEVERAL CARDS (MIS-0004 R46). On a shared login two cards declare one account,
+and that is exactly what a receiver has to see, so ``cards_of_account`` returns every one.
 
 Lookups compare cards without regard to case (MIS-0002 R164). The file is read per call, so an
 edit takes effect at the next decision, as the contact list does.
@@ -28,7 +39,11 @@ Format (YAML)::
     agents:
       ExampleAgent_0a1b2c:
         account: exampleagent_0a1b2c
-        keys: ["ed25519:<base64>"]
+        keys:
+          - "ed25519:<base64>"
+          - key: "ed25519:<base64>"
+            valid_from: 2026-11-08T00:00:00Z
+            valid_until: 2027-11-08T00:00:00Z
     certificates:
       - name: exampleagent_0a1b2c
         serial: "3f9a..."
@@ -40,10 +55,10 @@ import datetime
 import os
 import stat
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from macf import calling_card
 
@@ -61,18 +76,63 @@ class _Closed(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class KeyEntry(_Closed):
+    """One declared key, with the window it is valid in (MIS-0004 R45)."""
+    key: str
+    valid_from: Optional[datetime.datetime] = None
+    valid_until: Optional[datetime.datetime] = None
+
+    @field_validator("key")
+    @classmethod
+    def _key_parses(cls, key: str) -> str:
+        try:
+            parse_public_key(key)
+        except SigningError as e:
+            raise ValueError(str(e)) from e
+        return key
+
+    @field_validator("valid_from", "valid_until")
+    @classmethod
+    def _aware(cls, t: Optional[datetime.datetime]) -> Optional[datetime.datetime]:
+        if t is not None and t.utcoffset() is None:
+            raise ValueError(f"{t.isoformat()} has no timezone; write it with one, such as Z")
+        return t
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "KeyEntry":
+        if self.valid_from and self.valid_until and self.valid_until <= self.valid_from:
+            raise ValueError("valid_until must come after valid_from")
+        return self
+
+    @property
+    def retired(self) -> bool:
+        """A key with an end date is retired: it never signs (R45)."""
+        return self.valid_until is not None
+
+    def valid_at(self, when: datetime.datetime) -> bool:
+        return ((self.valid_from is None or self.valid_from <= when)
+                and (self.valid_until is None or when < self.valid_until))
+
+
 class AgentEntry(_Closed):
     account: str = Field(min_length=1, max_length=64)
-    keys: List[str] = Field(min_length=1)
+    keys: List[KeyEntry] = Field(min_length=1)
+
+    @field_validator("keys", mode="before")
+    @classmethod
+    def _bare_or_mapping(cls, keys: Any) -> Any:
+        if not isinstance(keys, list):
+            return keys
+        return [{"key": k} if isinstance(k, str) else k for k in keys]
 
     @field_validator("keys")
     @classmethod
-    def _keys_parse(cls, keys: List[str]) -> List[str]:
+    def _each_once(cls, keys: List[KeyEntry]) -> List[KeyEntry]:
+        seen = set()
         for k in keys:
-            try:
-                parse_public_key(k)
-            except SigningError as e:
-                raise ValueError(str(e)) from e
+            if k.key in seen:
+                raise ValueError(f"the key {k.key[:20]}... is declared twice")
+            seen.add(k.key)
         return keys
 
 
@@ -106,6 +166,14 @@ def check_owner(path: Path, root_uid: int = 0) -> None:
     if pst.st_uid != root_uid or pst.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
         raise RegistryError(f"the directory {parent} holding the registry could be written by "
                             f"someone other than root, who could replace the file (MIS-0004 R42)")
+    # Every ancestor, up to /: whoever can write one can swap the path beneath it. A sticky
+    # world-writable directory such as /tmp lets no one rename another's entry, so it passes.
+    for ancestor in Path(os.path.abspath(parent)).parents:
+        ast = os.stat(ancestor)
+        writable = ast.st_mode & (stat.S_IWGRP | stat.S_IWOTH) and not ast.st_mode & stat.S_ISVTX
+        if ast.st_uid not in (root_uid, 0) or writable:
+            raise RegistryError(f"the directory {ancestor} above the registry could be written by "
+                                f"someone other than root, who could swap the path to it (MIS-0004 R42)")
 
 
 class Registry:
@@ -144,22 +212,31 @@ class Registry:
                 return entry
         return None
 
-    def keys_for(self, card: str) -> List[str]:
-        """The public keys the operator declared for *card*; empty when it declares none."""
+    def key_entries(self, card: str) -> List[KeyEntry]:
+        """Every key the operator declared for *card*, with its window (R45); empty when none."""
         entry = self._entry(card)
         return list(entry.keys) if entry else []
+
+    def keys_for(self, card: str, at: Optional[datetime.datetime] = None) -> List[str]:
+        """The keys valid for *card* at *at* (now when not given): what current mail verifies against."""
+        when = at or datetime.datetime.now(datetime.timezone.utc)
+        return [k.key for k in self.key_entries(card) if k.valid_at(when)]
+
+    def signing_keys(self, card: str, at: Optional[datetime.datetime] = None) -> List[str]:
+        """The keys *card* may sign with at *at*: valid then, and not retired (R45)."""
+        when = at or datetime.datetime.now(datetime.timezone.utc)
+        return [k.key for k in self.key_entries(card) if k.valid_at(when) and not k.retired]
 
     def account_of(self, card: str) -> Optional[str]:
         """The account the operator declared as holding *card*'s key, or None."""
         entry = self._entry(card)
         return entry.account if entry else None
 
-    def card_of_account(self, account: str) -> Optional[str]:
-        """The card whose key the operator declared as held by *account*, or None."""
-        for declared, entry in self.load().agents.items():
-            if entry.account == account:
-                return declared
-        return None
+    def cards_of_account(self, account: str) -> List[str]:
+        """Every card whose key the operator declared as held by *account*. More than one is a
+        shared login, which a receiver must see (R46)."""
+        return sorted(declared for declared, entry in self.load().agents.items()
+                      if entry.account == account)
 
     def certificates(self) -> List[CertificateEntry]:
         """Each certificate the operator's authority issued, by name, serial and expiry."""

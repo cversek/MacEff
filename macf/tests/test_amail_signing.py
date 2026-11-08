@@ -132,7 +132,7 @@ def test_keys_declared_by_operator(tmp_path):
     assert reg.keys_for("ExampleAgent_0a1b2c") == [key]
     assert reg.keys_for("exampleagent_0A1B2C") == [key]
     assert reg.account_of("ExampleAgent_0a1b2c") == "exampleagent_0a1b2c"
-    assert reg.card_of_account("exampleagent_0a1b2c") == "ExampleAgent_0a1b2c"
+    assert reg.cards_of_account("exampleagent_0a1b2c") == ["ExampleAgent_0a1b2c"]
     assert reg.keys_for("OtherAgent_0a1b2c") == []
 
 
@@ -181,3 +181,69 @@ def test_a_certificate_is_recorded_by_name_serial_and_expiry(tmp_path):
     (cert,) = Registry(p, root_uid=os.getuid()).certificates()
     assert (cert.name, cert.serial, cert.not_after) == ("exampleagent_0a1b2c", "3f9a01",
                                                         datetime.date(2036, 11, 8))
+
+
+def test_a_key_has_a_validity_window_and_a_retired_key_never_signs(tmp_path):
+    """R45 reads the dates here: a retired key verifies only inside its window and never signs."""
+    import datetime as dt
+    from macf.amail.registry import Registry
+    old, new = _public_line(tmp_path, "old"), _public_line(tmp_path, "new")
+    p = _registry(tmp_path, "agents:\n  ExampleAgent_0a1b2c:\n    account: a\n    keys:\n"
+                            f"      - key: '{old}'\n        valid_from: 2026-01-01T00:00:00Z\n"
+                            "        valid_until: 2026-11-08T00:00:00Z\n"
+                            f"      - '{new}'\n")
+    reg = Registry(p, root_uid=os.getuid())
+    utc = dt.timezone.utc
+    assert reg.keys_for("ExampleAgent_0a1b2c", at=dt.datetime(2026, 6, 1, tzinfo=utc)) == [old, new]
+    assert reg.keys_for("ExampleAgent_0a1b2c", at=dt.datetime(2026, 12, 1, tzinfo=utc)) == [new]
+    assert reg.signing_keys("ExampleAgent_0a1b2c", at=dt.datetime(2026, 6, 1, tzinfo=utc)) == [new]
+    assert [k.retired for k in reg.key_entries("ExampleAgent_0a1b2c")] == [True, False]
+
+
+@pytest.mark.parametrize("window, why", [
+    ("valid_from: 2026-01-01T00:00:00", "timezone"),
+    ("valid_from: 2026-11-08T00:00:00Z\n        valid_until: 2026-01-01T00:00:00Z", "after valid_from"),
+])
+def test_a_bad_window_is_refused(tmp_path, window, why):
+    from macf.amail.registry import Registry, RegistryError
+    k = _public_line(tmp_path)
+    p = _registry(tmp_path, f"agents:\n  ExampleAgent_0a1b2c:\n    account: a\n    keys:\n"
+                            f"      - key: '{k}'\n        {window}\n")
+    with pytest.raises(RegistryError, match=why):
+        Registry(p, root_uid=os.getuid()).load()
+
+
+def test_the_same_key_twice_is_refused(tmp_path):
+    from macf.amail.registry import Registry, RegistryError
+    k = _public_line(tmp_path)
+    p = _registry(tmp_path, f"agents:\n  ExampleAgent_0a1b2c:\n    account: a\n    keys: ['{k}', '{k}']\n")
+    with pytest.raises(RegistryError, match="declared twice"):
+        Registry(p, root_uid=os.getuid()).load()
+
+
+def test_a_shared_login_shows_every_card_on_its_account(tmp_path):
+    """R46's case: two cards declare one account, and both are seen."""
+    from macf.amail.registry import Registry
+    a, b = _public_line(tmp_path, "a"), _public_line(tmp_path, "b")
+    p = _registry(tmp_path, f"agents:\n  ExampleAgent_0a1b2c:\n    account: shared\n    keys: ['{a}']\n"
+                            f"  OtherAgent_d4e5f6:\n    account: shared\n    keys: ['{b}']\n")
+    assert Registry(p, root_uid=os.getuid()).cards_of_account("shared") == [
+        "ExampleAgent_0a1b2c", "OtherAgent_d4e5f6"]
+
+
+def test_a_writable_ancestor_is_refused(tmp_path):
+    """Whoever can write any directory above the registry can swap the path beneath it."""
+    from macf.amail.registry import Registry, RegistryError
+    k = _public_line(tmp_path)
+    open_dir = tmp_path / "open"
+    open_dir.mkdir()
+    os.chmod(open_dir, 0o777)
+    d = open_dir / "etc"
+    d.mkdir(mode=0o755)
+    p = d / "registry.yaml"
+    p.write_text(f"agents:\n  ExampleAgent_0a1b2c:\n    account: a\n    keys: ['{k}']\n")
+    os.chmod(p, 0o644)
+    with pytest.raises(RegistryError, match="above the registry"):
+        Registry(p, root_uid=os.getuid()).load()
+    os.chmod(open_dir, 0o1777)          # sticky: no one can rename another's entry
+    Registry(p, root_uid=os.getuid()).load()
