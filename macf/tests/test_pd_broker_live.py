@@ -140,3 +140,61 @@ def test_a_reader_cannot_read_or_answer_another_readers_replay(broker):
     for c in (second, reader, daemon):
         c.loop_stop()
         c.disconnect()
+
+
+def test_a_reader_that_reconnects_catches_up_from_the_log_with_no_gap_or_duplicate(broker, tmp_path):
+    """B2's success criterion, live: records written while the reader is away arrive by replay,
+    the live stream resumes after them, and each record is delivered once, in log order."""
+    from macf.pd.broker import CatchUp, ReplayResponder
+    log = tmp_path / "events.jsonl"
+    log.write_text("")
+    stream = EventStream(AGENT, log)
+    daemon, _ = connected(broker, AGENT)
+    responder = ReplayResponder(stream, lambda m: daemon.publish(m.topic, m.payload, qos=1),
+                                grants={READER: ["pd_unit_state"]})
+    daemon.on_message = lambda _c, _u, m: responder.handle(m.topic, m.payload)
+    daemon.subscribe(replay_topics(AGENT, READER)["request"].replace(READER, "+"), qos=1)
+    pub = Publisher(stream, paho_publish(daemon))
+    got = []
+    catch = CatchUp(lambda r: got.append(r["record"]["data"]["n"]))
+
+    def reader_connect():
+        c = client(broker, READER)
+        def on_message(_c, _u, m):
+            if m.topic == replay_topics(AGENT, READER)["records"]:
+                catch.replayed(m.payload)
+            else:
+                catch.live(m.payload)
+        c.on_message = on_message
+        c.connect("localhost", broker["port"])
+        c.loop_start()
+        c.subscribe([(f"{AGENT}/events/pd/unit/state", 1), (replay_topics(AGENT, READER)["records"], 1)])
+        settle()
+        req = catch.request(["pd_unit_state"])
+        if req is not None:
+            c.publish(replay_topics(AGENT, READER)["request"], json.dumps(req), qos=1)
+        return c
+
+    def write(n):
+        with open(log, "a") as f:
+            f.write(json.dumps({"event": "pd_unit_state", "timestamp": 1.0, "data": {"n": n}}) + "\n")
+
+    daemon.loop_start()
+    reader = reader_connect()
+    write(1)
+    pub.pump()
+    settle()
+    reader.loop_stop()
+    reader.disconnect()
+    write(2)
+    write(3)
+    pub.pump()                                 # published while the reader is away
+    reader = reader_connect()                  # it asks for a replay from record 1
+    settle(1.0)
+    write(4)
+    pub.pump()
+    settle()
+    assert got == [1, 2, 3, 4]
+    for c in (reader, daemon):
+        c.loop_stop()
+        c.disconnect()

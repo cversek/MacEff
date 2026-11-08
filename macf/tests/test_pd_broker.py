@@ -10,6 +10,7 @@ from macf.pd.broker import (BrokerRefused, GapTracker, cert_name, grant_filters,
 SYS = "SystemDaemon_0a1b2c"
 AGENT = "ExampleAgent_1a2b3c"
 OTHER = "OtherAgent_4d5e6f"
+READER = "ReaderAgent_7a8b9c"
 
 
 def _users(acl):
@@ -281,3 +282,41 @@ def test_a_request_that_cant_be_read_is_refused_not_left_waiting(tmp_path, reque
     append(log, "pd_unit_state")
     (only,) = replayed(replay_messages(stream_over(log), OTHER, request_, granted=None))
     assert only["type"] == "refused"
+
+
+# --- a reader that reconnects catches up, once each, in order --------------------------------
+
+
+def rec(offset, log="L"):
+    return json.dumps({"type": "record", "position": {"log": log, "offset": offset},
+                       "source": "pd_unit_state", "record": {"n": offset}}).encode()
+
+
+def test_a_reader_that_reconnects_gets_each_record_once_in_log_order():
+    from macf.pd.broker import CatchUp
+    got = []
+    c = CatchUp(lambda r: got.append(r["position"]["offset"]))
+    assert c.request(["*"]) is None, "a reader with no history takes the stream from now"
+    c.live(rec(10))
+    c.live(rec(20))
+    req = c.request(["pd_unit_*"])            # it reconnects; 30 and 40 were written meanwhile
+    assert req == {"position": {"log": "L", "offset": 20}, "sources": ["pd_unit_*"]}
+    c.live(rec(50))                           # a live record overtakes the replay: held
+    for off in (20, 30, 40):                  # 20 again: the replay may repeat the boundary
+        c.replayed(rec(off))
+    assert c.replayed(json.dumps({"type": "done"}).encode())
+    c.live(rec(50))                           # and the live stream repeats it once more
+    assert got == [10, 20, 30, 40, 50]
+
+
+def test_the_responder_answers_only_granted_readers_on_their_own_topic(tmp_path):
+    from macf.pd.broker import ReplayResponder, replay_topics
+    log = tmp_path / "events.jsonl"
+    append(log, "pd_unit_state", unit="a")
+    stream = stream_over(log)
+    sent = []
+    r = ReplayResponder(stream, sent.append, grants={READER: ["pd_unit_state"]})
+    body = json.dumps({"position": {"log": stream.identity, "offset": 0}, "sources": ["*"]}).encode()
+    assert r.handle(replay_topics(AGENT, OTHER)["request"], body) == 0, "no grant, no answer"
+    assert r.handle(replay_topics(AGENT, READER)["request"], body) == 2     # the record, then done
+    assert {m.topic for m in sent} == {replay_topics(AGENT, READER)["records"]}

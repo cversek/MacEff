@@ -157,6 +157,93 @@ def replay_messages(stream, reader: str, request: dict, granted: Optional[Sequen
     return out
 
 
+class ReplayResponder:
+    """The daemon's side of replay: each request a granted reader writes on its own request
+    topic is answered from the log on its own records topic. ``grants`` maps a reader's card to
+    the sources it was granted; a request from a card with no grant gets nothing, and the broker
+    would not have let it write there in the first place."""
+
+    def __init__(self, stream, publish, grants: Dict[str, Sequence[str]]):
+        self.stream, self.publish, self.grants = stream, publish, dict(grants)
+
+    def handle(self, topic: str, payload: bytes) -> int:
+        """Answer one request message; the number of messages published."""
+        import json
+        prefix, suffix = f"{self.stream.card}/replay/", "/request"
+        if not (topic.startswith(prefix) and topic.endswith(suffix)):
+            return 0
+        reader = topic[len(prefix):-len(suffix)]
+        if reader not in self.grants:
+            return 0
+        try:
+            request = json.loads(payload)
+        except ValueError:
+            request = None
+        out = replay_messages(self.stream, reader, request, self.grants[reader])
+        for message in out:
+            self.publish(message)
+        return len(out)
+
+
+class CatchUp:
+    """A reader's view of one daemon's stream: live messages and replayed ones, in log order,
+    each delivered once. It remembers the last position it delivered; after a reconnect it asks
+    for a replay from there, delivers the replayed records it hasn't seen, and drops the live
+    messages that the replay already covered (R154 as amended)."""
+
+    def __init__(self, deliver):
+        self.deliver = deliver
+        self.seen: Optional[dict] = None      # position just past the last record delivered
+        self.gaps: List[dict] = []
+        self.replaying = False
+        self.held: List[dict] = []            # live records that arrived during a replay
+
+    def _take(self, record: dict) -> None:
+        pos = record["position"]
+        if self.seen is not None and pos["log"] == self.seen["log"] and pos["offset"] <= self.seen["offset"]:
+            return                            # a duplicate: the replay or the live stream already gave it
+        self.seen = pos
+        self.deliver(record)
+
+    def request(self, sources: Sequence[str]) -> Optional[dict]:
+        """The replay request to send after (re)connecting, from the last position delivered;
+        None for a reader that has delivered nothing, which takes the stream from now. Live
+        records are held from here until the replay is done, so none overtakes an older one."""
+        if self.seen is None:
+            return None
+        self.replaying = True
+        return {"position": self.seen, "sources": list(sources)}
+
+    def live(self, payload: bytes) -> None:
+        import json
+        body = json.loads(payload)
+        if body.get("type") == "record":
+            if self.replaying:
+                self.held.append(body)
+            else:
+                self._take(body)
+        elif body.get("type") == "gap":
+            self.gaps.append(body)
+
+    def replayed(self, payload: bytes) -> bool:
+        """One message on the reader's records topic; True once the replay is done, when the
+        live records held meanwhile are delivered after it."""
+        import json
+        body = json.loads(payload)
+        kind = body.get("type")
+        if kind == "record":
+            self._take(body)
+        elif kind == "gap":
+            self.gaps.append(body)
+        if kind in ("done", "refused"):
+            self.replaying = False
+            held, self.held = self.held, []
+            for record in held:
+                self._take(record)
+            return True
+        return False
+
+
 def paho_publish(client, *, timeout: float = 5.0):
     """``Publisher``'s ``publish`` over a connected paho-mqtt client: QoS 1, MQTT 5 user
     properties, and an exception unless the broker acknowledged the message within *timeout*,
