@@ -59,6 +59,11 @@ def add_pd_parser(sub) -> None:
     alive.add_argument("--in-flight", type=int, default=None, metavar="N",
                        help="work started and not finished, which the daemon checks before a restart")
     alive.set_defaults(func=cmd_pd_alive)
+    login = pd_sub.add_parser(
+        "login", help="this account's Claude login, from its stored expiry dates, with no model turn: "
+                      "exit 0 ok, 1 expiring or expired, 2 unknown (#884)")
+    login.add_argument("--json", action="store_true", help="print the verdict as JSON")
+    login.set_defaults(func=cmd_pd_login)
     entry = pd_sub.add_parser(
         "entry", help="your own timed entries, made from your live session (policy: persistent_layer)")
     entry_sub = entry.add_subparsers(dest="entry_cmd")
@@ -144,6 +149,19 @@ def add_pd_parser(sub) -> None:
     route.add_argument("--clear", action="store_true", help="take the source's route away")
     route.add_argument("--reason", default="", help="why; recorded with the rule")
     route.set_defaults(func=cmd_pd_stream_rule, act="route")
+
+
+def cmd_pd_login(args: argparse.Namespace) -> int:
+    """The login verdict for the account running this command; a deployment runs it as a seat's
+    own user to check that seat from outside. Reads only the two expiry dates."""
+    import json
+    from macf.pd.login import read_assessment
+    verdict = read_assessment()
+    if getattr(args, "json", False):
+        print(json.dumps(verdict))
+    else:
+        print(f"login: {verdict['state']}, {verdict['detail']}")
+    return {"ok": 0, "expiring": 1, "expired": 1}.get(str(verdict["state"]), 2)
 
 
 def cmd_pd_alive(args: argparse.Namespace) -> int:

@@ -59,7 +59,7 @@ LOOKBACK_S = 7 * 86400
 SEND_TIMEOUT_S = 30
 
 Verdict = Literal["ALIVE", "STALE", "GONE", "ABSENT", "UNREADABLE", "UNREACHABLE", "CHECK-FAILED", "DARK", "HELD", "UNREAD",
-                  "DRIFTED", "SWEEP-FAILED", "FAILED", "AUTH-FAILED"]
+                  "DRIFTED", "SWEEP-FAILED", "FAILED", "AUTH-FAILED", "LOGIN-EXPIRED", "LOGIN-EXPIRING"]
 
 #: Exit codes, worst wins (``service_supervision`` section 4.2): each state its own code.
 EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_UNREACHABLE, EXIT_CHECK_FAILED = 0, 1, 2, 3
@@ -69,6 +69,7 @@ _EXIT_FOR = {"ALIVE": EXIT_HEALTHY, "STALE": EXIT_UNHEALTHY, "GONE": EXIT_UNHEAL
              "ABSENT": EXIT_UNHEALTHY, "DARK": EXIT_UNHEALTHY, "HELD": EXIT_UNHEALTHY, "UNREAD": EXIT_UNHEALTHY,
              "DRIFTED": EXIT_UNHEALTHY, "SWEEP-FAILED": EXIT_UNHEALTHY,
              "FAILED": EXIT_UNHEALTHY, "AUTH-FAILED": EXIT_UNHEALTHY,
+             "LOGIN-EXPIRED": EXIT_UNHEALTHY, "LOGIN-EXPIRING": EXIT_UNHEALTHY,
              "UNREACHABLE": EXIT_UNREACHABLE,
              "UNREADABLE": EXIT_CHECK_FAILED, "CHECK-FAILED": EXIT_CHECK_FAILED}
 
@@ -222,7 +223,11 @@ def check_unit_state(card: str, unit: interface.Unit, event: Optional[dict],
         return None
     reason = data.get("reason") if isinstance(data.get("reason"), str) else "no reason recorded"
     if reason.startswith(interface.AUTH_FAILED_REASON):
-        return Finding(card, unit.name, "AUTH-FAILED", f"needs /login in its session: {reason}")
+        # The session runs on its daemon's own tmux socket, so a plain ``tmux ls`` can't find
+        # it: the alert names the command that can (#884).
+        return Finding(card, unit.name, "AUTH-FAILED",
+                       f"needs /login in its session, reached by "
+                       f"macf_tools harness attach --card {card}: {reason}")
     return Finding(card, unit.name, "FAILED", reason)
 
 
@@ -247,6 +252,52 @@ def last_channel_event(log_path: Path, card: str, now: float,
         if isinstance(data, dict) and calling_card.is_agent(data.get("agent"), card):
             return event
     return None
+
+
+def last_login_event(log_path: Path, card: str, now: float,
+                     lookback_s: float = LOOKBACK_S) -> Optional[dict]:
+    """The newest ``pd_login_state`` of agent *card* within the lookback, or None."""
+    from macf.pd.login import EVENT
+    cutoff = now - lookback_s
+    for line in iter_lines_reverse(log_path):
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        if event.get("event") != EVENT:
+            continue
+        data = event.get("data")
+        if isinstance(data, dict) and calling_card.is_agent(data.get("agent"), card):
+            return event
+    return None
+
+
+def check_login(card: str, event: Optional[dict], now: float) -> Optional[Finding]:
+    """The agent's login, from the daemon's own reading of its stored credential (#884), so an
+    expired login is heard of before the session needs to work, not at its first failed turn.
+    The verdict is re-judged against now from the recorded end date, so a login that ran out
+    since the daemon last recorded reads expired. None when no daemon here records logins."""
+    from macf.pd.login import EXPIRING_S
+    if event is None:
+        return None
+    data = event.get("data") or {}
+    ends = data.get("refresh_expires_at")
+    reach = f" (macf_tools harness attach --card {card})"
+    if not isinstance(ends, (int, float)) or isinstance(ends, bool):
+        return Finding(card, "login", "CHECK-FAILED", f"the login can't be judged: {data.get('detail', 'no end date')}")
+    left = ends - now
+    if left <= 0:
+        return Finding(card, "login", "LOGIN-EXPIRED",
+                       f"its refresh grant ended {_age(-left)} ago: run /login in its session{reach}")
+    if left <= EXPIRING_S:
+        return Finding(card, "login", "LOGIN-EXPIRING",
+                       f"its refresh grant ends in {_age(left)}: run /login in its session before then{reach}")
+    return Finding(card, "login", "ALIVE", f"its refresh grant ends in {_age(left)}")
 
 
 def check_channel(card: str, event: Optional[dict], now: float) -> Finding:
@@ -471,6 +522,12 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
             findings.append(check_wake(card, last_wake_event(log_path, card, now), now))
         except FileNotFoundError:
             findings.append(check_wake(card, None, now))
+        try:
+            login = check_login(card, last_login_event(log_path, card, now), now)
+        except FileNotFoundError:
+            login = None
+        if login is not None:
+            findings.append(login)
     if declaration.channel_connect_s is not None:      # a channel is expected, so watch it
         try:
             findings.append(check_channel(card, last_channel_event(log_path, card, now), now))
