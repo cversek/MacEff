@@ -198,3 +198,36 @@ def test_a_reader_that_reconnects_catches_up_from_the_log_with_no_gap_or_duplica
     for c in (reader, daemon):
         c.loop_stop()
         c.disconnect()
+
+
+def test_the_daemons_link_publishes_and_answers_a_replay_from_its_own_loop(broker, tmp_path):
+    """What the daemon runs: BrokerLink over its own client, driven only by tick() on the
+    daemon's thread; the network thread only queues requests."""
+    from macf.pd.broker_link import BrokerLink
+    from macf.pd.interface import BrokerSection
+    log = tmp_path / "events.jsonl"
+    log.write_text("")
+    section = BrokerSection(port=broker["port"], cafile="x", server_certfile="x", server_keyfile="x",
+                            client_certfile="x", client_keyfile="x", readers={READER: ["pd_unit_state"]})
+    link = BrokerLink(AGENT, log, section, {}, client=client(broker, AGENT))
+    link.start()
+    reader, got = connected(broker, READER)
+    reader.subscribe([(f"{AGENT}/events/#", 1), (replay_topics(AGENT, READER)["records"], 1)])
+    settle(1.0)
+    with open(log, "a") as f:
+        f.write(json.dumps({"event": "pd_unit_state", "timestamp": 1.0, "data": {"n": 1}}) + "\n")
+    for _ in range(20):
+        link.tick()
+        settle(0.1)
+    live = [m for m in got if "/events/" in m.topic]
+    assert len(live) == 1 and link.last_error is None
+    reader.publish(replay_topics(AGENT, READER)["request"],
+                   json.dumps({"position": {"log": link.stream.identity, "offset": 0}, "sources": ["*"]}), qos=1)
+    for _ in range(20):
+        link.tick()
+        settle(0.1)
+    replay = [json.loads(m.payload)["type"] for m in got if m.topic.endswith("/records")]
+    assert replay == ["record", "done"]
+    link.stop()
+    reader.loop_stop()
+    reader.disconnect()

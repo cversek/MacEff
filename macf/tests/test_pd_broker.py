@@ -320,3 +320,32 @@ def test_the_responder_answers_only_granted_readers_on_their_own_topic(tmp_path)
     assert r.handle(replay_topics(AGENT, OTHER)["request"], body) == 0, "no grant, no answer"
     assert r.handle(replay_topics(AGENT, READER)["request"], body) == 2     # the record, then done
     assert {m.topic for m in sent} == {replay_topics(AGENT, READER)["records"]}
+
+
+# --- the declaration's broker section -----------------------------------------------------------
+
+
+def test_a_declaration_names_its_broker_and_the_daemon_renders_it(tmp_path):
+    from macf.pd.broker_link import render_files
+    from macf.pd.interface import Declaration
+    d = Declaration.model_validate({"version": 1, "agent": AGENT, "broker": {
+        "port": 18830, "cafile": "{agent_home}/ca.crt", "server_certfile": "{agent_home}/s.crt",
+        "server_keyfile": "{agent_home}/s.key", "client_certfile": "{agent_home}/c.crt",
+        "client_keyfile": "{agent_home}/c.key", "readers": {OTHER: ["pd_unit_state"]}}})
+    conf = render_files(AGENT, d.broker, tmp_path, {"agent_home": "/h"})
+    text = conf.read_text()
+    assert "listener 18830 127.0.0.1" in text and "cafile /h/ca.crt" in text
+    assert "require_certificate true" in text and "persistence false" in text
+    acl = (conf.parent / "acl").read_text()
+    assert f"user {cert_name(OTHER)}" in acl and "pattern" not in acl
+    assert conf.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_a_broker_section_with_a_low_port_or_a_bad_source_is_refused():
+    from pydantic import ValidationError
+    from macf.pd.interface import BrokerSection
+    base = dict(cafile="a", server_certfile="b", server_keyfile="c", client_certfile="d", client_keyfile="e")
+    with pytest.raises(ValidationError):
+        BrokerSection(port=80, **base)
+    with pytest.raises(ValidationError):
+        BrokerSection(port=18830, readers={OTHER: ["#"]}, **base)

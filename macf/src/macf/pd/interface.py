@@ -376,6 +376,23 @@ class StreamGrant(_Closed):
     sources: List[Annotated[str, Field(pattern=_STREAM_SOURCE)]] = Field(min_length=1)
 
 
+class BrokerSection(_Closed):
+    """The daemon's own MQTT broker (PROTOTYPE, mission B phase B2). The daemon renders the
+    broker's configuration and access rules from this at start, into its runtime directory; the
+    broker process itself is a declared unit that runs mosquitto on that configuration. The daemon
+    then publishes its stream there and answers replay requests. Paths may use the declaration's
+    placeholders. ``readers`` maps a reader's card to the sources it may read, the broker's form
+    of ``stream_grants``."""
+
+    port: int = Field(ge=1024, le=65535)
+    cafile: str = Field(min_length=1)
+    server_certfile: str = Field(min_length=1)
+    server_keyfile: str = Field(min_length=1)
+    client_certfile: str = Field(min_length=1)
+    client_keyfile: str = Field(min_length=1)
+    readers: Dict[str, List[Annotated[str, Field(pattern=_STREAM_SOURCE)]]] = Field(default_factory=dict)
+
+
 class Declaration(_Closed):
     """Everything an agent declares to its primal daemon. Audited by reading it.
 
@@ -438,6 +455,8 @@ class Declaration(_Closed):
     #: Commands the agent's ``check`` entries may run, by name (the scheduler design, 4.2).
     check_templates: Dict[str, CheckTemplate] = Field(default_factory=dict)
     stream_grants: List[StreamGrant] = Field(default_factory=list)
+    #: The daemon's own MQTT broker (prototype). None: the stream runs on the socket only.
+    broker: Optional[BrokerSection] = None
     operator_uid: Optional[int] = Field(default=None, ge=0)
 
     @model_validator(mode="after")
