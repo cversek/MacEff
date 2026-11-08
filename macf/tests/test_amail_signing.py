@@ -422,3 +422,99 @@ def test_a_fifo_at_the_sidecar_path_is_refused_at_once(tmp_path):
         signal.alarm(0)
         signal.signal(signal.SIGALRM, old)
     assert got is None
+
+
+# --- R44: the receiver holds a registered sender to its declared keys --------------------------
+
+def _boxed(tmp_path, message, *, domain="here.test", handed_off_at="2026-03-01T12:00:00+00:00",
+           message_id=None, sender_card="from the address"):
+    """*message* handed off into a pickup box as its broker writes one: the bundle and its sidecar,
+    the broker here being the test's own uid, which owns the box."""
+    import hashlib
+    import json
+    box = tmp_path / "box"
+    box.mkdir(mode=0o2770, exist_ok=True)
+    payload = message.serialize().encode("utf-8")
+    stem = f"m{len(list(box.glob('*.amsg')))}"
+    if sender_card == "from the address":
+        from macf.amail.zone import card_for_address
+        sender_card = card_for_address(message.sender, domain="here.test")
+    (box / f"{stem}.json").write_text(json.dumps({
+        "message_id": message.message_id if message_id is None else message_id,
+        "raw_sha256": hashlib.sha256(payload).hexdigest(), "rung": "local",
+        "origin_domain": domain, "handed_off_at": handed_off_at, "sender_card": sender_card}))
+    (box / f"{stem}.amsg").write_bytes(payload)
+    return box
+
+
+def _ingested(tmp_path, message, registry, **boxed):
+    from macf.amail import store
+    from macf.amail.client import ingest
+    home = tmp_path / "home"
+    (home / "Maildir").mkdir(parents=True, exist_ok=True)
+    results = ingest(home, _boxed(tmp_path, message, **boxed), agent="bob", domain="here.test",
+                     registry=registry)
+    assert results and results[-1]["ingested"] is True, results
+    return store.read_all(home)[-1], results[-1]
+
+
+def test_receiver_marks_unsigned_agent_mail_suspect(tmp_path):
+    """MIS-0004 R44: a sender the operator's registry declares is held to its declared keys at
+    ingest. Unsigned, it is suspect; signed with a declared key, attested. A sender the registry
+    doesn't declare stays unverified, and with no registry at all nothing turns suspect, which is
+    what lets landing declare every key before enforcing (section 12.4)."""
+    from macf.amail.registry import Registry
+    from macf.amail.crypto import sign
+    k = _public_line(tmp_path, "alice")
+    reg = Registry(_registry(tmp_path, f"agents:\n  Alice_0a1b2c:\n    account: alice\n    keys: ['{k}']\n"),
+                   root_uid=os.getuid())
+
+    def mail(sender="alice_0a1b2c@here.test", signed=False):
+        m = Message(sender=sender, to=["bob_3d4e5f@here.test"], subject="s", body="b")
+        if signed:
+            m.signature = sign(m, load_private_key(tmp_path / "alice"))
+        return m
+
+    assert _ingested(tmp_path / "1", mail(), reg)[1]["trust"] == "suspect"
+    assert _ingested(tmp_path / "2", mail(signed=True), reg)[1]["trust"] == "attested"
+    stranger = _ingested(tmp_path / "3", mail(sender="carol_6a7b8c@here.test"), reg)[1]
+    assert stranger["trust"] == "unverified"
+    # The card is the broker's word from the sidecar: with none there, nothing is guessed from
+    # the address, and a registered sender's unsigned mail is unverified, not suspect.
+    assert _ingested(tmp_path / "5", mail(), reg, sender_card=None)[1]["trust"] == "unverified"
+    # No registry on this host yet: nothing is concluded, so nothing turns suspect.
+    nothing = Registry(tmp_path / "absent" / "registry.yaml", root_uid=os.getuid())
+    assert _ingested(tmp_path / "4", mail(), nothing)[1]["trust"] == "unverified"
+
+
+def test_ingest_judges_a_retired_key_at_its_own_brokers_acceptance(tmp_path):
+    """R45 at ingest: the acceptance time is this box's broker's ``handed_off_at``, and only from a
+    sidecar written for this very message by a broker of this domain. A retired key's signature is
+    attested when that record falls inside its window, and suspect when there is no such record."""
+    from macf.amail.registry import Registry
+    from macf.amail.crypto import sign
+    old = _public_line(tmp_path, "old")
+    reg = Registry(_registry(tmp_path, f"""
+agents:
+  Alice_0a1b2c:
+    account: alice
+    keys:
+      - key: "{old}"
+        valid_from: 2026-01-01T00:00:00Z
+        valid_until: 2026-06-01T00:00:00Z
+"""), root_uid=os.getuid())
+
+    def signed():
+        m = Message(sender="alice_0a1b2c@here.test", to=["bob_3d4e5f@here.test"], subject="s", body="b")
+        m.signature = sign(m, load_private_key(tmp_path / "old"))
+        return m
+
+    inside, entry = _ingested(tmp_path / "a", signed(), reg)
+    assert inside.trust == "attested"
+    # A peer broker's record is no record of this broker's acceptance: only current keys count.
+    assert _ingested(tmp_path / "c", signed(), reg, domain="peer.test")[0].trust == "suspect"
+    # Another message's sidecar is no word on this one at all, card included: unverified.
+    assert _ingested(tmp_path / "b", signed(), reg, message_id="msg-0-other")[0].trust == "unverified"
+    # Accepted after the key retired: suspect even with the broker's own record.
+    late = _ingested(tmp_path / "d", signed(), reg, handed_off_at="2026-07-01T00:00:00+00:00")[0]
+    assert late.trust == "suspect"

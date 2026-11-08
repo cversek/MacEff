@@ -18,9 +18,12 @@ import socket
 import stat
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from .models import Message, _now_iso
+
+if TYPE_CHECKING:
+    from .registry import Registry
 
 
 class BrokerUnavailable(RuntimeError):
@@ -273,7 +276,8 @@ def _ingest_lock(home: Path, wait: bool) -> int:
 
 
 def ingest(home: Path, pickup_box: Path, contacts_path: Optional[Path] = None,
-           agent: str = "", *, wait: bool = True) -> list:
+           agent: str = "", *, wait: bool = True, domain: str = "",
+           registry: Optional[Registry] = None) -> list:
     """Execute the custody transfer: move handed-off mail from the broker's
     pickup box into the caller's OWN store, as the caller.
 
@@ -293,19 +297,28 @@ def ingest(home: Path, pickup_box: Path, contacts_path: Optional[Path] = None,
     One ingest at a time per store (``_ingest_lock``). With ``wait`` false a
     held lock raises IngestBusy instead of waiting, for a caller that will
     simply try again on its next pass.
+
+    An agent message's signature is judged against the operator's registry
+    (MIS-0004 R44), *registry* or the host's own, at the acceptance time the
+    box's broker recorded when *domain* names it. *contacts_path* no longer
+    verifies anything: keys an agent's contacts declare are not the
+    operator's declaration (R42).
     """
     results = []
     if not pickup_box.is_dir():
         return results
+    if registry is None:
+        from .registry import Registry, registry_path
+        registry = Registry(registry_path())
     lock = _ingest_lock(home, wait)
     try:
-        return _ingest_locked(home, pickup_box, contacts_path, agent)
+        return _ingest_locked(home, pickup_box, contacts_path, agent, domain, registry)
     finally:
         os.close(lock)
 
 
 def _ingest_locked(home: Path, pickup_box: Path, contacts_path: Optional[Path],
-                   agent: str) -> list:
+                   agent: str, domain: str = "", registry: Optional[Registry] = None) -> list:
     results = []
     try:
         box_fd = os.open(pickup_box, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -320,7 +333,8 @@ def _ingest_locked(home: Path, pickup_box: Path, contacts_path: Optional[Path],
         bundles = sorted(pickup_box.glob("*.amsg"))
         held = _held_bundle_ids(home) if bundles else {}
         for amsg in bundles:
-            results.append(_ingest_bundle(home, amsg, contacts_path, agent, box_fd, broker_uid, held))
+            results.append(_ingest_bundle(home, amsg, contacts_path, agent, box_fd, broker_uid, held,
+                                          domain=domain, registry=registry))
         for eml in sorted(pickup_box.glob("*.eml")):
             results.append(_ingest_eml(home, eml, box_fd, broker_uid))
     finally:
@@ -468,24 +482,24 @@ def _ingest_eml(home: Path, eml: Path, box_fd: int, broker_uid: int) -> dict:
 
 
 def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str, box_fd: int,
-                   broker_uid: int, held: Optional[Dict[str, Path]] = None) -> dict:
+                   broker_uid: int, held: Optional[Dict[str, Path]] = None, *,
+                   domain: str = "", registry: Optional[Registry] = None) -> dict:
     """Custody transfer for an agent message, including the signature verdict.
 
     VERIFICATION HAPPENS HERE, not at read time, for three reasons the battery
     made concrete. Read-time verification lives on the path the suite never
     exercises — the same path that hid a phantom listing and a thread id minted
     from the clock. Ingest is exercised. Second, it must keep working with the
-    broker stopped, so the keys come from the contacts file on disk, read
-    directly, never a broker round-trip: the file is broker-OWNED and
-    agent-readable, so an agent can read the keys it has been given and cannot
-    rewrite them. Third, custody transfers once, so the trust fact is
+    broker stopped, so the keys come from the operator's registry on disk, read
+    directly, never a broker round-trip (MIS-0004 R44): root's file, which no
+    agent can rewrite. Third, custody transfers once, so the trust fact is
     established at the boundary and recorded, rather than recomputed on every
     glance.
 
     The verdict never collapses to a boolean. A declared key can change, so the
     raw message and its signature are preserved and re-verification stays
-    possible; and keys_for()'s three states stay distinct, because "no key
-    declared" is not "declared and failed" is not "verified".
+    possible; and the verdict's three states stay distinct, because "not in the
+    registry" is not "registered and failed" is not "verified".
     """
     import hashlib
     from . import store
@@ -539,7 +553,7 @@ def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str, box_fd: in
         entry.update(ingested=False, duplicate=True, reason=reason)
         return entry
 
-    verdict = _verify_at_ingest(message, contacts_path, agent)
+    verdict = _verify_at_ingest(message, meta, domain, registry)
     message.trust = verdict["trust"]
     meta["ingest_verification"] = verdict
     # Disagreement with the broker's own read is information, not noise: it is
@@ -563,40 +577,33 @@ def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str, box_fd: in
     return entry
 
 
-def _verify_at_ingest(message, contacts_path, agent: str) -> dict:
-    """The recipient's own signature verdict. Three states, never flattened."""
+def _verify_at_ingest(message, meta: Dict[str, Any], own_domain: str,
+                      registry: Optional[Registry]) -> dict:
+    """The recipient's own signature verdict, against the operator's registry (MIS-0004 R44).
+    Three states, never flattened.
+
+    A sender the registry declares is held to its keys: unsigned, or signed with no key valid for
+    it, is suspect. A sender it doesn't declare is outside mail and stays unverified, and so does
+    everything while the registry can't be read or trusted, so mail turns suspect only once the
+    operator has declared its sender (landing declares first and enforces second, section 12.4).
+    Nothing falls back to keys an agent's own contacts declare.
+
+    The sender's card and the acceptance time are this box's broker's word: its ``sender_card``,
+    resolved once from the sender's address, and its ``handed_off_at`` (R45), taken from a sidecar
+    the caller has already read through the box's descriptor as the broker's own file and checked
+    against the payload's hash, and only when it names this very message. With no card the
+    sender is unverified; with no acceptance time, only keys that may sign now count."""
+    from .attest import acceptance_time, sender_verdict
     from .trust import TrustClass
-    from .crypto import verify
 
-    if not contacts_path or not agent:
+    if registry is None:
         return {"trust": TrustClass.UNVERIFIED.value, "keys_declared": None,
-                "reason": "no local contact book available to this recipient; "
-                          "no verification attempted"}
-    try:
-        from .contacts import ContactBook
-        keys = ContactBook(Path(contacts_path)).keys_for(agent, message.sender)
-    except (OSError, ValueError) as e:
-        return {"trust": TrustClass.UNVERIFIED.value, "keys_declared": None,
-                "reason": f"contact book unreadable ({e}); no verification attempted"}
-
-    if message.signature and keys:
-        if verify(message, message.signature, keys):
-            return {"trust": TrustClass.ATTESTED.value, "keys_declared": len(keys),
-                    "reason": "signature verified against a declared key"}
-        return {"trust": TrustClass.SUSPECT.value, "keys_declared": len(keys),
-                "reason": "signature present and did NOT verify against any "
-                          "declared key"}
-    if message.signature and not keys:
-        return {"trust": TrustClass.UNVERIFIED.value, "keys_declared": 0,
-                "reason": "signed, but this recipient declares no key for the "
-                          "sender; nothing can be concluded"}
-    if keys and not message.signature:
-        return {"trust": TrustClass.SUSPECT.value, "keys_declared": len(keys),
-                "reason": "sender declares a key and sent no signature; "
-                          "breaking that commitment is the shape of impersonation"}
-    return {"trust": TrustClass.UNVERIFIED.value, "keys_declared": 0,
-            "reason": "unsigned, and no key declared for the sender"}
-
+                "reason": "no operator's registry given; no verification attempted"}
+    if meta.get("message_id") != message.message_id:
+        return sender_verdict(message, None, registry, None)
+    card = meta.get("sender_card") if isinstance(meta.get("sender_card"), str) else None
+    accepted_at = acceptance_time(meta, own_domain) if own_domain else None
+    return sender_verdict(message, card, registry, accepted_at)
 
 
 def read_sent(home: Path) -> list:
