@@ -502,6 +502,8 @@ def test_a_session_that_cannot_log_in_alerts_while_its_liveness_is_fresh(tmp_pat
     assert watch.run_pass(config, now=NOW, base=base, probe=ALL_RUNNING) == watch.EXIT_UNHEALTHY
     assert sink.read_text().count("ALERT") == 1
     assert "Resident_1a2b3c session: AUTH-FAILED, needs /login" in sink.read_text()
+    # The session is on its daemon's own socket, so the alert says how to reach it (#884).
+    assert "macf_tools harness attach --card Resident_1a2b3c" in sink.read_text()
     # Logged in again: the core records running, and the watch sends one recovery.
     _state(home, "session", age_s=-60, state="running", reason="authenticated again")
     _stamp(home, "session", age_s=-90, interval_s=120.0)

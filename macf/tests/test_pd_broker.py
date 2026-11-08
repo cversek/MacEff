@@ -519,6 +519,53 @@ def test_the_wrapper_beats_only_while_the_broker_listens_and_ends_with_its_statu
     assert probes == [1], "one probe per interval, however often the wrapper polls"
 
 
+def test_a_broker_deaf_to_the_stop_is_killed_and_the_wrapper_returns(tmp_path):
+    """#921: a mosquitto that ignored SIGTERM past the grace raised TimeoutExpired out of the
+    wrapper. It is killed instead, and the wrapper ends with its status."""
+    import signal
+    import sys
+    from macf.pd.broker_unit import run
+    ready = tmp_path / "deaf"                  # the stop waits until the child ignores it
+    deaf = [sys.executable, "-c",
+            "import pathlib, signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "pathlib.Path(sys.argv[1]).touch(); time.sleep(30)", str(ready)]
+    code = run(deaf, 1, lambda: None, poll_s=0.05, probe=lambda port: False,
+               stopping=ready.exists, stop_grace_s=0.3)
+    assert code == -signal.SIGKILL
+
+
+def test_reconnect_is_jittered(monkeypatch):
+    """MIS-0007-R38: each client draws its own first and longest reconnect delay, so members of
+    an association that restarted don't retry in step, and both links use the draw."""
+    import macf.pd.broker_link as bl
+    first, longest = bl.jittered_delays(lambda: 0.0)
+    assert (first, longest) == (0.5, bl.RECONNECT_MAX_S * 0.75)
+    first, longest = bl.jittered_delays(lambda: 0.999)
+    assert 1.49 < first < 1.5 and bl.RECONNECT_MAX_S * 0.99 < longest < bl.RECONNECT_MAX_S
+    draws = {bl.jittered_delays() for _ in range(20)}
+    assert len(draws) == 20, "two clients drawing the same delays would retry in step"
+
+    seen = []
+
+    class FakeClient:
+        def __init__(self, *a, **k): pass
+        def tls_set(self, **k): pass
+        def will_set(self, *a, **k): pass
+        def reconnect_delay_set(self, first, longest): seen.append((first, longest))
+
+    import paho.mqtt.client as mqtt
+    monkeypatch.setattr(mqtt, "Client", FakeClient)
+    monkeypatch.setattr(bl, "jittered_delays", lambda: (0.7, 25.0))
+    from macf.pd.interface import AssociationLink, BrokerSection
+    s = BrokerSection(port=18830, certificate_authority_file="a", server_certificate_file="b", server_key_file="c",
+                      client_certificate_file="d", client_key_file="e")
+    bl.BrokerLink._client(s, {})
+    link = AssociationLink(host="localhost", port=18831, certificate_authority_file="a",
+                           client_certificate_file="d", client_key_file="e")
+    bl.ExportLink._client(AGENT, link, {})
+    assert seen == [(0.7, 25.0), (0.7, 25.0)]
+
+
 def test_a_rendered_broker_configuration_is_private(tmp_path):
     from macf.pd.broker_link import render_files
     from macf.pd.interface import BrokerSection

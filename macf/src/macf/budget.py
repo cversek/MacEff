@@ -95,6 +95,21 @@ def keychain_accounts() -> list[str]:
 
 def read_token() -> str:
     """The CLI's OAuth access token, for one request. Raises BudgetError when none is reachable."""
+    raw = read_credential()
+    try:
+        tok = (json.loads(raw).get("claudeAiOauth") or {}).get("accessToken")
+    except (json.JSONDecodeError, AttributeError):
+        tok = None
+    if not tok:
+        raise BudgetError("the credential holds no OAuth access token; use `budget sample --manual`",
+                          short="no token in the credential")
+    return tok
+
+
+def read_credential() -> str:
+    """The CLI's stored credential, as text: the Keychain on macOS, else its file. Raises BudgetError
+    when none is reachable. Callers take what they need from it and keep nothing else; the login
+    check (``macf.pd.login``) reads only its expiry dates."""
     raw = None
     if sys.platform == "darwin":
         for acct in keychain_accounts() or [None]:
@@ -117,14 +132,7 @@ def read_token() -> str:
     if raw is None:
         raise BudgetError("no Claude Code credential reachable (Keychain or ~/.claude/.credentials.json); "
                           "paste the /usage screen with `budget sample --manual`", short="no credential")
-    try:
-        tok = (json.loads(raw).get("claudeAiOauth") or {}).get("accessToken")
-    except (json.JSONDecodeError, AttributeError):
-        tok = None
-    if not tok:
-        raise BudgetError("the credential holds no OAuth access token; use `budget sample --manual`",
-                          short="no token in the credential")
-    return tok
+    return raw
 
 
 def _retry_after_s(value: Optional[str], now: Optional[float] = None) -> Optional[float]:
