@@ -50,7 +50,7 @@ def accepts(port: int, host: str = LOOPBACK, timeout: float = 1.0) -> bool:
 PIDFILE_NAME = "mosquitto.pid"
 
 
-def end_orphan(pidfile: Path, *, grace_s: float = 5.0) -> Optional[int]:
+def end_orphan(pidfile: Path, *, grace_s: float = 5.0, what: str = "broker") -> Optional[int]:
     """End the mosquitto a previous wrapper started, when it is still that very process: a wrapper
     killed with SIGKILL can't stop its child, which then holds the port, and every new broker
     fails to bind (#921). The recorded start time is checked, so a reused pid is never signalled.
@@ -73,7 +73,7 @@ def end_orphan(pidfile: Path, *, grace_s: float = 5.0) -> Optional[int]:
             os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
         pass  # noqa: MACEFF003 - it ended on its own between the check and the signal, which is the goal
-    print(f"⚠️ MACF: pd: ended the broker a previous wrapper left running (pid {pid})", file=sys.stderr)
+    print(f"⚠️ MACF: pd: ended the {what} a previous wrapper left running (pid {pid})", file=sys.stderr)
     return pid
 
 
