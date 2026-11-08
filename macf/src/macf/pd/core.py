@@ -162,12 +162,18 @@ def cutover_declaration(agent_home: Path, card: str) -> Optional[Path]:
     if not calling_card.same(calling_card.from_history(old), card):
         return None     # noqa: MACEFF003 - another agent's card: load_declaration refuses it (R07)
     rewritten = text.replace(json.dumps(old), json.dumps(card))
-    Declaration.model_validate_json(rewritten)
+    try:
+        Declaration.model_validate_json(rewritten)
+    except ValidationError:
+        return None     # noqa: MACEFF003 - left as it was: load_declaration refuses it with the reason
+    mode = path.stat().st_mode & 0o7777
     kept = path.with_name(path.name + CUTOVER_KEPT_SUFFIX)
     if not kept.exists():
         kept.write_text(text)
+        kept.chmod(mode)
     staged = path.with_name(path.name + ".rewriting")
     staged.write_text(rewritten)
+    staged.chmod(mode)
     os.replace(staged, path)
     append_event("pd_declaration_rewritten", {"agent": card, "from": old, "path": str(path),
                                               "kept": str(kept), "reason": "MIS-0002-R165 cut-over"})

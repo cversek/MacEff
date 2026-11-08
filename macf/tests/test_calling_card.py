@@ -165,3 +165,27 @@ def test_a_rendered_declaration_is_never_rewritten(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "append_event", lambda *a: pytest.fail("nothing to record"))
     assert core.cutover_declaration(tmp_path, "ExampleAgent_0a1b2c") is None
     assert "ExampleAgent@0a1b2c" in rendered.read_text()
+
+
+def test_an_operator_rule_stored_under_the_old_card_still_holds():
+    """R166 for the operator's silence and route rules: a rule recorded before the cut-over names
+    the old card and must still fold into the rules in force after it."""
+    from macf.pd.stream import fold_rules
+    events = [{"event": "pd_stream_rule", "data": {"agent": "ExampleAgent@0a1b2c", "act": "silence",
+                                                    "target": "pd_entry_*", "asked_by": {"kind": "operator"}}},
+              {"event": "pd_stream_rule", "data": {"agent": "OtherAgent@0a1b2c", "act": "silence",
+                                                    "target": "zone_*", "asked_by": {"kind": "operator"}}}]
+    assert fold_rules(events, "ExampleAgent_0a1b2c").silenced == ["pd_entry_*"]
+
+
+def test_the_cut_over_keeps_the_file_mode_and_leaves_an_invalid_result_alone(tmp_path, monkeypatch):
+    from macf.pd import core
+    monkeypatch.setattr(core, "append_event", lambda *a: None)
+    path = _home_declaration(tmp_path, "ExampleAgent@0a1b2c")
+    path.chmod(0o600)
+    kept = core.cutover_declaration(tmp_path, "ExampleAgent_0a1b2c")
+    assert path.stat().st_mode & 0o777 == 0o600 and kept.stat().st_mode & 0o777 == 0o600
+    bad = _home_declaration(tmp_path / "b", "ExampleAgent@0a1b2c")
+    bad.write_text('{"version": 1, "agent": "ExampleAgent@0a1b2c", "units": [], "nonsense": 1}')
+    assert core.cutover_declaration(tmp_path / "b", "ExampleAgent_0a1b2c") is None
+    assert "ExampleAgent@0a1b2c" in bad.read_text()
