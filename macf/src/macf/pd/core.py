@@ -1125,14 +1125,15 @@ class Core:
                 return "a person"
         return None
 
-    def session_project_dir(self, agent_home: Path) -> Optional[Path]:
-        """The directory the session unit runs in, from its declared ``--project-dir``."""
+    def session_transcript(self, claude_home: Optional[Path] = None) -> Optional[Path]:
+        """The session unit's transcript, for the keystroke gate's turn check (MIS-0004 R29): in
+        the directory :meth:`_session_project_dir` finds, the adopted session's own file by its
+        id, else the newest. None when there is no session unit or nothing to read."""
+        from macf.pd.wake import latest_transcript
         for r in self._units.values():
             if r.spec.kind == "session":
-                cmd = list(r.spec.command)
-                if "--project-dir" in cmd and cmd.index("--project-dir") + 1 < len(cmd):
-                    return Path(cmd[cmd.index("--project-dir") + 1].replace("{agent_home}", str(agent_home)))
-                return Path(agent_home)     # no declared directory: the session starts in the home
+                return latest_transcript(self._session_project_dir(r), claude_home=claude_home,
+                                         session_id=r.client_session)
         return None
 
     def _apply_waiting(self, r: _Runner, waiting_on: Optional[str]) -> None:

@@ -448,13 +448,42 @@ def test_the_newest_transcript_of_the_project_is_read(tmp_path):
     assert _wk.transcript_turn_ended(None) is None
 
 
-def test_the_core_names_the_session_waiting_and_its_project_dir(tmp_path):
+def test_an_adopted_sessions_own_transcript_is_read_not_the_newest(tmp_path):
+    """A second session in the same project writes the newer file; the gate reads the adopted
+    session's own, by its id, and a missing one is no evidence at all (CTB on #925)."""
+    import os
+    proj = tmp_path / "proj"
+    folder = tmp_path / ".claude" / "projects" / str(proj).replace("/", "-").replace("_", "-")
+    folder.mkdir(parents=True)
+    own, other = folder / "3d52b89a-eeee.jsonl", folder / "ffff0000-1111.jsonl"
+    own.write_text("\n".join(_turns(ASSISTANT_DONE, USER_PROMPT)) + "\n")
+    other.write_text("\n".join(_turns(ASSISTANT_DONE)) + "\n")
+    os.utime(own, (1, 1))
+    home = tmp_path / ".claude"
+    assert _wk.latest_transcript(proj, claude_home=home) == other
+    assert _wk.latest_transcript(proj, claude_home=home, session_id="3d52b89a-eeee") == own
+    assert _wk.latest_transcript(proj, claude_home=home, session_id="00000000-gone") is None
+
+
+def test_the_core_names_the_session_waiting_and_its_transcript(tmp_path):
     from types import SimpleNamespace as NS
     from macf.pd.core import Core
     core = Core.__new__(Core)
-    sess = NS(spec=NS(kind="session", command=["py", "-m", "x", "--project-dir", "{agent_home}/proj"]), state="running")
+    core._placeholders = {"agent_home": str(tmp_path)}
+    sess = NS(spec=NS(kind="session", command=["py", "-m", "x", "--project-dir", "{agent_home}/proj"]),
+              state="running", client_session=None)
     core._units = {"session": sess, "monitor": NS(spec=NS(kind="service", command=[]), state="running")}
     assert core.session_waiting_on() is None
-    assert core.session_project_dir(tmp_path) == tmp_path / "proj"
+    folder = tmp_path / ".claude" / "projects" / str(tmp_path / "proj").replace("/", "-").replace("_", "-")
+    folder.mkdir(parents=True)
+    (folder / "aaaa.jsonl").write_text("{}\n")
+    (folder / "bbbb.jsonl").write_text("{}\n")
+    import os
+    os.utime(folder / "bbbb.jsonl", (1, 1))
+    home = tmp_path / ".claude"
+    # The project directory comes from Core's own lookup, the rendered --project-dir.
+    assert core.session_transcript(claude_home=home) == folder / "aaaa.jsonl"
+    sess.client_session = "bbbb"            # adopted: its own transcript, though older
+    assert core.session_transcript(claude_home=home) == folder / "bbbb.jsonl"
     sess.state = "waiting_on_a_person"
     assert core.session_waiting_on() == "a person"

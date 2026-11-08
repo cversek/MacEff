@@ -238,7 +238,7 @@ class Daemon:
         if any(u.kind == "session" for u in self.core.declaration.units):
             # The keystroke fallback types into the session unit's own pane (pd.session_unit),
             # recording each wake first so it never reads as the operator (MIS-0002-R105).
-            from macf.pd.wake import (TmuxPane, Waker, latest_transcript, saved_screens_dir,
+            from macf.pd.wake import (TmuxPane, Waker, saved_screens_dir,
                                       transcript_turn_ended)
             from macf.supervisor import record_keys_sent
             from macf.utils.identity import session_identifier
@@ -249,8 +249,7 @@ class Daemon:
                                         refractory_s=self.core.declaration.wake_refractory_s,
                                         # MIS-0004 R29: positive evidence of an idle prompt, besides the screen.
                                         waiting_on=self.core.session_waiting_on,
-                                        turn_ended=lambda: transcript_turn_ended(
-                                            latest_transcript(self.core.session_project_dir(self.home))))
+                                        turn_ended=lambda: transcript_turn_ended(self.core.session_transcript()))
         self._sel: Optional[selectors.BaseSelector] = None
         self._wake_r, self._wake_w = os.pipe()
         os.set_blocking(self._wake_w, False)

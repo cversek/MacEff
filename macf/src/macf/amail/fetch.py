@@ -129,6 +129,13 @@ def fetch_raw(correlation: str, credential: ImapCredential, *,
     network. It is not a substitute for running against a real mailbox, and
     that distinction is the whole reason this module exists -- the two defects
     above were both invisible to a suite that was green.
+
+    `tls_context` is how the mailbox's certificate is checked. A deployment's
+    caller MUST pass the pinned context its configuration builds for outbound
+    mail (MIS-0004 R34), so inbound and outbound trust the same declared bundle.
+    None checks against the system store; only tests and a deployment that
+    declares no bundle should get that. No production code calls this yet, so
+    the first caller carries the duty (CTB on #925).
     """
     if not credential or not credential.complete:
         raise FetchError("no complete IMAP credential; refusing to open a mailbox")
