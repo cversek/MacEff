@@ -56,3 +56,11 @@ def test_only_a_system_or_fleet_daemon_with_a_broker_admits_members():
                                     "association": {"port": 18831, "cafile": "a", "client_certfile": "d",
                                                     "client_keyfile": "e"}})
     assert d.association.exports == ["pd_unit_state", "pd_carried"]
+
+
+def test_a_system_daemons_member_findings_chain_up_as_a_summary():
+    """B4: what a system daemon exports to its fleet is its members' summary, the same Exporter."""
+    r = record("pd_member_findings", findings=[f"{M2}: offline"], members=[M1, M2], secret="x")
+    out = summarize(r)
+    assert out["data"] == {"findings": [f"{M2}: offline"]}
+    assert "secret" not in json.dumps(out)

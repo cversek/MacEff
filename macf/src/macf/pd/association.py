@@ -36,10 +36,16 @@ def presence_topic(card: str) -> str:
 
 def summarize(stream_record: dict) -> dict:
     """What an export carries for one stream record: its stamp and, for a unit's state, which
-    unit and what state. Nothing a record's data says beyond that leaves the member."""
+    unit and what state. For an association's ``pd_member_findings`` it also carries the findings,
+    which name members and how they differ, so a system daemon's members' summary chains up a
+    level (B4). Nothing a record's data says beyond that leaves the member."""
     out = {k: stream_record[k] for k in EXPORT_FIELDS if k in stream_record}
     data = (stream_record.get("record") or {}).get("data") or {}
     kept = {k: data[k] for k in EXPORT_DATA_FIELDS if isinstance(data.get(k), str)}
+    if stream_record.get("source") == "pd_member_findings":
+        findings = data.get("findings")
+        if isinstance(findings, list) and all(isinstance(f, str) for f in findings):
+            kept["findings"] = findings
     if kept:
         out["data"] = kept
     return out

@@ -22,16 +22,30 @@ pytestmark = pytest.mark.skipif(not MOSQUITTO or not shutil.which("openssl"),
                                 reason="mosquitto and openssl are needed for the live broker")
 
 SYS, M1, M2 = "SystemDaemon_0a1b2c", "MemberOne_1a2b3c", "MemberTwo_4d5e6f"
+FLEET, SYS2 = "HarborFleet_9e8d7c", "SystemTwo_5b4a3c"
+#: The recursion (B4): the same association, one level up. A system daemon is a member of its
+#: fleet exactly as an agent's daemon is a member of its system.
+LEVELS = {"system": (SYS, M1, M2), "fleet": (FLEET, SYS, SYS2)}
 
 
 @pytest.fixture(scope="module")
 def assoc(tmp_path_factory):
+    return make_broker(tmp_path_factory, SYS, [M1, M2])
+
+
+@pytest.fixture(scope="module", params=sorted(LEVELS))
+def level(request, tmp_path_factory):
+    head, a, b = LEVELS[request.param]
+    yield (make_broker(tmp_path_factory, head, [a, b]), head, a, b)
+
+
+def make_broker(tmp_path_factory, head, members):
     d = tmp_path_factory.mktemp("assoc")
     openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.crt",
             "-days", "1", "-subj", "/CN=scratch-ca", cwd=d)
-    certs = {n: issue(d, cert_name(n)) for n in (SYS, M1, M2)}
+    certs = {n: issue(d, cert_name(n)) for n in [head] + list(members)}
     certs["server"] = issue(d, "localhost")
-    (d / "acl").write_text(render_acl(SYS, association=True, members=[M1, M2]))
+    (d / "acl").write_text(render_acl(head, association=True, members=list(members)))
     port = free_port()
     conf = render_conf(port=port, listen="loopback", cafile=str(d / "ca.crt"), certfile=certs["server"][0],
                        keyfile=certs["server"][1], acl_file=str(d / "acl"), association=True)
@@ -44,9 +58,9 @@ def assoc(tmp_path_factory):
             break
         except OSError:
             time.sleep(0.05)
-    yield {"port": port, "dir": d, "certs": certs}
-    proc.terminate()
-    proc.wait(5)
+    import atexit
+    atexit.register(lambda: (proc.terminate(), proc.wait(5)))
+    return {"port": port, "dir": d, "certs": certs}
 
 
 def client(a, who, will=None):
@@ -121,11 +135,12 @@ def test_a_member_that_dies_is_marked_offline_by_its_will_and_reported(assoc, tm
     sysd.disconnect()
 
 
-def test_the_daemons_links_export_and_report_membership_from_their_own_loops(assoc, tmp_path):
+def test_the_daemons_links_export_and_report_membership_from_their_own_loops(level, tmp_path):
     """What the daemons run: a member's ExportLink and the association's BrokerLink, each driven
     by tick() alone. The association records each change in what differs from its declaration."""
     from macf.pd.broker_link import BrokerLink, ExportLink
     from macf.pd.interface import AssociationLink, BrokerSection
+    assoc, SYS, M1, M2 = level                      # the same test at each level (B4)
 
     def unconnected(who, will=None):
         c = paho.Client(paho.CallbackAPIVersion.VERSION2, protocol=paho.MQTTv5)
