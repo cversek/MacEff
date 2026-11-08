@@ -288,7 +288,9 @@ def turn_ended(lines: Iterable[str]) -> Optional[bool]:
             continue
         if not isinstance(rec, dict) or rec.get("type") not in ("user", "assistant"):
             continue
-        if rec.get("isMeta") or (rec["type"] == "user" and _record_text(rec).lstrip().startswith(_SKIPPED_TEXT)):
+        # Skipped by prefix only, never by isMeta: a channel message (Telegram, a MacEff notice)
+        # is an isMeta user record that starts a turn (CTB on #925).
+        if rec["type"] == "user" and _record_text(rec).lstrip().startswith(_SKIPPED_TEXT):
             continue
         last = rec
     if last is None:

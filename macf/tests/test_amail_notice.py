@@ -386,6 +386,9 @@ def test_turn_end_is_read_from_the_last_meaningful_record():
     bash_in = {"type": "user", "message": {"role": "user", "content": "<bash-input>ls</bash-input>"}}
     bash_out = {"type": "user", "message": {"role": "user", "content": "<bash-stdout>a</bash-stdout>"}}
     assert _wk.turn_ended(_turns(ASSISTANT_DONE, meta, bash_in, bash_out)) is True
+    # A channel message is isMeta too, but it starts a turn: the gate must stay shut (CTB on #925).
+    channel = {"type": "user", "isMeta": True, "message": {"role": "user", "content": '<channel source="telegram" chat_id="1">hi</channel>'}}
+    assert _wk.turn_ended(_turns(ASSISTANT_DONE, channel)) is False
     # Nothing readable is never evidence of an ended turn.
     assert _wk.turn_ended([]) is None and _wk.turn_ended(["not json"]) is None
 
