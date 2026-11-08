@@ -15,6 +15,7 @@ requests. Nothing here blocks the loop (MIS-0002-R153):
 """
 import collections
 import errno
+import random
 import socket
 import sys
 import threading
@@ -30,6 +31,17 @@ from macf.pd.stream import EventStream
 
 #: Seconds between reconnect attempts, at most, while the broker is unreachable.
 RECONNECT_MAX_S = 30
+
+
+def jittered_delays(rng: Callable[[], float] = random.random) -> Tuple[float, float]:
+    """The first and the longest reconnect delay for one client, drawn at random (MIS-0007-R38).
+
+    The MQTT client doubles its delay from the first up to the longest, with no jitter of its
+    own. So every member of an association that restarts would retry in step, and keep doing so.
+    Each client draws its own pair instead: the first delay from 0.5 to 1.5 s, and the longest
+    from three quarters of ``RECONNECT_MAX_S`` up to it. Their retries spread out from the first
+    attempt onward, and stay apart once each reaches its own ceiling."""
+    return 0.5 + rng(), RECONNECT_MAX_S * (0.75 + 0.25 * rng())
 
 
 def resolve(path: str, placeholders: Dict[str, str]) -> str:
@@ -181,7 +193,7 @@ class BrokerLink:
         c.tls_set(ca_certs=resolve(section.certificate_authority_file, placeholders),
                   certfile=resolve(section.client_certificate_file, placeholders),
                   keyfile=resolve(section.client_key_file, placeholders))
-        c.reconnect_delay_set(1, RECONNECT_MAX_S)
+        c.reconnect_delay_set(*jittered_delays())
         return c
 
     def _on_connect(self, client, _userdata, _flags, _reason, _props=None) -> None:
@@ -303,7 +315,7 @@ class ExportLink:
                   certfile=resolve(link.client_certificate_file, placeholders),
                   keyfile=resolve(link.client_key_file, placeholders))
         c.will_set(assoc.presence_topic(card), b"offline", qos=1, retain=True)
-        c.reconnect_delay_set(1, RECONNECT_MAX_S)
+        c.reconnect_delay_set(*jittered_delays())
         return c
 
     def _on_connect(self, client, _userdata, _flags, _reason, _props=None) -> None:
