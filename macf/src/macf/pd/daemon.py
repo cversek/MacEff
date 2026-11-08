@@ -141,7 +141,10 @@ class Daemon:
         cutover_declaration(self.home, self.card)    # once, before the old form is refused (R165)
         # Every daemon's stream is its own broker (MIS-0002 R150 to R156): a declaration that names
         # none gets the daemon's own, with its own authority, and a broker unit when none is declared.
-        from macf.pd.broker_defaults import with_own_broker
+        from macf.pd.broker_defaults import dependency_remedy, missing_dependencies, with_own_broker
+        missing = missing_dependencies()
+        if missing:      # refused here, naming the fix, rather than an ImportError deep in the start
+            raise DeclarationRefused(dependency_remedy(missing))
         self.core = Core(with_own_broker(load_declaration(self.home, self.card), self.home, self.card),
                          self.card, placeholders=placeholders, **core_options)
         #: The declared schedules and the agent's own entries, run by this daemon (MIS-0002 step
@@ -171,6 +174,11 @@ class Daemon:
         # rendering first let mkdir(parents=True) create it with the umask's 0755, which
         # the start then refused (seen on the system daemon's first start, Nov 8).
         ensure_runtime_dir(self.base)
+        self._broker_placeholders = placeholders
+        #: The readers silenced by name when the broker's access rules were last rendered.
+        self._rendered_silenced: List[str] = []
+        #: Whether the broker must be asked to reread rules rendered while it ran (R152).
+        self._reload_owed = False
         render_files(self.card, decl.broker, self.base, placeholders, members=decl.members)
         self.broker_link = BrokerLink(self.card, get_log_path(), decl.broker, placeholders,
                                       members=decl.members, on_findings=self._member_findings,
@@ -298,7 +306,33 @@ class Daemon:
         from macf.agent_events_log import add_append_listener
         from macf.pd.stream import fold_rules
         self.rules = fold_rules(read_events(reverse=False, scope="all", only=(EVENT_STREAM_RULE,)), self.card)
+        self._render_broker_rules(reload=False)     # before the broker unit starts, so no reload
         add_append_listener(self.broker_link.stream.note_own_append)
+
+    def _render_broker_rules(self, *, reload: bool = True) -> None:
+        """Render the broker's access rules again when the readers silenced by name changed, and
+        ask the broker unit to reread them, so a silenced reader stops receiving at once and an
+        unsilenced one resumes, without a restart (MIS-0002-R152)."""
+        from macf.pd.broker_link import render_files
+        # Only a name that is a card can be a broker reader; ``@channel`` is the session's.
+        silenced = sorted(n for n in self.rules.silenced_subscribers() if calling_card.is_card(n))
+        if silenced == self._rendered_silenced:
+            return
+        decl = self.core.declaration
+        render_files(self.card, decl.broker, self.base, self._broker_placeholders, members=decl.members,
+                     silenced_readers=silenced)
+        self._rendered_silenced = silenced
+        self._reload_owed = reload
+
+    def _reload_broker_if_owed(self) -> None:
+        """Ask the broker to reread rules rendered since it started, once it is running. A broker
+        still starting reads the new file itself, or is asked on a later pass; one not running at
+        all reads it when it next starts."""
+        if not self._reload_owed:
+            return
+        from macf.pd.core import LIVE_STATES
+        if self.core.reload("broker") or self.core.state_of("broker") not in LIVE_STATES:
+            self._reload_owed = False
 
     def _publish_units(self) -> None:
         """Publish a summary of this agent's units into its own public tree, for its peers in a
@@ -432,6 +466,7 @@ class Daemon:
     def _pump_stream(self) -> None:
         """One pass of the event stream on the broker. A failure inside it costs the stream's
         pass, never the loop that supervises the units (MIS-0002-R153 (subscriber_MUST-NOT_block_layer))."""
+        self._reload_broker_if_owed()
         for link in (self.broker_link, self.export_link):
             if link is None:
                 continue
@@ -905,6 +940,7 @@ class Daemon:
             return Response(ok=False, error=("the rule could not be recorded, so it is not set: a rule the "
                                              "next daemon cannot read back would be lost at its restart"))
         self.rules.apply(rule.act, rule.target, rule.subscriber)
+        self._render_broker_rules()
         return Response(ok=True, stream_rules=self.rules.as_dict())
 
     # ------------------------------------------------------------------ the wake's pace

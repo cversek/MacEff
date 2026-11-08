@@ -856,6 +856,28 @@ class Core:
         if r.proc is None:
             self._spawn(r)
 
+    def state_of(self, unit: str) -> Optional[str]:
+        """A declared unit's state now; None for a unit not declared."""
+        r = self._units.get(unit)
+        return None if r is None else r.state
+
+    def reload(self, unit: str) -> bool:
+        """Send SIGHUP to a running unit's own process, so it rereads what the daemon rendered for
+        it, as the broker's wrapper passes it to mosquitto when the access rules change
+        (MIS-0002-R152). Only a unit that has reported itself running is signalled: one still
+        starting may not handle SIGHUP yet, and its default action would end it. Only the
+        incarnation the daemon started is signalled; False otherwise."""
+        r = self._units.get(unit)
+        if r is None or r.proc is None or not r.pid or r.state != "running":
+            return False
+        if r.proc_start and not self._probe(r.pid, r.proc_start):
+            return False
+        try:
+            os.kill(r.pid, signal.SIGHUP)
+        except OSError:
+            return False
+        return True
+
     def stop(self, unit: str, asked_by: Asker, reason: str, peer: Optional[Peer] = None) -> None:
         """Stop a unit now. Nothing the unit or its session enforces can hold it
         (MIS-0002-R48 (outside_stop_MUST_override_gates))."""

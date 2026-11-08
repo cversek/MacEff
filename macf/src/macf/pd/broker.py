@@ -73,6 +73,27 @@ def grant_filters(card: str, grant: str, known: Iterable[str]) -> List[str]:
     return sorted(source_topic(card, s) for s in set(known) if fnmatch.fnmatchcase(s, grant))
 
 
+def routed_topic(card: str, reader: str, source: str) -> str:
+    """Where a source the operator routed to *reader* publishes instead of its own topic
+    (MIS-0002-R152): under the reader's own subtree, ``<card>/routed/<reader>/...``, which no
+    wildcard grant on ``<card>/events/`` matches, so the other readers stop receiving it without a
+    rule that denies (mosquitto's access rules only allow)."""
+    return f"{topic_name(card)}/routed/{topic_name(reader)}/" + source_topic(card, source).split("/events/", 1)[1]
+
+
+def reader_filters(card: str, reader: str, grants: Iterable[str], known: Iterable[str]) -> List[str]:
+    """Every topic filter *reader* may read for its *grants*: each source's own topic, and the
+    same source routed to it. A route chooses who of the granted receives a source; it never
+    widens a grant."""
+    events_root, routed_root = f"{topic_name(card)}/events/", f"{topic_name(card)}/routed/{topic_name(reader)}/"
+    out = set()
+    for grant in grants:
+        for f in grant_filters(card, grant, known):
+            out.add(f)
+            out.add(routed_root + f[len(events_root):])
+    return sorted(out)
+
+
 @dataclass(frozen=True, kw_only=True)
 class Message:
     """One record as published: where, what, and the positions a subscriber checks."""
@@ -93,7 +114,8 @@ def position_key(position: dict) -> str:
     return f"{position['log']}:{position['offset']}"
 
 
-def to_message(card: str, stream_record: dict, previous_of_source: Optional[str]) -> Message:
+def to_message(card: str, stream_record: dict, previous_of_source: Optional[str],
+               topic: Optional[str] = None) -> Message:
     """The message one stream record publishes as (R150, R154, R155 as amended): its source's
     topic, the stream record as JSON (its position, source, agent, time and origin travel inside
     it, set by the layer), and one user property, the position of the previous record of the
@@ -103,7 +125,7 @@ def to_message(card: str, stream_record: dict, previous_of_source: Optional[str]
     if not isinstance(source, str):
         raise BrokerRefused("a record without a source has no topic")
     props = {} if previous_of_source is None else {"previous": previous_of_source}
-    return Message(topic=source_topic(card, source),
+    return Message(topic=topic or source_topic(card, source),
                    payload=json.dumps(stream_record, separators=(",", ":")).encode(), properties=props)
 
 
@@ -168,11 +190,14 @@ class Replay:
     granted: Optional[Sequence[str]]
     log: str
     offset: int
+    #: Whether the operator's rules deliver a source to this reader now (MIS-0002-R152), read live.
+    delivers: Optional[Callable[[str], bool]] = None
 
     def wanted(self, source: str) -> bool:
         import fnmatch
         return (any(fnmatch.fnmatchcase(source, s) for s in self.sources)
-                and (self.granted is None or any(fnmatch.fnmatchcase(source, g) for g in self.granted)))
+                and (self.granted is None or any(fnmatch.fnmatchcase(source, g) for g in self.granted))
+                and (self.delivers is None or self.delivers(source)))
 
     def step(self, stream, max_bytes: Optional[int]) -> Tuple[List[Message], bool]:
         """One pass: the messages for at most *max_bytes* of log, and whether the replay is done.
@@ -231,6 +256,8 @@ class ReplayResponder:
     publish: object
     grants: Dict[str, Sequence[str]]
     in_flight: Dict[str, Replay] = field(default_factory=dict)
+    #: ``delivers(source, reader)``: the operator's rules, read live (MIS-0002-R152). None delivers all.
+    delivers: Optional[Callable[[str, str], bool]] = None
 
     def __post_init__(self) -> None:
         self.grants = {topic_name(r): g for r, g in self.grants.items()}
@@ -258,8 +285,10 @@ class ReplayResponder:
                                  {"type": "refused", "error": _REQUEST_SHAPE}))
             return 1
         at, sources = read
+        rules = self.delivers
         self.in_flight[reader] = Replay(reader=reader, sources=sources, granted=self.grants[reader],
-                                        log=at["log"], offset=at["offset"])
+                                        log=at["log"], offset=at["offset"],
+                                        delivers=None if rules is None else (lambda s, r=reader: rules(s, r)))
         return 0
 
     def pump(self, max_bytes: int = REPLAY_CHUNK_BYTES) -> int:
@@ -411,12 +440,16 @@ class Publisher:
     where the backlog is dropped and a gap published in its place (R153)."""
 
     def __init__(self, stream, publish, *, wall=None, max_seed_bytes: int = 8 * 1024 * 1024,
-                 silenced: Optional[Callable[[str], bool]] = None):
+                 silenced: Optional[Callable[[str], bool]] = None,
+                 routed: Optional[Callable[[str], Optional[List[str]]]] = None):
         import time as _time
         self.stream = stream
         self.publish = publish
         #: Whether the operator has silenced a source (MIS-0002-R152): its records aren't published.
         self.silenced = silenced or (lambda source: False)
+        #: The readers the operator routed a source to (R152), or None where it isn't routed: a
+        #: routed record publishes on each one's routed subtree instead of its source's topic.
+        self.routed = routed or (lambda source: None)
         self._wall = wall or _time.time
         self.previous = seed_previous(stream.log_path, stream.identity, stream.offset, max_seed_bytes)
         self.pending: List[object] = []     # stream records, or ready Messages (gaps)
@@ -438,7 +471,10 @@ class Publisher:
                 self.publish(item)
             else:
                 source = item["source"]
-                self.publish(to_message(self.stream.card, item, self.previous.get(source)))
+                readers = self.routed(source)
+                topics = [None] if readers is None else [routed_topic(self.stream.card, r, source) for r in readers]
+                for topic in topics:
+                    self.publish(to_message(self.stream.card, item, self.previous.get(source), topic))
                 self.previous[source] = position_key(item["position"])
             self.pending.pop(0)
             sent += 1
@@ -447,10 +483,13 @@ class Publisher:
 
 def render_access_rules(card: str, *, members: Sequence[str] = (), association: bool = False,
                readers: Optional[Dict[str, Iterable[str]]] = None,
-               known_sources: Iterable[str] = ()) -> str:
-    """The broker's access rules: one ``user`` block per certificate the declaration names."""
+               known_sources: Iterable[str] = (), silenced_readers: Iterable[str] = ()) -> str:
+    """The broker's access rules: one ``user`` block per certificate the declaration names. A
+    reader the operator silenced (``@<card>``, MIS-0002-R152) keeps its named block with no
+    topics, so it reads nothing, live or replayed, until the rule is lifted."""
     if members and not association:
         raise BrokerRefused("only an association admits members")
+    silent = {topic_name(r) for r in silenced_readers}
     blocks: List[str] = [f"user {cert_name(card)}\ntopic readwrite {topic_name(card)}/#"]
     if association:
         blocks[0] += "\ntopic read members/#"
@@ -458,8 +497,10 @@ def render_access_rules(card: str, *, members: Sequence[str] = (), association: 
         blocks.append(f"user {cert_name(member)}\ntopic write members/{topic_name(member)}/#")
     for reader, sources in sorted((readers or {}).items()):
         lines = [f"user {cert_name(reader)}"]
-        filters = sorted({f for s in sources for f in grant_filters(card, s, known_sources)})
-        lines += [f"topic read {f}" for f in filters]
+        if topic_name(reader) in silent:
+            blocks.append("\n".join(lines))
+            continue
+        lines += [f"topic read {f}" for f in reader_filters(card, reader, sources, known_sources)]
         replay = replay_topics(card, reader)       # its own replay, and no other reader's
         lines += [f"topic write {replay['request']}", f"topic read {replay['records']}"]
         blocks.append("\n".join(lines))

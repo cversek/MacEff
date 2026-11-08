@@ -391,6 +391,20 @@ class BrokerSection(_Closed):
     client_key_file: str = Field(min_length=1)
     readers: Dict[str, List[Annotated[str, Field(pattern=_STREAM_SOURCE)]]] = Field(default_factory=dict)
 
+    @field_validator("readers")
+    @classmethod
+    def _a_reader_is_named_by_its_card(cls, readers):
+        """A reader is its certificate, named by a card (R164). No other name can hold a
+        certificate, and ``channel``, the session's name in the operator's rules, is no card, so
+        no reader can be silenced or routed together with the session (MIS-0002-R152)."""
+        from macf import calling_card
+        for reader in readers:
+            try:
+                calling_card.read_declared(reader)
+            except calling_card.CardError as e:
+                raise ValueError(f"a broker reader is named by its certificate's card: {e}") from e
+        return readers
+
 
 class AssociationLink(_Closed):
     """Where this daemon exports, and what (PROTOTYPE, mission B phase B3): its association's

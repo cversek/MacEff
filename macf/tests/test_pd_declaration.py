@@ -172,7 +172,7 @@ def test_a_started_daemon_publishes_its_units_for_its_peers(tmp_path, script, ba
     assert str(script) not in text and "MACF_EVENTS_LOG_PATH" not in text   # no command, no environment
     [view] = sv.read_agents(home.parent)
     assert view.status == "PUBLISHED" and view.units.agent == CARD
-    assert [u.name for u in view.units.units] == ["worker"]
+    assert [u.name for u in view.units.units] == ["worker", "broker"]   # every daemon runs its own broker
 
 
 def test_a_restarted_daemon_publishes_the_declaration_it_reloaded(tmp_path, script, base, run_daemon):

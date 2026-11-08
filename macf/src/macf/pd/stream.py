@@ -104,12 +104,26 @@ class Rules:
         return self
 
     def delivers(self, source: str, name: Optional[str]) -> bool:
-        if name is not None and f"@{name}" in self.silenced:
+        """Whether *source* reaches the subscriber *name* (a broker reader's card, or ``channel``
+        for the session). Names compare without regard to case, as cards do (R164)."""
+        if name is not None and name.casefold() in self.silenced_subscribers():
             return False
-        if matches(source, (p for p in self.silenced if not p.startswith("@"))):
+        if self.source_silenced(source):
             return False
-        routed = [n for p, n in self.routes.items() if fnmatch.fnmatchcase(source, p)]
-        return not routed or name in routed
+        routed = self.routed_to(source)
+        return routed is None or (name is not None and name.casefold() in routed)
+
+    def source_silenced(self, source: str) -> bool:
+        return matches(source, (p for p in self.silenced if not p.startswith("@")))
+
+    def silenced_subscribers(self) -> List[str]:
+        """The subscribers silenced by name (``@name``), casefolded."""
+        return [p[1:].casefold() for p in self.silenced if p.startswith("@")]
+
+    def routed_to(self, source: str) -> Optional[List[str]]:
+        """The subscribers *source* is routed to, casefolded, or None where no route takes it."""
+        routed = sorted({n.casefold() for p, n in self.routes.items() if n and fnmatch.fnmatchcase(source, p)})
+        return routed or None
 
     def as_dict(self) -> dict:
         return {"silenced": list(self.silenced), "routes": dict(self.routes)}

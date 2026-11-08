@@ -40,6 +40,7 @@ def test_a_member_writes_only_its_own_subtree_and_reads_nothing():
 def test_a_reader_reads_only_the_sources_granted():
     users = _users(render_access_rules(AGENT, readers={OTHER: ["pd_unit_state", "pd_unit_state"]}))
     assert users[cert_name(OTHER)] == [f"topic read {AGENT.lower()}/events/pd/unit/state",
+                                       f"topic read {AGENT.lower()}/routed/{OTHER.lower()}/pd/unit/state",
                                        f"topic write {AGENT.lower()}/replay/{OTHER.lower()}/request",
                                        f"topic read {AGENT.lower()}/replay/{OTHER.lower()}/records"]
     with pytest.raises(BrokerRefused, match="not a source name"):
@@ -617,3 +618,30 @@ def test_a_silenced_source_is_not_published(tmp_path):
     append(log, "pd_unit_state", unit="a")
     p.pump()
     assert [m.topic for m in sent] == [source_topic(AGENT, "pd_unit_state")]
+
+
+def test_a_daemon_whose_interpreter_lacks_the_brokers_dependencies_is_refused_naming_the_fix(tmp_path, monkeypatch):
+    """An editable install made before paho-mqtt and cryptography were core dependencies doesn't
+    gain them when its checkout updates. Such a daemon is refused at start with the command that
+    installs them into its own interpreter, rather than dying on an import inside its start."""
+    import macf.pd.broker_defaults as bd
+    from macf.pd.core import DeclarationRefused
+    from macf.pd.daemon import Daemon
+    from test_primal_daemon import make_home
+    assert bd.missing_dependencies(lambda module: None) == ["paho-mqtt", "cryptography"]
+    assert bd.missing_dependencies(lambda module: None if module == "cryptography" else object()) == ["cryptography"]
+    assert bd.missing_dependencies() == []
+    monkeypatch.setattr(bd, "missing_dependencies", lambda: ["paho-mqtt"])
+    with pytest.raises(DeclarationRefused) as refused:
+        Daemon(make_home(tmp_path, []), base=tmp_path / "run")
+    import sys
+    assert "paho-mqtt" in str(refused.value) and f"{sys.executable} -m pip install" in str(refused.value)
+
+
+def test_the_wrapper_names_the_remedy_when_mosquitto_is_missing(tmp_path, capsys):
+    from macf.pd.broker_unit import main
+    conf = tmp_path / "mosquitto.conf"
+    conf.write_text("listener 18830 127.0.0.1\n")
+    assert main([str(conf), "--mosquitto", "no-such-mosquitto-here"]) == 127
+    err = capsys.readouterr().err
+    assert "install mosquitto" in err.lower() and "brew services start" in err

@@ -20,7 +20,7 @@ import hashlib
 import os
 import sys
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
 from macf.pd.broker import LOOPBACK, cert_name
 
@@ -115,6 +115,39 @@ def default_section(home: Path, card: str):
     return BrokerSection(port=default_port(card), certificate_authority_file=str(p["ca_cert"]),
                          server_certificate_file=str(p["cert"]), server_key_file=str(p["key"]),
                          client_certificate_file=str(p["cert"]), client_key_file=str(p["key"]))
+
+
+#: The modules every daemon's own broker needs, each with the distribution that provides it.
+BROKER_MODULES = {"paho.mqtt.client": "paho-mqtt", "cryptography": "cryptography"}
+
+
+def missing_dependencies(find=None) -> List[str]:
+    """The distributions the broker needs that this interpreter can't import. An editable install
+    made before they became core dependencies doesn't gain them when the checkout moves on."""
+    import importlib.util
+    find = find or importlib.util.find_spec
+    missing = []
+    for module, dist in BROKER_MODULES.items():
+        try:
+            found = find(module) is not None
+        except ImportError:
+            found = False
+        if not found:
+            missing.append(dist)
+    return missing
+
+
+def dependency_remedy(missing: List[str], executable: str = sys.executable) -> str:
+    """Why the daemon can't start without *missing*, and the command that installs them into the
+    interpreter it runs on."""
+    import macf
+    # An editable install runs from its checkout: the nearest directory above holding pyproject.toml.
+    project = next((p for p in Path(macf.__file__).resolve().parents if (p / "pyproject.toml").exists()), None)
+    install = (f"{executable} -m pip install -e {project}" if project is not None
+               else f"{executable} -m pip install --upgrade macf")
+    return (f"this daemon's interpreter ({executable}) lacks {', '.join(missing)}, which every daemon's "
+            f"own broker needs (persistent_layer 11.4); an editable install doesn't gain new "
+            f"dependencies when its checkout updates. Install them, then start again: {install}")
 
 
 def with_own_broker(declaration, home: Path, card: str):
