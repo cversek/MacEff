@@ -13685,7 +13685,7 @@ def _build_parser() -> argparse.ArgumentParser:
     amail_key_status.set_defaults(func=cmd_amail_key_status)
     amail_registry = amail_sub.add_parser(
         "registry", help="the operator's registry of agents' keys and issued certificates (MIS-0004 R42)")
-    amail_registry_sub = amail_registry.add_subparsers(dest="registry_cmd", required=True)
+    amail_registry_sub = amail_registry.add_subparsers(dest="registry_cmd")
     amail_registry_check = amail_registry_sub.add_parser(
         "check", help="check who can write the registry, and list what it declares")
     amail_registry_check.add_argument("--path", help="the registry (default: /etc/maceff/registry.yaml)")
