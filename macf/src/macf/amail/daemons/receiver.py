@@ -54,16 +54,56 @@ from pathlib import Path
 import jwt as pyjwt
 from jwt import PyJWKClient
 
-TEAM_DOMAIN = os.environ.get("INGEST_TEAM_DOMAIN", "").rstrip("/")
-AUD = os.environ.get("INGEST_AUD", "")
-PIN_CN = os.environ.get("INGEST_PIN_COMMON_NAME") or None
-BIND = ("127.0.0.1", int(os.environ.get("AMAIL_INGEST_PORT", "8025")))
-LOG_PATH = Path(os.environ.get("AMAIL_INGEST_LOG",
-                               "/var/lib/amail_ingest/ingest_receiver.jsonl"))
-SPOOL = Path(os.environ.get("AMAIL_INGEST_SPOOL",
-                            "/var/lib/amail_ingest/spool"))
-JWKS_URL = os.environ.get("INGEST_JWKS_URL",
-                          f"{TEAM_DOMAIN}/cdn-cgi/access/certs")
+from macf.pd.liveness import heartbeat_from_env
+
+
+def load_env_file(path: Path, environ=os.environ) -> int:
+    """Set each KEY=value from *path* that *environ* does not already hold; the count set.
+
+    As a primal daemon's unit the receiver gets only its declaration's environment, so the
+    deployment's verification parameters (team domain, audience, pin) are read from the file
+    start-up places for this account, ``AMAIL_INGEST_ENV_FILE``. A missing file sets nothing;
+    the checks in ``main`` then refuse to listen."""
+    try:
+        text = path.read_text()
+    except OSError:
+        return 0
+    n = 0
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            if key.strip() not in environ:
+                environ[key.strip()] = value.strip()
+                n += 1
+    return n
+
+
+ENV_FILE = Path(os.environ.get("AMAIL_INGEST_ENV_FILE", "/opt/amail_ingest/receiver.env"))
+
+#: The loopback probe the unit's liveness rests on: answered 200, never logged.
+HEALTH_PATH = "/healthz"
+
+#: Consecutive failed probes after which the receiver exits, so its daemon restarts it. Overdue
+#: liveness is only a status; a wedged server needs an exit to be replaced.
+PROBE_FAILURES_TO_EXIT = 3
+
+
+def _configure(environ=os.environ) -> None:
+    """Read the settings that come from the environment. At import from the process environment
+    alone; ``main`` calls it again after loading the env file, so importing this module never
+    reads a file."""
+    global TEAM_DOMAIN, AUD, PIN_CN, BIND, LOG_PATH, SPOOL, JWKS_URL
+    TEAM_DOMAIN = environ.get("INGEST_TEAM_DOMAIN", "").rstrip("/")
+    AUD = environ.get("INGEST_AUD", "")
+    PIN_CN = environ.get("INGEST_PIN_COMMON_NAME") or None
+    BIND = ("127.0.0.1", int(environ.get("AMAIL_INGEST_PORT", "8025")))
+    LOG_PATH = Path(environ.get("AMAIL_INGEST_LOG", "/var/lib/amail_ingest/ingest_receiver.jsonl"))
+    SPOOL = Path(environ.get("AMAIL_INGEST_SPOOL", "/var/lib/amail_ingest/spool"))
+    JWKS_URL = environ.get("INGEST_JWKS_URL", f"{TEAM_DOMAIN}/cdn-cgi/access/certs")
+
+
+_configure()
 
 # 5 MB raw (the Worker's operator-chosen gate; see its comment for the rationale) * 4/3 base64 + JSON envelope, rounded up.
 # Defends the disk; the Worker's gate is tighter and fails first in the
@@ -346,8 +386,13 @@ class IngestHandler(BaseHTTPRequestHandler):
         # affect delivery. The coupling is an alarm, not a gate.
         check_drain()
 
-    # Anything that is not POST /inbound is refused loudly.
+    # Anything that is not POST /inbound is refused loudly, except the health probe.
     def do_GET(self):
+        if self.path == HEALTH_PATH:
+            # The unit's own liveness probe (main). Not logged: it runs every interval, and it
+            # says nothing about mail. Through the tunnel it sits behind the same Access policy
+            # as /inbound, and it reveals only that the receiver answers.
+            return self._reply(200, {"ok": True})
         self._refuse(405, "POST only")
     do_PUT = do_DELETE = do_PATCH = do_GET
 
@@ -355,7 +400,32 @@ class IngestHandler(BaseHTTPRequestHandler):
         pass
 
 
+def watch_health(serving, probe, tick, sleep, pause_s: float,
+                 failures_to_exit: int = PROBE_FAILURES_TO_EXIT) -> int:
+    """Tick on each answered probe; return 1 when the server thread has died, or after
+    *failures_to_exit* probes in a row go unanswered, so the daemon restarts the unit. *serving*
+    says whether the server thread is still running."""
+    failed = 0
+    while True:
+        if not serving():
+            print("amail ingest receiver: its server thread has stopped; exiting so the daemon "
+                  "restarts this unit", file=sys.stderr, flush=True)
+            return 1
+        if probe():
+            failed = 0
+            tick()
+        else:
+            failed += 1
+            if failed >= failures_to_exit:
+                print(f"amail ingest receiver: {failed} health probes in a row went unanswered; "
+                      f"exiting so the daemon restarts this unit", file=sys.stderr, flush=True)
+                return 1
+        sleep(pause_s)
+
+
 def main() -> int:
+    load_env_file(ENV_FILE)
+    _configure()
     if not TEAM_DOMAIN or not AUD:
         print("refusing to start: INGEST_TEAM_DOMAIN and INGEST_AUD are "
               "required -- a receiver that cannot verify must not listen",
@@ -366,11 +436,43 @@ def main() -> int:
     print(f"amail ingest receiver on http://{BIND[0]}:{BIND[1]} "
           f"(aud {AUD[:12]}..., jwks {JWKS_URL}, "
           f"pin_cn {PIN_CN or 'none'})", flush=True)
+    heartbeat = heartbeat_from_env()
+    if heartbeat is None:
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        return 0
+    # As a declared unit, liveness is a request answered, not a process alive: the server runs
+    # on a thread and this loop asks it over loopback, ticking only on a 200 (MIS-0002-R14).
+    import threading
+    serve = threading.Thread(target=server.serve_forever, name="ingest-serve", daemon=True)
+    serve.start()
+    url = f"http://{BIND[0]}:{BIND[1]}{HEALTH_PATH}"
     try:
-        server.serve_forever()
+        return watch_health(serve.is_alive, lambda: probe_health(url), heartbeat.tick, time.sleep,
+                            min(heartbeat.interval_s / 2, 15))
     except KeyboardInterrupt:
-        pass
-    return 0
+        return 0
+    finally:
+        heartbeat.stop()
+        if serve.is_alive():          # shutdown() waits on serve_forever, so never on a dead one
+            server.shutdown()
+
+
+# The probe asks loopback, so it never goes through a proxy. Plain urlopen sends an http://
+# request through http_proxy whenever one is set, loopback included, and three failed probes make
+# the receiver exit, so a proxied unit environment would restart it in a loop while it was fine.
+_LOOPBACK = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def probe_health(url: str, timeout: float = 5.0) -> bool:
+    """Whether the receiver answers its health path with 200, asked directly over loopback."""
+    try:
+        with _LOOPBACK.open(url, timeout=timeout) as r:
+            return r.status == 200
+    except (OSError, ValueError):
+        return False
 
 
 if __name__ == "__main__":
