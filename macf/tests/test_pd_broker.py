@@ -502,3 +502,54 @@ def test_subscribe_over_the_broker_names_what_it_is_missing(capsys, monkeypatch)
                               reader=None, source=None, name=None)
     assert cli.cmd_pd_stream_subscribe(args) == 1
     assert "--cert, --key, --reader" in capsys.readouterr().err
+
+
+# --- the broker unit's wrapper: liveness only while the broker listens ---------------------------
+
+
+def test_the_wrapper_finds_the_port_the_daemon_rendered(tmp_path):
+    from macf.pd.broker_unit import listener_port
+    conf = tmp_path / "mosquitto.conf"
+    conf.write_text(render_conf(port=18830, listen="loopback", certificate_authority_file="a", certificate_file="b",
+                                key_file="c", access_rules_file="d"))
+    assert listener_port(conf) == 18830
+    conf.write_text("allow_anonymous false\n")
+    with pytest.raises(ValueError, match="no listener"):
+        listener_port(conf)
+
+
+def test_the_wrapper_beats_only_while_the_broker_listens_and_ends_with_its_status():
+    import sys
+    from macf.pd.broker_unit import run
+    ticks = []
+    child = [sys.executable, "-c", "import time, sys; time.sleep(0.3); sys.exit(3)"]
+    assert run(child, 1, lambda: ticks.append(1), poll_s=0.05, probe=lambda port: True) == 3
+    assert ticks, "it listens, so it beats"
+    ticks.clear()
+    assert run(child, 1, lambda: ticks.append(1), poll_s=0.05, probe=lambda port: False) == 3
+    assert ticks == [], "a broker process that doesn't listen earns no liveness"
+    probes = []
+    run(child, 1, lambda: None, poll_s=0.05, probe_every_s=10, probe=lambda port: probes.append(1) or True)
+    assert probes == [1], "one probe per interval, however often the wrapper polls"
+
+
+def test_a_rendered_broker_configuration_is_private(tmp_path):
+    from macf.pd.broker_link import render_files
+    from macf.pd.interface import BrokerSection
+    s = BrokerSection(port=18830, certificate_authority_file="a", server_certificate_file="b", server_key_file="c",
+                      client_certificate_file="d", client_key_file="e")
+    conf = render_files(AGENT, s, tmp_path, {})
+    assert conf.stat().st_mode & 0o777 == 0o600
+    assert (conf.parent / "access_rules").stat().st_mode & 0o777 == 0o600
+
+
+def test_the_wrapper_passes_a_stop_on_to_the_broker():
+    import sys
+    import time
+    from macf.pd.broker_unit import run
+    asked_at = time.monotonic() + 0.2
+    child = [sys.executable, "-c", "import time; time.sleep(30)"]
+    started = time.monotonic()
+    code = run(child, 1, lambda: None, poll_s=0.05, probe=lambda port: True,
+               stopping=lambda: time.monotonic() > asked_at)
+    assert code != 0 and time.monotonic() - started < 5

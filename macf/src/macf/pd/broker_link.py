@@ -95,12 +95,14 @@ def render_files(card: str, section: BrokerSection, runtime: Path, placeholders:
     access_rules = d / "access_rules"
     access_rules.write_text(b.render_access_rules(card, readers=section.readers, known_sources=known_sources,
                                 members=members, association=bool(members)))
+    access_rules.chmod(0o600)          # mosquitto warns on a world-readable one, and will refuse it
     conf = d / "mosquitto.conf"
     conf.write_text(b.render_conf(port=section.port, listen="loopback",
                                   certificate_authority_file=resolve(section.certificate_authority_file, placeholders),
                                   certificate_file=resolve(section.server_certificate_file, placeholders),
                                   key_file=resolve(section.server_key_file, placeholders),
                                   access_rules_file=str(access_rules), association=bool(members)) + "persistence false\n")
+    conf.chmod(0o600)
     return conf
 
 
