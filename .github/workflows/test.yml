@@ -54,7 +54,7 @@ jobs:
         # `amail` is here because the amail suite imports the crypto backend.
         # Without it those tests would SKIP rather than fail, and a silently
         # skipped security suite is the quietest way to stop testing something.
-        run: pip install -e "./macf[test,proxy,amail]"
+        run: pip install -e "./macf[test,proxy,amail,broker]"
 
       - name: Create CI environment directories
         if: env.RUN_TESTS == 'true'

@@ -108,6 +108,10 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - What happens when a subscriber falls behind, or reconnects after records it never saw?
 - Which records can a subscriber trust to say what the layer did?
 - Who may subscribe, and how does the operator silence or reroute the stream?
+- How does a daemon publish its stream on its own broker, and who may read it there? (prototype)
+- How does a reader that reconnects to the broker catch up without gaps or duplicates?
+- How does a daemon join an association, what does it export, and what travels up to the fleet? (prototype)
+- My daemon's broker or export link reads as unreachable. How do I find the cause?
 
 **12 The Daemon and Its Control Socket**
 - How does an agent get exactly one daemon, and where does its identity come from?
@@ -1034,6 +1038,57 @@ A subscriber receives only the sources it chose [MIS-0002-R151 (subscriber_MUST_
 - **That check holds at the socket, not across a restart.** At its start the daemon folds every `pd_stream_rule` line in your event log, and your own uid writes that log. So even with `operator_uid` set, a rule line you append yourself is honored from the next start, a `silence` of the very source that reports on you included. The operator's rules are kept apart only when they live where your uid can't write, which isn't built. As with your entries (10.6), the rules stop a confused agent, not a compromised one.
 
 **What the stream is not for.** Quiet hours, a daily bound, and delivering something exactly once belong to whichever subscriber delivers to a person, not to the layer. The operator route beyond unread mail, and "hold until present", are that subscriber's job, left by MIS-0002 R42 to a successor MIS.
+
+### 11.5 The stream on the daemon's own broker (prototype)
+
+**Status: prototype, pending the maintainers' argument and the operator's ruling.** A daemon whose declaration names a `broker` section also publishes its stream on its own MQTT broker. Without the section, nothing here applies, and the socket of 11.4 is the stream.
+
+**What to install.** The MQTT client is the optional extra `pip install 'macf[broker]'`, so a seat whose declaration names no broker installs nothing new. A declaration that names a `broker` or an `association` is refused at load without it, naming the extra. mosquitto, the broker itself, is a host package the operator installs.
+
+**What to declare.**
+- `broker.port`, a loopback port from 1024 to 65535, **its own on the host.** Every daemon's broker binds the same loopback address, so `pd install` and the daemon's start refuse a port that another declaration they can read already names, and say whose. Without the check, the second broker can't bind, and its daemon's link reaches the first daemon's broker, which refuses its certificate: it would read as unreachable, with nothing naming the cause.
+- The certificate authority that issued every certificate, the broker's server certificate and key, and the daemon's own client certificate and key. Paths may use the declaration's placeholders.
+- `broker.readers`, each reader's card mapped to the sources it may read. This is the broker's form of `stream_grants`.
+- A unit that runs the broker through its wrapper: `python -m macf.pd.broker_unit {runtime_dir}/<card>.broker/mosquitto.conf`. The daemon writes that file and its access rules at start, before units start. The broker is then supervised like any unit. **Why the wrapper:** a daemon credits a unit only for liveness events naming the process it started (11.2), and mosquitto writes none, so declared bare it would fail at its first liveness bound. The wrapper runs mosquitto as its child and beats only while the broker accepts connections on its listener. A broker process that exists but no longer listens therefore goes overdue. The wrapper ends with mosquitto's exit status and passes a stop on to it.
+
+**One address and one spelling.**
+- The broker binds `127.0.0.1`, and every local link dials that address, never `localhost`, which resolves to `::1` first on some systems (macOS among them). The broker's server certificate carries `127.0.0.1` as an IP name.
+- Wherever a topic names a card, it takes the card lowercased, as the certificate's name does. MQTT topics are case-sensitive, but two spellings of one card are the same card (MIS-0002-R164), so a member or reader declared in another case still matches. Below, `<card>` in a topic means the card lowercased.
+
+**Who can read what.** Certificates are required, and a certificate's name is its card lowercased (MIS-0002-R161).
+- The daemon reads and writes everything under its own card.
+- Each declared reader reads only the sources granted to it. It also writes its own replay request and reads its own replay records, and no other reader's.
+- A certificate the declaration doesn't name connects and reads nothing. A client with no certificate is refused.
+- There is never a `pattern` rule, because one would apply to every certificate the CA ever issued.
+
+**What a reader receives.**
+- Each record is published on its source's topic: the event name split on `_` into levels, so `pd_entry_due` is `<card>/events/pd/entry/due` and a family is one filter.
+- The payload is the record of 11.4, with its position inside.
+- One user property, `previous`, names the position of the last record of the same source, as `log:offset`.
+- A reader detects a gap per source: a message whose `previous` isn't the position it last saw from that source. A rotated log has another identity, so its positions never match the old log's.
+- A gap on the daemon's side (`rotated`, `overflow`) is published on `<card>/events/_gap`.
+
+**Catching up after a reconnect.** The broker's queue is never the record; the log is.
+- A reader that reconnects writes `<card>/replay/<reader>/request`, naming the last position it delivered and the sources it wants.
+- The daemon answers from its log on `<card>/replay/<reader>/records`: a gap first if records since then are gone, then the records it asked for and was granted, then `done`. An unreadable request gets `refused`.
+- The reader holds live records while the replay runs and drops duplicates at the boundary, so each record arrives once, in log order. `CatchUp` in `macf.pd.broker` does this, and so does `macf_tools pd stream subscribe --broker-port`.
+
+**What never blocks.** The daemon's publisher follows the log on its own, separately from the socket stream. A publish only joins the MQTT client's queue. A record whose publish fails stays pending and is retried first, and past its bound the backlog becomes one `overflow` gap. Replay requests are queued on the client's thread and answered on the daemon's, where the log is read, **in bounded passes**:
+- Each reader has at most one replay in flight. A reader's newer request replaces its older one, so no request is dropped unanswered. Each one is answered to `done` or replaced by a later one from the same reader, and the records the older one already sent are duplicates the reader drops.
+- Each pass of the daemon's loop reads at most 64 KiB of log per replay in flight, so a reader asking from an old position, however often, can't hold up the loop.
+
+**Associations.** A system or fleet daemon (`kind`) whose broker also admits `members` is an association. A member names the association it exports to in its `association` section: host, port, certificate authority, its own client certificate and key, and the sources it `exports`.
+- **What a member may do:** write `members/<member>/#` and nothing else. It can't write as a sibling or read one, and only the association daemon reads `members/#`.
+- **Presence:** a member publishes a retained `online` on `members/<member>/presence` when it connects, and registers `offline` as its will, which the broker publishes when the connection dies uncleanly. Before a clean stop, it publishes `offline` itself.
+- **Exports are summaries, never content:** a record's `source`, `agent`, `time` and `position`, plus `unit` and `state` for the unit-state family. Its data stays home, because the data may hold notice text, mail or unit arguments. The default is `pd_unit_state` and `pd_carried`.
+- **What travels up, and so must be fit to travel:**
+  - **Unit names.** Operators name units, so a unit name is the only free text that leaves the host. A unit name must not carry anything private.
+  - **Sibling cards.** An association's `pd_member_findings` names its members and how each differs from the declaration, and that summary is what a system daemon exports to its fleet. So a fleet sees its systems' members' cards. Cards are public signatures and the zone token is what keeps mail private, so that is acceptable, but no export carries only the member's own card.
+- **Findings:** the association compares the members it declares with those present: declared but never present, offline, present but silent, present but not declared. It records each change once as `pd_member_findings` in its own log, where the outside watch reads it. Members compare by card, ignoring case.
+- **A link that can't connect says why.** When a member can't reach its association, it records `pd_export_unreachable` once per change of reason, naming the host, the port and the cause, and records it again with no reason once it connects. On macOS, an `EHOSTUNREACH` to a LAN address is the Local Network privacy block, not an outage. A person must grant the process at the console, under System Settings > Privacy & Security > Local Network, and a LaunchAgent can't answer that prompt. The reason says so, and a macOS host's install steps include the grant. Without this, the association would only read the member as never present.
+- **The recursion:** a system daemon is a member of its fleet exactly as an agent's daemon is a member of its system, by the same code. The same membership test runs at both levels.
+
+**What doesn't move.** The MacEff channel keeps its own socket: MIS-0002 R113 and R123 require the channel to connect only to its own daemon through a local socket whose peer the kernel identifies. The control socket also stays, and so do the outside watch and the hooks, which read or append the log.
 
 ---
 

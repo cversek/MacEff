@@ -29,6 +29,7 @@ Nothing here blocks the daemon's loop: every socket is non-blocking, each subscr
 bounded, and a subscriber that falls behind loses its own backlog (MIS-0002-R153).
 """
 import collections
+import dataclasses
 import fnmatch
 import hashlib
 import json
@@ -62,6 +63,17 @@ FINGERPRINT_BYTES = 4096
 OWN_REMEMBERED = 10000
 
 Position = Dict[str, object]
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class Chunk:
+    """One bounded step of a replay (``EventStream.since_chunk``): the gap owed first, if any;
+    the records read; the position to continue from (None when there was nothing to read); and
+    whether the step reached what the stream has read."""
+    gap: Optional[tuple]
+    records: List[dict]
+    next: Optional[Position]
+    at_end: bool
 
 
 def log_identity(path: Path, ino: int) -> str:
@@ -232,6 +244,19 @@ class EventStream:
                 self._own.popitem(last=False)
         self._pending_own.clear()
 
+    def start_at_end(self) -> None:
+        """Follow from what the log holds now, not from its start: for a publisher or an
+        exporter, whose readers catch up from the log by replay. Without it, the first pass
+        read the whole log in one go (hundreds of megabytes on a long-lived host), published
+        it, and flooded an association with every export ever recorded (seen live, Nov 8)."""
+        try:
+            st = self.log_path.stat()
+        except FileNotFoundError:
+            return      # noqa: MACEFF003 - no log yet: its first line is new, followed from 0
+        # From the end as it stands. A line half-written at this moment is finished after
+        # it; its tail isn't JSON, so the next pass skips it as it skips any such line.
+        self._ino, self.identity, self.offset = st.st_ino, log_identity(self.log_path, st.st_ino), st.st_size
+
     def _follow(self) -> Tuple[List[Tuple[int, int, bytes]], Optional[Tuple[Position, Position]]]:
         """The complete lines appended since the last pass, as (start, end, line), and a gap
         when the log was replaced under them."""
@@ -312,7 +337,7 @@ class EventStream:
             at = nl + 1
         return out
 
-    def _render(self, start: int, end: int, line: bytes) -> Optional[Tuple[str, bytes]]:
+    def _record(self, start: int, end: int, line: bytes) -> Optional[dict]:
         """A log line as the stream's record: the layer's stamp, never the line's claims."""
         try:
             record = json.loads(line)
@@ -320,14 +345,53 @@ class EventStream:
             return None  # noqa: MACEFF003 - a line that isn't JSON is no record; the caller skips it by design
         if not isinstance(record, dict) or not isinstance(record.get("event"), str):
             return None
-        source = record["event"]
         stamp = record.get("timestamp")
         # The daemon's own line only where the log holds, at that offset, the very bytes it wrote.
         origin = "daemon" if self._own.get(start) == line else "log"
-        out = {"type": "record", "position": self.position(end), "source": source, "agent": self.card,
-               "time": stamp if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) else self._wall(),
-               "origin": origin, "record": record}
-        return source, json.dumps(out).encode() + b"\n"
+        return {"type": "record", "position": self.position(end), "source": record["event"],
+                "agent": self.card,
+                "time": stamp if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) else self._wall(),
+                "origin": origin, "record": record}
+
+    def _render(self, start: int, end: int, line: bytes) -> Optional[Tuple[str, bytes]]:
+        out = self._record(start, end, line)
+        return None if out is None else (out["source"], json.dumps(out).encode() + b"\n")
+
+    def since(self, log: str, offset: int) -> Tuple[Optional[Tuple[Position, Position, str]], List[dict]]:
+        """For a replay (R154 as amended): the gap owed before a resume from this position, if
+        any, and the stream records from where the resume can start up to what the stream has
+        read, under the same rules a socket subscriber's resume follows."""
+        self._settle_own()
+        gap, read_from = self._resume_from(log, offset)
+        if read_from is None:
+            return gap, []
+        lines = self._read_lines(read_from, self.offset)
+        return gap, [r for r in (self._record(s, e, line) for s, e, line in lines) if r is not None]
+
+    def since_chunk(self, log: str, offset: int, max_bytes: Optional[int]) -> "Chunk":
+        """``since`` in bounded steps, for a replay answered over several passes of the daemon's
+        loop: at most *max_bytes* of log, and at least one whole line, so a long line still makes
+        progress."""
+        self._settle_own()
+        gap, read_from = self._resume_from(log, offset)
+        if read_from is None:
+            return Chunk(gap=gap, records=[], next=None, at_end=True)
+        end = self.offset if max_bytes is None else min(self.offset, read_from + max_bytes)
+        lines = self._read_lines(read_from, end)
+        if not lines and end < self.offset:
+            lines = self._read_lines(read_from, self.offset)[:1]
+        reached = lines[-1][1] if lines else read_from
+        records = [r for r in (self._record(s, e, line) for s, e, line in lines) if r is not None]
+        return Chunk(gap=gap, records=records, next=self.position(reached), at_end=reached >= self.offset)
+
+    def take(self) -> Tuple[List[dict], Optional[Tuple[Position, Position]]]:
+        """For a publisher that isn't a socket subscriber (the broker, MIS-0002 R150 to R156 as
+        amended): the records appended since the last call, as stream records, and the gap owed
+        first when the log was replaced under them."""
+        self._settle_own()
+        lines, gap = self._follow()
+        records = [r for r in (self._record(s, e, line) for s, e, line in lines) if r is not None]
+        return records, gap
 
     # ------------------------------------------------------------------ the socket
 

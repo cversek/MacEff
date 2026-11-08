@@ -157,6 +157,27 @@ class Daemon:
         from macf.agent_events_log import get_log_path
         from macf.pd.stream import EventStream
         self.stream = EventStream(self.card, get_log_path(), self.core.declaration.stream_grants)
+        #: The daemon's own broker (prototype, mission B phase B2): its configuration rendered
+        #: here, before units start, and its publisher run from the loop.
+        self.broker_link = None
+        self.export_link = None
+        decl = self.core.declaration
+        if decl.broker is not None:
+            from macf.pd.broker_link import BrokerLink, declared_broker_ports, port_clash, render_files
+            clash = port_clash(self.card, decl.broker.port, declared_broker_ports(self.home))
+            if clash is not None:
+                raise DeclarationRefused(clash)
+            # The runtime directory is made private here, before the broker's files go in it:
+            # rendering first let mkdir(parents=True) create it with the umask's 0755, which
+            # the start then refused (seen on the system daemon's first start, Nov 8).
+            ensure_runtime_dir(self.base)
+            render_files(self.card, decl.broker, self.base, placeholders, members=decl.members)
+            self.broker_link = BrokerLink(self.card, get_log_path(), decl.broker, placeholders,
+                                          members=decl.members, on_findings=self._member_findings)
+        if decl.association is not None:
+            from macf.pd.broker_link import ExportLink
+            self.export_link = ExportLink(self.card, get_log_path(), decl.association, placeholders,
+                                          on_unreachable=self._export_unreachable)
         self._events_bound: Optional[tuple] = None
         self._listener: Optional[socket.socket] = None
         self._channel_listener: Optional[socket.socket] = None
@@ -376,6 +397,9 @@ class Daemon:
         sel.register(self._listener, selectors.EVENT_READ, "control")
         sel.register(self._channel_listener, selectors.EVENT_READ, "channel")
         sel.register(self._wake_r, selectors.EVENT_READ, "wake")
+        for link in (self.broker_link, self.export_link):
+            if link is not None:
+                link.start()
         try:
             while not self._stopping:
                 for key, _ in sel.select(timeout=TICK_S):
@@ -413,6 +437,9 @@ class Daemon:
             self.notifier.on_detach = None
             self.stream.on_unregister = None
             self.stream.close()
+            for link in (self.broker_link, self.export_link):
+                if link is not None:
+                    link.stop()
             self.scheduler.shutdown()
             sel.close()
             self._sel = None
@@ -427,6 +454,28 @@ class Daemon:
             self.stream.pump()
         except Exception as e:  # noqa: BLE001 - GUARD, not handler: the stream must not end the daemon
             print(f"⚠️ MACF: pd: the event stream's pass failed (the daemon goes on): {e!r}", file=sys.stderr)
+        for link in (self.broker_link, self.export_link):
+            if link is None:
+                continue
+            try:
+                link.tick()
+            except Exception as e:  # noqa: BLE001 - GUARD, not handler: a broker must not end the daemon
+                print(f"⚠️ MACF: pd: a broker link's pass failed (the daemon goes on): {e!r}", file=sys.stderr)
+
+    def _member_findings(self, findings) -> None:
+        """An association's members differ from its declaration, or stopped differing: recorded
+        once per change, in this daemon's own log, where the outside watch reads it."""
+        from macf.agent_events_log import append_event
+        append_event("pd_member_findings", {"agent": self.card, "findings": list(findings),
+                                            "members": list(self.core.declaration.members)})
+
+    def _export_unreachable(self, reason) -> None:
+        """This daemon can't reach its association's broker, or can again (reason None):
+        recorded once per change, naming the cause, such as a macOS Local Network grant."""
+        from macf.agent_events_log import append_event
+        link = self.core.declaration.association
+        append_event("pd_export_unreachable", {"agent": self.card, "host": link.host, "port": link.port,
+                                               "reason": reason})
 
     def stop(self, units: bool = False) -> None:
         """Ask ``serve`` to finish, and with ``units`` to stop every unit first; a plain stop,
