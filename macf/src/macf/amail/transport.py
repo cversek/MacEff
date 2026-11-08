@@ -183,11 +183,22 @@ class HttpTransport:
     name = "http"
 
     def __init__(self, endpoint: str, *, timeout: float = 30.0,
-                 opener: Optional[Any] = None):
+                 opener: Optional[Any] = None, tls_context: Optional[Any] = None):
         if not endpoint:
             raise ValueError("an HTTP transport needs an endpoint")
+        if tls_context is not None and opener is not None:
+            # One transport path: a pinned context and a substituted opener together would leave
+            # it unclear which one verified the server.
+            raise ValueError("pass a pinned tls_context or an opener, not both")
         self.endpoint = endpoint
         self.timeout = timeout
+        #: The pinned trust bundle's context (MIS-0004 R34, amail.pinned_tls). With it, the
+        #: endpoint is verified against the operator's bundle only, never the system store.
+        self.tls_context = tls_context
+        if tls_context is not None:
+            import urllib.request
+            opener = urllib.request.build_opener(
+                urllib.request.HTTPSHandler(context=tls_context)).open
         # Injected so the SEQUENCE can be tested without the network. The
         # injection is not a substitute for running it against the real
         # endpoint, and the docstring above says so rather than letting a green
