@@ -14,11 +14,13 @@ requests. Nothing here blocks the loop (MIS-0002-R153):
 """
 import collections
 import threading
+import time
 from pathlib import Path
-from typing import Deque, Dict, Optional, Tuple
+from typing import Callable, Deque, Dict, List, Optional, Sequence, Tuple
 
+from macf.pd import association as assoc
 from macf.pd import broker as b
-from macf.pd.interface import BrokerSection
+from macf.pd.interface import AssociationLink, BrokerSection
 from macf.pd.stream import EventStream
 
 #: Seconds between reconnect attempts, at most, while the broker is unreachable.
@@ -31,20 +33,22 @@ def resolve(path: str, placeholders: Dict[str, str]) -> str:
 
 
 def render_files(card: str, section: BrokerSection, runtime: Path, placeholders: Dict[str, str],
-                 known_sources=()) -> Path:
+                 known_sources=(), members: Sequence[str] = ()) -> Path:
     """Write the broker's access rules and configuration under *runtime*; the configuration's
-    path, which the broker unit's command names."""
+    path, which the broker unit's command names. With *members*, the broker is an association's:
+    each member may write its own subtree, and only this daemon reads them."""
     d = Path(runtime) / f"{card}.broker"
     d.mkdir(parents=True, exist_ok=True)
     d.chmod(0o700)
     acl = d / "acl"
-    acl.write_text(b.render_acl(card, readers=section.readers, known_sources=known_sources))
+    acl.write_text(b.render_acl(card, readers=section.readers, known_sources=known_sources,
+                                members=members, association=bool(members)))
     conf = d / "mosquitto.conf"
     conf.write_text(b.render_conf(port=section.port, listen="loopback",
                                   cafile=resolve(section.cafile, placeholders),
                                   certfile=resolve(section.server_certfile, placeholders),
                                   keyfile=resolve(section.server_keyfile, placeholders),
-                                  acl_file=str(acl)) + "persistence false\n")
+                                  acl_file=str(acl), association=bool(members)) + "persistence false\n")
     return conf
 
 
@@ -64,12 +68,19 @@ def nowait_publish(client):
 
 
 class BrokerLink:
-    """One daemon's publisher and replay responder, over one MQTT client."""
+    """One daemon's publisher and replay responder, over one MQTT client. For an association,
+    also its view of its members: each change in what differs from the declaration is handed to
+    ``on_findings`` once, for the daemon to record."""
 
     def __init__(self, card: str, log_path: Path, section: BrokerSection, placeholders: Dict[str, str],
-                 *, client=None):
+                 *, client=None, members: Sequence[str] = (),
+                 on_findings: Optional[Callable[[List[str]], None]] = None):
         self.card = card
         self.section = section
+        self.view = assoc.MembershipView(expected=list(members)) if members else None
+        self.on_findings = on_findings
+        self.reported: Optional[List[str]] = None
+        self.member_messages: Deque[Tuple[str, bytes]] = collections.deque(maxlen=1000)
         self.client = client if client is not None else self._client(section, placeholders)
         self.stream = EventStream(card, log_path)
         publish = nowait_publish(self.client)
@@ -93,10 +104,26 @@ class BrokerLink:
 
     def _on_connect(self, client, _userdata, _flags, _reason, _props=None) -> None:
         client.subscribe(f"{self.card}/replay/+/request", qos=1)
+        if self.view is not None:
+            client.subscribe("members/#", qos=1)
 
     def _on_message(self, _client, _userdata, message) -> None:
         with self._lock:                       # the network thread only queues
-            self.requests.append((message.topic, bytes(message.payload)))
+            if message.topic.startswith("members/"):
+                self.member_messages.append((message.topic, bytes(message.payload)))
+            else:
+                self.requests.append((message.topic, bytes(message.payload)))
+
+    def _members_tick(self, now: float) -> None:
+        with self._lock:
+            messages, self.member_messages = list(self.member_messages), collections.deque(maxlen=1000)
+        for topic, payload in messages:
+            self.view.observe(topic, payload, now)
+        findings = self.view.findings(now)
+        if findings != self.reported:
+            self.reported = findings
+            if self.on_findings is not None:
+                self.on_findings(findings)
 
     def start(self) -> None:
         self.client.connect_async("localhost", self.section.port)
@@ -115,8 +142,60 @@ class BrokerLink:
             self.last_error = None
         except (ConnectionError, OSError) as e:
             self.last_error = str(e)
+        if self.view is not None:
+            self._members_tick(time.time())
         return sent
 
     def stop(self) -> None:
+        self.client.loop_stop()
+        self.client.disconnect()
+
+
+class ExportLink:
+    """A member daemon's link to its association's broker: its presence (retained ``online``,
+    with ``offline`` as its will) and its exports, summaries only, through ``Exporter``."""
+
+    def __init__(self, card: str, log_path: Path, link: AssociationLink, placeholders: Dict[str, str],
+                 *, client=None):
+        self.card, self.link = card, link
+        self.client = client if client is not None else self._client(card, link, placeholders)
+        self.exporter = assoc.Exporter(card, EventStream(card, log_path), nowait_publish(self.client),
+                                       link.exports)
+        self.client.on_connect = self._on_connect
+        self.last_error: Optional[str] = None
+
+    @staticmethod
+    def _client(card: str, link: AssociationLink, placeholders: Dict[str, str]):
+        import paho.mqtt.client as mqtt
+        c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv5)
+        c.tls_set(ca_certs=resolve(link.cafile, placeholders),
+                  certfile=resolve(link.client_certfile, placeholders),
+                  keyfile=resolve(link.client_keyfile, placeholders))
+        c.will_set(assoc.presence_topic(card), b"offline", qos=1, retain=True)
+        c.reconnect_delay_set(1, RECONNECT_MAX_S)
+        return c
+
+    def _on_connect(self, client, _userdata, _flags, _reason, _props=None) -> None:
+        client.publish(assoc.presence_topic(self.card), b"online", qos=1, retain=True)
+
+    def start(self) -> None:
+        self.client.connect_async(self.link.host, self.link.port)
+        self.client.loop_start()
+
+    def tick(self) -> int:
+        try:
+            sent = self.exporter.pump()
+            self.last_error = None
+            return sent
+        except (ConnectionError, OSError) as e:
+            self.last_error = str(e)
+            return 0
+
+    def stop(self) -> None:
+        """A clean stop says offline itself: a will fires only on an unclean disconnect."""
+        try:
+            self.client.publish(assoc.presence_topic(self.card), b"offline", qos=1, retain=True).wait_for_publish(2)
+        except (RuntimeError, ValueError):
+            pass  # noqa: MACEFF003 - not connected: the will or the association's silence covers it
         self.client.loop_stop()
         self.client.disconnect()

@@ -393,6 +393,19 @@ class BrokerSection(_Closed):
     readers: Dict[str, List[Annotated[str, Field(pattern=_STREAM_SOURCE)]]] = Field(default_factory=dict)
 
 
+class AssociationLink(_Closed):
+    """Where this daemon exports, and what (PROTOTYPE, mission B phase B3): its association's
+    broker, its own client certificate there, and the sources it exports, as summaries only."""
+
+    host: str = Field(default="localhost", min_length=1)
+    port: int = Field(ge=1024, le=65535)
+    cafile: str = Field(min_length=1)
+    client_certfile: str = Field(min_length=1)
+    client_keyfile: str = Field(min_length=1)
+    exports: List[Annotated[str, Field(pattern=_STREAM_SOURCE)]] = Field(
+        default_factory=lambda: ["pd_unit_state", "pd_carried"])
+
+
 class Declaration(_Closed):
     """Everything an agent declares to its primal daemon. Audited by reading it.
 
@@ -457,6 +470,22 @@ class Declaration(_Closed):
     stream_grants: List[StreamGrant] = Field(default_factory=list)
     #: The daemon's own MQTT broker (prototype). None: the stream runs on the socket only.
     broker: Optional[BrokerSection] = None
+    #: What this daemon supervises for (prototype, B3): an agent, a system's agents, or a fleet's
+    #: systems. The same program in each placement.
+    kind: Literal["agent", "system", "fleet"] = "agent"
+    #: The association this daemon exports to (prototype, B3). None: it exports nothing.
+    association: Optional[AssociationLink] = None
+    #: The member daemons this association expects, by card (prototype, B3). Its broker admits
+    #: each to write its own subtree, and status reports each difference from those present.
+    members: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _members_belong_to_an_association(self) -> "Declaration":
+        if self.members and self.kind == "agent":
+            raise ValueError("an agent's daemon admits no members; only a system or fleet daemon is an association")
+        if self.members and self.broker is None:
+            raise ValueError("members join through the association's broker; declare broker as well")
+        return self
     operator_uid: Optional[int] = Field(default=None, ge=0)
 
     @model_validator(mode="after")

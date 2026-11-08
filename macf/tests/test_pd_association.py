@@ -40,3 +40,19 @@ def test_the_association_reports_each_difference_between_declared_and_present():
     assert f"{M1}: present but silent for 100 s" in v.findings(now=100)
     v.observe(presence_topic(M1), b"offline", now=101)
     assert f"{M1}: offline" in v.findings(now=101)
+
+
+def test_only_a_system_or_fleet_daemon_with_a_broker_admits_members():
+    import pytest
+    from pydantic import ValidationError
+    from macf.pd.interface import Declaration
+    broker = {"port": 18830, "cafile": "a", "server_certfile": "b", "server_keyfile": "c",
+              "client_certfile": "d", "client_keyfile": "e"}
+    with pytest.raises(ValidationError, match="admits no members"):
+        Declaration.model_validate({"version": 1, "agent": M1, "members": [M2], "broker": broker})
+    with pytest.raises(ValidationError, match="declare broker"):
+        Declaration.model_validate({"version": 1, "agent": M1, "kind": "system", "members": [M2]})
+    d = Declaration.model_validate({"version": 1, "agent": M1, "kind": "system", "members": [M2], "broker": broker,
+                                    "association": {"port": 18831, "cafile": "a", "client_certfile": "d",
+                                                    "client_keyfile": "e"}})
+    assert d.association.exports == ["pd_unit_state", "pd_carried"]

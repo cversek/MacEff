@@ -119,3 +119,53 @@ def test_a_member_that_dies_is_marked_offline_by_its_will_and_reported(assoc, tm
     assert view.findings(now=time.time()) == [f"{M1}: offline"]
     sysd.loop_stop()
     sysd.disconnect()
+
+
+def test_the_daemons_links_export_and_report_membership_from_their_own_loops(assoc, tmp_path):
+    """What the daemons run: a member's ExportLink and the association's BrokerLink, each driven
+    by tick() alone. The association records each change in what differs from its declaration."""
+    from macf.pd.broker_link import BrokerLink, ExportLink
+    from macf.pd.interface import AssociationLink, BrokerSection
+
+    def unconnected(who, will=None):
+        c = paho.Client(paho.CallbackAPIVersion.VERSION2, protocol=paho.MQTTv5)
+        c.tls_set(ca_certs=str(assoc["dir"] / "ca.crt"), certfile=assoc["certs"][who][0],
+                  keyfile=assoc["certs"][who][1])
+        if will:
+            c.will_set(will, b"offline", qos=1, retain=True)
+        return c
+    findings = []
+    section = BrokerSection(port=assoc["port"], cafile="x", server_certfile="x", server_keyfile="x",
+                            client_certfile="x", client_keyfile="x")
+    sys_log = tmp_path / "sys.jsonl"
+    sys_log.write_text("")
+    sysd = BrokerLink(SYS, sys_log, section, {}, client=unconnected(SYS), members=[M1, M2],
+                      on_findings=findings.append)
+    m_log = tmp_path / "m1.jsonl"
+    m_log.write_text("")
+    link = AssociationLink(port=assoc["port"], cafile="x", client_certfile="x", client_keyfile="x")
+    member = ExportLink(M1, m_log, link, {}, client=unconnected(M1, will=presence_topic(M1)))
+    sysd.start()
+    settle()
+    member.start()
+
+    def run(seconds):
+        for _ in range(int(seconds / 0.1)):
+            sysd.tick()
+            member.tick()
+            time.sleep(0.1)
+    run(1.5)
+    with open(m_log, "a") as f:
+        f.write(json.dumps({"event": "pd_unit_state", "timestamp": 1.0,
+                            "data": {"unit": "session", "state": "running", "notice": "private"}}) + "\n")
+    run(1.5)
+    # Before M1 connects it is absent, or offline by the retained presence an earlier member left:
+    # retained presence is how an association learns what happened before it connected.
+    assert findings[0][0] in (f"{M1}: declared, never present", f"{M1}: offline")
+    assert findings[0][1:] == [f"{M2}: declared, never present"]
+    assert findings[-1] == [f"{M2}: declared, never present"], "M1 is present and exporting"
+    assert sysd.view.members[M1].last_export is not None
+    member.stop()                                  # a clean stop says offline itself
+    run(1.5)
+    assert findings[-1] == [f"{M1}: offline", f"{M2}: declared, never present"]
+    sysd.stop()

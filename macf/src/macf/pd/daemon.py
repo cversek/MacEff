@@ -158,11 +158,16 @@ class Daemon:
         #: The daemon's own broker (prototype, mission B phase B2): its configuration rendered
         #: here, before units start, and its publisher run from the loop.
         self.broker_link = None
-        if self.core.declaration.broker is not None:
+        self.export_link = None
+        decl = self.core.declaration
+        if decl.broker is not None:
             from macf.pd.broker_link import BrokerLink, render_files
-            render_files(self.card, self.core.declaration.broker, self.base, placeholders)
-            self.broker_link = BrokerLink(self.card, get_log_path(), self.core.declaration.broker,
-                                          placeholders)
+            render_files(self.card, decl.broker, self.base, placeholders, members=decl.members)
+            self.broker_link = BrokerLink(self.card, get_log_path(), decl.broker, placeholders,
+                                          members=decl.members, on_findings=self._member_findings)
+        if decl.association is not None:
+            from macf.pd.broker_link import ExportLink
+            self.export_link = ExportLink(self.card, get_log_path(), decl.association, placeholders)
         self._events_bound: Optional[tuple] = None
         self._listener: Optional[socket.socket] = None
         self._channel_listener: Optional[socket.socket] = None
@@ -377,8 +382,9 @@ class Daemon:
         sel.register(self._listener, selectors.EVENT_READ, "control")
         sel.register(self._channel_listener, selectors.EVENT_READ, "channel")
         sel.register(self._wake_r, selectors.EVENT_READ, "wake")
-        if self.broker_link is not None:
-            self.broker_link.start()
+        for link in (self.broker_link, self.export_link):
+            if link is not None:
+                link.start()
         try:
             while not self._stopping:
                 for key, _ in sel.select(timeout=TICK_S):
@@ -416,8 +422,9 @@ class Daemon:
             self.notifier.on_detach = None
             self.stream.on_unregister = None
             self.stream.close()
-            if self.broker_link is not None:
-                self.broker_link.stop()
+            for link in (self.broker_link, self.export_link):
+                if link is not None:
+                    link.stop()
             self.scheduler.shutdown()
             sel.close()
             self._sel = None
@@ -432,11 +439,20 @@ class Daemon:
             self.stream.pump()
         except Exception as e:  # noqa: BLE001 - GUARD, not handler: the stream must not end the daemon
             print(f"⚠️ MACF: pd: the event stream's pass failed (the daemon goes on): {e!r}", file=sys.stderr)
-        if self.broker_link is not None:
+        for link in (self.broker_link, self.export_link):
+            if link is None:
+                continue
             try:
-                self.broker_link.tick()
-            except Exception as e:  # noqa: BLE001 - GUARD, not handler: the broker must not end the daemon
-                print(f"⚠️ MACF: pd: the broker link's pass failed (the daemon goes on): {e!r}", file=sys.stderr)
+                link.tick()
+            except Exception as e:  # noqa: BLE001 - GUARD, not handler: a broker must not end the daemon
+                print(f"⚠️ MACF: pd: a broker link's pass failed (the daemon goes on): {e!r}", file=sys.stderr)
+
+    def _member_findings(self, findings) -> None:
+        """An association's members differ from its declaration, or stopped differing: recorded
+        once per change, in this daemon's own log, where the outside watch reads it."""
+        from macf.agent_events_log import append_event
+        append_event("pd_member_findings", {"agent": self.card, "findings": list(findings),
+                                            "members": list(self.core.declaration.members)})
 
     def stop(self, units: bool = False) -> None:
         """Ask ``serve`` to finish, and with ``units`` to stop every unit first; a plain stop,
