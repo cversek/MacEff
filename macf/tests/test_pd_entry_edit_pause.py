@@ -10,7 +10,7 @@ from test_primal_daemon import base, run_daemon  # noqa: F401 - fixtures
 
 
 def _ev(kind, **data):
-    return {"event": kind, "data": {"agent": "A@abc123", **data}}
+    return {"event": kind, "data": {"agent": "A_abc123", **data}}
 
 
 def test_the_fold_applies_an_edit_a_pause_and_a_resume_and_ignores_them_for_an_entry_not_held():
@@ -18,12 +18,12 @@ def test_the_fold_applies_an_edit_a_pause_and_a_resume_and_ignores_them_for_an_e
     added = _ev(EVENT_ENTRY_ADDED, id=eid, when="cron:0 9 * * *", purpose="old", missed="once")
     paused = _ev(EVENT_ENTRY_PAUSED, id=eid, at="2026-10-24T10:00:00+00:00")
     edited = _ev(EVENT_ENTRY_CHANGED, id=eid, when="cron:0 10 * * *", purpose="new", missed="skip")
-    held = fold([added, paused, edited, _ev(EVENT_ENTRY_PAUSED, id=stranger, at="x")], "A@abc123")
+    held = fold([added, paused, edited, _ev(EVENT_ENTRY_PAUSED, id=stranger, at="x")], "A_abc123")
     assert list(held) == [eid]
     assert held[eid]["purpose"] == "new" and held[eid]["when"] == "cron:0 10 * * *"
     assert held[eid]["paused_at"] == "2026-10-24T10:00:00+00:00"          # a pause outlives an edit
     resumed = fold([added, paused, edited, _ev(EVENT_ENTRY_RESUMED, id=eid, at="2026-10-24T11:00:00+00:00")],
-                   "A@abc123")[eid]
+                   "A_abc123")[eid]
     assert "paused_at" not in resumed and resumed["resumed_at"] == "2026-10-24T11:00:00+00:00"
 
 
@@ -81,7 +81,7 @@ def test_the_cli_sends_edit_pause_and_resume_and_refuses_an_empty_edit(monkeypat
     from macf.pd.interface import Response
     sent = []
     monkeypatch.setattr(client, "ask", lambda card, request, **kw: sent.append(request) or Response(ok=True, entries=[]))
-    monkeypatch.setattr(cli, "_this_agent", lambda: (None, "Tester@abc123"))
+    monkeypatch.setattr(cli, "_this_agent", lambda: (None, "Tester_abc123"))
     parser = argparse.ArgumentParser()
     cli.add_pd_parser(parser.add_subparsers(dest="cmd"))
     eid = "e-0123456789ab"

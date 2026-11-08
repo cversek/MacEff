@@ -320,7 +320,7 @@ The transcript monitor makes these records. **The primal daemon turns the monito
 
 **On macOS each primal daemon runs as a per-user LaunchAgent** [MIS-0002-R05 (macos_MUST_render_LaunchAgent)], in the user's GUI session (`LimitLoadToSessionType: Aqua`), never as a LaunchDaemon that runs as root on someone's behalf.
 
-- **Its label is `maceff_pd.<id>`** [MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd)], where `<id>` is the calling card with `@` written as `_`: `IraMacEff@ee9a78` becomes `maceff_pd.IraMacEff_ee9a78`. Several agents can share one login, so every name carries the agent.
+- **Its label is `maceff_pd.<id>`** [MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd)], where `<id>` is the calling card exactly [MIS-0002-R160]: `maceff_pd.IraMacEff_ee9a78`. Several agents can share one login, so every name carries the agent.
 - **launchd is the outer tier here.** `KeepAlive` and `RunAtLoad` restart the daemon whenever it exits.
 - **The identity never travels in the environment.** The program is `python -m macf.pd <agent home>`, and the daemon reads its card from the identity file in that home.
 - **Install, remove and restart go through `launchctl bootstrap`, `bootout` and `kickstart`** against `gui/<uid>`. The legacy `load` and `unload` are not offered.
@@ -381,7 +381,7 @@ The operator may attach to any session without an invitation [MIS-0002-R81 (oper
 ### 4.3 Attach by name
 
 **`macf_tools harness attach <name>` takes a short name and resolves it to one agent**, or says that the name means several, or none. With no name it attaches to the agent of the home it runs in. The name is matched against the roster (4.4) in three tiers, and the first tier with any hit decides:
-1. an exact calling card, session identifier or uuid, with or without the `@` (`Lumen2MacEff@3f9a1c`, `Lumen2MacEff_3f9a1c`, `3f9a1c`, `@3f9a1c`). A shorter piece of a uuid is not exact;
+1. an exact calling card or uuid (`Lumen2MacEff_3f9a1c`, `3f9a1c`, `@3f9a1c`), where a card typed in the old spelling, `Lumen2MacEff@3f9a1c`, finds the same agent. A shorter piece of a uuid is not exact;
 2. an exact moniker or display name, ignoring case;
 3. a prefix of a moniker or a display name, ignoring case (`lumen2`). Names match by their start, not anywhere inside.
 
@@ -499,7 +499,7 @@ Commands and flags complete from a table taken from the parser when the script i
 
 ### 6.1 The daemon as a systemd user unit
 
-**On Linux each primal daemon runs as a systemd user unit** [MIS-0002-R03 (outer_tier_MUST_restart_pd)], named by the step 1 interface: `maceff_pd-<id>.service`, where `<id>` is the calling card with `@` written as `_` [MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd)].
+**On Linux each primal daemon runs as a systemd user unit** [MIS-0002-R03 (outer_tier_MUST_restart_pd)], named by the step 1 interface: `maceff_pd-<id>.service`, where `<id>` is the calling card exactly [MIS-0002-R160; MIS-0002-R06 (pd_identifiers_MUST_use_maceff_pd)].
 
 - **The user's systemd is the outer tier.** `Restart=always` restarts the daemon on every exit, a clean one included. `StartLimitIntervalSec=0` sits in `[Unit]`, where current systemd reads it; in `[Service]` it is ignored, and the daemon would stay down after its fifth quick crash.
 - **A daemon that can't start backs off, and is never given up on.** The delay between restarts stretches from 10 s to 60 s (`RestartSteps`, `RestartMaxDelaySec`), so a daemon that keeps exiting 75 or 78 tries once a minute, not every 10 s. Neither code stops the restarts. On 75 another daemon holds the agent, and this unit takes over when that one ends. 78 also covers start errors that clear by themselves. After fixing a declaration, `systemctl --user restart` starts it at once rather than at the next try.
@@ -717,7 +717,8 @@ An agent's declaration is one JSON file. On a host it is in the agent's own home
 
 **In a container, the deployment writes the declaration, and the agent can't.** A run executes as the agent, so a declaration the agent can write is one a run could rewrite before the daemon next starts, and with it the schedules [MIS-0002-R33 (run_MUST-NOT_change_schedules)].
 - **Where you declare it:** as `primal_daemon` under the agent in `agents.yaml`, laid over the default (above). This is the declaration's body without `agent` or `version`, which the container fills in. A body the daemon would refuse is refused when `agents.yaml` loads.
-- **Declare the agent's calling card beside it.** `calling_card` under the agent gives the name the daemon goes by (a letter, then up to 47 letters or digits). The id half is the first six characters of the agent's identity file. `agents.yaml` refuses `primal_daemon` without `calling_card` when it loads, naming the agent. An agent with only the default goes by its key when it declares no card (above). A vanilla account can't declare one.
+- **Declare the agent's calling card beside it.** `calling_card` under the agent gives the name the daemon goes by (one ASCII letter, then at most 23 ASCII letters or digits, MIS-0002-R158). The card is that name, an underscore, and the first six hexadecimal characters of the agent's identity file, lowercase (R157, R159). `agents.yaml` refuses `primal_daemon` without `calling_card` when it loads, naming the agent. An agent with only the default goes by its key when it declares no card (above). A vanilla account can't declare one.
+- **One card, several names, one way to read it** (MIS-0002-R160 to R166). A name derived from the card for a case-sensitive target, such as a launchd label, a unit, a path, a socket or a record, is the card exactly. A Unix account or a mail local part takes the card lowercased, and a DNS label or certificate name takes the lowercased card with its underscore as a hyphen. A card declared or configured in the old `Name@shortid` spelling is refused, and the refusal names the form to write instead; history written in that spelling is read as the same agent. `macf/calling_card.py` holds these rules, and every site asks it.
 - **Start-up writes the card into the agent's home at every start,** as `agent_identity.calling_card` in `<agent home>/.maceff/config.json`, before any declaration renders. The daemon reads its identity from the home and never from the environment [MIS-0002-R02 (pd_MUST-NOT_take_identity_from_env)], so this is how the card reaches it. Every other key in the file stays, and so do its owner and mode. A missing file is created as the agent's, mode 0600, holding just the card. A home that already holds the same card is left untouched. An agent without `calling_card` gets nothing written.
 - **A different card already in the home is refused, not overwritten.** The daemon's sockets and unit names are keyed by the agent's card, so a silent rename would strand them. When the home's `calling_card` or `moniker` differs from `agents.yaml`, or `config.json` can't be read, start-up logs the conflict by the agent's name with both values, and that agent gets no rendering, so no daemon. Every other agent still renders and starts. To resolve it, make `agents.yaml` and the home agree, then restart the container.
 - **What start-up does:** at every start, it writes the declaration to `/etc/maceff/pd/<account>/declaration.json`, owned by root, mode 0644, in directories only root can write. An agent that opts out, or becomes vanilla, has its old rendering removed too.
@@ -759,7 +760,7 @@ A declaration with one unit:
 ```json
 {
   "version": 1,
-  "agent": "ExampleAgent@abc123",
+  "agent": "ExampleAgent_abc123",
   "units": [
     {
       "name": "monitor",
@@ -983,7 +984,7 @@ Every start, stop and restart the core performs is a `pd_control` event naming w
 
 **What it is.** Every event your persistent layer records is published, as it is recorded, on one event stream [MIS-0002-R150 (layer_MUST_publish_event_stream)]. The stream is a way of reading your event log, not a second copy of it: the log stays the only store. Anything that tells a person, an agent or an app about your layer is a subscriber to the stream. The MacEff channel, the tray, and a bridge to the operator are meant to be subscribers, and nothing keeps a parallel feed. Today the MacEff channel still takes notices on its own socket (1.3), and no bridge to the operator is built: moving them onto the stream is a later step. The channel is already under the stream's rules, though, as the subscriber `@channel` (below).
 
-**Where it is.** Your primal daemon serves the stream on `<id>.events.sock` in its runtime directory, beside its control and channel sockets, mode 0600 (12.2). `<id>` is the calling card with `@` written as `_`, so `IraMacEff@ee9a78` serves `IraMacEff_ee9a78.events.sock`. It follows its own event log, as the core already does, and sends each new record to the subscribers that asked for its source. "As it records it" means within the daemon's tail interval, about one second: it reads the log on every pass of its loop, a quarter of a second apart, and that is the bound a subscriber may rely on. The daemon polls; it doesn't wait on kqueue or inotify, and nothing signals it from `append_event`.
+**Where it is.** Your primal daemon serves the stream on `<id>.events.sock` in its runtime directory, beside its control and channel sockets, mode 0600 (12.2). `<id>` is the calling card exactly, so `IraMacEff_ee9a78` serves `IraMacEff_ee9a78.events.sock`. It follows its own event log, as the core already does, and sends each new record to the subscribers that asked for its source. "As it records it" means within the daemon's tail interval, about one second: it reads the log on every pass of its loop, a quarter of a second apart, and that is the bound a subscriber may rely on. The daemon polls; it doesn't wait on kqueue or inotify, and nothing signals it from `append_event`.
 
 **Subscribing.** A subscriber connects and, within three seconds, sends one line. The line names the sources it takes (event names, with `*` globs), and optionally the position of the last record it saw and a name it goes by. A connection that sends nothing in time is closed. `macf_tools pd stream subscribe --source 'pd_unit_*' --name watch` does this and prints every line it gets; `--position LOG:OFFSET`, the `log` and `offset` of a record's position, resumes just after that record. The command doesn't reconnect on its own. When the stream ends, as when the daemon restarts, it exits 0, and a subscriber that must not miss records runs it again with the last position it printed. The daemon answers with a `welcome` line naming where the stream starts for it. Each record then arrives as one JSON line with:
 - its **position**: the log's identity (its inode and a digest of its first line, since rotation rewrites the file in place) and the byte offset just past the record, which is a line boundary;

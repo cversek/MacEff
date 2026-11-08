@@ -21,7 +21,7 @@ from macf.pd.interface import Declaration
 REPO = Path(__file__).resolve().parents[2]
 #: The real live-session check, before the fixture stubs it out.
 REAL_LIVE_CHECK = agent_stack.legacy_harness_live
-CARD = "Tester@abc123"
+CARD = "Tester_abc123"
 
 
 def _args(*flags):
@@ -61,7 +61,7 @@ def stack(tmp_path, monkeypatch):
     def fake_pd_install(args):
         installs.append(args)
         installed["unit"], installed["stale"] = True, False
-        print("Tester@abc123: installed")
+        print("Tester_abc123: installed")
         return 0
 
     real_which = agent_stack.shutil.which
@@ -808,7 +808,7 @@ def test_a_leftover_systemd_unit_on_macos_runs_nothing_but_on_linux_fails_closed
     import argparse
     from macf import agent_stack as real
     from macf.pd.names import pd_id
-    card = "Seat@abc123"
+    card = "Seat_abc123"
     units = tmp_path / ".config" / "systemd" / "user"
     units.mkdir(parents=True)
     (units / f"cc-harness-{pd_id(card)}.service").write_text("[Service]\n")
@@ -926,7 +926,7 @@ def test_an_unnamed_home_under_yes_refuses_naming_the_flag(stack):
     assert "agent_identity" not in json.loads((stack.home / ".maceff" / "config.json").read_text())
 
 
-@pytest.mark.parametrize("bad", ["Tester@abc123", "Name.suffix", "Name:suffix", "two words", "-lead"])
+@pytest.mark.parametrize("bad", ["Tester_abc123", "Name.suffix", "Name:suffix", "two words", "-lead"])
 def test_a_name_the_session_identifier_would_rewrite_is_refused_and_nothing_written(stack, bad):
     _unnamed(stack)
     _rc, results = _run(stack, f"--calling-card={bad}")

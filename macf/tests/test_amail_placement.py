@@ -31,7 +31,7 @@ def _settings(home, handoff, agent):
     (home / ".maceff" / "amail.json").write_text(json.dumps({"handoff": str(handoff), "agent": agent}))
 
 
-def _receiver(home, card="Tester@abc123"):
+def _receiver(home, card="Tester_abc123"):
     s = receiver_settings(home)
     events, notices = [], []
     r = Receiver(card, home, s["box"], s["agent"], s["contacts"],

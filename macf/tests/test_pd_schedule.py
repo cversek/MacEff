@@ -178,10 +178,10 @@ def test_declaration_with_an_unusable_schedule_is_refused(tmp_path, cron, window
                         run=PromptRun(prompt_file="prompts/nightly.md"), timeout_s=600)
     path = declaration_path(tmp_path)
     path.parent.mkdir(parents=True)
-    path.write_text(Declaration(version=1, agent="Tester@abc123", timezone="UTC", schedules=[schedule],
+    path.write_text(Declaration(version=1, agent="Tester_abc123", timezone="UTC", schedules=[schedule],
                                notice_routes=ROUTED).model_dump_json())
     with pytest.raises(DeclarationRefused, match=why):
-        load_declaration(tmp_path, "Tester@abc123")
+        load_declaration(tmp_path, "Tester_abc123")
 
 
 # Each missed-run policy crossed with whether the schedule's act restarts a unit.
@@ -221,14 +221,14 @@ def test_schedules_name_their_timezone():
     schedule = Schedule(name="nightly", cron="0 3 * * *", missed_run=policy("skip", None),
                         target="isolated", run=PromptRun(prompt_file="p.md"), timeout_s=600)
     with pytest.raises(ValidationError, match="names the timezone"):
-        Declaration(version=1, agent="Tester@abc123", schedules=[schedule], notice_routes=ROUTED)
+        Declaration(version=1, agent="Tester_abc123", schedules=[schedule], notice_routes=ROUTED)
     with pytest.raises(ValidationError, match="unknown timezone"):
-        Declaration(version=1, agent="Tester@abc123", timezone="Mars/Olympus", schedules=[schedule],
+        Declaration(version=1, agent="Tester_abc123", timezone="Mars/Olympus", schedules=[schedule],
                     notice_routes=ROUTED)
-    declared = Declaration(version=1, agent="Tester@abc123", timezone="America/New_York", schedules=[schedule],
+    declared = Declaration(version=1, agent="Tester_abc123", timezone="America/New_York", schedules=[schedule],
                            notice_routes=ROUTED)
     assert declared.schedules[0].restarts_unit is False
-    assert Declaration(version=1, agent="Tester@abc123").timezone is None
+    assert Declaration(version=1, agent="Tester_abc123").timezone is None
 
 
 # --- the scheduler: the daemon runs what the schedules owe ----------------------
@@ -246,8 +246,8 @@ def test_target_declared():
         Schedule(**base)
     with pytest.raises(ValidationError, match="target"):
         Schedule(**base, target="")
-    for target in ("isolated", "Tester@abc123"):
-        declared = Declaration(version=1, agent="Tester@abc123", timezone="UTC",
+    for target in ("isolated", "Tester_abc123"):
+        declared = Declaration(version=1, agent="Tester_abc123", timezone="UTC",
                                schedules=[Schedule(**base, target=target)])
         assert declared.schedules[0].target == target
 
@@ -259,11 +259,11 @@ def test_a_schedule_targeting_another_agent_is_refused_at_load():
     from pydantic import ValidationError
     from macf.pd.interface import CommandRun, Declaration, Schedule
     foreign = Schedule(name="check", cron="*/5 * * * *", missed_run=policy("skip"), timeout_s=30.0,
-                       target="Other@def456", run=CommandRun(command=["/usr/bin/true"], wake_when="exit_code"))
+                       target="Other_def456", run=CommandRun(command=["/usr/bin/true"], wake_when="exit_code"))
     with pytest.raises(ValidationError) as refused:
-        Declaration(version=1, agent="Tester@abc123", timezone="UTC", schedules=[foreign])
+        Declaration(version=1, agent="Tester_abc123", timezone="UTC", schedules=[foreign])
     said = str(refused.value)
-    assert "'Other@def456'" in said and "'isolated'" in said and "'Tester@abc123'" in said
+    assert "'Other_def456'" in said and "'isolated'" in said and "'Tester_abc123'" in said
 
 
 import json  # noqa: E402
@@ -278,7 +278,7 @@ from channel_receiver import ChannelReceiver  # noqa: E402
 from macf.pd import scheduler as sc  # noqa: E402
 from macf.pd.interface import CommandRun, Declaration, PromptRun, Schedule  # noqa: E402
 
-CARD = "Tester@abc123"
+CARD = "Tester_abc123"
 
 
 class Log:

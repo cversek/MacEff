@@ -7,7 +7,7 @@ from macf.pd import watch
 from macf.pd.channel_watch import DarkChannel
 from macf.pd.interface import EVENT_CHANNEL_BACK, EVENT_CHANNEL_DARK
 
-CARD = "Tester@abc123"
+CARD = "Tester_abc123"
 S1, S2 = (101, "start-1"), (202, "start-2")
 
 
@@ -90,7 +90,7 @@ def test_the_watch_reads_the_newest_channel_event_of_this_agent(tmp_path):
     now = time.time()
     path = _log(tmp_path, [
         {"timestamp": now - 50, "event": EVENT_CHANNEL_DARK, "data": {"agent": CARD, "reason": "dropped"}},
-        {"timestamp": now - 40, "event": EVENT_CHANNEL_DARK, "data": {"agent": "Other@000000", "reason": "x"}},
+        {"timestamp": now - 40, "event": EVENT_CHANNEL_DARK, "data": {"agent": "Other_000000", "reason": "x"}},
     ])
     f = watch.check_channel(CARD, watch.last_channel_event(path, CARD, now), now)
     assert (f.subject, f.verdict) == ("channel", "DARK") and "dropped" in f.detail

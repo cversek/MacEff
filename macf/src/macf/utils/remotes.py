@@ -51,9 +51,9 @@ CONNECT_TIMEOUT_S = 5
 #: A POSIX account name: what a login can legitimately be. Never begins with ``-``.
 ACCOUNT = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 
-#: A calling card (``Moniker@uuid``), or a bare moniker: letters, digits, ``_ . -``, never
-#: beginning with ``-``.
-CARD = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}(@[0-9a-f]{6})?$")
+#: A calling card (``Name_shortid``), or a bare moniker: letters, digits, ``_ . -``, never
+#: beginning with ``-``. The old ``Name@shortid`` is refused by name (MIS-0002-R165).
+CARD = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$")
 
 #: A host name or address for ssh: never beginning with ``-``.
 HOST = re.compile(r"^[A-Za-z0-9_.:\[\]%-]+$")
@@ -63,6 +63,14 @@ def _checked(value: Optional[str], pattern: "re.Pattern", what: str) -> Optional
     if value is not None and (not pattern.match(value) or value.startswith("-")):
         raise ValueError(f"{what} {value!r} is not a legitimate {what}")
     return value
+
+
+def _checked_card(value: Optional[str]) -> Optional[str]:
+    """A configured card refuses the old ``@`` form and says what to write instead."""
+    if value is not None and "@" in value:
+        from ..calling_card import read_declared
+        read_declared(value)   # raises, naming the form expected
+    return _checked(value, CARD, "card")
 
 
 class RemotesRefused(ValueError):
@@ -190,7 +198,7 @@ def parse_roster(remote: Remote, stdout: str) -> List[RosterEntry]:
     for e in entries:
         try:
             _checked(e.account, ACCOUNT, "account")
-            _checked(e.card, CARD, "card")
+            _checked_card(e.card)
         except ValueError as bad:
             raise RuntimeError(f"{remote.name}: the roster is refused: {bad}") from None
     return entries
@@ -241,7 +249,7 @@ def handoff_argv(remote: Remote, entry: RosterEntry, *, control: Optional[bool] 
         if not entry.account:
             raise ValueError(f"{remote.name}: {entry.card} has no account to log in as")
         login = entry.account
-    _checked(entry.card, CARD, "card")
+    _checked_card(entry.card)
     if control is None:
         control = remote.control if remote.control is not None else default_control
     remote_cmd = [remote.macf_tools, "harness", "attach", "--card", entry.card,

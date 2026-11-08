@@ -26,7 +26,7 @@ def home(tmp_path, monkeypatch):
 def _declare(home):
     path = declaration_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(Declaration(version=1, agent="Resident@1a2b3c").model_dump_json())
+    path.write_text(Declaration(version=1, agent="Resident_1a2b3c").model_dump_json())
 
 
 def _daemon_says(unit="session", pid="4242", state="running"):
@@ -83,4 +83,4 @@ def test_the_daemon_is_named_by_the_homes_card_not_the_environment(home, monkeyp
                         lambda card, environ=None, ask=None: asked.append(card) or None)
     monkeypatch.setenv("MACEFF_AGENT_NAME", "seat2")
     hss._supervision_block(environ={"MACEFF_AGENT_HOME_DIR": str(home), "MACEFF_AGENT_NAME": "seat2"})
-    assert asked == ["Seat2@1a2b3c"]
+    assert asked == ["Seat2_1a2b3c"]

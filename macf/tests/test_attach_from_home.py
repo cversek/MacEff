@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from macf.pd.client import DaemonUnavailable
 from macf.utils.attach import NONE, TMUX, AttachPlan, plan_attach_for_home, window_commands
 
-CARD = "Resident@1a2b3c"
+CARD = "Resident_1a2b3c"
 
 
 def _declaration(*units):

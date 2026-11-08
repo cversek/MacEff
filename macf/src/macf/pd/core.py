@@ -59,6 +59,7 @@ from macf.pd.interface import (
 from macf.pd.liveness import ENV_HOME, ENV_INTERVAL, ENV_UNIT
 from macf.pd.names import rendered_declaration_problem
 from macf.pd.schedule import CronExpr, check_window
+from macf import calling_card
 
 #: A unit is overdue once its last liveness is older than this many of its intervals.
 #: The interval is the one the unit published, so a unit that changes its cadence
@@ -133,6 +134,52 @@ class DeclarationRefused(ValueError):
     """The declaration cannot be used. Nothing is started: a refusal installs nothing."""
 
 
+#: Where a host declaration written before the card revision is kept when it is rewritten.
+CUTOVER_KEPT_SUFFIX = ".pre-card-underscore"
+
+
+def cutover_declaration(agent_home: Path, card: str) -> Optional[Path]:
+    """Rewrite a host declaration that names this home's own card in the old ``Name@shortid``
+    form, once, in place, before it is read; the path of the kept original, or None when
+    nothing was rewritten.
+
+    A host daemon that restarts onto code refusing the old form (MIS-0002-R165) would exit and
+    stay down, and its restart doesn't wait for a person to edit the file. Only the agent's own
+    file is rewritten, and only when its old card maps to this home's card (R166); a rendered
+    declaration is the deployment's, re-rendered in the new form at start. Every quoted
+    occurrence of the old card changes, schedule targets included. The result must validate, or
+    nothing is written. After it, only the new form is ever read."""
+    path = declaration_path(agent_home)
+    if path != Path(agent_home) / ".maceff" / "pd" / "declaration.json":
+        return None
+    try:
+        text = path.read_text()
+        old = json.loads(text).get("agent")
+    except (OSError, ValueError, AttributeError):
+        return None     # noqa: MACEFF003 - load_declaration refuses it with the reason
+    if not isinstance(old, str) or calling_card.from_history(old) == old:
+        return None     # noqa: MACEFF003 - already the current form, or no card: nothing to cut over
+    if not calling_card.same(calling_card.from_history(old), card):
+        return None     # noqa: MACEFF003 - another agent's card: load_declaration refuses it (R07)
+    rewritten = text.replace(json.dumps(old), json.dumps(card))
+    try:
+        Declaration.model_validate_json(rewritten)
+    except ValidationError:
+        return None     # noqa: MACEFF003 - left as it was: load_declaration refuses it with the reason
+    mode = path.stat().st_mode & 0o7777
+    kept = path.with_name(path.name + CUTOVER_KEPT_SUFFIX)
+    if not kept.exists():
+        kept.write_text(text)
+        kept.chmod(mode)
+    staged = path.with_name(path.name + ".rewriting")
+    staged.write_text(rewritten)
+    staged.chmod(mode)
+    os.replace(staged, path)
+    append_event("pd_declaration_rewritten", {"agent": card, "from": old, "path": str(path),
+                                              "kept": str(kept), "reason": "MIS-0002-R165 cut-over"})
+    return kept
+
+
 def load_declaration(agent_home: Path, card: str) -> Declaration:
     """Read and validate the agent's declaration, or refuse it whole with the reason.
 
@@ -156,7 +203,11 @@ def load_declaration(agent_home: Path, card: str) -> Declaration:
         declaration = Declaration.model_validate_json(text)
     except ValidationError as e:
         raise DeclarationRefused(f"{path} is not a valid declaration: {e}") from e
-    if declaration.agent != card:
+    try:
+        calling_card.read_declared(declaration.agent)
+    except calling_card.CardError as e:
+        raise DeclarationRefused(f"{path} names its agent wrongly: {e} (MIS-0002-R165)") from e
+    if not calling_card.same(declaration.agent, card):
         raise DeclarationRefused(
             f"{path} declares the units of {declaration.agent}, and this home belongs to "
             f"{card}. A declaration copied from another agent's home must not run under "
@@ -715,7 +766,7 @@ class Core:
             if event.get("event") == EVENT_COMPACTION:
                 newest = newest if newest is not None else _float_or_none(event.get("timestamp"))
                 continue
-            if data.get("agent") == self.card and data.get("occasion") == "compaction":
+            if calling_card.is_agent(data.get("agent"), self.card) and data.get("occasion") == "compaction":
                 # Read newest first, so a compaction found before this report came after it,
                 # and one after it in the scan is the one it covers.
                 break
@@ -748,7 +799,7 @@ class Core:
         # that daemon's start, its own start or its adoption, so the scan stops there.
         for event in read_events(reverse=True, scope="all", only=(EVENT_STATE, EVENT_DAEMON_START)):
             data = event.get("data") or {}
-            if data.get("agent") != self.card:
+            if not calling_card.is_agent(data.get("agent"), self.card):
                 continue
             if event.get("event") == EVENT_DAEMON_START:
                 if (data.get("pid"), data.get("proc_start")) != self._own_start:
@@ -1027,7 +1078,7 @@ class Core:
 
     def _on_liveness(self, event: dict, now: float) -> None:
         data = dict(event.get("data") or {})
-        if data.get("agent") != self.card:
+        if not calling_card.is_agent(data.get("agent"), self.card):
             return
         r = self._units.get(data.get("unit"))
         if r is None:

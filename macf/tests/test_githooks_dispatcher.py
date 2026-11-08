@@ -276,7 +276,7 @@ def _commit(repo, message, path="a.txt"):
 SESSION_TRAILER = ("feat: something\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n"
                    "Claude-Session: https://claude.ai/code/session_01V28aryCvj2w6i25W9KeD9m\n")
 BARE_URL = "feat: something\n\nsee https://claude.ai/code/session_01V28aryCvj2w6i25W9KeD9m for context\n"
-CLEAN = "feat: something\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n[AgentMacEff@abc123: task#1 s_a/c_1/p_b/t_2]\n"
+CLEAN = "feat: something\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n\n[AgentMacEff_abc123: task#1 s_a/c_1/p_b/t_2]\n"
 
 
 class TestCommitMsgStageAndPortableHooklets:
@@ -320,7 +320,7 @@ class TestCommitMsgStageAndPortableHooklets:
         assert r.returncode == 0, r.stderr
         log = subprocess.run(["git", "-C", str(repo), "log", "-1", "--format=%B"],
                              capture_output=True, text=True).stdout
-        assert "AgentMacEff@abc123" in log
+        assert "AgentMacEff_abc123" in log
 
     def test_a_commented_out_line_is_not_a_hit(self, tmp_path):
         """git's own template lines start with '#' and are stripped before the
@@ -387,19 +387,19 @@ class TestPrivateReferencesAreRefused:
         guard = self._guard(tmp_path)
         msg = tmp_path / "m"
         msg.write_text("feat: x\n\nFourth in the series, on top of #376. See roles.md.\n\n"
-                       "[IraMacEff@ee9a78: task#242 s_abc12345/c_40/p_x/t_1]\n")
+                       "[IraMacEff_ee9a78: task#242 s_abc12345/c_40/p_x/t_1]\n")
         r = subprocess.run(["bash", str(guard), str(msg)], capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
 
     def test_a_card_scoped_to_any_work_item_passes(self, tmp_path):
         guard = self._guard(tmp_path)
         msg = tmp_path / "m"
-        msg.write_text("feat: x\n\nA duty's work.\n\n[IraMacEff@ee9a78: duty#3e6719 s_abc12345/c_40/p_x/t_1]\n\n")
+        msg.write_text("feat: x\n\nA duty's work.\n\n[IraMacEff_ee9a78: duty#3e6719 s_abc12345/c_40/p_x/t_1]\n\n")
         r = subprocess.run(["bash", str(guard), str(msg)], capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
 
-    @pytest.mark.parametrize("card", ["*[IraMacEff@ee9a78: task#242 s_abc12345/c_40/p_x/t_1]*",
-                                      "_[IraMacEff@ee9a78: task#242 s_abc12345/c_40/p_x/t_1]_"])
+    @pytest.mark.parametrize("card", ["*[IraMacEff_ee9a78: task#242 s_abc12345/c_40/p_x/t_1]*",
+                                      "_[IraMacEff_ee9a78: task#242 s_abc12345/c_40/p_x/t_1]_"])
     def test_an_italic_card_footer_passes(self, tmp_path, card):
         """public_voice allows the card bare or in italics, and a close-out posted
         by task completion ends with the italic form."""
@@ -430,7 +430,7 @@ class TestPrivateReferencesAreRefused:
     def test_a_card_shaped_line_before_the_end_is_read_as_prose(self, tmp_path):
         guard = self._guard(tmp_path)
         msg = tmp_path / "m"
-        msg.write_text("feat: x\n\n[IraMacEff@ee9a78: task#242 s_abc12345/c_40/p_x/t_1]\n\nMore prose.\n")
+        msg.write_text("feat: x\n\n[IraMacEff_ee9a78: task#242 s_abc12345/c_40/p_x/t_1]\n\nMore prose.\n")
         r = subprocess.run(["bash", str(guard), str(msg)], capture_output=True, text=True)
         assert r.returncode == 1 and "c_40" in r.stderr
 

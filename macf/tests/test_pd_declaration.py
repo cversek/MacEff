@@ -26,7 +26,7 @@ def _unit(name, kind="service", memory=256, env=None):
             "environment": env or {}}
 
 
-def _declaration(agent="B@4d5e6f", units=None):
+def _declaration(agent="B_4d5e6f", units=None):
     return interface.Declaration.model_validate(
         {"version": 1, "agent": agent, "units": units if units is not None else [_unit("broker")]})
 
@@ -47,7 +47,7 @@ def test_shared_budget_operator_only(tmp_path):
     """MIS-0002-R103: no declaration can carry the container's budget, and the view only reads it."""
     for field in ("shared_budget", "container_memory_mb", "cpus"):
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            interface.Declaration.model_validate({"version": 1, "agent": "A@1a2b3c", field: 1})
+            interface.Declaration.model_validate({"version": 1, "agent": "A_1a2b3c", field: 1})
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         interface.Unit.model_validate({**_unit("x"), "container_memory_mb": 1})
     # A unit's limit is its own share, never the container's: the budget is read from files the
@@ -84,14 +84,14 @@ def test_a_summary_carries_no_command_and_no_environment(tmp_path):
 def test_every_agents_units_are_seen_and_none_controlled(tmp_path):
     """MIS-0002-R62: each agent's units appear in the view; the view offers no act."""
     homes = tmp_path / "home"
-    for user, card in (("pa_orchard", "A@1a2b3c"), ("pa_orchard2", "B@4d5e6f")):
+    for user, card in (("pa_orchard", "A_1a2b3c"), ("pa_orchard2", "B_4d5e6f")):
         (homes / user / "agent" / "public").mkdir(parents=True)
         sv.publish(homes / user, _declaration(agent=card, units=[_unit("broker", memory=512)]), now=1.0)
     (homes / "student" / "agent" / "public").mkdir(parents=True)        # a home that published nothing
     views = sv.read_agents(homes)
     assert [v.status for v in views] == ["PUBLISHED", "PUBLISHED", "UNPUBLISHED"]
     text = sv.render(views, sv.read_budget(_cgroup(tmp_path)))
-    assert "A@1a2b3c broker (service, 512 MB" in text and "B@4d5e6f broker" in text
+    assert "A_1a2b3c broker (service, 512 MB" in text and "B_4d5e6f broker" in text
     assert "UNPUBLISHED" in text and "held 42.1 GiB (66%)" in text
     assert "Declared unit limits sum to 1024 MB of the container's 65536 MB." in text
     assert not any(hasattr(sv, act) for act in ("stop", "start", "restart", "act", "control"))
@@ -223,14 +223,14 @@ def test_the_view_prints_each_summarys_age(tmp_path):
     """A summary outlives the daemon that wrote it, so the view says how old each one is: one
     left by a stopped daemon days ago doesn't read as current."""
     homes = tmp_path / "home"
-    for user, card, at in (("pa_orchard", "Orchard@e3f4a5", 1000.0), ("pa_orchard2", "Orchard2@f0a1b2", 1000.0 - 3 * 86400)):
+    for user, card, at in (("pa_orchard", "Orchard_e3f4a5", 1000.0), ("pa_orchard2", "Orchard2_f0a1b2", 1000.0 - 3 * 86400)):
         (homes / user / "agent" / "public").mkdir(parents=True)
         sv.publish(homes / user, _declaration(agent=card), now=at)
     text = sv.render(sv.read_agents(homes), sv.read_budget(_cgroup(tmp_path)), now=1045.0)
-    assert "Orchard@e3f4a5: summary published 45s ago" in text
-    assert "Orchard2@f0a1b2: summary published 3d ago" in text
+    assert "Orchard_e3f4a5: summary published 45s ago" in text
+    assert "Orchard2_f0a1b2: summary published 3d ago" in text
     # A stamp ahead of the reader's clock is said as such, never shown as a negative age.
-    assert "Orchard@e3f4a5: summary stamped 75s ahead of this clock" in sv.render(
+    assert "Orchard_e3f4a5: summary stamped 75s ahead of this clock" in sv.render(
         sv.read_agents(homes), sv.Budget(), now=925.0)
 
 
@@ -286,7 +286,7 @@ def test_renderings_exist():
     assert adapters.missing_renderings() == []
 
 
-CARD_T = "Tester@abc123"
+CARD_T = "Tester_abc123"
 
 
 class _Ran:
@@ -362,8 +362,8 @@ def test_every_unit_declared(tmp_path):
     nobody declared can't become a managed unit by being named on the socket."""
     from macf.pd.core import Core
     from macf.pd.interface import Asker
-    operator = Asker(kind="operator", card="Operator@000000")
-    core = Core(_declaration(units=[_unit("broker"), _unit("watcher")]), "B@4d5e6f",
+    operator = Asker(kind="operator", card="Operator_000000")
+    core = Core(_declaration(units=[_unit("broker"), _unit("watcher")]), "B_4d5e6f",
                 placeholders={"agent_home": str(tmp_path)})
     assert {name: core.state(name) for name in ("broker", "watcher")}
     for act in (core.start, core.stop, core.restart):
@@ -389,7 +389,7 @@ def test_schedules_hosted(tmp_path):
     (home / ".maceff_primary_agent.id").write_text("abc123def4567890\n")
     (home / ".maceff" / "config.json").write_text('{"agent_identity": {"moniker": "Tester"}}')
     interface.declaration_path(home).write_text(interface.Declaration(
-        version=1, agent="Tester@abc123", timezone="UTC", schedules=[schedule]).model_dump_json())
+        version=1, agent="Tester_abc123", timezone="UTC", schedules=[schedule]).model_dump_json())
     import shutil
     import tempfile
     base = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))     # a socket path short enough on macOS
@@ -428,7 +428,7 @@ def test_allowlist_lists_every_channel(tmp_path):
     from macf.pd import allowlist
 
     def decl(channels):
-        body = {"version": 1, "agent": "Ira@ee9a78"}
+        body = {"version": 1, "agent": "Ira_ee9a78"}
         if channels is not None:
             body["allowlisted_channels"] = channels
         return interface.Declaration.model_validate(body)
@@ -469,7 +469,7 @@ def test_allowlist_lists_every_channel(tmp_path):
 def test_an_allowlisted_channel_names_plugin_and_marketplace():
     """The client admits a channel only when the plugin and its marketplace both match, so a
     declared entry with either missing would compare as nothing; it is refused at load."""
-    body = {"version": 1, "agent": "Ira@ee9a78"}
+    body = {"version": 1, "agent": "Ira_ee9a78"}
     for bad in ({"plugin": "telegram"}, {"marketplace": "maceff"}, {"plugin": "", "marketplace": "x"},
                 "telegram@claude-plugins-official"):
         with pytest.raises(ValidationError):
@@ -488,8 +488,8 @@ def test_the_daemon_says_at_start_where_the_allowlist_and_declaration_differ(tmp
     written = []
     monkeypatch.setattr(log, "append_event", lambda event, data: written.append((event, data)) or True)
     declaration = interface.Declaration.model_validate(
-        {"version": 1, "agent": "Ira@ee9a78", "allowlisted_channels": [MACEFF]})
-    stub = SimpleNamespace(core=SimpleNamespace(declaration=declaration), card="Ira@ee9a78",
+        {"version": 1, "agent": "Ira_ee9a78", "allowlisted_channels": [MACEFF]})
+    stub = SimpleNamespace(core=SimpleNamespace(declaration=declaration), card="Ira_ee9a78",
                            _managed=[_managed(tmp_path, [TELEGRAM, MACEFF])])
 
     Daemon._compare_allowlist(stub)
@@ -499,7 +499,7 @@ def test_the_daemon_says_at_start_where_the_allowlist_and_declaration_differ(tmp
 
     written.clear()
     stub.core.declaration = interface.Declaration.model_validate(
-        {"version": 1, "agent": "Ira@ee9a78", "allowlisted_channels": [TELEGRAM, MACEFF]})
+        {"version": 1, "agent": "Ira_ee9a78", "allowlisted_channels": [TELEGRAM, MACEFF]})
     Daemon._compare_allowlist(stub)
     assert written == []
 
@@ -578,7 +578,7 @@ def test_mail_units(tmp_path, monkeypatch):
                                             chown=lambda p, u, g: owned.append((Path(p).name, u, g)))
     assert rendered == ["amail_broker"]
     card = pd_names.agent_card(home)
-    assert card == "AmailBroker@" + start.service_agent_id("amail_broker", cfg.ids)[:6]
+    assert card == "AmailBroker_" + start.service_agent_id("amail_broker", cfg.ids)[:6]
     assert start.service_agent_id("amail_broker", cfg.ids) == start.service_agent_id("amail_broker", cfg.ids)
     declaration = json.loads((tmp_path / "etc" / "amail_broker" / "declaration.json").read_text())
     assert declaration["agent"] == card
@@ -629,7 +629,7 @@ def test_periodic_clock_is_schedule(tmp_path, monkeypatch):
         with pytest.raises(ValidationError, match="R54"):
             _agents_yaml({"amail_broker": {"calling_card": "AmailBroker", "primal_daemon": looping}})
     cfg = _agents_yaml({"amail_broker": {"calling_card": "AmailBroker", "primal_daemon": BROKER_DAEMON}})
-    declaration = interface.Declaration(version=1, agent="AmailBroker@abc123",
+    declaration = interface.Declaration(version=1, agent="AmailBroker_abc123",
                                         **cfg.services["amail_broker"].primal_daemon)
     (sweep,) = [s for s in declaration.schedules if "sweep" in s.run.command]
     assert sweep.missed_run.kind == "skip"
@@ -657,9 +657,9 @@ def test_a_declared_daemon_outside_home_is_listed_once_and_seen_when_it_publishe
     views = sv.read_agents(homes, rendered=rendered, home_of=home_of)
     assert sorted((Path(v.home).name, v.status) for v in views) == [("broker", "UNPUBLISHED"), ("pa_seat", "UNPUBLISHED")]
     assert all(v.detail == "declared, no summary published" for v in views)
-    sv.publish(broker, _declaration(agent="Broker@ab12cd", units=[_unit("broker", memory=256)]), now=1.0)
+    sv.publish(broker, _declaration(agent="Broker_ab12cd", units=[_unit("broker", memory=256)]), now=1.0)
     seen = {Path(v.home).name: v for v in sv.read_agents(homes, rendered=rendered, home_of=home_of)}
-    assert seen["broker"].status == "PUBLISHED" and seen["broker"].units.agent == "Broker@ab12cd"
+    assert seen["broker"].status == "PUBLISHED" and seen["broker"].units.agent == "Broker_ab12cd"
 
 
 def test_a_declared_daemon_with_no_public_tree_still_publishes(tmp_path, script, base, run_daemon, monkeypatch):
@@ -716,4 +716,4 @@ def test_agents_yaml_accepts_a_schedule_aimed_at_its_own_card_and_refuses_a_lite
     body = {"timezone": "UTC", "units": [], "schedules": [dict(schedule, target="{card}")]}
     assert _validate_primal_daemon(body) is body
     with pytest.raises(ValueError, match="may target only"):
-        _validate_primal_daemon({**body, "schedules": [dict(schedule, target="Someone@abcdef")]})
+        _validate_primal_daemon({**body, "schedules": [dict(schedule, target="Someone_abcdef")]})

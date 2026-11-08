@@ -22,8 +22,8 @@ from macf.observe.acts import (
 )
 from macf.observe.presence import DAEMON_START, EVENT_SURFACE, fold_surfaces
 
-WATCHER = "Watcher@abc123"
-OTHER = "Other@def456"
+WATCHER = "Watcher_abc123"
+OTHER = "Other_def456"
 
 
 def _write(log, records):
@@ -37,7 +37,7 @@ def _ev(event, ts, **data):
 
 
 def _invite(ts, onlooker=WATCHER, **extra):
-    return _ev(EVENT_INVITE, ts, onlooker=onlooker, observed="Host@0a0a0a", stream_from=10,
+    return _ev(EVENT_INVITE, ts, onlooker=onlooker, observed="Host_0a0a0a", stream_from=10,
                secret_sha256="ab" * 32, cycle=1, **extra)
 
 
@@ -155,7 +155,7 @@ def test_malformed_surfaces_and_onlookers_cost_only_themselves_and_the_carry_com
         _ev(EVENT_SURFACE, 102, surface=["unhashable"], state="attached"),
         _invite(103),
         _invite(104, onlooker=["also", "unhashable"]),
-        _ev(EVENT_INVITE, 105, observed="Host@0a0a0a", stream_from=10, secret_sha256="cd" * 32),
+        _ev(EVENT_INVITE, 105, observed="Host_0a0a0a", stream_from=10, secret_sha256="cd" * 32),
         _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
     ])
 
@@ -173,7 +173,7 @@ def test_a_malformed_reinvitation_does_not_drop_the_good_one_from_the_carry(isol
     boundary, and it says so after."""
     _write(isolated_events_log, [
         _invite(100),
-        _ev(EVENT_INVITE, 101, onlooker=WATCHER, observed="Host@0a0a0a"),   # no offset or secret
+        _ev(EVENT_INVITE, 101, onlooker=WATCHER, observed="Host_0a0a0a"),   # no offset or secret
         _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
     ])
 
@@ -208,7 +208,7 @@ def test_a_lease_that_is_not_a_time_costs_only_its_own_invitation(isolated_event
     _write(isolated_events_log, [
         _invite(100),
         _invite(101, onlooker=OTHER),
-        _invite(102, onlooker="Third@aaa111", lease_until="soon"),
+        _invite(102, onlooker="Third_aaa111", lease_until="soon"),
         _ev(CYCLE_BOUNDARY_EVENT, 200, cycle=2),
     ])
 
