@@ -50,7 +50,7 @@ def accepts(port: int, host: str = LOOPBACK, timeout: float = 1.0) -> bool:
 PIDFILE_NAME = "mosquitto.pid"
 
 
-def end_orphan(pidfile: Path, *, grace_s: float = 5.0) -> Optional[int]:
+def end_orphan(pidfile: Path, *, grace_s: float = 5.0, what: str = "broker") -> Optional[int]:
     """End the mosquitto a previous wrapper started, when it is still that very process: a wrapper
     killed with SIGKILL can't stop its child, which then holds the port, and every new broker
     fails to bind (#921). The recorded start time is checked, so a reused pid is never signalled.
@@ -73,7 +73,7 @@ def end_orphan(pidfile: Path, *, grace_s: float = 5.0) -> Optional[int]:
             os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
         pass  # noqa: MACEFF003 - it ended on its own between the check and the signal, which is the goal
-    print(f"⚠️ MACF: pd: ended the broker a previous wrapper left running (pid {pid})", file=sys.stderr)
+    print(f"⚠️ MACF: pd: ended the {what} a previous wrapper left running (pid {pid})", file=sys.stderr)
     return pid
 
 
@@ -89,11 +89,12 @@ def run(command: List[str], port: int, tick: Callable[[], None], *, poll_s: floa
         probe_every_s: float = 0.0, probe: Callable[[int], bool] = accepts,
         stopping: Callable[[], bool] = lambda: False,
         reloading: Callable[[], bool] = lambda: False,
-        on_start: Callable[[int], None] = lambda pid: None) -> int:
+        on_start: Callable[[int], None] = lambda pid: None, stop_grace_s: float = 10.0) -> int:
     """Run *command* until it ends, ticking after each probe that finds it accepting on *port*;
     its exit status. A probe runs at most once per *probe_every_s* (each one is a connection
     the broker logs as a protocol error), while the child's exit and a stop are checked every
-    *poll_s*. When *stopping* turns true, the child is asked to end and the wrapper waits. When
+    *poll_s*. When *stopping* turns true, the child is asked to end and the wrapper waits up to
+    *stop_grace_s*; a child still running then is killed, and its status returned. When
     *reloading* turns true, the child is sent SIGHUP: mosquitto rereads its access rules then,
     and they apply to the connections it already holds (MIS-0002-R152)."""
     child = subprocess.Popen(command)
@@ -106,7 +107,11 @@ def run(command: List[str], port: int, tick: Callable[[], None], *, poll_s: floa
                 return code
             if stopping():
                 child.terminate()
-                return child.wait(timeout=10)
+                try:
+                    return child.wait(timeout=stop_grace_s)
+                except subprocess.TimeoutExpired:   # a broker deaf to the stop is killed, not raised past
+                    child.kill()
+                    return child.wait()
             if reloading():
                 child.send_signal(signal.SIGHUP)
             now = time.monotonic()
