@@ -20,6 +20,7 @@ signature proves the login, not the agent, and the verdict says so and names who
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -46,18 +47,28 @@ def acceptance_time(sidecar: Dict[str, Any], own_domain: str) -> Optional[dateti
     return when if when.tzinfo is not None else None
 
 
-def read_acceptance_time(sidecar_path: Path, own_domain: str,
-                         broker_uid: int) -> Optional[datetime.datetime]:
-    """:func:`acceptance_time` from the sidecar file at *sidecar_path*, read only when the
-    broker's uid owns the file. A box is group-writable (2770), so a sidecar another member of the
-    group wrote could carry an old hand-off time; it is no record, and None is returned."""
+def read_acceptance_time(sidecar_path: Path, own_domain: str, broker_uid: int, *,
+                         payload: bytes, message_id: str) -> Optional[datetime.datetime]:
+    """:func:`acceptance_time` from the sidecar file at *sidecar_path*, for the message whose
+    delivered bytes are *payload* and whose id is *message_id*. None unless the broker's uid owns
+    the file and the sidecar was written for exactly that message.
+
+    A box is group-writable (2770) with no sticky bit. A sidecar another member of the group wrote
+    is no record, and a genuine old one renamed to sit beside a new message would lend it an old
+    hand-off time; the ``raw_sha256`` and ``message_id`` the broker wrote into it bind it to its own
+    message."""
     try:
         if os.stat(sidecar_path, follow_symlinks=False).st_uid != broker_uid:
             return None
         sidecar = json.loads(Path(sidecar_path).read_text())
     except (OSError, ValueError):
         return None  # noqa: MACEFF003 - an unreadable sidecar is no record, so only current keys count (R45)
-    return acceptance_time(sidecar, own_domain) if isinstance(sidecar, dict) else None
+    if not isinstance(sidecar, dict):
+        return None
+    if (sidecar.get("raw_sha256") != hashlib.sha256(payload).hexdigest()
+            or sidecar.get("message_id") != message_id):
+        return None
+    return acceptance_time(sidecar, own_domain)
 
 
 def may_sign(card: str, public_key: str, registry: Registry,

@@ -354,11 +354,19 @@ def test_an_acceptance_time_is_read_only_from_a_sidecar_the_broker_owns(tmp_path
     carry an old hand-off time. Only a sidecar file owned by the broker's uid is a record (THM on #928)."""
     import json
     from macf.amail.attest import read_acceptance_time
+    import hashlib
+    payload, mid = b"the message as delivered", "msg-1772000000-0a0b0c0d0e0f"
     side = tmp_path / "1794000000-msg.sidecar.json"
-    side.write_text(json.dumps({"rung": "local", "origin_domain": "here.test",
+    side.write_text(json.dumps({"rung": "local", "origin_domain": "here.test", "message_id": mid,
+                                "raw_sha256": hashlib.sha256(payload).hexdigest(),
                                 "handed_off_at": "2026-03-01T12:00:00+00:00"}))
-    assert read_acceptance_time(side, "here.test", broker_uid=os.getuid()) == _utc(2026, 3, 1, 12)
-    assert read_acceptance_time(side, "here.test", broker_uid=os.getuid() + 1) is None
-    assert read_acceptance_time(tmp_path / "gone.json", "here.test", broker_uid=os.getuid()) is None
+    me = os.getuid()
+    assert read_acceptance_time(side, "here.test", broker_uid=me, payload=payload, message_id=mid) == _utc(2026, 3, 1, 12)
+    assert read_acceptance_time(side, "here.test", broker_uid=me + 1, payload=payload, message_id=mid) is None
+    # The box has no sticky bit, so a genuine old sidecar can be renamed to pair with a new message:
+    # it counts only for the bytes and the id it was written for (THM on #928).
+    assert read_acceptance_time(side, "here.test", broker_uid=me, payload=b"another message", message_id=mid) is None
+    assert read_acceptance_time(side, "here.test", broker_uid=me, payload=payload, message_id="msg-1-ffffffffffff") is None
+    assert read_acceptance_time(tmp_path / "gone.json", "here.test", broker_uid=me, payload=payload, message_id=mid) is None
     side.write_text("not json")
-    assert read_acceptance_time(side, "here.test", broker_uid=os.getuid()) is None
+    assert read_acceptance_time(side, "here.test", broker_uid=me, payload=payload, message_id=mid) is None
