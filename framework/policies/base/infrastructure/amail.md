@@ -656,16 +656,21 @@ file records each certificate the operator's authority issues, by its name, seri
 expiry, never its key; the repo owner chose one file for both.
 
 - The registry is `/etc/maceff/registry.yaml` unless a deployment names another path.
-  It is owned by root, mode 644, in a directory only root can write. Anything else is
+  It is owned by root, mode 644, in a directory only root can write, under ancestors
+  only root can write (a sticky directory such as `/tmp` passes). Anything else is
   refused when the registry is read, with the reason: whoever can write the file, or
-  the directory holding it, could put their own key in it.
+  any directory above it, could put their own key in it.
 - It maps each card to its account and its keys:
 
   ```yaml
   agents:
     ExampleAgent_0a1b2c:
       account: exampleagent_0a1b2c
-      keys: ["ed25519:<base64>"]
+      keys:
+        - "ed25519:<base64>"
+        - key: "ed25519:<base64>"
+          valid_from: 2026-11-08T00:00:00Z
+          valid_until: 2027-11-08T00:00:00Z
   certificates:
     - name: exampleagent_0a1b2c
       serial: "3f9a01"
@@ -673,8 +678,13 @@ expiry, never its key; the repo owner chose one file for both.
   ```
 
   A card must be `Name_shortid` (MIS-0002 R165), each card appears once in any case,
-  each agent has an account and at least one key, and a certificate entry holds only
-  its name, serial and expiry.
+  each agent has an account and at least one key, each key appears once, and a
+  certificate entry holds only its name, serial and expiry.
+- A key is a bare line, valid from the start, or a mapping with `valid_from` and
+  `valid_until`, written with a timezone. A key with `valid_until` is retired: it never
+  signs, and it verifies only what the broker accepted inside its window (R45).
+- Two cards may declare one account. That is a shared login, and a receiver sees every
+  card on it (R46).
 - `amail key-status` prints the public line to copy in. `amail registry check` says
   whether the registry is root's alone to write and lists what it declares, never a
   key's bytes.
