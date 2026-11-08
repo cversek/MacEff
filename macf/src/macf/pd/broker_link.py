@@ -85,17 +85,19 @@ def declared_broker_ports(own_home: Path, homes: Optional[Sequence[Path]] = None
 
 
 def render_files(card: str, section: BrokerSection, runtime: Path, placeholders: Dict[str, str],
-                 known_sources=(), members: Sequence[str] = ()) -> Path:
+                 known_sources=(), members: Sequence[str] = (), silenced_readers: Sequence[str] = ()) -> Path:
     """Write the broker's access rules and configuration under *runtime*; the configuration's
     path, which the broker unit's command names. With *members*, the broker is an association's:
-    each member may write its own subtree, and only this daemon reads them."""
+    each member may write its own subtree, and only this daemon reads them. A reader in
+    *silenced_readers* gets no topics (MIS-0002-R152)."""
     Path(runtime).mkdir(mode=0o700, parents=True, exist_ok=True)    # never the umask's 0755
     d = Path(runtime) / f"{card}.broker"
     d.mkdir(mode=0o700, exist_ok=True)
     d.chmod(0o700)
     access_rules = d / "access_rules"
     access_rules.write_text(b.render_access_rules(card, readers=section.readers, known_sources=known_sources,
-                                members=members, association=bool(members)))
+                                members=members, association=bool(members),
+                                silenced_readers=silenced_readers))
     access_rules.chmod(0o600)          # mosquitto warns on a world-readable one, and will refuse it
     conf = d / "mosquitto.conf"
     conf.write_text(b.render_conf(port=section.port, listen="loopback",
@@ -129,8 +131,11 @@ class BrokerLink:
 
     def __init__(self, card: str, log_path: Path, section: BrokerSection, placeholders: Dict[str, str],
                  *, client=None, members: Sequence[str] = (),
-                 on_findings: Optional[Callable[[List[str]], None]] = None):
+                 on_findings: Optional[Callable[[List[str]], None]] = None,
+                 rules: Optional[Callable[[], object]] = None):
         self.card = card
+        #: The operator's rules in force, read live (MIS-0002-R152); a silenced source isn't published.
+        self.rules = rules
         self.section = section
         self.view = assoc.MembershipView(expected=list(members)) if members else None
         self.on_findings = on_findings
@@ -140,14 +145,34 @@ class BrokerLink:
         self.stream = EventStream(card, log_path)
         self.stream.start_at_end()      # readers catch up by replay; the past isn't re-published
         publish = nowait_publish(self.client)
-        self.publisher = b.Publisher(self.stream, publish)
-        self.responder = b.ReplayResponder(self.stream, publish, section.readers)
+        self.publisher = b.Publisher(self.stream, publish, silenced=self._silenced, routed=self._routed)
+        # The daemon's own certificate reads its whole stream, replays included: the agent reading
+        # its own stream (``pd stream subscribe`` with no flags) is that reader.
+        self.responder = b.ReplayResponder(self.stream, publish, {**section.readers, card: ["*"]},
+                                           delivers=self._delivers)
         #: The newest request of each granted reader not yet taken; a newer one replaces it.
         self.requests: Dict[str, bytes] = {}
         self._lock = threading.Lock()
         self.client.on_message = self._on_message
         self.client.on_connect = self._on_connect
         self.last_error: Optional[str] = None
+
+    def _silenced(self, source: str) -> bool:
+        """A source the operator silenced isn't published (MIS-0002-R152)."""
+        return self.rules is not None and self.rules().source_silenced(source)
+
+    def _routed(self, source: str) -> Optional[List[str]]:
+        """The readers a routed source publishes to, each on its own routed subtree; None where no
+        route takes it. A route to a name that is no card (the session's ``channel``, a name
+        no reader holds) puts nothing on the broker: no reader is that subscriber."""
+        routed = None if self.rules is None else self.rules().routed_to(source)
+        if routed is None:
+            return None
+        return [n for n in routed if calling_card.is_card(n)]
+
+    def _delivers(self, source: str, reader: str) -> bool:
+        """Whether the operator's rules let *reader* have *source* replayed (R152)."""
+        return self.rules is None or self.rules().delivers(source, reader)
 
     @staticmethod
     def _client(section: BrokerSection, placeholders: Dict[str, str]):

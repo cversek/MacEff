@@ -12,6 +12,11 @@ authors = [{ name = "Craig Versek" }]
 dependencies = [
     "PyYAML>=6.0.0",  # Required for task system YAML parsing
     "pydantic>=2.0.0",  # Core: task/agent/project model validation, imported at CLI startup
+    # Every daemon's event stream is its own MQTT broker (persistent_layer 11.4): the client, and
+    # the library each daemon makes its own certificate authority and certificate with.
+    # mosquitto, the broker itself, is a host package.
+    "paho-mqtt>=2.0",
+    "cryptography>=40.0.0",
 ]
 
 [project.optional-dependencies]
@@ -43,12 +48,6 @@ lint = [
 ]
 proxy = [
     "aiohttp>=3.9.0",  # For API proxy streaming
-]
-broker = [
-    # A daemon's own MQTT broker and its association links (persistent_layer 11.5). Optional:
-    # a seat whose declaration names no broker installs nothing new. A declaration that names
-    # one is refused at load without it, naming this extra. mosquitto is a host package.
-    "paho-mqtt>=2.0",
 ]
 tray = [
     # The optional menu-bar app (MIS-0002-R67, R68): macOS only, never imported by the

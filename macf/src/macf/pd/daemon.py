@@ -53,7 +53,6 @@ from macf.pd.interface import (
     control_socket,
     parse_request,
     ensure_runtime_dir,
-    events_socket,
     record_path,
     runtime_dir,
 )
@@ -136,14 +135,18 @@ class Daemon:
         self.control_path = control_socket(self.card, self.base)
         self.record_path = record_path(self.card, self.base)
         self.channel_path = channel_socket(self.card, self.base)
-        self.events_path = events_socket(self.card, self.base)
         check_socket_path(self.control_path)
         check_socket_path(self.channel_path)
-        check_socket_path(self.events_path)
         placeholders = {"agent_home": str(self.home), "card": self.card, "runtime_dir": str(self.base)}
         cutover_declaration(self.home, self.card)    # once, before the old form is refused (R165)
-        self.core = Core(load_declaration(self.home, self.card), self.card,
-                         placeholders=placeholders, **core_options)
+        # Every daemon's stream is its own broker (MIS-0002 R150 to R156): a declaration that names
+        # none gets the daemon's own, with its own authority, and a broker unit when none is declared.
+        from macf.pd.broker_defaults import dependency_remedy, missing_dependencies, with_own_broker
+        missing = missing_dependencies()
+        if missing:      # refused here, naming the fix, rather than an ImportError deep in the start
+            raise DeclarationRefused(dependency_remedy(missing))
+        self.core = Core(with_own_broker(load_declaration(self.home, self.card), self.home, self.card),
+                         self.card, placeholders=placeholders, **core_options)
         #: The declared schedules and the agent's own entries, run by this daemon (MIS-0002 step
         #: 2). It runs with no schedule declared, since an agent's entries need it all the same.
         from macf.pd.names import rendered_declaration_path
@@ -153,41 +156,46 @@ class Daemon:
         self.scheduler = Scheduler(self.core.declaration, self.card, placeholders,
                                    work_dir=self.base / f"{self.record_path.stem}.runs",
                                    check_installed=not rendered_declaration_path(self.home).exists())
-        #: The event stream (persistent_layer 11.4): the log, followed and fanned out.
+        #: The operator's rules for the stream (MIS-0002-R152), folded from the log at start and
+        #: changed live by a stream rule: the publisher skips a silenced source, and the notifier
+        #: reads the same rules for the session's notices.
         from macf.agent_events_log import get_log_path
-        from macf.pd.stream import EventStream
-        self.stream = EventStream(self.card, get_log_path(), self.core.declaration.stream_grants)
-        #: The daemon's own broker (prototype, mission B phase B2): its configuration rendered
-        #: here, before units start, and its publisher run from the loop.
-        self.broker_link = None
+        from macf.pd.stream import Rules
+        self.rules = Rules()
+        #: The event stream (persistent_layer 11.4): the daemon's own broker, its configuration
+        #: rendered here, before units start, and its publisher run from the loop.
         self.export_link = None
         decl = self.core.declaration
-        if decl.broker is not None:
-            from macf.pd.broker_link import BrokerLink, declared_broker_ports, port_clash, render_files
-            clash = port_clash(self.card, decl.broker.port, declared_broker_ports(self.home))
-            if clash is not None:
-                raise DeclarationRefused(clash)
-            # The runtime directory is made private here, before the broker's files go in it:
-            # rendering first let mkdir(parents=True) create it with the umask's 0755, which
-            # the start then refused (seen on the system daemon's first start, Nov 8).
-            ensure_runtime_dir(self.base)
-            render_files(self.card, decl.broker, self.base, placeholders, members=decl.members)
-            self.broker_link = BrokerLink(self.card, get_log_path(), decl.broker, placeholders,
-                                          members=decl.members, on_findings=self._member_findings)
+        from macf.pd.broker_link import BrokerLink, declared_broker_ports, port_clash, render_files
+        clash = port_clash(self.card, decl.broker.port, declared_broker_ports(self.home))
+        if clash is not None:
+            raise DeclarationRefused(clash)
+        # The runtime directory is made private here, before the broker's files go in it:
+        # rendering first let mkdir(parents=True) create it with the umask's 0755, which
+        # the start then refused (seen on the system daemon's first start, Nov 8).
+        ensure_runtime_dir(self.base)
+        self._broker_placeholders = placeholders
+        #: The readers silenced by name when the broker's access rules were last rendered.
+        self._rendered_silenced: List[str] = []
+        #: Whether the broker must be asked to reread rules rendered while it ran (R152).
+        self._reload_owed = False
+        render_files(self.card, decl.broker, self.base, placeholders, members=decl.members)
+        self.broker_link = BrokerLink(self.card, get_log_path(), decl.broker, placeholders,
+                                      members=decl.members, on_findings=self._member_findings,
+                                      rules=lambda: self.rules)
         if decl.association is not None:
             from macf.pd.broker_link import ExportLink
             self.export_link = ExportLink(self.card, get_log_path(), decl.association, placeholders,
                                           on_unreachable=self._export_unreachable)
-        self._events_bound: Optional[tuple] = None
         self._listener: Optional[socket.socket] = None
         self._channel_listener: Optional[socket.socket] = None
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound
         #: Each attached channel still owed its hello: (deadline, peer pid, bytes so far).
         self._hellos: dict = {}
-        # The stream's rules, read live at each delivery: _bind_stream folds them anew at start
+        # The stream's rules, read live at each delivery: _fold_rules folds them anew at start
         # and a stream rule changes them at runtime (MIS-0002-R152).
         self.notifier = Notifier(self.home, self.core.declaration.notice_routes,
-                                 rules=lambda: self.stream.rules)
+                                 rules=lambda: self.rules)
         #: The agent's duties, hosted so a duty that falls due wakes it (the scheduler design, 4.4).
         from macf.agent_events_log import append_event, read_events
         from macf.pd.duties import HostedDuties
@@ -278,7 +286,7 @@ class Daemon:
         channel.listen(4)
         channel.setblocking(False)
         self._channel_listener = channel
-        self._bind_stream()
+        self._fold_rules()
         record = self._record = self._write_record()
         self.core.record_start(record.pid, record.proc_start)
         self._compare_allowlist()
@@ -292,17 +300,39 @@ class Daemon:
         self.scheduler.boot()
         self.duties.boot()
 
-    def _bind_stream(self) -> None:
-        """Bind the event stream's socket, fold the operator's rules from the log, and learn this
-        process's own appends as it makes them, so they carry ``origin: daemon``."""
+    def _fold_rules(self) -> None:
+        """Fold the operator's rules from the log, and let the publisher learn this process's
+        own appends as it makes them, so they carry ``origin: daemon``."""
         from macf.agent_events_log import add_append_listener
         from macf.pd.stream import fold_rules
-        self.stream.rules = fold_rules(read_events(reverse=False, scope="all", only=(EVENT_STREAM_RULE,)),
-                                       self.card)
-        self.stream.bind(self.events_path)
-        st = os.stat(self.events_path)
-        self._events_bound = (st.st_dev, st.st_ino)
-        add_append_listener(self.stream.note_own_append)
+        self.rules = fold_rules(read_events(reverse=False, scope="all", only=(EVENT_STREAM_RULE,)), self.card)
+        self._render_broker_rules(reload=False)     # before the broker unit starts, so no reload
+        add_append_listener(self.broker_link.stream.note_own_append)
+
+    def _render_broker_rules(self, *, reload: bool = True) -> None:
+        """Render the broker's access rules again when the readers silenced by name changed, and
+        ask the broker unit to reread them, so a silenced reader stops receiving at once and an
+        unsilenced one resumes, without a restart (MIS-0002-R152)."""
+        from macf.pd.broker_link import render_files
+        # Only a name that is a card can be a broker reader; ``@channel`` is the session's.
+        silenced = sorted(n for n in self.rules.silenced_subscribers() if calling_card.is_card(n))
+        if silenced == self._rendered_silenced:
+            return
+        decl = self.core.declaration
+        render_files(self.card, decl.broker, self.base, self._broker_placeholders, members=decl.members,
+                     silenced_readers=silenced)
+        self._rendered_silenced = silenced
+        self._reload_owed = reload
+
+    def _reload_broker_if_owed(self) -> None:
+        """Ask the broker to reread rules rendered since it started, once it is running. A broker
+        still starting reads the new file itself, or is asked on a later pass; one not running at
+        all reads it when it next starts."""
+        if not self._reload_owed:
+            return
+        from macf.pd.core import LIVE_STATES
+        if self.core.reload("broker") or self.core.state_of("broker") not in LIVE_STATES:
+            self._reload_owed = False
 
     def _publish_units(self) -> None:
         """Publish a summary of this agent's units into its own public tree, for its peers in a
@@ -386,9 +416,6 @@ class Daemon:
         the outer tier restarts the daemon alone."""
         sel = self._sel = selectors.DefaultSelector()
         self.notifier.on_detach = self._channel_gone
-        self.stream.on_register = lambda conn: sel.register(conn, selectors.EVENT_READ, "subscriber")
-        self.stream.on_unregister = sel.unregister
-        sel.register(self.stream.listener, selectors.EVENT_READ, "events")
         sel.register(self._listener, selectors.EVENT_READ, "control")
         sel.register(self._channel_listener, selectors.EVENT_READ, "channel")
         sel.register(self._wake_r, selectors.EVENT_READ, "wake")
@@ -404,10 +431,6 @@ class Daemon:
                         self._accept_channel()
                     elif key.data == "attached":
                         self._channel_readable(key.fileobj)
-                    elif key.data == "events":
-                        self.stream.accept()
-                    elif key.data == "subscriber":
-                        self.stream.readable(key.fileobj)
                     else:
                         os.read(self._wake_r, 512)
                 self.core.tick()
@@ -430,8 +453,6 @@ class Daemon:
             for conn in self.notifier.channels:
                 self.notifier.detach(conn)
             self.notifier.on_detach = None
-            self.stream.on_unregister = None
-            self.stream.close()
             for link in (self.broker_link, self.export_link):
                 if link is not None:
                     link.stop()
@@ -443,12 +464,9 @@ class Daemon:
             self._release()
 
     def _pump_stream(self) -> None:
-        """One pass of the event stream. A failure inside it costs the stream's pass, never the
-        loop that supervises the units (MIS-0002-R153 (subscriber_MUST-NOT_block_layer))."""
-        try:
-            self.stream.pump()
-        except Exception as e:  # noqa: BLE001 - GUARD, not handler: the stream must not end the daemon
-            print(f"⚠️ MACF: pd: the event stream's pass failed (the daemon goes on): {e!r}", file=sys.stderr)
+        """One pass of the event stream on the broker. A failure inside it costs the stream's
+        pass, never the loop that supervises the units (MIS-0002-R153 (subscriber_MUST-NOT_block_layer))."""
+        self._reload_broker_if_owed()
         for link in (self.broker_link, self.export_link):
             if link is None:
                 continue
@@ -547,11 +565,9 @@ class Daemon:
         if self._channel_listener is not None:
             self._channel_listener.close()
         from macf.agent_events_log import remove_append_listener
-        remove_append_listener(self.stream.note_own_append)
-        self.stream.close()
+        remove_append_listener(self.broker_link.stream.note_own_append)
         for path, still_mine in ((self.control_path, self._socket_is_mine),
                                  (self.channel_path, self._channel_is_mine),
-                                 (self.events_path, self._events_is_mine),
                                  (self.record_path, self._record_is_mine)):
             try:
                 if still_mine():
@@ -564,10 +580,6 @@ class Daemon:
     def _channel_is_mine(self) -> bool:
         st = os.stat(self.channel_path)
         return (st.st_dev, st.st_ino) == self._channel_bound
-
-    def _events_is_mine(self) -> bool:
-        st = os.stat(self.events_path)
-        return (st.st_dev, st.st_ino) == self._events_bound
 
     def _socket_is_mine(self) -> bool:
         st = os.stat(self.control_path)
@@ -927,8 +939,9 @@ class Daemon:
         if not append_event(EVENT_STREAM_RULE, rule.model_dump()):
             return Response(ok=False, error=("the rule could not be recorded, so it is not set: a rule the "
                                              "next daemon cannot read back would be lost at its restart"))
-        self.stream.rules.apply(rule.act, rule.target, rule.subscriber)
-        return Response(ok=True, stream_rules=self.stream.rules.as_dict())
+        self.rules.apply(rule.act, rule.target, rule.subscriber)
+        self._render_broker_rules()
+        return Response(ok=True, stream_rules=self.rules.as_dict())
 
     # ------------------------------------------------------------------ the wake's pace
 

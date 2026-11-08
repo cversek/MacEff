@@ -6,6 +6,7 @@ import pytest
 
 from macf.pd.broker import (BrokerRefused, GapTracker, cert_name, grant_filters, render_access_rules,
                              render_conf, source_topic)
+from test_primal_daemon import base  # noqa: F401 - a fixture: the short runtime dir daemon tests share
 
 SYS = "SystemDaemon_0a1b2c"
 AGENT = "ExampleAgent_1a2b3c"
@@ -40,6 +41,7 @@ def test_a_member_writes_only_its_own_subtree_and_reads_nothing():
 def test_a_reader_reads_only_the_sources_granted():
     users = _users(render_access_rules(AGENT, readers={OTHER: ["pd_unit_state", "pd_unit_state"]}))
     assert users[cert_name(OTHER)] == [f"topic read {AGENT.lower()}/events/pd/unit/state",
+                                       f"topic read {AGENT.lower()}/routed/{OTHER.lower()}/pd/unit/state",
                                        f"topic write {AGENT.lower()}/replay/{OTHER.lower()}/request",
                                        f"topic read {AGENT.lower()}/replay/{OTHER.lower()}/records"]
     with pytest.raises(BrokerRefused, match="not a source name"):
@@ -452,22 +454,6 @@ def test_the_export_link_records_each_change_of_reason_once(tmp_path):
     assert seen[-1] is None and len(seen) == 2
 
 
-def test_a_declaration_naming_a_broker_needs_the_mqtt_client(monkeypatch):
-    import importlib.util
-    from pydantic import ValidationError
-    from macf.pd.interface import Declaration
-    real = importlib.util.find_spec
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a: None if name == "paho" else real(name, *a))
-    broker = {"port": 18830, "certificate_authority_file": "a", "server_certificate_file": "b",
-              "server_key_file": "c", "client_certificate_file": "d", "client_key_file": "e"}
-    with pytest.raises(ValidationError, match=r"macf\[broker\]"):
-        Declaration.model_validate({"version": 1, "agent": AGENT, "broker": broker})
-    Declaration.model_validate({"version": 1, "agent": AGENT})      # no broker, nothing needed
-
-
-# --- the declaration's broker section -----------------------------------------------------------
-
-
 def test_a_declaration_names_its_broker_and_the_daemon_renders_it(tmp_path):
     from macf.pd.broker_link import render_files
     from macf.pd.interface import Declaration
@@ -571,3 +557,92 @@ def test_the_wrapper_passes_a_stop_on_to_the_broker():
     code = run(child, 1, lambda: None, poll_s=0.05, probe=lambda port: True,
                stopping=lambda: time.monotonic() > asked_at)
     assert code != 0 and time.monotonic() - started < 5
+
+
+# --- the clean break: every daemon's stream is its own broker (MIS-0002 R150, R151, R169) ------
+
+
+def test_every_daemon_runs_its_own_broker(tmp_path):
+    """A declaration that names no broker gets the daemon's own: a section with its own
+    authority and certificate, made with no root step, and a broker unit. One that names its
+    broker in full keeps it."""
+    import subprocess
+    from macf.pd.broker_defaults import with_own_broker
+    from macf.pd.interface import BrokerSection, Declaration
+    bare = Declaration(version=1, agent=AGENT)
+    d = with_own_broker(bare, tmp_path, AGENT)
+    assert d.broker is not None and [u.name for u in d.units] == ["broker"]
+    pki = tmp_path / ".maceff" / "pd" / "broker"
+    assert pki.stat().st_mode & 0o777 == 0o700
+    for f in ("authority.key", "own.key", "authority.crt", "own.crt"):
+        assert (pki / f).stat().st_mode & 0o777 == 0o600, f
+    verify = subprocess.run(["openssl", "verify", "-CAfile", str(pki / "authority.crt"), str(pki / "own.crt")],
+                            capture_output=True, text=True)
+    assert verify.returncode == 0, verify.stdout + verify.stderr
+    subject = subprocess.run(["openssl", "x509", "-in", str(pki / "own.crt"), "-noout", "-subject", "-ext",
+                              "subjectAltName"], capture_output=True, text=True).stdout
+    assert cert_name(AGENT) in subject and "127.0.0.1" in subject
+    again = with_own_broker(bare, tmp_path, AGENT)
+    assert (pki / "own.crt").read_bytes() == (tmp_path / ".maceff/pd/broker/own.crt").read_bytes()
+    assert again.broker.certificate_authority_file == d.broker.certificate_authority_file
+    named = BrokerSection(port=18830, certificate_authority_file="a", server_certificate_file="b",
+                          server_key_file="c", client_certificate_file="d", client_key_file="e")
+    kept = with_own_broker(Declaration(version=1, agent=AGENT, broker=named), tmp_path, AGENT)
+    assert kept.broker == named
+
+
+def test_a_subscriber_receives_only_the_sources_it_subscribed():
+    """A subscriber's filters, made from the sources it chose, match those sources' topics and no
+    others (R151): the broker delivers only what a subscription's filters match."""
+    from paho.mqtt.client import topic_matches_sub
+    chosen = ["pd_unit_state", "zone_*"]
+    filters = sorted({f for s in chosen for f in grant_filters(AGENT, s, ["zone_contact", "zone_edge_check"])})
+    def receives(source):
+        return any(topic_matches_sub(f, source_topic(AGENT, source)) for f in filters)
+    assert receives("pd_unit_state") and receives("zone_contact") and receives("zone_edge_check")
+    assert not receives("pd_entry_due") and not receives("tool_call_completed")
+
+
+def test_a_silenced_source_is_not_published(tmp_path):
+    """MIS-0002 R152 on the broker: the operator's silence acts before publishing."""
+    from macf.pd.broker import Publisher
+    from macf.pd.stream import EventStream, Rules
+    log = tmp_path / "events.jsonl"
+    log.write_text("")
+    rules = Rules()
+    rules.apply("silence", "tool_*")
+    from macf.pd.stream import matches
+    sent = []
+    p = Publisher(EventStream(AGENT, log), sent.append,
+                  silenced=lambda s: matches(s, [x for x in rules.silenced if not x.startswith("@")]))
+    append(log, "tool_call_completed", tool="Bash")
+    append(log, "pd_unit_state", unit="a")
+    p.pump()
+    assert [m.topic for m in sent] == [source_topic(AGENT, "pd_unit_state")]
+
+
+def test_a_daemon_whose_interpreter_lacks_the_brokers_dependencies_is_refused_naming_the_fix(tmp_path, base, monkeypatch):
+    """An editable install made before paho-mqtt and cryptography were core dependencies doesn't
+    gain them when its checkout updates. Such a daemon is refused at start with the command that
+    installs them into its own interpreter, rather than dying on an import inside its start."""
+    import macf.pd.broker_defaults as bd
+    from macf.pd.core import DeclarationRefused
+    from macf.pd.daemon import Daemon
+    from test_primal_daemon import make_home
+    assert bd.missing_dependencies(lambda module: None) == ["paho-mqtt", "cryptography"]
+    assert bd.missing_dependencies(lambda module: None if module == "cryptography" else object()) == ["cryptography"]
+    assert bd.missing_dependencies() == []
+    monkeypatch.setattr(bd, "missing_dependencies", lambda: ["paho-mqtt"])
+    with pytest.raises(DeclarationRefused) as refused:
+        Daemon(make_home(tmp_path, []), base=base)      # a short runtime dir: macOS caps a socket path at 103 bytes
+    import sys
+    assert "paho-mqtt" in str(refused.value) and f"{sys.executable} -m pip install" in str(refused.value)
+
+
+def test_the_wrapper_names_the_remedy_when_mosquitto_is_missing(tmp_path, capsys):
+    from macf.pd.broker_unit import main
+    conf = tmp_path / "mosquitto.conf"
+    conf.write_text("listener 18830 127.0.0.1\n")
+    assert main([str(conf), "--mosquitto", "no-such-mosquitto-here"]) == 127
+    err = capsys.readouterr().err
+    assert "install mosquitto" in err.lower() and "brew services start" in err

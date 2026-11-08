@@ -1063,7 +1063,9 @@ def test_a_crash_loop_is_one_notice_per_unit_with_its_count(tmp_path, script, ba
     loops = max(int(d["arrival_id"].split(":")[1]) for d in _logged(nt.EVENT_DETECTED)
                 if d["source"] == "pd_unit_failed" and d["arrival_id"].startswith("flaky:"))
     assert loops >= 4
-    raised = [d for d in _logged(nt.EVENT_DETECTED) if d["source"] == "pd_unit_failed"]
+    # The two units this test declares; the daemon's own broker unit is not this test's concern.
+    raised = [d for d in _logged(nt.EVENT_DETECTED) if d["source"] == "pd_unit_failed"
+              and d["arrival_id"].split(":")[0] in ("flaky", "steady")]
     assert len(raised) == loops + 1                                 # every failure is in the log
     assert _unit_failed_owed(daemon.notifier) == [("flaky", loops), ("steady", 1)]
 
