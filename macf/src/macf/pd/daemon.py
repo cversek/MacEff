@@ -186,7 +186,8 @@ class Daemon:
         if decl.association is not None:
             from macf.pd.broker_link import ExportLink
             self.export_link = ExportLink(self.card, get_log_path(), decl.association, placeholders,
-                                          on_unreachable=self._export_unreachable)
+                                          on_unreachable=self._export_unreachable,
+                                          snapshot=lambda: [(s.unit, s.state) for s in self.core.statuses()])
         self._listener: Optional[socket.socket] = None
         self._channel_listener: Optional[socket.socket] = None
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound

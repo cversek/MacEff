@@ -14,7 +14,7 @@ clean disconnect the member publishes ``offline`` itself, since a will fires onl
 import fnmatch
 import json
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from macf.pd import broker as b
 
@@ -75,6 +75,21 @@ class Exporter:
         self.card, self.stream, self.publish = card, stream, publish
         self.exports = tuple(exports)
         self.pending: List[b.Message] = []
+
+    def snapshot(self, states: Sequence[Tuple[str, str]], now: float) -> int:
+        """Queue each unit's current state, summarized as its ``pd_unit_state`` export would be
+        and marked ``snapshot``, when the declaration exports that source; the number queued. A link
+        starts at the log's end (R182), so without this a restarted member's association keeps the
+        states from before the restart until something changes."""
+        if not exported("pd_unit_state", self.exports):
+            return 0
+        topic = member_topic(self.card, "events/pd/unit/state")
+        for unit, state in states:
+            body = {"source": "pd_unit_state", "agent": self.card, "time": now, "snapshot": True,
+                    "data": {"unit": unit, "state": state}}
+            self.pending.append(b.Message(topic=topic, payload=json.dumps(body, separators=(",", ":")).encode(),
+                                          properties={}))
+        return len(states)
 
     def pump(self) -> int:
         records, _gap = self.stream.take()
