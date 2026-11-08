@@ -71,14 +71,13 @@ def read_assessment(now: Optional[float] = None,
                     reader: Optional[Callable[[], str]] = None) -> Dict[str, object]:
     """Read the agent's own stored credential and assess it.
 
-    On macOS the credential is in the Keychain, one entry per login under one service. Where
-    several agents share one macOS login there are several entries, and nothing here says which
-    is this agent's, so the verdict is ``unknown`` rather than another agent's date."""
-    from macf.budget import BudgetError, keychain_accounts, read_credential
+    On macOS the credential is in the Keychain, under one service, and there can be more than one
+    entry: a session started without USER files its refreshed token under "unknown", and the
+    original entry is never written again (#852). ``read_credential`` takes the newest, which is
+    the login in use. Agents that share one macOS login share that one Claude login, so the newest
+    entry is every such agent's own (#936)."""
+    from macf.budget import BudgetError, read_credential
     now = time.time() if now is None else now
-    if reader is None and sys.platform == "darwin" and len(keychain_accounts()) > 1:
-        return assess(None, now, why_unread="several Keychain logins on this macOS account; "
-                                            "which one is this agent's can't be told")
     try:
         raw = (reader or read_credential)()
     except BudgetError as e:
