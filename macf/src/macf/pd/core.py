@@ -1117,6 +1117,23 @@ class Core:
         elif r.state == "starting":
             self._transition(r, "running", "first liveness from this incarnation")
 
+    def session_waiting_on(self) -> Optional[str]:
+        """What the session unit waits on a person for, or None (MIS-0002-R21): the keystroke
+        fallback's first evidence that a prompt is idle (MIS-0004 R29)."""
+        for r in self._units.values():
+            if r.spec.kind == "session" and r.state == "waiting_on_a_person":
+                return "a person"
+        return None
+
+    def session_project_dir(self, agent_home: Path) -> Optional[Path]:
+        """The directory the session unit runs in, from its declared ``--project-dir``."""
+        for r in self._units.values():
+            if r.spec.kind == "session":
+                cmd = list(r.spec.command)
+                if "--project-dir" in cmd and cmd.index("--project-dir") + 1 < len(cmd):
+                    return Path(cmd[cmd.index("--project-dir") + 1].replace("{agent_home}", str(agent_home)))
+        return None
+
     def _apply_waiting(self, r: _Runner, waiting_on: Optional[str]) -> None:
         """Enter or leave waiting on a person (MIS-0002-R21 (pd_MUST_report_waiting_on_person))."""
         if waiting_on:

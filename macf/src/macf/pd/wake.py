@@ -256,6 +256,77 @@ def draft_text(screen: str) -> Optional[str]:
     return _box(screen)[1]
 
 
+#: Transcript records that are not a turn of the conversation: an interrupt, and a local command
+#: with its output. The macOS prototype found both holding the gate shut after a turn had ended
+#: (MIS-0004 R29); they failed safe, but a notice then waited for a person to type.
+_SKIPPED_TEXT = ("[Request interrupted by user", "<command-name>", "<local-command-stdout>",
+                 "<local-command-stderr>", "<command-message>")
+
+
+def _record_text(rec: dict) -> str:
+    content = (rec.get("message") or {}).get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(c.get("text", "") for c in content if isinstance(c, dict))
+    return ""
+
+
+def turn_ended(lines: Iterable[str]) -> Optional[bool]:
+    """Whether the transcript's last turn has ended (MIS-0004 R29), read from its JSONL lines.
+
+    True when the last meaningful record is the assistant's, finished (``stop_reason`` end_turn);
+    False when it is the user's, or the assistant's mid-turn (a tool call); None when nothing in
+    it can be read, which is never evidence of an idle prompt. Interrupt and local-command
+    records, and system records, are skipped."""
+    last = None
+    for raw in lines:
+        try:
+            rec = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(rec, dict) or rec.get("type") not in ("user", "assistant"):
+            continue
+        if rec["type"] == "user" and _record_text(rec).lstrip().startswith(_SKIPPED_TEXT):
+            continue
+        last = rec
+    if last is None:
+        return None
+    if last["type"] == "user":
+        return False
+    return (last.get("message") or {}).get("stop_reason") == "end_turn"
+
+
+def transcript_turn_ended(path: Optional[Path], tail_bytes: int = 262144) -> Optional[bool]:
+    """:func:`turn_ended` over the tail of the transcript at *path*; None when it can't be read."""
+    if path is None:
+        return None
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - tail_bytes))
+            data = f.read().decode("utf-8", "replace")
+    except OSError:
+        return None  # noqa: MACEFF003 - None is "can't be read", which the R29 gate holds as busy
+    lines = data.splitlines()
+    return turn_ended(lines[1:] if size > tail_bytes else lines)
+
+
+def latest_transcript(project_dir: Optional[Path], claude_home: Optional[Path] = None) -> Optional[Path]:
+    """The newest transcript of the sessions run in *project_dir*: Claude Code keeps them under
+    ``~/.claude/projects/<the path with every non-alphanumeric character as ->/``."""
+    if project_dir is None:
+        return None
+    key = re.sub(r"[^A-Za-z0-9]", "-", str(Path(project_dir)))
+    folder = (claude_home or Path.home() / ".claude") / "projects" / key
+    try:
+        found = max(folder.glob("*.jsonl"), key=lambda q: q.stat().st_mtime)
+    except (ValueError, OSError):
+        return None  # noqa: MACEFF003 - None is "no transcript found", which the R29 gate holds as busy
+    return found
+
+
 class Pane(Protocol):
     def capture(self) -> Optional[str]: ...
     def type(self, text: str) -> bool: ...
@@ -289,6 +360,12 @@ class Waker:
     screens_dir: Optional[Path] = None
     #: The wall clock, for a saved screen's name; ``clock`` only measures intervals.
     wall: Callable[[], float] = time.time
+    #: Who or what the session waits on (MIS-0002-R21), or None; with the next two, the positive
+    #: evidence of an idle prompt MIS-0004 R29 asks for. None here means not wired: no gate.
+    waiting_on: Optional[Callable[[], Optional[str]]] = None
+    #: Whether the transcript's last turn has ended (True), not (False) or can't be read (None,
+    #: which holds like False). None here means not wired: no gate.
+    turn_ended: Optional[Callable[[], Optional[bool]]] = None
 
     def tick(self, waiting_ids: List[str]) -> Optional[str]:
         """One step. Returns "sent" on the step a wake is typed, else None."""
@@ -314,6 +391,15 @@ class Waker:
                 self.cap_said = self.day
                 self._say(EVENT_CAP, {"cap": self.daily_cap, "day": self.day.isoformat()})
             return None
+        if self.waiting_on is not None:
+            who = self.waiting_on()
+            if who:
+                return self._hold(f"a person is waited on: {who}", fresh)
+        if self.turn_ended is not None:
+            ended = self.turn_ended()
+            if ended is not True:
+                return self._hold("the transcript's last turn has not ended" if ended is False
+                                  else "the transcript can't be read", fresh)
         screen = self.pane.capture()
         state = classify(screen) if screen is not None else DIALOG
         if state != IDLE_EMPTY:
@@ -325,9 +411,7 @@ class Waker:
         text = wake_text(waiting_ids)
         if text is None:
             return None
-        self.record_keys(text, "pd-wake")                  # before the keys, so they read as the framework's
-        if not self.pane.type(text):
-            self._say(EVENT_HELD, {"reason": "the pane could not be typed into", "waiting": len(fresh)})
+        if not self.type_notice(text):                     # it has said why
             return None
         # Sent, from here: recorded at the send, so a misread status can't send it again.
         self.woken.update(i for i in waiting_ids if MESSAGE_ID.match(i))
@@ -335,6 +419,25 @@ class Waker:
         self._say(EVENT_SENT, {"ids": sorted(self.woken & set(waiting_ids)), "chars": len(text)})
         self.enters, self.next_enter, self.verify_by = 0, now, now + VERIFY_S
         return "sent"
+
+    def type_notice(self, text: str) -> bool:
+        """Record, then type *text* without its return (MIS-0004 R39 sends the return apart). A
+        notice that begins with a digit is refused (R40): a survey bar reads as an empty box, and
+        a digit answers it."""
+        if text[:1].isdigit():
+            self._say(EVENT_HELD, {"reason": "the notice begins with a digit, which a survey bar would take as an answer"})
+            return False
+        self.record_keys(text, "pd-wake")                  # before the keys, so they read as the framework's
+        if not self.pane.type(text):
+            self._say(EVENT_HELD, {"reason": "the pane could not be typed into"})
+            return False
+        return True
+
+    def _hold(self, reason: str, fresh: List[str]) -> None:
+        if self.held != reason:                            # once per stretch, like the screen's reasons
+            self.held = reason
+            self._say(EVENT_HELD, {"reason": reason, "waiting": len(fresh)})
+        return None
 
     def release(self, reason: str) -> None:
         """End a held stretch without a wake, saying why; nothing if none is held."""
