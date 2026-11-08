@@ -387,6 +387,16 @@ def test_mail_for_unknown_recipient_is_quarantined(deploy):
     assert "no local agent" in result["reason"]
 
 
+def test_a_quarantine_reason_never_quotes_a_zone_token(deploy):
+    """MIS-0004 R49: mail to a zone address no agent here holds (a revoked token, or a typo) is
+    quarantined with the card part of the address and the token masked."""
+    token = "".join("0123456789abcdef")     # made-up and assembled, as R49 asks of fixtures
+    result = inbound.process_entry(
+        deploy, *spool(deploy, make_raw(), envelope_to=f"someone_0a1b2c_{token}@zone.example"))
+    assert result["disposition"] == QUARANTINED
+    assert token not in result["reason"] and "someone_0a1b2c_<token>@zone.example" in result["reason"]
+
+
 # ---- push-wake eligibility (the spec's named controls) ---------------------
 
 def test_push_granted_human_gets_push_wake_class(deploy):
