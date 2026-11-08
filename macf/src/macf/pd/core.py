@@ -1132,6 +1132,7 @@ class Core:
                 cmd = list(r.spec.command)
                 if "--project-dir" in cmd and cmd.index("--project-dir") + 1 < len(cmd):
                     return Path(cmd[cmd.index("--project-dir") + 1].replace("{agent_home}", str(agent_home)))
+                return Path(agent_home)     # no declared directory: the session starts in the home
         return None
 
     def _apply_waiting(self, r: _Runner, waiting_on: Optional[str]) -> None:

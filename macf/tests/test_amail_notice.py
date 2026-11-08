@@ -381,6 +381,11 @@ def test_turn_end_is_read_from_the_last_meaningful_record():
     # read as an open turn (they failed safe, holding the gate until a person typed).
     assert _wk.turn_ended(_turns(ASSISTANT_DONE, INTERRUPT)) is True
     assert _wk.turn_ended(_turns(ASSISTANT_DONE, LOCAL_CMD, LOCAL_OUT)) is True
+    # A /context or a ! command at an idle prompt writes meta and shell records, not a turn (CTB on #925).
+    meta = {"type": "user", "isMeta": True, "message": {"role": "user", "content": "<local-command-caveat>x</local-command-caveat>"}}
+    bash_in = {"type": "user", "message": {"role": "user", "content": "<bash-input>ls</bash-input>"}}
+    bash_out = {"type": "user", "message": {"role": "user", "content": "<bash-stdout>a</bash-stdout>"}}
+    assert _wk.turn_ended(_turns(ASSISTANT_DONE, meta, bash_in, bash_out)) is True
     # Nothing readable is never evidence of an ended turn.
     assert _wk.turn_ended([]) is None and _wk.turn_ended(["not json"]) is None
 

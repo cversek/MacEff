@@ -260,7 +260,8 @@ def draft_text(screen: str) -> Optional[str]:
 #: with its output. The macOS prototype found both holding the gate shut after a turn had ended
 #: (MIS-0004 R29); they failed safe, but a notice then waited for a person to type.
 _SKIPPED_TEXT = ("[Request interrupted by user", "<command-name>", "<local-command-stdout>",
-                 "<local-command-stderr>", "<command-message>")
+                 "<local-command-stderr>", "<command-message>", "<local-command-caveat>",
+                 "<bash-input>", "<bash-stdout>", "<bash-stderr>")
 
 
 def _record_text(rec: dict) -> str:
@@ -287,7 +288,7 @@ def turn_ended(lines: Iterable[str]) -> Optional[bool]:
             continue
         if not isinstance(rec, dict) or rec.get("type") not in ("user", "assistant"):
             continue
-        if rec["type"] == "user" and _record_text(rec).lstrip().startswith(_SKIPPED_TEXT):
+        if rec.get("isMeta") or (rec["type"] == "user" and _record_text(rec).lstrip().startswith(_SKIPPED_TEXT)):
             continue
         last = rec
     if last is None:
