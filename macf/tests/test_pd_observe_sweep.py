@@ -12,7 +12,7 @@ from macf.observe import acts, record
 from macf.pd import daemon as daemon_module
 from test_primal_daemon import base, make_home, run_daemon  # noqa: F401 - fixtures
 
-ME, THEM = "Observed@ab12cd", "Onlooker@cd34ef"
+ME, THEM = "Observed_ab12cd", "Onlooker_cd34ef"
 
 
 def _host(card):

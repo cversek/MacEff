@@ -28,11 +28,11 @@ PRIORITY_TERMS = [
     # Tools and pipeline
     "demini", "demini-rename", "demini-split", "demini-bkg",
     # Agents and roles
-    "ClaudeTheBuilder", "OrchardMacEff", "DevOpsEng", "TestEng",
+    "ClaudeTheBuilder", "DevOpsEng", "TestEng",
     # Concepts
     "breadcrumb", "compaction", "consciousness artifact",
     # Projects
-    "ExampleOrg", "orchard", "VoxelCAD",
+    "VoxelCAD",
     # Protocol terms
     "DELEG_DRV", "DEV_DRV", "INST_LANG",
     # Mode/state

@@ -639,14 +639,14 @@ Approach:
 ```markdown
 ### Personal Policies Layer Architecture
 
-**Precedence System** (from policy_awareness.md):
-1. Personal Policies (~/agent/policies/personal/) - HIGHEST
+**Layers** (from policy_awareness.md):
+1. Personal Policies (~/agent/policies/personal/) - augment, never replace
 2. Project Policies (/shared_workspace/.maceff/policies/)
 3. Framework Policies (/opt/maceff/framework/policies/current/)
 4. Core Policies (/opt/maceff/framework/policies/sets/base/) - LOWEST
 
 **Why This Matters**:
-- Agents' earned wisdom overrides all other policies
+- Agents' earned wisdom augments the framework's policies
 - CEP checks personal first before consulting framework
 - Enables habit formation through policy practice
 ```
@@ -699,7 +699,7 @@ not as a promise about your own output.
 ```markdown
 **B.1: Personal Policies Infrastructure (Complete)** [DEV_DRV 2025-10-27 "Personal Policies Layer" M0-15: s_abc12345/c_42/g_def6789/p_ghi01234/t_1234567890]
 
-**Problem**: Agents need highest-precedence policy layer
+**Problem**: Agents need a policy layer of their own
 **Solution**: Auto-create ~/agent/policies/personal/ with templates
 ```
 
@@ -1041,7 +1041,7 @@ Agents may develop **personal checkpoint conventions** in `~/agent/policies/pers
 - Create specialized templates for their work domain
 - Want to document checkpoint practices they've learned
 
-Personal checkpoint policies **override** this framework policy (highest precedence).
+Personal checkpoint policies **augment** this framework policy. `personal:checkpoint` is read alongside it, not instead of it.
 
 **Example Personal Policy**:
 ```markdown

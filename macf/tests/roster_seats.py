@@ -30,7 +30,7 @@ def write_seat(homes: Path, account: str, moniker: str, uuid: str, published: bo
     (home / "agent" / "public" / "pd").mkdir(parents=True)
     if published:
         (home / "agent" / "public" / "pd" / "units.json").write_text(json.dumps({
-            "version": 1, "agent": f"{moniker}@{uuid}", "published_at": 1.0,
+            "version": 1, "agent": f"{moniker}_{uuid}", "published_at": 1.0,
             "units": [{"name": "session", "kind": "session", "memory_limit_mb": 512,
                        "restart": "always", "optional": False}]}))
     return home
@@ -90,7 +90,7 @@ def seats(endpoint: str = "local") -> list:
     out = []
     for account, key, moniker, uuid in SEATS:
         aliases = (key, account) if key.casefold() != moniker.casefold() else (account,)
-        out.append(RosterEntry(card=f"{moniker}@{uuid}", moniker=moniker, uuid=uuid, account=account,
+        out.append(RosterEntry(card=f"{moniker}_{uuid}", moniker=moniker, uuid=uuid, account=account,
                                display_name=moniker.replace("MacEff", " MacEff"),
                                session_kind="daemon", state="running", endpoint=endpoint,
                                home=f"/home/{account}", aliases=aliases))

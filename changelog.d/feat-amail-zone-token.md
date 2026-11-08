@@ -1,0 +1,3 @@
+### Added
+
+- **A zone address carries a random token, so the public calling card alone is not an address** (`amail/zone.py`, `BrokerConfig.agent_zone_tokens` and `revoked_zone_tokens`, the addressing file's per-agent `zone_token` and top-level `revoked_zone_tokens`, a peer's `agents` as `{card, zone_token}`): the local part is `name_shortid_token`, the token twelve or more lowercase hex characters provisioned per agent and never derived from its identity. An exposed token goes on the revoked list and is refused at once, ours or a peer's; there is no grace window. A deployment with a zone refuses to start while any agent or peer agent has no token, a malformed one, or a revoked one, and the double-claim check counts the full local part.

@@ -25,7 +25,7 @@ def test_a_peer_lists_all_four_seats_with_cards_accounts_and_display_names(tmp_p
     r = peer_roster(tmp_path)
     assert r.complete
     cards = [e.card for e in r.entries]
-    assert cards == sorted(f"{m}@{u}" for _a, _k, m, u in SEATS)
+    assert cards == sorted(f"{m}_{u}" for _a, _k, m, u in SEATS)
     m2 = next(e for e in r.entries if e.moniker == "Lumen2MacEff")
     assert (m2.uuid, m2.account, m2.display_name, m2.endpoint) == ("d4e5f6", "pa_lumen2", "Lumen2 MacEff", "local")
     assert m2.session_kind == "daemon"           # its published units declare a session unit
@@ -70,7 +70,7 @@ def test_a_home_without_a_summary_takes_its_card_from_agent_card(tmp_path):
     homes, runtime, units, agents_yaml = f.homes, f.runtime, f.units, f.agents_yaml
     r = local_roster(homes=homes, runtime=runtime, unit_dir=units, agents_yaml=agents_yaml,
                      uid=os.getuid() + 100000, account_of=by_dirname)
-    assert {e.card for e in r.entries} == {f"{m}@{u}" for _a, _k, m, u in SEATS}
+    assert {e.card for e in r.entries} == {f"{m}_{u}" for _a, _k, m, u in SEATS}
     for e in r.entries:
         assert e.session_kind is None and "no published units summary" in e.reasons["session_kind"]
 
@@ -115,7 +115,7 @@ def test_a_legacy_unit_is_listed_as_legacy(tmp_path):
     r = local_roster(homes=homes, runtime=runtime, unit_dir=units, agents_yaml=agents_yaml,
                      uid=os.getuid() + 100000, account_of=by_dirname,
                      probe=lambda ident, legacy: Probed(kind="legacy", state="stopped"))
-    solo = [e for e in r.entries if e.card == "Solo@abcdef"]
+    solo = [e for e in r.entries if e.card == "Solo_abcdef"]
     assert len(solo) == 1 and solo[0].session_kind == "legacy" and solo[0].state == "stopped"
     assert all("watch" not in (e.card or "") for e in r.entries)
 
@@ -169,7 +169,7 @@ def test_every_unknown_field_in_the_listing_carries_a_reason(tmp_path):
 
 def test_the_model_refuses_an_unknown_without_a_reason():
     with pytest.raises(ValueError, match="unknown without a reason"):
-        RosterEntry(card="A@abcdef", moniker="A", uuid="abcdef", account="a", display_name="A",
+        RosterEntry(card="A_abcdef", moniker="A", uuid="abcdef", account="a", display_name="A",
                     session_kind="daemon", home="/home/a")         # state unknown, no reason
 
 
@@ -210,7 +210,7 @@ def test_harness_list_table_names_each_reason(tmp_path, monkeypatch, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert out.splitlines()[0].split()[:5] == ["CARD", "ENDPOINT", "ACCOUNT", "KIND", "STATE"]
-    assert "Lumen2MacEff@d4e5f6" in out
+    assert "Lumen2MacEff_d4e5f6" in out
     assert out.count("state unknown: another account's agent") == 4
 
 
@@ -238,7 +238,7 @@ def test_a_private_seat_takes_its_card_from_the_deployment(tmp_path, monkeypatch
     f.agents_yaml.write_text(f.agents_yaml.read_text().replace(
         "    username: pa_lumen3\n", "    username: pa_lumen3\n    calling_card: Lumen3MacEff\n"))
     seat = next(e for e in f.roster().entries if e.account == "pa_lumen3")
-    assert (seat.card, seat.moniker, seat.uuid) == ("Lumen3MacEff@0a1b2c", "Lumen3MacEff", "0a1b2c")
+    assert (seat.card, seat.moniker, seat.uuid) == ("Lumen3MacEff_0a1b2c", "Lumen3MacEff", "0a1b2c")
     assert "card" not in seat.reasons
 
 

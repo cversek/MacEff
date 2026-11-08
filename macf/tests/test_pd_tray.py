@@ -47,8 +47,8 @@ def test_icon_per_card(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
     monkeypatch.setenv("MACEFF_AGENT_NAME", "EnvDecoy")
 
-    answers = {control_socket("Resident@1a2b3c"): _resp(("session", "running")),
-               control_socket("Keeper@4d5e6f"): _resp(("session", "running"), ("broker", "stopped"))}
+    answers = {control_socket("Resident_1a2b3c"): _resp(("session", "running")),
+               control_socket("Keeper_4d5e6f"): _resp(("session", "running"), ("broker", "stopped"))}
     asked = []
 
     def connect(path):
@@ -62,8 +62,8 @@ def test_icon_per_card(tmp_path, monkeypatch):
     st = ctl.poll()
 
     assert ctl.errors == []
-    assert sorted(ctl.agents) == ["Keeper@4d5e6f", "Resident@1a2b3c"]
-    assert [e.card for e in st.entries] == ["Keeper@4d5e6f", "Resident@1a2b3c"]
+    assert sorted(ctl.agents) == ["Keeper_4d5e6f", "Resident_1a2b3c"]
+    assert [e.card for e in st.entries] == ["Keeper_4d5e6f", "Resident_1a2b3c"]
     assert [e.status for e in st.entries] == ["running", "running"]
     assert sorted(asked) == sorted(answers)          # each agent's own socket, from its card
     assert st.icon == "running" and not st.alerting  # one icon over both
@@ -71,9 +71,9 @@ def test_icon_per_card(tmp_path, monkeypatch):
 
 def test_union_keys_entries_by_card_in_card_order():
     """The model half: one entry per calling card, in card order, each with its own status."""
-    st = union([entry("Resident@1a2b3c", _resp(("session", "running"))),
-                entry("Keeper@4d5e6f", _resp(("session", "running"), ("broker", "stopped")))])
-    assert [e.card for e in st.entries] == ["Keeper@4d5e6f", "Resident@1a2b3c"]
+    st = union([entry("Resident_1a2b3c", _resp(("session", "running"))),
+                entry("Keeper_4d5e6f", _resp(("session", "running"), ("broker", "stopped")))])
+    assert [e.card for e in st.entries] == ["Keeper_4d5e6f", "Resident_1a2b3c"]
     assert [e.status for e in st.entries] == ["running", "running"]
     assert st.icon == "running" and not st.alerting
 

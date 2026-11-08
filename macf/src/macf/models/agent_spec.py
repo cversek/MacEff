@@ -5,6 +5,7 @@ Models correspond to the YAML structure documented in:
 docs/arch_v0.3_named_agents/05_implementation_guide.md (lines 48-125)
 """
 
+import re
 from enum import Enum
 from typing import Any, ClassVar, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -338,6 +339,10 @@ class EgressPolicy(BaseModel):
 #: module (`-m`), or as its script, which carries its own interpreter line.
 INBOUND_MODULE = 'macf.amail.daemons.inbound'
 INBOUND_SCRIPT = 'amail/daemons/inbound.py'
+
+#: A calling card's name: one ASCII letter, then at most 23 ASCII letters or digits
+#: (MIS-0002-R158), so a lowercased card fits a 31-character account.
+CARD_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9]{0,23}$")
 PERIODIC_INBOUND_VERBS = ('watchdog', 'sweep')
 
 
@@ -410,8 +415,46 @@ class AgentSpec(BaseModel):
 
     username: str = Field(
         ...,
-        description="Linux username for the agent (e.g., pa_sparrow)"
+        description=(
+            "Linux username for the agent (e.g., pa_sparrow). An agent minted under MIS-0002-R162 "
+            "leaves it out: it is its card lowercased, derived from calling_card and short_id."
+        )
     )
+
+    short_id: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{6}$",
+        description=(
+            "A new agent's short id, drawn ahead by `macf_tools agent mint` (MIS-0002-R162). "
+            "Declared with calling_card, it fixes the agent's card and account before the account "
+            "exists: start writes it as the identity file in a new home, and refuses a home whose "
+            "identity file says otherwise. An agent provisioned before R162 leaves it out and keeps "
+            "its declared username."
+        ),
+    )
+
+    @model_validator(mode='before')
+    @classmethod
+    def _a_minted_agent_is_named_by_its_card(cls, data: Any) -> Any:
+        """A minted agent's account is its card lowercased (MIS-0002-R162), so it is derived here,
+        before anything reads it. Declaring a different username beside short_id is refused."""
+        if not isinstance(data, dict) or data.get('short_id') is None:
+            return data
+        name, short_id = data.get('calling_card'), data['short_id']
+        if not name:
+            raise ValueError(f"short_id {short_id!r} is declared without calling_card: the account "
+                             "is the card lowercased, so both halves of the card are needed")
+        from macf import calling_card
+        try:
+            account = calling_card.lowercase(calling_card.build(name, str(short_id)))
+        except calling_card.CardError as e:
+            raise ValueError(str(e)) from e
+        declared = data.get('username')
+        if declared is not None and declared != account:
+            raise ValueError(f"agent {name}_{short_id} declares username {declared!r}, but a minted "
+                             f"agent's account is its card lowercased, {account!r} (MIS-0002-R162); "
+                             "leave username out")
+        return {**data, 'username': account}
 
     uid: int = Field(
         ...,
@@ -540,13 +583,38 @@ class AgentSpec(BaseModel):
 
     calling_card: Optional[str] = Field(
         default=None,
-        pattern=r"^[A-Za-z][A-Za-z0-9]{0,47}$",
+        pattern=CARD_NAME.pattern,
         description=(
             "The name this agent goes by, its calling card's first half; the second half is the "
             "first six characters of the agent's identity file. Container start-up writes it into "
             "the agent's home as agent_identity.calling_card in .maceff/config.json, where the "
             "primal daemon reads it, and refuses to overwrite a different card already there. "
             "Required with primal_daemon (persistent_layer 10.1)."
+        ),
+    )
+
+    project_dir: Optional[str] = Field(
+        default=None,
+        description=(
+            "Where this agent's session starts in a container, which is also the directory its "
+            "conversation is kept under. Absent: the agent's active_project link when it has "
+            "assigned projects, else its home, as the login shell has always used, so a seat moved "
+            "onto its daemon continues the same conversation (persistent_layer 10.1)."
+        ),
+    )
+
+    session_memory_mb: Optional[int] = Field(
+        default=None, gt=0,
+        description="The memory limit of the session unit the container declares for this agent "
+                    "by default. Absent: the host default's.",
+    )
+
+    primal_daemon_opt_out: Optional[str] = Field(
+        default=None, min_length=1,
+        description=(
+            "Why this agent runs without a primal daemon in a container, where every agent that "
+            "isn't vanilla gets one by default. Start-up logs the reason at every start. A reason "
+            "is required, so an agent left off the default says why (persistent_layer 10.1)."
         ),
     )
 
@@ -572,6 +640,56 @@ class AgentSpec(BaseModel):
                 "MacEff footprint, so no daemon would run its units or schedules. Remove primal_daemon, "
                 "or make the account maceff-flavored")
         return self
+
+    @model_validator(mode='after')
+    def _an_opt_out_is_alone_and_said(self) -> 'AgentSpec':
+        """An opt-out with a declaration says two opposite things, and an opt-out on a vanilla
+        account opts out of nothing; both are refused when agents.yaml loads."""
+        if self.primal_daemon_opt_out is None:
+            return self
+        if not self.primal_daemon_opt_out.strip():
+            raise ValueError(f"agent '{self.username}' opts out of its primal daemon without a reason; "
+                             "say why in primal_daemon_opt_out")
+        if self.primal_daemon is not None:
+            raise ValueError(f"agent '{self.username}' declares primal_daemon and opts out of it; "
+                             "remove one of the two")
+        if self.flavor == AgentFlavor.VANILLA:
+            raise ValueError(f"agent '{self.username}' is vanilla and opts out of a primal daemon; "
+                             "a vanilla account never gets one, so remove primal_daemon_opt_out")
+        return self
+
+    def has_daemon(self) -> bool:
+        """Whether a container starts a primal daemon for this agent: every agent that isn't
+        vanilla, unless it opts out."""
+        return not self.is_vanilla and self.primal_daemon_opt_out is None
+
+    def effective_calling_card(self, key: str) -> Optional[str]:
+        """The card this agent's daemon goes by: ``calling_card`` when declared, else the agent's
+        key in agents.yaml, which names the agent in its card by convention, when it can be a
+        card's name. None: no usable card, so its daemon can't be rendered."""
+        if self.calling_card is not None:
+            return self.calling_card
+        return key if CARD_NAME.fullmatch(key) else None
+
+    def effective_primal_daemon(self, key: str, *, mail: bool) -> Optional[Dict[str, Any]]:
+        """The declaration body a container renders for this agent: the default session
+        (``pd.default_declaration.container_body``) with whatever ``primal_daemon`` declares laid
+        over it (``merged_body``). None for a vanilla account or an opt-out. *mail* is whether the
+        deployment runs a mail broker, so the daemon routes mail notices to the agent. A unit
+        inherits nothing, so the session has a time zone only if declared
+        (``deployment_timezone``)."""
+        if not self.has_daemon():
+            return None
+        from macf.pd.default_declaration import container_body, deployment_timezone, merged_body
+        channels = (self.claude_config.channels if self.claude_config and self.claude_config.channels
+                    else [])
+        project = self.project_dir or (f"/home/{self.username}/active_project"
+                                       if self.assigned_projects else None)
+        default = container_body(account=self.username, harness_session=self.harness_session or key,
+                                 project_dir=project, channels=channels, mail=mail,
+                                 memory_limit_mb=self.session_memory_mb,
+                                 timezone=deployment_timezone())
+        return merged_body(default, self.primal_daemon)
 
     @model_validator(mode='after')
     def _a_daemon_has_a_name(self) -> 'AgentSpec':
@@ -997,6 +1115,17 @@ class AgentsConfig(BaseModel):
         description="Non-agent service accounts and the secrets they hold"
     )
 
+    homes_volume: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{16}$",
+        description=(
+            "The id `macf_tools agent homes-init` wrote into the homes volume's marker. Declared, "
+            "start refuses a homes root whose marker is missing or names another volume, and only "
+            "then creates a minted agent's new home (MIS-0002-R162). Absent, start creates no home "
+            "and checks nothing, so a deployment that hasn't run homes-init keeps starting."
+        ),
+    )
+
     @model_validator(mode='after')
     def _agent_uids_in_their_slots(self) -> 'AgentsConfig':
         """Every agent's uid sits in the block's agent slots, and no two agents share one."""
@@ -1012,6 +1141,27 @@ class AgentsConfig(BaseModel):
                     f"agents {seen[spec.uid]!r} and {name!r} both declare uid {spec.uid}; "
                     f"one uid names one agent")
             seen[spec.uid] = name
+        return self
+
+    def runs_mail(self) -> bool:
+        """Whether this deployment runs a mail broker, so its agents' daemons route mail notices."""
+        return 'amail_broker' in self.services
+
+    @model_validator(mode='after')
+    def _every_default_daemon_would_start(self) -> 'AgentsConfig':
+        """Each agent's effective declaration, the container default with its own block laid
+        over it, is checked as the daemon would check it, when agents.yaml loads. A merge the
+        daemon would refuse is named here, by agent, rather than costing that agent its daemon
+        at start."""
+        for name, spec in self.agents.items():
+            body = spec.effective_primal_daemon(name, mail=self.runs_mail())
+            if body is None:
+                continue
+            try:
+                declaration_body(body)
+            except ValueError as e:
+                raise ValueError(f"agent {name!r}: its primal daemon, the container default with "
+                                 f"its own primal_daemon laid over it, would be refused: {e}") from e
         return self
 
     @model_validator(mode='after')

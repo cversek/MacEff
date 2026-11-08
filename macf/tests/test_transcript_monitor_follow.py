@@ -21,7 +21,7 @@ from macf.pd import liveness as lv
 from macf.pd.monitor_unit import MONITOR_MODULE, declared_monitor_unit
 from macf.transcript_monitor import daemon
 
-CARD = "Resident@1a2b3c"
+CARD = "Resident_1a2b3c"
 
 
 def _identify(home):

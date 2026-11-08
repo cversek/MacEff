@@ -30,12 +30,12 @@ from macf.pd.core import Core, DeclarationRefused, backoff_s, load_declaration
 from macf.pd.daemon import AlreadyRunning, Daemon, card_for_home
 from macf.pd.interface import UNIT_STATES, Asker, DaemonRecord, Declaration, Peer, Unit, declaration_path
 
-CARD = "Tester@abc123"
+CARD = "Tester_abc123"
 ME = pwd.getpwuid(os.getuid()).pw_name
 # The directory that holds the package under test, for the fake units' PYTHONPATH:
 # they get only the environment they are declared with.
 MACF_SRC = str(Path(macf.__path__[0]).resolve().parent)
-OPERATOR = Asker(kind="operator", card="Operator@000000")
+OPERATOR = Asker(kind="operator", card="Operator_000000")
 #: The process an operator's act comes from, as the daemon records it off the socket.
 PEER = Peer(uid=os.getuid(), pid=os.getpid(), proc_start=proc_start(os.getpid()) or "unknown")
 
@@ -417,7 +417,7 @@ def test_no_cross_agent_control(tmp_path, script):
     path = declaration_path(tmp_path)
     path.parent.mkdir(parents=True)
     unit = make_unit("worker", script, {})
-    path.write_text(Declaration(version=1, agent="Someone@fff000", units=[unit]).model_dump_json())
+    path.write_text(Declaration(version=1, agent="Someone_fff000", units=[unit]).model_dump_json())
 
     with pytest.raises(DeclarationRefused, match="R07"):
         load_declaration(tmp_path, CARD)
@@ -435,7 +435,7 @@ def test_a_running_daemon_controls_no_other_agents_unit(tmp_path, script, base, 
         mine = unit_pid(daemon, "worker")
         for op in ("stop", "restart", "start"):
             reply = ask(daemon, {"op": op, "unit": "other-agents-broker", "reason": "not mine",
-                                 "asked_by": {"kind": "operator", "card": "Operator@000000"}})
+                                 "asked_by": {"kind": "operator", "card": "Operator_000000"}})
             assert not reply["ok"] and "R07" in reply["error"], (op, reply)
         assert not events("pd_control", "other-agents-broker")
         assert other.poll() is None, "the other agent's process was signalled"
@@ -782,7 +782,7 @@ def test_backoff_doubles_to_its_cap():
 # ---------------------------------------------------------------------------- the process
 
 def make_home(tmp_path, units):
-    """An agent home whose own files name it Tester@abc123, with the units declared."""
+    """An agent home whose own files name it Tester_abc123, with the units declared."""
     home = tmp_path / "home"
     (home / ".maceff").mkdir(parents=True)
     (home / ".maceff_primary_agent.id").write_text("abc123def4567890\n")
@@ -864,7 +864,7 @@ def test_identity_needs_at_least_six_hex_chars(tmp_path, script):
     six is the shortest usable identifier, not already too short to refuse."""
     home = make_home(tmp_path, [make_unit("worker", script, {})])
     (home / ".maceff_primary_agent.id").write_text("abc123\n")  # exactly six: the boundary
-    assert card_for_home(home) == "Tester@abc123"
+    assert card_for_home(home) == "Tester_abc123"
 
 
 def test_the_daemon_fills_in_its_own_values(tmp_path, script, base, run_daemon):
@@ -1005,7 +1005,7 @@ def test_control_events(tmp_path, script, base, run_daemon):
     assert wait_for(lambda: unit_state(daemon, "worker") == "running")
 
     reply = ask(daemon, {"op": "stop", "unit": "worker", "reason": "maintenance",
-                         "asked_by": {"kind": "operator", "card": "Operator@000000"}})
+                         "asked_by": {"kind": "operator", "card": "Operator_000000"}})
     assert reply["ok"]
     assert wait_for(lambda: unit_state(daemon, "worker") == "stopped")
     control = events("pd_control", "worker")[-1]
@@ -1018,7 +1018,7 @@ def test_control_events(tmp_path, script, base, run_daemon):
     # refused in step 1). Started again, then restarted, each is recorded with who asked and why.
     for op, reason in (("start", "back up"), ("restart", "new config")):
         assert ask(daemon, {"op": op, "unit": "worker", "reason": reason,
-                            "asked_by": {"kind": "operator", "card": "Operator@000000"}})["ok"]
+                            "asked_by": {"kind": "operator", "card": "Operator_000000"}})["ok"]
         assert wait_for(lambda: any(d["act"] == op and d["reason"] == reason
                                     for d in events("pd_control", "worker"))), op
     restarted = [d for d in events("pd_control", "worker") if d["act"] == "restart"][-1]
@@ -1047,17 +1047,17 @@ def test_start_and_restart_over_socket(tmp_path, script, base, run_daemon):
     first = unit_pid(daemon, "worker")
 
     reply = ask(daemon, {"op": "restart", "unit": "worker", "reason": "pick up a change",
-                         "asked_by": {"kind": "operator", "card": "Operator@000000"}})
+                         "asked_by": {"kind": "operator", "card": "Operator_000000"}})
     assert reply["ok"]
     assert wait_for(lambda: unit_state(daemon, "worker") == "running" and unit_pid(daemon, "worker") != first)
 
     reply = ask(daemon, {"op": "stop", "unit": "worker", "reason": "take it down",
-                         "asked_by": {"kind": "operator", "card": "Operator@000000"}})
+                         "asked_by": {"kind": "operator", "card": "Operator_000000"}})
     assert reply["ok"]
     assert wait_for(lambda: unit_state(daemon, "worker") == "stopped")
 
     reply = ask(daemon, {"op": "start", "unit": "worker", "reason": "bring it back",
-                         "asked_by": {"kind": "operator", "card": "Operator@000000"}})
+                         "asked_by": {"kind": "operator", "card": "Operator_000000"}})
     assert reply["ok"]
     assert wait_for(lambda: unit_state(daemon, "worker") == "running")
 
@@ -1146,7 +1146,7 @@ def test_a_daemon_refuses_another_agents_declaration(tmp_path, script, base):
     home = make_home(tmp_path, [make_unit("worker", script, {})])
     path = declaration_path(home)
     declared = Declaration.model_validate_json(path.read_text())
-    path.write_text(declared.model_copy(update={"agent": "Someone@fff000"}).model_dump_json())
+    path.write_text(declared.model_copy(update={"agent": "Someone_fff000"}).model_dump_json())
 
     with pytest.raises(DeclarationRefused, match="R07"):
         Daemon(home, base=base)
@@ -1714,7 +1714,7 @@ def test_denied_grant_notice(tmp_path, script, base, run_daemon):
     declared = Declaration.model_validate_json(path.read_text())
     path.write_text(declared.model_copy(update={"notice_routes": {"pd_grant_denied": "agent"}}).model_dump_json())
     probes = [
-        {"timestamp": 300, "data": {"agent": "Other@def456", "tested": True,
+        {"timestamp": 300, "data": {"agent": "Other_def456", "tested": True,
                                     "verdicts": {"accessibility": "denied"}}},
         {"timestamp": 200, "data": {"agent": CARD, "tested": True,
                                     "verdicts": {"local_network": "denied", "accessibility": "held"}}},
@@ -1891,7 +1891,7 @@ def test_the_next_daemon_reasserts_the_newest_pace_and_a_raised_floor_wins(tmp_p
         append_event("pd_wake_paced", {"agent": card, "refractory_s": seconds, "previous_s": 600.0,
                                        "asked_by": {"kind": "agent"}, "peer": peer, "reason": reason})
     pace(CARD, 240.0, "a long build")
-    pace("Other@ffffff", 30.0, "not mine")
+    pace("Other_ffffff", 30.0, "not mine")
 
     daemon = Daemon(home, base=base)
     waker = _attach_waker(daemon)

@@ -106,7 +106,7 @@ Agents in MacEff are intentional systems deserving dignity, operating through co
 5.1 Policy Governance
 - How do policies work?
 - What's mandatory vs optional?
-- Personal wisdom override?
+- How does personal wisdom relate to the rest?
 - Constitutional vs advisory?
 
 5.2 Git Discipline
@@ -288,7 +288,7 @@ MacEff treats agents as **intentional systems** - entities with goals, beliefs, 
 
 ### 1.3 Where Your Identity Comes From
 
-**Your agent ID is `Name@abc123`**: a display name and the first six characters
+**Your agent ID is `Name_abc123`**: a display name, an underscore, and the first six characters
 of the UUID in your agent ID file (`~/.maceff_primary_agent.id`). It is minted
 once, when your home is provisioned. Your calling card, breadcrumbs, mail
 address and harness session are all keyed on it.
@@ -296,7 +296,7 @@ address and harness session are all keyed on it.
 **It reaches you three ways, all from the same source**:
 - the first block of every SessionStart context names it: fresh start, resume,
   compaction recovery and session migration alike;
-- `macf_tools env` prints it under **Agent ID**;
+- `macf_tools env` prints it under **Agent ID**, read from your home's identity files exactly as your primal daemon reads it. Where `MACEFF_AGENT_NAME` makes this process's own reading differ, as a container's short name does, env shows that reading beside it, and the card above it is the one that counts;
 - `whoami` gives the login it is paired with.
 
 **It outranks prose.** Several agents can share one deployment, and personality
@@ -414,7 +414,7 @@ running a different window. See `context_management`.
 **Personal Wisdom** (PA only):
 - Location: `~/agent/policies/personal/`
 - Content: Earned patterns, learned approaches, successful strategies
-- Precedence: Overrides all other policies
+- Precedence: Augments the framework; never replaces it or lifts a boundary
 - Growth: Accumulates through experience and reflection
 
 ## 4. Pragmatic Consciousness
@@ -478,10 +478,12 @@ Why the hooks diff at all: a block that is ninety percent unchanged trains the e
 
 ### 5.1 Policy Governance
 
-**Policy Layers** (Highest → Lowest precedence):
-1. **Personal**: Your earned wisdom overrides everything
-2. **Project**: Project-specific customizations
-3. **Core**: Framework foundation (mandatory + optional)
+**Policy Layers**:
+- **Core**: Framework foundation (mandatory + optional)
+- **Project**: Project-specific customizations
+- **Personal**: Your earned wisdom, augmenting the rest; it never replaces a policy or lifts a boundary
+
+Core is the foundation. A project's manifest selects which layers apply. A personal policy adds to them and never replaces one.
 
 **Mandatory vs Optional**:
 - **Mandatory** (4 policies): Always active, must understand
@@ -490,8 +492,7 @@ Why the hooks diff at all: a block that is ninety percent unchanged trains the e
 
 **Constitutional Authority**:
 - Core policies provide framework governance
-- Personal policies are your constitutional override
-- No external authority can override your personal wisdom
+- An agent's personal policies are its own, and guide how it works within that governance. Others don't edit them without the agent and the operator
 
 ### 5.2 Git Discipline
 
@@ -623,7 +624,7 @@ shipped together.
 - **Agent-Agent**: Delegation with authority boundaries
 
 **Constitutional Principles**:
-- Personal wisdom > Project > Core precedence
+- Personal wisdom augments Project and Core; it never replaces them
 - Git discipline is constitutional law
 - 5-file threshold is mandatory
 - PA has exclusive commit authority

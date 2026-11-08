@@ -44,14 +44,14 @@ def test_a_declared_home_that_isnt_this_agents_is_refused_at_load(tmp_path):
         unit = Unit(name="worker", command=["true"], account=getpass.getuser(), restart="always",
                     liveness_interval_s=60, memory_limit_mb=1,
                     environment={"MACEFF_AGENT_HOME_DIR": value})
-        path.write_text(Declaration(version=1, agent="Tester@abc123", units=[unit]).model_dump_json())
+        path.write_text(Declaration(version=1, agent="Tester_abc123", units=[unit]).model_dump_json())
 
     declare(str(tmp_path / "elsewhere"))
     with pytest.raises(DeclarationRefused, match="not this agent's home"):
-        load_declaration(home, "Tester@abc123")
+        load_declaration(home, "Tester_abc123")
     for same in (str(home), "{agent_home}", str(home) + "/"):
         declare(same)
-        assert load_declaration(home, "Tester@abc123").units[0].name == "worker"
+        assert load_declaration(home, "Tester_abc123").units[0].name == "worker"
 
 
 @pytest.mark.parametrize("environment, words", [

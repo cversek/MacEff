@@ -129,7 +129,7 @@ def get_statusline_data(cc_json: Optional[Dict[str, Any]] = None) -> Dict[str, A
         agent_name = get_agent_identity()
     except Exception as e:
         print(f"⚠️ MACF: Agent identity detection failed: {e}", file=sys.stderr)
-        agent_name = "unknown@unknown"
+        agent_name = "unknown_unknown"
 
     # Project detection (env var or workspace detection)
     project = detect_project()

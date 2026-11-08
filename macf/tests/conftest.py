@@ -49,6 +49,47 @@ SAMPLE_AGENT_NAME = "TestAgent"
 SAMPLE_TIMEZONE = "America/New_York"
 
 
+@pytest.fixture(autouse=True)
+def _a_refused_daemon_exits_at_once_in_tests(monkeypatch):
+    """A refused daemon start holds a minute before exiting, to pace launchd's KeepAlive (#921).
+    A test, or a daemon a test starts as a process, has no reason to wait."""
+    monkeypatch.setenv("MACF_PD_REFUSED_HOLD_S", "0")
+
+
+@pytest.fixture(autouse=True)
+def _no_test_daemon_reads_the_developers_login(monkeypatch):
+    """A daemon checks its account's Claude login from the stored credential's expiry dates
+    (#884). A test daemon runs as the developer, so it would read the developer's own credential,
+    or ask the macOS Keychain for it. Each test reads a login that ends far in the future instead;
+    test_pd_login.py tests the reading itself."""
+    import macf.pd.login as pd_login
+    monkeypatch.setattr(pd_login, "daemon_assessment",
+                        lambda: {"state": "ok", "refresh_expires_at": 4_000_000_000.0,
+                                 "hours_left": None, "detail": "a test's login"})
+
+
+@pytest.fixture(autouse=True)
+def _no_test_reads_the_hosts_rendered_declarations(tmp_path, monkeypatch):
+    """The root-rendered declarations live under /etc/maceff/pd on a host that runs a system
+    daemon. A test that read them saw the host's real daemons, unreadable or extra, and failed there
+    while passing in CI (#922). Each test gets an empty root of its own instead."""
+    import macf.pd.names as pd_names
+    monkeypatch.setattr(pd_names, "RENDERED_DECLARATIONS", tmp_path / "etc-maceff-pd")
+
+
+@pytest.fixture(autouse=True)
+def _a_free_broker_port_for_each_test_daemon(monkeypatch):
+    """Every daemon runs its own broker on a port derived from its card (persistent_layer 11.4).
+    Test daemons share a few cards and run in parallel, so each test gets a free port of its own,
+    and no test's broker unit fails to bind because another test holds the same port."""
+    import socket as _socket
+    with _socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    import macf.pd.broker_defaults as bd
+    monkeypatch.setattr(bd, "default_port", lambda card: port)
+
+
 def _addressing(flat, domain="agents.test"):
     """Render the amail addressing config from a flat agent -> contacts mapping.
 
@@ -203,8 +244,30 @@ def isolated_events_log(tmp_path, monkeypatch):
 
     yield test_log
 
-    # Reset to default (production) path after test (monkeypatch auto-resets env vars)
-    set_log_path(None)
+    # Not back to the default: the default is the environment's own log. A daemon or core thread
+    # that outlives its test, finishing a stop after teardown, wrote its last pd_unit_state there
+    # under pytest-xdist's load (#933). Between tests, in-process writes go to the session's
+    # straggler log instead (the env var is restored by monkeypatch; subprocesses get it per test).
+    set_log_path(_straggler_log())
+
+
+_STRAGGLER_LOG = None
+
+
+def _straggler_log():
+    """One scratch log per test process, for in-process writes made outside any test (#933)."""
+    global _STRAGGLER_LOG
+    if _STRAGGLER_LOG is None:
+        _STRAGGLER_LOG = Path(tempfile.mkdtemp(prefix="macf-straggler-")) / "events.jsonl"
+    return _STRAGGLER_LOG
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _in_process_writes_outside_tests_go_to_a_scratch_log():
+    """Before the first test, too: a module-scoped fixture runs before any test's own log is set."""
+    from macf.agent_events_log import set_log_path
+    set_log_path(_straggler_log())
+    yield
 
 
 @pytest.fixture(autouse=True)
@@ -528,6 +591,28 @@ def pytest_report_header(config):
             "(an error in CI, a warning elsewhere)")
 
 
+def _appended(log, before: int, after: int, limit: int = 5) -> str:
+    """The events a window appended to *log*, by name with their breadcrumbs, so a report of a
+    write names its writer even when the window's own module isn't it (#933). Event data is left
+    out: the log may hold an agent's own record."""
+    try:
+        with open(log, "rb") as fh:
+            fh.seek(before)
+            tail = fh.read(max(0, after - before))
+    except OSError as e:
+        return f"unreadable ({e.strerror})"
+    said = []
+    lines = tail.decode("utf-8", "replace").splitlines()
+    for line in lines[:limit]:
+        try:
+            rec = json.loads(line)
+            said.append(f"{rec.get('event')} at {rec.get('breadcrumb')}")
+        except (ValueError, AttributeError):
+            said.append(f"a line that isn't JSON ({len(line)} chars)")
+    more = len(lines) - limit
+    return "; ".join(said) + (f"; and {more} more" if more > 0 else "") if said else "nothing whole"
+
+
 @pytest.fixture(scope="module", autouse=True)
 def live_event_log_is_left_alone(request):
     """Fail the module whose tests or fixtures wrote to the environment's own event log.
@@ -559,11 +644,17 @@ def live_event_log_is_left_alone(request):
     if after == before:
         return
 
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
     detail = (
         f"{request.module.__name__} changed {log} from {before} to {after} bytes. "
         "That is the event log of the environment the suite runs in: in an "
         "agent's session it is that agent's own record, and its modes are read "
-        "from it, so no test may write there."
+        "from it, so no test may write there. "
+        f"What was appended: {_appended(log, before, after)}"
+        + (f" Under pytest-xdist ({worker}) every worker shares this one log, so the "
+           "writer may be a module running in another worker at the same time; the "
+           "appended events name it, the module named here may not (#933)."
+           if worker else "")
     )
     if os.environ.get("CI"):
         pytest.fail(detail, pytrace=False)
@@ -1364,6 +1455,6 @@ def operator_channels(isolated_agent_home):
         from macf.utils import input_origin
         path = declaration_path(isolated_agent_home)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"version": 1, "agent": "Resident@1a2b3c", "operator_channels": list(names)}))
+        path.write_text(json.dumps({"version": 1, "agent": "Resident_1a2b3c", "operator_channels": list(names)}))
         input_origin._DECLARED.clear()
     return declare

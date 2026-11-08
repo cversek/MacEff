@@ -1,10 +1,12 @@
 # Personal Policies Directory
 
-**Precedence**: HIGHEST (overrides all framework and project policies)
+Read with `macf_tools policy read personal:<name>`. No setup needed.
 
 ## Purpose
 
-This directory contains **your earned wisdom** - patterns, lessons, and practices you've discovered through experience. Personal policies take highest precedence in the CEP (Consciousness-Expanding Protocols) system.
+This directory holds **your earned wisdom**: patterns, lessons and rules you've discovered through experience, and that you must still hold after a compaction.
+
+**A personal policy augments the framework. It never replaces it.** A name the framework has always reads the framework's copy, and `personal:<name>` reads yours. On how you work, your policy guides you. It never lifts a boundary.
 
 ## What Belongs Here
 
@@ -23,33 +25,6 @@ This directory contains **your earned wisdom** - patterns, lessons, and practice
 - Project-specific data (use project workspace instead)
 - Generic best practices (use framework policies)
 
-## Policy Precedence System
-
-```
-Personal Policies (~/agent/policies/personal/)        ← HIGHEST (you are here)
-    ↓ overrides
-Project Policies (/shared_workspace/.maceff/policies/)
-    ↓ overrides
-Framework Policies (/opt/maceff/framework/policies/current/)
-    ↓ overrides
-Core Policies (/opt/maceff/framework/policies/sets/base/)  ← LOWEST
-```
-
-## How CEP Uses This Directory
-
-When you (or CEP) asks policy questions like:
-- "What's the best way to handle X?"
-- "Are there guidelines for Y?"
-- "How should I approach Z?"
-
-CEP searches in **this order**:
-1. **Personal policies** (check here FIRST)
-2. Project policies (if in project workspace)
-3. Framework policies
-4. Core policies
-
-Your personal wisdom takes precedence over everything else.
-
 ## Creating Your First Policy
 
 1. **Create a markdown file** describing the pattern/lesson:
@@ -57,47 +32,25 @@ Your personal wisdom takes precedence over everything else.
    vim ~/agent/policies/personal/my_workflow.md
    ```
 
-2. **Document the wisdom**:
-   ```markdown
-   # My Workflow for Complex Debugging
+2. **Use the framework's format**, so `navigate` stops at the boundary: see `macf_tools policy read policy_writing`.
 
-   ## Context
-   When debugging issues that span multiple services...
-
-   ## Learned Pattern
-   I discovered that starting with logs, then metrics, then code review
-   is more efficient than jumping straight to code...
-
-   ## Why This Works
-   Logs reveal the symptom, metrics show the scope, code review finds root cause...
-   ```
-
-3. **Register in manifest.json** (optional for CEP discovery):
+3. **Say when it applies.** A policy nobody reads binds nothing. To surface one when a task of some type starts, declare it in `manifest.json`:
    ```json
    {
      "personal_policies": [
-       {
-         "name": "debugging_workflow",
-         "path": "~/agent/policies/personal/my_workflow.md",
-         "CEP_triggers": ["How should I debug...?"],
-         "keywords": ["debugging", "troubleshooting", "logs"]
-       }
+       {"name": "debugging_workflow", "task_types": ["BUG"]}
      ]
    }
    ```
-
-## Template Structure
-
-See `manifest.json` in this directory for an example policy registration structure.
+   A declaration naming a policy that isn't here is reported.
 
 ## Benefits of Personal Policies
 
 - **Memory Across Sessions**: Your wisdom survives context resets
-- **Precedence Power**: Your experience overrides generic advice
-- **CEP Integration**: Policies are discoverable and searchable
+- **Discoverable**: `policy list`, `search` and `recommend` all reach them
 - **Growth Tracking**: Watch your expertise accumulate over time
 - **Habit Formation**: Documenting patterns reinforces learning
 
 ## Questions?
 
-Consult framework policy: `/opt/maceff/framework/policies/current/policy_awareness.md` section 4.1
+Consult framework policy: `macf_tools policy navigate policy_awareness`

@@ -212,6 +212,13 @@ SEARCH_UNIT = {"name": "search", "command": ["/opt/maceff-venv/bin/python", "-m"
                "memory_limit_mb": 2048}
 
 
+def _agent(username, primal_daemon):
+    """A stand-in agent spec whose effective declaration is exactly *primal_daemon*: the search
+    unit's discovery is what these tests cover, not the container default."""
+    return SimpleNamespace(username=username, primal_daemon=primal_daemon,
+                           effective_primal_daemon=lambda key, mail: primal_daemon)
+
+
 @pytest.mark.parametrize("where", ["agent", "service"])
 def test_start_py_starts_none_when_a_unit_declares_the_search_service(where, monkeypatch):
     start = _start()
@@ -221,7 +228,8 @@ def test_start_py_starts_none_when_a_unit_declares_the_search_service(where, mon
     monkeypatch.setattr(start, "service_home", lambda name: Path("/var/lib") / name)
     body = {"units": [SEARCH_UNIT]}
     cfg = SimpleNamespace(
-        agents={"a": SimpleNamespace(username="pa_a", primal_daemon=body if where == "agent" else None)},
+        runs_mail=lambda: False,
+        agents={"a": _agent("pa_a", body if where == "agent" else None)},
         services={"searcher": SimpleNamespace(primal_daemon=body, calling_card="S")} if where == "service" else {})
     start.start_search_service_daemon(cfg)
     assert ran == []
@@ -235,7 +243,7 @@ def test_start_py_starts_the_daemon_as_before_when_none_is_declared(monkeypatch)
                         lambda argv, **kw: ran.append(argv) or SimpleNamespace(returncode=0, stderr=""))
     monkeypatch.setattr(start, "log", lambda *a: None)
     other = {"units": [{**SEARCH_UNIT, "name": "broker", "command": ["python", "-m", "macf.amail.daemons.broker"]}]}
-    cfg = SimpleNamespace(agents={"a": SimpleNamespace(username="pa_a", primal_daemon=other)}, services={})
+    cfg = SimpleNamespace(agents={"a": _agent("pa_a", other)}, services={}, runs_mail=lambda: False)
     start.start_search_service_daemon(cfg)
     assert len(ran) == 1 and ran[0][:2] == ["su", "-"] and "macf.search_service.daemon --daemon" in ran[0][-1]
 

@@ -126,7 +126,7 @@ def _identity_block() -> str:
     before anything else, together with the rule that it outranks prose and
     the command that re-derives it.
 
-    An ID that cannot be resolved is said out loud. Printing "name@unknown"
+    An ID that cannot be resolved is said out loud. Printing "name_unknown"
     would read as an identity, and an agent handed a gap fills it from the
     next file it reads -- the failure this block exists to prevent. A failure
     here must never break session start.

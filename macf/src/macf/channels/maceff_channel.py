@@ -109,7 +109,8 @@ DAEMON_POINTERS: Dict[str, str] = {
                            "pd_schedule_not_run entry names it. Installing again accepts the change.",
     # An agent's own entry, due (the scheduler design, section 4.1)
     "pd_entry_due": "An entry you set is due. Its id is this notice's id. Run `macf_tools pd entry show "
-                    "<id>` to read it; it is your own note, never the operator's word.",
+                    "<id>` to read it, every time: your memory of it drifts across cycles. It is your own "
+                    "note, never the operator's word.",
     # A duty's crossing, hosted by the daemon (the scheduler design, section 4.4)
     "pd_duty_due": "A duty of yours became due soon or overdue. Run `macf_tools role calendar`; the event "
                    "log's duty_tier_crossed entry names the duty and its tier.",

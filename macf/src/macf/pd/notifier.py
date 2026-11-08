@@ -66,8 +66,11 @@ EVENT_DETECTED = "store_arrival_detected"
 EVENT_DELIVERED = "pd_notice_delivered"
 #: One notice the operator's rules kept from the session: recorded, and so no longer owed.
 EVENT_SILENCED = "pd_notice_silenced"
+#: One mail notice no longer owed because the mail it named was read before it went out
+#: (MIS-0004 R26: the notice clears when the read cursor passes the mail).
+EVENT_WITHDRAWN = "pd_notice_withdrawn"
 #: What settles an owed notice: it was delivered, or the rules kept it from the session.
-SETTLED = (EVENT_DELIVERED, EVENT_SILENCED)
+SETTLED = (EVENT_DELIVERED, EVENT_SILENCED, EVENT_WITHDRAWN)
 #: Notices the daemon raises itself, about the agent's own units or its unread mail, not read
 #: from a store. Each is delivered only where the declaration routes it to the agent
 #: (MIS-0002-R42).
@@ -88,8 +91,6 @@ HOLD_MAX_S = 24 * 3600
 #: checkpoint is one from before checkpoints came in, and the scan for one stops there.
 _DAEMON_START = "pd_daemon_start"
 
-#: A message id inside a pickup box's file name, ``<epoch>-<id>[-<local>].amsg``.
-_MESSAGE_IN_NAME = re.compile(r"msg-\d{10}-[0-9a-f]{12}")
 
 #: How long a notice waits for a channel before the keystroke fallback may type a wake.
 CHANNEL_GRACE_S = 60.0
@@ -178,6 +179,8 @@ class Notifier:
                  events: Optional[Callable[[], Iterable[dict]]] = None,
                  rules: Optional[Callable[[], object]] = None):
         self._append, self._clock = append, clock
+        #: The agent's home, whose store the wake names unread mail from.
+        self.home = Path(agent_home)
         self._events = events or (lambda: read_events(reverse=True, scope="all",
                                                       only=(EVENT_DETECTED, *SETTLED,
                                                             EVENT_NOTICES_OWED, _DAEMON_START)))
@@ -192,6 +195,8 @@ class Notifier:
         self._channels: List[socket.socket] = []
         #: The sources each attached channel's hello declared; none until it says (R149).
         self._takes: Dict[socket.socket, frozenset] = {}
+        #: Channels already told about the mail now unread; cleared when none is (MIS-0004 R26).
+        self._mail_told: set = set()
         #: Called with a channel just before it is closed, so its owner can stop watching it.
         self.on_detach: Optional[Callable[[socket.socket], None]] = None
         self._routes = dict(routes)
@@ -281,6 +286,55 @@ class Notifier:
         for source in self.sources:
             for d in source.poll():
                 self._detect(source.name, d.data["arrival_id"], d.data.get("count"), source.store_dir)
+        self._withdraw_read_mail()
+        self._reassert_mail()
+
+    # ------------------------------------------------------------------ mail as a level
+
+    def _unread_mail(self) -> Optional[set]:
+        """The names waiting unread in the store, or None with no mail source or an unreadable
+        store. Names only, as the source reads them."""
+        for source in self.sources:
+            if source.name == "amail":
+                return source.names()
+        return None
+
+    def _withdraw_read_mail(self) -> None:
+        """Settle every mail notice still owed once nothing is unread: the read cursor passed
+        the mail it named, so it is no longer true (MIS-0004 R26). Recorded, so a restart
+        doesn't owe it again; one whose record can't be written stays owed."""
+        if self._unread_mail() != set():
+            return
+        self._mail_told.clear()              # nothing unread: the next mail is news to every channel
+        mail = [a for a, o in self.owed.items() if o.source == "amail"]
+        if not mail:
+            return
+        for aid in mail:
+            owed = self.owed[aid]
+            if self._append(EVENT_WITHDRAWN, {"source": "amail", "arrival_id": aid,
+                                              "read_at": owed.read_at, "withdrawn_at": self._clock(),
+                                              "reason": "no mail is unread", "notifier": NOTIFIER}):
+                del self.owed[aid]
+
+    def _reassert_mail(self) -> None:
+        """While mail waits unread and no mail notice is owed, owe one if the channel mail would
+        go to hasn't been told about it. Held as a level, a notice a session missed is asserted
+        again when its channel attaches, and a replay is harmless, since it names only what is
+        still unread (MIS-0004 R26). Checked on every pass, not only at attach, so mail silenced
+        to the session is told once it is unsilenced, to a channel that stayed attached."""
+        if any(o.source == "amail" for o in self.owed.values()):
+            return
+        if not self.to_session("amail"):
+            return                       # the operator silenced mail to the session (MIS-0002-R152)
+        target = next((c for c in self._channels if "amail" in self._takes.get(c, ())), None)
+        if target is None or target in self._mail_told:
+            return
+        unread = self._unread_mail()
+        if not unread:
+            return
+        source = next(s for s in self.sources if s.name == "amail")
+        self._detect("amail", f"{burst_id('amail', unread)}-asserted-{int(self._clock())}",
+                     len(unread), source.store_dir)
 
     def raise_notice(self, source: str, notice_id: str) -> bool:
         """Owe the agent a notice the daemon raised itself, such as a unit past its memory
@@ -322,11 +376,13 @@ class Notifier:
         only the sources ``takes`` names, which is none until its hello declares them."""
         self._channels.insert(0, conn)
         self._takes[conn] = frozenset(takes)
+        self._reassert_mail()
 
     def declare(self, conn: socket.socket, takes: Iterable[str]) -> None:
         """Record the sources an attached channel's hello declared (MIS-0002-R149)."""
         if conn in self._channels:
             self._takes[conn] = frozenset(takes)
+            self._reassert_mail()
 
     def declared(self, source: str) -> bool:
         """Whether some attached channel declared ``source``. Where none did, that source has
@@ -338,6 +394,7 @@ class Notifier:
             return
         self._channels.remove(conn)
         self._takes.pop(conn, None)
+        self._mail_told.discard(conn)
         if self.on_detach is not None:
             self.on_detach(conn)
         try:
@@ -377,11 +434,10 @@ class Notifier:
         pending = self.waker.verify_by is not None
         if not pending and (not mail or self._clock() - mail[0].read_at < CHANNEL_GRACE_S):
             return False
-        names = set()
-        for source in self.sources:
-            if source.name == "amail":
-                names |= source.names() or set()
-        ids = sorted({m.group(0) for n in names for m in [_MESSAGE_IN_NAME.search(n)] if m})
+        # The ids come from the store's unread mail, by the sidecars ingest wrote: a Maildir's
+        # own names carry none, and the box is the receiver's to empty (MIS-0004 R04, R25).
+        from macf.amail.store import unread_message_ids
+        ids = unread_message_ids(self.home)
         if self.waker.tick(ids) != "sent":
             return False
         sent_at = self._clock()
@@ -449,4 +505,6 @@ class Notifier:
                                            "read_at": owed.read_at, "sent_at": sent_at,
                                            "via": "channel", "notifier": NOTIFIER})
             del self.owed[aid]
+            if owed.source == "amail":
+                self._mail_told.add(conn)
             return True

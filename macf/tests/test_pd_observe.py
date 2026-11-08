@@ -75,7 +75,7 @@ def test_nothing_attachable_said():
 # Observation acts (R82, R86-R90, R92, R94, R111): events in the observed agent's log
 # ---------------------------------------------------------------------------
 
-ME, THEM = "IraMacEff@ee9a78", "OnlookerAgent@ab12cd"
+ME, THEM = "IraMacEff_ee9a78", "OnlookerAgent_ab12cd"
 
 
 def _host(card):
@@ -98,7 +98,7 @@ def test_onlooker_needs_invitation():
     state = acts.fold(log)
     assert acts.admit(THEM, inv.secret, state, now=1500.0).stream_from == 1200
     assert acts.admit(THEM, "a guess", state, now=1500.0) is None
-    assert acts.admit("SomeoneElse@abcdef", inv.secret, state, now=1500.0) is None
+    assert acts.admit("SomeoneElse_abcdef", inv.secret, state, now=1500.0) is None
 
 
 def test_observation_events(isolated_events_log):
@@ -568,14 +568,14 @@ def test_presence_on_call_line():
     derived from the agent's own log at read time."""
     inv, log = _invited()
     log.append(acts.pause(THEM, acts.fold(log), at=1300))
-    other = acts.invite(ME, "SecondOnlooker@cd34ef", 0, acts.fold(log), container_of=_host)
+    other = acts.invite(ME, "SecondOnlooker_cd34ef", 0, acts.fold(log), container_of=_host)
     log.append(other.event)
     log.append(presence.surface_event(presence.Surface("terminal", keyboard=True, viewer_seen=True)))
     line = presence.call_line(presence.from_events(log, daemon_alive=True))
-    assert line == "onlookers: OnlookerAgent@ab12cd (paused), SecondOnlooker@cd34ef \u00b7 operator: terminal attached"
+    assert line == "onlookers: OnlookerAgent_ab12cd (paused), SecondOnlooker_cd34ef \u00b7 operator: terminal attached"
     log.append(acts.end(THEM, "observed", acts.fold(log)))
     log.append(presence.surface_event(presence.Surface("terminal", keyboard=True, viewer_seen=False)))
-    assert presence.call_line(presence.from_events(log, daemon_alive=True)) == "onlookers: SecondOnlooker@cd34ef"
+    assert presence.call_line(presence.from_events(log, daemon_alive=True)) == "onlookers: SecondOnlooker_cd34ef"
 
 
 def test_surfaces_start_from_the_newest_daemon():

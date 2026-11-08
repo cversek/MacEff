@@ -202,6 +202,10 @@ def environment_patterns(env: Optional[Dict[str, str]] = None) -> List[List[str]
     full_id = (e.get("agent_uuid") or "").strip()
     if len(full_id) >= 8:
         out.append([_literal(full_id), "agent uuid"])
+        # This agent's own card in its current spelling, Name_shortid (MIS-0002-R157). A
+        # generic underscore-and-six-hex rule would flag ordinary identifiers, so only this
+        # agent's own short id is matched.
+        out.append([r"_" + re.escape(full_id[:6].lower()) + r"\b", "agent uuid"])
     # The @-suffixed short id, which is the form that actually leaks: it reads
     # as an email-ish token, so it survives the review that would have caught
     # the moniker spelled out.
@@ -241,8 +245,10 @@ def _moniker_from(home) -> Optional[str]:
     """
     if _agent_uuid_from(home) is None:
         return None
+    from .calling_card import SEPARATOR
     from .utils.identity import get_agent_identity
-    return get_agent_identity().split("@", 1)[0].strip() or None
+    # The LAST separator is the card's own: a fallback name may hold underscores of its own.
+    return get_agent_identity().rpartition(SEPARATOR)[0].strip() or None
 
 
 ### The hook body written into <repo>/.git/hooks/. Reads the profile at run
