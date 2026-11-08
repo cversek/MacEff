@@ -36,8 +36,45 @@ def cert_name(card: str) -> str:
     return calling_card.lowercase(card)
 
 
+def source_topic(card: str, source: str) -> str:
+    """The topic a source's events publish on: its name split on ``_`` into levels, so a family
+    of sources is one filter (``pd_entry_due`` -> ``<card>/events/pd/entry/due``)."""
+    if not source or any(c in source for c in "#+/") or source.startswith("_") or "__" in source:
+        raise BrokerRefused(f"not a source name: {source!r}")
+    return f"{card}/events/" + source.replace("_", "/")
+
+
+def grant_filters(card: str, grant: str, known: Iterable[str]) -> List[str]:
+    """The topic filters a granted source or glob becomes. A glob ending ``_*`` on a level boundary
+    is one ``#`` filter; any other glob is expanded against the sources the code defines, since
+    MQTT filters match whole levels only."""
+    import fnmatch
+    if not any(c in grant for c in "*?["):
+        return [source_topic(card, grant)]
+    prefix = grant[:-2]
+    if grant.endswith("_*") and prefix and not any(c in prefix for c in "*?["):
+        return [source_topic(card, prefix) + "/#"]
+    return sorted(source_topic(card, s) for s in set(known) if fnmatch.fnmatchcase(s, grant))
+
+
+class GapTracker:
+    """A subscriber's view of gaps (R154). Each message carries its log position and the position
+    of the previous record of the same source; a subscriber that filters by source sees global
+    positions skip by design, so it compares per source."""
+
+    def __init__(self) -> None:
+        self.last: Dict[str, int] = {}
+
+    def observe(self, source: str, position: int, previous: Optional[int]) -> bool:
+        """Record a message; True when records of this source were missed before it."""
+        seen = self.last.get(source)
+        self.last[source] = position
+        return seen is not None and previous != seen
+
+
 def render_acl(card: str, *, members: Sequence[str] = (), association: bool = False,
-               readers: Optional[Dict[str, Iterable[str]]] = None) -> str:
+               readers: Optional[Dict[str, Iterable[str]]] = None,
+               known_sources: Iterable[str] = ()) -> str:
     """The broker's access rules: one ``user`` block per certificate the declaration names."""
     if members and not association:
         raise BrokerRefused("only an association admits members")
@@ -48,10 +85,8 @@ def render_acl(card: str, *, members: Sequence[str] = (), association: bool = Fa
         blocks.append(f"user {cert_name(member)}\ntopic write members/{member}/#")
     for reader, sources in sorted((readers or {}).items()):
         lines = [f"user {cert_name(reader)}"]
-        for source in sorted(set(sources)):
-            if "#" in source or "+" in source or "/" in source:
-                raise BrokerRefused(f"a granted source is one event name, not {source!r}")
-            lines.append(f"topic read {card}/events/{source}")
+        filters = sorted({f for s in sources for f in grant_filters(card, s, known_sources)})
+        lines += [f"topic read {f}" for f in filters]
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks) + "\n"
 

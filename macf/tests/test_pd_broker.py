@@ -1,7 +1,8 @@
 """A daemon's own broker: what its configuration and access rules allow (prototype, phase B2)."""
 import pytest
 
-from macf.pd.broker import BrokerRefused, cert_name, render_acl, render_conf
+from macf.pd.broker import (BrokerRefused, GapTracker, cert_name, grant_filters, render_acl,
+                             render_conf, source_topic)
 
 SYS = "SystemDaemon_0a1b2c"
 AGENT = "ExampleAgent_1a2b3c"
@@ -34,9 +35,23 @@ def test_a_member_writes_only_its_own_subtree_and_reads_nothing():
 
 def test_a_reader_reads_only_the_sources_granted():
     users = _users(render_acl(AGENT, readers={OTHER: ["pd_unit_state", "pd_unit_state"]}))
-    assert users[cert_name(OTHER)] == [f"topic read {AGENT}/events/pd_unit_state"]
-    with pytest.raises(BrokerRefused, match="one event name"):
+    assert users[cert_name(OTHER)] == [f"topic read {AGENT}/events/pd/unit/state"]
+    with pytest.raises(BrokerRefused, match="not a source name"):
         render_acl(AGENT, readers={OTHER: ["#"]})
+
+
+def test_a_glob_on_a_family_is_one_filter_and_any_other_is_expanded():
+    known = ["pd_entry_due", "pd_entry_fired", "pd_unit_state", "zone_contact"]
+    assert grant_filters(AGENT, "pd_entry_*", known) == [f"{AGENT}/events/pd/entry/#"]
+    assert grant_filters(AGENT, "*_state", known) == [f"{AGENT}/events/pd/unit/state"]
+    assert source_topic(AGENT, "zone_contact") == f"{AGENT}/events/zone/contact"
+
+
+def test_a_gap_is_judged_per_source_not_by_global_position():
+    g = GapTracker()
+    assert not g.observe("pd_unit_state", 10, None)
+    assert not g.observe("pd_unit_state", 25, 10)     # other sources at 11..24 are not a gap
+    assert g.observe("pd_unit_state", 40, 31)         # a record of this source at 31 was missed
 
 
 def test_only_an_association_admits_members_or_listens_on_the_lan():
