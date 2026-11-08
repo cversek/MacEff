@@ -23,6 +23,7 @@ import datetime
 import hashlib
 import json
 import os
+import stat
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -51,16 +52,25 @@ def read_acceptance_time(sidecar_path: Path, own_domain: str, broker_uid: int, *
                          payload: bytes, message_id: str) -> Optional[datetime.datetime]:
     """:func:`acceptance_time` from the sidecar file at *sidecar_path*, for the message whose
     delivered bytes are *payload* and whose id is *message_id*. None unless the broker's uid owns
-    the file and the sidecar was written for exactly that message.
+    the file and the sidecar was written for exactly that message. The owner is checked on the
+    descriptor that is read, opened without following a symlink.
 
     A box is group-writable (2770) with no sticky bit. A sidecar another member of the group wrote
     is no record, and a genuine old one renamed to sit beside a new message would lend it an old
     hand-off time; the ``raw_sha256`` and ``message_id`` the broker wrote into it bind it to its own
     message."""
+    # One descriptor for the check and the read: stat-then-open by name would let a group member
+    # rename a forged sidecar over the path in between, and a symlink there is never followed.
     try:
-        if os.stat(sidecar_path, follow_symlinks=False).st_uid != broker_uid:
-            return None
-        sidecar = json.loads(Path(sidecar_path).read_text())
+        fd = os.open(sidecar_path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None  # noqa: MACEFF003 - no sidecar, or a symlink: no record, so only current keys count (R45)
+    try:
+        with os.fdopen(fd, "rb") as f:
+            st = os.fstat(f.fileno())
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != broker_uid:
+                return None
+            sidecar = json.loads(f.read().decode("utf-8"))
     except (OSError, ValueError):
         return None  # noqa: MACEFF003 - an unreadable sidecar is no record, so only current keys count (R45)
     if not isinstance(sidecar, dict):

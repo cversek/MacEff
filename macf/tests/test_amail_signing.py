@@ -370,3 +370,31 @@ def test_an_acceptance_time_is_read_only_from_a_sidecar_the_broker_owns(tmp_path
     assert read_acceptance_time(tmp_path / "gone.json", "here.test", broker_uid=me, payload=payload, message_id=mid) is None
     side.write_text("not json")
     assert read_acceptance_time(side, "here.test", broker_uid=me, payload=payload, message_id=mid) is None
+
+
+def test_a_sidecar_swapped_after_the_owner_check_is_not_read(tmp_path, monkeypatch):
+    """The owner is checked on the file that is read, through one descriptor: a group member who
+    renames a forged sidecar over the path after the check gets nothing (CTB on #928)."""
+    import hashlib
+    import json
+    from macf.amail import attest
+    payload, mid = b"the message as delivered", "msg-1772000000-0a0b0c0d0e0f"
+    good = {"rung": "local", "origin_domain": "here.test", "message_id": mid,
+            "raw_sha256": hashlib.sha256(payload).hexdigest(), "handed_off_at": "2026-03-01T12:00:00+00:00"}
+    side, forged = tmp_path / "s.json", tmp_path / "forged.json"
+    side.write_text(json.dumps(good))
+    forged.write_text(json.dumps({**good, "handed_off_at": "2020-01-01T00:00:00+00:00"}))
+    real_open = os.open
+
+    def open_then_swap(path, *a, **k):
+        fd = real_open(path, *a, **k)
+        os.replace(forged, side)          # the race: the path now names the forgery
+        return fd
+    monkeypatch.setattr(attest.os, "open", open_then_swap)
+    got = attest.read_acceptance_time(side, "here.test", broker_uid=os.getuid(), payload=payload, message_id=mid)
+    assert got == _utc(2026, 3, 1, 12)
+    # A symlink planted at the path is not followed.
+    monkeypatch.setattr(attest.os, "open", real_open)
+    link = tmp_path / "link.json"
+    link.symlink_to(side)
+    assert attest.read_acceptance_time(link, "here.test", broker_uid=os.getuid(), payload=payload, message_id=mid) is None
