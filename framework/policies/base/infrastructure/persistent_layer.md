@@ -108,6 +108,8 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - What happens when a subscriber falls behind, or reconnects after records it never saw?
 - Which records can a subscriber trust to say what the layer did?
 - Who may subscribe, and how does the operator silence or reroute the stream?
+- How does a daemon publish its stream on its own broker, and who may read it there? (prototype)
+- How does a reader that reconnects to the broker catch up without gaps or duplicates?
 
 **12 The Daemon and Its Control Socket**
 - How does an agent get exactly one daemon, and where does its identity come from?
@@ -1033,6 +1035,38 @@ A subscriber receives only the sources it chose [MIS-0002-R151 (subscriber_MUST_
 - **That check holds at the socket, not across a restart.** At its start the daemon folds every `pd_stream_rule` line in your event log, and your own uid writes that log. So even with `operator_uid` set, a rule line you append yourself is honored from the next start, a `silence` of the very source that reports on you included. The operator's rules are kept apart only when they live where your uid can't write, which isn't built. As with your entries (10.6), the rules stop a confused agent, not a compromised one.
 
 **What the stream is not for.** Quiet hours, a daily bound, and delivering something exactly once belong to whichever subscriber delivers to a person, not to the layer. The operator route beyond unread mail, and "hold until present", are that subscriber's job, left by MIS-0002 R42 to a successor MIS.
+
+### 11.5 The stream on the daemon's own broker (prototype)
+
+**Status: prototype, pending the maintainers' argument and the operator's ruling.** A daemon whose declaration names a `broker` section also publishes its stream on its own MQTT broker. Without the section, nothing here applies, and the socket of 11.4 is the stream.
+
+**What to declare.**
+- `broker.port`, a loopback port from 1024 to 65535.
+- The CA that issued every certificate, the broker's server certificate and key, and the daemon's own client certificate and key. Paths may use the declaration's placeholders.
+- `broker.readers`, each reader's card mapped to the sources it may read. This is the broker's form of `stream_grants`.
+- A unit that runs the broker: `mosquitto -c {runtime_dir}/<card>.broker/mosquitto.conf`. The daemon writes that file and its access rules at start, before units start. The broker is then supervised like any unit.
+
+**Who can read what.** Certificates are required, and a certificate's name is its card lowercased (MIS-0002-R161).
+- The daemon reads and writes everything under its own card.
+- Each declared reader reads only the sources granted to it. It also writes its own replay request and reads its own replay records, and no other reader's.
+- A certificate the declaration doesn't name connects and reads nothing. A client with no certificate is refused.
+- There is never a `pattern` rule, because one would apply to every certificate the CA ever issued.
+
+**What a reader receives.**
+- Each record is published on its source's topic: the event name split on `_` into levels, so `pd_entry_due` is `<card>/events/pd/entry/due` and a family is one filter.
+- The payload is the record of 11.4, with its position inside.
+- One user property, `previous`, names the position of the last record of the same source, as `log:offset`.
+- A reader detects a gap per source: a message whose `previous` isn't the position it last saw from that source. A rotated log has another identity, so its positions never match the old log's.
+- A gap on the daemon's side (`rotated`, `overflow`) is published on `<card>/events/_gap`.
+
+**Catching up after a reconnect.** The broker's queue is never the record; the log is.
+- A reader that reconnects writes `<card>/replay/<reader>/request`, naming the last position it delivered and the sources it wants.
+- The daemon answers from its log on `<card>/replay/<reader>/records`: a gap first if records since then are gone, then the records it asked for and was granted, then `done`. An unreadable request gets `refused`.
+- The reader holds live records while the replay runs and drops duplicates at the boundary, so each record arrives once, in log order. `CatchUp` in `macf.pd.broker` does this, and so does `macf_tools pd stream subscribe --broker-port`.
+
+**What never blocks.** The daemon's publisher follows the log on its own, separately from the socket stream. A publish only joins the MQTT client's queue. A record whose publish fails stays pending and is retried first, and past its bound the backlog becomes one `overflow` gap. Replay requests are queued on the client's thread and answered on the daemon's, where the log is read.
+
+**What doesn't move.** The MacEff channel keeps its own socket: MIS-0002 R113 and R123 require the channel to connect only to its own daemon through a local socket whose peer the kernel identifies. The control socket also stays, and so do the outside watch and the hooks, which read or append the log.
 
 ---
 
