@@ -20,8 +20,8 @@ WHAT LOADING REFUSES, before anything reads a key from it:
 - a card that isn't ``Name_shortid`` (MIS-0002 R165), the same card twice in any case, an entry
   without its account or its keys, a key that isn't ``ed25519:<base64>``, the same key twice in an
   entry, or a validity window that isn't timezone-aware or ends before it starts;
-- a certificate entry with anything but ``name``, ``serial`` and ``not_after``, so no key or secret
-  can be filed there by mistake.
+- a certificate entry with anything but ``name``, ``serial``, ``not_after`` and an optional
+  timezone-aware ``retired_at``, so no key or secret can be filed there by mistake.
 
 WHY KEYS CARRY WINDOWS (MIS-0004 R45). A key is either a bare ``ed25519:<base64>`` string, valid
 from the start and not retired, or a mapping with ``valid_from`` and ``valid_until``. A key with
@@ -66,6 +66,11 @@ from .crypto import SigningError, parse_public_key
 
 #: Where a system's registry lives unless the deployment declares another path.
 DEFAULT_PATH = Path("/etc/maceff/registry.yaml")
+
+
+def registry_path(environ=os.environ) -> Path:
+    """The registry this host reads: ``MACF_AMAIL_REGISTRY`` when set, else :data:`DEFAULT_PATH`."""
+    return Path(environ["MACF_AMAIL_REGISTRY"]) if environ.get("MACF_AMAIL_REGISTRY") else DEFAULT_PATH
 
 
 class RegistryError(ValueError):
@@ -140,6 +145,19 @@ class CertificateEntry(_Closed):
     name: str = Field(min_length=1, max_length=64)
     serial: str = Field(min_length=1, max_length=64, pattern=r"^[0-9A-Fa-f:]+$")
     not_after: datetime.date
+    #: When the operator retired the certificate before its expiry; it is trusted for nothing after.
+    retired_at: Optional[datetime.datetime] = None
+
+    @field_validator("retired_at")
+    @classmethod
+    def _aware(cls, t: Optional[datetime.datetime]) -> Optional[datetime.datetime]:
+        if t is not None and t.utcoffset() is None:
+            raise ValueError(f"{t.isoformat()} has no timezone; write it with one, such as Z")
+        return t
+
+    @property
+    def retired(self) -> bool:
+        return self.retired_at is not None
 
 
 class _RegistryFile(_Closed):
@@ -176,6 +194,32 @@ def check_owner(path: Path, root_uid: int = 0) -> None:
                                 f"someone other than root, who could swap the path to it (MIS-0004 R42)")
 
 
+def parse_text(text: str, where: Union[str, Path] = "the registry") -> _RegistryFile:
+    """A registry's text, parsed and held to every rule a load holds it to, ownership aside: the
+    same check a change is put through before it is shown, so nothing is staged that a load
+    would refuse."""
+    try:
+        raw = yaml.safe_load(text) or {}
+    except yaml.YAMLError as e:
+        raise RegistryError(f"the registry {where} can't be parsed: {e}") from e
+    try:
+        parsed = _RegistryFile.model_validate(raw)
+    except ValidationError as e:
+        raise RegistryError(f"the registry {where} is malformed: {e}") from e
+    seen: Dict[str, str] = {}
+    for card in parsed.agents:
+        try:
+            calling_card.read_declared(card)
+        except calling_card.CardError as e:
+            raise RegistryError(f"the registry {where}: {e}") from e
+        folded = card.casefold()
+        if folded in seen:
+            raise RegistryError(f"the registry {where} declares {seen[folded]} and {card}, "
+                                f"which are the same card (MIS-0002 R164)")
+        seen[folded] = card
+    return parsed
+
+
 class Registry:
     """The operator's registry at *path*, checked and read per call."""
 
@@ -186,25 +230,10 @@ class Registry:
     def load(self) -> _RegistryFile:
         check_owner(self.path, self.root_uid)
         try:
-            raw = yaml.safe_load(self.path.read_text()) or {}
-        except (OSError, yaml.YAMLError) as e:
-            raise RegistryError(f"the registry {self.path} can't be parsed: {e}") from e
-        try:
-            parsed = _RegistryFile.model_validate(raw)
-        except ValidationError as e:
-            raise RegistryError(f"the registry {self.path} is malformed: {e}") from e
-        seen: Dict[str, str] = {}
-        for card in parsed.agents:
-            try:
-                calling_card.read_declared(card)
-            except calling_card.CardError as e:
-                raise RegistryError(f"the registry {self.path}: {e}") from e
-            folded = card.casefold()
-            if folded in seen:
-                raise RegistryError(f"the registry {self.path} declares {seen[folded]} and {card}, "
-                                    f"which are the same card (MIS-0002 R164)")
-            seen[folded] = card
-        return parsed
+            text = self.path.read_text()
+        except OSError as e:
+            raise RegistryError(f"the registry {self.path} can't be read: {e}") from e
+        return parse_text(text, self.path)
 
     def _entry(self, card: str) -> Optional[AgentEntry]:
         for declared, entry in self.load().agents.items():

@@ -59,6 +59,9 @@ STEPS: List[Tuple[str, str, str]] = [
     ("permissions", "add the mode-safety permission entries to the project's settings.local.json",
      "no_permissions"),
     ("daemon", "put the primal daemon under the service manager (pd install)", "no_daemon"),
+    ("registry", ("declare the agent's signing key in the operator's registry, the change shown "
+                  "first; on a host the write is root's, printed as one step (MIS-0004 R42)"),
+     "no_registry"),
 ]
 
 #: The steps ``--update`` runs: the declaration only to report its drift, the channel and the
@@ -925,6 +928,55 @@ def step_daemon(ctx: Context) -> Result:
     return Result("daemon", DONE, _last_line(text))
 
 
+def signing_key_path(home: Path, environ=os.environ) -> Path:
+    """Where the agent's own signing key is, as ``amail`` looks for it (MIS-0004 R41)."""
+    if environ.get("MACF_AMAIL_SIGNING_KEY"):
+        return Path(environ["MACF_AMAIL_SIGNING_KEY"])
+    legacy = home / ".maceff" / "amail_signing_key.pem"
+    return legacy if legacy.exists() else home / ".maceff" / "keys" / "amail_signing_key.pem"
+
+
+def step_registry(ctx: Context) -> Result:
+    """Declare the agent's signing key in the operator's registry (MIS-0004 R42), as the operator
+    ruled on #927: transparently, the change shown and, on a host, the exact root step printed for
+    staged bytes named by their digest; idempotently, a current entry writes nothing."""
+    import pwd
+    try:
+        from macf.amail import registry_edit as edit
+        from macf.amail.crypto import load_private_key, public_key_line
+        from macf.amail.registry import registry_path
+    except ImportError as e:
+        return Result("registry", SKIPPED, f"the amail extra isn't installed ({e}), so there is no key to declare")
+    card = resolve_card(ctx)
+    if not card:
+        return Result("registry", SKIPPED, f"no calling card yet ({ctx.card_error or 'none resolves'})")
+    key_path = signing_key_path(ctx.home)
+    if not key_path.exists():
+        return Result("registry", SKIPPED, f"no signing key at {key_path}: `macf_tools amail keygen` makes one, "
+                                           f"and the next agent init declares it")
+    public = public_key_line(load_private_key(key_path))
+    account = pwd.getpwuid(os.getuid()).pw_name
+    target = registry_path()
+    try:
+        planned = edit.plan(target, lambda t: edit.declare(t, card, account, public))
+    except (ValueError, OSError) as e:
+        return Result("registry", REFUSED, str(e))
+    if not planned.changed:
+        return Result("registry", ALREADY, f"{card}'s key, on account {account}, in {target}")
+    if ctx.dry_run:
+        return Result("registry", WOULD, f"declare {card}'s key, on account {account}, in {target}:\n{planned.diff}")
+    is_root = os.geteuid() == 0
+    if ctx.in_container and not is_root:
+        return Result("registry", SKIPPED, CONTAINER_OWNS)
+    lines: List[str] = []
+    rc = edit.carry_out(planned, dry_run=False, is_root=is_root, out=lines.append)
+    if rc != 0:
+        return Result("registry", REFUSED, "\n".join(lines[-1:]))
+    if is_root:
+        return Result("registry", DONE, f"{card}'s key declared in {target}")
+    return Result("registry", PLANNED, "\n".join(lines))
+
+
 RUNNERS: Dict[str, Callable[[Context], Result]] = {
     "task-store": step_task_store,
     "calling-card": step_calling_card,
@@ -933,6 +985,7 @@ RUNNERS: Dict[str, Callable[[Context], Result]] = {
     "channel": step_channel,
     "permissions": step_permissions,
     "daemon": step_daemon,
+    "registry": step_registry,
 }
 
 

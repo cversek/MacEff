@@ -679,15 +679,33 @@ expiry, never its key; the repo owner chose one file for both.
 
   A card must be `Name_shortid` (MIS-0002 R165), each card appears once in any case,
   each agent has an account and at least one key, each key appears once, and a
-  certificate entry holds only its name, serial and expiry.
+  certificate entry holds only its name, serial, expiry and, once retired, a
+  timezone-aware `retired_at`.
 - A key is a bare line, valid from the start, or a mapping with `valid_from` and
   `valid_until`, written with a timezone. A key with `valid_until` is retired: it never
   signs, and it verifies only what the broker accepted inside its window (R45).
 - Two cards may declare one account. That is a shared login, and a receiver sees every
   card on it (R46).
-- `amail key-status` prints the public line to copy in. `amail registry check` says
-  whether the registry is root's alone to write and lists what it declares, never a
-  key's bytes.
+- **Nobody edits it by hand** (the repo owner, on #927). `agent init` declares the
+  agent's own key, and five commands make every other change: `amail registry declare`,
+  `rotate`, `retire`, `cert-record` and `cert-retire`. Each one:
+  - shows the change as a diff before anything is written, and with `--dry-run` writes
+    nothing at all, not even a staged copy;
+  - writes nothing when the change is already made, so running it twice is the same as
+    running it once, and a retired key or certificate keeps its first end date;
+  - is refused, with the reason, when the result would break any rule above;
+  - when run as root (the operator, or a container's start), writes beside the file,
+    renames it into place and loads it as every reader does;
+  - otherwise stages the new file in a temporary file, prints its sha256, and prints the
+    one root step that installs exactly those bytes, root-owned and mode 644, then runs
+    `amail registry check`. On macOS the group is `wheel`.
+- **Rotation follows R45's order.** `rotate --card C --key NEW --at T` declares the new
+  key from T and retires every other open key of C at T. Mail the broker accepted
+  before T verifies against the old key, exactly one key verifies at any moment, and two
+  keys never sign at once. Set T for when the agent switches to the new key.
+- `amail key-status` prints the public line. `amail registry check` says whether the
+  registry is root's alone to write and lists what it declares, retired keys and
+  certificates counted, never a key's bytes.
 - Lookups compare cards without regard to case, and the file is read at each decision,
   so an edit takes effect without a restart.
 - The registry only declares. Refusing an agent's unsigned mail (R43) and marking a
