@@ -10891,6 +10891,24 @@ def cmd_amail_key_status(args: argparse.Namespace) -> int:
     return 1 if (report["required"] and not report["exists"]) else 0
 
 
+def cmd_amail_registry_check(args: argparse.Namespace) -> int:
+    """Check the operator's registry (MIS-0004 R42): who can write it, and what it declares."""
+    from macf.amail.registry import DEFAULT_PATH, Registry, RegistryError
+
+    path = Path(args.path) if args.path else DEFAULT_PATH
+    try:
+        loaded = Registry(path).load()
+    except RegistryError as e:
+        print(f"❌ {e}")
+        return 1
+    print(f"✅ {path} is root's alone to write")
+    for card, entry in sorted(loaded.agents.items()):
+        print(f"   {card}: account {entry.account}, {len(entry.keys)} key(s)")
+    for cert in loaded.certificates:
+        print(f"   certificate {cert.name}: serial {cert.serial}, expires {cert.not_after}")
+    return 0
+
+
 def _broker_socket_ready(sock: Path, timeout: float = 0.0) -> bool:
     """True when something answers on the broker socket (within timeout)."""
     import socket as _socket
@@ -13665,6 +13683,13 @@ def _build_parser() -> argparse.ArgumentParser:
     amail_key_status.add_argument("--path", help="the key to check (default: the configured one)")
     amail_key_status.add_argument("--json", action="store_true", help="machine-readable output")
     amail_key_status.set_defaults(func=cmd_amail_key_status)
+    amail_registry = amail_sub.add_parser(
+        "registry", help="the operator's registry of agents' keys and issued certificates (MIS-0004 R42)")
+    amail_registry_sub = amail_registry.add_subparsers(dest="registry_cmd", required=True)
+    amail_registry_check = amail_registry_sub.add_parser(
+        "check", help="check who can write the registry, and list what it declares")
+    amail_registry_check.add_argument("--path", help="the registry (default: /etc/maceff/registry.yaml)")
+    amail_registry_check.set_defaults(func=cmd_amail_registry_check)
 
     amail_preflight = amail_sub.add_parser(
         "preflight", help="scan a hand-carried bundle before it leaves the host",

@@ -3,6 +3,7 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.15.0 — §3.2.3: the operator's registry. Each MacEff agent's public key is declared with its account in a root-owned file only the operator can write, which also records each certificate his authority issues by name, serial and expiry; anything else can write it and it is refused when read (MIS-0004 R42). `amail registry check` reports it.
 **Version**: 1.14.0 — §3.4: the broker's health is its last sweep (MIS-0004 R31). A deployment names the schedule that runs the inbound `sweep` in its declaration's `mail_sweep_schedule`; the broker is healthy only when that sweep's last run ended ok, and the outside watch alerts as `mail-broker: SWEEP-FAILED` when it failed, is overdue, or never ran, so stuck mail reaches a person (R32). Minor: a new declaration field and a new alert an operator can meet.
 **Version**: 1.13.0 — the spool consumer: an entry that fails unexpectedly is counted and the run goes on; after `max_failures` (default 3) it is quarantined with its last error and audited (MIS-0004 R17, R20). Minor: an outcome an operator can meet in the quarantine.
 **Version**: 1.12.0 — §2.4: the mail notice is a level (MIS-0004 R26). A channel that takes mail is told at each attach while mail waits unread; a notice still owed when the mail is read is withdrawn, recorded as `pd_notice_withdrawn`; nothing is re-asserted while the operator silences mail to the session, and after an unsilence still-unread mail is told on the next pass. Minor: a notice an agent may now meet again in a new session.
@@ -645,6 +646,53 @@ means something to a party that doesn't trust the broker.
   told on stderr. Receivers classify mail exactly as before; refusing unsigned agent
   mail (R43) and marking it suspect (R44) switch on only once every key is declared.
 
+### 3.2.3 The operator's registry
+
+Each MacEff agent's public key is declared, with the account that holds it, in a
+registry only the operator can write and every broker and receiver can read (MIS-0004
+R42). A key the agent declares in its own contact list proves nothing to anyone else,
+because anything that can run as the agent can declare a key of its choosing. The same
+file records each certificate the operator's authority issues, by its name, serial and
+expiry, never its key; the repo owner chose one file for both.
+
+- The registry is `/etc/maceff/registry.yaml` unless a deployment names another path.
+  It is owned by root, mode 644, in a directory only root can write, under ancestors
+  only root can write (a sticky directory such as `/tmp` passes). Anything else is
+  refused when the registry is read, with the reason: whoever can write the file, or
+  any directory above it, could put their own key in it.
+- It maps each card to its account and its keys:
+
+  ```yaml
+  agents:
+    ExampleAgent_0a1b2c:
+      account: exampleagent_0a1b2c
+      keys:
+        - "ed25519:<base64>"
+        - key: "ed25519:<base64>"
+          valid_from: 2026-11-08T00:00:00Z
+          valid_until: 2027-11-08T00:00:00Z
+  certificates:
+    - name: exampleagent_0a1b2c
+      serial: "3f9a01"
+      not_after: 2036-11-08
+  ```
+
+  A card must be `Name_shortid` (MIS-0002 R165), each card appears once in any case,
+  each agent has an account and at least one key, each key appears once, and a
+  certificate entry holds only its name, serial and expiry.
+- A key is a bare line, valid from the start, or a mapping with `valid_from` and
+  `valid_until`, written with a timezone. A key with `valid_until` is retired: it never
+  signs, and it verifies only what the broker accepted inside its window (R45).
+- Two cards may declare one account. That is a shared login, and a receiver sees every
+  card on it (R46).
+- `amail key-status` prints the public line to copy in. `amail registry check` says
+  whether the registry is root's alone to write and lists what it declares, never a
+  key's bytes.
+- Lookups compare cards without regard to case, and the file is read at each decision,
+  so an edit takes effect without a restart.
+- The registry only declares. Refusing an agent's unsigned mail (R43) and marking a
+  failed signature suspect (R44) read it once every key is declared.
+
 ### 3.3 The audit record
 
 The broker MUST append a record for every submission and every inbound message,
@@ -1248,8 +1296,8 @@ and a refusal for every combination that would have meant something else.
 **Deferred, with reasons:**
 
 - **Per-message authorship signing.** Decided by MIS-0004 (R41 to R46). Key custody
-  is §3.2.2 (R41). Rotation (R45) and the shared-login label (R46) follow with the
-  key registry (R42).
+  is §3.2.2 (R41). The key registry is §3.2.3 (R42). Rotation (R45) and the
+  shared-login label (R46) follow it.
 - **Encryption at rest and in transit beyond transport TLS.** Same reasoning.
 - **A dedicated task type for inbound mail.** Wanted so mail is tracked natively
   rather than becoming a generic task with hand-built structure. Deferred to
