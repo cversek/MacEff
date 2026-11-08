@@ -646,3 +646,61 @@ def test_the_wrapper_names_the_remedy_when_mosquitto_is_missing(tmp_path, capsys
     assert main([str(conf), "--mosquitto", "no-such-mosquitto-here"]) == 127
     err = capsys.readouterr().err
     assert "install mosquitto" in err.lower() and "brew services start" in err
+
+
+def test_a_broker_left_by_a_killed_wrapper_is_ended_at_the_next_start(tmp_path):
+    """#921: a wrapper killed with SIGKILL can't stop its mosquitto, which keeps the port, so every
+    new broker fails to bind. The wrapper records its child's pid and start time; the next wrapper
+    ends that very process before it starts its own, and never a pid reused since."""
+    import subprocess
+    import sys
+    import time
+    from macf.pd.broker_unit import PIDFILE_NAME, end_orphan, main, record_child
+    pidfile = tmp_path / PIDFILE_NAME
+    orphan = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        record_child(pidfile, orphan.pid)
+        # A record whose start time doesn't match is a reused pid: it is left alone.
+        pid, start = pidfile.read_text().split(None, 1)     # macOS writes the start time as words
+        start = start.strip()
+        pidfile.write_text(f"{pid} 1\n")
+        assert end_orphan(pidfile) is None and orphan.poll() is None
+        pidfile.write_text(f"{pid} {start}\n")
+        # The next wrapper's start ends the recorded broker, then records its own.
+        conf = tmp_path / "mosquitto.conf"
+        conf.write_text("listener 18830 127.0.0.1\n")
+        stand_in = tmp_path / "mosquitto"
+        stand_in.write_text("#!/bin/sh\nexit 0\n")
+        stand_in.chmod(0o755)
+        assert main([str(conf), "--mosquitto", str(stand_in)]) == 0
+        orphan.wait(timeout=10)
+        assert orphan.returncode is not None, "the orphaned broker was left running"
+        assert pidfile.read_text().split()[0] != pid, "the new broker was not recorded"
+    finally:
+        if orphan.poll() is None:
+            orphan.terminate()
+            orphan.wait()
+    assert end_orphan(tmp_path / "absent.pid") is None
+
+
+def test_a_refused_start_holds_before_it_exits_so_keepalive_is_paced(tmp_path, monkeypatch):
+    """#921: launchd's KeepAlive relaunches a job whatever its exit status, every ten seconds, so a
+    refused daemon wrote the same refusal six times a minute. A refused start now holds before it
+    exits: a minute unless MACF_PD_REFUSED_HOLD_S says otherwise."""
+    import macf.pd.broker_defaults as bd
+    from macf.pd.__main__ import REFUSED_HOLD_S, main
+    from test_primal_daemon import make_home
+    monkeypatch.setattr(bd, "missing_dependencies", lambda: ["paho-mqtt"])
+    home = make_home(tmp_path, [])
+    import os
+    held = []
+    # main() sets the agent home and drops the log path in os.environ; these restore both after.
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(home))
+    monkeypatch.setenv("MACF_EVENTS_LOG_PATH", os.environ.get("MACF_EVENTS_LOG_PATH", str(tmp_path / "e.jsonl")))
+    monkeypatch.delenv("MACF_PD_REFUSED_HOLD_S", raising=False)
+    assert main([str(home)], hold=held.append) == 78
+    assert held == [REFUSED_HOLD_S] and REFUSED_HOLD_S >= 60
+    monkeypatch.setenv("MACF_PD_REFUSED_HOLD_S", "5")
+    assert main([str(home)], hold=held.append) == 78 and held[-1] == 5.0
+    monkeypatch.setenv("MACF_PD_REFUSED_HOLD_S", "soon")
+    assert main([str(home)], hold=held.append) == 78 and held[-1] == REFUSED_HOLD_S

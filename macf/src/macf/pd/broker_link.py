@@ -272,8 +272,12 @@ class ExportLink:
 
     def __init__(self, card: str, log_path: Path, link: AssociationLink, placeholders: Dict[str, str],
                  *, client=None, on_unreachable: Optional[Callable[[Optional[str]], None]] = None,
-                 prober: Callable[[str, int], Optional[OSError]] = probe):
+                 prober: Callable[[str, int], Optional[OSError]] = probe,
+                 snapshot: Optional[Callable[[], List[Tuple[str, str]]]] = None):
         self.card, self.link = card, link
+        #: Each unit's current state, as (unit, state), sent once after every connect (R182).
+        self.snapshot = snapshot
+        self.snapshot_owed = False                 # set on the network thread, sent on the daemon's
         self.client = client if client is not None else self._client(card, link, placeholders)
         stream = EventStream(card, log_path)
         stream.start_at_end()           # exports what happens from now; the past stays home
@@ -305,6 +309,7 @@ class ExportLink:
     def _on_connect(self, client, _userdata, _flags, _reason, _props=None) -> None:
         self.reason = None
         client.publish(assoc.presence_topic(self.card), b"online", qos=1, retain=True)
+        self.snapshot_owed = True
 
     def start(self) -> None:
         self.client.connect_async(self.link.host, self.link.port)
@@ -316,6 +321,9 @@ class ExportLink:
             self.reported = reason
             if self.on_unreachable is not None:
                 self.on_unreachable(reason)
+        if self.snapshot_owed and self.snapshot is not None:
+            self.snapshot_owed = False
+            self.exporter.snapshot(self.snapshot(), time.time())
         try:
             sent = self.exporter.pump()
             self.last_error = None
