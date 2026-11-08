@@ -206,9 +206,10 @@ def _subscribe_broker(args: argparse.Namespace, card: str, position) -> int:
     except ImportError:
         print("maceff_pd: reading the broker needs paho-mqtt installed", file=sys.stderr)
         return 1
-    from macf.pd.broker import CatchUp, grant_filters, replay_topics
+    from macf.pd.broker import LOOPBACK, CatchUp, grant_filters, replay_topics, topic_name
     sources = args.source or ["*"]
-    filters = sorted({f for s in sources for f in (grant_filters(card, s, ()) if s != "*" else [f"{card}/events/#"])})
+    filters = sorted({f for s in sources
+                      for f in (grant_filters(card, s, ()) if s != "*" else [f"{topic_name(card)}/events/#"])})
     topics = replay_topics(card, args.reader)
 
     def deliver(record) -> None:
@@ -232,7 +233,7 @@ def _subscribe_broker(args: argparse.Namespace, card: str, position) -> int:
             client.publish(topics["request"], json.dumps(request), qos=1)
     c.on_message, c.on_connect = on_message, on_connect
     try:
-        c.connect("localhost", args.broker_port)
+        c.connect(LOOPBACK, args.broker_port)
     except OSError as e:
         print(f"maceff_pd: {card}: the broker on port {args.broker_port} can't be reached: {e}", file=sys.stderr)
         return 1
@@ -644,6 +645,11 @@ def cmd_pd_install(args: argparse.Namespace) -> int:
     except (OSError, ValueError) as e:
         mismatch = [f"the managed settings can't be read, so the organization allowlist can't be "
                     f"compared with the declaration: {e}"]
+    if declaration.broker is not None:
+        from macf.pd.broker_link import declared_broker_ports, port_clash
+        clash = port_clash(card, declaration.broker.port, declared_broker_ports(home))
+        if clash is not None:
+            mismatch.append(clash)
     if mismatch:
         # A channel the allowlist leaves out stops loading at the daemon's first unattended
         # restart, so the install stops here, where a person reads the reason.

@@ -29,6 +29,7 @@ Nothing here blocks the daemon's loop: every socket is non-blocking, each subscr
 bounded, and a subscriber that falls behind loses its own backlog (MIS-0002-R153).
 """
 import collections
+import dataclasses
 import fnmatch
 import hashlib
 import json
@@ -62,6 +63,17 @@ FINGERPRINT_BYTES = 4096
 OWN_REMEMBERED = 10000
 
 Position = Dict[str, object]
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class Chunk:
+    """One bounded step of a replay (``EventStream.since_chunk``): the gap owed first, if any;
+    the records read; the position to continue from (None when there was nothing to read); and
+    whether the step reached what the stream has read."""
+    gap: Optional[tuple]
+    records: List[dict]
+    next: Optional[Position]
+    at_end: bool
 
 
 def log_identity(path: Path, ino: int) -> str:
@@ -342,6 +354,22 @@ class EventStream:
             return gap, []
         lines = self._read_lines(read_from, self.offset)
         return gap, [r for r in (self._record(s, e, line) for s, e, line in lines) if r is not None]
+
+    def since_chunk(self, log: str, offset: int, max_bytes: Optional[int]) -> "Chunk":
+        """``since`` in bounded steps, for a replay answered over several passes of the daemon's
+        loop: at most *max_bytes* of log, and at least one whole line, so a long line still makes
+        progress."""
+        self._settle_own()
+        gap, read_from = self._resume_from(log, offset)
+        if read_from is None:
+            return Chunk(gap=gap, records=[], next=None, at_end=True)
+        end = self.offset if max_bytes is None else min(self.offset, read_from + max_bytes)
+        lines = self._read_lines(read_from, end)
+        if not lines and end < self.offset:
+            lines = self._read_lines(read_from, self.offset)[:1]
+        reached = lines[-1][1] if lines else read_from
+        records = [r for r in (self._record(s, e, line) for s, e, line in lines) if r is not None]
+        return Chunk(gap=gap, records=records, next=self.position(reached), at_end=reached >= self.offset)
 
     def take(self) -> Tuple[List[dict], Optional[Tuple[Position, Position]]]:
         """For a publisher that isn't a socket subscriber (the broker, MIS-0002 R150 to R156 as

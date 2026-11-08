@@ -33,24 +33,24 @@ def test_only_named_certificates_get_rules_and_never_by_pattern():
 
 def test_a_member_writes_only_its_own_subtree_and_reads_nothing():
     users = _users(render_access_rules(SYS, association=True, members=[AGENT, OTHER]))
-    assert users[cert_name(AGENT)] == [f"topic write members/{AGENT}/#"]
-    assert users[cert_name(SYS)] == [f"topic readwrite {SYS}/#", "topic read members/#"]
+    assert users[cert_name(AGENT)] == [f"topic write members/{AGENT.lower()}/#"]
+    assert users[cert_name(SYS)] == [f"topic readwrite {SYS.lower()}/#", "topic read members/#"]
 
 
 def test_a_reader_reads_only_the_sources_granted():
     users = _users(render_access_rules(AGENT, readers={OTHER: ["pd_unit_state", "pd_unit_state"]}))
-    assert users[cert_name(OTHER)] == [f"topic read {AGENT}/events/pd/unit/state",
-                                       f"topic write {AGENT}/replay/{OTHER}/request",
-                                       f"topic read {AGENT}/replay/{OTHER}/records"]
+    assert users[cert_name(OTHER)] == [f"topic read {AGENT.lower()}/events/pd/unit/state",
+                                       f"topic write {AGENT.lower()}/replay/{OTHER.lower()}/request",
+                                       f"topic read {AGENT.lower()}/replay/{OTHER.lower()}/records"]
     with pytest.raises(BrokerRefused, match="not a source name"):
         render_access_rules(AGENT, readers={OTHER: ["#"]})
 
 
 def test_a_glob_on_a_family_is_one_filter_and_any_other_is_expanded():
     known = ["pd_entry_due", "pd_entry_fired", "pd_unit_state", "zone_contact"]
-    assert grant_filters(AGENT, "pd_entry_*", known) == [f"{AGENT}/events/pd/entry/#"]
-    assert grant_filters(AGENT, "*_state", known) == [f"{AGENT}/events/pd/unit/state"]
-    assert source_topic(AGENT, "zone_contact") == f"{AGENT}/events/zone/contact"
+    assert grant_filters(AGENT, "pd_entry_*", known) == [f"{AGENT.lower()}/events/pd/entry/#"]
+    assert grant_filters(AGENT, "*_state", known) == [f"{AGENT.lower()}/events/pd/unit/state"]
+    assert source_topic(AGENT, "zone_contact") == f"{AGENT.lower()}/events/zone/contact"
 
 
 def test_a_gap_is_judged_per_source_not_by_global_position():
@@ -89,7 +89,7 @@ def test_a_record_publishes_on_its_source_topic_with_its_previous():
     rec = {"type": "record", "position": {"log": "L", "offset": 42}, "source": "pd_unit_state",
            "agent": AGENT, "time": 1.0, "origin": "log", "record": {"event": "pd_unit_state"}}
     m = to_message(AGENT, rec, "L:17")
-    assert m.topic == f"{AGENT}/events/pd/unit/state"
+    assert m.topic == f"{AGENT.lower()}/events/pd/unit/state"
     assert m.properties == {"previous": "L:17"}
     assert json.loads(m.payload) == rec
     assert to_message(AGENT, rec, None).properties == {}
@@ -320,6 +320,149 @@ def test_the_responder_answers_only_granted_readers_on_their_own_topic(tmp_path)
     assert r.handle(replay_topics(AGENT, OTHER)["request"], body) == 0, "no grant, no answer"
     assert r.handle(replay_topics(AGENT, READER)["request"], body) == 2     # the record, then done
     assert {m.topic for m in sent} == {replay_topics(AGENT, READER)["records"]}
+
+
+def test_a_long_replay_is_answered_in_bounded_passes_and_ends_once(tmp_path):
+    from macf.pd.broker import ReplayResponder
+    log = tmp_path / "events.jsonl"
+    for n in range(40):
+        append(log, "pd_unit_state", unit=f"u{n:02d}")
+    stream = stream_over(log)
+    sent = []
+    r = ReplayResponder(stream, sent.append, grants={READER: ["*"]})
+    body = json.dumps({"position": {"log": stream.identity, "offset": 0}, "sources": ["*"]}).encode()
+    assert r.request(READER, body) == 0
+    line = len((log.read_text().splitlines()[0] + "\n").encode())
+    passes = 0
+    while r.in_flight:
+        before = len(sent)
+        r.pump(max_bytes=5 * line)
+        passes += 1
+        assert len(sent) - before <= 6, "a pass reads at most its chunk: five records, and done at the end"
+    bodies = replayed(sent)
+    assert passes == 8
+    assert [b["record"]["data"]["unit"] for b in bodies[:-1]] == [f"u{n:02d}" for n in range(40)]
+    assert [b["type"] for b in bodies].count("done") == 1 and bodies[-1]["type"] == "done"
+
+
+def test_a_readers_newer_request_replaces_its_older_one_and_a_bad_one_is_refused(tmp_path):
+    from macf.pd.broker import ReplayResponder
+    log = tmp_path / "events.jsonl"
+    for n in range(10):
+        append(log, "pd_unit_state", unit=f"u{n}")
+    stream = stream_over(log)
+    sent = []
+    r = ReplayResponder(stream, sent.append, grants={READER: ["*"]})
+    old = json.dumps({"position": {"log": stream.identity, "offset": 0}, "sources": ["*"]}).encode()
+    r.request(READER, old)
+    r.pump(max_bytes=1)                             # one record of the old replay goes out
+    newer = json.dumps({"position": stream.position(), "sources": ["*"]}).encode()
+    r.request(READER, newer)
+    assert len(r.in_flight) == 1, "one replay in flight per reader"
+    while r.in_flight:
+        r.pump()
+    assert [b["type"] for b in replayed(sent)] == ["record", "done"], "the newer request is the one answered"
+    sent.clear()
+    assert r.request(READER, b"not json") == 1
+    assert replayed(sent)[0]["type"] == "refused" and not r.in_flight
+
+
+def test_a_reader_declared_in_another_case_gets_the_same_topics(tmp_path):
+    from macf.pd.broker import ReplayResponder, replay_topics, topic_name
+    assert replay_topics(AGENT, READER) == replay_topics(AGENT.split("_")[0].upper() + "_1a2b3c", READER.lower())
+    assert source_topic(AGENT, "pd_unit_state") == source_topic(AGENT.lower(), "pd_unit_state")
+    log = tmp_path / "events.jsonl"
+    append(log, "pd_unit_state")
+    r = ReplayResponder(stream_over(log), lambda m: None, grants={READER.split("_")[0].upper() + "_7a8b9c": ["*"]})
+    assert r.reader_of(f"{topic_name(AGENT)}/replay/{READER.lower()}/request") == READER.lower()
+
+
+def test_the_daemon_and_its_link_use_one_loopback_address(tmp_path):
+    from macf.pd import broker_link
+    from macf.pd.broker import LISTEN, LOOPBACK
+    from macf.pd.interface import AssociationLink
+    assert LISTEN["loopback"] == LOOPBACK == "127.0.0.1"
+    assert AssociationLink(port=18831, certificate_authority_file="a", client_certificate_file="b",
+                           client_key_file="c").host == LOOPBACK
+    dialed = []
+
+    class Client:
+        def connect_async(self, host, port):
+            dialed.append(host)
+
+        def loop_start(self):
+            pass
+    log = tmp_path / "events.jsonl"
+    log.write_text("")
+    section = broker_link.BrokerSection(port=18830, certificate_authority_file="a", server_certificate_file="b",
+                                        server_key_file="c", client_certificate_file="d", client_key_file="e")
+    broker_link.BrokerLink(AGENT, log, section, {}, client=Client()).start()
+    assert dialed == [LOOPBACK]
+
+
+def test_a_broker_port_another_declaration_names_is_refused_naming_it(tmp_path):
+    from macf.pd.broker_link import declared_broker_ports, port_clash
+    mine, theirs, quiet = tmp_path / "mine", tmp_path / "theirs", tmp_path / "quiet"
+    for home, doc in ((mine, {"agent": AGENT, "broker": {"port": 18830}}),
+                      (theirs, {"agent": OTHER, "broker": {"port": 18830}}),
+                      (quiet, {"agent": READER})):
+        (home / ".maceff" / "pd").mkdir(parents=True)
+        (home / ".maceff" / "pd" / "declaration.json").write_text(json.dumps(doc))
+    others = declared_broker_ports(mine, homes=[mine, theirs, quiet, tmp_path / "absent"])
+    assert [(c, p) for c, _w, p in others] == [(OTHER, 18830)]
+    why = port_clash(AGENT, 18830, others)
+    assert OTHER in why and "18830" in why and str(theirs) in why
+    assert port_clash(AGENT, 18831, others) is None
+    assert port_clash(OTHER.lower(), 18830, others) is None, "its own declaration, in another case, is no clash"
+
+
+def test_macos_local_network_block_is_named_not_read_as_an_outage():
+    import errno
+    from macf.pd.broker_link import unreachable_reason
+    blocked = OSError(errno.EHOSTUNREACH, "No route to host")
+    assert "Local Network" in unreachable_reason("192.0.2.1", 18831, blocked, platform="darwin")
+    assert "Local Network" not in unreachable_reason("192.0.2.1", 18831, blocked, platform="linux")
+    refused = OSError(errno.ECONNREFUSED, "Connection refused")
+    assert unreachable_reason("192.0.2.1", 18831, refused, platform="darwin").endswith("Connection refused")
+
+
+def test_the_export_link_records_each_change_of_reason_once(tmp_path):
+    import errno
+    from macf.pd.broker_link import ExportLink
+    from macf.pd.interface import AssociationLink
+
+    class Client:
+        def publish(self, *a, **k):
+            raise AssertionError("nothing is exported while unreachable")
+    link = AssociationLink(host="192.0.2.1", port=18831, certificate_authority_file="a",
+                           client_certificate_file="b", client_key_file="c", exports=["zone_*"])
+    seen = []
+    log = tmp_path / "events.jsonl"
+    log.write_text("")
+    e = ExportLink(AGENT, log, link, {}, client=Client(), on_unreachable=seen.append,
+                   prober=lambda h, p: OSError(errno.EHOSTUNREACH, "No route to host"))
+    e._on_connect_fail(None, None)
+    e.tick()
+    e.tick()
+    e._on_connect_fail(None, None)
+    e.tick()
+    assert len(seen) == 1 and "192.0.2.1:18831" in seen[0]
+    e.reason = None                                # what a later connect does
+    e.tick()
+    assert seen[-1] is None and len(seen) == 2
+
+
+def test_a_declaration_naming_a_broker_needs_the_mqtt_client(monkeypatch):
+    import importlib.util
+    from pydantic import ValidationError
+    from macf.pd.interface import Declaration
+    real = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a: None if name == "paho" else real(name, *a))
+    broker = {"port": 18830, "certificate_authority_file": "a", "server_certificate_file": "b",
+              "server_key_file": "c", "client_certificate_file": "d", "client_key_file": "e"}
+    with pytest.raises(ValidationError, match=r"macf\[broker\]"):
+        Declaration.model_validate({"version": 1, "agent": AGENT, "broker": broker})
+    Declaration.model_validate({"version": 1, "agent": AGENT})      # no broker, nothing needed
 
 
 # --- the declaration's broker section -----------------------------------------------------------

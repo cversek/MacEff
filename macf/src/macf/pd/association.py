@@ -4,7 +4,8 @@ A member exports what its declaration chooses to its association's broker, under
 ``members/<card>/``, and never content. The association reads every member's subtree, compares the
 members it declares with the members present, and reports the difference. Members can't write as
 a sibling or read one: the broker's access rules give each member ``write members/<card>/#`` and
-nothing else (``broker.render_acl``).
+nothing else (``broker.render_access_rules``). A card in a topic is lowercased (``broker.topic_name``),
+and the association compares members by the card, ignoring case (MIS-0002-R164).
 
 Presence is MQTT's own. A member publishes ``online``, retained, when it connects, and registers
 ``offline`` as its will, which the broker publishes when the connection dies uncleanly. Before a
@@ -27,7 +28,7 @@ DEFAULT_EXPORTS = ("pd_unit_state", "pd_carried")
 
 
 def member_topic(card: str, rest: str) -> str:
-    return f"members/{card}/{rest}"
+    return f"members/{b.topic_name(card)}/{rest}"
 
 
 def presence_topic(card: str) -> str:
@@ -106,7 +107,7 @@ class MembershipView:
         parts = topic.split("/")
         if len(parts) < 3 or parts[0] != "members":
             return
-        card = parts[1]
+        card = parts[1].lower()                 # topics carry the card lowercased already
         state = self.members.setdefault(card, MemberState())
         if parts[2] == "presence":
             state.present = payload == b"online"
@@ -115,16 +116,20 @@ class MembershipView:
 
     def findings(self, now: float) -> List[str]:
         """Each difference between the members declared and the members present, one line each,
-        for the association's own log and the outside watch's alert path."""
+        for the association's own log and the outside watch's alert path. A declared member is
+        named as declared; one present but not declared, as its topic spells it."""
         out = []
+        declared = set()
         for card in self.expected:
-            s = self.members.get(card)
+            key = card.lower()
+            declared.add(key)
+            s = self.members.get(key)
             if s is None:
                 out.append(f"{card}: declared, never present")
             elif not s.present:
                 out.append(f"{card}: offline")
             elif s.last_export is not None and now - s.last_export > self.silent_after_s:
                 out.append(f"{card}: present but silent for {now - s.last_export:.0f} s")
-        for card in sorted(set(self.members) - set(self.expected)):
+        for card in sorted(set(self.members) - declared):
             out.append(f"{card}: present but not declared")
         return out

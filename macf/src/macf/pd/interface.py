@@ -397,7 +397,9 @@ class AssociationLink(_Closed):
     """Where this daemon exports, and what (PROTOTYPE, mission B phase B3): its association's
     broker, its own client certificate there, and the sources it exports, as summaries only."""
 
-    host: str = Field(default="localhost", min_length=1)
+    #: The association's broker. The default is the loopback address a broker binds, never
+    #: ``localhost``, which resolves to ``::1`` first on some systems (``broker.LOOPBACK``).
+    host: str = Field(default="127.0.0.1", min_length=1)
     port: int = Field(ge=1024, le=65535)
     certificate_authority_file: str = Field(min_length=1)
     client_certificate_file: str = Field(min_length=1)
@@ -485,6 +487,18 @@ class Declaration(_Closed):
             raise ValueError("an agent's daemon admits no members; only a system or fleet daemon is an association")
         if self.members and self.broker is None:
             raise ValueError("members join through the association's broker; declare broker as well")
+        return self
+
+    @model_validator(mode="after")
+    def _a_broker_needs_its_client_installed(self) -> "Declaration":
+        """A declaration naming a broker or an association is refused at load when the MQTT
+        client isn't installed, naming the extra, rather than failing later at an import."""
+        if self.broker is None and self.association is None:
+            return self
+        import importlib.util
+        if importlib.util.find_spec("paho") is None:
+            raise ValueError("this declaration names a broker or an association, which needs the MQTT "
+                             "client: install macf with its broker extra, pip install 'macf[broker]'")
         return self
     operator_uid: Optional[int] = Field(default=None, ge=0)
 

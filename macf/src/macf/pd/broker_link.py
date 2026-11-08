@@ -9,15 +9,20 @@ requests. Nothing here blocks the loop (MIS-0002-R153):
 - the publisher has its own log follower, so it never races the socket stream's offsets;
 - a publish hands the message to the MQTT client's queue and returns, and a refusal (not
   connected, queue full) leaves the record pending for the next pass;
-- replay requests arrive on the client's network thread and are only queued there, then
-  answered on the daemon's thread, where the log is read.
+- replay requests arrive on the client's network thread and are only queued there, one slot
+  per granted reader, then answered on the daemon's thread in bounded passes, where the log is
+  read (``broker.ReplayResponder``).
 """
 import collections
+import errno
+import socket
+import sys
 import threading
 import time
 from pathlib import Path
 from typing import Callable, Deque, Dict, List, Optional, Sequence, Tuple
 
+from macf import calling_card
 from macf.pd import association as assoc
 from macf.pd import broker as b
 from macf.pd.interface import AssociationLink, BrokerSection
@@ -30,6 +35,53 @@ RECONNECT_MAX_S = 30
 def resolve(path: str, placeholders: Dict[str, str]) -> str:
     """A declared path with the declaration's placeholders filled in."""
     return path.format_map(placeholders)
+
+
+def port_clash(card: str, port: int, others) -> Optional[str]:
+    """Why *card*'s broker port can't be used: another declaration names the same port. Every
+    daemon's broker binds the one loopback address, so two daemons naming a port means the
+    second broker can't bind, and its link would reach the first daemon's broker, which refuses
+    its certificate: it would read as "unreachable" with nothing naming the cause. *others* is
+    ``(card, where, port)`` for each other declaration read."""
+    for other, where, other_port in others:
+        if other_port == port and not calling_card.same(other, card):
+            return (f"the broker port {port} is already named by {other}'s declaration ({where}); "
+                    f"each daemon on a host needs its own broker port")
+    return None
+
+
+def declared_broker_ports(own_home: Path, homes: Optional[Sequence[Path]] = None):
+    """``(card, where, port)`` for each other declaration on this host that names a broker and
+    that this account can read: the deployment's declared daemons and the homes under /home. A
+    declaration this account can't read is skipped; its daemon's own start makes the same check."""
+    import json
+    from macf.pd import shared_view
+    from macf.pd.names import declaration_path
+    if homes is None:
+        candidates = [h for h in shared_view.declared_homes() if isinstance(h, Path)]
+        try:
+            candidates += sorted(p for p in shared_view.HOMES.iterdir())
+        except OSError:
+            pass  # noqa: MACEFF003 - no /home listing: only the declared daemons are checked
+    else:
+        candidates = list(homes)
+    own = Path(own_home).resolve()
+    out, seen = [], set()
+    for home in candidates:
+        try:
+            if Path(home).resolve() == own:
+                continue
+            path = declaration_path(Path(home))
+            if path in seen:
+                continue
+            seen.add(path)
+            doc = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue  # noqa: MACEFF003 - unreadable or absent: that daemon's start checks for itself
+        broker = doc.get("broker") if isinstance(doc, dict) else None
+        if isinstance(broker, dict) and isinstance(broker.get("port"), int):
+            out.append((str(doc.get("agent", "?")), str(path), broker["port"]))
+    return out
 
 
 def render_files(card: str, section: BrokerSection, runtime: Path, placeholders: Dict[str, str],
@@ -86,7 +138,8 @@ class BrokerLink:
         publish = nowait_publish(self.client)
         self.publisher = b.Publisher(self.stream, publish)
         self.responder = b.ReplayResponder(self.stream, publish, section.readers)
-        self.requests: Deque[Tuple[str, bytes]] = collections.deque(maxlen=100)
+        #: The newest request of each granted reader not yet taken; a newer one replaces it.
+        self.requests: Dict[str, bytes] = {}
         self._lock = threading.Lock()
         self.client.on_message = self._on_message
         self.client.on_connect = self._on_connect
@@ -103,7 +156,7 @@ class BrokerLink:
         return c
 
     def _on_connect(self, client, _userdata, _flags, _reason, _props=None) -> None:
-        client.subscribe(f"{self.card}/replay/+/request", qos=1)
+        client.subscribe(f"{b.topic_name(self.card)}/replay/+/request", qos=1)
         if self.view is not None:
             client.subscribe("members/#", qos=1)
 
@@ -111,8 +164,10 @@ class BrokerLink:
         with self._lock:                       # the network thread only queues
             if message.topic.startswith("members/"):
                 self.member_messages.append((message.topic, bytes(message.payload)))
-            else:
-                self.requests.append((message.topic, bytes(message.payload)))
+                return
+            reader = self.responder.reader_of(message.topic)
+            if reader is not None:
+                self.requests[reader] = bytes(message.payload)
 
     def _members_tick(self, now: float) -> None:
         with self._lock:
@@ -126,18 +181,20 @@ class BrokerLink:
                 self.on_findings(findings)
 
     def start(self) -> None:
-        self.client.connect_async("localhost", self.section.port)
+        self.client.connect_async(b.LOOPBACK, self.section.port)
         self.client.loop_start()
 
     def tick(self) -> int:
-        """One pass on the daemon's thread: answer queued replays, publish what the log gained.
-        A failure is kept in ``last_error`` and the records stay pending; it never raises."""
+        """One pass on the daemon's thread: take queued replay requests, answer each replay in
+        flight for one bounded chunk, publish what the log gained. A failure is kept in
+        ``last_error`` and the records stay pending; it never raises."""
         sent = 0
         with self._lock:
-            requests, self.requests = list(self.requests), collections.deque(maxlen=100)
+            requests, self.requests = self.requests, {}
         try:
-            for topic, payload in requests:
-                sent += self.responder.handle(topic, payload)
+            for reader, payload in requests.items():
+                sent += self.responder.request(reader, payload)
+            sent += self.responder.pump()
             sent += self.publisher.pump()
             self.last_error = None
         except (ConnectionError, OSError) as e:
@@ -151,18 +208,58 @@ class BrokerLink:
         self.client.disconnect()
 
 
+#: What a person must grant when macOS blocks a process from the local network.
+MACOS_LOCAL_NETWORK_GRANT = ("macOS Local Network privacy blocks this process from the LAN: a person "
+                             "must grant it at the console, under System Settings > Privacy & Security > "
+                             "Local Network. A LaunchAgent can't answer that prompt, so it waits until then")
+
+
+def unreachable_reason(host: str, port: int, error: OSError, platform: str = sys.platform) -> str:
+    """Why a connection to an association's broker failed, in words that name the cause. On
+    macOS, EHOSTUNREACH to a LAN address is the Local Network privacy block, not an outage, and
+    retrying won't clear it."""
+    if platform == "darwin" and error.errno == errno.EHOSTUNREACH:
+        return f"cannot reach {host}:{port}: {MACOS_LOCAL_NETWORK_GRANT}"
+    return f"cannot reach {host}:{port}: {error.strerror or error}"
+
+
+def probe(host: str, port: int, timeout: float = 2.0) -> Optional[OSError]:
+    """The error a plain TCP connection to *host*:*port* meets, or None when it connects."""
+    try:
+        socket.create_connection((host, port), timeout=timeout).close()
+    except OSError as e:
+        return e
+    return None
+
+
 class ExportLink:
     """A member daemon's link to its association's broker: its presence (retained ``online``,
-    with ``offline`` as its will) and its exports, summaries only, through ``Exporter``."""
+    with ``offline`` as its will) and its exports, summaries only, through ``Exporter``.
+
+    When the connection fails, the client's network thread probes once to learn why and keeps
+    the reason; the next pass on the daemon's thread hands each change of reason (or its clearing,
+    as None) to ``on_unreachable`` once, so the daemon records the cause instead of a silence the
+    association would read as "never present"."""
 
     def __init__(self, card: str, log_path: Path, link: AssociationLink, placeholders: Dict[str, str],
-                 *, client=None):
+                 *, client=None, on_unreachable: Optional[Callable[[Optional[str]], None]] = None,
+                 prober: Callable[[str, int], Optional[OSError]] = probe):
         self.card, self.link = card, link
         self.client = client if client is not None else self._client(card, link, placeholders)
         self.exporter = assoc.Exporter(card, EventStream(card, log_path), nowait_publish(self.client),
                                        link.exports)
         self.client.on_connect = self._on_connect
+        self.client.on_connect_fail = self._on_connect_fail
+        self.on_unreachable = on_unreachable
+        self.prober = prober
+        self.reason: Optional[str] = None           # written on the network thread
+        self.reported: Optional[str] = None
         self.last_error: Optional[str] = None
+
+    def _on_connect_fail(self, _client, _userdata) -> None:
+        error = self.prober(self.link.host, self.link.port)
+        self.reason = (unreachable_reason(self.link.host, self.link.port, error) if error is not None
+                       else f"cannot connect to {self.link.host}:{self.link.port}: the broker refused the session")
 
     @staticmethod
     def _client(card: str, link: AssociationLink, placeholders: Dict[str, str]):
@@ -176,6 +273,7 @@ class ExportLink:
         return c
 
     def _on_connect(self, client, _userdata, _flags, _reason, _props=None) -> None:
+        self.reason = None
         client.publish(assoc.presence_topic(self.card), b"online", qos=1, retain=True)
 
     def start(self) -> None:
@@ -183,6 +281,11 @@ class ExportLink:
         self.client.loop_start()
 
     def tick(self) -> int:
+        reason = self.reason
+        if reason != self.reported:
+            self.reported = reason
+            if self.on_unreachable is not None:
+                self.on_unreachable(reason)
         try:
             sent = self.exporter.pump()
             self.last_error = None

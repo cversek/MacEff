@@ -33,12 +33,20 @@ def openssl(*args, cwd):
     subprocess.run(["openssl", *args], cwd=cwd, check=True, capture_output=True)
 
 
-def issue(ca: Path, name: str) -> tuple:
+#: The server certificate's names: the loopback address every local link dials, as an IP name.
+SERVER_NAMES = "subjectAltName=IP:127.0.0.1,DNS:localhost\n"
+
+
+def issue(ca: Path, name: str, extensions: str = "") -> tuple:
     key, csr, crt = ca / f"{name}.key", ca / f"{name}.csr", ca / f"{name}.crt"
     openssl("req", "-newkey", "rsa:2048", "-nodes", "-keyout", key.name, "-out", csr.name,
             "-subj", f"/CN={name}", cwd=ca)
+    extra = []
+    if extensions:
+        (ca / f"{name}.ext").write_text(extensions)
+        extra = ["-extfile", f"{name}.ext"]
     openssl("x509", "-req", "-in", csr.name, "-CA", "ca.crt", "-CAkey", "ca.key", "-CAcreateserial",
-            "-days", "1", "-out", crt.name, cwd=ca)
+            "-days", "1", "-out", crt.name, *extra, cwd=ca)
     return str(crt), str(key)
 
 
@@ -54,7 +62,7 @@ def broker(tmp_path_factory):
     openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.crt",
             "-days", "1", "-subj", "/CN=scratch-ca", cwd=d)
     certs = {n: issue(d, cert_name(n)) for n in (AGENT, READER, SECOND, STRANGER)}
-    certs["server"] = issue(d, "localhost")
+    certs["server"] = issue(d, "localhost", SERVER_NAMES)
     (d / "access_rules").write_text(render_access_rules(AGENT, readers={READER: ["pd_unit_state"], SECOND: ["pd_unit_state"]}))
     port = free_port()
     conf = render_conf(port=port, listen="loopback", certificate_authority_file=str(d / "ca.crt"), certificate_file=certs["server"][0],
@@ -84,7 +92,7 @@ def connected(broker, who):
     c = client(broker, who)
     got = []
     c.on_message = lambda _c, _u, m: got.append(m)
-    c.connect("localhost", broker["port"])
+    c.connect("127.0.0.1", broker["port"])
     c.loop_start()
     return c, got
 
@@ -96,7 +104,7 @@ def settle(seconds=0.5):
 def test_a_client_with_no_certificate_is_refused(broker):
     c = client(broker)
     with pytest.raises(Exception):
-        c.connect("localhost", broker["port"])
+        c.connect("127.0.0.1", broker["port"])
         c.loop_start()
         settle()
         assert c.is_connected(), "connected without a certificate"
@@ -107,7 +115,7 @@ def test_the_daemon_publishes_and_only_a_granted_reader_receives(broker, tmp_pat
     reader, got = connected(broker, READER)
     stranger, strange = connected(broker, STRANGER)
     for c in (reader, stranger):
-        c.subscribe(f"{AGENT}/events/#", qos=1)
+        c.subscribe(f"{AGENT.lower()}/events/#", qos=1)
     settle()
     log = tmp_path / "events.jsonl"
     log.write_text("")
@@ -118,7 +126,7 @@ def test_the_daemon_publishes_and_only_a_granted_reader_receives(broker, tmp_pat
         f.write(json.dumps({"event": "zone_contact", "timestamp": 1.0, "data": {}}) + "\n")
     assert pub.pump() == 2
     settle()
-    assert [m.topic for m in got] == [f"{AGENT}/events/pd/unit/state"], "only the granted source"
+    assert [m.topic for m in got] == [f"{AGENT.lower()}/events/pd/unit/state"], "only the granted source"
     assert strange == [], "a certificate the declaration doesn't name reads nothing"
     for c in (reader, stranger, daemon):
         c.loop_stop()
@@ -166,9 +174,9 @@ def test_a_reader_that_reconnects_catches_up_from_the_log_with_no_gap_or_duplica
             else:
                 catch.live(m.payload)
         c.on_message = on_message
-        c.connect("localhost", broker["port"])
+        c.connect("127.0.0.1", broker["port"])
         c.loop_start()
-        c.subscribe([(f"{AGENT}/events/pd/unit/state", 1), (replay_topics(AGENT, READER)["records"], 1)])
+        c.subscribe([(f"{AGENT.lower()}/events/pd/unit/state", 1), (replay_topics(AGENT, READER)["records"], 1)])
         settle()
         req = catch.request(["pd_unit_state"])
         if req is not None:
@@ -212,7 +220,7 @@ def test_the_daemons_link_publishes_and_answers_a_replay_from_its_own_loop(broke
     link = BrokerLink(AGENT, log, section, {}, client=client(broker, AGENT))
     link.start()
     reader, got = connected(broker, READER)
-    reader.subscribe([(f"{AGENT}/events/#", 1), (replay_topics(AGENT, READER)["records"], 1)])
+    reader.subscribe([(f"{AGENT.lower()}/events/#", 1), (replay_topics(AGENT, READER)["records"], 1)])
     settle(1.0)
     with open(log, "a") as f:
         f.write(json.dumps({"event": "pd_unit_state", "timestamp": 1.0, "data": {"n": 1}}) + "\n")

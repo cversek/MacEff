@@ -28,18 +28,30 @@ def test_an_export_carries_no_content_even_when_the_record_does():
 def test_only_declared_sources_are_exported_on_the_members_own_subtree():
     assert export_message(M1, record("zone_contact", address="example"), ["pd_unit_*"]) is None
     m = export_message(M1, record("pd_unit_state", unit="s", state="running"), ["pd_unit_*"])
-    assert m.topic == f"members/{M1}/events/pd/unit/state"
+    assert m.topic == f"members/{M1.lower()}/events/pd/unit/state"
 
 
 def test_the_association_reports_each_difference_between_declared_and_present():
     v = MembershipView(expected=[M1, M2], silent_after_s=60)
     v.observe(presence_topic(M1), b"online", now=0)
-    v.observe(f"members/{M1}/events/pd/unit/state", b"{}", now=0)
+    v.observe(f"members/{M1.lower()}/events/pd/unit/state", b"{}", now=0)
     v.observe(presence_topic("Stray_000000"), b"online", now=0)
-    assert v.findings(now=10) == [f"{M2}: declared, never present", "Stray_000000: present but not declared"]
+    assert v.findings(now=10) == [f"{M2}: declared, never present", "stray_000000: present but not declared"]
     assert f"{M1}: present but silent for 100 s" in v.findings(now=100)
     v.observe(presence_topic(M1), b"offline", now=101)
     assert f"{M1}: offline" in v.findings(now=101)
+
+
+def test_a_member_declared_in_another_case_is_the_same_member():
+    """R164: two spellings of a card are one card. The member publishes under its own spelling,
+    the association declares another, and the broker's rule and the view still agree."""
+    from macf.pd.broker import render_access_rules
+    declared = M1.split("_")[0].upper() + "_" + M1.split("_")[1]
+    v = MembershipView(expected=[declared])
+    v.observe(presence_topic(M1), b"online", now=0)
+    assert v.findings(now=1) == []
+    rule = f"topic write {presence_topic(M1).rsplit('/', 1)[0]}/#"
+    assert rule in render_access_rules("SystemDaemon_0a1b2c", association=True, members=[declared])
 
 
 def test_only_a_system_or_fleet_daemon_with_a_broker_admits_members():

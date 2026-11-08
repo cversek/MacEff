@@ -14,7 +14,7 @@ from macf.pd.association import MembershipView, presence_topic  # noqa: E402
 from macf.pd.broker import cert_name, render_access_rules, render_conf  # noqa: E402
 
 sys.path.insert(0, __import__("os").path.dirname(__file__))
-from test_pd_broker_live import MOSQUITTO, free_port, issue, openssl, settle  # noqa: E402
+from test_pd_broker_live import MOSQUITTO, SERVER_NAMES, free_port, issue, openssl, settle  # noqa: E402
 
 import shutil  # noqa: E402
 
@@ -44,7 +44,7 @@ def make_broker(tmp_path_factory, head, members):
     openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.crt",
             "-days", "1", "-subj", "/CN=scratch-ca", cwd=d)
     certs = {n: issue(d, cert_name(n)) for n in [head] + list(members)}
-    certs["server"] = issue(d, "localhost")
+    certs["server"] = issue(d, "localhost", SERVER_NAMES)
     (d / "access_rules").write_text(render_access_rules(head, association=True, members=list(members)))
     port = free_port()
     conf = render_conf(port=port, listen="loopback", certificate_authority_file=str(d / "ca.crt"), certificate_file=certs["server"][0],
@@ -70,7 +70,7 @@ def client(a, who, will=None):
         c.will_set(*will, qos=1, retain=True)
     got = []
     c.on_message = lambda _c, _u, m: got.append(m)
-    c.connect("localhost", a["port"])
+    c.connect("127.0.0.1", a["port"])
     c.loop_start()
     return c, got
 
@@ -79,14 +79,14 @@ def test_a_member_writes_only_its_own_subtree_and_reads_no_sibling(assoc):
     sysd, seen = client(assoc, SYS)
     sysd.subscribe("members/#", qos=1)
     m2, m2_got = client(assoc, M2)
-    m2.subscribe(f"members/{M1}/#", qos=1)       # a sibling's subtree: refused by the rules
+    m2.subscribe(f"members/{M1.lower()}/#", qos=1)       # a sibling's subtree: refused by the rules
     settle()
     m1, _ = client(assoc, M1)
-    m1.publish(f"members/{M1}/events/pd/unit/state", b'{"ok":1}', qos=1).wait_for_publish(5)
-    m1.publish(f"members/{M2}/presence", b"offline", qos=1, retain=True)   # forging a sibling
+    m1.publish(f"members/{M1.lower()}/events/pd/unit/state", b'{"ok":1}', qos=1).wait_for_publish(5)
+    m1.publish(f"members/{M2.lower()}/presence", b"offline", qos=1, retain=True)   # forging a sibling
     settle()
     topics = [m.topic for m in seen]
-    assert topics == [f"members/{M1}/events/pd/unit/state"], "only its own subtree arrives"
+    assert topics == [f"members/{M1.lower()}/events/pd/unit/state"], "only its own subtree arrives"
     assert m2_got == [], "a member reads no sibling"
     for c in (sysd, m2, m1):
         c.loop_stop()
@@ -98,7 +98,7 @@ import sys, time, paho.mqtt.client as m
 c = m.Client(m.CallbackAPIVersion.VERSION2, protocol=m.MQTTv5)
 c.tls_set(ca_certs=sys.argv[1], certfile=sys.argv[2], keyfile=sys.argv[3])
 c.will_set(sys.argv[5], b"offline", qos=1, retain=True)
-c.connect("localhost", int(sys.argv[4]), keepalive=5)
+c.connect("127.0.0.1", int(sys.argv[4]), keepalive=5)
 c.loop_start()
 c.publish(sys.argv[5], b"online", qos=1, retain=True).wait_for_publish(5)
 time.sleep(60)
@@ -179,7 +179,7 @@ def test_the_daemons_links_export_and_report_membership_from_their_own_loops(lev
     assert findings[0][0] in (f"{M1}: declared, never present", f"{M1}: offline")
     assert findings[0][1:] == [f"{M2}: declared, never present"]
     assert findings[-1] == [f"{M2}: declared, never present"], "M1 is present and exporting"
-    assert sysd.view.members[M1].last_export is not None
+    assert sysd.view.members[M1.lower()].last_export is not None
     member.stop()                                  # a clean stop says offline itself
     run(1.5)
     assert findings[-1] == [f"{M1}: offline", f"{M2}: declared, never present"]
