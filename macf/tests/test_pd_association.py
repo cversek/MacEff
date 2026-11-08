@@ -112,3 +112,49 @@ def test_links_start_at_the_end_of_a_log_that_has_history(tmp_path):
     broker.tick()
     export.tick()
     assert len(own.sent) == 1 and len(up.sent) == 1, "what is appended after start does"
+
+
+def test_a_link_starts_with_each_units_current_state(tmp_path):
+    """MIS-0002 R182: a link starts at the log's end, so after a restart the association would
+    keep the member's unit states from before it until something changed. At each connect the
+    link sends one summary of every unit's current state, then follows the log; a declaration that
+    doesn't export unit states sends none."""
+    from macf.pd.broker_link import ExportLink
+    from macf.pd.interface import AssociationLink
+
+    class Client:
+        def __init__(self):
+            self.sent = []
+
+        def publish(self, topic, payload, qos=0, properties=None, retain=False):
+            self.sent.append((topic, json.loads(payload) if payload not in (b"online", b"offline") else payload))
+            return type("Info", (), {"rc": 0})()
+
+    log = tmp_path / "events.jsonl"
+    log.write_text("")
+    link = AssociationLink(port=18831, certificate_authority_file="a", client_certificate_file="d",
+                           client_key_file="e")
+    up = Client()
+    states = [("broker", "running"), ("worker", "failed")]
+    export = ExportLink(M1, log, link, {}, client=up, snapshot=lambda: list(states))
+    export.tick()
+    assert up.sent == [], "nothing before the link connects"
+    export._on_connect(up, None, None, None)
+    export.tick()
+    sent = [body for topic, body in up.sent if topic.endswith("/events/pd/unit/state")]
+    assert [(b["data"]["unit"], b["data"]["state"], b["snapshot"]) for b in sent] == [
+        ("broker", "running", True), ("worker", "failed", True)]
+    assert all(b["agent"] == M1 and set(b) == {"source", "agent", "time", "snapshot", "data"} for b in sent)
+    export.tick()
+    assert len([1 for topic, _ in up.sent if topic.endswith("/events/pd/unit/state")]) == 2, "once per connect"
+    states[1] = ("worker", "running")
+    export._on_connect(up, None, None, None)             # a reconnect sends the current states again
+    export.tick()
+    assert [b["data"]["state"] for t, b in up.sent if t.endswith("/events/pd/unit/state")][-2:] == ["running", "running"]
+
+    quiet = Client()
+    no_units = ExportLink(M1, log, link.model_copy(update={"exports": ["pd_carried"]}), {}, client=quiet,
+                          snapshot=lambda: list(states))
+    no_units._on_connect(quiet, None, None, None)
+    no_units.tick()
+    assert [t for t, _ in quiet.sent if "/events/" in t] == []

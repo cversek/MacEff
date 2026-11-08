@@ -35,7 +35,10 @@ jobs:
           cache-dependency-path: macf/pyproject.toml
 
       - name: Install package with test dependencies
-        run: pip install -e "./macf[test,proxy,amail,broker]"
+        run: pip install -e "./macf[test,proxy,amail]"
+
+      - name: Install mosquitto, the broker every daemon runs (persistent_layer 11.4)
+        run: brew install mosquitto
 
       - name: Create CI environment directories
         run: mkdir -p ~/.claude/projects
