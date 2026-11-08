@@ -103,3 +103,65 @@ def test_a_declaration_in_the_old_form_is_refused_and_history_still_reads(tmp_pa
     (pd_dir / "declaration.json").write_text(
         '{"version": 1, "agent": "exampleagent_0A1B2C", "units": []}')
     assert core.load_declaration(tmp_path, "ExampleAgent_0a1b2c").agent == "exampleagent_0A1B2C"
+
+
+def _home_declaration(tmp_path, agent):
+    pd_dir = tmp_path / ".maceff" / "pd"
+    pd_dir.mkdir(parents=True, exist_ok=True)
+    path = pd_dir / "declaration.json"
+    path.write_text('{"version": 1,  "agent": "%s", "units": []}\n' % agent)
+    return path
+
+
+def test_a_host_declaration_naming_its_own_card_the_old_way_is_cut_over_once(tmp_path, monkeypatch):
+    """A host daemon restarting onto this code would refuse its own declaration and stay down,
+    so the old form of THIS home's card is rewritten in place once, the original kept and the
+    rewrite recorded; then only the new form is read."""
+    from macf.pd import core
+    events = []
+    monkeypatch.setattr(core, "append_event", lambda event, data: events.append((event, data)))
+    path = _home_declaration(tmp_path, "ExampleAgent@0a1b2c")
+    original = path.read_text()
+    kept = core.cutover_declaration(tmp_path, "ExampleAgent_0a1b2c")
+    assert kept is not None and kept.read_text() == original
+    assert path.read_text() == original.replace("ExampleAgent@0a1b2c", "ExampleAgent_0a1b2c")
+    assert events == [("pd_declaration_rewritten", {
+        "agent": "ExampleAgent_0a1b2c", "from": "ExampleAgent@0a1b2c", "path": str(path),
+        "kept": str(kept), "reason": "MIS-0002-R165 cut-over"})]
+    assert core.load_declaration(tmp_path, "ExampleAgent_0a1b2c").agent == "ExampleAgent_0a1b2c"
+    assert core.cutover_declaration(tmp_path, "ExampleAgent_0a1b2c") is None
+    assert len(events) == 1 and kept.read_text() == original
+
+
+def test_another_agents_old_card_is_not_cut_over_and_stays_refused(tmp_path, monkeypatch):
+    from macf.pd import core
+    from macf.pd.core import DeclarationRefused
+    monkeypatch.setattr(core, "append_event", lambda *a: pytest.fail("nothing to record"))
+    path = _home_declaration(tmp_path, "OtherAgent@0a1b2c")
+    before = path.read_text()
+    assert core.cutover_declaration(tmp_path, "ExampleAgent_0a1b2c") is None
+    assert path.read_text() == before
+    assert not list(path.parent.glob("*" + core.CUTOVER_KEPT_SUFFIX))
+    with pytest.raises(DeclarationRefused, match="old calling-card form"):
+        core.load_declaration(tmp_path, "ExampleAgent_0a1b2c")
+
+
+def test_a_declaration_already_in_the_new_form_is_left_alone(tmp_path, monkeypatch):
+    from macf.pd import core
+    monkeypatch.setattr(core, "append_event", lambda *a: pytest.fail("nothing to record"))
+    path = _home_declaration(tmp_path, "ExampleAgent_0a1b2c")
+    before = path.read_text()
+    assert core.cutover_declaration(tmp_path, "ExampleAgent_0a1b2c") is None
+    assert path.read_text() == before
+
+
+def test_a_rendered_declaration_is_never_rewritten(tmp_path, monkeypatch):
+    """The deployment's rendered copy is out of the agent's reach and re-rendered in the new form
+    at start; the cut-over touches only the agent's own file."""
+    from macf.pd import core
+    rendered = tmp_path / "rendered.json"
+    rendered.write_text('{"version": 1, "agent": "ExampleAgent@0a1b2c", "units": []}')
+    monkeypatch.setattr(core, "declaration_path", lambda home: rendered)
+    monkeypatch.setattr(core, "append_event", lambda *a: pytest.fail("nothing to record"))
+    assert core.cutover_declaration(tmp_path, "ExampleAgent_0a1b2c") is None
+    assert "ExampleAgent@0a1b2c" in rendered.read_text()

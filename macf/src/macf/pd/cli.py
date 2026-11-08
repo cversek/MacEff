@@ -560,12 +560,16 @@ def daemon_macf(python: str, modules: Tuple[str, ...] = ("macf.pd",)) -> Tuple[O
 
 def cmd_pd_install(args: argparse.Namespace) -> int:
     from macf.pd import adapter as adapters
-    from macf.pd.core import POLICY_POINTER, DeclarationRefused, load_declaration
+    from macf.pd.core import POLICY_POINTER, DeclarationRefused, cutover_declaration, load_declaration
 
     from macf.pd import allowlist
 
     try:
         home, card = _this_agent()
+        kept = cutover_declaration(home, card)
+        if kept is not None:
+            print(f"maceff_pd: the declaration named {card} in the old form; rewritten in place, "
+                  f"the original kept at {kept} (MIS-0002-R165)")
         declaration = load_declaration(home, card)
         tier = adapters.adapter_for(sys.platform)
     except (DeclarationRefused, LookupError) as e:

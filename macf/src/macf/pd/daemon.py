@@ -24,7 +24,7 @@ from pydantic import ValidationError
 
 from macf.agent_events_log import append_event, read_events
 from macf.notify.session import descends_from, proc_start, verify_incarnation
-from macf.pd.core import POLICY_POINTER, Core, DeclarationRefused, load_declaration
+from macf.pd.core import POLICY_POINTER, Core, DeclarationRefused, cutover_declaration, load_declaration
 from macf.pd.interface import (
     EVENT_CHANNEL_DECLARED,
     EVENT_CONTROL,
@@ -141,6 +141,7 @@ class Daemon:
         check_socket_path(self.channel_path)
         check_socket_path(self.events_path)
         placeholders = {"agent_home": str(self.home), "card": self.card, "runtime_dir": str(self.base)}
+        cutover_declaration(self.home, self.card)    # once, before the old form is refused (R165)
         self.core = Core(load_declaration(self.home, self.card), self.card,
                          placeholders=placeholders, **core_options)
         #: The declared schedules and the agent's own entries, run by this daemon (MIS-0002 step

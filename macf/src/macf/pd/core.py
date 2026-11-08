@@ -134,6 +134,46 @@ class DeclarationRefused(ValueError):
     """The declaration cannot be used. Nothing is started: a refusal installs nothing."""
 
 
+#: Where a host declaration written before the card revision is kept when it is rewritten.
+CUTOVER_KEPT_SUFFIX = ".pre-card-underscore"
+
+
+def cutover_declaration(agent_home: Path, card: str) -> Optional[Path]:
+    """Rewrite a host declaration that names this home's own card in the old ``Name@shortid``
+    form, once, in place, before it is read; the path of the kept original, or None when
+    nothing was rewritten.
+
+    A host daemon that restarts onto code refusing the old form (MIS-0002-R165) would exit and
+    stay down, and its restart doesn't wait for a person to edit the file. Only the agent's own
+    file is rewritten, and only when its old card maps to this home's card (R166); a rendered
+    declaration is the deployment's, re-rendered in the new form at start. Every quoted
+    occurrence of the old card changes, schedule targets included. The result must validate, or
+    nothing is written. After it, only the new form is ever read."""
+    path = declaration_path(agent_home)
+    if path != Path(agent_home) / ".maceff" / "pd" / "declaration.json":
+        return None
+    try:
+        text = path.read_text()
+        old = json.loads(text).get("agent")
+    except (OSError, ValueError, AttributeError):
+        return None     # noqa: MACEFF003 - load_declaration refuses it with the reason
+    if not isinstance(old, str) or calling_card.from_history(old) == old:
+        return None     # noqa: MACEFF003 - already the current form, or no card: nothing to cut over
+    if not calling_card.same(calling_card.from_history(old), card):
+        return None     # noqa: MACEFF003 - another agent's card: load_declaration refuses it (R07)
+    rewritten = text.replace(json.dumps(old), json.dumps(card))
+    Declaration.model_validate_json(rewritten)
+    kept = path.with_name(path.name + CUTOVER_KEPT_SUFFIX)
+    if not kept.exists():
+        kept.write_text(text)
+    staged = path.with_name(path.name + ".rewriting")
+    staged.write_text(rewritten)
+    os.replace(staged, path)
+    append_event("pd_declaration_rewritten", {"agent": card, "from": old, "path": str(path),
+                                              "kept": str(kept), "reason": "MIS-0002-R165 cut-over"})
+    return kept
+
+
 def load_declaration(agent_home: Path, card: str) -> Declaration:
     """Read and validate the agent's declaration, or refuse it whole with the reason.
 
