@@ -1,32 +1,19 @@
-"""The event stream: every event the layer records, published to the subscribers that chose it.
+"""The event stream's source: the event log, followed, for the daemon's own MQTT broker.
 
-The primal daemon serves it on ``<agent>.events.sock`` (persistent_layer 11.4; MIS-0002 R150 to
-R156). The event log stays the only store: the stream follows the log, as the core does, and
-sends each new line to the subscribers whose sources it matches. Nothing new writes to it.
+Every daemon publishes its stream on its own broker (persistent_layer 11.4; MIS-0002 R150 to R156,
+``macf.pd.broker``). This module is the part that reads the log: it follows the log as the core
+does, renders each new line as a stream record, and answers a replay from a position. The log stays
+the only store; nothing here writes to it.
 
-The wire, one JSON object per line each way:
+A stream record is ``{"type": "record", "position", "source", "agent", "time", "origin", "record"}``.
+``position`` names the log (its inode and the digest of its first line) and the byte offset just past
+this record, which is a line boundary. ``source`` is the record's event name, ``agent`` the daemon's
+own card and ``time`` the log's timestamp, never fields of the record's data. ``origin`` is
+``daemon`` for a line this daemon's process appended (it learns the line as it writes it, and checks
+the bytes in the log are the very bytes it wrote) and ``log`` for every other line.
 
-- **hello**, the subscriber's one line, within ``HELLO_TIMEOUT_S`` of connecting:
-  ``{"sources": ["pd_entry_*", ...], "position": {"log": ..., "offset": N}, "name": "tray"}``.
-  ``position`` and ``name`` are optional. A position is the one the last record it saw carried.
-- **welcome**: ``{"type": "welcome", "agent", "position", "sources", "granted"}``, where
-  ``position`` is where the stream starts for it.
-- **record**: ``{"type": "record", "position", "source", "agent", "time", "origin", "record"}``.
-  ``position`` names the log (its inode and the digest of its first line) and the byte offset
-  just past this record, which is a line boundary; a subscriber that reconnects with it is
-  resumed from there. ``source`` is the record's event name, ``agent`` the daemon's own card and
-  ``time`` the log's timestamp, never fields of the record's data. ``origin`` is ``daemon`` for a
-  line this daemon's process appended (it learns the line as it writes it, and checks the bytes
-  in the log are the very bytes it wrote) and ``log`` for every other line.
-- **gap**: ``{"type": "gap", "agent", "time", "from", "to", "reason"}``: records between the two
-  positions may be missing. ``reason`` is ``rotated`` (the log was replaced past the position),
-  ``not_a_line_boundary`` (the position names no record of the log), ``backlog`` (a resume
-  further back than the stream reads at once), or ``overflow`` (the subscriber fell behind and
-  lost its queue).
-- **refused**: ``{"type": "refused", "error"}``, then the connection closes.
-
-Nothing here blocks the daemon's loop: every socket is non-blocking, each subscriber's queue is
-bounded, and a subscriber that falls behind loses its own backlog (MIS-0002-R153).
+The operator's rules (MIS-0002 R152) fold here too, and act in the daemon before anything is
+published: a silenced source isn't published, and the notifier reads the same rules for notices.
 """
 import collections
 import dataclasses
@@ -34,27 +21,16 @@ import fnmatch
 import hashlib
 import json
 import os
-import socket
 import sys
 import time
 from pathlib import Path
-from typing import Callable, Deque, Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import ValidationError
 
-from macf.pd.interface import (CHANNEL_SUBSCRIBER, EVENT_STREAM_RULE, STREAM_SUBSCRIBER_NAME, StreamGrant,
-                               StreamRule)
+from macf.pd.interface import EVENT_STREAM_RULE, StreamGrant, StreamRule
 from macf import calling_card
-from macf.utils.peercred import peer_credentials
 
-#: How long a new connection has to send its hello.
-HELLO_TIMEOUT_S = 3.0
-#: The longest hello read; anything longer is refused, not buffered.
-MAX_HELLO_BYTES = 16 * 1024
-#: Records held for one subscriber before it loses them and is owed a gap.
-QUEUE_MAX = 1000
-#: Connections, a hello pending included, that one uid may hold.
-MAX_PER_UID = 8
 #: The most of the log a resume reads at once; a position further back gets a gap to here.
 MAX_CATCHUP_BYTES = 8 * 1024 * 1024
 #: How much of the log's first line names it, with its inode.
@@ -97,27 +73,6 @@ def matches(source: str, patterns: Iterable[str]) -> bool:
     return any(fnmatch.fnmatchcase(source, p) for p in patterns)
 
 
-class Hello(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    class At(BaseModel):
-        model_config = ConfigDict(extra="forbid")
-        log: str = Field(min_length=1, max_length=200)
-        offset: int = Field(ge=0)
-
-    sources: List[str] = Field(min_length=1, max_length=64)
-    position: Optional[At] = None
-    name: Optional[str] = Field(default=None, pattern=STREAM_SUBSCRIBER_NAME)
-
-    @field_validator("name")
-    @classmethod
-    def _not_the_session(cls, name: Optional[str]) -> Optional[str]:
-        if name == CHANNEL_SUBSCRIBER:
-            raise ValueError(f"{CHANNEL_SUBSCRIBER!r} names the agent's own session in the rules "
-                             f"(@{CHANNEL_SUBSCRIBER}), not a subscriber of the stream")
-        return name
-
-
 class Rules:
     """The operator's rules in force: what the ``pd_stream_rule`` events fold to. The notifier
     reads the same rules, live, for the agent's session under the name ``channel``
@@ -149,40 +104,33 @@ class Rules:
         return self
 
     def delivers(self, source: str, name: Optional[str]) -> bool:
-        if name is not None and f"@{name}" in self.silenced:
+        """Whether *source* reaches the subscriber *name* (a broker reader's card, or ``channel``
+        for the session). Names compare without regard to case, as cards do (R164)."""
+        if name is not None and name.casefold() in self.silenced_subscribers():
             return False
-        if matches(source, (p for p in self.silenced if not p.startswith("@"))):
+        if self.source_silenced(source):
             return False
-        routed = [n for p, n in self.routes.items() if fnmatch.fnmatchcase(source, p)]
-        return not routed or name in routed
+        routed = self.routed_to(source)
+        return routed is None or (name is not None and name.casefold() in routed)
+
+    def source_silenced(self, source: str) -> bool:
+        return matches(source, (p for p in self.silenced if not p.startswith("@")))
+
+    def silenced_subscribers(self) -> List[str]:
+        """The subscribers silenced by name (``@name``), casefolded."""
+        return [p[1:].casefold() for p in self.silenced if p.startswith("@")]
+
+    def routed_to(self, source: str) -> Optional[List[str]]:
+        """The subscribers *source* is routed to, casefolded, or None where no route takes it."""
+        routed = sorted({n.casefold() for p, n in self.routes.items() if n and fnmatch.fnmatchcase(source, p)})
+        return routed or None
 
     def as_dict(self) -> dict:
         return {"silenced": list(self.silenced), "routes": dict(self.routes)}
 
 
-class Subscriber:
-    def __init__(self, conn: socket.socket, uid: int, granted: Optional[List[str]], deadline: float):
-        self.conn = conn
-        self.uid = uid
-        self.granted = granted          # None: every source (the agent's own uid)
-        self.deadline = deadline
-        self.hello = b""
-        self.live = False
-        self.name: Optional[str] = None
-        self.sources: List[str] = []
-        self.queue: Deque[Tuple[bytes, Optional[Position]]] = collections.deque()
-        self.out = b""
-        self.kept: Optional[Position] = None   # just past the last record it holds or was sent
-        self.gap_from: Optional[Position] = None
-        self.gap_reason = ""
-
-    def wants(self, source: str) -> bool:
-        return matches(source, self.sources) and (self.granted is None or matches(source, self.granted))
-
-
 class EventStream:
-    """One agent's event stream. ``bind``, then drive it from the daemon's loop: ``accept`` and
-    ``readable`` when the selector says so, and ``pump`` on every pass."""
+    """One daemon's log, followed: ``take`` what it gained, ``since`` a position for a replay."""
 
     def __init__(self, card: str, log_path: Path, grants: Iterable[StreamGrant] = (),
                  rules: Optional[Rules] = None, *, clock: Callable[[], float] = time.monotonic,
@@ -193,11 +141,6 @@ class EventStream:
         self.rules = rules or Rules()
         self._clock, self._wall = clock, wall
         self._own_uid = os.getuid() if own_uid is None else own_uid
-        self.listener: Optional[socket.socket] = None
-        self.subscribers: List[Subscriber] = []
-        #: Called with each connection to watch for reading, and to stop watching.
-        self.on_register: Optional[Callable[[socket.socket], None]] = None
-        self.on_unregister: Optional[Callable[[socket.socket], None]] = None
         self._own: "collections.OrderedDict[int, bytes]" = collections.OrderedDict()
         self._pending_own: List[Tuple[int, bytes]] = []
         self._ino: Optional[int] = None
@@ -360,7 +303,7 @@ class EventStream:
     def since(self, log: str, offset: int) -> Tuple[Optional[Tuple[Position, Position, str]], List[dict]]:
         """For a replay (R154 as amended): the gap owed before a resume from this position, if
         any, and the stream records from where the resume can start up to what the stream has
-        read, under the same rules a socket subscriber's resume follows."""
+        read."""
         self._settle_own()
         gap, read_from = self._resume_from(log, offset)
         if read_from is None:
@@ -385,130 +328,13 @@ class EventStream:
         return Chunk(gap=gap, records=records, next=self.position(reached), at_end=reached >= self.offset)
 
     def take(self) -> Tuple[List[dict], Optional[Tuple[Position, Position]]]:
-        """For a publisher that isn't a socket subscriber (the broker, MIS-0002 R150 to R156 as
+        """For the publisher (the daemon's broker, MIS-0002 R150 to R156 as
         amended): the records appended since the last call, as stream records, and the gap owed
         first when the log was replaced under them."""
         self._settle_own()
         lines, gap = self._follow()
         records = [r for r in (self._record(s, e, line) for s, e, line in lines) if r is not None]
         return records, gap
-
-    # ------------------------------------------------------------------ the socket
-
-    def bind(self, path: Path) -> socket.socket:
-        path.unlink(missing_ok=True)
-        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        listener.bind(str(path))
-        os.chmod(path, 0o600)
-        listener.listen(16)
-        listener.setblocking(False)
-        self.listener = listener
-        return listener
-
-    def accept(self) -> None:
-        try:
-            conn, _ = self.listener.accept()
-        except BlockingIOError:
-            return  # noqa: MACEFF003 - nothing was pending: a spurious wakeup, not a failure
-        conn.setblocking(False)
-        try:
-            # The one peer-credential helper: SO_PEERCRED on Linux, LOCAL_PEERCRED on macOS.
-            uid = peer_credentials(conn).uid
-        except OSError as e:
-            self._refuse(conn, f"the subscriber cannot be identified: {e}")
-            return
-        if uid == self._own_uid:
-            granted = None
-        elif uid in self.grants:
-            granted = self.grants[uid]
-        else:
-            self._refuse(conn, f"uid {uid} has no grant to {self.card}'s event stream; the operator "
-                               f"grants one in the declaration's stream_grants")
-            return
-        if sum(s.uid == uid for s in self.subscribers) >= MAX_PER_UID:
-            self._refuse(conn, f"uid {uid} already holds {MAX_PER_UID} connections to this stream")
-            return
-        sub = Subscriber(conn, uid, granted, self._clock() + HELLO_TIMEOUT_S)
-        self.subscribers.append(sub)
-        if self.on_register:
-            self.on_register(conn)
-
-    def _refuse(self, conn: socket.socket, why: str) -> None:
-        print(f"⚠️ MACF: pd: refused an event-stream subscriber: {why}", file=sys.stderr)
-        try:
-            conn.send(json.dumps({"type": "refused", "error": why}).encode() + b"\n")
-        except OSError:
-            pass  # noqa: MACEFF003 - the refusal is said on stderr; the peer may be gone
-        conn.close()
-
-    def _drop(self, sub: Subscriber, why: str = "") -> None:
-        if sub in self.subscribers:
-            self.subscribers.remove(sub)
-        if self.on_unregister:
-            try:
-                self.on_unregister(sub.conn)
-            except (KeyError, ValueError):
-                pass  # noqa: MACEFF003 - it was never watched
-        if why:
-            self._refuse(sub.conn, why)
-        else:
-            sub.conn.close()
-
-    def readable(self, conn: socket.socket) -> None:
-        sub = next((s for s in self.subscribers if s.conn is conn), None)
-        if sub is None:
-            return
-        try:
-            data = conn.recv(4096)
-        except BlockingIOError:
-            return  # noqa: MACEFF003 - a spurious wakeup, not a failure
-        except OSError:
-            data = b""
-        if not data:
-            self._drop(sub)
-            return
-        if sub.live:
-            self._drop(sub, "a subscriber sends one line, its hello, and nothing after it")
-            return
-        sub.hello += data
-        if b"\n" not in sub.hello:
-            if len(sub.hello) > MAX_HELLO_BYTES:
-                self._drop(sub, f"the hello is longer than {MAX_HELLO_BYTES} bytes")
-            return
-        line, rest = sub.hello.split(b"\n", 1)
-        if rest:
-            self._drop(sub, "a subscriber sends one line, its hello, and nothing after it")
-            return
-        try:
-            hello = Hello.model_validate_json(line)
-        except ValidationError as e:
-            self._drop(sub, f"the hello was refused: {e.errors()[0]['msg']}")
-            return
-        self._welcome(sub, hello)
-
-    def _welcome(self, sub: Subscriber, hello: Hello) -> None:
-        """Take the hello: a subscriber with no position takes what is recorded from now; one
-        with a position reads back to it, after a gap where it can't (MIS-0002-R154)."""
-        sub.live, sub.name, sub.sources, sub.hello = True, hello.name, list(hello.sources), b""
-        gap, read_from = None, None
-        if hello.position is not None:
-            gap, read_from = self._resume_from(hello.position.log, hello.position.offset)
-        start = self.position(read_from)
-        welcome = {"type": "welcome", "agent": self.card, "position": start, "sources": sub.sources,
-                   "granted": sub.granted if sub.granted is not None else ["*"]}
-        sub.queue.append((json.dumps(welcome).encode() + b"\n", None))
-        sub.kept = start if hello.position is None else {"log": hello.position.log,
-                                                         "offset": hello.position.offset}
-        if gap is not None:
-            sub.gap_from, sub.gap_reason = gap[0], gap[2]
-            self._emit_gap(sub, gap[1])
-            sub.kept = gap[1]
-        if read_from is None:
-            return
-        for start_at, end, line in self._read_lines(read_from, self.offset):
-            rendered = self._render(start_at, end, line)
-            if rendered is not None and self._for(sub, rendered[0]):
-                self._enqueue(sub, rendered[1], self.position(start_at), self.position(end))
 
     def _resume_from(self, log: str, offset: int):
         """Where a resume reads from, and the gap it is owed first, if any."""
@@ -546,92 +372,8 @@ class EventStream:
         nl = chunk.find(b"\n")
         return self.offset if nl < 0 else offset + nl + 1
 
-    # ------------------------------------------------------------------ delivery
-
-    def _for(self, sub: Subscriber, source: str) -> bool:
-        return sub.wants(source) and self.rules.delivers(source, sub.name)
-
-    def _emit_gap(self, sub: Subscriber, to: Position) -> None:
-        gap = {"type": "gap", "agent": self.card, "time": self._wall(), "from": sub.gap_from, "to": to,
-               "reason": sub.gap_reason}
-        sub.queue.append((json.dumps(gap).encode() + b"\n", None))
-        sub.gap_from, sub.gap_reason = None, ""
-
-    def _enqueue(self, sub: Subscriber, payload: bytes, start: Position, end: Position) -> None:
-        if sub.gap_from is None and len(sub.queue) >= QUEUE_MAX:
-            # It fell behind: it loses its own backlog, and its next record is a gap from the
-            # last record it still holds (MIS-0002-R153).
-            sub.queue.clear()
-            sub.gap_from, sub.gap_reason = sub.kept, "overflow"
-        if sub.gap_from is not None:
-            self._emit_gap(sub, start)
-        sub.queue.append((payload, end))
-
-    def _flush(self, sub: Subscriber) -> None:
-        while True:
-            if not sub.out:
-                if not sub.queue:
-                    return
-                sub.out, end = sub.queue.popleft()
-                if end is not None:
-                    sub.kept = end
-            try:
-                sent = sub.conn.send(sub.out)
-            except BlockingIOError:
-                return  # noqa: MACEFF003 - the socket is full: keep the record and try next pass (R153)
-            except OSError:
-                self._drop(sub)
-                return
-            sub.out = sub.out[sent:]
-
-    def pump(self) -> None:
-        """One pass: close hellos that are late, publish what was appended, send what is queued."""
-        now = self._clock()
-        for sub in [s for s in self.subscribers if not s.live and now > s.deadline]:
-            self._drop(sub, f"no hello within {HELLO_TIMEOUT_S:g} s")
-        self._settle_own()
-        lines, gap = self._follow()
-        live = [s for s in self.subscribers if s.live]
-        if gap is not None:
-            for sub in live:
-                sub.gap_from, sub.gap_reason = sub.gap_from or gap[0], "rotated"
-        for start, end, line in lines:
-            rendered = self._render(start, end, line)
-            if rendered is None:
-                continue
-            source, payload = rendered
-            for sub in live:
-                if self._for(sub, source):
-                    self._enqueue(sub, payload, self.position(start), self.position(end))
-        for sub in list(self.subscribers):
-            if sub.live:
-                self._flush(sub)
-
-    def close(self) -> None:
-        for sub in list(self.subscribers):
-            self._drop(sub)
-        if self.listener is not None:
-            self.listener.close()
-            self.listener = None
-
-
 def fold_rules(events: Iterable[dict], card: str) -> Rules:
     return Rules().fold(events, card)
 
 
-def subscribe(path: Path, sources: List[str], *, position: Optional[Position] = None,
-              name: Optional[str] = None, timeout: Optional[float] = None) -> socket.socket:
-    """Connect to an event stream and send the hello; the caller reads lines from the socket."""
-    conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    conn.settimeout(timeout)
-    conn.connect(str(path))
-    hello: dict = {"sources": sources}
-    if position is not None:
-        hello["position"] = position
-    if name is not None:
-        hello["name"] = name
-    conn.sendall(json.dumps(hello).encode() + b"\n")
-    return conn
-
-
-__all__ = ["EVENT_STREAM_RULE", "EventStream", "Rules", "fold_rules", "log_identity", "subscribe"]
+__all__ = ["EVENT_STREAM_RULE", "EventStream", "Rules", "fold_rules", "log_identity"]
