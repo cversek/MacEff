@@ -121,6 +121,14 @@ def add_pd_parser(sub) -> None:
     sub_p.add_argument("--position", default=None, metavar="LOG:OFFSET",
                        help="resume just after the record that carried this position")
     sub_p.add_argument("--name", default=None, help="the name this subscriber goes by, for silence and route")
+    sub_p.add_argument("--broker-port", type=int, default=None, metavar="PORT",
+                       help="read from the daemon's own MQTT broker on this loopback port instead of "
+                            "the socket (prototype); needs --ca, --cert, --key and --reader")
+    sub_p.add_argument("--ca", default=None, help="the CA certificate the broker's certificate is checked against")
+    sub_p.add_argument("--cert", default=None, help="this reader's client certificate")
+    sub_p.add_argument("--key", default=None, help="this reader's client key")
+    sub_p.add_argument("--reader", default=None, metavar="CARD",
+                       help="the card this reader's certificate names, for its replay topics")
     sub_p.set_defaults(func=cmd_pd_stream_subscribe)
     for act, helptext in (("silence", "stop delivering a source, or anything to a subscriber (@name); it still lands in the log"),
                           ("unsilence", "deliver a source or a subscriber (@name) again")):
@@ -163,6 +171,8 @@ def cmd_pd_stream_subscribe(args: argparse.Namespace) -> int:
             print("maceff_pd: --position is LOG:OFFSET, as a record's position names them", file=sys.stderr)
             return 1
         position = {"log": log, "offset": int(offset)}
+    if args.broker_port is not None:
+        return _subscribe_broker(args, card, position)
     try:
         conn = subscribe(events_socket(card), args.source or ["*"], position=position, name=args.name)
     except OSError as e:
@@ -178,6 +188,60 @@ def cmd_pd_stream_subscribe(args: argparse.Namespace) -> int:
         return 0
     finally:
         conn.close()
+    return 0
+
+
+def _subscribe_broker(args: argparse.Namespace, card: str, position) -> int:
+    """``pd stream subscribe`` over the daemon's own broker (prototype, mission B phase B2): the
+    same one-JSON-record-per-line output. A --position becomes a replay request, so the records
+    since it arrive first, each once, then the live stream."""
+    import json
+    import threading
+    missing = [f for f in ("ca", "cert", "key", "reader") if not getattr(args, f)]
+    if missing:
+        print(f"maceff_pd: --broker-port needs {', '.join('--' + m for m in missing)}", file=sys.stderr)
+        return 1
+    try:
+        import paho.mqtt.client as mqtt
+    except ImportError:
+        print("maceff_pd: reading the broker needs paho-mqtt installed", file=sys.stderr)
+        return 1
+    from macf.pd.broker import CatchUp, grant_filters, replay_topics
+    sources = args.source or ["*"]
+    filters = sorted({f for s in sources for f in (grant_filters(card, s, ()) if s != "*" else [f"{card}/events/#"])})
+    topics = replay_topics(card, args.reader)
+
+    def deliver(record) -> None:
+        sys.stdout.write(json.dumps(record) + "\n")
+        sys.stdout.flush()
+    catch = CatchUp(deliver)
+    catch.seen = position
+    c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv5)
+    c.tls_set(ca_certs=args.ca, certfile=args.cert, keyfile=args.key)
+    lock = threading.Lock()
+
+    def on_message(_c, _u, m) -> None:
+        with lock:
+            (catch.replayed if m.topic == topics["records"] else catch.live)(m.payload)
+
+    def on_connect(client, _u, _f, _r, _p=None) -> None:
+        client.subscribe([(f, 1) for f in filters] + [(topics["records"], 1)])
+        with lock:
+            request = catch.request(sources)
+        if request is not None:
+            client.publish(topics["request"], json.dumps(request), qos=1)
+    c.on_message, c.on_connect = on_message, on_connect
+    try:
+        c.connect("localhost", args.broker_port)
+    except OSError as e:
+        print(f"maceff_pd: {card}: the broker on port {args.broker_port} can't be reached: {e}", file=sys.stderr)
+        return 1
+    try:
+        c.loop_forever()
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        c.disconnect()
     return 0
 
 

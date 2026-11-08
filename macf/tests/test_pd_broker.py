@@ -349,3 +349,13 @@ def test_a_broker_section_with_a_low_port_or_a_bad_source_is_refused():
         BrokerSection(port=80, **base)
     with pytest.raises(ValidationError):
         BrokerSection(port=18830, readers={OTHER: ["#"]}, **base)
+
+
+def test_subscribe_over_the_broker_names_what_it_is_missing(capsys, monkeypatch):
+    import argparse
+    from macf.pd import cli
+    monkeypatch.setattr(cli, "_this_agent", lambda: (None, AGENT))
+    args = argparse.Namespace(position=None, broker_port=18830, ca="ca.crt", cert=None, key=None,
+                              reader=None, source=None, name=None)
+    assert cli.cmd_pd_stream_subscribe(args) == 1
+    assert "--cert, --key, --reader" in capsys.readouterr().err
