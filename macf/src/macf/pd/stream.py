@@ -331,6 +331,17 @@ class EventStream:
         out = self._record(start, end, line)
         return None if out is None else (out["source"], json.dumps(out).encode() + b"\n")
 
+    def since(self, log: str, offset: int) -> Tuple[Optional[Tuple[Position, Position, str]], List[dict]]:
+        """For a replay (R154 as amended): the gap owed before a resume from this position, if
+        any, and the stream records from where the resume can start up to what the stream has
+        read, under the same rules a socket subscriber's resume follows."""
+        self._settle_own()
+        gap, read_from = self._resume_from(log, offset)
+        if read_from is None:
+            return gap, []
+        lines = self._read_lines(read_from, self.offset)
+        return gap, [r for r in (self._record(s, e, line) for s, e, line in lines) if r is not None]
+
     def take(self) -> Tuple[List[dict], Optional[Tuple[Position, Position]]]:
         """For a publisher that isn't a socket subscriber (the broker, MIS-0002 R150 to R156 as
         amended): the records appended since the last call, as stream records, and the gap owed

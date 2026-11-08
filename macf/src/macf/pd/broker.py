@@ -116,6 +116,47 @@ class GapTracker:
         return seen is not None and previous != seen
 
 
+def replay_topics(card: str, reader: str) -> Dict[str, str]:
+    """The two topics of one reader's replay: the request it writes and the records only it reads."""
+    return {"request": f"{card}/replay/{reader}/request", "records": f"{card}/replay/{reader}/records"}
+
+
+def replay_messages(stream, reader: str, request: dict, granted: Optional[Sequence[str]]) -> List[Message]:
+    """The answer to one reader's replay request (R154 as amended): the records since the
+    position it names, of the sources it asks for and was granted, on its own records topic,
+    after a gap when some are gone, and ending with ``done`` at the position the live stream
+    continues from. ``granted`` None is the daemon's own reader, granted everything. A request
+    that can't be read gets a ``refused`` marker, so the reader is never left waiting."""
+    import fnmatch
+    import json
+    card = stream.card
+    topic = replay_topics(card, reader)["records"]
+
+    def marker(body: dict) -> Message:
+        return Message(topic=topic, payload=json.dumps(body, separators=(",", ":")).encode(), properties={})
+
+    at = request.get("position") if isinstance(request, dict) else None
+    sources = request.get("sources") if isinstance(request, dict) else None
+    if (not isinstance(at, dict) or not isinstance(at.get("log"), str) or not isinstance(at.get("offset"), int)
+            or isinstance(at.get("offset"), bool) or at["offset"] < 0
+            or not isinstance(sources, list) or not sources or not all(isinstance(s, str) for s in sources)):
+        return [marker({"type": "refused", "error": "a replay request names a position {log, offset} "
+                                                    "and a non-empty list of sources"})]
+
+    def wanted(source: str) -> bool:
+        return (any(fnmatch.fnmatchcase(source, s) for s in sources)
+                and (granted is None or any(fnmatch.fnmatchcase(source, g) for g in granted)))
+
+    gap, records = stream.since(at["log"], at["offset"])
+    out: List[Message] = []
+    if gap is not None:
+        out.append(marker({"type": "gap", "agent": card, "from": gap[0], "to": gap[1], "reason": gap[2]}))
+    out += [Message(topic=topic, payload=json.dumps(r, separators=(",", ":")).encode(), properties={})
+            for r in records if wanted(r["source"])]
+    out.append(marker({"type": "done", "agent": card, "position": stream.position()}))
+    return out
+
+
 #: The most records held for a publish that keeps failing before they are dropped for a gap.
 PENDING_MAX = 1000
 
@@ -204,6 +245,8 @@ def render_acl(card: str, *, members: Sequence[str] = (), association: bool = Fa
         lines = [f"user {cert_name(reader)}"]
         filters = sorted({f for s in sources for f in grant_filters(card, s, known_sources)})
         lines += [f"topic read {f}" for f in filters]
+        replay = replay_topics(card, reader)       # its own replay, and no other reader's
+        lines += [f"topic write {replay['request']}", f"topic read {replay['records']}"]
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks) + "\n"
 

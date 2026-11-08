@@ -38,7 +38,9 @@ def test_a_member_writes_only_its_own_subtree_and_reads_nothing():
 
 def test_a_reader_reads_only_the_sources_granted():
     users = _users(render_acl(AGENT, readers={OTHER: ["pd_unit_state", "pd_unit_state"]}))
-    assert users[cert_name(OTHER)] == [f"topic read {AGENT}/events/pd/unit/state"]
+    assert users[cert_name(OTHER)] == [f"topic read {AGENT}/events/pd/unit/state",
+                                       f"topic write {AGENT}/replay/{OTHER}/request",
+                                       f"topic read {AGENT}/replay/{OTHER}/records"]
     with pytest.raises(BrokerRefused, match="not a source name"):
         render_acl(AGENT, readers={OTHER: ["#"]})
 
@@ -227,3 +229,55 @@ def test_a_rotated_log_publishes_a_gap(tmp_path):
     topics = [t for t, _, _ in records(client)]
     assert topics == ["_gap", "zone/contact"]
     assert records(client)[0][1]["reason"] == "rotated"
+
+
+# --- replay from the log ----------------------------------------------------------------------
+
+
+def stream_over(log):
+    from macf.pd.stream import EventStream
+    return EventStream(AGENT, log)
+
+
+def replayed(messages):
+    return [json.loads(m.payload) for m in messages]
+
+
+def test_a_replay_sends_the_granted_records_since_the_position_then_done(tmp_path):
+    from macf.pd.broker import replay_messages, replay_topics
+    log = tmp_path / "events.jsonl"
+    append(log, "pd_unit_state", unit="seen")
+    seen_at = {"log": stream_over(log).identity, "offset": log.stat().st_size}
+    append(log, "pd_unit_state", unit="missed")
+    append(log, "zone_contact", n=1)              # asked for, not granted
+    append(log, "pd_entry_due", id="x")           # granted, not asked for
+    stream = stream_over(log)
+    out = replay_messages(stream, OTHER, {"position": seen_at, "sources": ["pd_unit_*", "zone_*"]},
+                          granted=["pd_unit_state", "pd_entry_due"])
+    assert {m.topic for m in out} == {replay_topics(AGENT, OTHER)["records"]}
+    bodies = replayed(out)
+    assert [b["record"]["data"] for b in bodies[:-1]] == [{"unit": "missed"}]
+    assert bodies[-1] == {"type": "done", "agent": AGENT, "position": stream.position()}
+
+
+def test_a_replay_from_a_rotated_log_starts_with_a_gap(tmp_path):
+    from macf.pd.broker import replay_messages
+    log = tmp_path / "events.jsonl"
+    append(log, "pd_unit_state", unit="a")
+    out = replayed(replay_messages(stream_over(log), OTHER,
+                                   {"position": {"log": "999-0000", "offset": 10}, "sources": ["*"]},
+                                   granted=None))
+    assert out[0]["type"] == "gap" and out[0]["reason"] == "rotated"
+    assert out[1]["record"]["data"] == {"unit": "a"} and out[-1]["type"] == "done"
+
+
+@pytest.mark.parametrize("request_", [{}, {"position": {"log": "L", "offset": -1}, "sources": ["*"]},
+                                      {"position": {"log": "L", "offset": 0}, "sources": []},
+                                      {"position": {"log": "L", "offset": True}, "sources": ["*"]},
+                                      "not a request"])
+def test_a_request_that_cant_be_read_is_refused_not_left_waiting(tmp_path, request_):
+    from macf.pd.broker import replay_messages
+    log = tmp_path / "events.jsonl"
+    append(log, "pd_unit_state")
+    (only,) = replayed(replay_messages(stream_over(log), OTHER, request_, granted=None))
+    assert only["type"] == "refused"
