@@ -157,6 +157,23 @@ def replay_messages(stream, reader: str, request: dict, granted: Optional[Sequen
     return out
 
 
+def paho_publish(client, *, timeout: float = 5.0):
+    """``Publisher``'s ``publish`` over a connected paho-mqtt client: QoS 1, MQTT 5 user
+    properties, and an exception unless the broker acknowledged the message within *timeout*,
+    so the record stays pending (the prototype waits per message; batching is later work)."""
+    from paho.mqtt.packettypes import PacketTypes
+    from paho.mqtt.properties import Properties
+
+    def publish(message: Message) -> None:
+        props = Properties(PacketTypes.PUBLISH)
+        props.UserProperty = list(message.properties.items())
+        info = client.publish(message.topic, message.payload, qos=1, properties=props)
+        info.wait_for_publish(timeout)
+        if not info.is_published():
+            raise ConnectionError(f"the broker didn't acknowledge {message.topic} within {timeout:g} s")
+    return publish
+
+
 #: The most records held for a publish that keeps failing before they are dropped for a gap.
 PENDING_MAX = 1000
 
