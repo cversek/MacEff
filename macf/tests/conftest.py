@@ -57,6 +57,18 @@ def _a_refused_daemon_exits_at_once_in_tests(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_test_daemon_reads_the_developers_login(monkeypatch):
+    """A daemon checks its account's Claude login from the stored credential's expiry dates
+    (#884). A test daemon runs as the developer, so it would read the developer's own credential,
+    or ask the macOS Keychain for it. Each test reads a login that ends far in the future instead;
+    test_pd_login.py tests the reading itself."""
+    import macf.pd.login as pd_login
+    monkeypatch.setattr(pd_login, "read_assessment",
+                        lambda now=None, reader=None: {"state": "ok", "refresh_expires_at": 4_000_000_000.0,
+                                                       "hours_left": None, "detail": "a test's login"})
+
+
+@pytest.fixture(autouse=True)
 def _no_test_reads_the_hosts_rendered_declarations(tmp_path, monkeypatch):
     """The root-rendered declarations live under /etc/maceff/pd on a host that runs a system
     daemon. A test that read them saw the host's real daemons, unreadable or extra, and failed there
@@ -557,6 +569,28 @@ def pytest_report_header(config):
             "(an error in CI, a warning elsewhere)")
 
 
+def _appended(log, before: int, after: int, limit: int = 5) -> str:
+    """The events a window appended to *log*, by name with their breadcrumbs, so a report of a
+    write names its writer even when the window's own module isn't it (#933). Event data is left
+    out: the log may hold an agent's own record."""
+    try:
+        with open(log, "rb") as fh:
+            fh.seek(before)
+            tail = fh.read(max(0, after - before))
+    except OSError as e:
+        return f"unreadable ({e.strerror})"
+    said = []
+    lines = tail.decode("utf-8", "replace").splitlines()
+    for line in lines[:limit]:
+        try:
+            rec = json.loads(line)
+            said.append(f"{rec.get('event')} at {rec.get('breadcrumb')}")
+        except (ValueError, AttributeError):
+            said.append(f"a line that isn't JSON ({len(line)} chars)")
+    more = len(lines) - limit
+    return "; ".join(said) + (f"; and {more} more" if more > 0 else "") if said else "nothing whole"
+
+
 @pytest.fixture(scope="module", autouse=True)
 def live_event_log_is_left_alone(request):
     """Fail the module whose tests or fixtures wrote to the environment's own event log.
@@ -588,11 +622,17 @@ def live_event_log_is_left_alone(request):
     if after == before:
         return
 
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
     detail = (
         f"{request.module.__name__} changed {log} from {before} to {after} bytes. "
         "That is the event log of the environment the suite runs in: in an "
         "agent's session it is that agent's own record, and its modes are read "
-        "from it, so no test may write there."
+        "from it, so no test may write there. "
+        f"What was appended: {_appended(log, before, after)}"
+        + (f" Under pytest-xdist ({worker}) every worker shares this one log, so the "
+           "writer may be a module running in another worker at the same time; the "
+           "appended events name it, the module named here may not (#933)."
+           if worker else "")
     )
     if os.environ.get("CI"):
         pytest.fail(detail, pytrace=False)
