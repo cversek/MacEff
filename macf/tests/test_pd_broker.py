@@ -661,7 +661,8 @@ def test_a_broker_left_by_a_killed_wrapper_is_ended_at_the_next_start(tmp_path):
     try:
         record_child(pidfile, orphan.pid)
         # A record whose start time doesn't match is a reused pid: it is left alone.
-        pid, start = pidfile.read_text().split()
+        pid, start = pidfile.read_text().split(None, 1)     # macOS writes the start time as words
+        start = start.strip()
         pidfile.write_text(f"{pid} 1\n")
         assert end_orphan(pidfile) is None and orphan.poll() is None
         pidfile.write_text(f"{pid} {start}\n")

@@ -64,12 +64,15 @@ def end_orphan(pidfile: Path, *, grace_s: float = 5.0) -> Optional[int]:
         return None  # noqa: MACEFF003 - no record, or an unreadable one: nothing to end
     if not verify_incarnation(pid, start.strip()):
         return None
-    os.kill(pid, signal.SIGTERM)
-    deadline = time.monotonic() + grace_s
-    while time.monotonic() < deadline and verify_incarnation(pid, start.strip()):
-        time.sleep(0.1)
-    if verify_incarnation(pid, start.strip()):
-        os.kill(pid, signal.SIGKILL)
+    try:
+        os.kill(pid, signal.SIGTERM)
+        deadline = time.monotonic() + grace_s
+        while time.monotonic() < deadline and verify_incarnation(pid, start.strip()):
+            time.sleep(0.1)
+        if verify_incarnation(pid, start.strip()):
+            os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass  # noqa: MACEFF003 - it ended on its own between the check and the signal, which is the goal
     print(f"⚠️ MACF: pd: ended the broker a previous wrapper left running (pid {pid})", file=sys.stderr)
     return pid
 
