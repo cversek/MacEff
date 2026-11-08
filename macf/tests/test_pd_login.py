@@ -64,7 +64,20 @@ def test_a_check_that_raises_records_unknown_and_the_daemon_goes_on(capsys):
         raise RuntimeError("boom")
     login.HostedLoginCheck("Resident_1a2b3c", lambda e, d: events.append(d), assess_now=broken,
                            clock=lambda: 0.0).tick()
-    assert events[0]["state"] == "unknown"
+    assert events[0]["state"] == "error"
+
+
+def test_several_keychain_logins_read_unknown_not_another_agents(monkeypatch):
+    """A shared macOS login holds one Keychain entry per agent under one service, and nothing
+    says which is this agent's: the verdict is unknown, never another agent's date."""
+    import macf.budget as budget
+    monkeypatch.setattr(login.sys, "platform", "darwin")
+    monkeypatch.setattr(budget, "keychain_accounts", lambda: ["agent_a", "agent_b"])
+    monkeypatch.setattr(budget, "read_credential", lambda: _cred(NOW - DAY))
+    verdict = login.read_assessment(now=NOW)
+    assert verdict["state"] == "unknown" and "several Keychain logins" in verdict["detail"]
+    monkeypatch.setattr(budget, "keychain_accounts", lambda: ["agent_a"])
+    assert login.read_assessment(now=NOW)["state"] == "expired", "one entry is this agent's own"
 
 
 def _event(ends):
@@ -83,8 +96,11 @@ def test_the_watch_judges_the_recorded_end_against_now():
     unknown = {"timestamp": NOW, "event": login.EVENT,
                "data": {"agent": "Resident_1a2b3c", "state": "unknown", "refresh_expires_at": None,
                         "detail": "no credential reachable"}}
-    assert watch.check_login("Resident_1a2b3c", unknown, NOW).verdict == "CHECK-FAILED", \
-        "unknown is never healthy"
+    assert watch.check_login("Resident_1a2b3c", unknown, NOW) is None, \
+        "a login with no date (an API key) is not a fault, and would page at every pass"
+    broken = {**unknown, "data": {**unknown["data"], "state": "error", "detail": "the check failed: OSError"}}
+    assert watch.check_login("Resident_1a2b3c", broken, NOW).verdict == "CHECK-FAILED", \
+        "a check that itself broke is said"
 
 
 def test_the_watch_finds_the_newest_login_event_of_this_agent(tmp_path):

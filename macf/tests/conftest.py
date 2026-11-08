@@ -63,9 +63,9 @@ def _no_test_daemon_reads_the_developers_login(monkeypatch):
     or ask the macOS Keychain for it. Each test reads a login that ends far in the future instead;
     test_pd_login.py tests the reading itself."""
     import macf.pd.login as pd_login
-    monkeypatch.setattr(pd_login, "read_assessment",
-                        lambda now=None, reader=None: {"state": "ok", "refresh_expires_at": 4_000_000_000.0,
-                                                       "hours_left": None, "detail": "a test's login"})
+    monkeypatch.setattr(pd_login, "daemon_assessment",
+                        lambda: {"state": "ok", "refresh_expires_at": 4_000_000_000.0,
+                                 "hours_left": None, "detail": "a test's login"})
 
 
 @pytest.fixture(autouse=True)
@@ -244,8 +244,30 @@ def isolated_events_log(tmp_path, monkeypatch):
 
     yield test_log
 
-    # Reset to default (production) path after test (monkeypatch auto-resets env vars)
-    set_log_path(None)
+    # Not back to the default: the default is the environment's own log. A daemon or core thread
+    # that outlives its test, finishing a stop after teardown, wrote its last pd_unit_state there
+    # under pytest-xdist's load (#933). Between tests, in-process writes go to the session's
+    # straggler log instead (the env var is restored by monkeypatch; subprocesses get it per test).
+    set_log_path(_straggler_log())
+
+
+_STRAGGLER_LOG = None
+
+
+def _straggler_log():
+    """One scratch log per test process, for in-process writes made outside any test (#933)."""
+    global _STRAGGLER_LOG
+    if _STRAGGLER_LOG is None:
+        _STRAGGLER_LOG = Path(tempfile.mkdtemp(prefix="macf-straggler-")) / "events.jsonl"
+    return _STRAGGLER_LOG
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _in_process_writes_outside_tests_go_to_a_scratch_log():
+    """Before the first test, too: a module-scoped fixture runs before any test's own log is set."""
+    from macf.agent_events_log import set_log_path
+    set_log_path(_straggler_log())
+    yield
 
 
 @pytest.fixture(autouse=True)

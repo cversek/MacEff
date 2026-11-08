@@ -29,7 +29,9 @@ POLL_S = 3600.0
 #: The longest the daemon goes without recording the verdict, changed or not.
 RECORD_EVERY_S = 86400.0
 
-STATES = ("ok", "expiring", "expired", "unknown")
+#: ``unknown``: no date to judge (an API key, a credential without the field, none reachable, or
+#: one of several on a shared macOS login). ``error``: the check itself raised.
+STATES = ("ok", "expiring", "expired", "unknown", "error")
 
 
 def _seconds(value) -> Optional[float]:
@@ -67,14 +69,27 @@ def assess(raw: Optional[str], now: float, why_unread: str = "no credential reac
 
 def read_assessment(now: Optional[float] = None,
                     reader: Optional[Callable[[], str]] = None) -> Dict[str, object]:
-    """Read the agent's own stored credential and assess it."""
-    from macf.budget import BudgetError, read_credential
+    """Read the agent's own stored credential and assess it.
+
+    On macOS the credential is in the Keychain, one entry per login under one service. Where
+    several agents share one macOS login there are several entries, and nothing here says which
+    is this agent's, so the verdict is ``unknown`` rather than another agent's date."""
+    from macf.budget import BudgetError, keychain_accounts, read_credential
     now = time.time() if now is None else now
+    if reader is None and sys.platform == "darwin" and len(keychain_accounts()) > 1:
+        return assess(None, now, why_unread="several Keychain logins on this macOS account; "
+                                            "which one is this agent's can't be told")
     try:
         raw = (reader or read_credential)()
     except BudgetError as e:
         return assess(None, now, why_unread=getattr(e, "short", None) or "no credential reachable")
     return assess(raw, now)
+
+
+def daemon_assessment() -> Dict[str, object]:
+    """What the daemon's check reads: ``read_assessment``, behind a name a test suite can stand in
+    for, so no test daemon reads the developer's own credential."""
+    return read_assessment()
 
 
 class HostedLoginCheck:
@@ -95,9 +110,11 @@ class HostedLoginCheck:
             return
         self.last_poll = now
         try:
-            verdict = (self.assess_now or read_assessment)()   # looked up here, so a test can stand in
+            verdict = (self.assess_now or daemon_assessment)()   # looked up here, so a test can stand in
         except Exception as e:  # noqa: BLE001 - a credential that won't read must not end the daemon
-            verdict = {"state": "unknown", "refresh_expires_at": None, "hours_left": None,
+            # "error", not "unknown": the check itself broke, which the watch reports. "unknown" is
+            # a login with no date to judge (an API key, an older credential), which it doesn't.
+            verdict = {"state": "error", "refresh_expires_at": None, "hours_left": None,
                        "detail": f"the check failed: {type(e).__name__}"}
             print(f"⚠️ MACF: pd: the login check failed ({type(e).__name__})", file=sys.stderr)
         due = self.last_record is None or now - self.last_record >= RECORD_EVERY_S

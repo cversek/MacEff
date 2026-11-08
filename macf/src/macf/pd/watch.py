@@ -286,6 +286,11 @@ def check_login(card: str, event: Optional[dict], now: float) -> Optional[Findin
     if event is None:
         return None
     data = event.get("data") or {}
+    if data.get("state") == "unknown":
+        # No date to judge: an API key, a credential without the field, or one of several on a
+        # shared macOS login. Not a fault, and paging for it at every pass would be forever.
+        # An expired login there still arrives as AUTH-FAILED at the session's next turn.
+        return None
     ends = data.get("refresh_expires_at")
     reach = f" (macf_tools harness attach --card {card})"
     if not isinstance(ends, (int, float)) or isinstance(ends, bool):
