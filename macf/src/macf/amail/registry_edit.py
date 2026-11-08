@@ -15,10 +15,16 @@ here is three separate acts:
   Anyone else gets the change staged in a fresh temporary file, its sha256, and the one root step
   that installs exactly those bytes. A dry run shows the diff and writes nothing at all.
 
+THE DIGEST IS CHECKED ON ROOT'S COPY. The staged file belongs to the account that staged it, so
+it can change between the operator reading the diff and root installing it. The root step copies
+it into root's directory first, checks that copy against the printed sha256, and renames it into
+place only if they match. Nothing the agent can write is trusted after the check.
+
 ROTATION FOLLOWS R45. The new key is declared from the moment of rotation, and every other key
 still open is retired at that same moment. Mail the broker accepted before it verifies against the
 old key, exactly one key verifies at any instant, and two keys never sign at once. A retired key
-keeps its first end date: retiring it again changes nothing.
+keeps its first end date: retiring it again changes nothing. A second key is never declared next to
+one that may still sign; rotation replaces it.
 """
 from __future__ import annotations
 
@@ -103,6 +109,9 @@ def declare(text: str, card: str, account: str, key: str,
     present = [k if isinstance(k, str) else k.get("key") for k in entry.get("keys") or []]
     if key in present:
         return text
+    if any(isinstance(k, str) or k.get("valid_until") is None for k in entry.get("keys") or []):
+        raise RegistryEditError(f"{name} already has a key that may sign, and two keys never sign at once "
+                                f"(R45); `macf_tools amail registry rotate` replaces it")
     _keys(entry).append({"key": key} if valid_from is None
                         else {"key": key, "valid_from": _aware(valid_from, "valid_from")})
     return _dump(raw)
@@ -117,9 +126,15 @@ def rotate(text: str, card: str, new_key: str, at: datetime.datetime) -> str:
         raise RegistryEditError(f"{card} is not declared, so it has no key to rotate; declare it first")
     keys = _keys(raw["agents"][name])
     changed = False
-    if new_key not in [k.get("key") for k in keys]:
+    existing = next((k for k in keys if k.get("key") == new_key), None)
+    if existing is None:
         keys.append({"key": new_key, "valid_from": at})
         changed = True
+    elif existing.get("valid_until") is not None:
+        raise RegistryEditError(f"that key of {name} is retired, so it can't take over")
+    elif existing.get("valid_from") is not None and existing["valid_from"] > at:
+        raise RegistryEditError(f"the new key of {name} starts at {existing['valid_from'].isoformat()}, after "
+                                f"the rotation at {at.isoformat()}, which would leave a time when no key verifies")
     for k in keys:
         if k.get("key") == new_key or k.get("valid_until") is not None:
             continue
@@ -205,15 +220,23 @@ def plan(path: Union[str, Path], change: Change) -> Plan:
     return Plan(path, current, change(current))
 
 
-def root_step(staged: Path, target: Path, platform: str = sys.platform) -> str:
-    """The one root step that installs the staged bytes at *target*: a root-owned directory, the
-    file written beside the old one and renamed into place, so no reader sees half of it, then the
-    check every reader makes."""
+def digest_check(path: Path, digest: str, platform: str = sys.platform) -> str:
+    """A shell check that the file at *path* has the sha256 *digest*: it fails when it doesn't."""
+    tool = "shasum -a 256" if platform == "darwin" else "sha256sum"
+    return f"echo {shlex.quote(f'{digest}  {path}')} | {tool} -c -"
+
+
+def root_step(staged: Path, target: Path, digest: str, platform: str = sys.platform) -> str:
+    """The one root step that installs the staged bytes at *target*: a root-owned directory, root's
+    own copy of the file beside the old one, that copy checked against *digest* (and removed if it
+    doesn't match), then renamed into place so no reader sees half of it, then the check every
+    reader makes."""
     group = "wheel" if platform == "darwin" else "root"
     q, d = shlex.quote, Path(target).parent
     beside = d / f".{Path(target).name}.new"
     return (f"sudo install -d -o root -g {group} -m 0755 {q(str(d))} && "
             f"sudo install -o root -g {group} -m 0644 {q(str(staged))} {q(str(beside))} && "
+            f"{{ {digest_check(beside, digest, platform)} || {{ sudo rm -f {q(str(beside))}; false; }}; }} && "
             f"sudo mv -f {q(str(beside))} {q(str(target))} && "
             f"macf_tools amail registry check --path {q(str(target))}")
 
@@ -256,5 +279,5 @@ def carry_out(p: Plan, *, dry_run: bool, is_root: Optional[bool] = None, root_ui
     digest = hashlib.sha256(staged.read_bytes()).hexdigest()
     out(f"The registry is root's to write. The change is staged at {staged}  sha256 {digest}")
     out("Run as root:")
-    out(f"  {root_step(staged, p.path, platform)}")
+    out(f"  {root_step(staged, p.path, digest, platform)}")
     return 0

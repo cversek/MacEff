@@ -125,10 +125,47 @@ def test_the_printed_root_step_names_the_staged_bytes(tmp_path, capsys):
     digest = hashlib.sha256(staged.read_bytes()).hexdigest()
     assert f"sha256 {digest}" in out
     group = "wheel" if sys.platform == "darwin" else "root"
-    step = edit.root_step(staged, target, platform=sys.platform)
+    step = edit.root_step(staged, target, digest, platform=sys.platform)
     assert step in out and f"-o root -g {group} -m 0644 {staged}" in step
-    assert step.index("install -d") < step.index(".registry.yaml.new") < step.index("mv -f")
+    assert step.index("install -d") < step.index(".registry.yaml.new") < step.index(digest) < step.index("mv -f")
     assert step.rstrip().endswith(f"macf_tools amail registry check --path {target}")
+
+
+def test_the_digest_is_checked_on_roots_copy_and_a_swap_fails_it(tmp_path):
+    """The staged file is the stager's to change after the operator read the diff, so the root step
+    checks root's own copy against the printed digest. The check itself is run here, as printed:
+    it passes on the bytes the digest names and fails on anything else."""
+    import subprocess
+    copy = tmp_path / ".registry.yaml.new"
+    copy.write_text("agents: {}\n")
+    digest = hashlib.sha256(copy.read_bytes()).hexdigest()
+    check = edit.digest_check(copy, digest)
+    assert subprocess.run(check, shell=True, capture_output=True).returncode == 0
+    copy.write_text("agents: {Mallory_000000: {account: mallory, keys: [x]}}\n")
+    assert subprocess.run(check, shell=True, capture_output=True).returncode != 0
+
+
+def test_a_second_key_never_sits_beside_one_that_may_sign(tmp_path):
+    """A new key replaces the old one by rotation, never by declaring it alongside: agent init after
+    a fresh keygen is refused, pointing at rotate, so two keys never sign at once (R45)."""
+    old, new = _key(tmp_path, "old"), _key(tmp_path, "new")
+    text = edit.declare("", CARD, ACCOUNT, old)
+    with pytest.raises(edit.RegistryEditError, match="rotate"):
+        edit.declare(text, CARD, ACCOUNT, new)
+    retired = edit.retire(text, CARD, old, at=_utc(2026, 6, 1))
+    assert new in edit.declare(retired, CARD, ACCOUNT, new)   # once the old key is retired, it can
+
+
+def test_rotation_leaves_no_time_without_a_key(tmp_path):
+    """Rotating to a key declared to start later, or to a retired key, would leave a time when no
+    key verifies; both are refused."""
+    old, new = _key(tmp_path, "old"), _key(tmp_path, "new")
+    retired = edit.retire(edit.declare("", CARD, ACCOUNT, old), CARD, old, at=_utc(2026, 6, 1))
+    later = edit.declare(retired, CARD, ACCOUNT, new, valid_from=_utc(2026, 7, 1))
+    with pytest.raises(edit.RegistryEditError, match="no key verifies"):
+        edit.rotate(later, CARD, new, at=_utc(2026, 6, 15))
+    with pytest.raises(edit.RegistryEditError, match="retired"):
+        edit.rotate(later, CARD, old, at=_utc(2026, 8, 1))
 
 
 def test_a_registry_already_current_is_left_alone(tmp_path, capsys):

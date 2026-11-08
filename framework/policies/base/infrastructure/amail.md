@@ -698,11 +698,16 @@ expiry, never its key; the repo owner chose one file for both.
     renames it into place and loads it as every reader does;
   - otherwise stages the new file in a temporary file, prints its sha256, and prints the
     one root step that installs exactly those bytes, root-owned and mode 644, then runs
-    `amail registry check`. On macOS the group is `wheel`.
+    `amail registry check`. On macOS the group is `wheel`. The staged file stays the
+    stager's to change, so the step checks root's own copy against the printed sha256
+    and installs nothing if they differ.
 - **Rotation follows R45's order.** `rotate --card C --key NEW --at T` declares the new
   key from T and retires every other open key of C at T. Mail the broker accepted
   before T verifies against the old key, exactly one key verifies at any moment, and two
-  keys never sign at once. Set T for when the agent switches to the new key.
+  keys never sign at once. Set T for when the agent switches to the new key. A second
+  key is never declared beside one that may still sign: after a fresh `keygen`, `agent
+  init` refuses and names `rotate`. A rotation to a key declared to start after T, or to
+  a retired key, is refused, since it would leave a time when no key verifies.
 - `amail key-status` prints the public line. `amail registry check` says whether the
   registry is root's alone to write and lists what it declares, retired keys and
   certificates counted, never a key's bytes.
