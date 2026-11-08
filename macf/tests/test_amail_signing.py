@@ -347,3 +347,18 @@ agents:
     assert verdict["trust"] == "attested" and verdict["shared_with"] == ["Bob_1b2c3d"] and len(calls) == 1
     reg.load = lambda: (_ for _ in ()).throw(RegistryError("not root's"))
     assert registry_verdict(_signed(tmp_path / "a"), "Alice_0a1b2c", reg, accepted_at=None)["trust"] == "unverified"
+
+
+def test_an_acceptance_time_is_read_only_from_a_sidecar_the_broker_owns(tmp_path):
+    """R45: a box is group-writable (2770), so a sidecar another member of the group wrote could
+    carry an old hand-off time. Only a sidecar file owned by the broker's uid is a record (THM on #928)."""
+    import json
+    from macf.amail.attest import read_acceptance_time
+    side = tmp_path / "1794000000-msg.sidecar.json"
+    side.write_text(json.dumps({"rung": "local", "origin_domain": "here.test",
+                                "handed_off_at": "2026-03-01T12:00:00+00:00"}))
+    assert read_acceptance_time(side, "here.test", broker_uid=os.getuid()) == _utc(2026, 3, 1, 12)
+    assert read_acceptance_time(side, "here.test", broker_uid=os.getuid() + 1) is None
+    assert read_acceptance_time(tmp_path / "gone.json", "here.test", broker_uid=os.getuid()) is None
+    side.write_text("not json")
+    assert read_acceptance_time(side, "here.test", broker_uid=os.getuid()) is None

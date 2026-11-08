@@ -20,6 +20,9 @@ signature proves the login, not the agent, and the verdict says so and names who
 from __future__ import annotations
 
 import datetime
+import json
+import os
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from macf import calling_card
@@ -43,9 +46,26 @@ def acceptance_time(sidecar: Dict[str, Any], own_domain: str) -> Optional[dateti
     return when if when.tzinfo is not None else None
 
 
+def read_acceptance_time(sidecar_path: Path, own_domain: str,
+                         broker_uid: int) -> Optional[datetime.datetime]:
+    """:func:`acceptance_time` from the sidecar file at *sidecar_path*, read only when the
+    broker's uid owns the file. A box is group-writable (2770), so a sidecar another member of the
+    group wrote could carry an old hand-off time; it is no record, and None is returned."""
+    try:
+        if os.stat(sidecar_path, follow_symlinks=False).st_uid != broker_uid:
+            return None
+        sidecar = json.loads(Path(sidecar_path).read_text())
+    except (OSError, ValueError):
+        return None  # noqa: MACEFF003 - an unreadable sidecar is no record, so only current keys count (R45)
+    return acceptance_time(sidecar, own_domain) if isinstance(sidecar, dict) else None
+
+
 def may_sign(card: str, public_key: str, registry: Registry,
              now: Optional[datetime.datetime] = None) -> bool:
-    """Whether *public_key* may sign for *card* now: declared, valid now and not retired (R45)."""
+    """Whether *public_key* may sign for *card* now: declared, valid now and not retired (R45).
+
+    A registry that can't be trusted raises :class:`RegistryError` rather than answering; the
+    caller treats that as a refusal, never as permission."""
     return public_key in registry.signing_keys(card, at=now)
 
 
