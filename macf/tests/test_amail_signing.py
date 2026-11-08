@@ -247,3 +247,178 @@ def test_a_writable_ancestor_is_refused(tmp_path):
         Registry(p, root_uid=os.getuid()).load()
     os.chmod(open_dir, 0o1777)          # sticky: no one can rename another's entry
     Registry(p, root_uid=os.getuid()).load()
+
+
+# --- R45 and R46: rotation against the broker's own acceptance time, and shared logins -------
+
+def _signed(key_path, card="Alice_0a1b2c"):
+    from macf.amail.crypto import sign
+    m = Message(sender=f"{card.lower()}@example.test", to=["bob@example.test"], subject="s", body="b")
+    m.signature = sign(m, load_private_key(key_path))
+    return m
+
+
+def _utc(*a):
+    import datetime
+    return datetime.datetime(*a, tzinfo=datetime.timezone.utc)
+
+
+def test_rotation_keeps_old_signatures_verifiable(tmp_path):
+    """MIS-0004 R45: a retired key verifies only what the receiving broker accepted inside its
+    window, by that broker's own record, and never signs. A backdated message id is no record."""
+    from macf.amail.attest import acceptance_time, may_sign, registry_verdict
+    from macf.amail.registry import Registry
+    old, new = _public_line(tmp_path, "old"), _public_line(tmp_path, "new")
+    reg = Registry(_registry(tmp_path, f"""
+agents:
+  Alice_0a1b2c:
+    account: alice
+    keys:
+      - key: "{old}"
+        valid_from: 2026-01-01T00:00:00Z
+        valid_until: 2026-06-01T00:00:00Z
+      - key: "{new}"
+        valid_from: 2026-06-01T00:00:00Z
+"""), root_uid=os.getuid())
+    m = _signed(tmp_path / "old")
+    # Accepted inside the old key's window: still attested after it retired.
+    assert registry_verdict(m, "Alice_0a1b2c", reg, accepted_at=_utc(2026, 3, 1))["trust"] == "attested"
+    # The thief's case: a new message signed with the retired key, accepted after retirement.
+    late = registry_verdict(m, "Alice_0a1b2c", reg, accepted_at=_utc(2026, 7, 1))
+    assert late["trust"] == "suspect"
+    # No record of acceptance: current signing keys only, never a retired one, and a message id
+    # dated inside the old window (a peer's mint, or anyone's) changes nothing.
+    m.message_id = "msg-1772000000-0123456789ab"      # 2026-02-25, inside the old window
+    assert registry_verdict(m, "Alice_0a1b2c", reg, accepted_at=None)["trust"] == "suspect"
+    assert registry_verdict(_signed(tmp_path / "new"), "Alice_0a1b2c", reg, accepted_at=None)["trust"] == "attested"
+    # A retired key never signs; the current one does.
+    assert may_sign("Alice_0a1b2c", old, reg) is False and may_sign("Alice_0a1b2c", new, reg) is True
+    # The acceptance time is the receiving broker's own hand-off record, and only its own.
+    own = {"rung": "local", "origin_domain": "here.test", "handed_off_at": "2026-03-01T12:00:00+00:00"}
+    assert acceptance_time(own, "here.test") == _utc(2026, 3, 1, 12)
+    assert acceptance_time({**own, "origin_domain": "peer.test"}, "here.test") is None
+    assert acceptance_time({**own, "rung": "shared"}, "here.test") is None
+    assert acceptance_time({**own, "handed_off_at": "yesterday"}, "here.test") is None
+    assert acceptance_time({**own, "handed_off_at": "2026-03-01T12:00:00"}, "here.test") is None   # naive
+
+
+def test_shared_login_attestation_labelled(tmp_path):
+    """MIS-0004 R46: where the signing key's account also holds another agent's key, a verified
+    message attests the login, and the receiver says so and names who shares it."""
+    from macf.amail.attest import registry_verdict
+    from macf.amail.registry import Registry
+    a, b, c = (_public_line(tmp_path, n) for n in "abc")
+    reg = Registry(_registry(tmp_path, f"""
+agents:
+  Alice_0a1b2c: {{account: shared, keys: ["{a}"]}}
+  Bob_1b2c3d: {{account: shared, keys: ["{b}"]}}
+  Carol_2c3d4e: {{account: carol, keys: ["{c}"]}}
+"""), root_uid=os.getuid())
+    shared = registry_verdict(_signed(tmp_path / "a"), "Alice_0a1b2c", reg, accepted_at=None)
+    assert shared["trust"] == "attested" and shared["attests"] == "login"
+    assert shared["shared_with"] == ["Bob_1b2c3d"] and "shared login" in shared["reason"]
+    alone = registry_verdict(_signed(tmp_path / "c", "Carol_2c3d4e"), "Carol_2c3d4e", reg, accepted_at=None)
+    assert alone["trust"] == "attested" and alone["attests"] == "agent" and alone["shared_with"] == []
+    # Only a verified message is labelled: a failed one attests nothing.
+    forged = registry_verdict(_signed(tmp_path / "c"), "Alice_0a1b2c", reg, accepted_at=None)
+    assert forged["trust"] == "suspect" and forged["attests"] is None
+
+
+def test_a_verdict_reads_the_registry_once(tmp_path):
+    """One snapshot per verdict: a registry that turns untrustworthy between reads can't raise
+    into ingest or mix two versions of the file (CTB on #928)."""
+    from macf.amail.attest import registry_verdict
+    from macf.amail.registry import Registry, RegistryError
+    a, b = _public_line(tmp_path, "a"), _public_line(tmp_path, "b")
+    reg = Registry(_registry(tmp_path, f"""
+agents:
+  Alice_0a1b2c: {{account: shared, keys: ["{a}"]}}
+  Bob_1b2c3d: {{account: shared, keys: ["{b}"]}}
+"""), root_uid=os.getuid())
+    real, calls = reg.load, []
+
+    def once_then_refuse():
+        calls.append(1)
+        if len(calls) > 1:
+            raise RegistryError("the registry changed hands between reads")
+        return real()
+    reg.load = once_then_refuse
+    verdict = registry_verdict(_signed(tmp_path / "a"), "Alice_0a1b2c", reg, accepted_at=None)
+    assert verdict["trust"] == "attested" and verdict["shared_with"] == ["Bob_1b2c3d"] and len(calls) == 1
+    reg.load = lambda: (_ for _ in ()).throw(RegistryError("not root's"))
+    assert registry_verdict(_signed(tmp_path / "a"), "Alice_0a1b2c", reg, accepted_at=None)["trust"] == "unverified"
+
+
+def test_an_acceptance_time_is_read_only_from_a_sidecar_the_broker_owns(tmp_path):
+    """R45: a box is group-writable (2770), so a sidecar another member of the group wrote could
+    carry an old hand-off time. Only a sidecar file owned by the broker's uid is a record (THM on #928)."""
+    import json
+    from macf.amail.attest import read_acceptance_time
+    import hashlib
+    payload, mid = b"the message as delivered", "msg-1772000000-0a0b0c0d0e0f"
+    side = tmp_path / "1794000000-msg.sidecar.json"
+    side.write_text(json.dumps({"rung": "local", "origin_domain": "here.test", "message_id": mid,
+                                "raw_sha256": hashlib.sha256(payload).hexdigest(),
+                                "handed_off_at": "2026-03-01T12:00:00+00:00"}))
+    me = os.getuid()
+    assert read_acceptance_time(side, "here.test", broker_uid=me, payload=payload, message_id=mid) == _utc(2026, 3, 1, 12)
+    assert read_acceptance_time(side, "here.test", broker_uid=me + 1, payload=payload, message_id=mid) is None
+    # The box has no sticky bit, so a genuine old sidecar can be renamed to pair with a new message:
+    # it counts only for the bytes and the id it was written for (THM on #928).
+    assert read_acceptance_time(side, "here.test", broker_uid=me, payload=b"another message", message_id=mid) is None
+    assert read_acceptance_time(side, "here.test", broker_uid=me, payload=payload, message_id="msg-1-ffffffffffff") is None
+    assert read_acceptance_time(tmp_path / "gone.json", "here.test", broker_uid=me, payload=payload, message_id=mid) is None
+    side.write_text("not json")
+    assert read_acceptance_time(side, "here.test", broker_uid=me, payload=payload, message_id=mid) is None
+
+
+def test_a_sidecar_swapped_after_the_owner_check_is_not_read(tmp_path, monkeypatch):
+    """The owner is checked on the file that is read, through one descriptor: a group member who
+    renames a forged sidecar over the path after the check gets nothing (CTB on #928)."""
+    import hashlib
+    import json
+    from macf.amail import attest
+    payload, mid = b"the message as delivered", "msg-1772000000-0a0b0c0d0e0f"
+    good = {"rung": "local", "origin_domain": "here.test", "message_id": mid,
+            "raw_sha256": hashlib.sha256(payload).hexdigest(), "handed_off_at": "2026-03-01T12:00:00+00:00"}
+    side, forged = tmp_path / "s.json", tmp_path / "forged.json"
+    side.write_text(json.dumps(good))
+    forged.write_text(json.dumps({**good, "handed_off_at": "2020-01-01T00:00:00+00:00"}))
+    real_open = os.open
+
+    def open_then_swap(path, *a, **k):
+        fd = real_open(path, *a, **k)
+        os.replace(forged, side)          # the race: the path now names the forgery
+        return fd
+    monkeypatch.setattr(attest.os, "open", open_then_swap)
+    got = attest.read_acceptance_time(side, "here.test", broker_uid=os.getuid(), payload=payload, message_id=mid)
+    assert got == _utc(2026, 3, 1, 12)
+    # A symlink planted at the path is not followed.
+    monkeypatch.setattr(attest.os, "open", real_open)
+    link = tmp_path / "link.json"
+    link.symlink_to(side)
+    assert attest.read_acceptance_time(link, "here.test", broker_uid=os.getuid(), payload=payload, message_id=mid) is None
+
+
+def test_a_fifo_at_the_sidecar_path_is_refused_at_once(tmp_path):
+    """A named pipe planted at the path would block a plain open before the regular-file check
+    could refuse it; the open doesn't wait (CTB on #928)."""
+    import signal
+    from macf.amail import attest
+    fifo = tmp_path / "s.json"
+    os.mkfifo(fifo)
+
+    class Hung(BaseException):
+        """Not an OSError, which the function would swallow and so hide the hang."""
+
+    def hung(*_):
+        raise Hung("read_acceptance_time blocked on a FIFO")
+    old = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(3)
+    try:
+        got = attest.read_acceptance_time(fifo, "here.test", broker_uid=os.getuid(),
+                                          payload=b"x", message_id="msg-1-0a0b0c0d0e0f")
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+    assert got is None

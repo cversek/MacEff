@@ -88,3 +88,12 @@ def test_a_peer_declaration_needs_the_token_and_double_claims_count_the_full_add
     with pytest.raises(ConfigError, match="claimed more than once"):
         _start(tmp_path, {"card": CARD, "zone_token": NEW},
                peers={"host.local": {"handoff": str(tmp_path / "p"), "agents": {"w2": {"card": CARD, "zone_token": NEW}}}})
+
+
+def test_an_address_is_redacted_to_its_card_part():
+    """MIS-0004 R49: what a log or a reason may say about a zone address."""
+    from macf.amail.zone import redact_address
+    assert redact_address("someone_0a1b2c_" + TOKEN + "@zone.example") == "someone_0a1b2c_<token>@zone.example"
+    assert redact_address("someone_0a1b2c@zone.example") == "someone_0a1b2c@zone.example"
+    assert redact_address("nobody@elsewhere.example") == "nobody@elsewhere.example"
+    assert redact_address("") == ""
