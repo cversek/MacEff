@@ -186,6 +186,16 @@ Logging that an error occurred without explaining what fallback was taken leaves
 
 When a utility function catches an error, returns a fallback value, and the caller cannot distinguish success from failure - this is a "masked error." The function completes, but the caller has no way to know something went wrong.
 
+### Two-Letter Names
+
+A package, module, class, function, variable, field or path named with two letters, such as `pd`, `sd`, `ca` or `fd`, makes every reader decode it. The same letters mean different things in different places. `ca` can be a certificate authority, a CA file or a callback, and `fd` a file descriptor or a fleet daemon. A reader who decodes it wrong gets no warning.
+
+**Spell the name out:** `primal_daemon`, `certificate_authority_file`, `fleet_daemon`. A longer name costs a few keystrokes once. A two-letter one costs every reader a lookup on every read, and it costs the operator most, who reads the paths and commands they must run.
+
+- **Where another program fixes a keyword,** keep it only where that program reads it. mosquitto's configuration says `cafile`, so the line written into its configuration says `cafile`, but the field that holds the value is `certificate_authority_file`.
+- **Loop indices and well-known mathematical symbols** inside a few lines (`i`, `x`, `dt`) are not this anti-pattern. Anything that crosses a module boundary, appears in a schema, or names a file or package is.
+- **An existing two-letter name** is renamed in its own mechanical change, not mixed into a feature. A new one is never added.
+
 ---
 
 ## 4 Utility Function Pattern: Warn + Reraise

@@ -14,7 +14,7 @@ import pytest
 
 paho = pytest.importorskip("paho.mqtt.client")
 
-from macf.pd.broker import Publisher, cert_name, paho_publish, render_acl, render_conf, replay_topics  # noqa: E402
+from macf.pd.broker import Publisher, cert_name, paho_publish, render_access_rules, render_conf, replay_topics  # noqa: E402
 from macf.pd.stream import EventStream  # noqa: E402
 
 MOSQUITTO = shutil.which("mosquitto") or next(
@@ -55,10 +55,10 @@ def broker(tmp_path_factory):
             "-days", "1", "-subj", "/CN=scratch-ca", cwd=d)
     certs = {n: issue(d, cert_name(n)) for n in (AGENT, READER, SECOND, STRANGER)}
     certs["server"] = issue(d, "localhost")
-    (d / "acl").write_text(render_acl(AGENT, readers={READER: ["pd_unit_state"], SECOND: ["pd_unit_state"]}))
+    (d / "access_rules").write_text(render_access_rules(AGENT, readers={READER: ["pd_unit_state"], SECOND: ["pd_unit_state"]}))
     port = free_port()
-    conf = render_conf(port=port, listen="loopback", cafile=str(d / "ca.crt"), certfile=certs["server"][0],
-                       keyfile=certs["server"][1], acl_file=str(d / "acl"))
+    conf = render_conf(port=port, listen="loopback", certificate_authority_file=str(d / "ca.crt"), certificate_file=certs["server"][0],
+                       key_file=certs["server"][1], access_rules_file=str(d / "access_rules"))
     (d / "mosquitto.conf").write_text(conf + "persistence false\nlog_dest file %s\n" % (d / "log"))
     proc = subprocess.Popen([MOSQUITTO, "-c", str(d / "mosquitto.conf")])
     for _ in range(100):
@@ -207,8 +207,8 @@ def test_the_daemons_link_publishes_and_answers_a_replay_from_its_own_loop(broke
     from macf.pd.interface import BrokerSection
     log = tmp_path / "events.jsonl"
     log.write_text("")
-    section = BrokerSection(port=broker["port"], cafile="x", server_certfile="x", server_keyfile="x",
-                            client_certfile="x", client_keyfile="x", readers={READER: ["pd_unit_state"]})
+    section = BrokerSection(port=broker["port"], certificate_authority_file="x", server_certificate_file="x", server_key_file="x",
+                            client_certificate_file="x", client_key_file="x", readers={READER: ["pd_unit_state"]})
     link = BrokerLink(AGENT, log, section, {}, client=client(broker, AGENT))
     link.start()
     reader, got = connected(broker, READER)

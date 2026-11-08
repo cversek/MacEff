@@ -11,7 +11,7 @@ import pytest
 paho = pytest.importorskip("paho.mqtt.client")
 
 from macf.pd.association import MembershipView, presence_topic  # noqa: E402
-from macf.pd.broker import cert_name, render_acl, render_conf  # noqa: E402
+from macf.pd.broker import cert_name, render_access_rules, render_conf  # noqa: E402
 
 sys.path.insert(0, __import__("os").path.dirname(__file__))
 from test_pd_broker_live import MOSQUITTO, free_port, issue, openssl, settle  # noqa: E402
@@ -45,10 +45,10 @@ def make_broker(tmp_path_factory, head, members):
             "-days", "1", "-subj", "/CN=scratch-ca", cwd=d)
     certs = {n: issue(d, cert_name(n)) for n in [head] + list(members)}
     certs["server"] = issue(d, "localhost")
-    (d / "acl").write_text(render_acl(head, association=True, members=list(members)))
+    (d / "access_rules").write_text(render_access_rules(head, association=True, members=list(members)))
     port = free_port()
-    conf = render_conf(port=port, listen="loopback", cafile=str(d / "ca.crt"), certfile=certs["server"][0],
-                       keyfile=certs["server"][1], acl_file=str(d / "acl"), association=True)
+    conf = render_conf(port=port, listen="loopback", certificate_authority_file=str(d / "ca.crt"), certificate_file=certs["server"][0],
+                       key_file=certs["server"][1], access_rules_file=str(d / "access_rules"), association=True)
     (d / "mosquitto.conf").write_text(conf + "persistence false\n")
     proc = subprocess.Popen([MOSQUITTO, "-c", str(d / "mosquitto.conf")], stderr=subprocess.DEVNULL)
     import socket
@@ -150,15 +150,15 @@ def test_the_daemons_links_export_and_report_membership_from_their_own_loops(lev
             c.will_set(will, b"offline", qos=1, retain=True)
         return c
     findings = []
-    section = BrokerSection(port=assoc["port"], cafile="x", server_certfile="x", server_keyfile="x",
-                            client_certfile="x", client_keyfile="x")
+    section = BrokerSection(port=assoc["port"], certificate_authority_file="x", server_certificate_file="x", server_key_file="x",
+                            client_certificate_file="x", client_key_file="x")
     sys_log = tmp_path / "sys.jsonl"
     sys_log.write_text("")
     sysd = BrokerLink(SYS, sys_log, section, {}, client=unconnected(SYS), members=[M1, M2],
                       on_findings=findings.append)
     m_log = tmp_path / "m1.jsonl"
     m_log.write_text("")
-    link = AssociationLink(port=assoc["port"], cafile="x", client_certfile="x", client_keyfile="x")
+    link = AssociationLink(port=assoc["port"], certificate_authority_file="x", client_certificate_file="x", client_key_file="x")
     member = ExportLink(M1, m_log, link, {}, client=unconnected(M1, will=presence_topic(M1)))
     sysd.start()
     settle()

@@ -385,11 +385,11 @@ class BrokerSection(_Closed):
     of ``stream_grants``."""
 
     port: int = Field(ge=1024, le=65535)
-    cafile: str = Field(min_length=1)
-    server_certfile: str = Field(min_length=1)
-    server_keyfile: str = Field(min_length=1)
-    client_certfile: str = Field(min_length=1)
-    client_keyfile: str = Field(min_length=1)
+    certificate_authority_file: str = Field(min_length=1)
+    server_certificate_file: str = Field(min_length=1)
+    server_key_file: str = Field(min_length=1)
+    client_certificate_file: str = Field(min_length=1)
+    client_key_file: str = Field(min_length=1)
     readers: Dict[str, List[Annotated[str, Field(pattern=_STREAM_SOURCE)]]] = Field(default_factory=dict)
 
 
@@ -399,9 +399,9 @@ class AssociationLink(_Closed):
 
     host: str = Field(default="localhost", min_length=1)
     port: int = Field(ge=1024, le=65535)
-    cafile: str = Field(min_length=1)
-    client_certfile: str = Field(min_length=1)
-    client_keyfile: str = Field(min_length=1)
+    certificate_authority_file: str = Field(min_length=1)
+    client_certificate_file: str = Field(min_length=1)
+    client_key_file: str = Field(min_length=1)
     exports: List[Annotated[str, Field(pattern=_STREAM_SOURCE)]] = Field(
         default_factory=lambda: ["pd_unit_state", "pd_carried"])
 

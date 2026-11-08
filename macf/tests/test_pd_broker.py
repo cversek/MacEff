@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from macf.pd.broker import (BrokerRefused, GapTracker, cert_name, grant_filters, render_acl,
+from macf.pd.broker import (BrokerRefused, GapTracker, cert_name, grant_filters, render_access_rules,
                              render_conf, source_topic)
 
 SYS = "SystemDaemon_0a1b2c"
@@ -26,24 +26,24 @@ def _users(acl):
 
 
 def test_only_named_certificates_get_rules_and_never_by_pattern():
-    acl = render_acl(SYS, association=True, members=[AGENT, OTHER])
+    acl = render_access_rules(SYS, association=True, members=[AGENT, OTHER])
     assert "pattern" not in acl
     assert set(_users(acl)) == {cert_name(SYS), cert_name(AGENT), cert_name(OTHER)}
 
 
 def test_a_member_writes_only_its_own_subtree_and_reads_nothing():
-    users = _users(render_acl(SYS, association=True, members=[AGENT, OTHER]))
+    users = _users(render_access_rules(SYS, association=True, members=[AGENT, OTHER]))
     assert users[cert_name(AGENT)] == [f"topic write members/{AGENT}/#"]
     assert users[cert_name(SYS)] == [f"topic readwrite {SYS}/#", "topic read members/#"]
 
 
 def test_a_reader_reads_only_the_sources_granted():
-    users = _users(render_acl(AGENT, readers={OTHER: ["pd_unit_state", "pd_unit_state"]}))
+    users = _users(render_access_rules(AGENT, readers={OTHER: ["pd_unit_state", "pd_unit_state"]}))
     assert users[cert_name(OTHER)] == [f"topic read {AGENT}/events/pd/unit/state",
                                        f"topic write {AGENT}/replay/{OTHER}/request",
                                        f"topic read {AGENT}/replay/{OTHER}/records"]
     with pytest.raises(BrokerRefused, match="not a source name"):
-        render_acl(AGENT, readers={OTHER: ["#"]})
+        render_access_rules(AGENT, readers={OTHER: ["#"]})
 
 
 def test_a_glob_on_a_family_is_one_filter_and_any_other_is_expanded():
@@ -62,8 +62,8 @@ def test_a_gap_is_judged_per_source_not_by_global_position():
 
 def test_only_an_association_admits_members_or_listens_on_the_lan():
     with pytest.raises(BrokerRefused, match="only an association admits members"):
-        render_acl(AGENT, members=[OTHER])
-    common = dict(port=18830, cafile="/ca.crt", certfile="/b.crt", keyfile="/b.key", acl_file="/acl")
+        render_access_rules(AGENT, members=[OTHER])
+    common = dict(port=18830, certificate_authority_file="/ca.crt", certificate_file="/b.crt", key_file="/b.key", access_rules_file="/acl")
     with pytest.raises(BrokerRefused, match="only an association listens on the LAN"):
         render_conf(listen="lan", lan_address="192.0.2.10", **common)
     assert "listener 18830 192.0.2.10" in render_conf(listen="lan", lan_address="192.0.2.10",
@@ -71,8 +71,8 @@ def test_only_an_association_admits_members_or_listens_on_the_lan():
 
 
 def test_the_broker_requires_a_certificate_and_names_users_by_it():
-    conf = render_conf(port=18830, listen="loopback", cafile="/ca.crt", certfile="/b.crt",
-                       keyfile="/b.key", acl_file="/acl")
+    conf = render_conf(port=18830, listen="loopback", certificate_authority_file="/ca.crt", certificate_file="/b.crt",
+                       key_file="/b.key", access_rules_file="/acl")
     for line in ("allow_anonymous false", "listener 18830 127.0.0.1", "require_certificate true",
                  "use_identity_as_username true", "acl_file /acl"):
         assert line in conf.splitlines()
@@ -329,14 +329,14 @@ def test_a_declaration_names_its_broker_and_the_daemon_renders_it(tmp_path):
     from macf.pd.broker_link import render_files
     from macf.pd.interface import Declaration
     d = Declaration.model_validate({"version": 1, "agent": AGENT, "broker": {
-        "port": 18830, "cafile": "{agent_home}/ca.crt", "server_certfile": "{agent_home}/s.crt",
-        "server_keyfile": "{agent_home}/s.key", "client_certfile": "{agent_home}/c.crt",
-        "client_keyfile": "{agent_home}/c.key", "readers": {OTHER: ["pd_unit_state"]}}})
+        "port": 18830, "certificate_authority_file": "{agent_home}/ca.crt", "server_certificate_file": "{agent_home}/s.crt",
+        "server_key_file": "{agent_home}/s.key", "client_certificate_file": "{agent_home}/c.crt",
+        "client_key_file": "{agent_home}/c.key", "readers": {OTHER: ["pd_unit_state"]}}})
     conf = render_files(AGENT, d.broker, tmp_path, {"agent_home": "/h"})
     text = conf.read_text()
     assert "listener 18830 127.0.0.1" in text and "cafile /h/ca.crt" in text
     assert "require_certificate true" in text and "persistence false" in text
-    acl = (conf.parent / "acl").read_text()
+    acl = (conf.parent / "access_rules").read_text()
     assert f"user {cert_name(OTHER)}" in acl and "pattern" not in acl
     assert conf.parent.stat().st_mode & 0o777 == 0o700
 
@@ -344,7 +344,7 @@ def test_a_declaration_names_its_broker_and_the_daemon_renders_it(tmp_path):
 def test_a_broker_section_with_a_low_port_or_a_bad_source_is_refused():
     from pydantic import ValidationError
     from macf.pd.interface import BrokerSection
-    base = dict(cafile="a", server_certfile="b", server_keyfile="c", client_certfile="d", client_keyfile="e")
+    base = dict(certificate_authority_file="a", server_certificate_file="b", server_key_file="c", client_certificate_file="d", client_key_file="e")
     with pytest.raises(ValidationError):
         BrokerSection(port=80, **base)
     with pytest.raises(ValidationError):

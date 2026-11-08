@@ -1043,7 +1043,7 @@ A subscriber receives only the sources it chose [MIS-0002-R151 (subscriber_MUST_
 
 **What to declare.**
 - `broker.port`, a loopback port from 1024 to 65535.
-- The CA that issued every certificate, the broker's server certificate and key, and the daemon's own client certificate and key. Paths may use the declaration's placeholders.
+- The certificate authority that issued every certificate, the broker's server certificate and key, and the daemon's own client certificate and key. Paths may use the declaration's placeholders.
 - `broker.readers`, each reader's card mapped to the sources it may read. This is the broker's form of `stream_grants`.
 - A unit that runs the broker: `mosquitto -c {runtime_dir}/<card>.broker/mosquitto.conf`. The daemon writes that file and its access rules at start, before units start. The broker is then supervised like any unit.
 

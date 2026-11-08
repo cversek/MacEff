@@ -334,7 +334,7 @@ class Publisher:
         return sent
 
 
-def render_acl(card: str, *, members: Sequence[str] = (), association: bool = False,
+def render_access_rules(card: str, *, members: Sequence[str] = (), association: bool = False,
                readers: Optional[Dict[str, Iterable[str]]] = None,
                known_sources: Iterable[str] = ()) -> str:
     """The broker's access rules: one ``user`` block per certificate the declaration names."""
@@ -355,8 +355,8 @@ def render_acl(card: str, *, members: Sequence[str] = (), association: bool = Fa
     return "\n\n".join(blocks) + "\n"
 
 
-def render_conf(*, port: int, listen: str, cafile: str, certfile: str, keyfile: str,
-                acl_file: str, association: bool = False, crlfile: Optional[str] = None,
+def render_conf(*, port: int, listen: str, certificate_authority_file: str, certificate_file: str, key_file: str,
+                access_rules_file: str, association: bool = False, crlfile: Optional[str] = None,
                 lan_address: Optional[str] = None) -> str:
     """mosquitto.conf for one daemon's broker: one TLS listener, certificates required, the
     certificate's name as the user, and the rendered access rules."""
@@ -377,12 +377,12 @@ def render_conf(*, port: int, listen: str, cafile: str, certfile: str, keyfile: 
         "per_listener_settings false",
         "allow_anonymous false",
         f"listener {port} {bind}",
-        f"cafile {cafile}",
-        f"certfile {certfile}",
-        f"keyfile {keyfile}",
+        f"cafile {certificate_authority_file}",
+        f"certfile {certificate_file}",
+        f"keyfile {key_file}",
         "require_certificate true",
         "use_identity_as_username true",
-        f"acl_file {acl_file}",
+        f"acl_file {access_rules_file}",
     ]
     if crlfile:
         lines.append(f"crlfile {crlfile}")

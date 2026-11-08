@@ -40,15 +40,15 @@ def render_files(card: str, section: BrokerSection, runtime: Path, placeholders:
     d = Path(runtime) / f"{card}.broker"
     d.mkdir(parents=True, exist_ok=True)
     d.chmod(0o700)
-    acl = d / "acl"
-    acl.write_text(b.render_acl(card, readers=section.readers, known_sources=known_sources,
+    access_rules = d / "access_rules"
+    access_rules.write_text(b.render_access_rules(card, readers=section.readers, known_sources=known_sources,
                                 members=members, association=bool(members)))
     conf = d / "mosquitto.conf"
     conf.write_text(b.render_conf(port=section.port, listen="loopback",
-                                  cafile=resolve(section.cafile, placeholders),
-                                  certfile=resolve(section.server_certfile, placeholders),
-                                  keyfile=resolve(section.server_keyfile, placeholders),
-                                  acl_file=str(acl), association=bool(members)) + "persistence false\n")
+                                  certificate_authority_file=resolve(section.certificate_authority_file, placeholders),
+                                  certificate_file=resolve(section.server_certificate_file, placeholders),
+                                  key_file=resolve(section.server_key_file, placeholders),
+                                  access_rules_file=str(access_rules), association=bool(members)) + "persistence false\n")
     return conf
 
 
@@ -96,9 +96,9 @@ class BrokerLink:
     def _client(section: BrokerSection, placeholders: Dict[str, str]):
         import paho.mqtt.client as mqtt
         c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv5)
-        c.tls_set(ca_certs=resolve(section.cafile, placeholders),
-                  certfile=resolve(section.client_certfile, placeholders),
-                  keyfile=resolve(section.client_keyfile, placeholders))
+        c.tls_set(ca_certs=resolve(section.certificate_authority_file, placeholders),
+                  certfile=resolve(section.client_certificate_file, placeholders),
+                  keyfile=resolve(section.client_key_file, placeholders))
         c.reconnect_delay_set(1, RECONNECT_MAX_S)
         return c
 
@@ -168,9 +168,9 @@ class ExportLink:
     def _client(card: str, link: AssociationLink, placeholders: Dict[str, str]):
         import paho.mqtt.client as mqtt
         c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv5)
-        c.tls_set(ca_certs=resolve(link.cafile, placeholders),
-                  certfile=resolve(link.client_certfile, placeholders),
-                  keyfile=resolve(link.client_keyfile, placeholders))
+        c.tls_set(ca_certs=resolve(link.certificate_authority_file, placeholders),
+                  certfile=resolve(link.client_certificate_file, placeholders),
+                  keyfile=resolve(link.client_key_file, placeholders))
         c.will_set(assoc.presence_topic(card), b"offline", qos=1, retain=True)
         c.reconnect_delay_set(1, RECONNECT_MAX_S)
         return c
