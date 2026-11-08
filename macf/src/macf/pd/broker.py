@@ -19,6 +19,7 @@ WHAT EACH CERTIFICATE MAY DO.
   a sibling or read one.
 - Each granted reader: ``read <card>/events/<source>`` for each source granted.
 """
+from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence
 
 from macf import calling_card
@@ -55,6 +56,31 @@ def grant_filters(card: str, grant: str, known: Iterable[str]) -> List[str]:
     if grant.endswith("_*") and prefix and not any(c in prefix for c in "*?["):
         return [source_topic(card, prefix) + "/#"]
     return sorted(source_topic(card, s) for s in set(known) if fnmatch.fnmatchcase(s, grant))
+
+
+@dataclass(frozen=True, kw_only=True)
+class Message:
+    """One record as published: where, what, and the positions a subscriber checks."""
+    topic: str
+    payload: bytes
+    properties: Dict[str, str]
+
+
+def to_message(card: str, record: dict, position: int,
+               previous_of_source: Optional[int]) -> Message:
+    """The message one log record publishes as (R150, R154, R155): its topic, the record as JSON
+    exactly as the log holds it, and two user properties, its log position and the position of
+    the previous record of the same source. The record keeps the source, agent and time the layer
+    set; only the daemon may publish under its own root, so no publisher can claim them."""
+    import json
+    source = record.get("event")
+    if not isinstance(source, str):
+        raise BrokerRefused("a record without an event name has no topic")
+    props = {"position": str(position)}
+    if previous_of_source is not None:
+        props["previous"] = str(previous_of_source)
+    return Message(topic=source_topic(card, source),
+                   payload=json.dumps(record, separators=(",", ":")).encode(), properties=props)
 
 
 class GapTracker:

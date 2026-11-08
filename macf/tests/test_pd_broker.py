@@ -76,3 +76,13 @@ def test_a_certificate_is_named_by_the_card_lowercased_and_a_non_card_is_refused
     assert cert_name(AGENT) == "exampleagent_1a2b3c"
     with pytest.raises(ValueError):
         cert_name("maceff_system")
+
+
+def test_a_record_publishes_on_its_source_topic_with_both_positions():
+    from macf.pd.broker import to_message
+    rec = {"event": "pd_unit_state", "data": {"agent": AGENT, "unit": "session"}, "ts": 1.0}
+    m = to_message(AGENT, rec, 42, 17)
+    assert m.topic == f"{AGENT}/events/pd/unit/state"
+    assert m.properties == {"position": "42", "previous": "17"}
+    assert __import__("json").loads(m.payload) == rec
+    assert "previous" not in to_message(AGENT, rec, 43, None).properties
