@@ -38,6 +38,9 @@ def stack(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("MACEFF_PROJECT_DIR", raising=False)
     monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
+    # The registry step reads the operator's registry; never the host's own /etc/maceff here.
+    monkeypatch.setenv("MACF_AMAIL_REGISTRY", str(tmp_path / "etc" / "registry.yaml"))
+    monkeypatch.delenv("MACF_AMAIL_SIGNING_KEY", raising=False)
     monkeypatch.setattr("macf.utils.paths.find_agent_home", lambda *a, **k: home)
 
     claude_calls = []
@@ -110,7 +113,9 @@ def test_plan_lists_every_step_and_changes_nothing(stack, capsys):
     assert results[0].status == PLANNED
     # Each checked, none acted. The fixture's home is already named, so that step finds it so.
     assert _by_step(results)["calling-card"].status == ALREADY, results
-    assert {r.status for r in results[1:] if r.step != "calling-card"} == {WOULD}, results
+    assert {r.status for r in results[1:] if r.step not in ("calling-card", "registry")} == {WOULD}, results
+    # The fixture's home has no signing key yet, so there is nothing to declare (MIS-0004 R42).
+    assert _by_step(results)["registry"].status == SKIPPED and "amail keygen" in _by_step(results)["registry"].detail
     assert {s for s, _w, _f in STEPS} >= {"preamble", "task-store", "calling-card", "declaration", "harness",
                                           "channel", "permissions", "daemon"}
     assert not (stack.home / ".maceff" / "pd").exists() and stack.claude == [] and stack.installs == []
@@ -190,7 +195,9 @@ def test_a_second_run_reports_everything_already_done(stack):
     claude_before, installs_before = len(stack.claude), len(stack.installs)
     rc2, results = _run(stack, preamble_status=ALREADY)
     assert rc1 == rc2 == 0
-    assert [r.status for r in results] == [ALREADY] * len(STEPS), results
+    # Every step already done, except the registry, which has no signing key to declare yet.
+    assert [r.status for r in results if r.step != "registry"] == [ALREADY] * (len(STEPS) - 1), results
+    assert _by_step(results)["registry"].status == SKIPPED
     assert len(stack.claude) == claude_before and len(stack.installs) == installs_before
 
 
