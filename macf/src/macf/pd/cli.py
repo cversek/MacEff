@@ -120,10 +120,10 @@ def add_pd_parser(sub) -> None:
                        help="an event name to take, with * globs; repeat it (default: every source)")
     sub_p.add_argument("--position", default=None, metavar="LOG:OFFSET",
                        help="resume just after the record that carried this position")
-    sub_p.add_argument("--name", default=None, help="the name this subscriber goes by, for silence and route")
     sub_p.add_argument("--broker-port", type=int, default=None, metavar="PORT",
-                       help="read from the daemon's own MQTT broker on this loopback port instead of "
-                            "the socket (prototype); needs --ca, --cert, --key and --reader")
+                       help="read another daemon's broker on this loopback port, as a reader it grants; "
+                            "needs --ca, --cert, --key and --reader. Without these, the agent's own "
+                            "stream is read as the agent, with its own certificate")
     sub_p.add_argument("--ca", default=None, help="the CA certificate the broker's certificate is checked against")
     sub_p.add_argument("--cert", default=None, help="this reader's client certificate")
     sub_p.add_argument("--key", default=None, help="this reader's client key")
@@ -161,9 +161,7 @@ def cmd_pd_alive(args: argparse.Namespace) -> int:
 
 def cmd_pd_stream_subscribe(args: argparse.Namespace) -> int:
     """0 when the stream ends or on Ctrl+C; 1 when it refused or could not be reached."""
-    from macf.pd.interface import events_socket
-    from macf.pd.stream import subscribe
-    _, card = _this_agent()
+    home, card = _this_agent()
     position = None
     if args.position:
         log, sep, offset = args.position.rpartition(":")
@@ -171,24 +169,23 @@ def cmd_pd_stream_subscribe(args: argparse.Namespace) -> int:
             print("maceff_pd: --position is LOG:OFFSET, as a record's position names them", file=sys.stderr)
             return 1
         position = {"log": log, "offset": int(offset)}
-    if args.broker_port is not None:
-        return _subscribe_broker(args, card, position)
-    try:
-        conn = subscribe(events_socket(card), args.source or ["*"], position=position, name=args.name)
-    except OSError as e:
-        print(f"maceff_pd: {card}: the event stream can't be reached: {e}", file=sys.stderr)
-        return 1
-    try:
-        for line in conn.makefile("rb"):
-            sys.stdout.write(line.decode("utf-8", errors="replace"))
-            sys.stdout.flush()
-            if line.startswith(b'{"type": "refused"'):
-                return 1
-    except KeyboardInterrupt:
-        return 0
-    finally:
-        conn.close()
-    return 0
+    if args.broker_port is None and not any((args.ca, args.cert, args.key, args.reader)):
+        # The agent's own stream, read as the agent: its own broker and its own certificate.
+        from macf.pd.broker_defaults import pki_paths
+        from macf.pd.core import DeclarationRefused, load_declaration
+        from macf.pd.broker_defaults import with_own_broker
+        try:
+            section = with_own_broker(load_declaration(home, card), home, card).broker
+        except DeclarationRefused as e:
+            print(f"maceff_pd: {card}: the declaration can't be read: {e}", file=sys.stderr)
+            return 1
+        placeholders = {"agent_home": str(home), "card": card}
+        args.broker_port = section.port
+        args.ca = section.certificate_authority_file.format_map(placeholders)
+        args.cert = section.client_certificate_file.format_map(placeholders)
+        args.key = section.client_key_file.format_map(placeholders)
+        args.reader = card
+    return _subscribe_broker(args, card, position)
 
 
 def _subscribe_broker(args: argparse.Namespace, card: str, position) -> int:

@@ -54,7 +54,10 @@ jobs:
         # `amail` is here because the amail suite imports the crypto backend.
         # Without it those tests would SKIP rather than fail, and a silently
         # skipped security suite is the quietest way to stop testing something.
-        run: pip install -e "./macf[test,proxy,amail,broker]"
+        run: pip install -e "./macf[test,proxy,amail]"
+
+      - name: Install mosquitto, the broker every daemon runs (persistent_layer 11.4)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq mosquitto && sudo systemctl disable --now mosquitto || true
 
       - name: Create CI environment directories
         if: env.RUN_TESTS == 'true'

@@ -35,7 +35,6 @@ from macf.pd.names import (  # re-exported: interface's callers import these fro
     control_socket,
     declaration_path,
     ensure_runtime_dir,
-    events_socket,
     launchd_label,
     pd_id,
     record_path,
@@ -487,18 +486,6 @@ class Declaration(_Closed):
             raise ValueError("an agent's daemon admits no members; only a system or fleet daemon is an association")
         if self.members and self.broker is None:
             raise ValueError("members join through the association's broker; declare broker as well")
-        return self
-
-    @model_validator(mode="after")
-    def _a_broker_needs_its_client_installed(self) -> "Declaration":
-        """A declaration naming a broker or an association is refused at load when the MQTT
-        client isn't installed, naming the extra, rather than failing later at an import."""
-        if self.broker is None and self.association is None:
-            return self
-        import importlib.util
-        if importlib.util.find_spec("paho") is None:
-            raise ValueError("this declaration names a broker or an association, which needs the MQTT "
-                             "client: install macf with its broker extra, pip install 'macf[broker]'")
         return self
     operator_uid: Optional[int] = Field(default=None, ge=0)
 

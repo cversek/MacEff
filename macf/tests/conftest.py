@@ -49,6 +49,19 @@ SAMPLE_AGENT_NAME = "TestAgent"
 SAMPLE_TIMEZONE = "America/New_York"
 
 
+@pytest.fixture(autouse=True)
+def _a_free_broker_port_for_each_test_daemon(monkeypatch):
+    """Every daemon runs its own broker on a port derived from its card (persistent_layer 11.4).
+    Test daemons share a few cards and run in parallel, so each test gets a free port of its own,
+    and no test's broker unit fails to bind because another test holds the same port."""
+    import socket as _socket
+    with _socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    import macf.pd.broker_defaults as bd
+    monkeypatch.setattr(bd, "default_port", lambda card: port)
+
+
 def _addressing(flat, domain="agents.test"):
     """Render the amail addressing config from a flat agent -> contacts mapping.
 

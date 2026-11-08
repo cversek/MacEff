@@ -452,22 +452,6 @@ def test_the_export_link_records_each_change_of_reason_once(tmp_path):
     assert seen[-1] is None and len(seen) == 2
 
 
-def test_a_declaration_naming_a_broker_needs_the_mqtt_client(monkeypatch):
-    import importlib.util
-    from pydantic import ValidationError
-    from macf.pd.interface import Declaration
-    real = importlib.util.find_spec
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a: None if name == "paho" else real(name, *a))
-    broker = {"port": 18830, "certificate_authority_file": "a", "server_certificate_file": "b",
-              "server_key_file": "c", "client_certificate_file": "d", "client_key_file": "e"}
-    with pytest.raises(ValidationError, match=r"macf\[broker\]"):
-        Declaration.model_validate({"version": 1, "agent": AGENT, "broker": broker})
-    Declaration.model_validate({"version": 1, "agent": AGENT})      # no broker, nothing needed
-
-
-# --- the declaration's broker section -----------------------------------------------------------
-
-
 def test_a_declaration_names_its_broker_and_the_daemon_renders_it(tmp_path):
     from macf.pd.broker_link import render_files
     from macf.pd.interface import Declaration
@@ -571,3 +555,65 @@ def test_the_wrapper_passes_a_stop_on_to_the_broker():
     code = run(child, 1, lambda: None, poll_s=0.05, probe=lambda port: True,
                stopping=lambda: time.monotonic() > asked_at)
     assert code != 0 and time.monotonic() - started < 5
+
+
+# --- the clean break: every daemon's stream is its own broker (MIS-0002 R150, R151, R169) ------
+
+
+def test_every_daemon_runs_its_own_broker(tmp_path):
+    """A declaration that names no broker gets the daemon's own: a section with its own
+    authority and certificate, made with no root step, and a broker unit. One that names its
+    broker in full keeps it."""
+    import subprocess
+    from macf.pd.broker_defaults import with_own_broker
+    from macf.pd.interface import BrokerSection, Declaration
+    bare = Declaration(version=1, agent=AGENT)
+    d = with_own_broker(bare, tmp_path, AGENT)
+    assert d.broker is not None and [u.name for u in d.units] == ["broker"]
+    pki = tmp_path / ".maceff" / "pd" / "broker"
+    assert pki.stat().st_mode & 0o777 == 0o700
+    for f in ("authority.key", "own.key", "authority.crt", "own.crt"):
+        assert (pki / f).stat().st_mode & 0o777 == 0o600, f
+    verify = subprocess.run(["openssl", "verify", "-CAfile", str(pki / "authority.crt"), str(pki / "own.crt")],
+                            capture_output=True, text=True)
+    assert verify.returncode == 0, verify.stdout + verify.stderr
+    subject = subprocess.run(["openssl", "x509", "-in", str(pki / "own.crt"), "-noout", "-subject", "-ext",
+                              "subjectAltName"], capture_output=True, text=True).stdout
+    assert cert_name(AGENT) in subject and "127.0.0.1" in subject
+    again = with_own_broker(bare, tmp_path, AGENT)
+    assert (pki / "own.crt").read_bytes() == (tmp_path / ".maceff/pd/broker/own.crt").read_bytes()
+    assert again.broker.certificate_authority_file == d.broker.certificate_authority_file
+    named = BrokerSection(port=18830, certificate_authority_file="a", server_certificate_file="b",
+                          server_key_file="c", client_certificate_file="d", client_key_file="e")
+    kept = with_own_broker(Declaration(version=1, agent=AGENT, broker=named), tmp_path, AGENT)
+    assert kept.broker == named
+
+
+def test_a_subscriber_receives_only_the_sources_it_subscribed():
+    """A subscriber's filters, made from the sources it chose, match those sources' topics and no
+    others (R151): the broker delivers only what a subscription's filters match."""
+    from paho.mqtt.client import topic_matches_sub
+    chosen = ["pd_unit_state", "zone_*"]
+    filters = sorted({f for s in chosen for f in grant_filters(AGENT, s, ["zone_contact", "zone_edge_check"])})
+    def receives(source):
+        return any(topic_matches_sub(f, source_topic(AGENT, source)) for f in filters)
+    assert receives("pd_unit_state") and receives("zone_contact") and receives("zone_edge_check")
+    assert not receives("pd_entry_due") and not receives("tool_call_completed")
+
+
+def test_a_silenced_source_is_not_published(tmp_path):
+    """MIS-0002 R152 on the broker: the operator's silence acts before publishing."""
+    from macf.pd.broker import Publisher
+    from macf.pd.stream import EventStream, Rules
+    log = tmp_path / "events.jsonl"
+    log.write_text("")
+    rules = Rules()
+    rules.apply("silence", "tool_*")
+    from macf.pd.stream import matches
+    sent = []
+    p = Publisher(EventStream(AGENT, log), sent.append,
+                  silenced=lambda s: matches(s, [x for x in rules.silenced if not x.startswith("@")]))
+    append(log, "tool_call_completed", tool="Bash")
+    append(log, "pd_unit_state", unit="a")
+    p.pump()
+    assert [m.topic for m in sent] == [source_topic(AGENT, "pd_unit_state")]

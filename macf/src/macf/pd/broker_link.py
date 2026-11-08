@@ -129,8 +129,11 @@ class BrokerLink:
 
     def __init__(self, card: str, log_path: Path, section: BrokerSection, placeholders: Dict[str, str],
                  *, client=None, members: Sequence[str] = (),
-                 on_findings: Optional[Callable[[List[str]], None]] = None):
+                 on_findings: Optional[Callable[[List[str]], None]] = None,
+                 rules: Optional[Callable[[], object]] = None):
         self.card = card
+        #: The operator's rules in force, read live (MIS-0002-R152); a silenced source isn't published.
+        self.rules = rules
         self.section = section
         self.view = assoc.MembershipView(expected=list(members)) if members else None
         self.on_findings = on_findings
@@ -140,14 +143,26 @@ class BrokerLink:
         self.stream = EventStream(card, log_path)
         self.stream.start_at_end()      # readers catch up by replay; the past isn't re-published
         publish = nowait_publish(self.client)
-        self.publisher = b.Publisher(self.stream, publish)
-        self.responder = b.ReplayResponder(self.stream, publish, section.readers)
+        self.publisher = b.Publisher(self.stream, publish, silenced=self._silenced)
+        # The daemon's own certificate reads its whole stream, replays included: the agent reading
+        # its own stream (``pd stream subscribe`` with no flags) is that reader.
+        self.responder = b.ReplayResponder(self.stream, publish, {**section.readers, card: ["*"]})
         #: The newest request of each granted reader not yet taken; a newer one replaces it.
         self.requests: Dict[str, bytes] = {}
         self._lock = threading.Lock()
         self.client.on_message = self._on_message
         self.client.on_connect = self._on_connect
         self.last_error: Optional[str] = None
+
+    def _silenced(self, source: str) -> bool:
+        """A source the operator silenced isn't published. A rule naming a subscriber (``@name``)
+        or a route acts on the notifier's deliveries; on the broker, which reader gets which
+        source is the declaration's grants (``broker.readers``)."""
+        if self.rules is None:
+            return False
+        from macf.pd.stream import matches
+        rules = self.rules()
+        return matches(source, [p for p in rules.silenced if not p.startswith("@")])
 
     @staticmethod
     def _client(section: BrokerSection, placeholders: Dict[str, str]):

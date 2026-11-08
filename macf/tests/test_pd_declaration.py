@@ -192,7 +192,7 @@ def test_a_restarted_daemon_publishes_the_declaration_it_reloaded(tmp_path, scri
     time.sleep(0.01)
     run_daemon(home, base)
     view = sv.read_agent(home)
-    assert [u.name for u in view.units.units] == ["worker", "helper"]
+    assert [u.name for u in view.units.units] == ["worker", "helper", "broker"], "every daemon also runs its own broker"
     assert view.units.published_at > stamped
 
 

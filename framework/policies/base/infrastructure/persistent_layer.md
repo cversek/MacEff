@@ -108,9 +108,9 @@ MacEff's long-lived machinery grew one piece at a time, and most of it died with
 - What happens when a subscriber falls behind, or reconnects after records it never saw?
 - Which records can a subscriber trust to say what the layer did?
 - Who may subscribe, and how does the operator silence or reroute the stream?
-- How does a daemon publish its stream on its own broker, and who may read it there? (prototype)
+- How does my daemon publish its stream on its own broker, and how do I read it?
 - How does a reader that reconnects to the broker catch up without gaps or duplicates?
-- How does a daemon join an association, what does it export, and what travels up to the fleet? (prototype)
+- How does a daemon join an association, what does it export, and what travels up to the fleet?
 - My daemon's broker or export link reads as unreachable. How do I find the cause?
 
 **12 The Daemon and Its Control Socket**
@@ -986,46 +986,21 @@ Every start, stop and restart the core performs is a `pd_control` event naming w
 
 ### 11.4 The event stream
 
-**What it is.** Every event your persistent layer records is published, as it is recorded, on one event stream [MIS-0002-R150 (layer_MUST_publish_event_stream)]. The stream is a way of reading your event log, not a second copy of it: the log stays the only store. Anything that tells a person, an agent or an app about your layer is a subscriber to the stream. The MacEff channel, the tray, and a bridge to the operator are meant to be subscribers, and nothing keeps a parallel feed. Today the MacEff channel still takes notices on its own socket (1.3), and no bridge to the operator is built: moving them onto the stream is a later step. The channel is already under the stream's rules, though, as the subscriber `@channel` (below).
+**What it is.** Every event your persistent layer records is published, as it is recorded, on one event stream: your daemon's own MQTT broker [MIS-0002-R150 (layer_MUST_publish_event_stream)]. The stream is a way of reading your event log, not a second copy of it: the log stays the only store. Every daemon runs its broker, an agent's, a system's and a fleet's alike, and there is no other stream: the socket that once served it is gone (the operator's ruling of 2026-11-08, "replace the stream wholesale with the MQTT and cut the legacy path"). The MacEff channel keeps its own socket (1.3), which is the notice path, not the stream.
 
-**Where it is.** Your primal daemon serves the stream on `<id>.events.sock` in its runtime directory, beside its control and channel sockets, mode 0600 (12.2). `<id>` is the calling card exactly, so `IraMacEff_ee9a78` serves `IraMacEff_ee9a78.events.sock`. It follows its own event log, as the core already does, and sends each new record to the subscribers that asked for its source. "As it records it" means within the daemon's tail interval, about one second: it reads the log on every pass of its loop, a quarter of a second apart, and that is the bound a subscriber may rely on. The daemon polls; it doesn't wait on kqueue or inotify, and nothing signals it from `append_event`.
+**Your broker, with nothing to do.** A declaration that names no `broker` gets its daemon's own (`macf.pd.broker_defaults`):
+- **Its own certificate authority,** made by the daemon at its first start, in `~/.maceff/pd/broker/`, mode 0700 with every file 0600. No root step. It signs one certificate, the daemon's own, named by your card lowercased, which serves the broker as its server certificate and the daemon as its client. Nothing else trusts that authority, so only your daemon connects. The certificates are made anew within 30 days of their end.
+- **A port derived from your card,** between 20000 and 29999. Two daemons on one host can still derive the same one, and the install and start refuse that clash, naming whose; the declaration then names a `broker` with its own port.
+- **A broker unit,** when the declaration declares none: `python -m macf.pd.broker_unit` running mosquitto, with the daemon's own interpreter. mosquitto is a host package: on Linux `apt install mosquitto`, on macOS `brew install mosquitto`, and in a container its base image carries it. Without it the broker unit fails, and says so, while the rest of the daemon runs.
+- A declaration names `broker` in full only where others must trust it: an association, whose members hold certificates the operator's authority signs, or readers the operator grants (11.5).
 
-**Subscribing.** A subscriber connects and, within three seconds, sends one line. The line names the sources it takes (event names, with `*` globs), and optionally the position of the last record it saw and a name it goes by. A connection that sends nothing in time is closed. `macf_tools pd stream subscribe --source 'pd_unit_*' --name watch` does this and prints every line it gets; `--position LOG:OFFSET`, the `log` and `offset` of a record's position, resumes just after that record. The command doesn't reconnect on its own. When the stream ends, as when the daemon restarts, it exits 0, and a subscriber that must not miss records runs it again with the last position it printed. The daemon answers with a `welcome` line naming where the stream starts for it. Each record then arrives as one JSON line with:
-- its **position**: the log's identity (its inode and a digest of its first line, since rotation rewrites the file in place) and the byte offset just past the record, which is a line boundary;
-- its **source**, **agent** and **time**, as the layer set them;
-- its **origin**;
-- the record itself.
+**Reading it.** `macf_tools pd stream subscribe` with no flags reads your own stream as you, with your own certificate: `--source 'pd_unit_*'` picks sources, and `--position LOG:OFFSET` resumes just after a record, from the log. Each record is one JSON line: its **position** (the log's identity, its inode and a digest of its first line, and the byte offset just past the record), its **source**, **agent** and **time** as the layer set them [MIS-0002-R155 (stream_record_MUST_name_source)], its **origin**, and the record itself. A subscriber receives only the sources it chose [MIS-0002-R151 (subscriber_MUST_receive_chosen_sources)]. Another daemon's broker is read with `--broker-port`, `--ca`, `--cert`, `--key` and `--reader`, as a reader that daemon's declaration grants (11.5) [MIS-0002-R156 (subscriber_MUST_be_granted_agents)].
 
-**On the wire**, one JSON object per line each way:
-- hello: `{"sources": ["pd_unit_*"], "position": {"log": "<identity>", "offset": 1234}, "name": "watch"}`, with `position` and `name` optional. A position is copied whole from the last record received.
-- welcome: `{"type": "welcome", "agent", "position", "sources", "granted"}`.
-- record: `{"type": "record", "position", "source", "agent", "time", "origin", "record"}`.
-- gap: `{"type": "gap", "agent", "time", "from", "to", "reason"}`, where `reason` is `rotated`, `not_a_line_boundary`, `backlog` or `overflow`.
-- refused: `{"type": "refused", "error"}`.
+**Origin.** Anything running as your uid can append a line to your log, so a record read back from it carries `origin: log`, whatever its event name claims. A record the daemon wrote itself, learned in-process as it wrote it and found byte for byte at that offset, carries `origin: daemon`; it remembers its last ten thousand lines, so history and replays are `origin: log`. A subscriber that alerts a person alerts on `origin: daemon` records. This stops a confused agent, not a compromised one (10.6).
 
-A subscriber receives only the sources it chose [MIS-0002-R151 (subscriber_MUST_receive_chosen_sources)]. A subscriber refused for any reason gets one `refused` line saying why, and the connection closes.
+**Nothing is skipped in silence, and nothing blocks** [MIS-0002-R154, R153]: each record names the previous position of its own source, a reader that reconnects asks the daemon for a replay from the log, and a gap is said where records are gone; publishing and replays never block the daemon's loop. The mechanisms are in 11.5.
 
-**Nothing is skipped in silence** [MIS-0002-R154 (subscriber_MUST_resume_from_last_record)]. On reconnect with a position, the stream resumes just after it, from the log. If the position names another log, or isn't on a line boundary of this one, the stream sends one `gap` record saying from where to where records may be missing, then continues. A subscriber is never handed the next record as if nothing were missed. A resume reads at most 8 MB of the log at once, and one from further back gets a `gap` (`backlog`) to where that read starts.
-
-**Rotation changes the log's identity.** Rotation rewrites the log in place from a later line, keeping its inode and its current cycle, so its first line, and with it the identity in every position, changes. What a subscriber gets depends on whether it was connected:
-- **Connected through the rotation:** the daemon finds the last line it had read in the rewritten log and goes on without a gap, when rotation kept it. When it didn't, each subscriber gets a `gap` (`rotated`).
-- **Reconnecting with a position from before the rotation:** that position names a log that no longer exists, even when the record it points to was kept. The subscriber gets a `gap` (`rotated`), then the rotated log from its start, within the 8 MB bound. Records it already saw can come again, under new positions.
-
-**A slow subscriber never slows the layer** [MIS-0002-R153 (subscriber_MUST-NOT_block_layer)]. Each subscriber has a bounded queue of a thousand records, and sends never block. A subscriber that falls behind loses its own backlog, not the daemon's time. Its next record is a `gap` (`overflow`) from the last record it still held. Each uid may hold eight connections, a hello not yet sent included.
-
-**What a record can claim** [MIS-0002-R155 (stream_record_MUST_name_source)]. `agent` and `time` come from the layer, never from a field a publisher put in the event's data: `agent` is the daemon's own agent, and `time` the record's timestamp in the log, which `append_event` writes.
-- Anything running as your uid can append a line to your log: a shell redirect, or a tool steered by injected text. So a record read back from the log carries `origin: log`, whatever its event name claims.
-- A record the daemon writes itself carries `origin: daemon`. The daemon learns the line in-process as it writes it, and checks that the log holds exactly those bytes at that offset; a copy appended by anything else, even byte for byte, is `origin: log`. Only these can vouch that the layer did what they say. The daemon remembers the last ten thousand lines it wrote, in memory, so a record from before this daemon started, or replayed on a resume from further back, is `origin: log` even if the layer wrote it. `origin: daemon` marks live records, not history.
-- A subscriber that alerts a person, such as an operator bridge, alerts on `origin: daemon` records.
-- This is the same threat model as your own entries (10.6): it stops a confused agent, not a compromised one. The operator's rules below are folded from the log too, so a forged rule line is read like any other.
-
-**Who may subscribe** [MIS-0002-R156 (subscriber_MUST_be_granted_agents)]. The daemon checks the connecting process's uid, as the kernel reports it (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on macOS):
-- **Your own uid** may subscribe to your sources.
-- **Any other uid** needs a grant in the operator's declaration, naming that uid and the sources it may take: `stream_grants: [{"uid": 0, "sources": ["pd_unit_state", "pd_daemon_start"]}]`. A host-wide watch might be granted unit states and notices, but never your tool events. A grant narrows what the subscriber asked for; the `welcome` names what was granted. The socket's mode and the private runtime directory keep every other non-root uid from reaching it at all, so today a grant is how a root watch, or a later deployment that opens the socket, gets in.
-- A subscriber of one daemon sees only that agent's records. Watching several agents means connecting to several daemons, each granting it separately.
-- **A grant separates uids, not agents.** On a host where several agents share one login, every one of them is "your own uid" to every other's daemon, and each may subscribe to the others' streams. Separating agents needs an account per agent, as containers have. The stream can't be more private than the event log it reads, which is mode 0600 to the login. The cap of eight connections per uid is likewise one budget per daemon for the whole login on a shared login, so another agent's subscribers, or a reconnect loop, can fill it and leave the tray or an operator bridge refused.
-
-**The operator can silence or reroute any source or subscriber without a restart** [MIS-0002-R152 (operator_MUST_silence_and_reroute)]. The commands are `macf_tools pd stream silence <source|@subscriber>`, `unsilence <source|@subscriber>`, and `route <source> <subscriber>`, which sends a source only to that subscriber, among those that chose it; `route <source> --clear` takes the route away. A subscriber is named with `@`, by the name its hello gave.
+**The operator can silence or reroute any source or subscriber without a restart** [MIS-0002-R152 (operator_MUST_silence_and_reroute)]. The commands are `macf_tools pd stream silence <source|@subscriber>`, `unsilence <source|@subscriber>`, and `route <source> <subscriber>`; `route <source> --clear` takes the route away. **On the broker, a silenced source isn't published.** A rule naming a subscriber (`@name`), and a route, act on the notifier's deliveries, of which your session (`@channel`) is the one built; which reader of the broker gets which source is the declaration's grants (11.5).
 - **A source in a rule is an event name or a glob,** matched with `*` and `?` as a subscriber's sources are. A subscriber's name is matched exactly. Each source is its own name: `amail` (mail arrived) and `pd_unread_mail` (mail left unread) are two, and silencing `amail` leaves `pd_unread_mail` delivered. Keeping both from your session takes a rule for each.
 - Each one is recorded as a `pd_stream_rule` event before it takes effect, and the daemon's rules are what those events fold to, so a rule survives a restart. A rule that can't be recorded isn't set.
 - A silenced source still lands in the log. Only its delivery stops.
@@ -1039,9 +1014,9 @@ A subscriber receives only the sources it chose [MIS-0002-R151 (subscriber_MUST_
 
 **What the stream is not for.** Quiet hours, a daily bound, and delivering something exactly once belong to whichever subscriber delivers to a person, not to the layer. The operator route beyond unread mail, and "hold until present", are that subscriber's job, left by MIS-0002 R42 to a successor MIS.
 
-### 11.5 The stream on the daemon's own broker (prototype)
+### 11.5 The broker in full: readers, associations, and what never blocks
 
-**Status: prototype, pending the maintainers' argument and the operator's ruling.** A daemon whose declaration names a `broker` section also publishes its stream on its own MQTT broker. Without the section, nothing here applies, and the socket of 11.4 is the stream.
+Every daemon runs its own broker (11.4). This section is the broker in full: what a declaration names when others must trust it, and the mechanisms behind 11.4's promises.
 
 **What to install.** The MQTT client is the optional extra `pip install 'macf[broker]'`, so a seat whose declaration names no broker installs nothing new. A declaration that names a `broker` or an `association` is refused at load without it, naming the extra. mosquitto, the broker itself, is a host package the operator installs.
 

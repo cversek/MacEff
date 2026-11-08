@@ -28,7 +28,7 @@ address. ``localhost`` resolves to ``::1`` first on some systems (macOS among th
 first attempt then fails; the server certificate carries ``LOOPBACK`` as an IP name.
 """
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from macf import calling_card
 
@@ -410,10 +410,13 @@ class Publisher:
     the next pump, so a broken connection delays records and loses none until ``PENDING_MAX``,
     where the backlog is dropped and a gap published in its place (R153)."""
 
-    def __init__(self, stream, publish, *, wall=None, max_seed_bytes: int = 8 * 1024 * 1024):
+    def __init__(self, stream, publish, *, wall=None, max_seed_bytes: int = 8 * 1024 * 1024,
+                 silenced: Optional[Callable[[str], bool]] = None):
         import time as _time
         self.stream = stream
         self.publish = publish
+        #: Whether the operator has silenced a source (MIS-0002-R152): its records aren't published.
+        self.silenced = silenced or (lambda source: False)
         self._wall = wall or _time.time
         self.previous = seed_previous(stream.log_path, stream.identity, stream.offset, max_seed_bytes)
         self.pending: List[object] = []     # stream records, or ready Messages (gaps)
@@ -423,7 +426,7 @@ class Publisher:
         records, gap = self.stream.take()
         if gap is not None:
             self.pending.append(gap_message(self.stream.card, gap[0], gap[1], "rotated", self._wall()))
-        self.pending.extend(records)
+        self.pending.extend(r for r in records if not self.silenced(r["source"]))
         if len(self.pending) > PENDING_MAX:
             first = next((r["position"] for r in self.pending if isinstance(r, dict)), None)
             last = next((r["position"] for r in reversed(self.pending) if isinstance(r, dict)), None)
