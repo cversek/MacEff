@@ -57,6 +57,14 @@ def _a_refused_daemon_exits_at_once_in_tests(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_test_reads_the_hosts_registry(tmp_path, monkeypatch):
+    """Every ingest judges agent mail against the operator's registry (MIS-0004 R44), by default
+    /etc/maceff/registry.yaml. A host that has one would make a test's verdicts depend on which
+    agents its operator declared, so each test starts with none; a test wanting one names it."""
+    monkeypatch.setenv("MACF_AMAIL_REGISTRY", str(tmp_path / "no-registry" / "registry.yaml"))
+
+
+@pytest.fixture(autouse=True)
 def _no_test_daemon_reads_the_developers_login(monkeypatch):
     """A daemon checks its account's Claude login from the stored credential's expiry dates
     (#884). A test daemon runs as the developer, so it would read the developer's own credential,

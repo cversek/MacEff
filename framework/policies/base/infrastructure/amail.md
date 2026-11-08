@@ -3,6 +3,7 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.16.0 — §3.2.3: every agent message is judged against the operator's registry (MIS-0004 R44), by the broker and the recipient with one rule, card and time: the broker resolves the sender's card and writes it with its acceptance time into the hand-off sidecar. A declared sender's unsigned or failed signature is suspect; any other sender is unverified; contact books no longer verify. Minor for operators: a declared agent's verdicts change, and a receiver's amail settings may name `domain`.
 **Version**: 1.15.0 — §3.2.3: the operator's registry. Each MacEff agent's public key is declared with its account in a root-owned file only the operator can write, which also records each certificate his authority issues by name, serial and expiry; anything else can write it and it is refused when read (MIS-0004 R42). `amail registry check` reports it.
 **Version**: 1.14.0 — §3.4: the broker's health is its last sweep (MIS-0004 R31). A deployment names the schedule that runs the inbound `sweep` in its declaration's `mail_sweep_schedule`; the broker is healthy only when that sweep's last run ended ok, and the outside watch alerts as `mail-broker: SWEEP-FAILED` when it failed, is overdue, or never ran, so stuck mail reaches a person (R32). Minor: a new declaration field and a new alert an operator can meet.
 **Version**: 1.13.0 — the spool consumer: an entry that fails unexpectedly is counted and the run goes on; after `max_failures` (default 3) it is quarantined with its last error and audited (MIS-0004 R17, R20). Minor: an outcome an operator can meet in the quarantine.
@@ -261,8 +262,8 @@ thing that *should* change; contacts, stored mail and the message format do not.
 
 **Where the write lands, and why it is not the pickup box.** The pickup box is
 the boundary between an agent and **its own** broker. The broker that writes
-there has consulted the recipient's contact book, classified the message with the
-recipient's keys, and vouched for both in the sidecar — and a broker on the other
+there has consulted the recipient's contact book, classified the message against
+the operator's registry, and vouched for both in the sidecar — and a broker on the other
 side of a mount can do none of that, because it cannot read the peer's book. A
 pair it wrote into the box would carry an authorization claim nobody made, and
 moving the recipient-side check to ingest would put an authorization predicate in
@@ -643,8 +644,9 @@ means something to a party that doesn't trust the broker.
   It never prints the private key.
 - **The declare step.** An agent whose configuration sets `signing_required` refuses
   to send without a usable key. Any other agent without a key sends unsigned and is
-  told on stderr. Receivers classify mail exactly as before; refusing unsigned agent
-  mail (R43) and marking it suspect (R44) switch on only once every key is declared.
+  told on stderr. Until the operator declares an agent's key, its mail is unverified at
+  every receiver, never suspect (R44, §3.2.3); the broker's refusal of unsigned agent
+  mail (R43) switches on only once every key is declared.
 
 ### 3.2.3 The operator's registry
 
@@ -713,8 +715,20 @@ expiry, never its key; the repo owner chose one file for both.
   certificates counted, never a key's bytes.
 - Lookups compare cards without regard to case, and the file is read at each decision,
   so an edit takes effect without a restart.
-- The registry only declares. Refusing an agent's unsigned mail (R43) and marking a
-  failed signature suspect (R44) read it once every key is declared.
+- **Every agent message is judged against it (R44)**, by the broker when it hands the
+  message off and by the recipient at ingest, with one rule. A sender the registry
+  declares is held to its keys: unsigned, or signed with no key valid for it, is
+  suspect. Any other sender, and every sender while the registry is missing or can't
+  be trusted, is unverified. Nothing falls back to the keys a contact book declares.
+- **One card, one time.** The broker resolves the sender's card once, from a zone
+  address with its token removed, from the deployment's `agent_cards` for its own
+  domain, or from a local part that is itself a card. It writes that card and its
+  acceptance time (`sender_card`, `handed_off_at`) into the hand-off sidecar, and the
+  recipient judges by both, so the two never disagree on the same message. A sidecar
+  that doesn't name the message gives no card, and the mail is unverified. A
+  receiver's own domain comes from `domain` in its amail settings.
+- Refusing an agent's unsigned mail at the broker (R43) switches on once every key is
+  declared.
 
 ### 3.3 The audit record
 
