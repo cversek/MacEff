@@ -62,7 +62,8 @@ def read_acceptance_time(sidecar_path: Path, own_domain: str, broker_uid: int, *
     # One descriptor for the check and the read: stat-then-open by name would let a group member
     # rename a forged sidecar over the path in between, and a symlink there is never followed.
     try:
-        fd = os.open(sidecar_path, os.O_RDONLY | os.O_NOFOLLOW)
+        # O_NONBLOCK: a FIFO planted at the path would otherwise block the open itself.
+        fd = os.open(sidecar_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         return None  # noqa: MACEFF003 - no sidecar, or a symlink: no record, so only current keys count (R45)
     try:

@@ -398,3 +398,27 @@ def test_a_sidecar_swapped_after_the_owner_check_is_not_read(tmp_path, monkeypat
     link = tmp_path / "link.json"
     link.symlink_to(side)
     assert attest.read_acceptance_time(link, "here.test", broker_uid=os.getuid(), payload=payload, message_id=mid) is None
+
+
+def test_a_fifo_at_the_sidecar_path_is_refused_at_once(tmp_path):
+    """A named pipe planted at the path would block a plain open before the regular-file check
+    could refuse it; the open doesn't wait (CTB on #928)."""
+    import signal
+    from macf.amail import attest
+    fifo = tmp_path / "s.json"
+    os.mkfifo(fifo)
+
+    class Hung(BaseException):
+        """Not an OSError, which the function would swallow and so hide the hang."""
+
+    def hung(*_):
+        raise Hung("read_acceptance_time blocked on a FIFO")
+    old = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(3)
+    try:
+        got = attest.read_acceptance_time(fifo, "here.test", broker_uid=os.getuid(),
+                                          payload=b"x", message_id="msg-1-0a0b0c0d0e0f")
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+    assert got is None
