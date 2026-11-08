@@ -543,6 +543,24 @@ def test_a_rendered_broker_configuration_is_private(tmp_path):
     assert (conf.parent / "access_rules").stat().st_mode & 0o777 == 0o600
 
 
+def test_rendering_into_a_missing_runtime_directory_makes_it_private(tmp_path):
+    """The system daemon's first start: its runtime directory didn't exist yet, rendering made
+    it with the umask's 0755, and the daemon's own check then refused it (Nov 8)."""
+    import os
+    from macf.pd.broker_link import render_files
+    from macf.pd.interface import BrokerSection
+    s = BrokerSection(port=18830, certificate_authority_file="a", server_certificate_file="b", server_key_file="c",
+                      client_certificate_file="d", client_key_file="e")
+    runtime = tmp_path / "run" / "maceff_pd"
+    old = os.umask(0o022)
+    try:
+        render_files(AGENT, s, runtime, {})
+    finally:
+        os.umask(old)
+    assert runtime.stat().st_mode & 0o777 == 0o700
+    assert (runtime / f"{AGENT}.broker").stat().st_mode & 0o777 == 0o700
+
+
 def test_the_wrapper_passes_a_stop_on_to_the_broker():
     import sys
     import time

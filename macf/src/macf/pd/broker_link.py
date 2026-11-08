@@ -89,8 +89,9 @@ def render_files(card: str, section: BrokerSection, runtime: Path, placeholders:
     """Write the broker's access rules and configuration under *runtime*; the configuration's
     path, which the broker unit's command names. With *members*, the broker is an association's:
     each member may write its own subtree, and only this daemon reads them."""
+    Path(runtime).mkdir(mode=0o700, parents=True, exist_ok=True)    # never the umask's 0755
     d = Path(runtime) / f"{card}.broker"
-    d.mkdir(parents=True, exist_ok=True)
+    d.mkdir(mode=0o700, exist_ok=True)
     d.chmod(0o700)
     access_rules = d / "access_rules"
     access_rules.write_text(b.render_access_rules(card, readers=section.readers, known_sources=known_sources,

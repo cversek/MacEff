@@ -167,6 +167,10 @@ class Daemon:
             clash = port_clash(self.card, decl.broker.port, declared_broker_ports(self.home))
             if clash is not None:
                 raise DeclarationRefused(clash)
+            # The runtime directory is made private here, before the broker's files go in it:
+            # rendering first let mkdir(parents=True) create it with the umask's 0755, which
+            # the start then refused (seen on the system daemon's first start, Nov 8).
+            ensure_runtime_dir(self.base)
             render_files(self.card, decl.broker, self.base, placeholders, members=decl.members)
             self.broker_link = BrokerLink(self.card, get_log_path(), decl.broker, placeholders,
                                           members=decl.members, on_findings=self._member_findings)
