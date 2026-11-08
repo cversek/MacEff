@@ -134,6 +134,14 @@ def test_the_edge_matches_new_form_cards_and_flags_each_difference():
     assert old_part not in json.dumps(found)
 
 
+def test_a_system_not_yet_cut_over_is_read_as_history_not_refused():
+    """R166: an addressing file that still says Name@shortid is read in the current form, so the
+    watch over several systems doesn't fail on the one that hasn't moved (seen live, Nov 8)."""
+    c = cfg(expected_routes=["dmarc@zone.example"])
+    old_form = "WrenTuba_3c9d1e".replace("_", "@")       # the fixture card, as history spells it
+    assert edge_findings(c, [("aero.local", doc(old_form))], [rule(REAL), rule("dmarc@zone.example")], DROP) == []
+
+
 def test_the_edge_is_recorded_and_alerted_only_when_it_changes():
     h = Harness()
     assert edge_pass(cfg(), ["x"], events=h.events, record=h.record, push=h.push) == ["x"]

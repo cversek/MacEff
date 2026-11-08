@@ -223,7 +223,10 @@ class Declared:
 
 def declared_addresses(cfg: Config, documents: Sequence[Tuple[str, dict]]) -> Declared:
     """The addresses the systems declare under this zone, the revoked ones, and any declared by
-    two systems, from each system's addressing document (``(name, document)``)."""
+    two systems, from each system's addressing document (``(name, document)``). A card a system
+    hasn't cut over yet still reads ``Name@shortid``; it is read as history (MIS-0002-R166), so a
+    watch over several systems doesn't fail on the one that hasn't moved."""
+    from macf import calling_card
     from macf.amail.zone import local_part_from_card
     live, revoked, twice = {}, set(), set()
     for where, doc in documents:
@@ -232,6 +235,8 @@ def declared_addresses(cfg: Config, documents: Sequence[Tuple[str, dict]]) -> De
         bad = {str(t).lower() for t in doc.get("revoked_zone_tokens") or []}
         for name, a in (doc.get("agents") or {}).items():
             card, tok = (a or {}).get("card"), (a or {}).get("zone_token")
+            if card:
+                card = calling_card.from_history(str(card))
             if card and tok:
                 addr = f"{local_part_from_card(card, tok)}@{cfg.zone_domain}"
                 if addr in live:
