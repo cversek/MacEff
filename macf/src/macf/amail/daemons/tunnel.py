@@ -13,13 +13,20 @@ not connected reads overdue to its daemon, as it should.
 
 WHY IT EXITS. When cloudflared exits, this exits with the same code, and the daemon restarts the
 unit under its declared policy. A bad configuration therefore shows as a failing unit with its
-reason in the unit's log, not as a launched process nobody looks at again.
+reason in the unit's log, not as a launched process nobody looks at again. A cloudflared killed by
+a signal exits as a shell reports it, 128 plus the signal's number.
+
+LOOPBACK BY CONSTRUCTION. ``--metrics`` must be a loopback IP address, or the start is refused:
+the metrics server answers anyone who can reach it. The readiness probe asks it directly and
+ignores proxy variables, so a proxy in the unit's environment can't turn a connected tunnel into
+an unreachable one.
 
 STARTED MEANS CONNECTED. "connected" is printed on the first ready answer. If none comes within
 ``--startup-s``, a warning says so and names the metrics address, and the wait continues: the
 daemon's overdue reading is the alarm, this line is the explanation.
 """
 import argparse
+import ipaddress
 import json
 import os
 import shutil
@@ -38,12 +45,16 @@ DEFAULT_METRICS = "127.0.0.1:20241"
 DEFAULT_STARTUP_S = 60.0
 POLL_S = 5.0
 
+# The probe asks loopback, so it never goes through a proxy. Plain urlopen sends an http://
+# request through http_proxy whenever one is set, loopback included.
+_LOOPBACK = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 
 def ready(metrics: str, timeout: float = 3.0) -> Tuple[bool, str]:
     """Whether cloudflared reports at least one registered edge connection, and why not."""
     url = f"http://{metrics}/ready"
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
+        with _LOOPBACK.open(url, timeout=timeout) as r:
             body = r.read(4096)
     except urllib.error.HTTPError as e:
         return False, f"/ready answered {e.code}"
@@ -57,12 +68,9 @@ def ready(metrics: str, timeout: float = 3.0) -> Tuple[bool, str]:
 
 
 PR_SET_PDEATHSIG = 1
-# Read in the wrapper at import, before any fork, so the child can tell whether its parent
-# is still the wrapper that started it.
-_WRAPPER_PID = os.getpid()
 
 
-def die_with_parent() -> None:
+def die_with_parent(wrapper_pid: int) -> None:
     """In the child, before exec: have the kernel send SIGTERM when this wrapper dies.
 
     The daemon stops a unit by its process group, which takes cloudflared with it. A wrapper killed
@@ -73,7 +81,9 @@ def die_with_parent() -> None:
     The signal follows the THREAD that forked, not the process: if the Popen ran on a worker
     thread, the child would be killed when that thread exited, with the wrapper still alive. Keep
     the Popen on the main thread. A wrapper that died between the fork and this call would never
-    send the signal, so the child checks that its parent is still the one that started it."""
+    send the signal, so the child checks that its parent is still ``wrapper_pid``. ``start`` reads
+    that pid just before it forks, not at import: a process that imported this module and forked
+    later would otherwise have every child exit here."""
     if not sys.platform.startswith("linux"):
         return
     import ctypes
@@ -81,8 +91,25 @@ def die_with_parent() -> None:
     if libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0) != 0:
         err = ctypes.get_errno()
         raise OSError(err, "prctl(PR_SET_PDEATHSIG) failed: " + os.strerror(err))
-    if os.getppid() != _WRAPPER_PID:
+    if os.getppid() != wrapper_pid:
         os._exit(1)  # the wrapper is already gone; don't start an orphaned tunnel
+
+
+def start(binary: str, config: str, metrics: str) -> "subprocess.Popen":
+    """Start cloudflared as this process's child, set to die with it (die_with_parent)."""
+    wrapper_pid = os.getpid()   # the process about to fork, read now
+    return subprocess.Popen([binary, "tunnel", "--config", config, "--metrics", metrics, "run"],
+                            preexec_fn=lambda: die_with_parent(wrapper_pid))
+
+
+def is_loopback(metrics: str) -> bool:
+    """Whether a ``host:port`` names a loopback IP address. A name such as localhost doesn't count:
+    it depends on the resolver, and the address should be loopback by construction."""
+    host = metrics.rsplit(":", 1)[0].strip("[]")
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def supervise(child: "subprocess.Popen", metrics: str, startup_s: float,
@@ -101,8 +128,11 @@ def supervise(child: "subprocess.Popen", metrics: str, startup_s: float,
             if stopping():
                 print(f"amail tunnel stopped on request (cloudflared exited with {code})", flush=True)
                 return 0
-            print(f"amail tunnel: cloudflared exited with {code}; the daemon restarts this unit",
+            how = f"was killed by signal {-code}" if code < 0 else f"exited with {code}"
+            print(f"amail tunnel: cloudflared {how}; the daemon restarts this unit",
                   file=sys.stderr, flush=True)
+            if code < 0:
+                return 128 - code   # as a shell reports it; exiting -15 would read as 241
             return code if code != 0 else 1   # a tunnel that stops unasked is never a clean exit
         ok, why = probe(metrics)
         if ok:
@@ -131,14 +161,18 @@ def main(argv=None) -> int:
     p.add_argument("--startup-s", type=float, default=DEFAULT_STARTUP_S)
     p.add_argument("--binary", default=shutil.which("cloudflared") or "/usr/local/bin/cloudflared")
     args = p.parse_args(argv)
+    if not is_loopback(args.metrics):
+        print(f"refusing to start: --metrics {args.metrics} is not a loopback IP address, and the "
+              f"metrics server answers anyone who can reach it (default {DEFAULT_METRICS})",
+              file=sys.stderr)
+        return 78
     if not os.path.exists(args.config):
         print(f"refusing to start: no tunnel config at {args.config}", file=sys.stderr)
         return 78   # EX_CONFIG: restarting cannot fix a missing file
     if not os.access(args.binary, os.X_OK):
         print(f"refusing to start: cloudflared is not installed at {args.binary}", file=sys.stderr)
         return 78
-    child = subprocess.Popen([args.binary, "tunnel", "--config", args.config,
-                              "--metrics", args.metrics, "run"], preexec_fn=die_with_parent)
+    child = start(args.binary, args.config, args.metrics)
     asked = []
 
     def stop(signum, _frame):

@@ -460,10 +460,16 @@ def main() -> int:
             server.shutdown()
 
 
+# The probe asks loopback, so it never goes through a proxy. Plain urlopen sends an http://
+# request through http_proxy whenever one is set, loopback included, and three failed probes make
+# the receiver exit, so a proxied unit environment would restart it in a loop while it was fine.
+_LOOPBACK = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def probe_health(url: str, timeout: float = 5.0) -> bool:
-    """Whether the receiver answers its health path with 200."""
+    """Whether the receiver answers its health path with 200, asked directly over loopback."""
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
+        with _LOOPBACK.open(url, timeout=timeout) as r:
             return r.status == 200
     except (OSError, ValueError):
         return False

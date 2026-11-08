@@ -2642,6 +2642,8 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
 #: Where start-up places the receiver's verification parameters and a deployment's tunnel config.
 RECEIVER_ENV = Path('/opt/amail_ingest/receiver.env')
 TUNNEL_CONFIG = Path('/etc/cloudflared/config.yml')
+#: The account whose daemon runs the receiver: it owns the receiver's spool and log.
+INGEST_ACCOUNT = 'amail_ingest'
 
 
 def _check_inbound_units(agents_config: AgentsConfig) -> None:
@@ -2672,6 +2674,13 @@ def _check_inbound_units(agents_config: AgentsConfig) -> None:
                     found.setdefault(module, []).append(f"{name}/{u.get('name')}")
     receiver = found.get('macf.amail.daemons.receiver')
     tunnel = found.get('macf.amail.daemons.tunnel')
+    misplaced = [r for r in receiver or [] if r.split('/')[0] != INGEST_ACCOUNT]
+    if misplaced:
+        # Refused here, by name, rather than later at the spool's or the log's permissions.
+        raise RuntimeError(
+            f"amail: the receiver unit is declared on {', '.join(misplaced)}, but it must run on "
+            f"the ingest account {INGEST_ACCOUNT}, which owns its spool and log: persistent_layer "
+            "section 8")
     if receiver:
         log(f"amail ingest receiver: declared unit {', '.join(receiver)}; its daemon starts it")
     elif RECEIVER_ENV.exists():

@@ -52,6 +52,42 @@ def test_ready_is_false_when_nothing_listens():
     assert not ok and "unreachable" in why
 
 
+@pytest.fixture
+def proxied(monkeypatch):
+    """A proxy in the environment that refuses every connection. urlopen builds its default opener
+    once and reads the proxy variables then, so drop any opener cached before they were set."""
+    import urllib.request
+    for k in ("http_proxy", "HTTP_PROXY"):
+        monkeypatch.setenv(k, "http://127.0.0.1:9")
+    for k in ("no_proxy", "NO_PROXY"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(urllib.request, "_opener", None)
+
+
+def test_ready_asks_loopback_directly_even_with_a_proxy_set(proxied):
+    """A unit environment carrying http_proxy must not turn a connected tunnel into an
+    unreachable one: urlopen sends http:// through the proxy, loopback included."""
+    srv, addr = _serve(200, {"status": 200, "readyConnections": 2})
+    try:
+        assert tunnel.ready(addr) == (True, "2 edge connection(s)")
+    finally:
+        srv.shutdown()
+
+
+def test_the_receiver_probe_asks_loopback_directly_even_with_a_proxy_set(proxied, monkeypatch):
+    """Through a proxy every probe would fail, and three failures make the receiver exit: a
+    restart loop while the server was fine."""
+    from macf.amail.daemons import receiver
+    monkeypatch.setattr(receiver, "log_event", lambda e: None)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), receiver.IngestHandler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{srv.server_address[1]}{receiver.HEALTH_PATH}"
+        assert receiver.probe_health(url) is True
+    finally:
+        srv.shutdown()
+
+
 class _Child:
     def __init__(self, exit_after, code):
         self.polls, self.exit_after, self.code = 0, exit_after, code
@@ -81,6 +117,13 @@ def test_a_clean_child_exit_is_still_a_failure():
                             sleep=lambda s: None) == 1
 
 
+def test_a_cloudflared_killed_by_a_signal_exits_as_a_shell_reports_it(capsys):
+    """Popen gives a signal death as a negative code, and exiting -15 would read as 241."""
+    assert tunnel.supervise(_Child(0, -15), "x", 60, probe=lambda m: (True, ""),
+                            sleep=lambda s: None) == 143
+    assert "killed by signal 15" in capsys.readouterr().err
+
+
 def test_never_connecting_warns_once_after_the_startup_window(capsys):
     t = iter(range(0, 1000, 30))
     tunnel.supervise(_Child(exit_after=5, code=2), "127.0.0.1:20241", startup_s=60,
@@ -92,6 +135,17 @@ def test_never_connecting_warns_once_after_the_startup_window(capsys):
 
 def test_main_refuses_a_missing_config_with_ex_config(tmp_path):
     assert tunnel.main(["--config", str(tmp_path / "none.yml")]) == 78
+
+
+@pytest.mark.parametrize("metrics, loopback", [
+    ("127.0.0.1:20241", True), ("[::1]:20241", True),
+    ("0.0.0.0:20241", False), ("192.168.1.5:20241", False), ("localhost:20241", False),
+])
+def test_a_metrics_address_off_loopback_is_refused(tmp_path, capsys, metrics, loopback):
+    """The metrics server answers anyone who can reach it, so it stays on loopback by
+    construction. A loopback address gets past this check to the missing config's refusal."""
+    assert tunnel.main(["--config", str(tmp_path / "none.yml"), "--metrics", metrics]) == 78
+    assert ("not a loopback IP address" in capsys.readouterr().err) is (not loopback)
 
 
 # --------------------------------------------------------------------------- receiver
@@ -173,6 +227,15 @@ def test_a_placed_receiver_env_with_no_unit_refuses_the_start(start):
         start._check_inbound_units(_cfg({}))
 
 
+def test_a_receiver_declared_on_another_account_refuses_the_start(start):
+    """The receiver owns the ingest spool and log. On any other account it would fail later, at
+    their permissions, so the start-up check refuses it by name."""
+    with pytest.raises(RuntimeError, match="ingest account amail_ingest"):
+        start._check_inbound_units(_cfg({
+            "amail_tunnel": {"calling_card": "AmailTunnel", "primal_daemon": {
+                "units": [_unit("receiver", "macf.amail.daemons.receiver", "amail_tunnel")]}}}))
+
+
 def test_a_tunnel_config_with_no_unit_is_announced_not_silent(start):
     start.TUNNEL_CONFIG.write_text("tunnel: x\n")
     start._check_inbound_units(_cfg({}))
@@ -245,9 +308,10 @@ def test_a_killed_wrapper_takes_cloudflared_with_it(tmp_path):
     import time
     pidfile = tmp_path / "child.pid"
     wrapper = subprocess.Popen([sys.executable, "-c", (
-        "import subprocess, sys, time\n"
+        "import os, subprocess, sys, time\n"
         "from macf.amail.daemons.tunnel import die_with_parent\n"
-        "c = subprocess.Popen(['sleep', '60'], preexec_fn=die_with_parent)\n"
+        "w = os.getpid()\n"
+        "c = subprocess.Popen(['sleep', '60'], preexec_fn=lambda: die_with_parent(w))\n"
         f"open({str(pidfile)!r}, 'w').write(str(c.pid))\n"
         "time.sleep(60)\n")], env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)})
     for _ in range(100):
@@ -280,12 +344,30 @@ def test_a_child_whose_wrapper_already_died_does_not_start(monkeypatch, parent_i
     """The death signal only covers a wrapper that dies after it is set. A child whose parent is
     no longer the wrapper that started it must exit before exec, not run as an orphan."""
     import os
-    monkeypatch.setattr(tunnel, "_WRAPPER_PID", os.getpid() if parent_is_wrapper else 1)
+    wrapper = os.getpid() if parent_is_wrapper else 1
     pid = os.fork()
     if pid == 0:
         try:
-            tunnel.die_with_parent()
+            tunnel.die_with_parent(wrapper)
         finally:
             os._exit(0)
     _, raw = os.waitpid(pid, 0)
     assert os.waitstatus_to_exitcode(raw) == status
+
+
+@pytest.mark.skipif(not __import__("sys").platform.startswith("linux"), reason="PR_SET_PDEATHSIG")
+def test_a_process_that_forks_after_import_still_starts_its_tunnel():
+    """The wrapper's pid is read when cloudflared starts, not when the module is imported: a
+    process that imported it and forked before starting would otherwise see the parent check
+    stop every child before exec."""
+    import os
+    import shutil
+    pid = os.fork()
+    if pid == 0:
+        code = 99
+        try:
+            code = tunnel.start(shutil.which("true"), "unused.yml", "127.0.0.1:1").wait()
+        finally:
+            os._exit(code)
+    _, raw = os.waitpid(pid, 0)
+    assert os.waitstatus_to_exitcode(raw) == 0
