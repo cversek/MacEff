@@ -54,8 +54,10 @@ def test_receiver_runs_as_its_agent(tmp_path, base, run_daemon, monkeypatch):
     m = _msg()
     _put(box, "1-first", m)
     run_daemon(home, base)
+    # The receiver stores the message, then removes the pair from the box: wait for both, since a
+    # loaded runner (macOS CI, #935) showed the pair still there just after the store had it.
     deadline = time.monotonic() + 10
-    while time.monotonic() < deadline and not store.find(home, m.message_id):
+    while time.monotonic() < deadline and (not store.find(home, m.message_id) or list(box.glob("*.amsg"))):
         time.sleep(0.05)
     assert store.find(home, m.message_id) is not None, "the daemon never ingested the box"
     assert not list(box.glob("*.amsg")), "the pair left the box"
