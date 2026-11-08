@@ -44,6 +44,12 @@ lint = [
 proxy = [
     "aiohttp>=3.9.0",  # For API proxy streaming
 ]
+broker = [
+    # A daemon's own MQTT broker and its association links (persistent_layer 11.5). Optional:
+    # a seat whose declaration names no broker installs nothing new. A declaration that names
+    # one is refused at load without it, naming this extra. mosquitto is a host package.
+    "paho-mqtt>=2.0",
+]
 tray = [
     # The optional menu-bar app (MIS-0002-R67, R68): macOS only, never imported by the
     # persistent layer. python -m macf.tray
