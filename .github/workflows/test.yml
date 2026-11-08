@@ -64,14 +64,22 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq mosquitto
           sudo systemctl disable --now mosquitto || true
-          if [ -f /etc/apparmor.d/usr.sbin.mosquitto ]; then
-            sudo apparmor_parser -R /etc/apparmor.d/usr.sbin.mosquitto || true
-            sudo ln -sf /etc/apparmor.d/usr.sbin.mosquitto /etc/apparmor.d/disable/usr.sbin.mosquitto
-          fi
+          # Unload every loaded profile naming mosquitto, whatever its file is called.
+          profiles=/sys/kernel/security/apparmor/profiles
+          sudo grep -i mosquitto "$profiles" || echo "no AppArmor profile for mosquitto is loaded"
+          for p in $(sudo grep -i mosquitto "$profiles" | sed 's/ (.*//'); do
+            echo "unloading AppArmor profile $p"; echo -n "$p" | sudo tee /sys/kernel/security/apparmor/.remove >/dev/null
+          done
+          sudo grep -i mosquitto "$profiles" && { echo "a mosquitto profile is still loaded"; exit 1; } || true
           conf=$(mktemp -d)/mosquitto.conf
           printf 'listener 18999 127.0.0.1\nallow_anonymous true\n' > "$conf"
           set +e; timeout 2 mosquitto -c "$conf"; code=$?; set -e
-          if [ "$code" != 124 ]; then echo "mosquitto could not run on a configuration outside /etc (exit $code)"; exit 1; fi
+          if [ "$code" != 124 ]; then
+            echo "mosquitto could not run on a configuration outside /etc (exit $code)"
+            id; ls -la "$(dirname "$conf")"; which -a mosquitto
+            sudo dmesg | grep -i -E 'apparmor.*mosquitto' | tail -5 || true
+            exit 1
+          fi
 
       - name: Create CI environment directories
         if: env.RUN_TESTS == 'true'
