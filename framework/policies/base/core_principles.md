@@ -296,7 +296,7 @@ address and harness session are all keyed on it.
 **It reaches you three ways, all from the same source**:
 - the first block of every SessionStart context names it: fresh start, resume,
   compaction recovery and session migration alike;
-- `macf_tools env` prints it under **Agent ID**;
+- `macf_tools env` prints it under **Agent ID**, read from your home's identity files exactly as your primal daemon reads it. Where `MACEFF_AGENT_NAME` makes this process's own reading differ, as a container's short name does, env shows that reading beside it, and the card above it is the one that counts;
 - `whoami` gives the login it is paired with.
 
 **It outranks prose.** Several agents can share one deployment, and personality
