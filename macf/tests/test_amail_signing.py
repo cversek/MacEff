@@ -322,3 +322,28 @@ agents:
     # Only a verified message is labelled: a failed one attests nothing.
     forged = registry_verdict(_signed(tmp_path / "c"), "Alice_0a1b2c", reg, accepted_at=None)
     assert forged["trust"] == "suspect" and forged["attests"] is None
+
+
+def test_a_verdict_reads_the_registry_once(tmp_path):
+    """One snapshot per verdict: a registry that turns untrustworthy between reads can't raise
+    into ingest or mix two versions of the file (CTB on #928)."""
+    from macf.amail.attest import registry_verdict
+    from macf.amail.registry import Registry, RegistryError
+    a, b = _public_line(tmp_path, "a"), _public_line(tmp_path, "b")
+    reg = Registry(_registry(tmp_path, f"""
+agents:
+  Alice_0a1b2c: {{account: shared, keys: ["{a}"]}}
+  Bob_1b2c3d: {{account: shared, keys: ["{b}"]}}
+"""), root_uid=os.getuid())
+    real, calls = reg.load, []
+
+    def once_then_refuse():
+        calls.append(1)
+        if len(calls) > 1:
+            raise RegistryError("the registry changed hands between reads")
+        return real()
+    reg.load = once_then_refuse
+    verdict = registry_verdict(_signed(tmp_path / "a"), "Alice_0a1b2c", reg, accepted_at=None)
+    assert verdict["trust"] == "attested" and verdict["shared_with"] == ["Bob_1b2c3d"] and len(calls) == 1
+    reg.load = lambda: (_ for _ in ()).throw(RegistryError("not root's"))
+    assert registry_verdict(_signed(tmp_path / "a"), "Alice_0a1b2c", reg, accepted_at=None)["trust"] == "unverified"

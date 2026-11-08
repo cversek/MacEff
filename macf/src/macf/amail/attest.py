@@ -22,6 +22,8 @@ from __future__ import annotations
 import datetime
 from typing import Any, Dict, Optional
 
+from macf import calling_card
+
 from .crypto import verify
 from .registry import Registry, RegistryError
 from .trust import TrustClass
@@ -57,13 +59,18 @@ def registry_verdict(message: Any, card: str, registry: Registry,
     keys an agent declared for itself."""
     verdict: Dict[str, Any] = {"attests": None, "shared_with": [],
                                "accepted_at": accepted_at.isoformat() if accepted_at else None}
+    # One read, and every lookup below answered from it: a file that changes or turns
+    # untrustworthy between reads can neither raise into ingest nor mix two versions.
     try:
-        declared = registry.key_entries(card)
-        keys = (registry.keys_for(card, at=accepted_at) if accepted_at is not None
-                else registry.signing_keys(card))
+        loaded = registry.load()
     except RegistryError as e:
         return {**verdict, "trust": TrustClass.UNVERIFIED.value, "keys_declared": None,
                 "reason": f"the operator's registry can't be trusted ({e}); nothing verified"}
+    entry = next((e for c, e in loaded.agents.items() if calling_card.same(c, card)), None)
+    declared = list(entry.keys) if entry else []
+    when_t = accepted_at or datetime.datetime.now(datetime.timezone.utc)
+    keys = [k.key for k in declared
+            if k.valid_at(when_t) and (accepted_at is not None or not k.retired)]
     if not declared:
         return {**verdict, "trust": TrustClass.UNVERIFIED.value, "keys_declared": 0,
                 "reason": f"{card} is not in the operator's registry; nothing can be concluded"}
@@ -75,8 +82,9 @@ def registry_verdict(message: Any, card: str, registry: Registry,
     if not verify(message, message.signature, keys):
         return {**verdict, "trust": TrustClass.SUSPECT.value, "keys_declared": len(declared),
                 "reason": f"the signature verifies against no key valid for {card} {when}"}
-    account = registry.account_of(card)
-    others = [c for c in registry.cards_of_account(account) if c != card] if account else []
+    others = sorted(c for c, e in loaded.agents.items()
+                    if e.account == entry.account and not calling_card.same(c, card))
+    account = entry.account
     if others:
         return {**verdict, "trust": TrustClass.ATTESTED.value, "keys_declared": len(declared),
                 "attests": "login", "shared_with": others,
