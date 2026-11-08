@@ -173,7 +173,7 @@ The Secretary gathered these preliminary requirements from the positions on #850
 ### 6.9 Egress, transport and the socket
 
 - **R33** [MUST · decidable: macf/tests/test_amail_egress.py::test_rule_allows_only_declared_accounts] The egress rule MUST let only the broker's account and the human accounts the operator declares open the mail ports, matching each socket's owner. (host_egress_MUST_match_the_broker_account)
-- **R34** [MUST · decidable: macf/tests/test_amail_transport.py::test_pinned_bundle] The broker's outbound transport MUST verify servers against a pinned trust bundle that the operator rotates by a declared procedure. (transport_MUST_pin_trust_bundle)
+- **R34** [MUST · decidable: macf/tests/test_amail_pinned_tls.py::test_pinned_bundle] The broker's outbound transport MUST verify servers against a pinned trust bundle that the operator rotates by a declared procedure. (transport_MUST_pin_trust_bundle)
 - **R35** [MUST · decidable: macf/tests/test_amail_units.py::test_socket_version] The broker socket MUST carry a protocol version, and accept the previous version for a declared window after each change. (broker_socket_MUST_carry_version)
 
 ### 6.10 Signing
@@ -314,18 +314,18 @@ Detection alone stays allowed only where no agent has a reachable address. Addre
 | R26 | decidable | `macf/tests/test_amail_notice.py::test_notice_level_triggered` | passing |
 | R27 | decidable | `macf/tests/test_amail_notice.py::test_restart_keeps_cursor` | passing |
 | R28 | decidable | `macf/tests/test_amail_notice.py::test_notice_carries_ids` | planned |
-| R29 | decidable | `macf/tests/test_amail_notice.py::test_keystrokes_need_idle_prompt` | planned |
+| R29 | decidable | `macf/tests/test_amail_notice.py::test_keystrokes_need_idle_prompt` | passing |
 | R30 | decidable | `macf/tests/test_amail_notice.py::test_listing_new_since_last_read` | passing |
 | R31 | decidable | `macf/tests/test_amail_health.py::test_health_is_last_sweep` | passing |
 | R32 | decidable | `macf/tests/test_amail_health.py::test_stuck_mail_alerts` | passing |
 | R33 | decidable | `macf/tests/test_amail_egress.py::test_rule_allows_only_declared_accounts` | planned |
-| R34 | decidable | `macf/tests/test_amail_transport.py::test_pinned_bundle` | planned |
+| R34 | decidable | `macf/tests/test_amail_pinned_tls.py::test_pinned_bundle` | planned |
 | R35 | decidable | `macf/tests/test_amail_units.py::test_socket_version` | planned |
 | R36 | decidable | `macf/tests/test_amail_partition.py::test_box_files_not_group_writable` | passing |
 | R37 | decidable | `macf/tests/test_amail_partition.py::test_receiver_checks_owner_and_links`, with a hard link from outside and a file the recipient's group created, each set aside | planned |
 | R38 | decidable | `macf/tests/test_amail_handoff.py::test_one_copy_per_recipient` | passing |
-| R39 | decidable | `macf/tests/test_amail_notice.py::test_keystrokes_read_back` | planned |
-| R40 | decidable | `macf/tests/test_amail_notice.py::test_keystroke_notice_no_leading_digit` | planned |
+| R39 | decidable | `macf/tests/test_amail_notice.py::test_keystrokes_read_back` | passing |
+| R40 | decidable | `macf/tests/test_amail_notice.py::test_keystroke_notice_no_leading_digit` | passing |
 | R41 | decidable | `macf/tests/test_amail_signing.py::test_agent_signs_every_message` | passing |
 | R42 | decidable | `macf/tests/test_amail_signing.py::test_keys_declared_by_operator` | planned |
 | R43 | decidable | `macf/tests/test_amail_signing.py::test_broker_refuses_unsigned_agent_mail` | planned |

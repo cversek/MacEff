@@ -367,6 +367,22 @@ def _require_zone_cards(addressing: "AddressingConfig") -> None:
             f"them their zone mail is refused.")
 
 
+def _require_own_login(addressing: "AddressingConfig") -> None:
+    """MIS-0004 R05: an agent reachable from the Internet (one with a zone address) runs under a
+    login no other agent shares. On a shared login anything that runs as it can make the agent's
+    own process speak, so a signature or a sender check would attest the login, not the agent."""
+    by_uid: Dict[int, List[str]] = {}
+    for name, b in addressing.agents.items():
+        if b.uid is not None:
+            by_uid.setdefault(b.uid, []).append(name)
+    shared = {uid: names for uid, names in by_uid.items() if len(names) > 1}
+    if shared:
+        raise ConfigError(
+            "these agents have zone addresses but share a login (MIS-0004 R05): " + "; ".join(
+                f"uid {uid}: {', '.join(sorted(n))}" for uid, n in sorted(shared.items()))
+            + ". Give each Internet-reachable agent a login of its own.")
+
+
 def _refuse_double_claims(addressing: "AddressingConfig", peers: Dict[str, Any]) -> None:
     """One zone address, one holder (R08): refuse a start where two declarations claim the same
     zone local part, whether two peers, one peer twice, or a peer and one of our own agents.
@@ -750,6 +766,7 @@ class BrokerDeployConfig(BaseModel):
                                                 for box, h in decl.agents.items()})
         if addressing.zone:
             _require_zone_cards(addressing)
+            _require_own_login(addressing)
             _refuse_double_claims(addressing, self.shared_handoffs)
         return BrokerConfig(
             domain=addressing.domain,
