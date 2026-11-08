@@ -61,6 +61,7 @@ from macf.pd.channel_watch import DarkChannel
 from macf.pd.unread_mail import UnreadMail, pickup_box
 from macf.pd.notifier import Notifier
 from macf.utils.peercred import peer_credentials
+from macf import calling_card
 
 #: The askers an act over the control socket may name. The daemon's own policy and the harness
 #: ask from inside, so no requesting process exists to record (MIS-0002-R52
@@ -321,7 +322,7 @@ class Daemon:
         declared = {g for u in self.core.declaration.units for g in u.privacy_grants}
         for event in probes():
             data = event.get("data") or {}
-            if not isinstance(data, dict) or data.get("agent") != self.card:
+            if not isinstance(data, dict) or not calling_card.is_agent(data.get("agent"), self.card):
                 continue
             if not data.get("tested"):
                 # The newest install couldn't test them, so nothing older speaks for them now.
@@ -935,7 +936,7 @@ class Daemon:
         # A lifetime read, scope "all": a pace holds until another replaces it, across compactions,
         # restarts and log rotation, so no cycle bounds where the newest one is. It stops there.
         newest = next((e for e in read_events(reverse=True, scope="all", only={EVENT_PACED})
-                       if (e.get("data") or {}).get("agent") == self.card), None)
+                       if calling_card.is_agent((e.get("data") or {}).get("agent"), self.card)), None)
         declaration = self.core.declaration
         window, source = window_at_boot(declaration.wake_refractory_s,
                                         declaration.wake_refractory_floor_s, newest,

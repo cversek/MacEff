@@ -58,7 +58,7 @@ def test_the_deployment_file_carries_the_zone_to_the_broker(tmp_path):
     import yaml
     from macf.amail.deploy_config import BrokerDeployConfig
     base = {"domain": "aero.local",
-            "agents": {"wren": {"home": str(tmp_path / "wren_t"), "uid": 1002, "contacts": [], "card": "WrenTuba@3c9d1e", "zone_token": "0123456789ab"}}}
+            "agents": {"wren": {"home": str(tmp_path / "wren_t"), "uid": 1002, "contacts": [], "card": "WrenTuba_3c9d1e", "zone_token": "0" * 12}}}
     for zone in ("agents.example.org", None):
         addr = tmp_path / "addressing.yaml"
         addr.write_text(yaml.safe_dump({**base, **({"zone": zone} if zone else {})}))
@@ -79,14 +79,14 @@ def test_a_closed_home_resolves_through_the_declared_card(tmp_path):
         bare = BrokerConfig(domain="aero.local", zone="agents.example.org", agent_homes={"wren": home})
         assert bare.agent_for("wrentuba_3c9d1e@agents.example.org") is None
         carded = BrokerConfig(domain="aero.local", zone="agents.example.org", agent_homes={"wren": home},
-                              agent_cards={"wren": "WrenTuba@3c9d1e"})
+                              agent_cards={"wren": "WrenTuba_3c9d1e"})
         assert carded.agent_for("wrentuba_3c9d1e@agents.example.org") == "wren"
     finally:
         (home / ".maceff").chmod(0o700)
 
 
 def test_a_malformed_card_is_not_a_card():
-    assert local_part_from_card("WrenTuba@3c9d1e") == "wrentuba_3c9d1e"
+    assert local_part_from_card("WrenTuba_3c9d1e") == "wrentuba_3c9d1e"
     for bad in ("WrenTuba", "@3c9d1e", "WrenTuba@3c9d"):
         with pytest.raises(ValueError):
             local_part_from_card(bad)
@@ -112,7 +112,7 @@ def test_a_zone_start_refuses_an_agent_with_no_usable_card(tmp_path):
     agents["wren"]["card"] = "WrenTuba"
     with pytest.raises(ConfigError, match="not a calling card"):
         _deploy(tmp_path, agents).to_broker_config()
-    agents["wren"]["card"] = "WrenTuba@3c9d1e"
+    agents["wren"]["card"] = "WrenTuba_3c9d1e"
     cfg = _deploy(tmp_path, agents).to_broker_config()
-    assert cfg.agent_cards == {"wren": "WrenTuba@3c9d1e"}
+    assert cfg.agent_cards == {"wren": "WrenTuba_3c9d1e"}
     assert cfg.agent_for("_".join(["wrentuba", "3c9d1e", "0123456789ab"]) + "@agents.example.org") == "wren"

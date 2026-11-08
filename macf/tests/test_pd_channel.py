@@ -25,7 +25,7 @@ from macf.hooks import handle_user_prompt_submit as hook
 from macf.notify.notice import amail_notice
 from macf.notify.session import descends_from, proc_start
 
-CARD = "TestAgent@abc123"
+CARD = "TestAgent_abc123"
 
 
 def _record(**over):
@@ -362,12 +362,12 @@ def _loop(ch, monkeypatch, delivered, held_s=0.0, rounds=7):
 def test_a_refused_channel_backs_off_instead_of_spinning(monkeypatch):
     """A daemon that refuses the channel accepts and closes at once. The channel waits before
     every reconnect, and the wait grows to the cap, as for a daemon that's down."""
-    ch = Channel("Resident@1a2b3c")
+    ch = Channel("Resident_1a2b3c")
     assert _loop(ch, monkeypatch, delivered=0) == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0]
 
 
 def test_a_working_connection_reconnects_from_the_first_delay(monkeypatch):
-    ch = Channel("Resident@1a2b3c")
+    ch = Channel("Resident_1a2b3c")
     assert _loop(ch, monkeypatch, delivered=1, rounds=3) == [1.0, 1.0, 1.0]
     assert _loop(ch, monkeypatch, delivered=0, held_s=60.0, rounds=3) == [1.0, 1.0, 1.0]
 
@@ -382,7 +382,7 @@ def test_the_channel_names_its_daemon_by_the_homes_card_not_the_environment(tmp_
     (tmp_path / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": "Seat2"}}))
     (tmp_path / ".maceff_primary_agent.id").write_text("f0a1b200-0000-0000-0000-000000000000\n")
     env = {"MACEFF_AGENT_HOME_DIR": str(tmp_path), "MACEFF_AGENT_NAME": "seat2"}
-    assert channel_card(env) == "Seat2@f0a1b2"
+    assert channel_card(env) == "Seat2_f0a1b2"
 
 
 def test_main_starts_the_channel_with_the_homes_card(tmp_path, monkeypatch):
@@ -398,7 +398,7 @@ def test_main_starts_the_channel_with_the_homes_card(tmp_path, monkeypatch):
     monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(tmp_path))
     monkeypatch.setenv("MACEFF_AGENT_NAME", "seat2")
     from macf.utils.identity import get_agent_identity
-    assert get_agent_identity() == "seat2@f0a1b2", "the fixture must reproduce the seat's mismatch"
+    assert get_agent_identity() == "seat2_f0a1b2", "the fixture must reproduce the seat's mismatch"
     started = []
 
     class _Recorded:
@@ -409,4 +409,4 @@ def test_main_starts_the_channel_with_the_homes_card(tmp_path, monkeypatch):
             pass
     monkeypatch.setattr(maceff_channel, "Channel", _Recorded)
     assert maceff_channel.main() == 0
-    assert started == ["Seat2@f0a1b2"]
+    assert started == ["Seat2_f0a1b2"]

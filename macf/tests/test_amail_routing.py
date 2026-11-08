@@ -17,7 +17,7 @@ from macf.amail.models import Message
 
 ZONE = "agents.example.org"
 HOST, BOX = "host.local", "box.local"
-IRA, WREN = "IraTest@a1a1a1", "WrenTuba@3c9d1e"
+IRA, WREN = "IraTest_a1a1a1", "WrenTuba_3c9d1e"
 T_IRA, T_WREN = "111122223333", "444455556666"   # made-up zone tokens
 IRA_Z, WREN_Z = f"iratest_a1a1a1@{ZONE}", f"wrentuba_3c9d1e@{ZONE}"
 

@@ -31,6 +31,7 @@ from typing import Callable, Dict, Iterable, Optional
 
 from macf.agent_events_log import append_event, read_events
 from macf.pd.interface import EVENT_UNREAD_MAIL, EVENT_UNREAD_MAIL_CLEARED, UNREAD_MAIL_SOURCE
+from macf import calling_card
 
 #: ``active_since`` when the agent declares no session: every wait counts from arrival.
 ALWAYS_ACTIVE = float("-inf")
@@ -69,7 +70,7 @@ def _spell_open(events: Iterable[dict], card: str) -> bool:
     """Whether the newest unread-mail event of *card* opened a spell (read newest first)."""
     for event in events:
         data = event.get("data") or {}
-        if isinstance(data, dict) and data.get("agent") == card:
+        if isinstance(data, dict) and calling_card.is_agent(data.get("agent"), card):
             return event.get("event") == EVENT_UNREAD_MAIL
     return False
 

@@ -92,7 +92,8 @@ one **session identifier**, and it is a pure function of the agent's Calling
 Card:
 
 ```
-TheHarborMaster@ee5cd8   ->   TheHarborMaster_ee5cd8
+ExampleAgent_0a1b2c   ->   ExampleAgent_0a1b2c
+ExampleAgent@0a1b2c   ->   ExampleAgent_0a1b2c     (the old spelling, from history)
 ```
 
 `macf.utils.identity.session_identifier()` computes it;

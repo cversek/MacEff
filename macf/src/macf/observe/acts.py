@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import re
 import secrets
 import sys
 from dataclasses import dataclass, field, replace
@@ -40,8 +39,6 @@ ENDED = "ended"
 #: Who may end an observation (MIS-0002-R86, R87), and the lease's own ending (R89).
 ENDED_BY = ("observed", "onlooker", "operator", "lease")
 
-#: A calling card: a name, ``@``, and the first six hex digits of the agent's UUID.
-_CARD = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}@[0-9a-f]{6}$")
 
 
 class ActRefused(ValueError):
@@ -76,9 +73,11 @@ def _digest(secret: str) -> str:
 
 
 def _check_card(card: str, what: str) -> None:
-    """MIS-0002-R94 (invitation_MUST_name_card): a calling card, never a login user."""
-    if not isinstance(card, str) or not _CARD.match(card):
-        raise ActRefused(f"the {what} must be named by calling card (Name@abc123), not {card!r}")
+    """MIS-0002-R94 (invitation_MUST_name_card): a calling card, never a login user, and in the
+    card's current form, since an invitation is declared now (R165)."""
+    from macf.calling_card import is_card
+    if not is_card(card):
+        raise ActRefused(f"the {what} must be named by calling card (Name_abc123), not {card!r}")
 
 
 def fold(events: Iterable[dict]) -> Dict[str, Observation]:

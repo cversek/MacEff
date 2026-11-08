@@ -2615,7 +2615,7 @@ def _ensure_agent_uuid(
     silently changing who the agent is.
 
     Without an id file the resolver returns ``unknown``, so a freshly
-    provisioned host displays ``Name@unknown`` and breadcrumbs lose their UUID
+    provisioned host displays ``Name_unknown`` and breadcrumbs lose their UUID
     half (#131). The naive fix — mint whenever *this* file is missing — checks
     the wrong thing: the resolver prefers the per-project file over the
     host-global one, so minting into an agent home while a global identity is
@@ -2692,14 +2692,14 @@ def _ensure_agent_uuid(
         print(f"\n🆔 Proposed agent UUID: {candidate}")
         # A bare '@abc123' is no card: every step keyed on the card needs the name half
         # too, which the calling-card step writes (cversek/MacEff#842).
-        print(f"    Calling card would be: <name>@{candidate[:6]} "
+        print(f"    Calling card would be: <name>_{candidate[:6]} "
               f"(the name comes next, from the calling-card step or --calling-card NAME)")
         answer = input("  [A]ccept / [r]egenerate / [s]kip: ").strip().lower()
         if answer in ('', 'a', 'accept', 'y', 'yes'):
             _write(candidate, "Minted")
             return
         if answer in ('s', 'skip', 'n', 'no'):
-            print("    Skipped — the agent will resolve to @unknown until an id exists.")
+            print("    Skipped — the agent will resolve to <name>_unknown until an id exists.")
             return
         # anything else re-rolls
 
@@ -3036,6 +3036,31 @@ def cmd_agent_init_auth_token(args: argparse.Namespace) -> int:
         "   read or rewrite this file. True enforcement requires the external harness\n"
         "   classifier or a multi-user / file-permission setup."
     )
+    return 0
+
+
+def cmd_agent_mint(args: argparse.Namespace) -> int:
+    """Mint a new container agent ahead of its account (MIS-0002-R162)."""
+    from macf import calling_card, homes
+    try:
+        minted = homes.mint(args.name)
+    except calling_card.CardError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 2
+    print(homes.render_minted(minted, args.key or args.name.lower()), end="")
+    return 0
+
+
+def cmd_agent_homes_init(args: argparse.Namespace) -> int:
+    """Mark a homes volume and print its id (MIS-0002-R162)."""
+    from macf import homes
+    try:
+        volume = homes.init_volume(args.root)
+    except (homes.HomesRefused, OSError) as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 2
+    print(f"{args.root} is homes volume {volume}. Declare it in agents.yaml:\n"
+          f"homes_volume: \"{volume}\"")
     return 0
 
 
@@ -12406,7 +12431,7 @@ def _build_parser() -> argparse.ArgumentParser:
         nargs="?",
         default=None,
         help="title string (default: agent calling card from get_agent_identity, "
-             "e.g. Name@abc123). Inside tmux, also run "
+             "e.g. Name_abc123). Inside tmux, also run "
              "'tmux set-option -g set-titles on' for titles to surface.",
     )
     set_title_parser.set_defaults(func=cmd_env_set_term_title)
@@ -12624,6 +12649,20 @@ def _build_parser() -> argparse.ArgumentParser:
     restore_install.add_argument("--force", action="store_true", help="overwrite existing consciousness (creates checkpoint)")
     restore_install.add_argument("--dry-run", action="store_true", help="show what would be done")
     restore_install.set_defaults(func=cmd_restore_install)
+
+    # New agents and their homes volume (MIS-0002-R162)
+    mint_parser = agent_sub.add_parser(
+        "mint", help="draw a new container agent's short id and zone token, and print the lines "
+                     "agents.yaml and the addressing file take (MIS-0002-R162)")
+    mint_parser.add_argument("name", help="the card's name: a letter, then up to 23 letters or digits")
+    mint_parser.add_argument("--key", help="the agent's key in agents.yaml (default: the name lowercased)")
+    mint_parser.set_defaults(func=cmd_agent_mint)
+
+    homes_init_parser = agent_sub.add_parser(
+        "homes-init", help="mark a deployment's homes volume and print its id for agents.yaml's "
+                           "homes_volume; start creates a new home only on a marked, declared volume")
+    homes_init_parser.add_argument("root", type=Path, help="the mounted homes volume")
+    homes_init_parser.set_defaults(func=cmd_agent_homes_init)
 
     # Agent GitHub identity
     gh_parser = agent_sub.add_parser("set-github", help="set per-project GitHub identity via GH_TOKEN")

@@ -59,6 +59,7 @@ from macf.pd.interface import (
 from macf.pd.liveness import ENV_HOME, ENV_INTERVAL, ENV_UNIT
 from macf.pd.names import rendered_declaration_problem
 from macf.pd.schedule import CronExpr, check_window
+from macf import calling_card
 
 #: A unit is overdue once its last liveness is older than this many of its intervals.
 #: The interval is the one the unit published, so a unit that changes its cadence
@@ -156,7 +157,11 @@ def load_declaration(agent_home: Path, card: str) -> Declaration:
         declaration = Declaration.model_validate_json(text)
     except ValidationError as e:
         raise DeclarationRefused(f"{path} is not a valid declaration: {e}") from e
-    if declaration.agent != card:
+    try:
+        calling_card.read_declared(declaration.agent)
+    except calling_card.CardError as e:
+        raise DeclarationRefused(f"{path} names its agent wrongly: {e} (MIS-0002-R165)") from e
+    if not calling_card.same(declaration.agent, card):
         raise DeclarationRefused(
             f"{path} declares the units of {declaration.agent}, and this home belongs to "
             f"{card}. A declaration copied from another agent's home must not run under "
@@ -715,7 +720,7 @@ class Core:
             if event.get("event") == EVENT_COMPACTION:
                 newest = newest if newest is not None else _float_or_none(event.get("timestamp"))
                 continue
-            if data.get("agent") == self.card and data.get("occasion") == "compaction":
+            if calling_card.is_agent(data.get("agent"), self.card) and data.get("occasion") == "compaction":
                 # Read newest first, so a compaction found before this report came after it,
                 # and one after it in the scan is the one it covers.
                 break
@@ -748,7 +753,7 @@ class Core:
         # that daemon's start, its own start or its adoption, so the scan stops there.
         for event in read_events(reverse=True, scope="all", only=(EVENT_STATE, EVENT_DAEMON_START)):
             data = event.get("data") or {}
-            if data.get("agent") != self.card:
+            if not calling_card.is_agent(data.get("agent"), self.card):
                 continue
             if event.get("event") == EVENT_DAEMON_START:
                 if (data.get("pid"), data.get("proc_start")) != self._own_start:
@@ -1027,7 +1032,7 @@ class Core:
 
     def _on_liveness(self, event: dict, now: float) -> None:
         data = dict(event.get("data") or {})
-        if data.get("agent") != self.card:
+        if not calling_card.is_agent(data.get("agent"), self.card):
             return
         r = self._units.get(data.get("unit"))
         if r is None:

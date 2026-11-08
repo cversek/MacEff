@@ -340,8 +340,9 @@ class EgressPolicy(BaseModel):
 INBOUND_MODULE = 'macf.amail.daemons.inbound'
 INBOUND_SCRIPT = 'amail/daemons/inbound.py'
 
-#: A calling card's name: a letter, then up to 47 letters or digits (persistent_layer 10.1).
-CARD_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9]{0,47}$")
+#: A calling card's name: one ASCII letter, then at most 23 ASCII letters or digits
+#: (MIS-0002-R158), so a lowercased card fits a 31-character account.
+CARD_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9]{0,23}$")
 PERIODIC_INBOUND_VERBS = ('watchdog', 'sweep')
 
 
@@ -414,8 +415,46 @@ class AgentSpec(BaseModel):
 
     username: str = Field(
         ...,
-        description="Linux username for the agent (e.g., pa_sparrow)"
+        description=(
+            "Linux username for the agent (e.g., pa_sparrow). An agent minted under MIS-0002-R162 "
+            "leaves it out: it is its card lowercased, derived from calling_card and short_id."
+        )
     )
+
+    short_id: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{6}$",
+        description=(
+            "A new agent's short id, drawn ahead by `macf_tools agent mint` (MIS-0002-R162). "
+            "Declared with calling_card, it fixes the agent's card and account before the account "
+            "exists: start writes it as the identity file in a new home, and refuses a home whose "
+            "identity file says otherwise. An agent provisioned before R162 leaves it out and keeps "
+            "its declared username."
+        ),
+    )
+
+    @model_validator(mode='before')
+    @classmethod
+    def _a_minted_agent_is_named_by_its_card(cls, data: Any) -> Any:
+        """A minted agent's account is its card lowercased (MIS-0002-R162), so it is derived here,
+        before anything reads it. Declaring a different username beside short_id is refused."""
+        if not isinstance(data, dict) or data.get('short_id') is None:
+            return data
+        name, short_id = data.get('calling_card'), data['short_id']
+        if not name:
+            raise ValueError(f"short_id {short_id!r} is declared without calling_card: the account "
+                             "is the card lowercased, so both halves of the card are needed")
+        from macf import calling_card
+        try:
+            account = calling_card.lowercase(calling_card.build(name, str(short_id)))
+        except calling_card.CardError as e:
+            raise ValueError(str(e)) from e
+        declared = data.get('username')
+        if declared is not None and declared != account:
+            raise ValueError(f"agent {name}_{short_id} declares username {declared!r}, but a minted "
+                             f"agent's account is its card lowercased, {account!r} (MIS-0002-R162); "
+                             "leave username out")
+        return {**data, 'username': account}
 
     uid: int = Field(
         ...,
@@ -1074,6 +1113,17 @@ class AgentsConfig(BaseModel):
     services: Dict[str, ServiceSpec] = Field(
         default_factory=dict,
         description="Non-agent service accounts and the secrets they hold"
+    )
+
+    homes_volume: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{16}$",
+        description=(
+            "The id `macf_tools agent homes-init` wrote into the homes volume's marker. Declared, "
+            "start refuses a homes root whose marker is missing or names another volume, and only "
+            "then creates a minted agent's new home (MIS-0002-R162). Absent, start creates no home "
+            "and checks nothing, so a deployment that hasn't run homes-init keeps starting."
+        ),
     )
 
     @model_validator(mode='after')

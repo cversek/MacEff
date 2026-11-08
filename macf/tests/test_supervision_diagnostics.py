@@ -95,7 +95,7 @@ class TestFormatting:
 
     def _d(self, **over):
         base = {
-            "agent": {"identifier": "Agent_abc123", "calling_card": "Agent@abc123",
+            "agent": {"identifier": "Agent_abc123", "calling_card": "Agent_abc123",
                       "resolved_from": "calling card", "is_default": False,
                       "candidates": None, "installed": []},
             "supervision": {"supervised": False, "supervisors": [],
@@ -225,7 +225,7 @@ def test_a_session_unit_the_daemon_runs_is_supervised():
     """env said NONE for a session its primal daemon runs and restarts (Oct 14)."""
     from macf.utils import supervision
     found = supervision.primal_daemon_unit(
-        "A@1a2b3c", _SESSION_ENV,
+        "A_1a2b3c", _SESSION_ENV,
         ask=lambda: _Report(units=[{"unit": "session", "pid": 4242, "state": "running"}]))
     assert found["confirmed"]
     d = TestFormatting()._d(supervision={"supervised": True, "primal_daemon": found})
@@ -242,7 +242,7 @@ def test_a_session_unit_the_daemon_runs_is_supervised():
 def test_the_sessions_claim_alone_does_not_confirm_it(report, said):
     """The variables are the session's claim; only the daemon's answer confirms it."""
     from macf.utils import supervision
-    found = supervision.primal_daemon_unit("A@1a2b3c", _SESSION_ENV, ask=lambda: report)
+    found = supervision.primal_daemon_unit("A_1a2b3c", _SESSION_ENV, ask=lambda: report)
     assert not found["confirmed"] and said in found["why"]
     out = format_diagnosis(TestFormatting()._d(supervision={"primal_daemon": found}))
     assert "unconfirmed" in out and "NONE running" in out
@@ -264,18 +264,18 @@ def test_the_daemon_is_asked_by_the_homes_card_not_a_short_agent_name(monkeypatc
     monkeypatch.setattr(supervision, "live_supervisors", lambda: [])
     monkeypatch.setattr("macf.supervisor._find_own_supervisor", lambda: None)
     supervision.diagnose()
-    assert asked == ["Seat@1a2b3c"]
+    assert asked == ["Seat_1a2b3c"]
     # A home that names no agent falls back to the identifier's card.
-    assert supervision._daemon_card("Seat@9f8e7d", {"MACEFF_AGENT_HOME_DIR": str(tmp_path / "none")}) == "Seat@9f8e7d"
+    assert supervision._daemon_card("Seat_9f8e7d", {"MACEFF_AGENT_HOME_DIR": str(tmp_path / "none")}) == "Seat_9f8e7d"
     # With no home variable, the home is found as the session-start hook finds it, not the login's.
     monkeypatch.setattr("macf.utils.paths.find_agent_home", lambda: tmp_path)
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "login")
-    assert supervision._daemon_card("Other@000000", {}) == "Seat@1a2b3c"
+    assert supervision._daemon_card("Other_000000", {}) == "Seat_1a2b3c"
 
 
 def test_without_the_session_variables_there_is_no_daemon_claim():
     from macf.utils import supervision
-    assert supervision.primal_daemon_unit("A@1a2b3c", {}, ask=lambda: 1 / 0) is None
+    assert supervision.primal_daemon_unit("A_1a2b3c", {}, ask=lambda: 1 / 0) is None
 
 
 def test_a_credential_named_variable_is_reported_set_but_never_shown(monkeypatch):

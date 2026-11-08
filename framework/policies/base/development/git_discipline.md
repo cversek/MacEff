@@ -574,7 +574,7 @@ htmlcov/
 
 Co-Authored-By: <model> <noreply@anthropic.com>
 
-[Moniker@idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
+[Moniker_idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
 ```
 
 **The last line is the calling card, and it is the ONLY place agent identity or

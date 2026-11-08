@@ -15,7 +15,8 @@ import pytest
 
 from macf import attribution as A
 
-CARD = "Tester@abcdef"
+CARD = "Tester_abcdef"
+OLD = "Tester@abcdef"   # the spelling before MIS-0002-R157, still signing during the cut-over
 GOOD = f"[{CARD}: task#7 s_1/c_2/p_3/t_4]"
 
 
@@ -52,12 +53,14 @@ def test_another_agents_card_is_not_a_sign_off():
     assert not A.card_line_pattern(CARD).match("[Other@123456: task#7 s_1/c_2/p_3/t_4]")
 
 
-def test_own_card_in_the_underscore_spelling_is_accepted():
-    """During the separator change an agent may sign Name_shortid before its identity
-    files are cut over, plain or italic."""
-    pat = A.card_line_pattern(CARD)
-    assert pat.match("[Tester_abcdef: task#7 s_1/c_2/p_3/t_4]")
-    assert pat.match("*[Tester_abcdef: task#7 s_1/c_2/p_3/t_4]*")
+@pytest.mark.parametrize("identity", [CARD, OLD])
+def test_own_card_in_the_underscore_spelling_is_accepted(identity):
+    """MIS-0002-R167: while the footer cut-over is open, the agent's own card signs in either
+    spelling, plain or italic, whichever spelling its identity carries."""
+    pat = A.card_line_pattern(identity)
+    for line in ("[Tester_abcdef: task#7 s_1/c_2/p_3/t_4]", "*[Tester_abcdef: task#7 s_1/c_2/p_3/t_4]*",
+                 "[Tester@abcdef: task#7 s_1/c_2/p_3/t_4]", "*[Tester@abcdef: task#7 s_1/c_2/p_3/t_4]*"):
+        assert pat.match(line), line
 
 
 @pytest.mark.parametrize("line", ["[Other_123456: task#7 s_1/c_2/p_3/t_4]",
@@ -73,6 +76,16 @@ def test_an_identity_already_in_the_underscore_form_accepts_both():
     pat = A.card_line_pattern("Tester_abcdef")
     assert pat.match("[Tester_abcdef: task#7 s_1/c_2/p_3/t_4]")
     assert pat.match("[Tester@abcdef: task#7 s_1/c_2/p_3/t_4]")
+
+
+@pytest.mark.parametrize("card", [CARD, OLD])
+def test_only_the_new_form_signs_after_the_cut_over(monkeypatch, card):
+    """MIS-0002-R168: once the footer cut-over ends, Name_shortid signs and Name@shortid
+    doesn't, whichever spelling the identity still carries."""
+    monkeypatch.setattr(A, "CUTOVER_OPEN", False)
+    pat = A.card_line_pattern(card)
+    assert pat.match("[Tester_abcdef: task#7 s_1/c_2/p_3/t_4]")
+    assert not pat.match("[Tester@abcdef: task#7 s_1/c_2/p_3/t_4]")
 
 
 def test_card_must_be_the_last_line(agent, tmp_path):

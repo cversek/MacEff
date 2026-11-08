@@ -71,10 +71,10 @@ def test_reading_moves_the_cursor_past_what_was_read(home, box):
     _put(box, "2", b)
     client.ingest(home, box, agent="a")
     assert len(store.unread_names(home)) == 2
-    assert store.mark_read(home, a.message_id, "Reader@abc123")
+    assert store.mark_read(home, a.message_id, "Reader_abc123")
     assert [store.find(home, b.message_id).message_id] == \
         [x.message_id for x in store.read_all(home, include_seen=False)]
-    assert store.mark_read(home, a.message_id, "Reader@abc123") is None, "read once"
+    assert store.mark_read(home, a.message_id, "Reader_abc123") is None, "read once"
     assert {x.message_id for x in store.read_all(home)} == {a.message_id, b.message_id}
 
 
@@ -83,9 +83,9 @@ def test_the_reader_is_recorded(home, box):
     m = _msg()
     _put(box, "1", m)
     client.ingest(home, box, agent="a")
-    name = store.mark_read(home, m.message_id, "Reader@abc123")
+    name = store.mark_read(home, m.message_id, "Reader_abc123")
     meta = json.loads((store.bundle_sidecars_for(home) / f"{name}.json").read_text())
-    assert meta["read"]["by"] == "Reader@abc123" and meta["read"]["at"]
+    assert meta["read"]["by"] == "Reader_abc123" and meta["read"]["at"]
 
 
 def test_a_read_moves_only_its_own_stores_mail(tmp_path, home, box):
@@ -95,7 +95,7 @@ def test_a_read_moves_only_its_own_stores_mail(tmp_path, home, box):
     client.ingest(home, box, agent="a")
     other = tmp_path / "other"
     store.ensure_maildir(other)
-    assert store.mark_read(other, m.message_id, "Other@abc123") is None
+    assert store.mark_read(other, m.message_id, "Other_abc123") is None
     assert len(store.unread_names(home)) == 1
 
 
@@ -105,7 +105,7 @@ def test_internet_mail_is_read_by_name_or_sha(home, box):
     client.ingest(home, box, agent="a")
     [name] = store.unread_names(home)
     sha = hashlib.sha256(raw).hexdigest()
-    assert store.mark_read(home, sha[:12], "Reader@abc123") == name
+    assert store.mark_read(home, sha[:12], "Reader_abc123") == name
     assert store.unread_names(home) == []
 
 
@@ -117,12 +117,12 @@ def test_restart_keeps_cursor(tmp_path, home, box):
     _put(box, "1", a)
     _put(box, "2", b)
     client.ingest(home, box, agent="a")
-    store.mark_read(home, a.message_id, "Reader@abc123")
+    store.mark_read(home, a.message_id, "Reader_abc123")
     before = (sorted(store.unread_names(home)),
               sorted(p.name for p in (store.maildir_for(home) / "cur").iterdir()))
     for _ in range(2):                                   # two restarts
         s = receiver_settings(home)
-        Receiver("a@abc123", home, s["box"], s["agent"], s["contacts"],
+        Receiver("a_abc123", home, s["box"], s["agent"], s["contacts"],
                  lambda e, d: None, lambda src, nid: None).tick(0.0)
         agent_store_source(home).start()
     after = (sorted(store.unread_names(home)),
@@ -144,7 +144,7 @@ def test_listing_new_since_last_read(home, box, monkeypatch, capsys):
     _put(box, "1", a)
     _put(box, "2", b)
     client.ingest(home, box, agent="a")
-    store.mark_read(home, a.message_id, "Reader@abc123")
+    store.mark_read(home, a.message_id, "Reader_abc123")
     out = _list(home, monkeypatch, capsys)
     assert "second subject" in out and "first subject" not in out
     assert "and 1 read, not shown" in out
@@ -218,7 +218,7 @@ def test_amail_read_moves_what_it_printed(home, box, monkeypatch, capsys):
     _put(box, "2", b)
     client.ingest(home, box, agent="a")
     monkeypatch.setattr(cli, "_amail_config", lambda: {"home": str(home), "handoff": "", "agent": ""})
-    monkeypatch.setattr(cli, "_reader_card", lambda h: "Reader@abc123")
+    monkeypatch.setattr(cli, "_reader_card", lambda h: "Reader_abc123")
     assert cli.cmd_amail_read(argparse.Namespace(message_id=a.message_id, json=False)) == 0
     assert "one" in capsys.readouterr().out
     assert [x.message_id for x in store.read_all(home, include_seen=False)] == [b.message_id]
@@ -234,7 +234,7 @@ def test_the_wake_names_unread_ids_from_a_real_ingest(home, box):
     _put(box, "2", b)
     client.ingest(home, box, agent="a")
     assert store.unread_message_ids(home) == [a.message_id, b.message_id]
-    store.mark_read(home, a.message_id, "Reader@abc123")
+    store.mark_read(home, a.message_id, "Reader_abc123")
     assert store.unread_message_ids(home) == [b.message_id]
 
 
@@ -304,7 +304,7 @@ def test_notice_level_triggered(home, box, monkeypatch):
     n.poll()
     assert [o.source for o in n.owed.values()] == ["amail"]
     for x in store.read_all(home, include_seen=False):
-        store.mark_read(home, x.message_id, "Reader@abc123")
+        store.mark_read(home, x.message_id, "Reader_abc123")
     n.poll()
     assert not n.owed, "a notice for mail already read stayed owed"
     third, third_end = _channel_pair()

@@ -54,7 +54,7 @@ def test_the_entries_held_are_what_the_events_fold_to():
     """The event log is the store (R16): an entry added is held until it's removed, and another
     agent's events, or a record whose id isn't an entry id, change nothing."""
     from macf.pd.entries import EVENT_ENTRY_ADDED, EVENT_ENTRY_REMOVED, fold
-    me, other = "Tester@abc123", "Other@def456"
+    me, other = "Tester_abc123", "Other_def456"
     a, b = new_entry_id(), new_entry_id()
 
     def ev(kind, card, entry_id, **data):
@@ -62,7 +62,7 @@ def test_the_entries_held_are_what_the_events_fold_to():
     events = [ev(EVENT_ENTRY_ADDED, me, a, purpose="check the pace"),
               ev(EVENT_ENTRY_ADDED, me, b, purpose="the weekly audit"),
               ev(EVENT_ENTRY_ADDED, other, new_entry_id(), purpose="not mine"),
-              ev(EVENT_ENTRY_ADDED, me, "Tester@abc123-1", purpose="not an entry id"),
+              ev(EVENT_ENTRY_ADDED, me, "Tester_abc123-1", purpose="not an entry id"),
               ev(EVENT_ENTRY_REMOVED, other, b),
               ev(EVENT_ENTRY_REMOVED, me, a)]
     held = fold(events, me)
@@ -206,7 +206,7 @@ def test_the_cli_asks_the_daemon_and_says_what_it_answered(monkeypatch, capsys):
             return Response(ok=False, error="the entry's time was refused")
         return Response(ok=True, entries=[held])
     monkeypatch.setattr(client, "ask", ask)
-    monkeypatch.setattr(cli, "_this_agent", lambda: (None, "Tester@abc123"))
+    monkeypatch.setattr(cli, "_this_agent", lambda: (None, "Tester_abc123"))
     parser = argparse.ArgumentParser()
     cli.add_pd_parser(parser.add_subparsers(dest="cmd"))
 
@@ -226,7 +226,7 @@ def test_the_agenda_shows_both_tiers_soonest_first():
     its tier and soonest first (story 15)."""
     from macf.pd.cli import agenda_lines
     from macf.pd.interface import CommandRun, Declaration, MissedRunPolicy, Schedule
-    decl = Declaration(version=1, agent="Tester@abc123", timezone="UTC", notice_routes={"pd_run_failed": "agent"},
+    decl = Declaration(version=1, agent="Tester_abc123", timezone="UTC", notice_routes={"pd_run_failed": "agent"},
                        schedules=[Schedule(name="sweep", cron="0 13 * * *", missed_run=MissedRunPolicy(kind="skip"),
                                            target="isolated", run=CommandRun(command=["true"], wake_when="exit_code"),
                                            timeout_s=60)])
@@ -264,14 +264,14 @@ def test_pd_entry_show_prints_one_entry_in_full(monkeypatch, capsys):
     from macf.pd import cli, client
     from macf.pd.interface import Response
     sent = []
-    held = {"id": "e-0123456789ab", "agent": "Tester@abc123", "action": "wake", "when": "cron:0 9 * * *",
+    held = {"id": "e-0123456789ab", "agent": "Tester_abc123", "action": "wake", "when": "cron:0 9 * * *",
             "purpose": "the weekly audit is due", "missed": "once", "marked": ["a web fetch"]}
 
     def ask(card, request, **kw):
         sent.append(request)
         return Response(ok=True, entries=[held])
     monkeypatch.setattr(client, "ask", ask)
-    monkeypatch.setattr(cli, "_this_agent", lambda: (None, "Tester@abc123"))
+    monkeypatch.setattr(cli, "_this_agent", lambda: (None, "Tester_abc123"))
     parser = argparse.ArgumentParser()
     cli.add_pd_parser(parser.add_subparsers(dest="cmd"))
 
@@ -493,7 +493,7 @@ def test_an_entry_is_removed_by_the_agent_or_the_operator_and_stops(tmp_path, ba
     sent = []
     monkeypatch.setattr(client, "ask", lambda card, request, **kw: sent.append(request) or
                         __import__("macf.pd.interface", fromlist=["Response"]).Response(ok=True, entries=[]))
-    monkeypatch.setattr(cli, "_this_agent", lambda: (None, "Tester@abc123"))
+    monkeypatch.setattr(cli, "_this_agent", lambda: (None, "Tester_abc123"))
     parser = argparse.ArgumentParser()
     cli.add_pd_parser(parser.add_subparsers(dest="cmd"))
     args = parser.parse_args(["pd", "entry", "remove", "e-0123456789ab"])
@@ -773,14 +773,14 @@ def test_pd_agenda_lists_both_tiers_each_marked(tmp_path, monkeypatch, capsys):
 
     from macf.pd import cli, client, core
     from macf.pd.interface import CommandRun, Declaration, MissedRunPolicy, Response, Schedule
-    decl = Declaration(version=1, agent="Tester@abc123", timezone="UTC", notice_routes={"pd_run_failed": "agent"},
+    decl = Declaration(version=1, agent="Tester_abc123", timezone="UTC", notice_routes={"pd_run_failed": "agent"},
                        schedules=[Schedule(name="sweep", cron="0 13 * * *", missed_run=MissedRunPolicy(kind="skip"),
                                            target="isolated", run=CommandRun(command=["true"], wake_when="exit_code"),
                                            timeout_s=60)])
     entries = [{"id": "e-0123456789ab", "when": "cron:0 9 * * *", "zone": "UTC", "start": "2026-10-19T08:00:00+00:00",
                 "first": "2026-10-19T09:00:00+00:00", "purpose": "check the pace", "marked": ["a web fetch"]}]
     sent = []
-    monkeypatch.setattr(cli, "_this_agent", lambda: (tmp_path, "Tester@abc123"))
+    monkeypatch.setattr(cli, "_this_agent", lambda: (tmp_path, "Tester_abc123"))
     monkeypatch.setattr(core, "load_declaration", lambda home, card: decl)
     monkeypatch.setattr(client, "ask", lambda card, request, **kw: sent.append(request) or Response(ok=True, entries=entries))
     parser = argparse.ArgumentParser()

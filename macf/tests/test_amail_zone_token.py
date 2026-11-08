@@ -13,13 +13,13 @@ from macf.amail.deploy_config import BrokerDeployConfig, ConfigError
 from macf.amail.zone import local_part_from_card
 
 ZONE = "agents.example.org"
-CARD, OTHER = "WrenTuba@3c9d1e", "IraTest@a1a1a1"
+CARD, OTHER = "WrenTuba_3c9d1e", "IraTest_a1a1a1"
 TOKEN, NEW, PEER_TOKEN = "0123456789ab", "fedcba987654", "aaaabbbbcccc"
 SEP = "_"
 
 
 def addr(card, token):
-    name, short = card.lower().split("@")
+    name, short = card.lower().split("_")
     return SEP.join([name, short, token]) + "@" + ZONE
 
 

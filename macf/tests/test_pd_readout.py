@@ -13,7 +13,7 @@ from macf.notify.session import proc_start
 from macf.pd.health import ABSENT, ALIVE, GONE, STALE, UNREADABLE, health
 from macf.pd.interface import Declaration, Unit
 
-CARD = "Tester@abc123"
+CARD = "Tester_abc123"
 
 
 def declaration(*names):
@@ -90,7 +90,7 @@ def test_each_declared_unit_once_and_nothing_else():
         state("worker", "starting", at=now - 10),
         state("worker", "running", at=now - 9),
         alive("worker", at=now - 1),
-        alive("worker", at=now - 1, card="Someone@ffffff", pid=1111),
+        alive("worker", at=now - 1, card="Someone_ffffff", pid=1111),
         alive("stray", at=now - 1),
     ], now, lambda pid, start: True)
     assert [h.unit for h in results] == ["worker", "broker"]
@@ -238,7 +238,7 @@ def test_health_is_runs():
     # Two firings owed: the 10:00 run is the late one, however fresh the 11:00 firing is.
     two = schedule_health(_scheduled(), seen, H10 + 3600 + 30)[0]
     assert two.verdict == "OVERDUE" and two.owed == iso and "1 more owed" in two.detail
-    assert verdict(seen + [_run("pd_run_started", H10 + 1, scheduled_for=iso, card="Other@000000")],
+    assert verdict(seen + [_run("pd_run_started", H10 + 1, scheduled_for=iso, card="Other_000000")],
                    H10 + 120) == "OVERDUE"
     started = seen + [_run("pd_run_started", H10 + 1, scheduled_for=iso)]
     assert verdict(started, H10 + 30) == "RUNNING"

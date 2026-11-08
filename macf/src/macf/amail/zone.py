@@ -1,7 +1,7 @@
 """Zone addresses (MIS-0004 R06): an agent's address under the shared mail zone.
 
 The local part is the calling card from the agent's identity file, ``name_shortid``, lower-cased:
-``WrenTuba@3c9d1e`` is ``wrentuba_3c9d1e@<zone>``. It is never taken from
+``WrenTuba_3c9d1e`` is ``wrentuba_3c9d1e@<zone>``. It is never taken from
 ``MACEFF_AGENT_NAME``, because a seat may set that variable to its short name, and an address built
 from it would name a mailbox no broker holds.
 
@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from .. import calling_card
 from ..pd.names import agent_card
 
 
@@ -27,13 +28,11 @@ def check_token(token: str) -> str:
 
 
 def local_part_from_card(card: str, token: Optional[str] = None) -> str:
-    """``name_shortid``, lower-cased, from a calling card ``Name@shortid``, then ``_token`` when one is
-    declared; ValueError on a malformed card or token. The token is a random value provisioned per
-    agent and never derived from its identity, so an exposed one can be revoked and replaced."""
-    name, sep, shortid = card.strip().partition("@")  # noqa: MACEFF005 - a calling card is "Name@shortid", fixed in pd.names
-    if not sep or not name or len(shortid) != 6:
-        raise ValueError(f"'{card}' is not a calling card (Name@shortid)")
-    base = f"{name}_{shortid}".lower()
+    """The calling card lowercased, the mail local part MIS-0002-R161 gives it, then ``_token``
+    when one is declared; ValueError on a malformed card or token. The token is a random value
+    provisioned per agent and never derived from its identity, so an exposed one can be revoked
+    and replaced."""
+    base = calling_card.lowercase("_".join(calling_card.split(card.strip())))
     return f"{base}_{check_token(token)}" if token is not None else base
 
 

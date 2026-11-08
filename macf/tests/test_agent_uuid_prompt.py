@@ -14,6 +14,6 @@ def test_the_mint_preview_shows_a_name_half_not_a_bare_suffix(tmp_path, monkeypa
     out = capsys.readouterr().out
     minted = (tmp_path / ".maceff_primary_agent.id").read_text().strip()
     preview = next(line for line in out.splitlines() if "Calling card would be" in line)
-    assert f"<name>@{minted[:6]}" in preview, preview
-    assert not re.search(r"would be: @", preview), preview
+    assert f"<name>_{minted[:6]}" in preview, preview
+    assert not re.search(r"would be: _", preview), preview
     assert "--calling-card NAME" in preview
