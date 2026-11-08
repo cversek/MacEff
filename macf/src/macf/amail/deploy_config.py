@@ -26,7 +26,7 @@ configuration becomes broker authority.
 import sys
 import pwd
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Literal, Tuple
+from typing import Any, Dict, List, Optional, Literal, Tuple, Union
 
 import yaml
 from pydantic import (BaseModel, ConfigDict, Field, field_validator,
@@ -298,6 +298,13 @@ class AgentAddressing(AgentBinding):
                     "the identity file in its home (MIS-0004 R06). The broker's account "
                     "cannot read that file (the home is closed to it by design, R05), so "
                     "under a zone the address is derived from this declaration.")
+    zone_token: Optional[str] = Field(
+        default=None,
+        description="the random part of this agent's zone address after its card, twelve or "
+                    "more lowercase hex characters from a CSPRNG, written at provisioning and "
+                    "never derived from its identity, so the public card alone is not an "
+                    "address. Required under a zone. Exposed: add it to "
+                    "`revoked_zone_tokens` and provision a new one.")
     shared_uid: bool = Field(
         default=False,
         description="this agent's uid names more than one agent (amail.md §1.3). "
@@ -325,8 +332,21 @@ def _require_zone_cards(addressing: "AddressingConfig") -> None:
     refused as not ours with no word at all. Refuse the start and name them instead."""
     from .zone import local_part_from_card
     from ..pd.names import IdentityError, agent_card
+    from .zone import check_token
+    revoked = set(addressing.revoked_zone_tokens)
     missing = []
     for name, b in addressing.agents.items():
+        if b.zone_token is None:
+            missing.append(f"{name} (no 'zone_token' declared)")
+            continue
+        try:
+            check_token(b.zone_token)
+        except ValueError as e:
+            missing.append(f"{name} ('zone_token': {e})")
+            continue
+        if b.zone_token in revoked:
+            missing.append(f"{name} (its 'zone_token' is revoked; provision a new one)")
+            continue
         if b.card:
             try:
                 local_part_from_card(b.card)
@@ -342,8 +362,43 @@ def _require_zone_cards(addressing: "AddressingConfig") -> None:
     if missing:
         raise ConfigError(
             f"zone '{addressing.zone}' is declared, but these agents have no usable calling "
-            f"card: {', '.join(missing)}. Declare 'card: Name@shortid' for each, as "
-            f"provisioning writes it (MIS-0004 R06); without it their zone mail is refused.")
+            f"card and zone token: {', '.join(missing)}. Declare 'card: Name@shortid' and a "
+            f"fresh 'zone_token' for each, as provisioning writes them (MIS-0004 R06); without "
+            f"them their zone mail is refused.")
+
+
+def _refuse_double_claims(addressing: "AddressingConfig", peers: Dict[str, Any]) -> None:
+    """One zone address, one holder (R08): refuse a start where two declarations claim the same
+    zone local part, whether two peers, one peer twice, or a peer and one of our own agents.
+    Routing would otherwise pick one by sort order and say nothing."""
+    from .zone import local_part_from_card, zone_local_part
+    from ..pd.names import IdentityError
+    from ..pd.names import agent_card
+    claims: Dict[str, List[str]] = {}
+    for name, b in addressing.agents.items():
+        try:
+            local = local_part_from_card(b.card or agent_card(b.home), b.zone_token)
+        except (IdentityError, ValueError):
+            continue   # _require_zone_cards has already refused this agent
+        claims.setdefault(local, []).append(f"local agent '{name}'")
+    missing = []
+    for dom, decl in sorted(peers.items()):
+        for box, held in decl.agents.items():
+            card, token = (held.card, held.zone_token) if isinstance(held, PeerAgent) else (held, None)
+            if token is None:
+                missing.append(f"peer '{dom}' box '{box}'")
+                continue
+            claims.setdefault(local_part_from_card(card, token), []).append(f"peer '{dom}' box '{box}'")
+    if missing:
+        raise ConfigError(
+            f"under zone '{addressing.zone}' each peer agent needs its 'zone_token' beside its "
+            f"card ({', '.join(missing)}): a card alone is not a zone address (MIS-0004 R06)")
+    doubled = {k: v for k, v in claims.items() if len(v) > 1}
+    if doubled:
+        raise ConfigError(
+            "these zone addresses are claimed more than once: " + "; ".join(
+                f"{k} by {', '.join(v)}" for k, v in sorted(doubled.items()))
+            + ". One zone address has one holder (MIS-0004 R08); remove the wrong declaration.")
 
 
 class AddressingConfig(BaseModel):
@@ -365,6 +420,11 @@ class AddressingConfig(BaseModel):
                     "(MIS-0004 R06). An address under it is derived from each agent's "
                     "calling card, so the zone needs no table; the name stays in the "
                     "deployment's own file, never in the repository.")
+    revoked_zone_tokens: List[str] = Field(
+        default_factory=list,
+        description="zone tokens that have been exposed. An address carrying one is refused at "
+                    "once, ours or a peer's: rotation is a hard cut. An agent may not hold a "
+                    "revoked token; the start refuses it.")
     tier: Literal["container", "host"] = Field(
         default="container",
         description="which tier this deployment runs under (amail.md §7.5). "
@@ -448,6 +508,15 @@ class AddressingConfig(BaseModel):
         return self
 
 
+class PeerAgent(BaseModel):
+    """One of a peer's agents under the zone: its calling card and its zone token."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    card: str
+    zone_token: Optional[str] = None
+
+
 class SharedHandoffDecl(BaseModel):
     """One peer deployment reachable through this filesystem (rung 1s).
 
@@ -476,6 +545,25 @@ class SharedHandoffDecl(BaseModel):
                     "Verified before every write, and applied to the pair "
                     "when the box is not setgid. This broker must be a member "
                     "of it on this side of the mount.")
+    agents: Dict[str, Union[str, PeerAgent]] = Field(
+        default_factory=dict,
+        description="the peer's agents under the shared zone, box name -> {card, zone_token} "
+                    "as the peer's operator provisioned them, or the card alone where the zone "
+                    "has no tokens yet (MIS-0004 R06, R08). "
+                    "Under one zone the domain does not say which broker holds a mailbox; "
+                    "this map does. Retired when the system daemon declares it (MIS-0007).")
+
+    @field_validator("agents")
+    @classmethod
+    def _cards_are_cards(cls, v: Dict[str, Any]):
+        from .zone import local_part_from_card
+        for box, held in v.items():
+            if isinstance(held, PeerAgent):
+                local_part_from_card(held.card, held.zone_token)   # ValueError names the bad value
+            else:
+                local_part_from_card(held)
+        return v
+
     note: str = Field(
         default="",
         description="operator's note: which deployment this is, where the "
@@ -647,9 +735,12 @@ class BrokerDeployConfig(BaseModel):
                     f"deployment's domain. Refusing rather than let two rungs "
                     f"claim the same mailboxes.")
             shared[key] = SharedHandoff(handoff=decl.handoff, uid=decl.uid,
-                                        gid=decl.gid, note=decl.note)
+                                        gid=decl.gid, note=decl.note,
+                                        agents={box: (h.card, h.zone_token) if isinstance(h, PeerAgent) and h.zone_token else (h.card if isinstance(h, PeerAgent) else h)
+                                                for box, h in decl.agents.items()})
         if addressing.zone:
             _require_zone_cards(addressing)
+            _refuse_double_claims(addressing, self.shared_handoffs)
         return BrokerConfig(
             domain=addressing.domain,
             zone=addressing.zone,
@@ -657,6 +748,8 @@ class BrokerDeployConfig(BaseModel):
             shared_sweep_seconds=self.shared_sweep_seconds,
             agent_homes={name: b.home for name, b in addressing.agents.items()},
             agent_cards={name: b.card for name, b in addressing.agents.items() if b.card},
+            agent_zone_tokens={name: b.zone_token for name, b in addressing.agents.items() if b.zone_token},
+            revoked_zone_tokens=set(addressing.revoked_zone_tokens),
             contacts_path=self.addressing_path,
             audit_path=self.audit_path,
             socket_path=self.socket_path,

@@ -409,6 +409,24 @@ class TestPrivateReferencesAreRefused:
         r = subprocess.run(["bash", str(guard), str(msg)], capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
 
+    @pytest.mark.parametrize("card", ["[IraMacEff_ee9a78: task#242 s_abc12345/c_40/p_x/t_1]",
+                                      "*[IraMacEff_ee9a78: task#242 s_abc12345/c_40/p_x/t_1]*",
+                                      "_[IraMacEff_ee9a78: task#242 s_abc12345/c_40/p_x/t_1]_"])
+    def test_the_underscore_card_footer_passes(self, tmp_path, card):
+        """While the card's separator moves from @ to _, the footer is exempt in either form."""
+        guard = self._guard(tmp_path)
+        msg = tmp_path / "m"
+        msg.write_text(f"feat: x\n\nFourth in the series, on top of #376.\n\n{card}\n")
+        r = subprocess.run(["bash", str(guard), str(msg)], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+
+    def test_an_underscore_card_line_before_the_end_is_read_as_prose(self, tmp_path):
+        guard = self._guard(tmp_path)
+        msg = tmp_path / "m"
+        msg.write_text("feat: x\n\n[IraMacEff_ee9a78: task#242 s_abc12345/c_40/p_x/t_1]\n\nMore prose.\n")
+        r = subprocess.run(["bash", str(guard), str(msg)], capture_output=True, text=True)
+        assert r.returncode == 1 and "c_40" in r.stderr
+
     def test_a_card_shaped_line_before_the_end_is_read_as_prose(self, tmp_path):
         guard = self._guard(tmp_path)
         msg = tmp_path / "m"

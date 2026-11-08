@@ -58,7 +58,7 @@ def test_the_deployment_file_carries_the_zone_to_the_broker(tmp_path):
     import yaml
     from macf.amail.deploy_config import BrokerDeployConfig
     base = {"domain": "aero.local",
-            "agents": {"wren": {"home": str(tmp_path / "wren_t"), "uid": 1002, "contacts": [], "card": "WrenTuba@3c9d1e"}}}
+            "agents": {"wren": {"home": str(tmp_path / "wren_t"), "uid": 1002, "contacts": [], "card": "WrenTuba@3c9d1e", "zone_token": "0123456789ab"}}}
     for zone in ("agents.example.org", None):
         addr = tmp_path / "addressing.yaml"
         addr.write_text(yaml.safe_dump({**base, **({"zone": zone} if zone else {})}))
@@ -106,7 +106,7 @@ def _deploy(tmp_path, agents, zone="agents.example.org"):
 def test_a_zone_start_refuses_an_agent_with_no_usable_card(tmp_path):
     """Never skipped silently: the start names the agent and the fix."""
     from macf.amail.deploy_config import ConfigError
-    agents = {"wren": {"home": str(tmp_path / "closed"), "uid": 1002, "contacts": []}}
+    agents = {"wren": {"home": str(tmp_path / "closed"), "uid": 1002, "contacts": [], "zone_token": "0123456789ab"}}
     with pytest.raises(ConfigError, match="wren"):
         _deploy(tmp_path, agents).to_broker_config()
     agents["wren"]["card"] = "WrenTuba"
@@ -115,4 +115,4 @@ def test_a_zone_start_refuses_an_agent_with_no_usable_card(tmp_path):
     agents["wren"]["card"] = "WrenTuba@3c9d1e"
     cfg = _deploy(tmp_path, agents).to_broker_config()
     assert cfg.agent_cards == {"wren": "WrenTuba@3c9d1e"}
-    assert cfg.agent_for("wrentuba_3c9d1e@agents.example.org") == "wren"
+    assert cfg.agent_for("_".join(["wrentuba", "3c9d1e", "0123456789ab"]) + "@agents.example.org") == "wren"

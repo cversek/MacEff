@@ -197,6 +197,13 @@ checked at each point where the artifact leaves the agent's hands:
 the form `[Name@id: task#N <breadcrumb>]`, bare or in italics. Another agent's card,
 or a placeholder of the right shape, is not a sign-off by this agent.
 
+**While calling cards move from `Name@id` to `Name_id`** (the MIS-0002 revision on
+calling cards), the checks accept the agent's own card in either spelling:
+`[Name_id: task#N <breadcrumb>]` signs as well as `[Name@id: ...]`. That lets an
+agent sign with the new form before its identity files are cut over. Only the
+separator may differ; the name and the id must still be the agent's own. Once every
+agent has cut over, only the new form will be accepted.
+
 **Checked only inside an agent session, and only where the agent opts in.** An
 operator and an agent can share one login, so the account cannot tell them apart.
 Claude Code sets `CLAUDECODE=1` in the shells it runs, and a person's own terminal
