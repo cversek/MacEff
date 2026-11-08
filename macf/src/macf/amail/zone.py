@@ -27,6 +27,19 @@ def check_token(token: str) -> str:
     return token
 
 
+#: A zone local part: the lowercased card (``name_shortid``) and then ``_token``.
+_ZONE_LOCAL_RE = re.compile(r"^(?P<card>[a-z0-9]+(?:_[a-z0-9]+)*_[0-9a-f]{6})_[0-9a-f]{12,}$")
+
+
+def redact_address(address: str) -> str:
+    """*address* with its zone token masked, for any log line or reason (MIS-0004 R49): the card
+    part still says whose address it was, and the token that makes it reachable is never written.
+    An address with no token is returned as it is."""
+    local, at, domain = str(address).partition("@")
+    m = _ZONE_LOCAL_RE.match(local)
+    return f"{m.group('card')}_<token>{at}{domain}" if m else str(address)
+
+
 def local_part_from_card(card: str, token: Optional[str] = None) -> str:
     """The calling card lowercased, the mail local part MIS-0002-R161 gives it, then ``_token``
     when one is declared; ValueError on a malformed card or token. The token is a random value
