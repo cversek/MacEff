@@ -91,6 +91,20 @@ def may_sign(card: str, public_key: str, registry: Registry,
     return public_key in registry.signing_keys(card, at=now)
 
 
+def sender_verdict(message: Any, card: Optional[str], registry: Registry,
+                   accepted_at: Optional[datetime.datetime]) -> Dict[str, Any]:
+    """:func:`registry_verdict` for *message* from the sender's *card*, the one rule the broker and
+    the receiver both apply (MIS-0004 R44). The card is the broker's single resolution of the
+    sender's address (:func:`zone.card_for_address`), which the receiver reads from the hand-off
+    sidecar; with none, the sender is outside mail and unverified, never a guess."""
+    if card is None:
+        return {"attests": None, "shared_with": [], "keys_declared": None,
+                "accepted_at": accepted_at.isoformat() if accepted_at else None,
+                "trust": TrustClass.UNVERIFIED.value,
+                "reason": "no calling card is known for the sender; nothing can be concluded"}
+    return registry_verdict(message, card, registry, accepted_at)
+
+
 def registry_verdict(message: Any, card: str, registry: Registry,
                      accepted_at: Optional[datetime.datetime]) -> Dict[str, Any]:
     """The receiver's verdict on *message* from *card*, against the operator's registry.

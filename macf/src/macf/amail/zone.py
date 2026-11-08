@@ -11,7 +11,7 @@ from deployment configuration and never appears in this repository.
 """
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 
 from .. import calling_card
 from ..pd.names import agent_card
@@ -38,6 +38,30 @@ def redact_address(address: str) -> str:
     local, at, domain = str(address).partition("@")
     m = _ZONE_LOCAL_RE.match(local)
     return f"{m.group('card')}_<token>{at}{domain}" if m else str(address)
+
+
+def card_for_address(address: str, agent_cards: Optional[Mapping[str, str]] = None,
+                     domain: Optional[str] = None) -> Optional[str]:
+    """The calling card an address names, or None when it names none (MIS-0004 R44), tried in this
+    order: a zone address with its token removed (``name_shortid_token``); under *domain*, an
+    agent's name declared in *agent_cards*, since an agent's configured name need not be its card
+    (MIS-0002 R161 covers only names derived from one); then a local part that is itself a card.
+    The broker resolves the sender once with this and writes the card into the hand-off sidecar,
+    so the recipient judges by the same card and never parses an address itself."""
+    local, at, dom = str(address or "").strip().rpartition("@")
+    if not at or not local:
+        return None
+    m = _ZONE_LOCAL_RE.match(local.lower())
+    if m:
+        return m.group("card")
+    if agent_cards and domain and dom.lower() == domain.strip().lower():
+        named = {name.lower(): card for name, card in agent_cards.items()}
+        if local.lower() in named:
+            return named[local.lower()]
+    try:
+        return calling_card.read_declared(local)
+    except calling_card.CardError:
+        return None  # noqa: MACEFF003 - None is the stated answer: the address names no card, so its mail is unverified
 
 
 def local_part_from_card(card: str, token: Optional[str] = None) -> str:

@@ -38,8 +38,9 @@ GRANT_SOURCE = "pd_grant_denied"
 
 
 def receiver_settings(agent_home: Path) -> Optional[Dict[str, object]]:
-    """``{"box", "agent", "contacts"}`` from the home's own amail settings, or None when they
-    don't name the agent. The environment is never read."""
+    """``{"box", "agent", "contacts", "domain"}`` from the home's own amail settings, or None when
+    they don't name the agent. The environment is never read. The domain names this box's broker,
+    whose record of acceptance a signature is judged at (MIS-0004 R45); empty when unset."""
     from macf.amail.pickup import _settings, resolve_pickup_box
     cfg = _settings(Path(agent_home))
     if not cfg.get("agent"):
@@ -47,15 +48,18 @@ def receiver_settings(agent_home: Path) -> Optional[Dict[str, object]]:
     # With no environment, the handoff is the settings' or the fixed default, never a variable.
     box, _how = resolve_pickup_box(Path(agent_home), env={})
     return {"box": box, "agent": str(cfg["agent"]),
-            "contacts": Path(str(cfg.get("contacts") or DEFAULT_CONTACTS))}
+            "contacts": Path(str(cfg.get("contacts") or DEFAULT_CONTACTS)),
+            "domain": str(cfg.get("domain") or "")}
 
 
 class Receiver:
     """One pass at a time: ``tick(now)``."""
 
     def __init__(self, card: str, agent_home: Path, box: Path, agent: str, contacts: Path,
-                 append: Callable[[str, dict], object], notice: Callable[[str, str], object]):
+                 append: Callable[[str, dict], object], notice: Callable[[str, str], object],
+                 domain: str = ""):
         self.card = card
+        self.domain = domain
         self.home = Path(agent_home)
         self.box = Path(box)
         self.agent = agent
@@ -91,7 +95,7 @@ class Receiver:
         from macf.amail.client import IngestBusy, ingest
         try:
             results = ingest(self.home, self.box, contacts_path=self.contacts,
-                             agent=self.agent, wait=False)
+                             agent=self.agent, wait=False, domain=self.domain)
         except IngestBusy:
             return  # noqa: MACEFF003 - `amail list` holds the lock and takes what is waiting; this pass tries again
         except OSError as e:

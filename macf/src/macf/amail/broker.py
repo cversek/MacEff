@@ -35,6 +35,7 @@ its domain, which is the one thing that should change.
 from __future__ import annotations
 
 import contextlib
+import datetime
 import hashlib
 import json
 import os
@@ -61,7 +62,6 @@ from .audit import AuditLog
 from .contacts import ContactBook, ContactListError
 from .models import Message, new_id, _now_iso
 from .trust import TrustClass, LOCAL_SUBMISSION
-from .crypto import verify
 from .store import deliver, ensure_maildir
 from . import store
 
@@ -538,10 +538,19 @@ class DeliveryOutcome:
     detail: str    #: human-readable reason; "" on success
 
 
+def _accepted_now() -> datetime.datetime:
+    """This broker's acceptance time, timezone-aware and to the second, as the sidecar records it."""
+    return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+
+
 class Broker:
     def __init__(self, config: BrokerConfig):
         self.config = config
         self.contacts = ContactBook(config.contacts_path) if config.contacts_path else None
+        # The operator's registry, which every signature is judged against (MIS-0004 R42, R44):
+        # the host's one root-owned file, wherever registry_path() says it is.
+        from .registry import Registry, registry_path
+        self.registry = Registry(registry_path())
         self.audit = (AuditLog(config.audit_path, tier=config.tier)
                       if config.audit_path else None)
         self._warned_peers: set = set()
@@ -987,7 +996,7 @@ class Broker:
         return False
 
     def hand_off(self, agent: str, message: Message, trust: str,
-                 via: str = "") -> Path:
+                 via: str = "", accepted_at: Optional[str] = None) -> Path:
         """Hand a delivered message into the recipient's pickup box.
 
         UNIFIED DELIVERY. This replaced a direct write into the recipient's
@@ -1026,7 +1035,10 @@ class Broker:
         stem = f"{int(time.time())}-{message.message_id}"
         sidecar = {
             "kind": "bundle",
-            "handed_off_at": _now_iso(),
+            # The time the trust was judged at, so the recipient judges at the same one (R45).
+            "handed_off_at": accepted_at or _now_iso(),
+            # The sender's card as this broker resolved it, which the recipient judges by (R44).
+            "sender_card": self.sender_card(message),
             "message_id": message.message_id,
             "sender": message.sender,
             "recipient": self.config.address_for(agent),
@@ -1250,9 +1262,10 @@ class Broker:
             # Classified against THIS recipient's contact book, immediately
             # before the handoff. Two recipients may declare different keys for
             # the same sender, so the answer is per mailbox, not per message.
-            trust = self.classify_inbound(message, agent).value
+            at = _accepted_now()
+            trust = self.classify_inbound(message, agent, accepted_at=at).value
             message.trust = trust
-            self.hand_off(agent, message, trust)
+            self.hand_off(agent, message, trust, accepted_at=at.isoformat(timespec="seconds"))
             # Local handoff IS delivery: the message is in the recipient's
             # pickup box and only the recipient can move it from there.
             return DeliveryOutcome(rung="local", trust=trust,
@@ -1656,8 +1669,15 @@ class Broker:
         message.to = to
         return edited
 
+    def sender_card(self, message: Message) -> Optional[str]:
+        """The sender's calling card, resolved once here and written into the hand-off sidecar, so
+        the recipient judges the signature by the same card (MIS-0004 R44)."""
+        from .zone import card_for_address
+        return card_for_address(message.sender, self.config.agent_cards, self.config.domain)
+
     def classify_inbound(self, message: Message, agent: str,
-                         domain_authenticated: bool = False) -> TrustClass:
+                         domain_authenticated: bool = False,
+                         accepted_at: Optional[datetime.datetime] = None) -> TrustClass:
         """What has actually been established about where this came from.
 
         `domain_authenticated` is supplied by the receiving MTA boundary — OUR
@@ -1673,30 +1693,23 @@ class Broker:
         only the DOMAIN — and the message that reads as a trusted human over an
         attacker-controlled address passes DMARC cleanly, because the attacker's
         domain genuinely is the attacker's domain.
+
+        THE SIGNATURE IS JUDGED AGAINST THE OPERATOR'S REGISTRY (MIS-0004 R44), by the same
+        :func:`attest.sender_verdict` the recipient applies at ingest, so the two never disagree on
+        the same bytes. *accepted_at* is this broker's acceptance, which it writes into the
+        sidecar as ``handed_off_at``; when omitted it is now, never "no record", since the broker
+        is accepting it now. A sender the registry declares is held to its keys; any other sender,
+        and every sender while the registry is missing or untrusted, is unverified, and nothing
+        falls back to the keys a contact book declares (R42). *agent* no longer changes the
+        answer: the registry is one declaration for every recipient.
         """
-        keys = self.contacts.keys_for(agent, message.sender) if self.contacts else []
-        if message.signature and keys:
-            if verify(message, message.signature, keys):
-                return TrustClass.ATTESTED
-            # A signature that fails is not the same as no signature. Someone
-            # went to the trouble of attaching one and it did not check out.
-            # Collapsing this into UNVERIFIED discards the only evidence that
-            # separates "we could not tell" from "we looked, and it did not add
-            # up" — and the second is the one worth waking someone for.
-            return TrustClass.SUSPECT
-        if message.signature and not keys:
-            # Signed by a correspondent who has declared no key. Nothing can be
-            # concluded, so nothing is: this is not SUSPECT (no check failed)
-            # and it is certainly not ATTESTED.
-            return TrustClass.DOMAIN_AUTH if domain_authenticated else TrustClass.UNVERIFIED
-        if keys and not message.signature:
-            # A correspondent who publishes a key and then sends unsigned mail
-            # is the shape of an impersonation: the attacker has the address but
-            # not the key, so the cheapest move is to simply omit the signature
-            # and hope nobody checks. Declaring a key is a commitment to using
-            # one, and mail that breaks the commitment is worth flagging.
-            return TrustClass.SUSPECT
-        return TrustClass.DOMAIN_AUTH if domain_authenticated else TrustClass.UNVERIFIED
+        from .attest import sender_verdict
+        verdict = sender_verdict(message, self.sender_card(message), self.registry,
+                                 accepted_at or _accepted_now())
+        trust = TrustClass(verdict["trust"])
+        if trust is TrustClass.UNVERIFIED and domain_authenticated:
+            return TrustClass.DOMAIN_AUTH
+        return trust
 
     def accept_inbound(self, message: Message, recipient: str,
                        via: str = "", *, rung: str = "shared",
@@ -1815,7 +1828,8 @@ class Broker:
         # The invariant this establishes, which is what the tests assert:
         #     verify(deserialize(stored_bytes)) == (stored.trust == ATTESTED)
         truncated = self._bound_fields(message)
-        message.trust = self.classify_inbound(message, agent).value
+        at = _accepted_now()
+        message.trust = self.classify_inbound(message, agent, accepted_at=at).value
         # AUTHORIZE FIRST, THEN DO THE EXPENSIVE WORK.
         #
         # The visibility checks below each scan and deserialise the recipient's
@@ -1899,7 +1913,8 @@ class Broker:
 
         # Same unified path: inbound peer mail is handed off, not written
         # across the boundary.
-        self.hand_off(agent, message, message.trust or "", via=held_via)
+        self.hand_off(agent, message, message.trust or "", via=held_via,
+                      accepted_at=at.isoformat(timespec="seconds"))
         if self.audit:
             self.audit.inbound(sender=message.sender, recipient=recipient,
                                message_id=message.message_id, decision="delivered",

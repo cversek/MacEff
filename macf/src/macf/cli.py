@@ -11210,7 +11210,7 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
         # THIS recipient holds — a filesystem read, so it still works
         # with the broker stopped, which R4 requires.
         ingested = ingest(home, box, contacts_path=cfg.get("contacts"),
-                          agent=cfg.get("agent") or "")
+                          agent=cfg.get("agent") or "", domain=cfg.get("domain") or "")
         ok = sum(1 for r in ingested if r.get("ingested"))
         # An entry another ingest took (the primal daemon's receiver) is in the store, not stuck.
         stuck = [r for r in ingested if not r.get("ingested") and not r.get("taken")]

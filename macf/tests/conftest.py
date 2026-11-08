@@ -57,6 +57,14 @@ def _a_refused_daemon_exits_at_once_in_tests(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_test_reads_the_hosts_registry(tmp_path, monkeypatch):
+    """Every ingest judges agent mail against the operator's registry (MIS-0004 R44), by default
+    /etc/maceff/registry.yaml. A host that has one would make a test's verdicts depend on which
+    agents its operator declared, so each test starts with none; a test wanting one names it."""
+    monkeypatch.setenv("MACF_AMAIL_REGISTRY", str(tmp_path / "no-registry" / "registry.yaml"))
+
+
+@pytest.fixture(autouse=True)
 def _no_test_reads_the_hosts_rendered_declarations(tmp_path, monkeypatch):
     """The root-rendered declarations live under /etc/maceff/pd on a host that runs a system
     daemon. A test that read them saw the host's real daemons, unreadable or extra, and failed there
