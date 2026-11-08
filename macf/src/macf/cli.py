@@ -307,7 +307,13 @@ def cmd_env(args: argparse.Namespace) -> int:
     _detect_cc_binary = detect_cc_binary
 
     # Get agent identity
-    agent_identity = get_agent_identity()
+    # The card as the primal daemon reads it, from the home's own files (#924).
+    from .utils.identity import reported_identity
+    try:
+        _home = Path(os.environ["MACEFF_AGENT_HOME_DIR"]) if os.environ.get("MACEFF_AGENT_HOME_DIR") else find_agent_home()
+    except (OSError, ValueError):
+        _home = None
+    identity = reported_identity(_home)
 
     # Compute CC internal paths
     try:
@@ -343,9 +349,7 @@ def cmd_env(args: argparse.Namespace) -> int:
 
     # Gather all data
     data = {
-        "identity": {
-            "agent_id": agent_identity
-        },
+        "identity": identity,
         "versions": {
             "macf": _ver,
             "claude_code": get_claude_code_version() or "(unavailable)",
@@ -417,8 +421,14 @@ def cmd_env(args: argparse.Namespace) -> int:
         line = "━" * 80
         print(line)
 
+        ident = data['identity']
         print("Agent ID")
-        print(f"  {data['identity']['agent_id']}")
+        where = ("from the home's identity files, as the primal daemon reads it" if ident['source'] == "home"
+                 else f"no home names an agent; from {ident['source']}")
+        print(f"  {ident['agent_id']}  ({where})")
+        if ident.get('process_identity'):
+            print(f"  This process's own identity reads {ident['process_identity']} "
+                  f"(MACEFF_AGENT_NAME comes first there); the card above is the one that counts.")
         print()
 
         print("Supervision")
@@ -10893,9 +10903,9 @@ def cmd_amail_key_status(args: argparse.Namespace) -> int:
 
 def cmd_amail_registry_check(args: argparse.Namespace) -> int:
     """Check the operator's registry (MIS-0004 R42): who can write it, and what it declares."""
-    from macf.amail.registry import DEFAULT_PATH, Registry, RegistryError
+    from macf.amail.registry import Registry, RegistryError, registry_path
 
-    path = Path(args.path) if args.path else DEFAULT_PATH
+    path = Path(args.path) if args.path else registry_path()
     try:
         loaded = Registry(path).load()
     except RegistryError as e:
@@ -10903,10 +10913,54 @@ def cmd_amail_registry_check(args: argparse.Namespace) -> int:
         return 1
     print(f"✅ {path} is root's alone to write")
     for card, entry in sorted(loaded.agents.items()):
-        print(f"   {card}: account {entry.account}, {len(entry.keys)} key(s)")
+        retired = sum(1 for k in entry.keys if k.retired)
+        print(f"   {card}: account {entry.account}, {len(entry.keys)} key(s)"
+              + (f", {retired} retired" if retired else ""))
     for cert in loaded.certificates:
-        print(f"   certificate {cert.name}: serial {cert.serial}, expires {cert.not_after}")
+        print(f"   certificate {cert.name}: serial {cert.serial}, expires {cert.not_after}"
+              + (f", retired {cert.retired_at.isoformat()}" if cert.retired else ""))
     return 0
+
+
+def _registry_time(text):
+    """A command-line time: ISO 8601 with a timezone, or now (UTC) when none is given."""
+    import datetime as _dt
+    if not text:
+        return _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0)
+    t = _dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    if t.utcoffset() is None:
+        raise ValueError(f"{text} has no timezone; write it with one, such as Z")
+    return t
+
+
+def cmd_amail_registry_change(args: argparse.Namespace) -> int:
+    """Declare, rotate or retire a key, or record or retire a certificate, in the operator's
+    registry (MIS-0004 R42, R45): the change is shown first, written by root or staged for it,
+    and a change already made writes nothing."""
+    import datetime as _dt
+    from macf.amail import registry_edit as edit
+    from macf.amail.registry import registry_path
+
+    path = Path(args.path) if args.path else registry_path()
+    try:
+        at = _registry_time(getattr(args, "at", None))
+        verb = args.registry_cmd
+        if verb == "declare":
+            change = lambda t: edit.declare(t, args.card, args.account, args.key)
+        elif verb == "rotate":
+            change = lambda t: edit.rotate(t, args.card, args.key, at=at)
+        elif verb == "retire":
+            change = lambda t: edit.retire(t, args.card, args.key, at=at)
+        elif verb == "cert-record":
+            not_after = _dt.date.fromisoformat(args.not_after)
+            change = lambda t: edit.cert_record(t, args.name, args.serial, not_after)
+        else:
+            change = lambda t: edit.cert_retire(t, args.serial, at=at)
+        planned = edit.plan(path, change)
+    except (ValueError, OSError) as e:
+        print(f"❌ {e}")
+        return 1
+    return edit.carry_out(planned, dry_run=args.dry_run)
 
 
 def _broker_socket_ready(sock: Path, timeout: float = 0.0) -> bool:
@@ -13690,6 +13744,31 @@ def _build_parser() -> argparse.ArgumentParser:
         "check", help="check who can write the registry, and list what it declares")
     amail_registry_check.add_argument("--path", help="the registry (default: /etc/maceff/registry.yaml)")
     amail_registry_check.set_defaults(func=cmd_amail_registry_check)
+    _reg_help = {
+        "declare": "declare an agent's public key, held by its account (written by agent init too)",
+        "rotate": "declare a new key from --at and retire every other open key at that moment (R45)",
+        "retire": "retire a key at --at: it signs nothing after, and verifies only earlier mail",
+        "cert-record": "record a certificate the operator's authority issued, by name, serial and expiry",
+        "cert-retire": "retire a recorded certificate at --at, before its expiry",
+    }
+    for _verb, _help in _reg_help.items():
+        _rp = amail_registry_sub.add_parser(_verb, help=_help + "; shown first, written by root or "
+                                                    "staged for it, and a no-op when already made")
+        _rp.add_argument("--path", help="the registry (default: /etc/maceff/registry.yaml)")
+        _rp.add_argument("--dry-run", action="store_true", help="show the change and write nothing, not even the staged copy")
+        if _verb in ("declare", "rotate", "retire"):
+            _rp.add_argument("--card", required=True, help="the agent's calling card, Name_shortid")
+            _rp.add_argument("--key", required=True, help="the public key, ed25519:<base64> (amail key-status prints it)")
+        if _verb == "declare":
+            _rp.add_argument("--account", required=True, help="the login account that holds the key")
+        if _verb in ("cert-record", "cert-retire"):
+            _rp.add_argument("--serial", required=True, help="the certificate's serial, hex")
+        if _verb == "cert-record":
+            _rp.add_argument("--name", required=True, help="the certificate's name")
+            _rp.add_argument("--not-after", required=True, help="its expiry date, YYYY-MM-DD")
+        if _verb in ("rotate", "retire", "cert-retire"):
+            _rp.add_argument("--at", default=None, help="when, ISO 8601 with a timezone (default: now, UTC)")
+        _rp.set_defaults(func=cmd_amail_registry_change)
 
     amail_preflight = amail_sub.add_parser(
         "preflight", help="scan a hand-carried bundle before it leaves the host",
