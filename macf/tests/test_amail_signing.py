@@ -438,7 +438,7 @@ def _boxed(tmp_path, message, *, domain="here.test", handed_off_at="2026-03-01T1
     stem = f"m{len(list(box.glob('*.amsg')))}"
     if sender_card == "from the address":
         from macf.amail.zone import card_for_address
-        sender_card = card_for_address(message.sender)
+        sender_card = card_for_address(message.sender, domain="here.test")
     (box / f"{stem}.json").write_text(json.dumps({
         "message_id": message.message_id if message_id is None else message_id,
         "raw_sha256": hashlib.sha256(payload).hexdigest(), "rung": "local",

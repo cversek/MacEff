@@ -97,3 +97,29 @@ def test_an_address_is_redacted_to_its_card_part():
     assert redact_address("someone_0a1b2c@zone.example") == "someone_0a1b2c@zone.example"
     assert redact_address("nobody@elsewhere.example") == "nobody@elsewhere.example"
     assert redact_address("") == ""
+
+
+def test_a_sender_resolves_to_a_card_only_at_its_own_domain():
+    """MIS-0004 R44: the card a signature is judged by comes from the domain the address belongs
+    to. A stranger elsewhere who picks one of our cards, or a zone-shaped local part, is outside
+    mail and stays unverified, not judged against our agent's keys."""
+    from macf.amail.zone import card_for_address
+    ours = {"domain": "here.example", "zone": "zone.example", "agent_cards": {"alice": "Alice_0a1b2c"},
+            "peers": {"peer.example": {"bob": "Bob_3d4e5f", "carol": ("Carol_6a7b8c", TOKEN)}}}
+    resolve = lambda address: card_for_address(address, **ours)   # noqa: E731
+    # Our own domain: a declared name, or a card-shaped local part.
+    assert resolve("alice@here.example") == "Alice_0a1b2c"
+    assert resolve("dave_9e8f7a@here.example") == "dave_9e8f7a"
+    # The zone: a zone address with its token removed, and nothing else.
+    assert resolve(f"alice_0a1b2c_{TOKEN}@zone.example") == "alice_0a1b2c"
+    assert resolve("alice_0a1b2c@zone.example") is None
+    # A declared peer: its box map, tokened or not, or a card-shaped local part.
+    assert resolve("bob@peer.example") == "Bob_3d4e5f"
+    assert resolve("carol@peer.example") == "Carol_6a7b8c"
+    assert resolve("erin_1a2b3c@peer.example") == "erin_1a2b3c"
+    # Anywhere else: nothing, however card-shaped (the host-side maintainer's probes on #937).
+    assert resolve("Alice_0a1b2c@elsewhere.example") is None
+    assert resolve(f"alice_0a1b2c_{TOKEN}@elsewhere.example") is None
+    assert resolve("alice@elsewhere.example") is None
+    assert resolve("beta@peer.example") is None
+    assert resolve("not an address") is None

@@ -11,7 +11,7 @@ from deployment configuration and never appears in this repository.
 """
 import re
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Any, Mapping, Optional
 
 from .. import calling_card
 from ..pd.names import agent_card
@@ -40,24 +40,41 @@ def redact_address(address: str) -> str:
     return f"{m.group('card')}_<token>{at}{domain}" if m else str(address)
 
 
-def card_for_address(address: str, agent_cards: Optional[Mapping[str, str]] = None,
-                     domain: Optional[str] = None) -> Optional[str]:
-    """The calling card an address names, or None when it names none (MIS-0004 R44), tried in this
-    order: a zone address with its token removed (``name_shortid_token``); under *domain*, an
-    agent's name declared in *agent_cards*, since an agent's configured name need not be its card
-    (MIS-0002 R161 covers only names derived from one); then a local part that is itself a card.
-    The broker resolves the sender once with this and writes the card into the hand-off sidecar,
-    so the recipient judges by the same card and never parses an address itself."""
+def card_for_address(address: str, *, domain: Optional[str] = None, zone: Optional[str] = None,
+                     agent_cards: Optional[Mapping[str, str]] = None,
+                     peers: Optional[Mapping[str, Mapping[str, Any]]] = None) -> Optional[str]:
+    """The calling card an address names, or None (MIS-0004 R44). Each rule holds only at the
+    domain it belongs to, because an address outside the deployment and its declared peers is
+    outside mail and stays unverified: a stranger who picks one of our cards as a local part is
+    not using our agent's address, and must not be judged against its keys.
+
+    - Under *zone*: a zone address, ``name_shortid_token``, with its token removed.
+    - Under *domain* (this deployment): an agent's name declared in *agent_cards*, since an
+      agent's configured name need not be its card (MIS-0002 R161 covers only names derived from
+      one), else a local part that is itself a card.
+    - Under a declared peer's domain in *peers* (domain -> box -> card, or ``(card, token)``):
+      that box's declared card, else a local part that is itself a card.
+
+    The broker resolves the sender once with this and writes the card into the hand-off
+    sidecar, so the recipient judges by the same card and never parses an address itself."""
     local, at, dom = str(address or "").strip().rpartition("@")
     if not at or not local:
         return None
-    m = _ZONE_LOCAL_RE.match(local.lower())
-    if m:
-        return m.group("card")
-    if agent_cards and domain and dom.lower() == domain.strip().lower():
-        named = {name.lower(): card for name, card in agent_cards.items()}
-        if local.lower() in named:
-            return named[local.lower()]
+    dom, low = dom.strip().lower(), local.lower()
+    if zone and dom == zone.strip().lower():
+        m = _ZONE_LOCAL_RE.match(low)
+        return m.group("card") if m else None
+    if domain and dom == domain.strip().lower():
+        names = agent_cards or {}
+    else:
+        declared = {d.strip().lower(): agents for d, agents in (peers or {}).items()}
+        if dom not in declared:
+            return None
+        names = {box: (v[0] if isinstance(v, (tuple, list)) and v else v)
+                 for box, v in (declared[dom] or {}).items()}
+    named = {str(n).lower(): str(c) for n, c in names.items() if c}
+    if low in named:
+        return named[low]
     try:
         return calling_card.read_declared(local)
     except calling_card.CardError:

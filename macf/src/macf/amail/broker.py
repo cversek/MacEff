@@ -1673,7 +1673,9 @@ class Broker:
         """The sender's calling card, resolved once here and written into the hand-off sidecar, so
         the recipient judges the signature by the same card (MIS-0004 R44)."""
         from .zone import card_for_address
-        return card_for_address(message.sender, self.config.agent_cards, self.config.domain)
+        return card_for_address(message.sender, domain=self.config.domain, zone=self.config.zone,
+                                agent_cards=self.config.agent_cards,
+                                peers={d: h.agents for d, h in self.config.shared_handoffs.items()})
 
     def classify_inbound(self, message: Message, agent: str,
                          domain_authenticated: bool = False,
