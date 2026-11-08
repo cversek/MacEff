@@ -14,8 +14,9 @@
 #
 # The calling-card footer is exempt: the message's last non-blank line, when
 # it has the form
-#   [Name@id: <scope>#<id> <breadcrumb>]
-# bare or in italics (*[...]* or _[...]_, as public_voice allows and a task's
+#   [Name@id: <scope>#<id> <breadcrumb>]   or, after the card change,
+#   [Name_id: <scope>#<id> <breadcrumb>]
+# (both are accepted while the card's separator moves from @ to _), bare or in italics (*[...]* or _[...]_, as public_voice allows and a task's
 # close-out comment writes it), is the agreed attribution format for this repository and is recognisable as
 # an identifier rather than a reference, whatever the work item it is scoped
 # to (task#N, duty#<hex>, ...). Only the last line: a card-shaped line
@@ -37,7 +38,7 @@ BODY=$(grep -vE '^#' "$MSG_FILE" | awk '
   END {
     last = NR
     while (last > 0 && line[last] ~ /^[[:space:]]*$/) last--
-    card = last > 0 && line[last] ~ /^[*_]?\[[A-Za-z0-9_-]+@[0-9a-f]+: [A-Za-z_]+#[0-9A-Za-z]+ [^]]*\][*_]?[[:space:]]*$/
+    card = last > 0 && line[last] ~ /^[*_]?\[[A-Za-z0-9_-]+[@_][0-9a-f]+: [A-Za-z_]+#[0-9A-Za-z]+ [^]]*\][*_]?[[:space:]]*$/
     for (i = 1; i <= NR; i++)
       if (!(card && i == last) && line[i] !~ /^Breadcrumb: /) print line[i]
   }' || true)
