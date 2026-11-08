@@ -311,7 +311,7 @@ class EventStream:
             at = nl + 1
         return out
 
-    def _render(self, start: int, end: int, line: bytes) -> Optional[Tuple[str, bytes]]:
+    def _record(self, start: int, end: int, line: bytes) -> Optional[dict]:
         """A log line as the stream's record: the layer's stamp, never the line's claims."""
         try:
             record = json.loads(line)
@@ -319,14 +319,26 @@ class EventStream:
             return None  # noqa: MACEFF003 - a line that isn't JSON is no record; the caller skips it by design
         if not isinstance(record, dict) or not isinstance(record.get("event"), str):
             return None
-        source = record["event"]
         stamp = record.get("timestamp")
         # The daemon's own line only where the log holds, at that offset, the very bytes it wrote.
         origin = "daemon" if self._own.get(start) == line else "log"
-        out = {"type": "record", "position": self.position(end), "source": source, "agent": self.card,
-               "time": stamp if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) else self._wall(),
-               "origin": origin, "record": record}
-        return source, json.dumps(out).encode() + b"\n"
+        return {"type": "record", "position": self.position(end), "source": record["event"],
+                "agent": self.card,
+                "time": stamp if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) else self._wall(),
+                "origin": origin, "record": record}
+
+    def _render(self, start: int, end: int, line: bytes) -> Optional[Tuple[str, bytes]]:
+        out = self._record(start, end, line)
+        return None if out is None else (out["source"], json.dumps(out).encode() + b"\n")
+
+    def take(self) -> Tuple[List[dict], Optional[Tuple[Position, Position]]]:
+        """For a publisher that isn't a socket subscriber (the broker, MIS-0002 R150 to R156 as
+        amended): the records appended since the last call, as stream records, and the gap owed
+        first when the log was replaced under them."""
+        self._settle_own()
+        lines, gap = self._follow()
+        records = [r for r in (self._record(s, e, line) for s, e, line in lines) if r is not None]
+        return records, gap
 
     # ------------------------------------------------------------------ the socket
 

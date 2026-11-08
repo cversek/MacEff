@@ -66,36 +66,127 @@ class Message:
     properties: Dict[str, str]
 
 
-def to_message(card: str, record: dict, position: int,
-               previous_of_source: Optional[int]) -> Message:
-    """The message one log record publishes as (R150, R154, R155): its topic, the record as JSON
-    exactly as the log holds it, and two user properties, its log position and the position of
-    the previous record of the same source. The record keeps the source, agent and time the layer
-    set; only the daemon may publish under its own root, so no publisher can claim them."""
+#: The topic level a daemon-side gap publishes on, under ``<card>/events/``. No source can take
+#: it: ``source_topic`` refuses a name beginning with ``_``.
+GAP_LEVEL = "_gap"
+
+
+def position_key(position: dict) -> str:
+    """A stream position as one string, ``<log>:<offset>``: the log's identity and the byte
+    offset just past the record. A rotated log has another identity, so its positions never
+    equal the old log's."""
+    return f"{position['log']}:{position['offset']}"
+
+
+def to_message(card: str, stream_record: dict, previous_of_source: Optional[str]) -> Message:
+    """The message one stream record publishes as (R150, R154, R155 as amended): its source's
+    topic, the stream record as JSON (its position, source, agent, time and origin travel inside
+    it, set by the layer), and one user property, the position of the previous record of the
+    same source. Only the daemon may publish under its own root, so no publisher can claim them."""
     import json
-    source = record.get("event")
+    source = stream_record.get("source")
     if not isinstance(source, str):
-        raise BrokerRefused("a record without an event name has no topic")
-    props = {"position": str(position)}
-    if previous_of_source is not None:
-        props["previous"] = str(previous_of_source)
+        raise BrokerRefused("a record without a source has no topic")
+    props = {} if previous_of_source is None else {"previous": previous_of_source}
     return Message(topic=source_topic(card, source),
-                   payload=json.dumps(record, separators=(",", ":")).encode(), properties=props)
+                   payload=json.dumps(stream_record, separators=(",", ":")).encode(), properties=props)
+
+
+def gap_message(card: str, gap_from: dict, gap_to: dict, reason: str, time: float) -> Message:
+    """A daemon-side gap (``rotated``, ``overflow``) as every subscriber sees it, on
+    ``<card>/events/_gap``: records between the two positions may be missing."""
+    import json
+    body = {"type": "gap", "agent": card, "time": time, "from": gap_from, "to": gap_to, "reason": reason}
+    return Message(topic=f"{card}/events/{GAP_LEVEL}",
+                   payload=json.dumps(body, separators=(",", ":")).encode(), properties={})
 
 
 class GapTracker:
-    """A subscriber's view of gaps (R154). Each message carries its log position and the position
-    of the previous record of the same source; a subscriber that filters by source sees global
-    positions skip by design, so it compares per source."""
+    """A subscriber's view of gaps (R154). Each message carries the position of the previous
+    record of the same source; a subscriber that filters by source sees global positions skip by
+    design, so it compares per source."""
 
     def __init__(self) -> None:
-        self.last: Dict[str, int] = {}
+        self.last: Dict[str, str] = {}
 
-    def observe(self, source: str, position: int, previous: Optional[int]) -> bool:
+    def observe(self, source: str, position: str, previous: Optional[str]) -> bool:
         """Record a message; True when records of this source were missed before it."""
         seen = self.last.get(source)
         self.last[source] = position
         return seen is not None and previous != seen
+
+
+#: The most records held for a publish that keeps failing before they are dropped for a gap.
+PENDING_MAX = 1000
+
+
+def seed_previous(log_path, identity: Optional[str], offset: int, max_bytes: int) -> Dict[str, str]:
+    """The position of the last record of each source before *offset*, read back at most
+    *max_bytes*: what the publisher's first message of each source names as its previous, so a
+    subscriber that saw records before a daemon restart doesn't read the restart as a gap, and one
+    that missed records written while the daemon was down does."""
+    import json
+    if identity is None or offset == 0:
+        return {}
+    start = max(0, offset - max_bytes)
+    with open(log_path, "rb") as f:
+        f.seek(start)
+        chunk = f.read(offset - start)
+    if start > 0:
+        cut = chunk.find(b"\n")         # a partial first line names no record
+        if cut < 0:
+            return {}
+        chunk, start = chunk[cut + 1:], start + cut + 1
+    seen: Dict[str, str] = {}
+    end = start
+    for line in chunk.split(b"\n")[:-1]:    # the part after the last newline is no full line
+        end += len(line) + 1
+        try:
+            event = json.loads(line).get("event")
+        except (ValueError, AttributeError):
+            event = None    # noqa: MACEFF003 - a line that isn't a record names no source
+        if isinstance(event, str):
+            seen[event] = f"{identity}:{end}"
+    return seen
+
+
+class Publisher:
+    """Puts a daemon's stream on its own broker: every record the log gains, in order, at QoS 1,
+    each naming the previous position of its own source. ``publish`` hands one message to the
+    MQTT client and raises when it can't; the record then stays pending and is retried first on
+    the next pump, so a broken connection delays records and loses none until ``PENDING_MAX``,
+    where the backlog is dropped and a gap published in its place (R153)."""
+
+    def __init__(self, stream, publish, *, wall=None, max_seed_bytes: int = 8 * 1024 * 1024):
+        import time as _time
+        self.stream = stream
+        self.publish = publish
+        self._wall = wall or _time.time
+        self.previous = seed_previous(stream.log_path, stream.identity, stream.offset, max_seed_bytes)
+        self.pending: List[object] = []     # stream records, or ready Messages (gaps)
+
+    def pump(self) -> int:
+        """One pass: take what the log gained, publish what is pending; the count published."""
+        records, gap = self.stream.take()
+        if gap is not None:
+            self.pending.append(gap_message(self.stream.card, gap[0], gap[1], "rotated", self._wall()))
+        self.pending.extend(records)
+        if len(self.pending) > PENDING_MAX:
+            first = next((r["position"] for r in self.pending if isinstance(r, dict)), None)
+            last = next((r["position"] for r in reversed(self.pending) if isinstance(r, dict)), None)
+            self.pending = [gap_message(self.stream.card, first, last, "overflow", self._wall())]
+        sent = 0
+        while self.pending:
+            item = self.pending[0]
+            if isinstance(item, Message):
+                self.publish(item)
+            else:
+                source = item["source"]
+                self.publish(to_message(self.stream.card, item, self.previous.get(source)))
+                self.previous[source] = position_key(item["position"])
+            self.pending.pop(0)
+            sent += 1
+        return sent
 
 
 def render_acl(card: str, *, members: Sequence[str] = (), association: bool = False,
