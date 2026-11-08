@@ -609,8 +609,10 @@ def process_entry(cfg: InboundConfig, eml: Path, sidecar: Path) -> Dict[str, Any
     recipient_agent = cfg.broker_config.agent_for(envelope_to)
     summary["recipient"] = envelope_to
     if recipient_agent is None:
-        _quarantine(cfg, eml, sidecar, f"no local agent for '{envelope_to}'")
-        return terminal(QUARANTINED, f"no local agent for '{envelope_to}'")
+        # The card part only: a zone address's token is never written (MIS-0004 R49).
+        from .zone import redact_address
+        _quarantine(cfg, eml, sidecar, f"no local agent for '{redact_address(envelope_to)}'")
+        return terminal(QUARANTINED, f"no local agent for '{redact_address(envelope_to)}'")
 
     try:
         sender, _ = sender_identity(raw)

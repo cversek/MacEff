@@ -316,13 +316,21 @@ def transcript_turn_ended(path: Optional[Path], tail_bytes: int = 262144) -> Opt
     return turn_ended(lines[1:] if size > tail_bytes else lines)
 
 
-def latest_transcript(project_dir: Optional[Path], claude_home: Optional[Path] = None) -> Optional[Path]:
-    """The newest transcript of the sessions run in *project_dir*: Claude Code keeps them under
-    ``~/.claude/projects/<the path with every non-alphanumeric character as ->/``."""
+def latest_transcript(project_dir: Optional[Path], claude_home: Optional[Path] = None,
+                      session_id: Optional[str] = None) -> Optional[Path]:
+    """The transcript of the session run in *project_dir*: Claude Code keeps them under
+    ``~/.claude/projects/<the path with every non-alphanumeric character as ->/<session id>.jsonl``.
+
+    With *session_id*, that session's own file, or None when it has none: another session in the
+    same project may have written a newer file, and its turns say nothing about this one. Without
+    it, the newest file, for a session whose id the daemon doesn't know."""
     if project_dir is None:
         return None
     key = re.sub(r"[^A-Za-z0-9]", "-", str(Path(project_dir)))
     folder = (claude_home or Path.home() / ".claude") / "projects" / key
+    if session_id is not None:
+        own = folder / f"{session_id}.jsonl"
+        return own if own.is_file() else None
     try:
         found = max(folder.glob("*.jsonl"), key=lambda q: q.stat().st_mtime)
     except (ValueError, OSError):
