@@ -181,6 +181,28 @@ def calling_card_from_identifier(identifier: str) -> str:
     return identifier
 
 
+def reported_identity(agent_home: Optional[Path]) -> dict:
+    """What ``macf_tools env`` reports as this agent's card.
+
+    The card is the home's own (``pd.names.agent_card``), exactly as the primal daemon reads it,
+    because the address, the channel and the broker's topics all derive from that card
+    (MIS-0002-R02, R157). :func:`get_agent_identity` reads ``MACEFF_AGENT_NAME`` first, which in
+    a container is the agents.yaml key, so it could name the same agent another way (#924); that
+    reading is kept beside the card only where it differs. A home that names no agent falls back
+    to it, saying so."""
+    process = get_agent_identity()
+    card = None
+    if agent_home is not None:
+        from macf.pd.names import IdentityError, agent_card
+        try:
+            card = agent_card(Path(agent_home))
+        except (IdentityError, OSError):
+            card = None
+    if card is None:
+        return {"agent_id": process, "source": agent_name_source(), "process_identity": None}
+    return {"agent_id": card, "source": "home", "process_identity": process if process != card else None}
+
+
 def _get_config_identity_name() -> Optional[str]:
     """Read display name from .maceff/config.json agent_identity block.
 

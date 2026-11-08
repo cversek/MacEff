@@ -307,7 +307,13 @@ def cmd_env(args: argparse.Namespace) -> int:
     _detect_cc_binary = detect_cc_binary
 
     # Get agent identity
-    agent_identity = get_agent_identity()
+    # The card as the primal daemon reads it, from the home's own files (#924).
+    from .utils.identity import reported_identity
+    try:
+        _home = Path(os.environ["MACEFF_AGENT_HOME_DIR"]) if os.environ.get("MACEFF_AGENT_HOME_DIR") else find_agent_home()
+    except (OSError, ValueError):
+        _home = None
+    identity = reported_identity(_home)
 
     # Compute CC internal paths
     try:
@@ -343,9 +349,7 @@ def cmd_env(args: argparse.Namespace) -> int:
 
     # Gather all data
     data = {
-        "identity": {
-            "agent_id": agent_identity
-        },
+        "identity": identity,
         "versions": {
             "macf": _ver,
             "claude_code": get_claude_code_version() or "(unavailable)",
@@ -417,8 +421,14 @@ def cmd_env(args: argparse.Namespace) -> int:
         line = "━" * 80
         print(line)
 
+        ident = data['identity']
         print("Agent ID")
-        print(f"  {data['identity']['agent_id']}")
+        where = ("from the home's identity files, as the primal daemon reads it" if ident['source'] == "home"
+                 else f"no home names an agent; from {ident['source']}")
+        print(f"  {ident['agent_id']}  ({where})")
+        if ident.get('process_identity'):
+            print(f"  This process's own identity reads {ident['process_identity']} "
+                  f"(MACEFF_AGENT_NAME comes first there); the card above is the one that counts.")
         print()
 
         print("Supervision")
