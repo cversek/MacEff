@@ -101,13 +101,15 @@ def test_env_names_the_card_as_the_daemon_reads_it_whatever_maceff_agent_name_sa
     home = _identity_home(tmp_path)
     monkeypatch.setattr(identity, "get_agent_identity", lambda: "example2_0a1b2c")
     got = identity.reported_identity(home)
-    assert got == {"agent_id": agent_card(home), "source": "home", "process_identity": "example2_0a1b2c"}
+    # The home's card is reported in its own case; a reading that differs only in case is the same
+    # card (R164), so there is nothing to explain beside it.
+    assert got == {"agent_id": agent_card(home), "source": "home", "process_identity": None}
     assert got["agent_id"] == "Example2_0a1b2c"
-    monkeypatch.setattr(identity, "get_agent_identity", lambda: "Example2_0a1b2c")
-    assert identity.reported_identity(home)["process_identity"] is None      # nothing to explain
+    monkeypatch.setattr(identity, "get_agent_identity", lambda: "Shortname_0a1b2c")
+    assert identity.reported_identity(home)["process_identity"] == "Shortname_0a1b2c"   # another name: shown
     # A home that names no agent falls back to the process's reading, and says where it came from.
     monkeypatch.setattr(identity, "agent_name_source", lambda: "env")
-    assert identity.reported_identity(tmp_path / "empty") == {"agent_id": "Example2_0a1b2c", "source": "env",
+    assert identity.reported_identity(tmp_path / "empty") == {"agent_id": "Shortname_0a1b2c", "source": "env",
                                                               "process_identity": None}
 
 

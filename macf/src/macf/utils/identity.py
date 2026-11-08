@@ -200,7 +200,10 @@ def reported_identity(agent_home: Optional[Path]) -> dict:
             card = None
     if card is None:
         return {"agent_id": process, "source": agent_name_source(), "process_identity": None}
-    return {"agent_id": card, "source": "home", "process_identity": process if process != card else None}
+    from macf import calling_card
+    # Cards compare without regard to case (R164): a reading that differs only in case is the same card.
+    same = calling_card.same(process, card)
+    return {"agent_id": card, "source": "home", "process_identity": None if same else process}
 
 
 def _get_config_identity_name() -> Optional[str]:
