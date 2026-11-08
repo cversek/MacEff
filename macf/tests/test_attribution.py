@@ -52,6 +52,29 @@ def test_another_agents_card_is_not_a_sign_off():
     assert not A.card_line_pattern(CARD).match("[Other@123456: task#7 s_1/c_2/p_3/t_4]")
 
 
+def test_own_card_in_the_underscore_spelling_is_accepted():
+    """During the separator change an agent may sign Name_shortid before its identity
+    files are cut over, plain or italic."""
+    pat = A.card_line_pattern(CARD)
+    assert pat.match("[Tester_abcdef: task#7 s_1/c_2/p_3/t_4]")
+    assert pat.match("*[Tester_abcdef: task#7 s_1/c_2/p_3/t_4]*")
+
+
+@pytest.mark.parametrize("line", ["[Other_123456: task#7 s_1/c_2/p_3/t_4]",
+                                  "[Tester_abcde0: task#7 s_1/c_2/p_3/t_4]",
+                                  "[Testerx_abcdef: task#7 s_1/c_2/p_3/t_4]",
+                                  "[Tester-abcdef: task#7 s_1/c_2/p_3/t_4]"])
+def test_only_the_separator_may_vary(line):
+    """Another name, another short id, or any other separator is not this agent's card."""
+    assert not A.card_line_pattern(CARD).match(line)
+
+
+def test_an_identity_already_in_the_underscore_form_accepts_both():
+    pat = A.card_line_pattern("Tester_abcdef")
+    assert pat.match("[Tester_abcdef: task#7 s_1/c_2/p_3/t_4]")
+    assert pat.match("[Tester@abcdef: task#7 s_1/c_2/p_3/t_4]")
+
+
 def test_card_must_be_the_last_line(agent, tmp_path):
     msg = tmp_path / "m"
     msg.write_text(f"fix: x\n\n{GOOD}\n\nCo-Authored-By: someone\n")

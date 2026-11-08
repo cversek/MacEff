@@ -68,9 +68,18 @@ def card_line_pattern(card: str) -> "re.Pattern[str]":
 
     Anchored to the agent's OWN card: a line carrying another agent's card, or a
     card-shaped placeholder, is not a sign-off by this agent.
+
+    While the card's separator changes from ``@`` to ``_`` (the MIS-0002 revision on
+    calling cards), the agent's own card is accepted in either spelling,
+    ``Name@shortid`` or ``Name_shortid``, so an agent can sign with the new form
+    before its identity files are cut over. Only the separator varies: the name and
+    the short id must still be this agent's.
     """
+    sep = "@" if "@" in card else "_"
+    name, found, shortid = card.rpartition(sep)
+    own = re.escape(name) + r"[@_]" + re.escape(shortid) if found else re.escape(card)
     return re.compile(
-        r"^\*?\[" + re.escape(card) + r": [A-Za-z_]+#[0-9A-Za-z]+ [^\]\n]*\]\*?\s*$"
+        r"^\*?\[" + own + r": [A-Za-z_]+#[0-9A-Za-z]+ [^\]\n]*\]\*?\s*$"
     )
 
 
