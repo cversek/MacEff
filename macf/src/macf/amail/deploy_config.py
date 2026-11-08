@@ -367,6 +367,22 @@ def _require_zone_cards(addressing: "AddressingConfig") -> None:
             f"them their zone mail is refused.")
 
 
+def _require_own_login(addressing: "AddressingConfig") -> None:
+    """MIS-0004 R05: an agent reachable from the Internet (one with a zone address) runs under a
+    login no other agent shares. On a shared login anything that runs as it can make the agent's
+    own process speak, so a signature or a sender check would attest the login, not the agent."""
+    by_uid: Dict[int, List[str]] = {}
+    for name, b in addressing.agents.items():
+        if b.uid is not None:
+            by_uid.setdefault(b.uid, []).append(name)
+    shared = {uid: names for uid, names in by_uid.items() if len(names) > 1}
+    if shared:
+        raise ConfigError(
+            "these agents have zone addresses but share a login (MIS-0004 R05): " + "; ".join(
+                f"uid {uid}: {', '.join(sorted(n))}" for uid, n in sorted(shared.items()))
+            + ". Give each Internet-reachable agent a login of its own.")
+
+
 def _refuse_double_claims(addressing: "AddressingConfig", peers: Dict[str, Any]) -> None:
     """One zone address, one holder (R08): refuse a start where two declarations claim the same
     zone local part, whether two peers, one peer twice, or a peer and one of our own agents.
@@ -678,6 +694,16 @@ class BrokerDeployConfig(BaseModel):
         description="rung 1s, receiving side: how often the broker sweeps its "
                     "own peer intake (handoff/_peers/<domain>/) and accepts "
                     "what peer brokers wrote there through the inbound path.")
+    trust_bundle: Optional[Path] = Field(
+        default=None,
+        description="the pinned trust bundle (MIS-0004 R34): a file of the CA certificates the "
+                    "outbound transport trusts, and nothing else; the system store is never "
+                    "loaded. Declared together with `trust_bundle_sha256`. Rotation: put the new "
+                    "bundle beside the old, switch both fields together, remove the old.")
+    trust_bundle_sha256: Optional[str] = Field(
+        default=None,
+        description="the SHA-256 of `trust_bundle`'s bytes, lowercase hex. A bundle whose bytes "
+                    "don't match it is refused before any connection is made.")
     transport_endpoint: Optional[str] = Field(
         default=None,
         description="the outbound submission endpoint. Null until the outbound "
@@ -740,6 +766,7 @@ class BrokerDeployConfig(BaseModel):
                                                 for box, h in decl.agents.items()})
         if addressing.zone:
             _require_zone_cards(addressing)
+            _require_own_login(addressing)
             _refuse_double_claims(addressing, self.shared_handoffs)
         return BrokerConfig(
             domain=addressing.domain,
@@ -800,7 +827,23 @@ class BrokerDeployConfig(BaseModel):
         if not self.transport_endpoint:
             return None
         from macf.amail.transport import HttpTransport
-        return HttpTransport(self.transport_endpoint, timeout=self.transport_timeout)
+        if (self.trust_bundle is None) != (self.trust_bundle_sha256 is None):
+            raise ConfigError("`trust_bundle` and `trust_bundle_sha256` are declared together, or "
+                              "neither (MIS-0004 R34)")
+        if self.trust_bundle is None:
+            # Declare first, enforce later, as signing does: until every deployment declares a
+            # bundle, an undeclared one is said out loud at every start rather than refused.
+            print("⚠️ MACF: no pinned trust bundle is declared (trust_bundle, MIS-0004 R34); "
+                  "outbound mail verifies its endpoint against the system trust store",
+                  file=sys.stderr)
+            return HttpTransport(self.transport_endpoint, timeout=self.transport_timeout)
+        from macf.amail.pinned_tls import PinnedTrustError, pinned_context
+        try:
+            ctx = pinned_context(self.trust_bundle, self.trust_bundle_sha256)
+        except PinnedTrustError as e:
+            raise ConfigError(str(e)) from e
+        return HttpTransport(self.transport_endpoint, timeout=self.transport_timeout,
+                             tls_context=ctx)
 
     def _build_rate_limiter(self, agents=None):
         """The limiter, or None when the deployment declares no budget.
