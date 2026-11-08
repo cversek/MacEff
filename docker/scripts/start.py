@@ -36,6 +36,7 @@ sys.path.insert(0, '/opt/macf_tools/src')
 
 from macf.models.agent_spec import AgentsConfig, AgentSpec, SubagentSpec, ClaudeCodeConfig, ConsciousnessArtifactsConfig
 from macf.models.project_spec import ProjectsConfig, ProjectSpec
+from macf.homes import HomesRefused, check_identity, check_volume, may_create_home
 
 
 # Configuration paths
@@ -341,7 +342,8 @@ def check_service_paths(ids) -> None:
                 f"run the renumber step before this start (container_operations policy)")
 
 
-def provision_agent_identity(username: str, home_dir: str, display_name: Optional[str], agent_key: str) -> str:
+def provision_agent_identity(username: str, home_dir: str, display_name: Optional[str], agent_key: str,
+                             short_id: Optional[str] = None) -> str:
     """
     Create persistent identity file and set GECOS field.
 
@@ -350,14 +352,28 @@ def provision_agent_identity(username: str, home_dir: str, display_name: Optiona
         home_dir: Agent's home directory path
         display_name: Human-readable name from agents.yaml (e.g., 'Orchard MacEff')
         agent_key: Agent dictionary key (e.g., 'sparrow') for fallback
+        short_id: The short id agents.yaml declares for an agent minted ahead (MIS-0002-R162).
+            Written as a new home's identity file; a home whose identity file holds another
+            value is refused, so an edit to the declaration can't relabel a home.
 
     Returns:
         str: The 6-character agent UUID (existing or newly generated)
     """
     identity_file = Path(home_dir) / '.maceff_primary_agent.id'
 
+    if short_id is not None:
+        check_identity(Path(home_dir), short_id)
+        if identity_file.exists():
+            log(f"Identity preserved: {username} -> {short_id}")
+            agent_uuid = short_id
+        else:
+            identity_file.write_text(short_id)
+            identity_file.chmod(0o444)
+            run_command(['chown', 'root:root', str(identity_file)])
+            log(f"Identity written from agents.yaml: {username} -> {short_id}")
+            agent_uuid = short_id
     # Check if identity file already exists (preserve continuity)
-    if identity_file.exists():
+    elif identity_file.exists():
         try:
             agent_uuid = identity_file.read_text().strip()
             log(f"Identity preserved: {username} -> {agent_uuid}")
@@ -603,8 +619,10 @@ def vanilla_home_violations(home: Path) -> List[str]:
     return violations
 
 
-def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Optional[Dict] = None) -> None:
-    """Create Primary Agent Linux user."""
+def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Optional[Dict] = None,
+                   homes_volume: Optional[str] = None) -> None:
+    """Create Primary Agent Linux user. A missing home is created only for an agent minted ahead,
+    on the homes volume agents.yaml declares (MIS-0002-R162, ``macf.homes``)."""
     username = agent_spec.username
     uid = agent_spec.uid
 
@@ -616,6 +634,13 @@ def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Option
         raise DeclaredIdMismatch(
             f"account {username} is uid {existing.pw_uid} gid {existing.pw_gid}, but agents.yaml "
             f"declares {uid}; run the renumber step for this deployment (container_operations policy)")
+    # Before anything is created: a missing home only for a minted agent on the declared volume,
+    # and a present one only if its identity is the declared one (MIS-0002-R162).
+    if not (HOME_ROOT / username).exists():
+        may_create_home(HOME_ROOT, HOME_ROOT / username, declared=homes_volume,
+                        short_id=agent_spec.short_id)
+    elif agent_spec.short_id is not None:
+        check_identity(HOME_ROOT / username, agent_spec.short_id)
     if existing is None:
         # /etc/passwd is the image's and starts fresh at every recreate, while /home persists:
         # a home still owned by another number belongs to the account's old uid, and creating
@@ -639,7 +664,8 @@ def create_pa_user(agent_name: str, agent_spec: AgentSpec, defaults_dict: Option
 
     # Provision persistent agent identity (UUID + GECOS field)
     display_name = getattr(agent_spec, 'display_name', None)
-    agent_uuid = provision_agent_identity(username, str(home_dir), display_name, agent_name)
+    agent_uuid = provision_agent_identity(username, str(home_dir), display_name, agent_name,
+                                          short_id=agent_spec.short_id)
 
     # Install every declared SSH key (falls back to /keys/{username}.pub when undeclared)
     install_ssh_key(username, getattr(agent_spec, 'ssh_keys', None))
@@ -1282,7 +1308,7 @@ def create_agent_tree(username: str, agent_spec: AgentSpec, defaults_config: Opt
 
 
 def create_personal_policies(username: str) -> None:
-    """Create personal policies directory with templates (highest precedence layer)."""
+    """Create personal policies directory with templates (the policy_awareness personal layer)."""
     home = Path(f'/home/{username}')
     policies_dir = home / 'agent' / 'policies' / 'personal'
 
@@ -2598,9 +2624,6 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
             f"fail at delivery.")
     provision_pickup_boxes(broker_config, handoff_root)
 
-    venv_py = '/opt/maceff-venv/bin/python'
-    interp = venv_py if Path(venv_py).exists() else '/usr/bin/python3'
-
     # THE INBOUND PATH IS OPTIONAL AND WAS TREATED AS UNIVERSAL. A deployment
     # can run the broker -- agent-to-agent mail inside the container -- without
     # any inbound transport at all: no tunnel, no courier, no domain. This
@@ -2631,7 +2654,7 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
                 f"runs `macf.amail.daemons.inbound watch`, so inbound mail will spool undrained")
 
     if runs_inbound:
-        _start_inbound_transport(interp)
+        _check_inbound_units(agents_config)
 
     if not declared:
         raise RuntimeError(
@@ -2642,66 +2665,63 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
             "section 8")
 
 
-def _start_inbound_transport(interp: str) -> None:
-    """Start the receiver, and the tunnel if this deployment supplies one.
+#: Where start-up places the receiver's verification parameters and a deployment's tunnel config.
+RECEIVER_ENV = Path('/opt/amail_ingest/receiver.env')
+TUNNEL_CONFIG = Path('/etc/cloudflared/config.yml')
+#: The account whose daemon runs the receiver: it owns the receiver's spool and log.
+INGEST_ACCOUNT = 'amail_ingest'
 
-    THESE TWO CARRY MAIL AND NEITHER WAS PROVISIONED. Both ran for weeks from
-    a container's writable layer, placed by hand, so a recreate would have taken
-    the inbound path with them -- and the tunnel credential is not reissuable
-    from anything this side holds. Provisioning covered the components with a
-    home in the framework and missed the two that exist only in a deployment,
-    which is discovery-order-is-not-ownership running in the other direction.
 
-    THE TUNNEL IS OPTIONAL AND THE BASE IMAGE STAYS AGNOSTIC. It does not ship
-    cloudflared: which transport fronts the receiver is a deployment's choice,
-    and baking one in would make every deployment carry a 40MB binary for a
-    vendor it may not use. A deployment that wants it installs it in its own
-    image and supplies the config; this starts it when BOTH are present and says
-    which half is missing when they are not.
+def _check_inbound_units(agents_config: AgentsConfig) -> None:
+    """Say which daemon runs the receiver and the tunnel; refuse when nothing runs the receiver.
 
-    ANNOUNCE THE UNCONFIGURED CASE. "No tunnel configured" and "the tunnel
-    failed to start" must not look alike from the log, because the first is a
-    deployment choice and the second is an outage.
+    THEY ARE UNITS NOW, NOT PROCESSES THIS STARTS. Until 2026-11 this function launched both with
+    a bare Popen and logged "started" at launch. On their first live start the tunnel exited at
+    once on a bad config line while the log said it had started: nothing restarted it and nothing
+    reported it. Each is now a declared unit of its account's primal daemon (persistent_layer
+    10.1), whose liveness means working: the receiver answers its health probe, the tunnel holds
+    an edge connection (macf.amail.daemons.receiver, macf.amail.daemons.tunnel).
+
+    THE TUNNEL IS OPTIONAL AND THE BASE IMAGE STAYS AGNOSTIC. Which transport fronts the receiver
+    is a deployment's choice; a deployment that wants cloudflared installs it in its own image,
+    supplies the config, and declares the unit on an account of its own, the only holder of the
+    tunnel credential.
+
+    ANNOUNCE EVERY CASE. "No tunnel configured", "a tunnel configured but not declared", and
+    "declared" must not look alike in the log.
     """
-    env_file = Path('/opt/amail_ingest/receiver.env')
-    if env_file.exists():
-        try:
-            env = dict(os.environ)
-            for raw in env_file.read_text().splitlines():
-                line = raw.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    key, value = line.split('=', 1)
-                    env[key.strip()] = value.strip()
-            subprocess.Popen(
-                ['setpriv', '--reuid=amail_ingest', '--regid=amail_ingest',
-                 '--clear-groups', '--', interp, '-m',
-                 'macf.amail.daemons.receiver'],
-                stdout=open('/var/lib/amail_ingest/receiver.out', 'a'),
-                stderr=subprocess.STDOUT, start_new_session=True, env=env)
-            log("amail ingest receiver started")
-        except (OSError, subprocess.SubprocessError) as e:
-            log(f"⚠️ MACF: amail ingest receiver failed to start ({e}); inbound "
-                f"mail cannot be ACCEPTED at all until this is repaired.")
+    found = {}
+    for name, svc in agents_config.services.items():
+        pd = getattr(svc, 'primal_daemon', None) or {}
+        for u in pd.get('units', []):
+            cmd = ' '.join(u.get('command', []))
+            for module in ('macf.amail.daemons.receiver', 'macf.amail.daemons.tunnel'):
+                if module in cmd:
+                    found.setdefault(module, []).append(f"{name}/{u.get('name')}")
+    receiver = found.get('macf.amail.daemons.receiver')
+    tunnel = found.get('macf.amail.daemons.tunnel')
+    misplaced = [r for r in receiver or [] if r.split('/')[0] != INGEST_ACCOUNT]
+    if misplaced:
+        # Refused here, by name, rather than later at the spool's or the log's permissions.
+        raise RuntimeError(
+            f"amail: the receiver unit is declared on {', '.join(misplaced)}, but it must run on "
+            f"the ingest account {INGEST_ACCOUNT}, which owns its spool and log: persistent_layer "
+            "section 8")
+    if receiver:
+        log(f"amail ingest receiver: declared unit {', '.join(receiver)}; its daemon starts it")
+    elif RECEIVER_ENV.exists():
+        raise RuntimeError(
+            "amail: /opt/amail_ingest/receiver.env is placed, but no service's primal_daemon "
+            "declares a unit running `macf.amail.daemons.receiver`, so nothing accepts inbound "
+            "mail. Declare it on the ingest account: persistent_layer section 8")
     else:
-        log("amail ingest receiver: no receiver.env -- not started. Declare it "
-            "as a secret if this deployment accepts inbound mail.")
-
-    tunnel_config = Path('/etc/cloudflared/config.yml')
-    have_binary = shutil.which('cloudflared')
-    if tunnel_config.exists() and have_binary:
-        try:
-            subprocess.Popen(
-                [have_binary, 'tunnel', '--config', str(tunnel_config), 'run'],
-                stdout=open('/var/lib/amail_ingest/tunnel.out', 'a'),
-                stderr=subprocess.STDOUT, start_new_session=True)
-            log(f"amail inbound tunnel started ({have_binary})")
-        except (OSError, subprocess.SubprocessError) as e:
-            log(f"⚠️ MACF: inbound tunnel failed to start ({e}); mail will not "
-                f"REACH the receiver until this is repaired.")
-    elif tunnel_config.exists():
-        log("⚠️ MACF: /etc/cloudflared/config.yml is present but cloudflared is "
-            "not installed -- this deployment declared a tunnel its image does "
-            "not provide. Inbound mail cannot reach the receiver.")
+        log("amail ingest receiver: none configured (no receiver.env)")
+    if tunnel:
+        log(f"amail inbound tunnel: declared unit {', '.join(tunnel)}; its daemon starts it")
+    elif TUNNEL_CONFIG.exists():
+        log("⚠️ MACF: /etc/cloudflared/config.yml is present, but no service's primal_daemon "
+            "declares a unit running `macf.amail.daemons.tunnel`, so inbound mail cannot reach "
+            "the receiver")
     else:
         log("amail inbound tunnel: none configured (deployment choice)")
 
@@ -2958,6 +2978,8 @@ def main() -> int:
         # Every account and group takes its number from the deployment's id block, so groups
         # are created only once agents.yaml has said which block that is.
         ids = agents_config.ids
+        # The homes root is the declared volume, or start stops before touching an account.
+        check_volume(HOME_ROOT, agents_config.homes_volume)
         check_image_ids(ids)
         check_service_paths(ids)
         ensure_group('agents_all', ids.slot('agents_all'))
@@ -2994,7 +3016,8 @@ def main() -> int:
             log(f"Setting up PA: {agent_spec.username} (flavor={flavor_label})")
 
             # Create user — both flavors get home, SSH, mailbox, shell env, settings
-            create_pa_user(agent_name, agent_spec, defaults_dict)
+            create_pa_user(agent_name, agent_spec, defaults_dict,
+                           homes_volume=agents_config.homes_volume)
 
             # Everything below this line IS the MacEff footprint. A vanilla account
             # is defined by receiving none of it: no agent/ tree, no consciousness
@@ -3120,7 +3143,7 @@ def main() -> int:
         # Wait on sshd (keeps container alive)
         sshd_proc.wait()
 
-    except DeclaredIdMismatch as e:
+    except (DeclaredIdMismatch, HomesRefused) as e:
         log(f"REFUSED: {e}")
         return 1
     except Exception as e:

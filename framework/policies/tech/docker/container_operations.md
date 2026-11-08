@@ -107,6 +107,12 @@ Docker container operations policy establishes best practices for building, runn
 - How do I move a deployment that already runs on order-assigned numbers, and in what order?
 - How do I check a host and its containers for overlapping ids?
 
+**6.3 New Agents and the Homes Volume**
+- How do I add a new agent, and why is it minted before its first start?
+- What names its account, and what if agents.yaml declares a username too?
+- Why won't start create a missing home, and what does it need first?
+- What does the homes volume's marker prove, and why doesn't start write it?
+
 === CEP_NAV_BOUNDARY ===
 
 ---
@@ -579,6 +585,25 @@ None of these is repaired at start. Moving an existing deployment onto its decla
 Files the containers wrote into host paths that no container mounts read-write (an old handoff directory, say) are the host's to re-own, as root on the host. List them from the audit's numbers before changing anything.
 
 **The check is `macf_tools ids audit`,** run on the host. It reads the host and every running container together and names every number at or above 1000 held by more than one identity. It exits 1 on an overlap, and 2 when a place can't be read. Run it after any rebuild, and after adding a deployment to a host. System ids below 1000 held under different names are listed apart and don't count: each side's packages allocate those, so no declaration reaches them.
+
+### 6.3 New Agents and the Homes Volume
+
+**A new agent is minted before its first start** (MIS-0002-R162). Its account is its calling card lowercased, and the card needs the short id. A start can't draw the short id itself, because at a container start `/etc/passwd` is new and only the persisted home tells a new agent from an existing one. So:
+
+1. Run `macf_tools agent mint <Name> --key <key>`. It draws the short id and a zone token, then prints two blocks: the agent's lines for agents.yaml (`calling_card` and `short_id`, with no `username`) and its entry for the addressing file (`account`, `card`, `zone_token`). Paste them as printed. The values are quoted, because YAML reads `873633` as a number. The edge rules, contacts and apps can be set up from those lines before the agent ever starts.
+2. Once per deployment, mark the homes volume: `macf_tools agent homes-init <mounted homes root>`. It writes a marker holding a random volume id and prints `homes_volume: "<id>"` for the top level of agents.yaml. Running it again prints the same id.
+3. Start. Start derives the account from the card, creates the home, and writes the declared short id as the identity file.
+
+**What start refuses, before it changes anything:**
+- a missing home for an agent that declares no `short_id`. An existing agent's home is missing only when the volume isn't the expected one, so start won't create a fresh home and identity in its place;
+- a missing home when agents.yaml declares no `homes_volume`;
+- a homes root whose marker is missing or names another volume, whenever `homes_volume` is declared. This check runs at every start, before any account is created. A volume that failed to mount leaves an empty directory with no marker. Another deployment's homes, or a stale copy, carry a different id;
+- a home whose identity file holds another short id than agents.yaml declares, so an edit to the declaration can't relabel a home;
+- a `username` beside `short_id` that isn't the card lowercased.
+
+**Why start never writes the marker.** A marker written "at the volume's first use" would be written on the empty directory a failed mount leaves, and the guard would pass in the one case it exists for. Only `homes-init`, run on purpose, writes it.
+
+**Agents provisioned before R162** keep their declared `username`, and their identity file stays the source of their short id. A deployment that hasn't declared `homes_volume` keeps starting as before: nothing is checked while every home is present. It can create no new home until the volume is marked and declared.
 
 ---
 

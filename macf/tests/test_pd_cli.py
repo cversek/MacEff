@@ -26,12 +26,12 @@ from macf.pd.interface import (
     record_path,
 )
 
-CARD = "Tester@abc123"
+CARD = "Tester_abc123"
 ME = pwd.getpwuid(os.getuid()).pw_name
 
 
 def make_home(tmp_path, declared=True):
-    """An agent home whose own files name it Tester@abc123, declaring one unit."""
+    """An agent home whose own files name it Tester_abc123, declaring one unit."""
     home = tmp_path / "home"
     (home / ".maceff").mkdir(parents=True)
     (home / ".maceff_primary_agent.id").write_text("abc123def4567890\n")
@@ -110,7 +110,7 @@ def test_status_from_the_log_when_no_daemon_answers(tmp_path, base):
     append_event(EVENT_LIVENESS, {"agent": CARD, "unit": "worker", "pid": me,
                                   "proc_start": proc_start(me), "interval_s": 60})
     # Another agent's unit of the same name, written later, is not this agent's.
-    append_event(EVENT_STATE, {"agent": "Someone@fff000", "unit": "worker", "state": "failed",
+    append_event(EVENT_STATE, {"agent": "Someone_fff000", "unit": "worker", "state": "failed",
                                "pid": me, "proc_start": proc_start(me), "reason": "not ours"})
     report = status(make_home(tmp_path), CARD, base=base)
     assert report.source == "event log"
@@ -170,7 +170,7 @@ def test_pd_wake_shows_or_paces_and_a_pace_needs_its_reason(monkeypatch, capsys)
     from macf.pd.interface import Response
     sent = []
     monkeypatch.setattr(paths, "find_agent_home", lambda: Path("/nowhere"))
-    monkeypatch.setattr(daemon, "card_for_home", lambda home: "Tester@abc123")
+    monkeypatch.setattr(daemon, "card_for_home", lambda home: "Tester_abc123")
     monkeypatch.setattr(client, "ask", lambda card, request: sent.append(request) or Response(
         ok=True, wake_refractory_s=request.get("refractory_s") or 600.0, wake_window_from="the declaration"))
 
@@ -185,6 +185,6 @@ def test_pd_wake_shows_or_paces_and_a_pace_needs_its_reason(monkeypatch, capsys)
     assert run(refractory="5m", declared=True, reason="r") == 1 and len(sent) == 1
     assert run(refractory="5m", reason="a busy hour") == 0
     assert sent[-1] == {"op": "pace", "refractory_s": 300.0, "reason": "a busy hour",
-                        "asked_by": {"kind": "agent", "card": "Tester@abc123"}}
+                        "asked_by": {"kind": "agent", "card": "Tester_abc123"}}
     assert run(declared=True, reason="done", asked_by="operator") == 0
     assert sent[-1]["refractory_s"] is None and sent[-1]["asked_by"] == {"kind": "operator"}

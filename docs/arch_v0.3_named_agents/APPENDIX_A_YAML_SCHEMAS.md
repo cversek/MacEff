@@ -126,13 +126,13 @@ agents:
     # daemon reads; the agent can't change it (persistent_layer 10.1, MIS-0002-R33).
     # calling_card is required with it: the name the daemon goes by. Start-up writes it into
     # the home's .maceff/config.json at every start, and refuses to overwrite a different one.
-    calling_card: Sparrow1
+    calling_card: Orchard1
     primal_daemon:
       units:
         - name: session
           kind: session
           command: ["/opt/maceff-venv/bin/python", "-m", "macf.cli", "harness", "unit",
-                    "--agent", "sparrow1", "--home", "{agent_home}", "--project-dir", "{agent_home}",
+                    "--agent", "orchard1", "--home", "{agent_home}", "--project-dir", "{agent_home}",
                     "--no-proxy"]
           account: pa_sparrow
           restart: always
@@ -196,7 +196,30 @@ services:
             wake_when: stdout
           timeout_s: 120
       timezone: UTC
-  amail_ingest: {}
+  # The receiver, on the ingest account: alive while it answers its own /healthz over loopback.
+  amail_ingest:
+    calling_card: AmailIngest
+    primal_daemon:
+      units:
+        - name: receiver
+          command: ["/opt/maceff-venv/bin/python", "-m", "macf.amail.daemons.receiver"]
+          account: amail_ingest
+          restart: always
+          liveness_interval_s: 60
+          memory_limit_mb: 256
+  # Optional: a Cloudflare tunnel in front of the receiver, on an account of the deployment's own
+  # (created in its Dockerfile), the only holder of the tunnel credential. Alive only while
+  # cloudflared reports an edge connection.
+  # amail_tunnel:
+  #   calling_card: AmailTunnel
+  #   primal_daemon:
+  #     units:
+  #       - name: tunnel
+  #         command: ["/opt/maceff-venv/bin/python", "-m", "macf.amail.daemons.tunnel"]
+  #         account: amail_tunnel
+  #         restart: always
+  #         liveness_interval_s: 60
+  #         memory_limit_mb: 256
 
 defaults:
   consciousness_artifacts:

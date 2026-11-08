@@ -58,9 +58,19 @@ def test_an_agent_that_declares_nothing_gets_the_default_session():
     assert env["MACEFF_CHANNELS"] == f"{TELEGRAM} plugin:maceff-channel@maceff"
     assert {"plugin": "maceff-channel", "marketplace": "maceff"} in body["allowlisted_channels"]
     assert body["operator_channels"] == ["plugin:telegram:telegram"]
-    Declaration(version=1, agent="Resident@1a2b3c", **body)
+    Declaration(version=1, agent="Resident_1a2b3c", **body)
     # The tmux name falls back to the agent's key, as provisioning's does.
     assert _session(_body())["environment"]["MACEFF_HARNESS_SESSION"] == "Resident"
+
+
+def test_the_agents_own_bin_comes_ahead_of_the_system_on_the_session_path():
+    """An agent's gh wrapper is in ~/.local/bin. Behind the system's directories, or absent, a plain
+    gh is the system binary, under another identity or none and without the publish gate."""
+    dirs = _session(_body())["environment"]["PATH"].split(":")
+    own = dirs.index("/home/pa_res/.local/bin")
+    assert all(own < dirs.index(d) for d in ("/usr/local/bin", "/usr/bin", "/bin"))
+    # The framework's interpreter stays first, so nothing in a home stands in for it.
+    assert dirs[0] == "/opt/maceff-venv/bin"
 
 
 def test_the_session_starts_where_the_login_shell_always_did():
@@ -74,6 +84,24 @@ def test_the_session_starts_where_the_login_shell_always_did():
     assert project(assigned_projects=["Orchard"], project_dir="/home/pa_res/workspace/Orchard") \
         == "/home/pa_res/workspace/Orchard"
     assert _session(_body(session_memory_mb=28672))["memory_limit_mb"] == 28672
+
+
+def test_a_time_zone_that_does_not_resolve_is_reported_not_declared(monkeypatch, capsys):
+    """The C library falls back to UTC without a word, so a typo would look like the old bug."""
+    monkeypatch.setenv("MACEFF_TZ", "America/New_Yrok")
+    assert "TZ" not in _session(_body())["environment"]
+    assert "America/New_Yrok" in capsys.readouterr().err
+
+
+def test_the_session_keeps_the_deployments_time_zone(monkeypatch):
+    """A unit inherits nothing, so the login shell's TZ doesn't reach it. Without this the seat's
+    clock moves to UTC when it moves onto its daemon, while its login shells stay on local time."""
+    monkeypatch.setenv("MACEFF_TZ", "America/New_York")
+    assert _session(_body())["environment"]["TZ"] == "America/New_York"
+    Declaration(version=1, agent="Resident_1a2b3c", **_body())
+    for unset in (lambda: monkeypatch.delenv("MACEFF_TZ"), lambda: monkeypatch.setenv("MACEFF_TZ", "")):
+        unset()
+        assert "TZ" not in _session(_body())["environment"]
 
 
 def test_a_declared_block_is_laid_over_the_default():
@@ -163,7 +191,7 @@ def test_start_renders_the_default_and_names_an_agent_left_without_one(tmp_path,
     rendered = start.render_pd_declarations(config, root=tmp_path / "etc", chown=lambda p, u, g: None)
     assert rendered == ["pa_res"], said
     declaration = json.loads((tmp_path / "etc" / "pa_res" / "declaration.json").read_text())
-    assert declaration["agent"] == "Resident@1a2b3c"
+    assert declaration["agent"] == "Resident_1a2b3c"
     assert [u["name"] for u in declaration["units"]] == ["session"]
     assert any("pa_off" in line and "moves Thursday" in line for line in said)
     assert not (tmp_path / "etc" / "pa_off").exists()
@@ -203,6 +231,6 @@ def test_a_home_keeps_the_name_it_holds_and_only_a_nameless_home_takes_the_key(t
     assert sorted(rendered) == ["pa_bare", "pa_res"]
     assert (named / ".maceff" / "config.json").read_text() == held          # untouched
     assert json.loads((tmp_path / "etc" / "pa_res" / "declaration.json").read_text())["agent"] \
-        == "Resident@1a2b3c"
+        == "Resident_1a2b3c"
     assert json.loads((bare / ".maceff" / "config.json").read_text())["agent_identity"]["calling_card"] == "Bare"
     assert start.home_agent_name(bare) == "Bare" and start.home_agent_name(tmp_path / "none") is None

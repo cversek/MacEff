@@ -15,7 +15,7 @@ from macf.observe import presence
 from macf.observe.acts import EVENT_INVITE
 from macf.pd.names import declaration_path, record_path
 
-WATCHER = "Watcher@abc123"
+WATCHER = "Watcher_abc123"
 
 
 def _home(tmp_path, declared):
@@ -30,7 +30,7 @@ def _home(tmp_path, declared):
 
 
 def _invite():
-    append_event(EVENT_INVITE, {"onlooker": WATCHER, "observed": "Tester@abc123", "stream_from": 0,
+    append_event(EVENT_INVITE, {"onlooker": WATCHER, "observed": "Tester_abc123", "stream_from": 0,
                                 "secret_sha256": "ab" * 32})
 
 
@@ -65,7 +65,7 @@ def test_a_live_daemon_shows_who_watches(tmp_path, monkeypatch, isolated_events_
 def test_alive_means_the_record_names_this_very_process(tmp_path):
     """The daemon's record must name a live process by pid and start time; a record whose
     pid now belongs to another incarnation, or that can't be read, is not alive."""
-    card = "Tester@abc123"
+    card = "Tester_abc123"
     assert not presence.daemon_alive(card, base=tmp_path)
     record_path(card, tmp_path).write_text(json.dumps({"pid": os.getpid(), "proc_start": proc_start(os.getpid())}))
     assert presence.daemon_alive(card, base=tmp_path)
@@ -76,7 +76,7 @@ def test_alive_means_the_record_names_this_very_process(tmp_path):
 
 
 def test_a_malformed_row_does_not_cost_the_line(tmp_path, monkeypatch, isolated_events_log):
-    append_event(EVENT_INVITE, {"onlooker": "Broken@0b0b0b"})
+    append_event(EVENT_INVITE, {"onlooker": "Broken_0b0b0b"})
     _invite()
     with patch.object(presence, "daemon_alive", return_value=True):
         out = _line(_home(tmp_path, declared=True), monkeypatch)
@@ -86,7 +86,7 @@ def test_a_malformed_row_does_not_cost_the_line(tmp_path, monkeypatch, isolated_
 def test_an_invitation_without_an_onlooker_does_not_cost_the_line(tmp_path, monkeypatch, isolated_events_log):
     """Skipped where it folds. Folded under None, it sorted against a card and took the whole
     segment down, and the carry would have brought it back every cycle."""
-    append_event(EVENT_INVITE, {"observed": "Tester@abc123", "stream_from": 0, "secret_sha256": "cd" * 32})
+    append_event(EVENT_INVITE, {"observed": "Tester_abc123", "stream_from": 0, "secret_sha256": "cd" * 32})
     _invite()
     with patch.object(presence, "daemon_alive", return_value=True):
         out = _line(_home(tmp_path, declared=True), monkeypatch)

@@ -71,10 +71,10 @@ def test_reading_moves_the_cursor_past_what_was_read(home, box):
     _put(box, "2", b)
     client.ingest(home, box, agent="a")
     assert len(store.unread_names(home)) == 2
-    assert store.mark_read(home, a.message_id, "Reader@abc123")
+    assert store.mark_read(home, a.message_id, "Reader_abc123")
     assert [store.find(home, b.message_id).message_id] == \
         [x.message_id for x in store.read_all(home, include_seen=False)]
-    assert store.mark_read(home, a.message_id, "Reader@abc123") is None, "read once"
+    assert store.mark_read(home, a.message_id, "Reader_abc123") is None, "read once"
     assert {x.message_id for x in store.read_all(home)} == {a.message_id, b.message_id}
 
 
@@ -83,9 +83,9 @@ def test_the_reader_is_recorded(home, box):
     m = _msg()
     _put(box, "1", m)
     client.ingest(home, box, agent="a")
-    name = store.mark_read(home, m.message_id, "Reader@abc123")
+    name = store.mark_read(home, m.message_id, "Reader_abc123")
     meta = json.loads((store.bundle_sidecars_for(home) / f"{name}.json").read_text())
-    assert meta["read"]["by"] == "Reader@abc123" and meta["read"]["at"]
+    assert meta["read"]["by"] == "Reader_abc123" and meta["read"]["at"]
 
 
 def test_a_read_moves_only_its_own_stores_mail(tmp_path, home, box):
@@ -95,7 +95,7 @@ def test_a_read_moves_only_its_own_stores_mail(tmp_path, home, box):
     client.ingest(home, box, agent="a")
     other = tmp_path / "other"
     store.ensure_maildir(other)
-    assert store.mark_read(other, m.message_id, "Other@abc123") is None
+    assert store.mark_read(other, m.message_id, "Other_abc123") is None
     assert len(store.unread_names(home)) == 1
 
 
@@ -105,7 +105,7 @@ def test_internet_mail_is_read_by_name_or_sha(home, box):
     client.ingest(home, box, agent="a")
     [name] = store.unread_names(home)
     sha = hashlib.sha256(raw).hexdigest()
-    assert store.mark_read(home, sha[:12], "Reader@abc123") == name
+    assert store.mark_read(home, sha[:12], "Reader_abc123") == name
     assert store.unread_names(home) == []
 
 
@@ -117,12 +117,12 @@ def test_restart_keeps_cursor(tmp_path, home, box):
     _put(box, "1", a)
     _put(box, "2", b)
     client.ingest(home, box, agent="a")
-    store.mark_read(home, a.message_id, "Reader@abc123")
+    store.mark_read(home, a.message_id, "Reader_abc123")
     before = (sorted(store.unread_names(home)),
               sorted(p.name for p in (store.maildir_for(home) / "cur").iterdir()))
     for _ in range(2):                                   # two restarts
         s = receiver_settings(home)
-        Receiver("a@abc123", home, s["box"], s["agent"], s["contacts"],
+        Receiver("a_abc123", home, s["box"], s["agent"], s["contacts"],
                  lambda e, d: None, lambda src, nid: None).tick(0.0)
         agent_store_source(home).start()
     after = (sorted(store.unread_names(home)),
@@ -144,7 +144,7 @@ def test_listing_new_since_last_read(home, box, monkeypatch, capsys):
     _put(box, "1", a)
     _put(box, "2", b)
     client.ingest(home, box, agent="a")
-    store.mark_read(home, a.message_id, "Reader@abc123")
+    store.mark_read(home, a.message_id, "Reader_abc123")
     out = _list(home, monkeypatch, capsys)
     assert "second subject" in out and "first subject" not in out
     assert "and 1 read, not shown" in out
@@ -218,7 +218,7 @@ def test_amail_read_moves_what_it_printed(home, box, monkeypatch, capsys):
     _put(box, "2", b)
     client.ingest(home, box, agent="a")
     monkeypatch.setattr(cli, "_amail_config", lambda: {"home": str(home), "handoff": "", "agent": ""})
-    monkeypatch.setattr(cli, "_reader_card", lambda h: "Reader@abc123")
+    monkeypatch.setattr(cli, "_reader_card", lambda h: "Reader_abc123")
     assert cli.cmd_amail_read(argparse.Namespace(message_id=a.message_id, json=False)) == 0
     assert "one" in capsys.readouterr().out
     assert [x.message_id for x in store.read_all(home, include_seen=False)] == [b.message_id]
@@ -234,7 +234,7 @@ def test_the_wake_names_unread_ids_from_a_real_ingest(home, box):
     _put(box, "2", b)
     client.ingest(home, box, agent="a")
     assert store.unread_message_ids(home) == [a.message_id, b.message_id]
-    store.mark_read(home, a.message_id, "Reader@abc123")
+    store.mark_read(home, a.message_id, "Reader_abc123")
     assert store.unread_message_ids(home) == [b.message_id]
 
 
@@ -304,7 +304,7 @@ def test_notice_level_triggered(home, box, monkeypatch):
     n.poll()
     assert [o.source for o in n.owed.values()] == ["amail"]
     for x in store.read_all(home, include_seen=False):
-        store.mark_read(home, x.message_id, "Reader@abc123")
+        store.mark_read(home, x.message_id, "Reader_abc123")
     n.poll()
     assert not n.owed, "a notice for mail already read stayed owed"
     third, third_end = _channel_pair()
@@ -347,3 +347,114 @@ def test_unsilenced_mail_reaches_a_channel_that_stayed_attached(home, box, monke
         n.flush()
     assert _sources_sent(theirs) == [], "a told channel was told again every pass"
 
+
+
+# --- MIS-0004 R29, R39, R40: the keystroke fallback types only on positive evidence ---------------
+import json as _json
+
+from test_pd_wake import ID1, FakePane, _waker, screen
+from macf.pd import wake as _wk
+
+
+def _turns(*records):
+    return [_json.dumps(r) for r in records]
+
+
+ASSISTANT_DONE = {"type": "assistant", "message": {"role": "assistant", "stop_reason": "end_turn",
+                                                    "content": [{"type": "text", "text": "done"}]}}
+ASSISTANT_TOOL = {"type": "assistant", "message": {"role": "assistant", "stop_reason": "tool_use",
+                                                    "content": [{"type": "tool_use", "name": "Bash"}]}}
+USER_PROMPT = {"type": "user", "message": {"role": "user", "content": "next please"}}
+INTERRUPT = {"type": "user", "message": {"role": "user", "content": [
+    {"type": "text", "text": "[Request interrupted by user]"}]}}
+LOCAL_CMD = {"type": "user", "message": {"role": "user",
+                                         "content": "<command-name>/mcp</command-name>"}}
+LOCAL_OUT = {"type": "user", "message": {"role": "user",
+                                         "content": "<local-command-stdout>ok</local-command-stdout>"}}
+
+
+def test_turn_end_is_read_from_the_last_meaningful_record():
+    assert _wk.turn_ended(_turns(USER_PROMPT, ASSISTANT_DONE)) is True
+    assert _wk.turn_ended(_turns(ASSISTANT_DONE, USER_PROMPT)) is False
+    assert _wk.turn_ended(_turns(USER_PROMPT, ASSISTANT_TOOL)) is False
+    # The prototype's two gaps: an interrupt record and local-command records are skipped, not
+    # read as an open turn (they failed safe, holding the gate until a person typed).
+    assert _wk.turn_ended(_turns(ASSISTANT_DONE, INTERRUPT)) is True
+    assert _wk.turn_ended(_turns(ASSISTANT_DONE, LOCAL_CMD, LOCAL_OUT)) is True
+    # A /context or a ! command at an idle prompt writes meta and shell records, not a turn (CTB on #925).
+    meta = {"type": "user", "isMeta": True, "message": {"role": "user", "content": "<local-command-caveat>x</local-command-caveat>"}}
+    bash_in = {"type": "user", "message": {"role": "user", "content": "<bash-input>ls</bash-input>"}}
+    bash_out = {"type": "user", "message": {"role": "user", "content": "<bash-stdout>a</bash-stdout>"}}
+    assert _wk.turn_ended(_turns(ASSISTANT_DONE, meta, bash_in, bash_out)) is True
+    # A channel message is isMeta too, but it starts a turn: the gate must stay shut (CTB on #925).
+    channel = {"type": "user", "isMeta": True, "message": {"role": "user", "content": '<channel source="telegram" chat_id="1">hi</channel>'}}
+    assert _wk.turn_ended(_turns(ASSISTANT_DONE, channel)) is False
+    # Nothing readable is never evidence of an ended turn.
+    assert _wk.turn_ended([]) is None and _wk.turn_ended(["not json"]) is None
+
+
+@pytest.mark.parametrize("waiting, ended, typed", [
+    (None, True, True),          # all three signals: type
+    ("a permission prompt", True, False),
+    (None, False, False),
+    (None, None, False),         # transcript unreadable: fail closed
+])
+def test_keystrokes_need_idle_prompt(waiting, ended, typed):
+    """R29: an empty box alone is not enough; no person may be waited on and the last turn must
+    have ended. Each single-signal false type of the macOS catalog is a planted case here."""
+    pane, events = FakePane([screen()]), []
+    w = _waker(pane, events, waiting_on=lambda: waiting, turn_ended=lambda: ended).waker
+    assert (w.tick([ID1]) == "sent") is typed
+    assert bool(pane.typed) is typed
+    if not typed:
+        assert events and events[-1][0] == _wk.EVENT_HELD
+
+
+def test_keystrokes_read_back():
+    """R39: text and return go separately, the box is read back, and Enter is retried only while
+    the box still holds the notice."""
+    text = _wk.wake_text([ID1])
+    pane, events = FakePane([screen(), screen(box=text), screen(box=text), screen(above=("✻ Thinking…",))]), []
+    h = _waker(pane, events, waiting_on=lambda: None, turn_ended=lambda: True)
+    assert h.waker.tick([ID1]) == "sent"
+    assert pane.log[:2] == ["record", "type"] and pane.enters == 0, "the text goes alone, first"
+    for _ in range(3):
+        h.clock[0] += 5
+        h.waker.tick([ID1])
+    assert 1 <= pane.enters <= 2, "Enter only while the notice is still in the box"
+
+
+def test_keystroke_notice_no_leading_digit():
+    """R40: a survey bar reads as an empty box and a digit answers it, so no notice may begin with one."""
+    assert not _wk.wake_text([ID1])[0].isdigit()
+    pane, events = FakePane([screen()]), []
+    w = _waker(pane, events, waiting_on=lambda: None, turn_ended=lambda: True).waker
+    assert w.type_notice("1 mail waiting") is False and not pane.typed
+    assert events[-1][0] == _wk.EVENT_HELD and "digit" in events[-1][1]["reason"]
+
+
+def test_the_newest_transcript_of_the_project_is_read(tmp_path):
+    import os
+    proj = tmp_path / "work" / "proj"
+    folder = tmp_path / ".claude" / "projects" / str(proj).replace("/", "-").replace("_", "-")
+    folder.mkdir(parents=True)
+    old, new = folder / "a.jsonl", folder / "b.jsonl"
+    old.write_text("\n".join(_turns(ASSISTANT_DONE)) + "\n")
+    new.write_text("\n".join(_turns(ASSISTANT_DONE, USER_PROMPT)) + "\n")
+    os.utime(old, (1, 1))
+    found = _wk.latest_transcript(proj, claude_home=tmp_path / ".claude")
+    assert found == new and _wk.transcript_turn_ended(found) is False
+    assert _wk.latest_transcript(tmp_path / "nowhere", claude_home=tmp_path / ".claude") is None
+    assert _wk.transcript_turn_ended(None) is None
+
+
+def test_the_core_names_the_session_waiting_and_its_project_dir(tmp_path):
+    from types import SimpleNamespace as NS
+    from macf.pd.core import Core
+    core = Core.__new__(Core)
+    sess = NS(spec=NS(kind="session", command=["py", "-m", "x", "--project-dir", "{agent_home}/proj"]), state="running")
+    core._units = {"session": sess, "monitor": NS(spec=NS(kind="service", command=[]), state="running")}
+    assert core.session_waiting_on() is None
+    assert core.session_project_dir(tmp_path) == tmp_path / "proj"
+    sess.state = "waiting_on_a_person"
+    assert core.session_waiting_on() == "a person"

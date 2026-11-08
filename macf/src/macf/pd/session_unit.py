@@ -239,15 +239,17 @@ def proxy_environment(port: int, probe: Optional[Callable[[str], bool]] = None) 
 
 def window_title(agent: str) -> str:
     """The Calling Card the session's window is named after, or the session identifier."""
+    from macf import calling_card
     from macf.utils.identity import calling_card_from_identifier, get_agent_identity
     card = calling_card_from_identifier(agent)
-    if "@" in card:
+    if calling_card.is_card(card):
         return card
     try:
         found = get_agent_identity()
     except (OSError, ValueError):
         return agent
-    return found if found.split("@")[0] == agent and not found.endswith("@unknown") else agent
+    name = found.rpartition(calling_card.SEPARATOR)[0]
+    return found if name == agent and not calling_card.is_unknown(found) else agent
 
 
 def _tmux(tmux: str, env: Mapping[str, str], *args: str) -> subprocess.CompletedProcess:

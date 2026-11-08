@@ -15,6 +15,7 @@ from typing import Callable, Iterable, Optional, Set, Tuple
 from macf.roles.priority import TIER_NAMES
 from macf.roles.source import EVENT, DutyTierSource
 from macf.roles.store import RoleStore
+from macf import calling_card
 
 #: The notice a duty's crossing raises.
 NOTICE_DUTY_DUE = "pd_duty_due"
@@ -39,7 +40,7 @@ class HostedDuties:
         seen = set()
         for event in self.events():
             data = event.get("data") or {}
-            if event.get("event") == EVENT and data.get("source") == SOURCE and data.get("agent") == self.card \
+            if event.get("event") == EVENT and data.get("source") == SOURCE and calling_card.is_agent(data.get("agent"), self.card) \
                     and data.get("tier") in TIER_NAMES:
                 seen.add((data.get("duty_id"), TIER_NAMES.index(data["tier"]), data.get("entered")))
         return seen

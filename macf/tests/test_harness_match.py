@@ -28,14 +28,14 @@ def test_lumen_lists_all_four(four):
 
 
 def test_an_alias_resolves_when_nothing_else_starts_with_it():
-    solo = RosterEntry(card="Keeper@5e6f7a", moniker="Keeper", uuid="5e6f7a",
+    solo = RosterEntry(card="Keeper_5e6f7a", moniker="Keeper", uuid="5e6f7a",
                        account="kwarden", display_name=None, session_kind="daemon", state="running",
                        home="/home/kwarden", aliases=("kwarden",), reasons={"display_name": "none"})
     r = match(seats() + [solo], "kwarden")
     assert r.kind == ONE and r.entry is solo
 
 
-@pytest.mark.parametrize("query", ["d4e5f6", "@d4e5f6", "Lumen2MacEff@d4e5f6", "Lumen2MacEff_d4e5f6"])
+@pytest.mark.parametrize("query", ["d4e5f6", "@d4e5f6", "Lumen2MacEff_d4e5f6", "Lumen2MacEff_d4e5f6"])
 def test_tier_one_exact_card_identifier_or_uuid(four, query):
     r = match(four, query)
     assert (r.kind, r.tier, r.entry.moniker) == (ONE, 1, "Lumen2MacEff")
@@ -137,7 +137,7 @@ def test_an_exact_display_name_is_picked_even_when_it_starts_another():
     """A display name that is a prefix of another's could never be picked on its own while
     display names matched only by prefix (Ira on #806)."""
     def seat(moniker, uuid, shown):
-        return RosterEntry(card=f"{moniker}@{uuid}", moniker=moniker, uuid=uuid, account=moniker.lower(),
+        return RosterEntry(card=f"{moniker}_{uuid}", moniker=moniker, uuid=uuid, account=moniker.lower(),
                            display_name=shown, session_kind="daemon", state="running",
                            home=f"/home/{moniker.lower()}")
     pair = [seat("Alpha", "111111", "Lab"), seat("Beta", "222222", "Lab Two")]

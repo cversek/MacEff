@@ -173,7 +173,7 @@ The Secretary gathered these preliminary requirements from the positions on #850
 ### 6.9 Egress, transport and the socket
 
 - **R33** [MUST · decidable: macf/tests/test_amail_egress.py::test_rule_allows_only_declared_accounts] The egress rule MUST let only the broker's account and the human accounts the operator declares open the mail ports, matching each socket's owner. (host_egress_MUST_match_the_broker_account)
-- **R34** [MUST · decidable: macf/tests/test_amail_transport.py::test_pinned_bundle] The broker's outbound transport MUST verify servers against a pinned trust bundle that the operator rotates by a declared procedure. (transport_MUST_pin_trust_bundle)
+- **R34** [MUST · decidable: macf/tests/test_amail_pinned_tls.py::test_pinned_bundle] The broker's outbound transport MUST verify servers against a pinned trust bundle that the operator rotates by a declared procedure. (transport_MUST_pin_trust_bundle)
 - **R35** [MUST · decidable: macf/tests/test_amail_units.py::test_socket_version] The broker socket MUST carry a protocol version, and accept the previous version for a declared window after each change. (broker_socket_MUST_carry_version)
 
 ### 6.10 Signing
@@ -220,7 +220,7 @@ Each requirement's reason, with its source. P and O numbers refer to section 14.
 - **R39**: twice in the macOS catalog, a single return left the text in the box. Read back, a notice still in the box is retried; a dialog that opened is never typed into (P29).
 - **R40**: a survey bar reads as an empty box, and a digit answers it (P29).
 - **R41**: the operator asked that mail between MacEff agents always be attested, and Q08 no longer be deferred (P30). Most of the mechanism is already on main: Ed25519 signing and verification, contact entries that declare one key or several, and trust states that keep attested apart from suspect (P31). On macOS the private key is a file of mode 0600 in a 0700 directory of the agent's own account, outside any repository, synced folder or backup that leaves the machine. Not the login keychain: its access control is per application, so on one login every agent reads what one can, and its prompts are modal dialogs that stall an unattended session. Not the Secure Enclave, which holds P-256 keys only (P32). The broker never holds an agent's key (R03), and only verifies (P30).
-- **R42**: keys live today in each agent's own contacts file, which the agent can write, so the declaration moves out of the agent's reach. Its home is the operator-written, root-owned system declaration MIS-0007 drafts, so there is one registry, not two (P31, P32). The entry names the account that holds each key, which is what lets a receiver see a shared login (R46, P32). Each declaration and rotation is an operator step; that cost is the point (P32).
+- **R42**: keys live today in each agent's own contacts file, which the agent can write, so the declaration moves out of the agent's reach. Its home was to be the operator-written, root-owned system declaration MIS-0007 drafted (P31, P32). The ruling on #920 left MIS-0007 with no root process, and the repo owner then chose one root-owned registry file for the keys and for the certificates his authority issues (#867, comment 6723601215), so there is still one registry, not two. The entry names the account that holds each key, which is what lets a receiver see a shared login (R46, P32). Each declaration and rotation is an operator step; that cost is the point (P32).
 - **R43**: the operator's draft carried it, and the operator confirmed it dropped from the posted review by mistake (P30). An unsigned local submission is no longer attested on the kernel's identity, because on a shared login the peer uid is the same for every agent and can't stand in for a signature; so "signed" means the same on every path (P31, P32). During a rotation an agent has two declared keys; checking validity at acceptance lets the new key through and refuses a retired one on a new submission, so R43 and R45 agree (P33).
 - **R44**: the receiver decides who is a MacEff agent from the registry: an address in it is held to its keys, and an address outside it is outside mail and stays unverified (P30, P31). Switching it on turns today's agent mail suspect until every key is declared, which is why landing declares first and enforces second (P31; section 12.4).
 - **R45**: validity dates alone don't stop a stolen retired key, whose thief can date a message inside the old window. R15's acceptance time is minted by the broker, so validity is checked against it (P32). Between systems that time comes from the sending system's broker, which the receiver doesn't run. So R45 holds against a stolen agent key, not a compromised broker, which could still date a message inside a retired key's window (P33). Rotation runs: the agent generates a new key in its own account, the operator declares it with its start date, the agent switches to it, then the operator sets the old key's end date; the agent never signs with an undeclared key (P32). A suspected exposure, a change of account, or a move to another machine triggers it; a migration or restore generates a new key and never carries the old private key. After a compromise the end date is the last time the key is known safe (P32).
@@ -294,7 +294,7 @@ Detection alone stays allowed only where no agent has a reachable address. Addre
 | R06 | decidable | `macf/tests/test_amail_address.py::test_address_from_identity_file` | planned |
 | R07 | decidable | `macf/tests/test_amail_address.py::test_origin_from_peer_uid` | planned |
 | R08 | decidable | `macf/tests/test_amail_routing.py::test_rung_from_declared_map` | planned |
-| R09 | decidable | `macf/tests/test_amail_routing.py::test_only_declared_peers` | planned |
+| R09 | decidable | `macf/tests/test_amail_routing.py::test_only_declared_peers` | passing |
 | R10 | decidable | `macf/tests/test_amail_handoff.py::test_next_holder_pulls` | planned |
 | R11 | decidable | `macf/tests/test_amail_handoff.py::test_copy_kept_until_next_holder_completes` | planned |
 | R12 | decidable | `macf/tests/test_amail_partition.py::test_two_accounts`, on two real accounts, with refusal and success in one run and multi-recipient and same-second sends, run by a maintainer other than its author | planned |
@@ -314,20 +314,20 @@ Detection alone stays allowed only where no agent has a reachable address. Addre
 | R26 | decidable | `macf/tests/test_amail_notice.py::test_notice_level_triggered` | passing |
 | R27 | decidable | `macf/tests/test_amail_notice.py::test_restart_keeps_cursor` | passing |
 | R28 | decidable | `macf/tests/test_amail_notice.py::test_notice_carries_ids` | planned |
-| R29 | decidable | `macf/tests/test_amail_notice.py::test_keystrokes_need_idle_prompt` | planned |
+| R29 | decidable | `macf/tests/test_amail_notice.py::test_keystrokes_need_idle_prompt` | passing |
 | R30 | decidable | `macf/tests/test_amail_notice.py::test_listing_new_since_last_read` | passing |
 | R31 | decidable | `macf/tests/test_amail_health.py::test_health_is_last_sweep` | passing |
 | R32 | decidable | `macf/tests/test_amail_health.py::test_stuck_mail_alerts` | passing |
 | R33 | decidable | `macf/tests/test_amail_egress.py::test_rule_allows_only_declared_accounts` | planned |
-| R34 | decidable | `macf/tests/test_amail_transport.py::test_pinned_bundle` | planned |
+| R34 | decidable | `macf/tests/test_amail_pinned_tls.py::test_pinned_bundle` | planned |
 | R35 | decidable | `macf/tests/test_amail_units.py::test_socket_version` | planned |
 | R36 | decidable | `macf/tests/test_amail_partition.py::test_box_files_not_group_writable` | passing |
 | R37 | decidable | `macf/tests/test_amail_partition.py::test_receiver_checks_owner_and_links`, with a hard link from outside and a file the recipient's group created, each set aside | planned |
 | R38 | decidable | `macf/tests/test_amail_handoff.py::test_one_copy_per_recipient` | passing |
-| R39 | decidable | `macf/tests/test_amail_notice.py::test_keystrokes_read_back` | planned |
-| R40 | decidable | `macf/tests/test_amail_notice.py::test_keystroke_notice_no_leading_digit` | planned |
+| R39 | decidable | `macf/tests/test_amail_notice.py::test_keystrokes_read_back` | passing |
+| R40 | decidable | `macf/tests/test_amail_notice.py::test_keystroke_notice_no_leading_digit` | passing |
 | R41 | decidable | `macf/tests/test_amail_signing.py::test_agent_signs_every_message` | passing |
-| R42 | decidable | `macf/tests/test_amail_signing.py::test_keys_declared_by_operator` | planned |
+| R42 | decidable | `macf/tests/test_amail_signing.py::test_keys_declared_by_operator` | passing |
 | R43 | decidable | `macf/tests/test_amail_signing.py::test_broker_refuses_unsigned_agent_mail` | planned |
 | R44 | decidable | `macf/tests/test_amail_signing.py::test_receiver_marks_unsigned_agent_mail_suspect` | planned |
 | R45 | decidable | `macf/tests/test_amail_signing.py::test_rotation_keeps_old_signatures_verifiable` | planned |
@@ -355,6 +355,12 @@ R08 between systems, R09 and R34 were withheld from both and stay so. The untest
 ### 12.2 The direct dependency: MIS-0007
 
 The system daemon's requirements are in MIS-0007 (draft), at the operator's addendum to the motion (P17), so that mail and the system daemon can be developed in parallel without breaking the basis for reconciling them. R01, R02 and the rows of section 10 that name the system daemon wait on it. Until it lands, a container's start step stands in for it, as it does today.
+
+**The declared map's stand-in, and its retirement.** Until MIS-0007 lands, R08's map is declared in each broker's own configuration, a file no agent can write. Under each shared hand-off, `agents` lists the peer's agents by box name and calling card, and each agent's own card is the addressing file's `card`. Retiring the stand-in takes four steps:
+1. The system daemon declares, per system, the agents it holds with their cards. The broker reads its local agents and each peer's agents from those declarations. When both a declaration and the stand-in are present, it reports any disagreement at start-up.
+2. A release in which the declaration wins, the stand-in is still accepted, and each use of the stand-in is logged as deprecated.
+3. The next release refuses a configuration that still carries `agents` or `card`, and names the field to remove.
+4. R08's Conformance row moves to passing only then, with a test that the rung comes from the daemon's declaration. Until then it stays planned.
 
 ### 12.3 Carried to MIS-0006
 
@@ -454,6 +460,7 @@ The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 h
 - 2026-11-01: landing, the mail notice as a level (head maintainer). R26 is passing: a channel that takes mail is told at each attach while mail waits unread, and a mail notice still owed when the mail is read is withdrawn and recorded. While the operator silences mail to the session nothing is re-asserted; after an unsilence, still-unread mail is asserted on the next pass. amail policy 1.12.0 says so (§2.4).
 - 2026-11-01: landing, flow area (container-management maintainer). R17, R18 and R20 are passing. R20 and the spool half of R17 needed a change: one spool entry that failed unexpectedly ended every watcher run, so it is now counted per entry, the run goes on, and after `max_failures` the entry is quarantined with its last error. amail policy 1.13.0 says so.
 - 2026-11-01: landing, health area (container-management maintainer). R31 and R32 are passing. R31 needed a change: nothing judged the broker by its sweep, so a deployment now names its sweep schedule in the broker account's declaration (`mail_sweep_schedule`), and the broker is healthy only when that sweep's last run ended ok; a failed, overdue or missing sweep is not. R32's broker half needed the outside watch to read that verdict and alert as `mail-broker: SWEEP-FAILED`; mail stuck past its pickup bound fails the sweep, and an agent's mail unread past its threshold already alerted as `mail: UNREAD`. amail policy 1.14.0 says so (§3.4).
+- 2026-11-08: landing, signing area (head maintainer). R42 is passing: `macf/amail/registry.py` reads the operator's registry, refusing it when anyone but root could write the file or its directory, and `amail registry check` reports it (amail 3.2.3). The ruling on #920 left MIS-0007 with no root process, so the registry's home in R42's rationale changes to the one root-owned file the repo owner chose for keys and certificates (#867, comment 6723601215); R42's text is unchanged. Editorial (mis 8.1).
 
 ## Wiki-Links
 

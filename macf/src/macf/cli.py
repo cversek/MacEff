@@ -307,7 +307,13 @@ def cmd_env(args: argparse.Namespace) -> int:
     _detect_cc_binary = detect_cc_binary
 
     # Get agent identity
-    agent_identity = get_agent_identity()
+    # The card as the primal daemon reads it, from the home's own files (#924).
+    from .utils.identity import reported_identity
+    try:
+        _home = Path(os.environ["MACEFF_AGENT_HOME_DIR"]) if os.environ.get("MACEFF_AGENT_HOME_DIR") else find_agent_home()
+    except (OSError, ValueError):
+        _home = None
+    identity = reported_identity(_home)
 
     # Compute CC internal paths
     try:
@@ -343,9 +349,7 @@ def cmd_env(args: argparse.Namespace) -> int:
 
     # Gather all data
     data = {
-        "identity": {
-            "agent_id": agent_identity
-        },
+        "identity": identity,
         "versions": {
             "macf": _ver,
             "claude_code": get_claude_code_version() or "(unavailable)",
@@ -417,8 +421,14 @@ def cmd_env(args: argparse.Namespace) -> int:
         line = "━" * 80
         print(line)
 
+        ident = data['identity']
         print("Agent ID")
-        print(f"  {data['identity']['agent_id']}")
+        where = ("from the home's identity files, as the primal daemon reads it" if ident['source'] == "home"
+                 else f"no home names an agent; from {ident['source']}")
+        print(f"  {ident['agent_id']}  ({where})")
+        if ident.get('process_identity'):
+            print(f"  This process's own identity reads {ident['process_identity']} "
+                  f"(MACEFF_AGENT_NAME comes first there); the card above is the one that counts.")
         print()
 
         print("Supervision")
@@ -2615,7 +2625,7 @@ def _ensure_agent_uuid(
     silently changing who the agent is.
 
     Without an id file the resolver returns ``unknown``, so a freshly
-    provisioned host displays ``Name@unknown`` and breadcrumbs lose their UUID
+    provisioned host displays ``Name_unknown`` and breadcrumbs lose their UUID
     half (#131). The naive fix — mint whenever *this* file is missing — checks
     the wrong thing: the resolver prefers the per-project file over the
     host-global one, so minting into an agent home while a global identity is
@@ -2692,14 +2702,14 @@ def _ensure_agent_uuid(
         print(f"\n🆔 Proposed agent UUID: {candidate}")
         # A bare '@abc123' is no card: every step keyed on the card needs the name half
         # too, which the calling-card step writes (cversek/MacEff#842).
-        print(f"    Calling card would be: <name>@{candidate[:6]} "
+        print(f"    Calling card would be: <name>_{candidate[:6]} "
               f"(the name comes next, from the calling-card step or --calling-card NAME)")
         answer = input("  [A]ccept / [r]egenerate / [s]kip: ").strip().lower()
         if answer in ('', 'a', 'accept', 'y', 'yes'):
             _write(candidate, "Minted")
             return
         if answer in ('s', 'skip', 'n', 'no'):
-            print("    Skipped — the agent will resolve to @unknown until an id exists.")
+            print("    Skipped — the agent will resolve to <name>_unknown until an id exists.")
             return
         # anything else re-rolls
 
@@ -2973,7 +2983,6 @@ def _agent_init_preamble(args: argparse.Namespace, pa_home: Path, config):
             manifest_data = {
                 "version": "1.0.0",
                 "description": f"{config.agent_name} Personal Policies",
-                "extends": "/opt/maceff/policies/manifest.json",
                 "personal_policies": []
             }
             with open(personal_manifest, 'w') as f:
@@ -3037,6 +3046,31 @@ def cmd_agent_init_auth_token(args: argparse.Namespace) -> int:
         "   read or rewrite this file. True enforcement requires the external harness\n"
         "   classifier or a multi-user / file-permission setup."
     )
+    return 0
+
+
+def cmd_agent_mint(args: argparse.Namespace) -> int:
+    """Mint a new container agent ahead of its account (MIS-0002-R162)."""
+    from macf import calling_card, homes
+    try:
+        minted = homes.mint(args.name)
+    except calling_card.CardError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 2
+    print(homes.render_minted(minted, args.key or args.name.lower()), end="")
+    return 0
+
+
+def cmd_agent_homes_init(args: argparse.Namespace) -> int:
+    """Mark a homes volume and print its id (MIS-0002-R162)."""
+    from macf import homes
+    try:
+        volume = homes.init_volume(args.root)
+    except (homes.HomesRefused, OSError) as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 2
+    print(f"{args.root} is homes volume {volume}. Declare it in agents.yaml:\n"
+          f"homes_volume: \"{volume}\"")
     return 0
 
 
@@ -3458,8 +3492,11 @@ def cmd_policy_search(args: argparse.Namespace) -> int:
                 for ref in policy_refs:
                     section_matches.append((index_key, ref))
 
+        from .utils.manifest import policy_content_matches
+        content_matches = policy_content_matches(keyword)
+
         # Display results
-        total = len(policy_matches) + len(section_matches)
+        total = len(policy_matches) + len(section_matches) + len(content_matches)
         print(f"Search results for '{keyword}': {total} matches")
         print("=" * 50)
 
@@ -3473,7 +3510,14 @@ def cmd_policy_search(args: argparse.Namespace) -> int:
             for index_key, ref in section_matches:
                 print(f"  [{index_key}] → {ref}")
 
-        if not policy_matches and not section_matches:
+        if content_matches:
+            print("\n📄 Policies That Say It:")
+            for match in content_matches[:15]:
+                print(f"  {match['name']} ({match['count']}): {match['line'][:90]}")
+            if len(content_matches) > 15:
+                print(f"  ... and {len(content_matches) - 15} more")
+
+        if not policy_matches and not section_matches and not content_matches:
             print("No matches found")
             print("\n💡 Try:")
             print("  macf_tools policy list              # Browse all policies")
@@ -3516,9 +3560,10 @@ def cmd_policy_list(args: argparse.Namespace) -> int:
         else:
             print("All Policies")
         print("=" * 50)
-        from .utils.manifest import extra_policy_roots
-        for root in extra_policy_roots():
-            print(f"  root {root.name}: {root.path} (MACEFF_POLICY_ROOTS; read as {root.name}:<policy>)")
+        from .utils.manifest import policy_roots
+        for root in policy_roots():
+            if not root.framework:
+                print(f"  root {root.name}: {root.path} ({root.source}; read as {root.name}:<policy>)")
 
         if not policies:
             # "None found" and "cannot look" are different facts, and reporting
@@ -3653,6 +3698,13 @@ def cmd_policy_recommend(args: argparse.Namespace) -> int:
         print("⚠️ Query too short (minimum 10 characters)")
         return 1
 
+    from .utils.manifest import policies_newer_than_index
+    from .utils.paths import find_agent_home
+    stale = policies_newer_than_index(find_agent_home() / ".maceff" / "policy_index.lance")
+    if stale:
+        print(f"⚠️ {len(stale)} policies changed since the index was built ({', '.join(stale[:3])}"
+              f"{', ...' if len(stale) > 3 else ''}). Rebuild: macf_tools policy build_index", file=sys.stderr)
+
     # Try warm service first (fast path)
     result = query_search_service("policy", query, limit=limit, timeout_s=1.0)
 
@@ -3717,6 +3769,23 @@ def cmd_policy_recommend(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_policy_check(args: argparse.Namespace) -> int:
+    """Report what a policy lacks against policy_writing's format. Exit 1 on any finding."""
+    from .utils.manifest import check_policies
+    try:
+        results = check_policies(getattr(args, "policy_name", None))
+    except LookupError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 2
+    failing = {name: found for name, found in results.items() if found}
+    for name, found in sorted(failing.items()):
+        print(name)
+        for finding in found:
+            print(f"  {finding}")
+    print(f"{len(results) - len(failing)} of {len(results)} pass")
+    return 1 if failing else 0
+
+
 def cmd_policy_build_index(args: argparse.Namespace) -> int:
     """Build hybrid FTS5 + semantic index from policy files."""
     try:
@@ -3745,9 +3814,13 @@ def cmd_policy_build_index(args: argparse.Namespace) -> int:
         # Build index
         manifest_path = policies_dir / "manifest.json"
         indexer = PolicyIndexer(manifest_path=manifest_path if manifest_path.exists() else None)
+        # The agent's other roots, unless a directory was named: then that directory is the index.
+        from .utils.manifest import policy_roots
+        extra_roots = [] if args.policies_dir else [(r.name, r.path) for r in policy_roots() if not r.framework]
         stats = indexer.build_index(
             policies_dir=policies_dir,
             db_path=db_path,
+            extra_roots=extra_roots,
         )
 
         # Output
@@ -10828,6 +10901,68 @@ def cmd_amail_key_status(args: argparse.Namespace) -> int:
     return 1 if (report["required"] and not report["exists"]) else 0
 
 
+def cmd_amail_registry_check(args: argparse.Namespace) -> int:
+    """Check the operator's registry (MIS-0004 R42): who can write it, and what it declares."""
+    from macf.amail.registry import Registry, RegistryError, registry_path
+
+    path = Path(args.path) if args.path else registry_path()
+    try:
+        loaded = Registry(path).load()
+    except RegistryError as e:
+        print(f"❌ {e}")
+        return 1
+    print(f"✅ {path} is root's alone to write")
+    for card, entry in sorted(loaded.agents.items()):
+        retired = sum(1 for k in entry.keys if k.retired)
+        print(f"   {card}: account {entry.account}, {len(entry.keys)} key(s)"
+              + (f", {retired} retired" if retired else ""))
+    for cert in loaded.certificates:
+        print(f"   certificate {cert.name}: serial {cert.serial}, expires {cert.not_after}"
+              + (f", retired {cert.retired_at.isoformat()}" if cert.retired else ""))
+    return 0
+
+
+def _registry_time(text):
+    """A command-line time: ISO 8601 with a timezone, or now (UTC) when none is given."""
+    import datetime as _dt
+    if not text:
+        return _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0)
+    t = _dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    if t.utcoffset() is None:
+        raise ValueError(f"{text} has no timezone; write it with one, such as Z")
+    return t
+
+
+def cmd_amail_registry_change(args: argparse.Namespace) -> int:
+    """Declare, rotate or retire a key, or record or retire a certificate, in the operator's
+    registry (MIS-0004 R42, R45): the change is shown first, written by root or staged for it,
+    and a change already made writes nothing."""
+    import datetime as _dt
+    from macf.amail import registry_edit as edit
+    from macf.amail.registry import registry_path
+
+    path = Path(args.path) if args.path else registry_path()
+    try:
+        at = _registry_time(getattr(args, "at", None))
+        verb = args.registry_cmd
+        if verb == "declare":
+            change = lambda t: edit.declare(t, args.card, args.account, args.key)
+        elif verb == "rotate":
+            change = lambda t: edit.rotate(t, args.card, args.key, at=at)
+        elif verb == "retire":
+            change = lambda t: edit.retire(t, args.card, args.key, at=at)
+        elif verb == "cert-record":
+            not_after = _dt.date.fromisoformat(args.not_after)
+            change = lambda t: edit.cert_record(t, args.name, args.serial, not_after)
+        else:
+            change = lambda t: edit.cert_retire(t, args.serial, at=at)
+        planned = edit.plan(path, change)
+    except (ValueError, OSError) as e:
+        print(f"❌ {e}")
+        return 1
+    return edit.carry_out(planned, dry_run=args.dry_run)
+
+
 def _broker_socket_ready(sock: Path, timeout: float = 0.0) -> bool:
     """True when something answers on the broker socket (within timeout)."""
     import socket as _socket
@@ -12368,7 +12503,7 @@ def _build_parser() -> argparse.ArgumentParser:
         nargs="?",
         default=None,
         help="title string (default: agent calling card from get_agent_identity, "
-             "e.g. Name@abc123). Inside tmux, also run "
+             "e.g. Name_abc123). Inside tmux, also run "
              "'tmux set-option -g set-titles on' for titles to surface.",
     )
     set_title_parser.set_defaults(func=cmd_env_set_term_title)
@@ -12587,6 +12722,20 @@ def _build_parser() -> argparse.ArgumentParser:
     restore_install.add_argument("--dry-run", action="store_true", help="show what would be done")
     restore_install.set_defaults(func=cmd_restore_install)
 
+    # New agents and their homes volume (MIS-0002-R162)
+    mint_parser = agent_sub.add_parser(
+        "mint", help="draw a new container agent's short id and zone token, and print the lines "
+                     "agents.yaml and the addressing file take (MIS-0002-R162)")
+    mint_parser.add_argument("name", help="the card's name: a letter, then up to 23 letters or digits")
+    mint_parser.add_argument("--key", help="the agent's key in agents.yaml (default: the name lowercased)")
+    mint_parser.set_defaults(func=cmd_agent_mint)
+
+    homes_init_parser = agent_sub.add_parser(
+        "homes-init", help="mark a deployment's homes volume and print its id for agents.yaml's "
+                           "homes_volume; start creates a new home only on a marked, declared volume")
+    homes_init_parser.add_argument("root", type=Path, help="the mounted homes volume")
+    homes_init_parser.set_defaults(func=cmd_agent_homes_init)
+
     # Agent GitHub identity
     gh_parser = agent_sub.add_parser("set-github", help="set per-project GitHub identity via GH_TOKEN")
     gh_parser.add_argument("username", help="GitHub username (must be logged in via gh auth)")
@@ -12796,6 +12945,11 @@ def _build_parser() -> argparse.ArgumentParser:
     recommend_parser.add_argument("--limit", type=int, default=5,
                                   help="max results to show (default: 5)")
     recommend_parser.set_defaults(func=cmd_policy_recommend)
+
+    # policy check
+    check_parser = policy_sub.add_parser("check", help="report what a policy lacks against the policy_writing format")
+    check_parser.add_argument("policy_name", nargs="?", help="one policy, or every root's policies if omitted")
+    check_parser.set_defaults(func=cmd_policy_check)
 
     # policy build_index
     build_index_parser = policy_sub.add_parser("build_index", help="build hybrid FTS5 + semantic index")
@@ -13583,6 +13737,38 @@ def _build_parser() -> argparse.ArgumentParser:
     amail_key_status.add_argument("--path", help="the key to check (default: the configured one)")
     amail_key_status.add_argument("--json", action="store_true", help="machine-readable output")
     amail_key_status.set_defaults(func=cmd_amail_key_status)
+    amail_registry = amail_sub.add_parser(
+        "registry", help="the operator's registry of agents' keys and issued certificates (MIS-0004 R42)")
+    amail_registry_sub = amail_registry.add_subparsers(dest="registry_cmd")
+    amail_registry_check = amail_registry_sub.add_parser(
+        "check", help="check who can write the registry, and list what it declares")
+    amail_registry_check.add_argument("--path", help="the registry (default: /etc/maceff/registry.yaml)")
+    amail_registry_check.set_defaults(func=cmd_amail_registry_check)
+    _reg_help = {
+        "declare": "declare an agent's public key, held by its account (written by agent init too)",
+        "rotate": "declare a new key from --at and retire every other open key at that moment (R45)",
+        "retire": "retire a key at --at: it signs nothing after, and verifies only earlier mail",
+        "cert-record": "record a certificate the operator's authority issued, by name, serial and expiry",
+        "cert-retire": "retire a recorded certificate at --at, before its expiry",
+    }
+    for _verb, _help in _reg_help.items():
+        _rp = amail_registry_sub.add_parser(_verb, help=_help + "; shown first, written by root or "
+                                                    "staged for it, and a no-op when already made")
+        _rp.add_argument("--path", help="the registry (default: /etc/maceff/registry.yaml)")
+        _rp.add_argument("--dry-run", action="store_true", help="show the change and write nothing, not even the staged copy")
+        if _verb in ("declare", "rotate", "retire"):
+            _rp.add_argument("--card", required=True, help="the agent's calling card, Name_shortid")
+            _rp.add_argument("--key", required=True, help="the public key, ed25519:<base64> (amail key-status prints it)")
+        if _verb == "declare":
+            _rp.add_argument("--account", required=True, help="the login account that holds the key")
+        if _verb in ("cert-record", "cert-retire"):
+            _rp.add_argument("--serial", required=True, help="the certificate's serial, hex")
+        if _verb == "cert-record":
+            _rp.add_argument("--name", required=True, help="the certificate's name")
+            _rp.add_argument("--not-after", required=True, help="its expiry date, YYYY-MM-DD")
+        if _verb in ("rotate", "retire", "cert-retire"):
+            _rp.add_argument("--at", default=None, help="when, ISO 8601 with a timezone (default: now, UTC)")
+        _rp.set_defaults(func=cmd_amail_registry_change)
 
     amail_preflight = amail_sub.add_parser(
         "preflight", help="scan a hand-carried bundle before it leaves the host",

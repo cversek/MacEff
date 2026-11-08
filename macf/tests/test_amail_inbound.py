@@ -271,6 +271,114 @@ def test_hash_mismatch_is_quarantined_as_corruption(deploy):
     assert (deploy.quarantine_dir / eml.name).exists()
 
 
+def _rename_across_volumes(monkeypatch):
+    """Make every rename fail as it does between two filesystems. A test's temp
+    directory is one filesystem, so without this the copy path never runs."""
+    import errno
+    import os
+
+    def cross_device(src, dst, *a, **kw):
+        raise OSError(errno.EXDEV, "Invalid cross-device link", str(src))
+    monkeypatch.setattr(os, "rename", cross_device)
+
+
+def test_quarantine_crosses_volumes_by_copy(deploy, monkeypatch):
+    _rename_across_volumes(monkeypatch)
+    raw = make_raw(sender="stranger@example.org")
+    eml, sidecar = spool(deploy, raw)
+    side_bytes = sidecar.read_bytes()
+    result = inbound.process_entry(deploy, eml, sidecar)
+    assert result["disposition"] == QUARANTINED
+    assert (deploy.quarantine_dir / eml.name).read_bytes() == raw
+    assert (deploy.quarantine_dir / sidecar.name).read_bytes() == side_bytes
+    assert not eml.exists() and not sidecar.exists()
+    assert not list(deploy.quarantine_dir.glob(".*.partial"))
+
+
+def test_a_failed_cross_volume_copy_leaves_the_spool_entry(deploy, monkeypatch):
+    _rename_across_volumes(monkeypatch)
+
+    import os
+
+    # Fail AFTER the partial copy exists, so the test sees whether it is cleaned up.
+    def fails_after_create(*a, **kw):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(os, "fchmod", fails_after_create)
+    eml, sidecar = spool(deploy, make_raw(sender="stranger@example.org"))
+    with pytest.raises(OSError):
+        inbound.process_entry(deploy, eml, sidecar)
+    assert eml.exists() and sidecar.exists()
+    assert not (deploy.quarantine_dir / eml.name).exists()
+    assert not list(deploy.quarantine_dir.glob(".*.partial"))
+
+
+def test_a_cross_volume_copy_does_not_follow_a_symlinked_entry(deploy, monkeypatch, tmp_path):
+    # A compromised receiver plants a link to a file only the broker can read.
+    # A rename would move the link; a copy that followed it would publish the file.
+    _rename_across_volumes(monkeypatch)
+    secret = tmp_path / "broker_only.txt"
+    secret.write_text("not for the spool")
+    eml, sidecar = spool(deploy, make_raw(sender="stranger@example.org"))
+    eml.unlink()
+    eml.symlink_to(secret)
+    with pytest.raises(OSError):
+        inbound.process_entry(deploy, eml, sidecar)
+    assert eml.is_symlink()
+    leaked = [p for p in deploy.quarantine_dir.rglob("*")
+              if p.is_file() and not p.is_symlink() and "not for the spool" in p.read_text()]
+    assert leaked == []
+
+
+def test_a_cross_volume_copy_refuses_a_fifo_without_hanging(deploy, monkeypatch):
+    import os
+    _rename_across_volumes(monkeypatch)
+    eml, sidecar = spool(deploy, make_raw(sender="stranger@example.org"))
+    sidecar.unlink()
+    os.mkfifo(sidecar)
+    deploy.quarantine_dir.mkdir(parents=True)
+    with pytest.raises(OSError, match="not a regular file"):
+        inbound._move_into(sidecar, deploy.quarantine_dir / sidecar.name)
+    assert not (deploy.quarantine_dir / sidecar.name).exists()
+    assert not list(deploy.quarantine_dir.glob(".*.partial"))
+
+
+def test_an_interrupted_quarantine_leaves_the_message_where_the_next_pass_finds_it(
+        deploy, monkeypatch):
+    # The sidecar moves first. If the message's move then fails, the message is
+    # still in the spool, which is scanned for messages, and the next pass sets
+    # it aside visibly. The reverse order would strand a sidecar nothing scans for.
+    real_move = inbound._move_into
+
+    def message_move_fails(src, dest):
+        if src.suffix == ".eml":
+            raise OSError(5, "Input/output error")
+        real_move(src, dest)
+    monkeypatch.setattr(inbound, "_move_into", message_move_fails)
+    eml, sidecar = spool(deploy, make_raw(sender="stranger@example.org"))
+    with pytest.raises(OSError):
+        inbound.process_entry(deploy, eml, sidecar)
+    assert eml.exists() and not sidecar.exists()
+
+    monkeypatch.setattr(inbound, "_move_into", real_move)
+    result = inbound.process_entry(deploy, eml, sidecar)
+    assert result["disposition"] == QUARANTINED
+    assert "sidecar unreadable" in result["reason"]
+    assert (deploy.quarantine_dir / eml.name).exists()
+
+
+def test_a_rename_error_other_than_cross_volume_is_not_copied_around(deploy, monkeypatch):
+    import os
+
+    def denied(*a, **kw):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(os, "rename", denied)
+    eml, sidecar = spool(deploy, make_raw(sender="stranger@example.org"))
+    with pytest.raises(PermissionError):
+        inbound.process_entry(deploy, eml, sidecar)
+    assert eml.exists()
+    assert not (deploy.quarantine_dir / eml.name).exists()
+
+
 def test_mail_for_unknown_recipient_is_quarantined(deploy):
     raw = make_raw()
     result = inbound.process_entry(

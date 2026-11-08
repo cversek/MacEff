@@ -80,6 +80,33 @@ def _send_permission_preview(tool_name, tool_input, send_notification, send_docu
         send_notification(msg, parse_mode="HTML")
 
 
+def _deny_enabled() -> bool:
+    """Opt-in: the agent's deployment must have chosen this (autonomous_operation 5.5)."""
+    from macf.config import resolve_setting
+    value, _ = resolve_setting("MACF_DENY_UNDER_FULL_AUTONOMY", "permissions.deny_under_full_autonomy", False,
+                               coerce=lambda raw: str(raw).strip().lower() in ("1", "true", "yes", "on"))
+    return bool(value)
+
+
+def _autonomy_state(session_id: str):
+    """The active modes and whether play time is running, derived from the event log and live scope."""
+    from macf.modes.detection import detect_active_modes, get_active_task_type_marker
+    return detect_active_modes(session_id, {}), bool(get_active_task_type_marker())
+
+
+def _denial_reason(session_id: str, data: Dict[str, Any]):
+    """None leaves the dialog up, including when the state can't be read: asking is the safe side."""
+    try:
+        if not _deny_enabled():
+            return None
+        from macf.permission_watch import full_autonomy_denial
+        modes, play_time_active = _autonomy_state(session_id)
+        return full_autonomy_denial(modes, play_time_active, data.get("permission_mode"), data.get("tool_name"))
+    except Exception as e:
+        emit_warning(Warning(source="permission_request", kind="full_autonomy_check_failed", detail=str(e)))
+        return None
+
+
 @shared_event_reads
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
@@ -125,9 +152,13 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             hook_input=data
         )
 
+        why_denied = _denial_reason(session_id, data)
+        if why_denied:
+            append_event(event="permission_auto_denied", data={"session_id": session_id, "tool_name": tool_name})
+            return {"hookSpecificOutput": {"hookEventName": "PermissionRequest",
+                                           "decision": {"behavior": "deny", "message": why_denied}}}
+
         # Format message
-        # Note: PermissionRequest hook doesn't support hookSpecificOutput
-        # (only PreToolUse, UserPromptSubmit, PostToolUse do)
         timestamp = get_minimal_timestamp()
         breadcrumb = get_breadcrumb()
         message = f"{format_macf_brand()} | {timestamp} | {breadcrumb} | 🔐 Permission: {tool_name}"

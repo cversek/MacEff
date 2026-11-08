@@ -128,7 +128,7 @@ comment, a commit message, or a host agent's comment in a deliberation the
 operator convenes (§2.4), and nowhere else**:
 
 ```
-[Moniker@idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
+[Moniker_idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
 ```
 
 Nothing follows it. Any tooling trailer (`Co-Authored-By:` and the like) sits
@@ -167,7 +167,7 @@ signs it, rather than narrating which internal work item produced each paragraph
 
 Co-Authored-By: <model> <noreply@anthropic.com>
 
-[Moniker@idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
+[Moniker_idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
 ```
 
 A commit message is the most durable public artifact an agent produces - it
@@ -196,6 +196,13 @@ checked at each point where the artifact leaves the agent's hands:
 **The card must be the agent's OWN**, read from its identity (`macf_tools env`), in
 the form `[Name@id: task#N <breadcrumb>]`, bare or in italics. Another agent's card,
 or a placeholder of the right shape, is not a sign-off by this agent.
+
+**While calling cards move from `Name@id` to `Name_id`** (the MIS-0002 revision on
+calling cards), the checks accept the agent's own card in either spelling:
+`[Name_id: task#N <breadcrumb>]` signs as well as `[Name@id: ...]`. That lets an
+agent sign with the new form before its identity files are cut over. Only the
+separator may differ; the name and the id must still be the agent's own. Once every
+agent has cut over, only the new form will be accepted.
 
 **Checked only inside an agent session, and only where the agent opts in.** An
 operator and an agent can share one login, so the account cannot tell them apart.
@@ -279,7 +286,7 @@ represents it. That host agent:
 
 <the agent's text, unchanged>
 
-[Moniker@idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
+[Moniker_idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
 ```
 
 A pseudonym does not echo an identity that is already public, and a set of

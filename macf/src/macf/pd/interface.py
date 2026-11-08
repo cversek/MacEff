@@ -35,7 +35,6 @@ from macf.pd.names import (  # re-exported: interface's callers import these fro
     control_socket,
     declaration_path,
     ensure_runtime_dir,
-    events_socket,
     launchd_label,
     pd_id,
     record_path,
@@ -376,6 +375,52 @@ class StreamGrant(_Closed):
     sources: List[Annotated[str, Field(pattern=_STREAM_SOURCE)]] = Field(min_length=1)
 
 
+class BrokerSection(_Closed):
+    """The daemon's own MQTT broker (PROTOTYPE, mission B phase B2). The daemon renders the
+    broker's configuration and access rules from this at start, into its runtime directory; the
+    broker process itself is a declared unit that runs mosquitto on that configuration. The daemon
+    then publishes its stream there and answers replay requests. Paths may use the declaration's
+    placeholders. ``readers`` maps a reader's card to the sources it may read, the broker's form
+    of ``stream_grants``."""
+
+    port: int = Field(ge=1024, le=65535)
+    certificate_authority_file: str = Field(min_length=1)
+    server_certificate_file: str = Field(min_length=1)
+    server_key_file: str = Field(min_length=1)
+    client_certificate_file: str = Field(min_length=1)
+    client_key_file: str = Field(min_length=1)
+    readers: Dict[str, List[Annotated[str, Field(pattern=_STREAM_SOURCE)]]] = Field(default_factory=dict)
+
+    @field_validator("readers")
+    @classmethod
+    def _a_reader_is_named_by_its_card(cls, readers):
+        """A reader is its certificate, named by a card (R164). No other name can hold a
+        certificate, and ``channel``, the session's name in the operator's rules, is no card, so
+        no reader can be silenced or routed together with the session (MIS-0002-R152)."""
+        from macf import calling_card
+        for reader in readers:
+            try:
+                calling_card.read_declared(reader)
+            except calling_card.CardError as e:
+                raise ValueError(f"a broker reader is named by its certificate's card: {e}") from e
+        return readers
+
+
+class AssociationLink(_Closed):
+    """Where this daemon exports, and what (PROTOTYPE, mission B phase B3): its association's
+    broker, its own client certificate there, and the sources it exports, as summaries only."""
+
+    #: The association's broker. The default is the loopback address a broker binds, never
+    #: ``localhost``, which resolves to ``::1`` first on some systems (``broker.LOOPBACK``).
+    host: str = Field(default="127.0.0.1", min_length=1)
+    port: int = Field(ge=1024, le=65535)
+    certificate_authority_file: str = Field(min_length=1)
+    client_certificate_file: str = Field(min_length=1)
+    client_key_file: str = Field(min_length=1)
+    exports: List[Annotated[str, Field(pattern=_STREAM_SOURCE)]] = Field(
+        default_factory=lambda: ["pd_unit_state", "pd_carried"])
+
+
 class Declaration(_Closed):
     """Everything an agent declares to its primal daemon. Audited by reading it.
 
@@ -438,6 +483,24 @@ class Declaration(_Closed):
     #: Commands the agent's ``check`` entries may run, by name (the scheduler design, 4.2).
     check_templates: Dict[str, CheckTemplate] = Field(default_factory=dict)
     stream_grants: List[StreamGrant] = Field(default_factory=list)
+    #: The daemon's own MQTT broker (prototype). None: the stream runs on the socket only.
+    broker: Optional[BrokerSection] = None
+    #: What this daemon supervises for (prototype, B3): an agent, a system's agents, or a fleet's
+    #: systems. The same program in each placement.
+    kind: Literal["agent", "system", "fleet"] = "agent"
+    #: The association this daemon exports to (prototype, B3). None: it exports nothing.
+    association: Optional[AssociationLink] = None
+    #: The member daemons this association expects, by card (prototype, B3). Its broker admits
+    #: each to write its own subtree, and status reports each difference from those present.
+    members: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _members_belong_to_an_association(self) -> "Declaration":
+        if self.members and self.kind == "agent":
+            raise ValueError("an agent's daemon admits no members; only a system or fleet daemon is an association")
+        if self.members and self.broker is None:
+            raise ValueError("members join through the association's broker; declare broker as well")
+        return self
     operator_uid: Optional[int] = Field(default=None, ge=0)
 
     @model_validator(mode="after")

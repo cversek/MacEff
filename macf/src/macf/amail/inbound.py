@@ -32,10 +32,12 @@ from __future__ import annotations
 import email
 import email.policy
 import email.utils
+import errno
 import hashlib
 import json
 import os
 import re
+import stat
 import sys
 import time
 from dataclasses import dataclass, field
@@ -481,12 +483,74 @@ def _quarantine(cfg: InboundConfig, eml: Path, sidecar: Path, reason: str) -> Pa
     qdir = cfg.quarantine_dir
     qdir.mkdir(mode=0o700, parents=True, exist_ok=True)
     dest = qdir / eml.name
-    os.rename(eml, dest)  # same filesystem by deployment contract
-    side_dest = qdir / sidecar.name
-    if sidecar.exists():
-        os.rename(sidecar, side_dest)
+    # Sidecar FIRST. The spool is scanned for .eml files only, so a sidecar left
+    # behind by a failed second move would never be looked at again, while a
+    # message left behind is found on the next pass and quarantined as having no
+    # readable sidecar. The order makes an interrupted move visible.
+    if sidecar.exists() or sidecar.is_symlink():
+        _move_into(sidecar, qdir / sidecar.name)
+    _move_into(eml, dest)
     (qdir / f"{eml.stem}.reason").write_text(reason + "\n")
     return dest
+
+
+def _move_into(src: Path, dest: Path) -> None:
+    """Move *src* to *dest*, copying when the two are on different filesystems.
+
+    A deployment that keeps the receiving account and the broker apart may give
+    the spool and the quarantine separate volumes, and then a rename fails with
+    EXDEV. The copy is written under a hidden name in the destination's own
+    directory, synced, and only then given its real name, so the quarantine never
+    holds a partial message under a final name. The source is removed last: a
+    failure at any step leaves the message in at least one place, and a rerun
+    replaces an identical copy rather than making a second one.
+
+    The copy reads only a regular file, opened without following a link. A
+    rename moves a symlink itself; a copy would read whatever it points at, so a
+    compromised receiver could plant a link in the spool and have the broker copy
+    any file the broker can read. A link, a FIFO or a device is refused with an
+    error, and the entry stays in the spool to be counted and reported.
+
+    The copy is written by the broker, so it takes the broker's owner and group
+    rather than the receiver's; only the permission bits are carried over. That
+    suits a quarantine only the broker reads.
+    """
+    try:
+        os.rename(src, dest)
+        return
+    except OSError as e:
+        if e.errno != errno.EXDEV:
+            raise
+    # O_NONBLOCK so a FIFO planted in the spool cannot hang the broker on open.
+    sfd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    tmp = dest.with_name(f".{dest.name}.partial")
+    try:
+        st = os.fstat(sfd)
+        if not stat.S_ISREG(st.st_mode):
+            raise OSError(errno.EINVAL, "spool entry is not a regular file; not copied", str(src))
+        tfd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+                      stat.S_IMODE(st.st_mode))
+        try:
+            os.fchmod(tfd, stat.S_IMODE(st.st_mode))
+            while chunk := os.read(sfd, 1 << 20):
+                view = memoryview(chunk)
+                while view:
+                    view = view[os.write(tfd, view):]
+            os.fsync(tfd)
+        finally:
+            os.close(tfd)
+        os.replace(tmp, dest)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    finally:
+        os.close(sfd)
+    dfd = os.open(dest.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+    os.unlink(src)
 
 
 def process_entry(cfg: InboundConfig, eml: Path, sidecar: Path) -> Dict[str, Any]:

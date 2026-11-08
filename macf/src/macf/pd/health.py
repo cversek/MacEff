@@ -33,6 +33,7 @@ from macf.notify.session import verify_incarnation
 from macf.pd.core import LIVENESS_TOLERANCE
 from macf.pd.interface import EVENT_DAEMON_START, EVENT_LIVENESS, EVENT_STATE, Declaration, Liveness, Schedule
 from macf.pd.schedule import CronExpr
+from macf import calling_card
 from macf.pd.scheduler import (
     EVENT_DEFERRED,
     EVENT_DONE,
@@ -123,7 +124,7 @@ def health(declaration: Declaration, events: Iterable[dict], now: float,
         unit = data.get("unit")
         # A unit that isn't a string can't be a declared name, and a list or a dict would
         # raise in the membership test and cost every unit its verdict.
-        if data.get("agent") != declaration.agent or not isinstance(unit, str) or unit not in declared:
+        if not calling_card.is_agent(data.get("agent"), declaration.agent) or not isinstance(unit, str) or unit not in declared:
             continue
         (states if kind == EVENT_STATE else lives)[data["unit"]] = event
     return [_unit_health(u.name, states.get(u.name), lives.get(u.name), now, probe)
@@ -226,7 +227,7 @@ def schedule_health(declaration: Declaration, events: Iterable[dict], now: float
         if kind not in SCHEDULE_EVENTS:
             continue
         data = event.get("data") or {}
-        if not isinstance(data, dict) or data.get("agent") != declaration.agent:
+        if not isinstance(data, dict) or not calling_card.is_agent(data.get("agent"), declaration.agent):
             continue
         if kind == EVENT_DAEMON_START:
             stamp = _float_or_none(event.get("timestamp")) or 0.0

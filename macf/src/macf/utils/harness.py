@@ -231,7 +231,8 @@ def resolve_agent(explicit: Optional[str] = None,
         # 'unknown' is what identity returns when no UUID resolves; deriving a
         # session name from it would manufacture an identifier for an agent
         # whose identity is precisely what could not be established.
-        if card and not card.endswith("@unknown"):
+        from ..calling_card import is_unknown
+        if card and not is_unknown(card):
             # Only a configured name is the calling card. A name the identity layer
             # fell back to is reported as the fallback it is: labelled "calling card",
             # `env` read healthy in a home the daemon refused as naming no agent

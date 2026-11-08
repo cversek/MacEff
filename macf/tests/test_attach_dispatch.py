@@ -12,7 +12,7 @@ REMOTES = RemotesConfig(control=True, remotes=[
 
 
 def _entry(**over):
-    fields = {"card": "Lumen2MacEff@3f9a1c", "moniker": "Lumen2MacEff", "uuid": "3f9a1c", "account": "pa_two",
+    fields = {"card": "Lumen2MacEff_3f9a1c", "moniker": "Lumen2MacEff", "uuid": "3f9a1c", "account": "pa_two",
               "display_name": "Lumen2", "session_kind": "daemon", "state": "running", "home": "/home/pa_two",
               "endpoint": "local"}
     fields.update(over)
@@ -27,7 +27,7 @@ def _local(plan=None, has=True, **kw):
 def test_a_remote_agent_is_handed_off_by_card_as_its_seat():
     d = decide(_entry(endpoint="seats"), REMOTES, control=None, read_only=False, **_local())
     assert d.argv[:8] == ["ssh", "-t", "-l", "pa_two", "-p", "2224", "--", "box"]
-    assert shlex.split(d.argv[8])[3:] == ["--card", "Lumen2MacEff@3f9a1c", "--control"]
+    assert shlex.split(d.argv[8])[3:] == ["--card", "Lumen2MacEff_3f9a1c", "--control"]
     gone = decide(_entry(endpoint="elsewhere"), REMOTES, control=None, read_only=False, **_local())
     assert gone.exit_code == 1 and "elsewhere" in gone.message
 
@@ -74,7 +74,7 @@ def test_a_daemon_with_no_home_known_resolves_from_the_daemon_alone():
 
     d = decide(_entry(home=None, reasons={"home": "no home row"}), REMOTES, control=False,
                read_only=False, plan_for_card=by_card, **_local(None, has=False))
-    assert asked == ["Lumen2MacEff@3f9a1c"] and d.argv[-2:] == ["=L_3f9a1c", "-d"]
+    assert asked == ["Lumen2MacEff_3f9a1c"] and d.argv[-2:] == ["=L_3f9a1c", "-d"]
 
 
 def test_a_slug_no_row_carries_still_attaches_by_its_exact_name(monkeypatch):
@@ -83,7 +83,7 @@ def test_a_slug_no_row_carries_still_attaches_by_its_exact_name(monkeypatch):
                           has_session=lambda target, env: target == "=Other_aabbcc",
                           environment=lambda agent: {"X": "1"})
     assert d.argv == ["tmux", "attach", "-t", "=Other_aabbcc", "-d"]
-    assert d.before[0][-1] == "Other@aabbcc"
+    assert d.before[0][-1] == "Other_aabbcc"
     monkeypatch.setattr(ad.sys, "platform", "darwin")
     gone = ad.legacy_by_slug("Other_aabbcc", control=False, read_only=False,
                              has_session=lambda target, env: False, environment=lambda agent: None)

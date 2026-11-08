@@ -72,7 +72,7 @@ def _start_session_unit(tmp_path, project, monkeypatch, keep):
 
     home = tmp_path / "home"
     (home / ".maceff" / "pd").mkdir(parents=True)
-    card = "Resident@1a2b3c"
+    card = "Resident_1a2b3c"
     (home / ".maceff" / "pd" / "declaration.json").write_text(json.dumps(
         {"version": 1, "agent": card, "keep_harness_idle_compaction": keep}))
     monkeypatch.setattr(pd_names, "RENDERED_DECLARATIONS", tmp_path / "rendered")   # none rendered
@@ -145,7 +145,7 @@ def test_the_sessions_project_is_read_wherever_the_command_runs(tmp_path, monkey
         d.mkdir(parents=True)
     path = declaration_path(home)
     path.parent.mkdir(parents=True)
-    path.write_text(json.dumps({"version": 1, "agent": "Resident@1a2b3c", "units": [{
+    path.write_text(json.dumps({"version": 1, "agent": "Resident_1a2b3c", "units": [{
         "name": "session", "kind": "session", "account": "resident",
         "command": ["python", "-m", "macf.cli", "harness", "unit", "--home", "{agent_home}",
                     "--project-dir", str(work), "--no-proxy"]}]}))
@@ -167,7 +167,7 @@ def _declare(home, units):
     from macf.pd.interface import declaration_path
     path = declaration_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"version": 1, "agent": "Resident@1a2b3c", "units": units}))
+    path.write_text(json.dumps({"version": 1, "agent": "Resident_1a2b3c", "units": units}))
 
 
 def test_the_equals_form_and_a_malformed_unit(tmp_path, monkeypatch):
@@ -269,7 +269,7 @@ def _core(home, client, marker, path=None, **options):
     me = pwd.getpwuid(os.getuid()).pw_name
     unit = Unit(name="session", kind="session", command=["/usr/bin/touch", str(marker)], account=me,
                 restart="always", liveness_interval_s=60, memory_limit_mb=64, environment={"PATH": path})
-    return Core(Declaration(version=1, agent="Tester@abc123", units=[unit]), "Tester@abc123",
+    return Core(Declaration(version=1, agent="Tester_abc123", units=[unit]), "Tester_abc123",
                 placeholders={"agent_home": str(home)}, hosted=client.hosted, client=client,
                 backoff_base_s=0.01, backoff_cap_s=0.05, **options)
 

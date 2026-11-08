@@ -100,7 +100,10 @@ def agent(uid=21100):
     return AgentSpec(username="pa_a0", uid=uid, personality="p.md")
 
 
-def test_a_new_agent_is_created_at_its_declared_uid_and_gid(start, monkeypatch):
+def test_a_new_agent_is_created_at_its_declared_uid_and_gid(start, monkeypatch, tmp_path):
+    """A new account needs a minted agent on the declared homes volume (MIS-0002-R162,
+    test_homes.py); this test is about its numbers."""
+    (tmp_path / ".maceff_homes").write_text("0123456789abcdef\n")
     monkeypatch.setattr(start.pwd, "getpwnam", no_such)
     monkeypatch.setattr(start.grp, "getgrnam", no_such)
 
@@ -110,10 +113,11 @@ def test_a_new_agent_is_created_at_its_declared_uid_and_gid(start, monkeypatch):
             raise Stop()  # everything after creation is out of this test's scope
         return ""
     monkeypatch.setattr(start, "run_command", record)
+    new = AgentSpec(calling_card="Wren", short_id="3c9d1e", uid=21100, personality="p.md")
     with pytest.raises(Stop):
-        start.create_pa_user("a0", agent())
-    assert ["groupadd", "-g", "21100", "pa_a0"] in start.calls
-    assert ["useradd", "-m", "-s", "/bin/bash", "-u", "21100", "-g", "21100", "pa_a0"] in start.calls
+        start.create_pa_user("a0", new, homes_volume="0123456789abcdef")
+    assert ["groupadd", "-g", "21100", "wren_3c9d1e"] in start.calls
+    assert ["useradd", "-m", "-s", "/bin/bash", "-u", "21100", "-g", "21100", "wren_3c9d1e"] in start.calls
 
 
 def test_an_existing_account_on_another_uid_stops_start_up(start, monkeypatch):
@@ -183,6 +187,6 @@ def test_a_service_directory_left_at_its_old_owner_stops_start_up(start, monkeyp
 
 
 def test_start_up_refuses_with_a_message_not_a_traceback():
-    """main catches the mismatch by name and logs it as a refusal."""
+    """main catches the mismatch, and a refused homes volume, by name and logs them as refusals."""
     src = START_PY.read_text()
-    assert "except DeclaredIdMismatch as e:" in src and 'log(f"REFUSED: {e}")' in src
+    assert "except (DeclaredIdMismatch, HomesRefused) as e:" in src and 'log(f"REFUSED: {e}")' in src

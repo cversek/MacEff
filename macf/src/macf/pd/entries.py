@@ -18,6 +18,7 @@ from typing import Dict, Iterable, Optional, Union
 
 from macf.pd.recurrence import Recurrence
 from macf.pd.schedule import CronExpr, _utc
+from macf import calling_card
 
 #: An entry's id: ``e-`` and 12 hex digits. Opaque, and within the MacEff channel's id
 #: pattern, which a calling card's ``@`` is not (#734's class).
@@ -53,7 +54,7 @@ def fold(events: Iterable[dict], card: str) -> Dict[str, dict]:
     held: Dict[str, dict] = {}
     for event in events:
         data = event.get("data") if isinstance(event, dict) else None
-        if not isinstance(data, dict) or data.get("agent") != card:
+        if not isinstance(data, dict) or not calling_card.is_agent(data.get("agent"), card):
             continue
         entry_id = data.get("id")
         if not isinstance(entry_id, str) or not ENTRY_ID.match(entry_id):
@@ -91,7 +92,7 @@ def with_last_firing(held: Dict[str, dict], events: Iterable[dict], card: str, f
     last: Dict[str, dict] = {}
     for event in events:
         data = event.get("data") if isinstance(event, dict) else None
-        if (event.get("event") == fired_event and isinstance(data, dict) and data.get("agent") == card
+        if (event.get("event") == fired_event and isinstance(data, dict) and calling_card.is_agent(data.get("agent"), card)
                 and data.get("id") in held):
             last[data["id"]] = {k: data.get(k) for k in LAST_FIRED_FIELDS}
     return [{**entry, "last_fired": last[entry_id]} if entry_id in last else entry

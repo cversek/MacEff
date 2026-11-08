@@ -24,9 +24,9 @@ def _denies(monkeypatch):
 
 
 def test_the_status_line_leads_with_the_modes():
-    line = format_statusline("A@abc123", None, "Host", 1000, 1_000_000, 90, modes=" 🤖😴 🏃")
-    assert line.startswith("🤖😴 🏃 | A@abc123")
-    assert format_statusline("A@abc123", None, "Host", 1000, 1_000_000, 90).startswith("A@abc123")
+    line = format_statusline("A_abc123", None, "Host", 1000, 1_000_000, 90, modes=" 🤖😴 🏃")
+    assert line.startswith("🤖😴 🏃 | A_abc123")
+    assert format_statusline("A_abc123", None, "Host", 1000, 1_000_000, 90).startswith("A_abc123")
 
 
 def _telegram_is_the_operators():
