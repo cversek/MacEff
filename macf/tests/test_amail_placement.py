@@ -155,3 +155,40 @@ def test_a_box_made_later_is_still_checked(tmp_path):
         assert [n[0] for n in rig.notices] == ["pd_grant_denied"]
     finally:
         box.chmod(0o770)
+
+
+# --- MIS-0004 R05: an Internet-reachable agent runs under a login no other agent shares ---------
+
+import yaml as _yaml
+
+from macf.amail.deploy_config import BrokerDeployConfig, ConfigError
+
+
+def _r05_start(tmp_path, agents, zone=True, host=False):
+    a = tmp_path / "addressing.yaml"
+    body = {"domain": "box.local", "agents": agents}
+    if zone:
+        body["zone"] = "agents.example.org"
+    if host:
+        body.update({"tier": "host", "supervision": "operator-at-terminal"})
+    a.write_text(_yaml.safe_dump(body))
+    return BrokerDeployConfig.model_validate({
+        "addressing_path": str(a), "audit_path": str(tmp_path / "a.jsonl"),
+        "inbound_quarantine": str(tmp_path / "q"), "inbound_handoff": str(tmp_path / "h"),
+    }).to_broker_config()
+
+
+def _r05_agent(tmp_path, name, uid, card, token):
+    return {"home": str(tmp_path / name), "uid": uid, "contacts": [], "card": card, "zone_token": token}
+
+
+def test_reachable_agent_has_own_login(tmp_path):
+    ok = {"wren": _r05_agent(tmp_path, "wren", 1002, "WrenTuba_3c9d1e", "0123456789ab"),
+          "ira": _r05_agent(tmp_path, "ira", 1003, "IraTest_a1a1a1", "fedcba987654")}
+    assert _r05_start(tmp_path, ok)
+    shared = {"wren": {**_r05_agent(tmp_path, "wren", 1002, "WrenTuba_3c9d1e", "0123456789ab"), "shared_uid": True},
+              "ira": {**_r05_agent(tmp_path, "ira", 1002, "IraTest_a1a1a1", "fedcba987654"), "shared_uid": True}}
+    with pytest.raises(ConfigError, match="R05"):
+        _r05_start(tmp_path, shared, host=True)
+    # Without a zone, no agent is reachable from the Internet, and a shared host login stays allowed.
+    assert _r05_start(tmp_path, shared, zone=False, host=True)
