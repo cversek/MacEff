@@ -748,6 +748,14 @@ class Scheduler:
         except ProcessLookupError:
             pass  # noqa: MACEFF003 - the group ended between the poll and the signal
 
+    def stop_run(self, name: str, why: str) -> None:
+        """Stop *name*'s run in flight, if any, as asked: it ends ``stopped: <why>``, and a run
+        stopped on purpose owes no failure notice (#746). The kill follows the grace, as for any run."""
+        run = self.running.get(name)
+        if run is not None and run.stopped_by is None:
+            run.stopped_by = why
+            self._term(run, self.clock())
+
     def shutdown(self) -> None:
         """Stop the runs in flight as the daemon stops; each is recorded as it ends."""
         for run in list(self.running.values()):
