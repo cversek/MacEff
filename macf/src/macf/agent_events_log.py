@@ -640,7 +640,11 @@ def read_events(
             yielded, and a reverse read stops at the first line older than
             it, judged by the line's leading timestamp before any parse. This
             is the "valid within an interval" bound above, and with ``only``
-            it lets a reader skip every other event's parse (#881).
+            it lets a reader skip every other event's parse (#881). The stop
+            assumes the log is in time order, which it nearly is: a writer
+            stamps an event before it takes the lock, so neighbours can be
+            out of order by milliseconds, and an event that close to the
+            floor may be missed.
 
     Yields:
         Event dictionaries
