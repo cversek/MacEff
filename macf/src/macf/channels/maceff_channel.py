@@ -1,7 +1,7 @@
 """The MacEff channel: notices from an agent's primal daemon, delivered into its live
 Claude Code session as channel events instead of typed keystrokes.
 
-MIS-0002 section 6.14. A channel event that reaches an idle session starts a turn, and
+MIS-0002 section 6.2.3. A channel event that reaches an idle session starts a turn, and
 Claude Code sets its source from this server's configured name, never from the text.
 That is a wake that reads no screen, which is why it comes first and the keystroke wake
 is the fallback (MIS-0002-R104 (adapter_MUST_deliver_through_channel)).

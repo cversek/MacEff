@@ -1,4 +1,4 @@
-"""The MacEff channel (MIS-0002 section 6.14).
+"""The MacEff channel (MIS-0002 section 6.2.3).
 
 Test names follow MIS-0002's Conformance table, so each requirement's row names a
 test that exists. The primal daemon is not built yet (step 1 of the landing), so a
