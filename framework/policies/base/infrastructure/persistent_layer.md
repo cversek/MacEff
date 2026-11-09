@@ -35,6 +35,8 @@ A system daemon and a fleet daemon are the base placed again, and MIS-0007 speci
 - What does the socket do, and what does it refuse?
 - How is the daemon read from outside, and when is it believed?
 - What happens to the units when a daemon dies?
+- What does a daemon build, and what does a system or fleet daemon leave out?
+- What does a start that is refused, or finds its daemon running, do before it exits?
 
 **2 The Declaration**
 - Where does an agent's declaration live, and whose units may it declare?
@@ -196,6 +198,18 @@ The daemon starts its units as its children, but they don't die with it: the out
 **Between a daemon's death and its restart, the units run unsupervised.** The window is the outer tier's restart delay. A unit whose process dies inside it isn't adopted, and the new daemon starts it as at any boot.
 
 ---
+
+### 1.7 What a daemon builds: the base and the Agent Daemon
+
+Every primal daemon builds the base: its core and units, its event log, its control socket, its scheduler and its own broker. Only a declaration of `kind: agent`, the default, adds the Agent Daemon's components [MIS-0002-R183 (component_MUST_be_added_by_declaration)]:
+- the notice path to the session, with its keystroke wake where a session unit is declared (6);
+- the MacEff channel's socket, and the dark-channel watch where `channel_connect_s` is declared (6.10);
+- the agent's duties (8) and its login check;
+- its mail, where its mail settings and `unread_mail_threshold_s` are declared (6.11).
+
+A system or fleet daemon (`kind: system` or `kind: fleet`) builds none of them, and binds no channel socket [MIS-0007 R74]. It runs the base alone: it supervises its units, records their liveness and its own events, and answers its control socket and its outside watch [MIS-0002-R184 (base_MUST_stand_alone)]. A notice its core would raise, a unit past its memory limit for one, is recorded in its log and owed to no one [MIS-0002-R60 (pd_MUST_notice_limit_exceeded)].
+
+A start that is refused (exit 78), or that finds this principal's daemon already running (exit 75), holds for a minute before it exits, so an outer tier that restarts on exit doesn't spin. `MACF_PD_REFUSED_HOLD_S` sets another hold [MIS-0002-R185 (refused_start_MUST_hold_before_exit)].
 
 ## 2 The Declaration
 
@@ -1168,7 +1182,7 @@ If the container is near its limit and a peer's unit holds most of it, tell the 
 
 Specified in MIS-0002 and arriving with their landing steps, each in the pull request that enforces it:
 - **The rest of the primal daemon:** compaction on request, once the operator is established some other way than a claim on the socket (11.3, 1.3); and a command-line act that stops every unit, with the question of which asker a command line claims (1.1) (MIS-0002 6.1.1 to 6.1.5, 6.1.7).
-- **The base alone:** a daemon builds each Agent Daemon component only where its declaration adds it, and one that adds none runs the base alone [MIS-0002-R183 (component_MUST_be_added_by_declaration)] [MIS-0002-R184 (base_MUST_stand_alone)]. Today the notice path, role duties and the login check are built in every daemon, a system's and a fleet's included. A crossed memory limit is recorded only as a notice, and a denied grant reaches nobody where no session reads notices [MIS-0002-R60 (pd_MUST_notice_limit_exceeded)] [MIS-0002-R65 (denied_grant_MUST_raise_notice)]. Also still to come: a unit's declared needs, one time zone per daemon, each unit's code version, failures told once per stretch, and the stop timeout checked against the chain of stop graces (MIS-0002 R186 to R189, R197, R198).
+- **The rest of the base and of placement:** a denied grant reaches nobody where no session reads notices, until the outside watch alerts it [MIS-0002-R65 (denied_grant_MUST_raise_notice)]; and a unit's declared needs, one time zone per daemon, each unit's code version, failures told once per stretch, an agent's control of its own units, and the stop timeout checked against the chain of stop graces (MIS-0002 R186 to R190, R197, R198).
 - **The rest of the notifier** (6.8):
   - the refusal at load of a declaration that doesn't route `pd_carried` to the agent, once the deployed declarations route it, so that the notice of what a restart, recreate or compaction carried, changed and lost always reaches the agent (3.1) [MIS-0002-R47 (pd_MUST_report_carried_changed_lost)];
   - the operator's routes for sources other than unread mail, and `held_until_present`, which a declaration may not name until the event stream serves them (6.8);

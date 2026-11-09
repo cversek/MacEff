@@ -155,11 +155,11 @@ The base is what every primal daemon is, whether it serves an agent, a system or
 - **R80** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_network_listener] A primal daemon MUST NOT listen on a network port itself, so only its broker unit listens, and only as R170 allows. (pd_MUST-NOT_listen_on_network)
   - *Revised 2026-11-09 at the repo owner's request (the requirement map, ruled "Accept as is" on #552, comment 6731243851); previous text: MacEff g_f1ad7283.*
 - **R129** [MUST · decidable: macf/tests/test_pd_render.py::TestMacOSInstall::test_socket_path_length and macf/tests/test_pd_install.py::test_a_socket_path_too_long_stops_the_systemd_install_before_anything_is_written] When the platform adapter installs a primal daemon, it MUST check that the daemon's socket path fits the platform's length limit. (adapter_MUST_check_socket_path_length)
-- **R185** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_refused_start_holds_before_it_exits_so_keepalive_is_paced and macf/tests/test_pd_composition.py::test_a_start_that_finds_its_daemon_running_holds_before_it_exits (planned)] When a primal daemon refuses its start, or finds its principal's daemon already running, it MUST hold for a set time before it exits. (refused_start_MUST_hold_before_exit)
+- **R185** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_refused_start_holds_before_it_exits_so_keepalive_is_paced and macf/tests/test_pd_composition.py::test_a_start_that_finds_its_daemon_running_holds_before_it_exits] When a primal daemon refuses its start, or finds its principal's daemon already running, it MUST hold for a set time before it exits. (refused_start_MUST_hold_before_exit)
   - *Added by the revision of 2026-11-09 (the requirement map, ruled on #552, comment 6731243851).*
-- **R183** [MUST · decidable: macf/tests/test_pd_composition.py::test_each_agent_component_is_built_only_where_its_declaration_adds_it (planned)] A primal daemon MUST build an Agent Daemon component only where its declaration adds that component. (component_MUST_be_added_by_declaration)
+- **R183** [MUST · decidable: macf/tests/test_pd_composition.py::test_each_agent_component_is_built_only_where_its_declaration_adds_it] A primal daemon MUST build an Agent Daemon component only where its declaration adds that component. (component_MUST_be_added_by_declaration)
   - *Added by the revision of 2026-11-09 (the requirement map, ruled on #552, comment 6731243851).*
-- **R184** [MUST · decidable: macf/tests/test_pd_composition.py::test_a_declaration_that_adds_no_component_runs_the_base_alone (planned)] Where a declaration adds no Agent Daemon component, the primal daemon MUST run its units, record its events and answer its outside watch as the base specifies. (base_MUST_stand_alone)
+- **R184** [MUST · decidable: macf/tests/test_pd_composition.py::test_a_declaration_that_adds_no_component_runs_the_base_alone] Where a declaration adds no Agent Daemon component, the primal daemon MUST run its units, record its events and answer its outside watch as the base specifies. (base_MUST_stand_alone)
   - *Added by the revision of 2026-11-09 (the requirement map, ruled on #552, comment 6731243851).*
 
 #### 6.1.2 Calling cards, and the names derived from them
@@ -238,7 +238,7 @@ These bind every schedule a daemon runs. A schedule that targets an agent's sess
 
 - **R58** [MUST NOT · decidable: macf/tests/test_container_start_order.py::test_optional_units_independent] An optional unit MUST NOT delay the start of another unit. (optional_unit_MUST-NOT_delay_others)
 - **R59** [MUST · decidable: macf/tests/test_pd_interface.py::test_a_unit_missing_a_required_field_is_refused] Each declared unit MUST state a memory limit. (unit_MUST_declare_memory_limit)
-- **R60** [MUST · decidable: macf/tests/test_pd_notice.py::test_a_unit_measured_past_its_limit_reaches_the_channel and macf/tests/test_pd_notice.py::test_the_daemon_wires_its_core_and_scheduler_notices_to_its_notifier and macf/tests/test_pd_notice.py::test_a_unit_past_its_limit_is_a_notice_held_and_delivered and macf/tests/test_pd_composition.py::test_a_limit_crossed_without_notices_is_recorded (planned)] When a unit uses more than its declared limit, the primal daemon MUST record it, and deliver a notice where the notices component is present. (pd_MUST_notice_limit_exceeded)
+- **R60** [MUST · decidable: macf/tests/test_pd_notice.py::test_a_unit_measured_past_its_limit_reaches_the_channel and macf/tests/test_pd_notice.py::test_the_daemon_wires_its_core_and_scheduler_notices_to_its_notifier and macf/tests/test_pd_notice.py::test_a_unit_past_its_limit_is_a_notice_held_and_delivered and macf/tests/test_pd_composition.py::test_a_limit_crossed_without_notices_is_recorded] When a unit uses more than its declared limit, the primal daemon MUST record it, and deliver a notice where the notices component is present. (pd_MUST_notice_limit_exceeded)
   - *Revised 2026-11-09 at the repo owner's request (the requirement map, ruled "Accept as is" on #552, comment 6731243851); previous text: MacEff g_f1ad7283.*
 
 #### 6.1.9 The outside watch
@@ -276,7 +276,7 @@ The event stream of 6.1.10 is carried by each primal daemon's own MQTT broker. W
 
 ### 6.2 The Agent Daemon
 
-An agent's primal daemon is the base plus the components below. Each subsection opens with what adds its component, and a daemon builds a component only where its declaration adds it (R183). A system or a fleet daemon adds none (MIS-0007).
+An agent's primal daemon, `kind: agent` in its declaration (the default), is the base plus the components below. Each subsection opens with what adds its component, and a daemon builds a component only where its declaration adds it (R183). A system or a fleet daemon adds none (MIS-0007).
 
 #### 6.2.1 The session
 
@@ -302,7 +302,7 @@ An agent's primal daemon is the base plus the components below. Each subsection 
 
 #### 6.2.2 Notices and wakes
 
-**Added by:** `notice_routes` naming the agent's session.
+**Added by:** `kind: agent`. `notice_routes` routes its sources; a source left unrouted goes to the agent.
 
 - **R37** [SHOULD · judgment: the Secretary, at review of each declaration] Where a schedule's work needs no judgment, the schedule SHOULD run without a model turn and wake its agent only when a declared condition holds. (no-judgment_work_SHOULD_skip_model_turn)
 - **R38** [MUST · decidable: macf/tests/test_pd_notice.py::test_source_named] Each notice MUST name its source. (notice_MUST_name_source)
@@ -327,7 +327,7 @@ An agent's primal daemon is the base plus the components below. Each subsection 
 
 #### 6.2.3 The Claude Code channel
 
-**Added by:** `channel_connect_s`, with a session unit whose harness is Claude Code.
+**Added by:** `kind: agent`, which binds the channel's socket; `channel_connect_s` adds the dark-channel watch.
 
 - **R112** [MUST · judgment: the head maintainer, at review of the Claude Code harness adapter] Where the harness is Claude Code, the harness adapter MUST be a MacEff channel. (claude_code_adapter_MUST_be_maceff_channel)
 - **R113** [MUST · decidable: macf/tests/test_pd_channel.py::test_unix_socket_peer and macf/tests/test_pd_channel.py::test_verify_peer_needs_a_published_record_that_matches] The MacEff channel MUST connect to its primal daemon only through a local Unix socket whose peer the kernel identifies. (channel_MUST_connect_by_unix_socket)
@@ -365,7 +365,7 @@ An agent's primal daemon is the base plus the components below. Each subsection 
 
 #### 6.2.5 Duties
 
-**Added by:** a roles directory in the agent's home.
+**Added by:** `kind: agent`, with a roles directory in the agent's home.
 
 - **R144** [MUST · decidable: macf/tests/test_pd_duties.py::test_a_duty_that_crossed_while_no_daemon_ran_is_announced_once_and_never_again] The primal daemon MUST raise one notice for each crossing of a duty into due soon or overdue, including a crossing that happened while no primal daemon ran. (duty_crossing_MUST_raise_notice_once)
 
@@ -401,7 +401,7 @@ An agent's primal daemon is the base plus the components below. Each subsection 
 
 #### 6.2.7 Mail
 
-**Added by:** `unread_mail_threshold_s`, and the agent's mail settings for its receiver.
+**Added by:** `kind: agent`, with `unread_mail_threshold_s`, and the agent's mail settings for its receiver.
 
 - **R55** [MUST · decidable: macf/tests/test_pd_notice.py::test_unread_mail_notice and macf/tests/test_pd_notice.py::test_unread_mail_reaches_the_routes_declared_for_it] When mail sits unread past its agent's declared threshold, the primal daemon MUST deliver a notice to the routes declared for it. (unread_mail_MUST_raise_notice)
 - **R56** [SHOULD · judgment: the head maintainer, at review of the mail landing] The mail system SHOULD report each message to its sender as stored, notified or read. (mail_SHOULD_report_state_to_sender)
@@ -539,7 +539,7 @@ The positions are cited by their IDs in section 14.
 - **Q05 is answered: files, not sockets.** The head maintainer tested it on macOS on Apple silicon under Docker Desktop. Sockets fail across the bind mount in both directions. Files work: lines a container appends reach the host in about 7 ms, and one new file per message, renamed into a folder, makes a round trip in about 6 ms (P30). Section 10 now says so, and R80 stays whole.
 
 **The base and the Agent Daemon (the revision of 2026-11-09).** The repo owner asked for this shape on 2026-11-08: "MIS-0002 needs to become the spec describing the minimal PD base and the Agent Daemon based on it - like a reshuffle of requirements and maybe a few deletions and additions", with MIS-0007 to "describe the recursion of super structures based on the PD". The prototype of mission 958 had shown why. A system daemon and a fleet daemon ran the same program as an agent's, on their own accounts, and the parts that serve an agent ran there too: the notice path to a session, role duties and the login check. Nothing in MIS-0002 said which requirements bind every daemon and which bind only an agent's. A requirement map placed every row of MIS-0002 and of MIS-0007's revision exactly once, checked by a script against both files. Both maintainers reviewed it on #552, and the repo owner ruled it "Accept as is" (comment 6731243851). This revision moves each row to where the map placed it, keeping its ID and slug, so every citation still resolves.
-- **R183** and **R184** are the seam. An Agent Daemon component is built only where the declaration adds it, and a daemon that adds none runs the base alone, which is all a system or a fleet daemon needs. They are planned until the code is composed that way (landing step 10). Today the notice path, the duties and the login check are built at every level.
+- **R183** and **R184** are the seam. An Agent Daemon component is built only where the declaration adds it, and a daemon that adds none runs the base alone, which is all a system or a fleet daemon needs. The switch is the declaration's `kind`, which the prototype added for associations: only `kind: agent` adds the components, so a container agent whose declaration routes no notice keeps its notices. Landing step 10 built it, and a planted defect turned each named test red.
 - **R185** is the hold after a refused start, from #930. A daemon that refuses its start (78), or finds its own already running (75), waits before it exits, so an outer tier that restarts on exit doesn't spin. The host-side maintainer asked for it in the map's review.
 - **R186**, **R187** and **R188** come from MIS-0007's draft, where they bound a system daemon. They bind every daemon's units. R12's check under `env -i` tests that nothing is inherited, not that what a unit needs is there, so a unit that states its needs lets a start refuse a gap by name (R186). One restart moved a seat's time zone, and its scheduled wakes fired at the same clock numbers in the new zone (R187, reworded from "a system or fleet daemon" to "each primal daemon", so it takes a new slug). A worker without reload served stale code after an update until someone restarted it by hand, and a supervisor can't know when a unit needs new code, so it records and reports (R188).
 - **R189** and **R190** also come from MIS-0007's draft, and bind an Agent Daemon. A failing unit woke one seat dozens of times in a night, each wake re-reading a large cached context (R189). Long-lived services survive restarts under a supervisor only if the agent keeps control of its own, without a prompt that hangs when nobody watches (R190).
@@ -620,9 +620,9 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R07 | decidable | macf/tests/test_primal_daemon.py::test_no_cross_agent_control and macf/tests/test_primal_daemon.py::test_a_running_daemon_controls_no_other_agents_unit | passing |
 | R80 | decidable | macf/tests/test_primal_daemon.py::test_no_network_listener | passing |
 | R129 | decidable | macf/tests/test_pd_render.py::TestMacOSInstall::test_socket_path_length and macf/tests/test_pd_install.py::test_a_socket_path_too_long_stops_the_systemd_install_before_anything_is_written | passing |
-| R185 | decidable | macf/tests/test_pd_broker.py::test_a_refused_start_holds_before_it_exits_so_keepalive_is_paced and macf/tests/test_pd_composition.py::test_a_start_that_finds_its_daemon_running_holds_before_it_exits | planned: the first test holds a refused start (78); a start that finds its daemon running (75) shares the code and has no test yet |
-| R183 | decidable | macf/tests/test_pd_composition.py::test_each_agent_component_is_built_only_where_its_declaration_adds_it | planned: lands with step 10, the base in code |
-| R184 | decidable | macf/tests/test_pd_composition.py::test_a_declaration_that_adds_no_component_runs_the_base_alone | planned: lands with step 10, the base in code |
+| R185 | decidable | macf/tests/test_pd_broker.py::test_a_refused_start_holds_before_it_exits_so_keepalive_is_paced and macf/tests/test_pd_composition.py::test_a_start_that_finds_its_daemon_running_holds_before_it_exits | passing |
+| R183 | decidable | macf/tests/test_pd_composition.py::test_each_agent_component_is_built_only_where_its_declaration_adds_it | passing |
+| R184 | decidable | macf/tests/test_pd_composition.py::test_a_declaration_that_adds_no_component_runs_the_base_alone | passing |
 | R157 | decidable | macf/tests/test_calling_card.py::test_card_is_name_underscore_shortid | planned |
 | R158 | decidable | macf/tests/test_calling_card.py::test_name_is_a_letter_then_at_most_23_letters_or_digits | planned |
 | R159 | decidable | macf/tests/test_calling_card.py::test_shortid_is_the_first_six_hex_of_the_identity_file | planned |
@@ -669,7 +669,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R52 | decidable | macf/tests/test_primal_daemon.py::test_control_events and macf/tests/test_primal_daemon.py::test_a_held_restart_is_the_operators_act_when_the_window_ends | passing (the layer performs no compaction yet, so the compaction clause binds when it does) |
 | R58 | decidable | macf/tests/test_container_start_order.py::test_optional_units_independent | passing |
 | R59 | decidable | macf/tests/test_pd_interface.py::test_a_unit_missing_a_required_field_is_refused | passing |
-| R60 | decidable | macf/tests/test_pd_notice.py::test_a_unit_measured_past_its_limit_reaches_the_channel and macf/tests/test_pd_notice.py::test_the_daemon_wires_its_core_and_scheduler_notices_to_its_notifier and macf/tests/test_pd_notice.py::test_a_unit_past_its_limit_is_a_notice_held_and_delivered and macf/tests/test_pd_composition.py::test_a_limit_crossed_without_notices_is_recorded | planned: the notice half passes on the first three tests; recording a crossing where no notices component is present lands with step 10 |
+| R60 | decidable | macf/tests/test_pd_notice.py::test_a_unit_measured_past_its_limit_reaches_the_channel and macf/tests/test_pd_notice.py::test_the_daemon_wires_its_core_and_scheduler_notices_to_its_notifier and macf/tests/test_pd_notice.py::test_a_unit_past_its_limit_is_a_notice_held_and_delivered and macf/tests/test_pd_composition.py::test_a_limit_crossed_without_notices_is_recorded | passing |
 | R74 | decidable | macf/tests/test_pd_watch.py::test_a_stopped_daemon_alerts_once_then_recovers_once | passing |
 | R75 | judgment | the operator, at review of each deployment's alert path | standing |
 | R150 | decidable | macf/tests/test_pd_broker.py::test_each_new_record_publishes_in_order_naming_its_own_sources_previous and macf/tests/test_pd_broker.py::test_every_daemon_runs_its_own_broker | passing |
