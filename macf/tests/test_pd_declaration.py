@@ -421,6 +421,24 @@ TELEGRAM = {"plugin": "telegram", "marketplace": "claude-plugins-official"}
 MACEFF = {"plugin": "maceff-channel", "marketplace": "maceff"}
 
 
+def test_without_an_allowlist_a_channel_outside_the_default_marketplace_is_named(tmp_path):
+    """cversek/MacEff#904: with no organization allowlist the client admits only its default
+    channels, and a declared channel from another marketplace connects and is silent. That is
+    named; a declaration of official channels only, or one an allowlist covers, says nothing."""
+    from macf.pd import allowlist
+
+    def decl(channels):
+        return interface.Declaration.model_validate(
+            {"version": 1, "agent": "Ira_ee9a78", "allowlisted_channels": channels})
+
+    (named,) = allowlist.unadmitted_without_allowlist(decl([TELEGRAM, MACEFF]), None)
+    assert "maceff-channel@maceff" in named and "telegram" not in named and "allowedChannelPlugins" in named
+    assert allowlist.unadmitted_without_allowlist(decl([TELEGRAM]), None) == []
+    assert allowlist.unadmitted_without_allowlist(decl([]), None) == []
+    admitted = allowlist.managed_allowlist([_managed(tmp_path, [TELEGRAM, "maceff-channel@maceff"])])
+    assert allowlist.unadmitted_without_allowlist(decl([TELEGRAM, MACEFF]), admitted) == []
+
+
 def test_allowlist_lists_every_channel(tmp_path):
     """MIS-0002-R124 (allowlist_declaration_MUST_list_every_channel): where managed settings set
     an allowlist, every channel it admits is in the declaration, and every channel the

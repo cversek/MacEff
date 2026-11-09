@@ -191,6 +191,36 @@ def _supervision_block(environ=None, ask=None) -> str:
     return f"<system-reminder>\n{text}\n</system-reminder>\n"
 
 
+#: Observed, not documented: Claude Code shows a hook's additionalContext inline up to about
+#: 10,000 characters. A longer one is kept in a file, and the model sees a preview of about
+#: 2,000 characters (#802). The smallest payload seen moved to a file was 10,254 bytes.
+OBSERVED_INLINE_LIMIT_CHARS = 10_000
+
+
+def _measured(context: str, path: str, session_id: str = "") -> str:
+    """Record this session start's context size in the hook's own log, and say so loudly when it
+    is past the inline limit, so the model reads only a preview (#802). Returns ``context``
+    unchanged. A failure here must never break session start."""
+    try:
+        # Three counts, since they differ by more than a tenth on a context with emoji: the limit
+        # was observed in bytes, Python counts code points, and the client (JavaScript) UTF-16 units.
+        size = len(context)
+        log_hook_event({"hook_name": "session_start", "event_type": "CONTEXT_SIZE",
+                        "session_id": session_id or "unknown", "path": path, "chars": size,
+                        "utf8_bytes": len(context.encode("utf-8")),
+                        "utf16_units": len(context.encode("utf-16-le")) // 2,
+                        "over_inline_limit": size > OBSERVED_INLINE_LIMIT_CHARS})
+        if size > OBSERVED_INLINE_LIMIT_CHARS:
+            emit_warning(Warning(
+                source="session_start", kind="context_over_inline_limit",
+                detail=(f"the {path} session-start context is {size:,} characters, past the "
+                        f"~{OBSERVED_INLINE_LIMIT_CHARS:,} Claude Code shows inline, so the model reads "
+                        f"only a preview; what it needs first must come first")))
+    except Exception as e:  # noqa: BLE001 - GUARD: a measurement must not break session start
+        print(f"⚠️ MACF: session start could not measure its context: {e}", file=sys.stderr)
+    return context
+
+
 def _recovery_context(recovery_msg: str) -> str:
     """The compaction-recovery context. The recovery message comes right after the identity, and
     the other blocks after it: Claude Code shows the model only a preview of a context this long,
@@ -458,8 +488,10 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                     "continue": True,
                     "hookSpecificOutput": {
                         "hookEventName": "SessionStart",
-                        "additionalContext": _identity_block() + _supervision_block() + _feedback_drafts_block() + _ask_rules_block()
-                                             + f"<system-reminder>\n{migration_msg}\n</system-reminder>"
+                        "additionalContext": _measured(
+                            _identity_block() + _supervision_block() + _feedback_drafts_block() + _ask_rules_block()
+                            + f"<system-reminder>\n{migration_msg}\n</system-reminder>",
+                            "migration", session_id)
                     }
                 }
 
@@ -671,7 +703,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 "systemMessage": recovery_msg,  # TOP LEVEL - user sees this
                 "hookSpecificOutput": {
                     "hookEventName": "SessionStart",
-                    "additionalContext": _recovery_context(recovery_msg)
+                    "additionalContext": _measured(_recovery_context(recovery_msg), "compaction", session_id)
                 }
             }
 
@@ -802,7 +834,7 @@ Session Context:
             "systemMessage": message,  # TOP LEVEL - user sees this
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
-                "additionalContext": additional_context
+                "additionalContext": _measured(additional_context, source or "startup", session_id)
             }
         }
 
