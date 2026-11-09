@@ -297,8 +297,8 @@ def _leave_shared_reads_in_child() -> None:
     for window in getattr(_shared, "windows", None) or []:
         try:
             window.source.close()
-        except Exception:  # noqa: BLE001 - GUARD, not handler: a reader that will not close must not stop the child
-            pass
+        except Exception as e:  # noqa: BLE001 - GUARD, not handler: a reader that will not close must not stop the child
+            print(f"⚠️ MACF: a forked child could not close an inherited event-log reader: {e}", file=sys.stderr)
     _shared.active, _shared.window, _shared.windows = False, None, []
 
 
@@ -320,6 +320,53 @@ def _reverse_source(log_path: Path, end: int) -> Generator[Optional[str], None, 
         yield from iter_archive_lines(archive, reverse=True)
 
 
+#: An event line's leading timestamp, as append_event writes it, read without parsing the line.
+_TIMESTAMP_PREFIX = re.compile(r'^\{"timestamp": (-?[0-9][0-9.eE+-]*)[,}]')
+
+
+def _line_time(line: str) -> Optional[float]:
+    """The time a log line records, from its leading ``"timestamp"`` when it has one, else from
+    parsing it; None for a line with neither. Lets a reader stop at a time floor without
+    parsing the lines it passes over (#881)."""
+    m = _TIMESTAMP_PREFIX.match(line)
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            pass  # noqa: MACEFF003 - an odd prefix falls through to the full parse below
+    event = _parse(line)
+    when = event.get("timestamp") if isinstance(event, dict) else None
+    return float(when) if isinstance(when, (int, float)) else None
+
+
+def _older(line: str, since: Optional[float]) -> bool:
+    """Whether ``line`` is older than the floor ``since``; never, without a floor or a time."""
+    if since is None:
+        return False
+    when = _line_time(line)
+    return when is not None and when < since
+
+
+#: An event line's leading timestamp and name, as append_event writes every line.
+_LEAD = re.compile(r'^\{"timestamp": (-?[0-9][0-9.eE+-]*), "event": "([^"\\]*)"')
+
+
+def _line_lead(line: str) -> Tuple[Optional[float], Optional[str]]:
+    """A line's time and event name from how it begins, without parsing it: (None, None)
+    for a line written some other way, which a reader then judges the slower way."""
+    m = _LEAD.match(line)
+    if not m:
+        return None, None
+    try:
+        return float(m.group(1)), m.group(2)
+    except ValueError:
+        return None, None  # noqa: MACEFF003 - an odd prefix: the reader falls back to the full line
+
+
+#: A body line the window holds but no reader has needed parsed yet.
+_UNPARSED = object()
+
+
 def _parse(line: str) -> Optional[dict]:
     line = line.strip()
     if not line:
@@ -331,10 +378,13 @@ def _parse(line: str) -> Optional[dict]:
 
 
 class _Window:
-    """One log's events, parsed once, newest first, as deep as any reader has gone.
+    """One log's events, newest first, as deep as any reader has gone, each parsed at most once.
 
-    ``body`` holds the file as it was when the window opened, read lazily from
-    the end; ``head`` holds what this process appended since, oldest first. A
+    ``body`` holds the file's lines as it was when the window opened, read lazily
+    from the end, and ``parsed`` each line's event once some reader needed it: a
+    reader asking for some events only (``only=``) skips the others' lines unparsed,
+    which is most of what a hook's reads cost on a long log (#881). ``head`` holds
+    what this process appended since, oldest first. A
     change to the file by anyone else ends the window; a reader already
     iterating keeps the one it started on, which is what a streaming reader
     sees, since a reverse read never saw appends made after it began.
@@ -345,7 +395,9 @@ class _Window:
         self.key = key
         self.end = key[2]
         self.head: List[dict] = []
-        self.body: List[dict] = []
+        self.body: List[str] = []
+        self.parsed: List[Any] = []
+        self.lead: List[Tuple[Optional[float], Optional[str]]] = []
         self.live_len: Optional[int] = None
         self.taken = 0
         self.stored = 0
@@ -375,17 +427,28 @@ class _Window:
         if line is None:
             self.live_len = len(self.body)
             return
-        event = _parse(line)
-        if event is None:
+        line = line.strip()
+        if not line:
             return
-        self.body.append(event)
-        self.keep(event)
+        self.body.append(line)
+        self.parsed.append(_UNPARSED)
+        self.lead.append(_line_lead(line))
         self.stored += len(line)
         if self.stored >= SHARED_READ_CAP_BYTES:
             self.capped = True
             self.source.close()
 
-    def _beyond(self, live_only: bool) -> Generator[dict, None, None]:
+    def _event(self, i: int) -> Optional[dict]:
+        """Body line ``i``'s event, parsed the first time a reader needs it; None if malformed."""
+        event = self.parsed[i]
+        if event is _UNPARSED:
+            event = self.parsed[i] = _parse(self.body[i])
+            if event is not None:
+                self.keep(event)
+        return event
+
+    def _beyond(self, live_only: bool, needles=None,
+                since: Optional[float] = None) -> Generator[dict, None, None]:
         """Past the cap: read on privately from where the window stopped."""
         source = _reverse_source(self.log_path, self.end)
         try:
@@ -396,6 +459,10 @@ class _Window:
                     if live_only:
                         return
                     continue
+                if _older(line, since):
+                    return
+                if needles is not None and not needles.search(line):
+                    continue
                 event = _parse(line)
                 if event is not None:
                     yield event
@@ -403,20 +470,39 @@ class _Window:
             if isinstance(e, OSError):
                 print(f"⚠️ MACF: event log read failed: {e}", file=sys.stderr)
 
-    def events(self, live_only: bool) -> Generator[dict, None, None]:
-        """Newest first. ``live_only`` stops where the live log ends."""
+    def events(self, live_only: bool, needles=None, since: Optional[float] = None,
+               names: Optional[frozenset] = None) -> Generator[dict, None, None]:
+        """Newest first. ``live_only`` stops where the live log ends, and ``since`` at the first
+        event older than it. A line that can't be one of ``names`` stays unparsed: judged by the
+        name it begins with, read once per line, or by ``needles`` for a line that doesn't."""
         for i in range(len(self.head) - 1, -1, -1):
-            yield self.head[i]
+            event = self.head[i]
+            if since is not None and event.get("timestamp", since) < since:
+                return
+            yield event
         i = 0
         while True:
             at_live_end = live_only and self.live_len is not None and i >= self.live_len
             if at_live_end:
                 return
             if i < len(self.body):
-                yield self.body[i]
+                when, name = self.lead[i]
+                if since is not None:
+                    if when is None:
+                        when = _line_time(self.body[i])
+                    if when is not None and when < since:
+                        return
+                if names is not None and name is not None:
+                    wanted = name in names
+                else:
+                    wanted = needles is None or bool(needles.search(self.body[i]))
+                if wanted:
+                    event = self._event(i)
+                    if event is not None:
+                        yield event
                 i += 1
             elif self.capped:
-                yield from self._beyond(live_only)
+                yield from self._beyond(live_only, needles, since)
                 return
             elif self.done:
                 return
@@ -495,6 +581,7 @@ def read_events(
     reverse: bool = True,
     scope: str = "cycle",
     only: Optional[Iterable[str]] = None,
+    since: Optional[float] = None,
 ) -> Generator[dict, None, None]:
     """
     Read events from log (generator for memory efficiency).
@@ -549,6 +636,11 @@ def read_events(
             of those events and is skipped without being parsed, which is most
             of what a scan costs. In cycle scope the boundary is still
             recognised, and yielded only if it is named.
+        since: A time floor (epoch seconds). Only events at or after it are
+            yielded, and a reverse read stops at the first line older than
+            it, judged by the line's leading timestamp before any parse. This
+            is the "valid within an interval" bound above, and with ``only``
+            it lets a reader skip every other event's parse (#881).
 
     Yields:
         Event dictionaries
@@ -586,7 +678,7 @@ def read_events(
     # readers get the same bound as reverse ones instead of an exemption. A
     # forward ALL read still streams; nothing is materialised there.
     if scope == "cycle" and not reverse:
-        window = list(read_events(limit=limit, reverse=True, scope="cycle", only=names))
+        window = list(read_events(limit=limit, reverse=True, scope="cycle", only=names, since=since))
         for event in reversed(window):
             yield event
         return
@@ -595,7 +687,9 @@ def read_events(
     # (see shared_event_reads). A deprecated numeric limit is not served there.
     shared = _shared_window() if reverse and limit is None else None
     if shared is not None:
-        for event in shared.events(live_only=(scope == "cycle")):
+        wanted_names = None if names is None else names | ({CYCLE_BOUNDARY_EVENT} if scope == "cycle" else set())
+        for event in shared.events(live_only=(scope == "cycle"), needles=needles, since=since,
+                                   names=wanted_names):
             if names is None or event.get("event") in names:
                 yield event
             if scope == "cycle" and event.get("event") == CYCLE_BOUNDARY_EVENT:
@@ -633,6 +727,10 @@ def read_events(
         for line in line_iter:
             line = line.strip()
             if not line:
+                continue
+            if _older(line, since):
+                if reverse:
+                    break
                 continue
             if needles is not None and not needles.search(line):
                 continue
