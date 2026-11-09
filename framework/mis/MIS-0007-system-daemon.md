@@ -561,7 +561,7 @@ None was raised as an objection. The seats' conflict with R05, R11 and R23 was c
   - Conformance: R07, R11, R21, R27, R30, R31, R38, R65, R66, R70 and R71 pass on tests already on main.
   - Q01, Q03 and Q04 answered or extended; Q06 withdrawn; Q07 moved to MIS-0002; Q10 and Q11 new.
   - The operator asked, with his word of 2026-11-08, that deliberation be opened on this revision. Convening it and setting its window are his.
-- 2026-11-09: a revision from the requirement map of mission 998, ruled "Accept as is" by the operator on #552 (comment 6731243851), drafted by the host-side maintainer for the Secretary. MIS-0002 now specifies the base and the Agent Daemon, and this MIS the recursion (6.1) and the System Daemon in full (6.2), and names the Fleet Daemon (6.3).
+- 2026-11-09: a revision from the requirement map of mission 998, ruled "Accept as is" by the operator on #552 (comment 6731243851), drafted by the container-management maintainer for the Secretary. MIS-0002 now specifies the base and the Agent Daemon, and this MIS the recursion (6.1) and the System Daemon in full (6.2), and names the Fleet Daemon (6.3).
   - Moved to MIS-0002, their reasons with them: R10, R11, R13, R14, R16, R19, R20, R21, R26, R45 and R46, as MIS-0002 R186 to R192 and R195 to R198.
   - Withdrawn as restating a MIS-0002 requirement: R12, R15, R18, R40 and R44.
   - New: R74 (an association adds no Agent Daemon component). Proposed here from MIS-0002, which holds them binding until this MIS is accepted: R75 to R80 (its R177 to R182, the association rules) and R81 and R82 (its R53 and R54, the mail broker and clock).
