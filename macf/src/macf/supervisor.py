@@ -548,10 +548,12 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
             # With a draft waiting, the client answers /exit with a dialog (review and send,
             # or discard) instead of exiting, so the restart this asks for would sit there
             # until someone presses a key. The draft is the operator's, so it is named, not
-            # discarded.
+            # discarded, with its title and age so the operator can decide from this alone (#903).
+            from macf.utils.feedback_drafts import describe, unsent_drafts
+            named = "; ".join(describe(d) for d in unsent_drafts()) or ", ".join(str(d) for d in drafts)
             print(f"[inject] The client holds {len(drafts)} unsent feedback draft(s), so {cmd} "
                   f"would stop on its review-or-discard dialog instead of exiting: "
-                  f"{', '.join(str(d) for d in drafts)}. Ask the operator to send or discard "
+                  f"{named}. Ask the operator to send or discard "
                   f"it (/feedback), then run this again.", file=sys.stderr)
             return 1
     if target:
