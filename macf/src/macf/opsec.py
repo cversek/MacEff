@@ -358,13 +358,43 @@ def _added_lines(*against):
             yield fname, line[1:]
 
 
-def merging():
-    """While a merge is being committed, MERGE_HEAD names the incoming side."""
-    return subprocess.run(["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
-                          capture_output=True).returncode == 0
+def _verify(rev):
+    r = subprocess.run(["git", "rev-parse", "-q", "--verify", rev + "^0"],
+                       capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else None
 
 
-def incoming_published():
+def in_merge():
+    """Whether this commit is a merge: one finished by hand after it stopped (MERGE_HEAD),
+    or one git is completing by itself, in pre-merge-commit, which has no MERGE_HEAD yet."""
+    action = os.environ.get("GIT_REFLOG_ACTION", "")
+    return bool(_verify("MERGE_HEAD")) or action.startswith(("merge", "pull"))
+
+
+def incoming():
+    """The incoming side of the merge, or None when it can't be named. A merge finished by hand
+    has MERGE_HEAD. A clean merge has only what git says it is doing: "merge <ref>" names it,
+    and a pull's one for-merge line in FETCH_HEAD names its. An octopus names none."""
+    head = _verify("MERGE_HEAD")
+    if head:
+        return head
+    words = os.environ.get("GIT_REFLOG_ACTION", "").split()
+    if words[:1] == ["merge"]:
+        refs = [w for w in words[1:] if not w.startswith("-")]
+        return _verify(refs[0]) if len(refs) == 1 else None
+    if words[:1] == ["pull"]:
+        git_dir = subprocess.run(["git", "rev-parse", "--git-dir"],
+                                 capture_output=True, text=True).stdout.strip()
+        try:
+            with open(os.path.join(git_dir, "FETCH_HEAD")) as f:
+                lines = [l for l in f.read().splitlines() if l and "not-for-merge" not in l]
+        except OSError:
+            return None
+        return _verify(lines[0].split()[0]) if len(lines) == 1 else None
+    return None
+
+
+def incoming_published(rev):
     """Whether the incoming side of a merge is already on a remote-tracking branch.
 
     The narrowing below rests on the incoming side having been scanned and
@@ -372,7 +402,7 @@ def incoming_published():
     hook was installed, or never pushed would otherwise reach a remote for the
     first time through this merge, unscanned. A remote-tracking ref can be
     written by hand: like the gate itself, this guards accidents."""
-    r = subprocess.run(["git", "branch", "-r", "--contains", "MERGE_HEAD"],
+    r = subprocess.run(["git", "branch", "-r", "--contains", rev],
                        capture_output=True, text=True)
     return r.returncode == 0 and bool(r.stdout.strip())
 
@@ -380,15 +410,22 @@ def incoming_published():
 def staged_added_lines():
     """The lines this commit adds. In a merge whose incoming side is already on a
     remote, only those neither parent has: that side was scanned and published
-    before. Any other merge, a squash and a cherry-pick are scanned whole."""
+    before. Any other merge, a squash and a cherry-pick are scanned whole. A clean
+    merge whose incoming side can't be named is let through unscanned, as every
+    clean merge was before pre-merge-commit ran this gate (cversek/MacEff#646)."""
     added = list(_added_lines())
-    if not merging():
+    if not in_merge():
         return added
-    if not incoming_published():
+    rev = incoming()
+    if rev is None:
+        print("pre-commit gate: merge commit: its incoming side can't be named, so it is "
+              "not scanned", file=sys.stderr)
+        return []
+    if not incoming_published(rev):
         print("pre-commit gate: merge commit: the incoming side is not on any remote, "
               "so it is scanned whole", file=sys.stderr)
         return added
-    new_to_both = set(_added_lines("MERGE_HEAD"))
+    new_to_both = set(_added_lines(rev))
     kept = [pair for pair in added if pair in new_to_both]
     print("pre-commit gate: merge commit: scanned only what the merge adds beyond "
           "both parents (%d of %d added lines); the incoming side was scanned when "
@@ -649,25 +686,33 @@ def install_hook(repo: Path, profile: Optional[Path] = None,
     # hardcodes the path to a private pattern file, and committing that would
     # publish one developer's private vocabulary to everyone who clones.
     dispatch = install_dispatcher(repo, source_root=source_root)
-    local_d = Path(dispatch["local_dir"]) / "pre-commit.d"
-    local_d.mkdir(parents=True, exist_ok=True)
-    hooklet = local_d / "10-opsec"
-    # The interpreter is this one, which just passed the self-test, and not a
-    # bare python3: the hook would run whichever python3 the committer's PATH
-    # finds, certified by nothing. Never resolved -- a venv's python is a
-    # symlink, and it is the symlink that puts macf on the path.
-    hooklet.write_text(SHIM_TEMPLATE.format(python=shlex.quote(sys.executable)))
-    os.chmod(hooklet, hooklet.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    # pre-commit runs for a commit, and for a merge that stopped on conflicts. A merge git
+    # completes by itself runs pre-merge-commit instead, so the same gate goes there too, or
+    # a clean merge would go unscanned (#646). The checker scans only what a merge adds.
+    hooklets = []
+    for stage in ("pre-commit", "pre-merge-commit"):
+        local_d = Path(dispatch["local_dir"]) / f"{stage}.d"
+        local_d.mkdir(parents=True, exist_ok=True)
+        hooklet = local_d / "10-opsec"
+        # The interpreter is this one, which just passed the self-test, and not a
+        # bare python3: the hook would run whichever python3 the committer's PATH
+        # finds, certified by nothing. Never resolved -- a venv's python is a
+        # symlink, and it is the symlink that puts macf on the path.
+        hooklet.write_text(SHIM_TEMPLATE.format(python=shlex.quote(sys.executable)))
+        os.chmod(hooklet, hooklet.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        hooklets.append(hooklet)
+    hooklet = hooklets[0]
 
     # And once more through the hook as git will run it, so what is certified
     # is the installed path and not only the checker beside it.
     fired, stderr = _probe([str(hooklet), "--self-test"])
     missing = sorted(required - fired)
     if missing:
-        hooklet.unlink()
+        for h in hooklets:
+            h.unlink()
         raise RuntimeError(
             "opsec hook INERT when run through its shim, for: " + ", ".join(missing)
-            + " -- the shim was removed. stderr: " + stderr[:300])
+            + " -- the shims were removed. stderr: " + stderr[:300])
     self_test = {"fired": sorted(fired), "stderr": stderr}
 
     return {
@@ -675,6 +720,7 @@ def install_hook(repo: Path, profile: Optional[Path] = None,
         "hooks_dir": str(hooks_dir),
         "profile": str(profile_path),
         "hooklet": str(hooklet),
+        "hooklets": [str(h) for h in hooklets],
         "interpreter": sys.executable,
         "dispatcher_actions": dispatch["actions"],
         "adopted": dispatch["adopted"],
