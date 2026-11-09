@@ -9,7 +9,27 @@ import subprocess
 import sys
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
+
+
+def installed_cc_version(binary_line: str) -> Optional[str]:
+    """The version of the installed Claude Code that *binary_line* (``detect_cc_binary``) names,
+    read from its ``versions/X.Y.Z`` path; None when the path doesn't carry one."""
+    import re
+    m = re.search(r"/versions/(\d+\.\d+\.\d+)(?:\s|$)", binary_line or "")
+    return m.group(1) if m else None
+
+
+def cc_version_lines(binary_line: str, running: Optional[str]) -> List[str]:
+    """``env``'s lines for Claude Code (#866): the installed binary, with its version, and, when the
+    session runs another, a second line saying which and why. A session that started before an
+    auto-update keeps running the version it started with."""
+    installed = installed_cc_version(binary_line)
+    lines = [f"CC Installed:   {binary_line}"]
+    if installed and running and running != installed:
+        lines.append(f"CC Running:     {running}, not the installed {installed}: this session started before "
+                     f"an update, and runs {installed} once it is restarted")
+    return lines
 
 
 def detect_cc_binary() -> str:
