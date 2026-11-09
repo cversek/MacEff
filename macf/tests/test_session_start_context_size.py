@@ -16,9 +16,11 @@ def _logged(monkeypatch):
 
 def test_every_context_is_measured_in_the_hooks_log(monkeypatch, capsys):
     seen = _logged(monkeypatch)
-    assert hss._measured("x" * 500, "startup", "s1") == "x" * 500
+    context = "x" * 500 + "🏗️"          # one emoji: three different counts
+    assert hss._measured(context, "startup", "s1") == context
     [event] = [e for e in seen if e["event_type"] == "CONTEXT_SIZE"]
-    assert (event["path"], event["chars"], event["over_inline_limit"]) == ("startup", 500, False)
+    assert (event["path"], event["chars"], event["over_inline_limit"]) == ("startup", 502, False)
+    assert (event["utf8_bytes"], event["utf16_units"]) == (507, 503)
     assert "inline" not in capsys.readouterr().err
 
 

@@ -202,9 +202,13 @@ def _measured(context: str, path: str, session_id: str = "") -> str:
     is past the inline limit, so the model reads only a preview (#802). Returns ``context``
     unchanged. A failure here must never break session start."""
     try:
+        # Three counts, since they differ by more than a tenth on a context with emoji: the limit
+        # was observed in bytes, Python counts code points, and the client (JavaScript) UTF-16 units.
         size = len(context)
         log_hook_event({"hook_name": "session_start", "event_type": "CONTEXT_SIZE",
                         "session_id": session_id or "unknown", "path": path, "chars": size,
+                        "utf8_bytes": len(context.encode("utf-8")),
+                        "utf16_units": len(context.encode("utf-16-le")) // 2,
                         "over_inline_limit": size > OBSERVED_INLINE_LIMIT_CHARS})
         if size > OBSERVED_INLINE_LIMIT_CHARS:
             emit_warning(Warning(
@@ -215,6 +219,17 @@ def _measured(context: str, path: str, session_id: str = "") -> str:
     except Exception as e:  # noqa: BLE001 - GUARD: a measurement must not break session start
         print(f"⚠️ MACF: session start could not measure its context: {e}", file=sys.stderr)
     return context
+
+
+def _recovery_context(recovery_msg: str) -> str:
+    """The compaction-recovery context. The recovery message comes right after the identity, and
+    the other blocks after it: Claude Code shows the model only a preview of a context this long,
+    and what to read, and in what order, has to be in it (#802). Each block in front pushed the
+    message's essentials further out."""
+    return (_identity_block()
+            + f"<system-reminder>\n{recovery_msg}\n</system-reminder>\n"
+            + _supervision_block() + _feedback_drafts_block() + _ask_rules_block()
+            + _focused_charter_block())
 
 
 def _feedback_drafts_block() -> str:
@@ -688,11 +703,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 "systemMessage": recovery_msg,  # TOP LEVEL - user sees this
                 "hookSpecificOutput": {
                     "hookEventName": "SessionStart",
-                    "additionalContext": _measured(
-                        _identity_block() + _supervision_block() + _feedback_drafts_block() + _ask_rules_block()
-                        + f"<system-reminder>\n{recovery_msg}\n</system-reminder>"
-                        + _focused_charter_block(),
-                        "compaction", session_id)
+                    "additionalContext": _measured(_recovery_context(recovery_msg), "compaction", session_id)
                 }
             }
 
