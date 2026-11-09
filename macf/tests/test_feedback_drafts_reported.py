@@ -63,3 +63,23 @@ def test_pd_status_says_nothing_without_drafts(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     pd_cli._say_drafts()
     assert capsys.readouterr().out == ""
+
+
+def test_session_start_says_drafts_are_waiting(tmp_path, monkeypatch):
+    """#903: the session-start text names waiting drafts once per session, read only."""
+    from macf.hooks.handle_session_start import _feedback_drafts_block
+    path = _draft(tmp_path, monkeypatch, "e.json", title="A queued note", created_at="2026-10-22T09:00:00Z")
+    block = _feedback_drafts_block()
+    assert "1 unsent feedback draft(s)" in block and '"A queued note"' in block and "inject exit" in block
+    assert json.loads(path.read_text())["title"] == "A queued note"
+
+
+def test_session_start_says_nothing_without_drafts(tmp_path, monkeypatch):
+    from macf.hooks.handle_session_start import _feedback_drafts_block
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    assert _feedback_drafts_block() == ""
+
+
+def test_a_test_that_names_no_config_dir_sees_none_of_the_hosts_drafts():
+    """The conftest keeps a developer's own drafts out of every test that doesn't name its own."""
+    assert unsent_drafts() == []

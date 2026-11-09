@@ -191,6 +191,29 @@ def _supervision_block(environ=None, ask=None) -> str:
     return f"<system-reminder>\n{text}\n</system-reminder>\n"
 
 
+def _feedback_drafts_block() -> str:
+    """A line when the client holds unsent feedback drafts (cversek/MacEff#903). A draft makes a
+    restart through ``inject exit`` refuse, and until it did nothing said a draft was waiting, so the
+    operator first heard of one when it blocked something. Said once per session, so the agent can
+    raise it at a calm moment. The drafts are read, never changed: sending or discarding one is the
+    operator's. A failure here must never break session start."""
+    try:
+        from ..utils.feedback_drafts import age, unsent_drafts
+        drafts = unsent_drafts()
+    except Exception as e:  # noqa: BLE001 - GUARD: a readout must not break session start
+        emit_warning(Warning(source="session_start", kind="feedback_drafts_unread",
+                             detail=f"could not read the client's feedback drafts: {e}"))
+        return ""
+    if not drafts:
+        return ""
+    oldest = drafts[0]
+    named = f' ("{oldest.title}")' if oldest.title else ""
+    text = (f"📝 The client holds {len(drafts)} unsent feedback draft(s), the oldest {age(oldest)}{named}. "
+            "A session restart through `inject exit` waits until the operator sends or discards them "
+            "(/feedback). Mention it to the operator at a calm moment; never send or discard one yourself.")
+    return f"<system-reminder>\n{text}\n</system-reminder>\n"
+
+
 def _ask_rules_block(project_dir: Optional[str] = None, home: Optional[Path] = None, environ=None) -> str:
     """The Ask rules in force, at every session start (autonomous_operation 5.5). A command one of
     them matches stops at a dialog, and in AUTO_MODE with nobody at the keyboard it waits until
@@ -424,7 +447,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                     "continue": True,
                     "hookSpecificOutput": {
                         "hookEventName": "SessionStart",
-                        "additionalContext": _identity_block() + _supervision_block() + _ask_rules_block()
+                        "additionalContext": _identity_block() + _supervision_block() + _feedback_drafts_block() + _ask_rules_block()
                                              + f"<system-reminder>\n{migration_msg}\n</system-reminder>"
                     }
                 }
@@ -637,7 +660,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 "systemMessage": recovery_msg,  # TOP LEVEL - user sees this
                 "hookSpecificOutput": {
                     "hookEventName": "SessionStart",
-                    "additionalContext": _identity_block() + _supervision_block() + _ask_rules_block()
+                    "additionalContext": _identity_block() + _supervision_block() + _feedback_drafts_block() + _ask_rules_block()
                                          + f"<system-reminder>\n{recovery_msg}\n</system-reminder>"
                                          + _focused_charter_block()
                 }
@@ -747,7 +770,7 @@ Session Context:
             emit_warning(Warning(source="session_start", kind="telegram_send_failed", detail=f"session-start telegram notification failed: {e}"))
 
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
-        additional_context = (_identity_block() + _supervision_block() + _ask_rules_block()
+        additional_context = (_identity_block() + _supervision_block() + _feedback_drafts_block() + _ask_rules_block()
                               + f"<system-reminder>\n{message}\n</system-reminder>"
                               + _focused_charter_block())
 
