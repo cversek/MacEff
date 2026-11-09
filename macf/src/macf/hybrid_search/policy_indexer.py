@@ -240,7 +240,8 @@ if __name__ == "__main__":
 
     agent_home = find_agent_home()
     policies_dir = agent_home / ".maceff" / "framework" / "policies"
-    output_path = agent_home / ".maceff" / "policy_index.lance"
+    from ..utils.recommend import get_policy_db_path
+    output_path = get_policy_db_path()
     manifest_path = policies_dir / "manifest.json"
 
     if not policies_dir.exists():

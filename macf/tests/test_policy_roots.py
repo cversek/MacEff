@@ -699,3 +699,29 @@ def test_the_cli_exit_code_says_whether_it_passed(roots, capsys):
     assert cli.cmd_policy_check(Namespace(policy_name="personal:merging")) == 1
     assert "no **Type**" in capsys.readouterr().out
     assert cli.cmd_policy_check(Namespace(policy_name="personal:absent")) == 2
+
+
+def test_with_its_sources_recorded_the_index_is_judged_by_content(roots, tmp_path):
+    """#898: a checkout re-stamps files whose content didn't change. With the build's sources
+    recorded, only a real change, a new policy or a removed one reads as changed."""
+    root = _personal()
+    db = tmp_path / "index.lance"
+    (db / "documents.lance").mkdir(parents=True)
+    mf.record_index_sources(db)
+    later = (db / "documents.lance").stat().st_mtime + 100
+    os.utime(root / "merging.md", (later, later))                 # re-stamped, same content
+    assert mf.policies_newer_than_index(db) == []
+    (root / "merging.md").write_text("# Merging, revised\n")
+    (roots.fw / "base" / "development" / "new_policy.md").write_text("# New\n")
+    (roots.fw / "base" / "development" / "task_management.md").unlink()
+    assert mf.policies_newer_than_index(db) == ["new_policy", "personal:merging", "task_management (removed)"]
+
+
+def test_an_unreadable_sources_record_falls_back_to_time(roots, tmp_path, capsys):
+    db = tmp_path / "index.lance"
+    (db / "documents.lance").mkdir(parents=True)
+    mf.index_sources_path(db).write_text("not json")
+    built = (db / "documents.lance").stat().st_mtime
+    os.utime(_personal() / "merging.md", (built + 10, built + 10))
+    assert mf.policies_newer_than_index(db) == ["personal:merging"]
+    assert "judging it by time" in capsys.readouterr().err

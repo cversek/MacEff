@@ -203,9 +203,59 @@ def policy_content_matches(keyword: str, maceff_root: Optional[Path] = None) -> 
     return sorted(found, key=lambda f: (-f["count"], f["name"]))
 
 
+def _policy_name(root: "PolicyRoot", md_file: Path) -> str:
+    return md_file.stem if root.framework else f"{root.name}:{md_file.stem}"
+
+
+def index_sources_path(db_path: Path) -> Path:
+    """Where the index at ``db_path`` records the content it was built from (#898)."""
+    return db_path.with_name(db_path.name + ".sources.json")
+
+
+def policy_digests(maceff_root: Optional[Path] = None) -> Dict[str, str]:
+    """Every policy this agent reads, by name, to the sha256 of its content."""
+    import hashlib
+    digests = {}
+    for root in policy_roots(maceff_root):
+        for md_file in _files_of(root):
+            try:
+                digests[_policy_name(root, md_file)] = hashlib.sha256(md_file.read_bytes()).hexdigest()
+            except OSError as e:
+                _report_once(f"could not read {md_file} to record it with the policy index ({e})")
+    return digests
+
+
+def record_index_sources(db_path: Path, maceff_root: Optional[Path] = None) -> None:
+    """Record, beside the index just built at ``db_path``, the content of every policy it holds,
+    so a later check compares content, not times a checkout re-stamps (#898)."""
+    sources = index_sources_path(db_path)
+    tmp = sources.with_name(sources.name + ".tmp")
+    tmp.write_text(json.dumps(policy_digests(maceff_root), indent=1, sort_keys=True))
+    os.replace(tmp, sources)
+
+
 def policies_newer_than_index(db_path: Path, maceff_root: Optional[Path] = None) -> List[str]:
     """Policies changed since the index at ``db_path`` was built, by name. A missing index says
-    nothing here: the search that needs it reports that itself."""
+    nothing here: the search that needs it reports that itself.
+
+    Where the build recorded its sources, content decides: a policy whose sha256 differs, one
+    added since, and one removed since (named with "(removed)") are changed, and a checkout that
+    only re-stamps files changes nothing (#898). An index built before that record existed is
+    judged by modification time, as before."""
+    if not db_path.is_dir():
+        return []
+    try:
+        recorded = json.loads(index_sources_path(db_path).read_text())
+    except FileNotFoundError:
+        recorded = None
+    except (OSError, ValueError) as e:
+        _report_once(f"could not read what the policy index was built from ({e}); judging it by time")
+        recorded = None
+    if isinstance(recorded, dict):
+        now = policy_digests(maceff_root)
+        changed = [name for name, digest in now.items() if recorded.get(name) != digest]
+        removed = [f"{name} (removed)" for name in recorded if name not in now]
+        return sorted(changed) + sorted(removed)
     try:
         built = max((p.stat().st_mtime for p in db_path.iterdir()), default=None)
     except OSError:
@@ -217,7 +267,7 @@ def policies_newer_than_index(db_path: Path, maceff_root: Optional[Path] = None)
         for md_file in _files_of(root):
             try:
                 if md_file.stat().st_mtime > built:
-                    newer.append(md_file.stem if root.framework else f"{root.name}:{md_file.stem}")
+                    newer.append(_policy_name(root, md_file))
             except OSError as e:
                 _report_once(f"could not check {md_file} against the policy index ({e})")
     return sorted(newer)

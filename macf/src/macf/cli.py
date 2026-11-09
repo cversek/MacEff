@@ -3699,11 +3699,16 @@ def cmd_policy_recommend(args: argparse.Namespace) -> int:
         return 1
 
     from .utils.manifest import policies_newer_than_index
-    from .utils.paths import find_agent_home
-    stale = policies_newer_than_index(find_agent_home() / ".maceff" / "policy_index.lance")
+    from .utils.recommend import get_policy_db_path
+    stale = policies_newer_than_index(get_policy_db_path())
     if stale:
+        # The warm search service keeps the index it loaded, so a rebuild alone leaves it
+        # answering from the old one (#898).
         print(f"⚠️ {len(stale)} policies changed since the index was built ({', '.join(stale[:3])}"
-              f"{', ...' if len(stale) > 3 else ''}). Rebuild: macf_tools policy build_index", file=sys.stderr)
+              f"{', ...' if len(stale) > 3 else ''}). Rebuild: macf_tools policy build_index, then "
+              f"restart the search service, which keeps the index it loaded: where a primal daemon "
+              f"runs it, restart its `search` unit (the tray's Restart); otherwise "
+              f"macf_tools search-service stop, then start", file=sys.stderr)
 
     # Try warm service first (fast path)
     result = query_search_service("policy", query, limit=limit, timeout_s=1.0)
@@ -3822,6 +3827,14 @@ def cmd_policy_build_index(args: argparse.Namespace) -> int:
             db_path=db_path,
             extra_roots=extra_roots,
         )
+        # What the index holds, by content, so its staleness check isn't fooled by a checkout's
+        # new mtimes (#898). An index built from a named directory holds something other than the
+        # agent's roots, so it records nothing, and any old record goes, rather than mislead.
+        from .utils.manifest import index_sources_path, record_index_sources
+        if args.policies_dir:
+            index_sources_path(db_path).unlink(missing_ok=True)
+        else:
+            record_index_sources(db_path)
 
         # Output
         if json_output:
