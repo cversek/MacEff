@@ -111,3 +111,28 @@ def test_attach_refuses_a_card_two_homes_claim():
              Agent("Twin@aaaaaa", Path("/run/b"), Path("/run/b.json"))]
     done = _controller(twins).attach("Twin@aaaaaa", opener=lambda card: pytest.fail("opened"))
     assert not done["ok"] and "two installed agents" in done["error"]
+
+
+def test_a_link_planted_at_the_scripts_temporary_path_is_refused_and_said(tmp_path):
+    """Nothing is written through the link, and the refusal comes back for the alert, not as
+    an exception the menu callback would swallow."""
+    victim = tmp_path / "victim"
+    victim.write_text("untouched")
+    (tmp_path / "rt").mkdir(mode=0o700)
+    (tmp_path / "rt" / "attach-IraMacEff-ee9a78.tmp").symlink_to(victim)
+    done = open_attach("IraMacEff@ee9a78", directory=tmp_path / "rt", python=PY,
+                       iterm=tmp_path / "no", run=_Open())
+    assert not done["ok"] and "could not be written" in done["error"]
+    assert victim.read_text() == "untouched"
+
+
+def test_a_runtime_directory_the_tray_cannot_use_is_said(tmp_path, monkeypatch):
+    import macf.utils.paths as paths
+
+    def refuse():
+        raise PermissionError("the runtime directory is writable by others")
+    monkeypatch.setattr(paths, "user_runtime_dir", refuse)
+    run = _Open()
+    done = open_attach("IraMacEff@ee9a78", python=PY, iterm=tmp_path / "no", run=run)
+    assert not done["ok"] and "writable by others" in done["error"]
+    assert run.calls == []

@@ -41,21 +41,27 @@ def _script_name(card: str) -> str:
 def open_attach(card: str, *, directory: Optional[Path] = None, python: str = sys.executable,
                 iterm: Path = ITERM, run: Callable = subprocess.run) -> dict:
     """Write ``card``'s attach script into this user's private directory and open it in a
-    terminal window. Returns ``ok``, the script's path, and an error when the open failed."""
-    if directory is None:
-        from macf.utils.paths import user_runtime_dir
-        directory = user_runtime_dir() / "tray"
-    directory = Path(directory)
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(directory, 0o700)
+    terminal window. Returns ``ok``, the script's path, and an error when it could not be
+    written or opened. Every failure comes back as that error, never as an exception, so the
+    menu can say it: a runtime directory others can write is refused, and so is a link at
+    the script's temporary path, which is never written through."""
     control = iterm.is_dir()
-    script = directory / _script_name(card)
-    tmp = script.with_suffix(".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o700)
-    with os.fdopen(fd, "w") as f:
-        f.write(attach_script(card, python, control))
-    os.chmod(tmp, 0o700)
-    os.replace(tmp, script)
+    try:
+        if directory is None:
+            from macf.utils.paths import user_runtime_dir
+            directory = user_runtime_dir() / "tray"
+        directory = Path(directory)
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(directory, 0o700)
+        script = directory / _script_name(card)
+        tmp = script.with_suffix(".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o700)
+        with os.fdopen(fd, "w") as f:
+            f.write(attach_script(card, python, control))
+        os.chmod(tmp, 0o700)
+        os.replace(tmp, script)
+    except OSError as e:
+        return {"ok": False, "script": None, "error": f"the attach script could not be written: {e}"}
     app = str(iterm) if control else "Terminal"
     try:
         done = run(["open", "-a", app, str(script)], capture_output=True, text=True, timeout=10)
