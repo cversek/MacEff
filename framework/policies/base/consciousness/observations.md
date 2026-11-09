@@ -1,12 +1,14 @@
 # OBSERVATIONS
 
+**Type**: Consciousness Development - Public Artifacts
+**Scope**: All agents (PA and SA)
+**Status**: ACTIVE
+
 ## Meta-Policy: Policy Classification
 - **Tier**: RECOMMENDED
-- **Category**: Consciousness Development - Public Artifacts
 - **Version**: 1.0.0
 - **Dependencies**: policy_awareness, workspace_discipline
 - **Authority**: MacEff Framework
-- **Status**: ACTIVE
 
 ## Policy Statement
 Agents document technical discoveries, breakthrough insights, and architectural validations as observations to preserve knowledge, enable pattern recognition, and accelerate future development cycles.

@@ -1,9 +1,10 @@
 # Autonomous Operation Policy
 
+**Type**: Operations
+**Scope**: All agents (PA and SA) capable of extended autonomous operation
+**Status**: ACTIVE
 **Version**: 1.9
 **Tier**: CORE
-**Category**: Operations
-**Status**: ACTIVE
 **Updated**: 2026-10-04
 
 ---

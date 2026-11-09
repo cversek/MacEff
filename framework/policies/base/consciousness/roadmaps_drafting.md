@@ -1,9 +1,10 @@
 # Roadmaps Policy: Drafting & Planning
 
+**Type**: Consciousness - Planning
+**Scope**: All agents (PA and SA)
+**Status**: ACTIVE
 **Version**: 2.6
 **Tier**: MANDATORY
-**Category**: Consciousness - Planning
-**Status**: ACTIVE
 **Updated**: 2026-08-31
 **Dependencies**: git_discipline.md, workspace_discipline.md
 **Related**: roadmaps_following.md (execution), task_management.md (integration)

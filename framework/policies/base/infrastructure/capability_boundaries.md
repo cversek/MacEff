@@ -103,6 +103,8 @@ to prevent. **The explanation is part of the control, not documentation of it.**
 
 **7 Anti-Patterns**
 
+=== CEP_NAV_BOUNDARY ===
+
 ---
 
 ## 1 Why Boundaries Exist

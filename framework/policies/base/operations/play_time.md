@@ -1,9 +1,10 @@
 # Play Time Policy
 
+**Type**: Operations
+**Scope**: All agents (PA and SA)
+**Status**: ACTIVE
 **Version**: 1.1
 **Tier**: MANDATORY
-**Category**: Operations
-**Status**: ACTIVE
 **Related**: `autonomous_operation.md` (mode lifecycle), `mode_system.md` (mode system, Markov recommender), `autonomous_sprint.md` (sibling — workload-defined autonomous work)
 
 **See also**: `maceff-play-time` skill (invocation wrapper for PLAY_TIME) | `autonomous_sprint.md` (sibling type for workload-defined work) | `maceff-sprint` skill (invocation wrapper for SPRINT)

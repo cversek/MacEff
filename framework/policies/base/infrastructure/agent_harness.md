@@ -60,6 +60,8 @@ check can resolve its own subject, and whether "is it running" has an answer.
 **6 Scope**
 - One session per identity — why, and what is deferred?
 
+=== CEP_NAV_BOUNDARY ===
+
 ---
 
 ## 1 What the Harness Is

@@ -1,9 +1,10 @@
 # Rust Coding Standards
 
+**Type**: Rust
+**Scope**: All Rust code in MacEff framework projects
+**Status**: ACTIVE
 **Version**: 1.0
 **Tier**: LANG
-**Category**: Rust
-**Status**: ACTIVE
 **Updated**: 2026-09-20
 **Parent**: base/development/coding_standards.md
 
@@ -83,6 +84,8 @@ crates those are.
 
 **9 Amendment**
 - How is this standard changed, and by whom?
+
+=== CEP_NAV_BOUNDARY ===
 
 ---
 
