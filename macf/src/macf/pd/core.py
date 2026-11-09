@@ -1615,9 +1615,11 @@ class Core:
             return False
         r.pane_lookup = key
         since = start_epoch(r.proc_start)
+        if since is None:
+            return False               # with no start to stop at, the look-back would walk the whole log
         for event in read_events(reverse=True, scope="all", only=(EVENT_SESSION_PANE,)):
             at = _float_or_none(event.get("timestamp"))
-            if since is not None and at is not None and at < since - 60:
+            if at is not None and at < since - 60:
                 break                  # older than the wrapper: it never announced
             data = event.get("data") or {}
             if data.get("wrapper_pid") == r.pid and data.get("wrapper_start") == r.proc_start:

@@ -291,6 +291,7 @@ def respawn_session(tmux: str, env: Mapping[str, str], agent: str,
         if not reap_group(pgid, leader_start=leader_start):
             print(f"⚠️ MACF: session unit: process group {pgid} of session {agent} survived SIGKILL; "
                   f"not starting a second session beside it", file=sys.stderr)
+            _tmux(tmux, env, "set-option", "-w", "-t", target, "remain-on-exit", "off")
             return None
     again = _tmux(tmux, env, "respawn-pane", "-k", "-t", target)
     _tmux(tmux, env, "set-option", "-w", "-t", target, "remain-on-exit", "off")
