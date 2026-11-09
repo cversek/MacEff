@@ -922,6 +922,9 @@ class Daemon:
             if not append_event(EVENT_ENTRY_REMOVED, removed):
                 return Response(ok=False, error="the removal could not be recorded in the event log")
             self.scheduler.entries.pop(request.id, None)
+            # A removal revokes the entry (R135), so a check of it still running is stopped, and
+            # reads as stopped rather than failed.
+            self.scheduler.stop_run(request.id, "its entry was removed")
         if isinstance(request, EntryAddRequest):
             zone = self.core.declaration.timezone
             tz = ZoneInfo(zone) if zone else timezone.utc

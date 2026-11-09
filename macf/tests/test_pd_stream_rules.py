@@ -517,3 +517,21 @@ def test_a_forged_carried_line_reaches_the_session_as_no_text(mail_home, base, d
     # m1 is still unread, so the new attach asserts it again (MIS-0004 R26), as a closed record.
     # The restart's own pd_carried notice (R47) names the broker unit it carried, in the closed form.
     assert [(r.source, r.count) for r in _records_in(data) if r.source != "pd_carried"] == [("amail", 1)]
+
+
+def test_a_broader_or_elsewhere_allow_keeps_the_operators_choice(tmp_path, monkeypatch):
+    """An operator who allowed the commands more broadly, or in another settings file, isn't
+    overridden by an ask added over it (#759): ask beats allow, so adding one would undo them."""
+    from macf.utils import claude_settings as cs
+    settings = tmp_path / "settings.local.json"
+    settings.write_text(json.dumps({"permissions": {"allow": ["Bash(macf_tools pd:*)"]}}))
+    monkeypatch.setattr(cs, "_read_settings", lambda root=None: (json.loads(settings.read_text()), settings))
+    monkeypatch.setattr(cs, "_other_allow_entries", lambda root=None: ["Bash(macf_tools pd stream:*)"])
+    cs.ensure_mode_safety_permissions()
+    ask = json.loads(settings.read_text())["permissions"].get("ask", [])
+    assert not [a for a in ask if a.startswith("Bash(macf_tools pd ")], ask
+    # With neither, the commands still start in ask.
+    settings.write_text(json.dumps({"permissions": {}}))
+    monkeypatch.setattr(cs, "_other_allow_entries", lambda root=None: [])
+    cs.ensure_mode_safety_permissions()
+    assert "Bash(macf_tools pd entry add:*)" in json.loads(settings.read_text())["permissions"]["ask"]

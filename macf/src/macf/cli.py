@@ -8867,10 +8867,22 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
             _readded.append(_sid)
 
     from .task.scope import get_scope_state
-    _kept_paused = [t for t, st in get_scope_state().items() if st == "paused" and t in expanded]
+    _before = get_scope_state()
+    _kept_paused = [t for t, st in _before.items() if st == "paused" and t in expanded]
 
     result = set_scope(expanded, parent_expanded=len(expanded) > len(raw_ids),
                        expanded_from=raw_ids[0] if len(raw_ids) == 1 else None)
+
+    # `scope set` replaces the scope's open tasks (task_management, autonomous_sprint): an
+    # active or paused task this list leaves out leaves the scope. A completed one stays as
+    # the scope's history. Only after a set that scoped something, so a failed set changes nothing.
+    _left = []
+    if result["success"]:
+        _left = [t for t, st in _before.items()
+                 if st in ("active", "paused") and t not in result["tasks_scoped"]]
+        if _left:
+            from .task.scope import remove_from_scope
+            _left = remove_from_scope(_left)["removed_ids"]
 
     for _done in result.get("skipped_completed", []):
         print(f"⚠️  Task #{_done} is done (completed or archived), so it was not scoped")
@@ -8882,6 +8894,8 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
         for _pid in _kept_paused:
             # Re-listing a paused task does not answer what it waits on; unpause is explicit.
             print(f"   ⏸️  #{_pid} stays paused (macf_tools task scope unpause {_pid} to resume it)")
+        for _lid in _left:
+            print(f"   ➖ #{_lid} left the scope (not in this list)")
         for _sid in _readded:
             # Reported, never silent: the caller did not ask for this task and
             # should see that the sprint mode-lock is what put it back.
