@@ -643,6 +643,11 @@ EVENT_UNREAD_MAIL_CLEARED = "pd_unread_mail_cleared"
 #: (MIS-0002-R124). ``findings`` names each difference.
 EVENT_ALLOWLIST_MISMATCH = "pd_allowlist_mismatch"
 EVENT_DAEMON_START = "pd_daemon_start"
+#: The session unit's wrapper started its session in its pane: once at start, and again after
+#: each restart in place (MacEff #726). ``wrapper_pid``, ``wrapper_start``, ``pane_pid`` and
+#: ``respawns`` (0 at start). A wrapper that has announced one can restart its session in place,
+#: so the daemon sends it SIGUSR1 rather than restarting the unit whole.
+EVENT_SESSION_PANE = "pd_session_pane"
 #: An operator's rule for the event stream: what its rules in force fold to (persistent_layer 11.4).
 EVENT_STREAM_RULE = "pd_stream_rule"
 

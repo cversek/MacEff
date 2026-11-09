@@ -256,10 +256,67 @@ def _tmux(tmux: str, env: Mapping[str, str], *args: str) -> subprocess.Completed
     return subprocess.run([tmux, *args], env=dict(env), capture_output=True, text=True, timeout=15)
 
 
+def _announce(append: Callable[[str, dict], bool], agent: str, pane_pid: Optional[int],
+              respawns: int) -> None:
+    """Say which pane runs the session now: the daemon's word that this wrapper can respawn it,
+    and, after a respawn, that the session is a new incarnation (MacEff #726)."""
+    from macf.pd.interface import EVENT_SESSION_PANE
+    data = {"agent": agent, "wrapper_pid": os.getpid(), "wrapper_start": proc_start(os.getpid()),
+            "pane_pid": pane_pid, "respawns": respawns}
+    if not append(EVENT_SESSION_PANE, data):
+        print(f"⚠️ MACF: session unit: the {EVENT_SESSION_PANE} event was not recorded; the daemon "
+              f"will restart this unit whole", file=sys.stderr)
+
+
+def respawn_session(tmux: str, env: Mapping[str, str], agent: str,
+                    pane_groups: Mapping[int, Optional[str]]) -> Optional[tuple]:
+    """Restart the session in its pane and keep the server, so attached clients stay
+    attached (MacEff #726). Returns (pane pid, its groups), or None after saying why.
+
+    The pane is kept while the old session ends (``remain-on-exit``), and the old session's
+    groups are reaped as the unit's own end reaps them, SIGTERM and then SIGKILL, before the
+    pane runs again: the session resumes its conversation (``claude -c``), and two at once
+    would share it. ``respawn-pane`` then runs the pane's own command again."""
+    target = f"={agent}:"
+    if _tmux(tmux, env, "has-session", "-t", f"={agent}").returncode != 0:
+        print(f"⚠️ MACF: session unit: no session {agent} answers on this server; it can't be "
+              f"restarted in place", file=sys.stderr)
+        return None
+    held = _tmux(tmux, env, "set-option", "-w", "-t", target, "remain-on-exit", "on")
+    if held.returncode != 0:
+        print(f"⚠️ MACF: session unit: could not keep the pane while its session ends: "
+              f"{(held.stderr or held.stdout).strip()[:200]}", file=sys.stderr)
+        return None
+    for pgid, leader_start in pane_groups.items():
+        if not reap_group(pgid, leader_start=leader_start):
+            print(f"⚠️ MACF: session unit: process group {pgid} of session {agent} survived SIGKILL; "
+                  f"not starting a second session beside it", file=sys.stderr)
+            return None
+    again = _tmux(tmux, env, "respawn-pane", "-k", "-t", target)
+    _tmux(tmux, env, "set-option", "-w", "-t", target, "remain-on-exit", "off")
+    if again.returncode != 0:
+        print(f"⚠️ MACF: session unit: the pane could not run its session again: "
+              f"{(again.stderr or again.stdout).strip()[:200]}", file=sys.stderr)
+        return None
+    shown = _tmux(tmux, env, "display-message", "-p", "-t", target, "#{pane_pid}")
+    try:
+        pane = int(shown.stdout.strip())
+    except ValueError:
+        print(f"⚠️ MACF: session unit: tmux named the respawned pane's pid as {shown.stdout.strip()!r}",
+              file=sys.stderr)
+        return None
+    groups: Dict[int, Optional[str]] = {}
+    group = pane_group(pane, os.getpgid(0))
+    if group is not None:
+        groups[group] = proc_start(group)
+    return pane, groups
+
+
 def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
         conf: Optional[Path] = None, extra_env: Optional[Mapping[str, str]] = None,
         environ: Optional[Mapping[str, str]] = None, tmux: str = "tmux",
-        base: Optional[Path] = None, ready_timeout: float = READY_TIMEOUT_S) -> int:
+        base: Optional[Path] = None, ready_timeout: float = READY_TIMEOUT_S,
+        append: Optional[Callable[[str, dict], bool]] = None) -> int:
     """Be the session unit until the session ends; return the tmux server's exit status.
 
     ``child`` is the command the session runs (the harness child script). A declared
@@ -304,6 +361,13 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
 
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, _stop)
+
+    # SIGUSR1 asks for the session to restart in its pane (MacEff #726). The handler only
+    # marks the ask; the wait loop below does the work, outside the signal handler.
+    respawn_asked = []
+    signal.signal(signal.SIGUSR1, lambda _s, _f: respawn_asked.append(True))
+    if append is None:
+        from macf.agent_events_log import append_event as append
 
     deadline = time.monotonic() + ready_timeout
     while _tmux(tmux, env, "show-options", "-s", "exit-empty").returncode != 0:
@@ -361,7 +425,30 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
     _tmux(tmux, env, "set-option", "-s", "exit-empty", "on")
     print(f"📡 MACF: session unit: session {agent} runs under tmux server {server.pid} "
           f"(TMUX_TMPDIR={directory})", file=sys.stderr)
-    status = server.wait()
+    respawns = 0
+    _announce(append, agent, int(panes[0]) if panes and panes[0].isdigit() else None, respawns)
+    while True:
+        try:
+            status = server.wait(timeout=0.2)
+            break
+        except subprocess.TimeoutExpired:
+            pass  # noqa: MACEFF003 - the server runs on; the loop only looks for a respawn ask
+        if not respawn_asked:
+            continue
+        respawn_asked.clear()
+        done = respawn_session(tmux, env, agent, pane_groups)
+        if done is None:
+            # The session can't be restarted in place, so the unit ends and the daemon,
+            # which asked for a restart, starts it again whole.
+            print(f"⚠️ MACF: session unit: restarting {agent} whole instead", file=sys.stderr)
+            _stop(None, None)
+            continue
+        pane, pane_groups = done
+        _write_pane_record(directory, pane_groups)
+        respawns += 1
+        print(f"📡 MACF: session unit: session {agent} restarted in its pane (pid {pane}); "
+              f"tmux server {server.pid} kept", file=sys.stderr)
+        _announce(append, agent, pane, respawns)
     # The unit ends only when the session has: a pane that outlived the server's hangup is
     # stopped here, so a restart never starts a second session beside it.
     for pgid, leader_start in pane_groups.items():
