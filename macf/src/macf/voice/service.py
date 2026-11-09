@@ -176,8 +176,12 @@ def handle_request(request: dict) -> dict:
 
             return response
 
-        except Exception as e:
-            return {"error": str(e)}
+        except Exception as e:  # noqa: BLE001 - any failure becomes the one fixed reply below
+            # The detail (ffmpeg's command line names the path) goes to the service's own log, which
+            # only its account reads; the caller learns only that the file couldn't be transcribed
+            # (cversek/MacEff#868).
+            print(f"⚠️ MACF: voice: transcription failed: {e}", file=sys.stderr)
+            return {"error": "the audio file can't be read"}
 
     else:
         return {"error": f"Unknown action: {action}"}
@@ -282,8 +286,9 @@ def start_service(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
                 response = handle_request(request)
                 conn.sendall(json.dumps(response).encode('utf-8') + b'\n')
         except Exception as e:
+            print(f"⚠️ MACF: voice: a request failed: {e}", file=sys.stderr)
             try:
-                conn.sendall(json.dumps({"error": str(e)}).encode('utf-8') + b'\n')
+                conn.sendall(json.dumps({"error": "the request failed"}).encode('utf-8') + b'\n')
             except OSError as send_err:
                 print(f"⚠️ MACF: failed to send error response to voice client: {send_err}", file=sys.stderr)
         finally:

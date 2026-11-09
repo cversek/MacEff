@@ -26,3 +26,13 @@ def test_stop_signals_the_service_and_sends_no_request(monkeypatch, tmp_path):
     monkeypatch.setattr(service.os, "kill", lambda pid, sig: killed.append((pid, sig)))
     assert service.stop_service() == 0
     assert sent == [] and killed == [(4242, signal.SIGTERM)]
+
+
+def test_a_file_that_exists_but_isnt_audio_gets_the_same_reply(tmp_path, capsys):
+    """The #969 review: a file that exists and fails to transcribe used to return ffmpeg's error,
+    which quotes the whole command line, path included. It gets the same fixed reply as a missing
+    one, and the detail goes to the service's own stderr."""
+    notes = tmp_path / "private-notes.oga"
+    notes.write_text("not audio")
+    reply = service.handle_request({"action": "transcribe", "file": str(notes)})
+    assert reply == {"error": "the audio file can't be read"}
