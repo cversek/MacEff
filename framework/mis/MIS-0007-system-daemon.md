@@ -2,14 +2,14 @@
 
 **Number**: 0007
 **Type**: Standards
-**Status**: Final-Comment
+**Status**: Deliberation
 **Authors**: the operator; drafted by the head maintainer as Secretary
 **Secretary**: the head maintainer
 **Deliberation**: https://github.com/cversek/MacEff/issues/867
 **Created**: 2026-10-28
 **Updates**: none
 **Supersedes**: none
-**Lands-in**: macf.pd, where the system and fleet daemons already run as primal daemons (#920, #926, #930); framework/policies/base/infrastructure/persistent_layer.md, sections 11.4 and 11.5 (landed with the clean break) and a section on associations (planned); framework/glossary.md (planned)
+**Lands-in**: macf.pd, where the system and fleet daemons already run as primal daemons (#920, #926, #930); framework/policies/base/infrastructure/persistent_layer.md, sections 3.4 and 3.5 (landed with the clean break) and a section on associations (planned); framework/glossary.md (planned)
 **Resolution**: none
 
 ---
@@ -24,12 +24,14 @@ This revision carries the prototype the operator ruled on (#920, "Keep it, merge
 
 MIS-0004 depends on the system daemon directly, because its mail broker is a system-daemon unit. The operator proposed the system daemon on #850, MIS-0004's deliberation, and on 2026-10-28 moved that its requirements be documented in a separate draft, so mail and the system daemon could be developed in parallel (#850, comment 6477160351). On 2026-10-31 he convened a deliberation on #867 that widened the scope to the grouping layer (P01). This revision carries that deliberation's outcome, as the Secretary's synthesis on #867 proposes, and the two prototypes' results that came before it. This MIS concerns the operator, who installs and declares the system daemon, and every agent on a system that has one.
 
+The revision of 2026-11-09 draws one seam with MIS-0002. MIS-0002 specifies the base every primal daemon is and the Agent Daemon built on it. This MIS specifies what placing that base again adds, the recursion, and the System Daemon in full. It names the Fleet Daemon as the next placement and leaves its own specification to a later MIS.
+
 ## 2 Motivation
 
-- **A unit that needs another account has no supervisor.** A primal daemon starts units only as its own account (persistent_layer 10.3, under MIS-0002-R78 (layer_MUST-NOT_widen_permissions)). So a mail broker on its own account needs something that can start a unit as a declared account. Without one shared supervisor, each such service gets a service daemon of its own, which is the sprawl MIS-0002 set out to end (the operator, #850 comment 6471946844). Evidence: the policy, and the positions on #850.
+- **A unit that needs another account has no supervisor.** A primal daemon starts units only as its own account (persistent_layer 2.3, under MIS-0002-R78 (layer_MUST-NOT_widen_permissions)). So a mail broker on its own account needs something that can start a unit as a declared account. Without one shared supervisor, each such service gets a service daemon of its own, which is the sprawl MIS-0002 set out to end (the operator, #850 comment 6471946844). Evidence: the policy, and the positions on #850.
 - **Shared resources are duplicated per agent.** A warm embedding model holds 1,273 MB resident, once per agent under MIS-0006's draft, although only each agent's index is private. The subscription's usage reading runs in every agent's hooks, each with its own copy of the credential. Once a fetch failed, every hook on the host retried it on every tool call (#852). Evidence: a measurement (the search service) and an incident.
 - **Only a parent can read an exit status.** A primal daemon restarted beside its running session adopts that session. At every planned restart it then reports the session failed, because only a parent reads an exit status (Seat N, #850 comment 6476229730). Evidence: an incident, reported by the seat.
-- **A container's start step already does this job, once.** It renders declarations that only root can write, and starts each daemon as its account (persistent_layer 10.1). Nothing keeps doing that after the start (#850 comment 6475537319). Evidence: the deployment.
+- **A container's start step already does this job, once.** It renders declarations that only root can write, and starts each daemon as its account (persistent_layer 2.1). Nothing keeps doing that after the start (#850 comment 6475537319). Evidence: the deployment.
 - **A grouping of agents shares more than a broker.** The status of every unit, the network door, the streams that leave an agent, and shared services all belong to a system rather than to any one agent (P01). Without one place for them, each arrives as its own daemon or its own listener. MacEff already runs three listeners on loopback that any local account can reach (#868). Evidence: the deliberation, and an audit of today's listeners.
 - **Seats lose work in ways no status shows.** A session waiting on a prompt read healthy for most of a day, a restart left a seat's notice channel failed while its status read running, and one failing unit woke a seat dozens of times in a night (P21). Evidence: the container seats' reports, relayed.
 
@@ -96,8 +98,8 @@ flowchart TB
   end
 
   subgraph AROUND["Around each daemon"]
-    PLAT["Its own platform: launchd, the user's systemd,<br/>or a container's outer tier as container root (R11, R40)"]
-    WATCH["Outside watch, its own timer and its own alert credential (R18)"]
+    PLAT["Its own platform: launchd, the user's systemd,<br/>or a container's outer tier as container root (MIS-0002 R195, R03)"]
+    WATCH["Outside watch, its own timer and its own alert credential (MIS-0002 R74)"]
     REG[("Operator's registry, root-owned, one file<br/>agents' keys and each certificate's name, serial, expiry (R70)")]
   end
 
@@ -145,7 +147,7 @@ To place a new unit, ask three questions:
 
 The usage reading is an example. It holds a person's credential and serves every agent on that person's login. So it runs once per login, as that login, a unit of that login's daemon. When agents on several systems share one subscription, its summary is exported up to the fleet, the first service that belongs there (P03).
 
-**The declarations.** A system or fleet daemon is declared as any primal daemon is (MIS-0002 and persistent_layer 11), with three sections an agent's daemon may also carry:
+**The declarations.** A system or fleet daemon is declared as any primal daemon is (MIS-0002 and persistent_layer 2 and 3.5), with three sections an agent's daemon may also carry:
 - `broker`: its own MQTT broker's port, certificate authority, certificates and the readers it grants;
 - `association`: for a daemon that admits members, the members it expects, each by card and certificate, and how long a member may stay silent;
 - `export`: for a member, the association broker it exports to, its certificates there, and the sources it exports.
@@ -182,57 +184,69 @@ These are the terms the Specification uses beyond the glossary.
 
 ## 6 Specification
 
-The Secretary gathered the first requirements from the positions on #850, at the operator's motion of 2026-10-28, and the rest from the deliberation on #867. Section 7 gives each one's reason and source. Section 12 says how each lands.
+The Secretary gathered the first requirements from the positions on #850, at the operator's motion of 2026-10-28, and the rest from the deliberation on #867. Section 7 gives each one's reason and source. Section 12 says how each lands. The revision of 2026-11-09 moved the rows that bind every daemon to MIS-0002, which now specifies the base and the Agent Daemon built on it, so this MIS specifies the recursion and the System Daemon, and names the Fleet Daemon (6.3).
 
-### 6.1 The system daemon and its account
+### 6.1 The recursion
 
-- **R01** [MUST · decidable: macf/tests/test_pd_association.py::test_one_system_daemon_per_system] Each system MUST run at most one system daemon, a primal daemon on its own account, started by the system's own service manager. (system_daemon_MUST_be_one_per_system)
-- **R72** [MUST NOT · decidable: macf/tests/test_pd_association.py::test_a_system_or_fleet_daemon_refuses_to_run_as_root] A system or fleet daemon MUST NOT run as root. (system_daemon_MUST-NOT_run_as_root)
-- **R73** [MUST · judgment: the head maintainer, at review of each change to macf.pd] A system or fleet daemon MUST run the primal daemon's own code, and differ from an agent's only in its declaration. (association_MUST_be_a_primal_daemon)
-- **R07** [MUST NOT · decidable: macf/tests/test_pd_broker.py::test_a_member_writes_only_its_own_subtree_and_reads_nothing] An association MUST NOT take an instruction from a member, whose certificate writes only that member's own exports and presence. (association_MUST-NOT_take_member_instructions)
+A system daemon and a fleet daemon are MIS-0002's base placed again, on accounts of their own (R73). What every daemon is, its identity, declaration, units, log, scheduler, outside watch and its own broker, is MIS-0002 6.1, and this MIS doesn't restate it. This section adds what placing the base again needs: associations of daemons, members, exports, presence and certificates. The same rules serve every level, so stacking another level above is one more placement, not new code.
 
-### 6.2 Members, units and their placement
-
+- **R74** [MUST NOT · decidable: macf/tests/test_pd_composition.py::test_a_system_or_fleet_declaration_builds_no_agent_component (planned)] A system or fleet daemon's declaration MUST NOT add an Agent Daemon component. (association_MUST_add_no_agent_component)
+  - *Added by the revision of 2026-11-09 (the requirement map, ruled "Accept as is" on #552, comment 6731243851).*
 - **R09** [MUST · judgment: the head maintainer, at review of each new unit] A service MUST run as the account whose secret it holds, in that account's daemon, a member of the smallest group sharing it. (unit_MUST_be_placed_by_secret_and_scope)
-- **R10** [MUST · judgment: the head maintainer, at review of each new unit] Where a service needs a login's session, it MUST run in that session, as a unit of that login's own daemon. (session_bound_unit_MUST_run_in_its_session)
-- **R11** [MUST · decidable: macf/tests/test_container_outer_tier.py::test_a_failing_daemon_is_restarted_with_the_units_backoff] Where the system is a container, its outer tier MUST start each primal daemon as its account, restart it with backoff, and read its exit status. (outer_tier_MUST_parent_in_container)
-- **R21** [MUST · decidable: macf/tests/test_container_outer_tier.py::test_an_unusable_home_is_not_restarted] A primal daemon MUST tell its outer tier what it wants only by its exit status, read through the exit table. (pd_MUST_speak_to_outer_tier_by_exit_status)
-- **R40** [MUST · judgment: the host-side maintainer, at review of each install path] On a host, each primal daemon MUST be started and restarted by its login's service manager, never by another daemon. (host_pd_MUST_be_run_by_its_service_manager)
-- **R12** [MUST · decidable: macf/tests/test_sd_units.py::test_declared_environment_and_identity] Each unit MUST start with only its declared environment, checked under `env -i`, together with the identity it presents to outside services. (unit_environment_MUST_be_declared_in_full)
-- **R46** [SHOULD · decidable: macf/tests/test_sd_units.py::test_declared_needs_refused_by_name] A unit SHOULD declare the commands and variables it needs, so a start that lacks one is refused by name. (unit_SHOULD_declare_its_needs)
-- **R13** [MUST · decidable: macf/tests/test_sd_units.py::test_one_time_zone] A system or fleet daemon MUST declare one time zone for all its units, and state it in every restart report. (system_daemon_MUST_declare_one_time_zone)
-- **R14** [MUST · decidable: macf/tests/test_sd_units.py::test_code_version_recorded] When a unit starts, its daemon MUST record the code version it started from, and report a unit that runs older code. (unit_code_version_MUST_be_recorded)
-- **R15** [MUST · decidable: macf/tests/test_sd_units.py::test_restart_report_in_agent_store] After a restart, the report of what was carried, changed and lost MUST be written into the agent's own store, by the agent's account. (restart_report_MUST_reach_agent_store)
-- **R45** [MUST · decidable: macf/tests/test_sd_units.py::test_failure_notifies_once_per_stretch] A unit's failures MUST reach its agent once when they begin and once when they end, never once per restart attempt. (unit_failure_MUST_notify_once_per_stretch)
-- **R44** [MUST NOT · decidable: macf/tests/test_sd_units.py::test_waiting_unit_not_restarted] A unit that reports it is waiting on a person MUST NOT be restarted for waiting, and reads as healthy. (waiting_unit_MUST-NOT_be_restarted)
-- **R16** [MUST · decidable: macf/tests/test_sd_units.py::test_agent_controls_own_units] An agent MUST be able to start, stop, read the status of, and read the logs of the units under its primal daemon, without root or a prompt. (agent_MUST_control_its_own_units)
 - **R39** [MUST NOT · decidable: macf/tests/test_pd_association.py::test_a_member_runs_and_records_without_its_association] A primal daemon MUST NOT depend on its association, or on any member of it, to run or to record. (pd_MUST-NOT_depend_on_its_association)
 - **R17** [MUST · judgment: the head maintainer, at review of each export] Data MUST flow only up an association, as exports the reader weighs, never down as an instruction. (association_data_MUST_flow_up_only)
-
-### 6.3 Status and the outside watch
-
-- **R18** [MUST · decidable: macf/tests/test_sd_watch.py::test_watch_outside_system_daemon] Each system or fleet daemon MUST be checked by an outside watch that its service manager runs, never by one of its own units. (system_daemon_MUST_have_outside_watch)
 - **R27** [MUST · decidable: macf/tests/test_pd_association.py::test_only_declared_sources_are_exported_on_the_members_own_subtree] A member's status MUST reach its association only as exports the member publishes, never read from the member's store or socket. (member_status_MUST_be_pushed_as_exports)
 - **R30** [MUST · decidable: macf/tests/test_pd_association.py::test_the_association_reports_each_difference_between_declared_and_present] Once a member exports nothing within its declared bound, its association MUST report it silent, never its last export as current. (status_MUST_show_report_age)
 - **R31** [MUST · decidable: macf/tests/test_pd_association.py::test_an_export_carries_no_content_even_when_the_record_does] An export MUST carry states, codes, versions, ages and counts, never a record's content, keys or logs. (status_MUST_carry_no_content)
 - **R33** [MUST · decidable: macf/tests/test_pd_association.py::test_shared_login_exports_labelled_claimed] On a login several agents share, a member's exports MUST be labelled claimed, since every agent there can read the others' certificates. (shared_login_source_MUST_be_labelled_claimed)
 - **R42** [MUST · decidable: macf/tests/test_pd_association.py::test_absent_login_reads_absent] Where a member's login is absent, its association MUST say the login is absent, not that the member failed. (absent_login_MUST_read_as_absent)
-- **R22** [MUST · decidable: macf/tests/test_sd_socket.py::test_status_reports_egress_rule] The system daemon's status MUST report the egress rule as enforced, not enforced or unknown, from a probe the rule refuses and a control it allows. (egress_rule_MUST_be_reported_by_status)
-
-### 6.4 Platforms and the outer tier
-
-- **R19** [MUST · decidable: macf/tests/test_sd_platform.py::test_reload_waits_for_bootout] On macOS, a reload MUST wait until launchd reports the booted-out job gone before it bootstraps the job again. (reload_MUST_wait_for_bootout)
-- **R20** [MUST · decidable: macf/tests/test_container_outer_tier.py::test_the_longest_stop_chain_fits_the_stop_timeout] In a container, the longest chain of unit stop graces, in reverse start order, MUST fit inside the container's stop timeout. (container_stop_timeout_MUST_exceed_unit_grace)
-- **R26** [MUST · decidable: macf/tests/test_sd_platform.py::test_outer_stop_timeout_matches_declaration] Before a daemon starts, the install or start step MUST set the outer tier's stop timeout from the declaration, or refuse to start where they differ. (outer_stop_timeout_MUST_match_declaration)
-- **R28** [MUST · decidable: macf/tests/test_sd_declaration.py::test_macos_door_in_system_domain] On macOS, a system or fleet daemon, and a door, MUST run in the system domain, never in a per-user domain. (macos_association_MUST_run_in_system_domain)
-
-### 6.5 Links between daemons
-
 - **R38** [MUST · decidable: macf/tests/test_pd_broker.py::test_reconnect_is_jittered] When a member loses its association's broker, it MUST reconnect after a jittered backoff, so members don't all reconnect at once. (reconnect_MUST_be_jittered)
+- **R65** [MUST · decidable: macf/tests/test_pd_association_live.py::test_a_member_that_dies_is_marked_offline_by_its_will_and_reported] A member MUST publish its presence retained, with an `offline` last will, and retain nothing else on its association's broker. (presence_MUST_be_retained_with_a_will)
+- **R66** [MUST · decidable: macf/tests/test_pd_association_live.py::test_a_member_that_dies_is_marked_offline_by_its_will_and_reported] A member's last will MUST report only that its link was lost, never the state of the member. (last_will_MUST_report_the_link_only)
+- **R67** [MUST NOT · decidable: macf/tests/test_pd_association.py::test_a_members_link_subscribes_to_nothing_at_its_association] A member's link MUST NOT subscribe to anything on its association's broker, so nothing retained there can reach the member. (member_link_MUST-NOT_receive_from_association)
+- **R70** [MUST · decidable: macf/tests/test_amail_signing.py::test_a_certificate_is_recorded_by_name_serial_and_expiry] Each certificate the operator's authority issues MUST be recorded in the operator's registry by its name, serial and expiry, never its key. (certificate_MUST_be_recorded_in_registry)
+- **R71** [MUST · decidable: macf/tests/test_pd_association.py::test_the_association_reports_each_difference_between_declared_and_present] A daemon MUST join an association only by its own declaration naming that association's broker and the certificates it uses there. (membership_MUST_be_declared_by_member)
+- **R75** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_member_writes_only_its_own_subtree_and_reads_nothing] Where a daemon admits members, its MQTT broker MUST let each declared member's certificate write only that member's own subtree. (member_MUST_write_only_own_subtree)
+  - *Proposed here from MIS-0002 R177 by the revision of 2026-11-09 (the requirement map, ruled "Accept as is" on #552, comment 6731243851). MIS-0002 6.4 holds it, binding, until this MIS is accepted; the accepting revision withdraws it there.*
+- **R76** [MUST · decidable: macf/tests/test_pd_association.py::test_an_export_carries_no_content_even_when_the_record_does and macf/tests/test_pd_association.py::test_only_declared_sources_are_exported_on_the_members_own_subtree] A member MUST export only its declared sources, as summaries that carry none of the records' data. (export_MUST_be_declared_and_contentless)
+  - *Proposed here from MIS-0002 R178 by the revision of 2026-11-09 (the requirement map, ruled "Accept as is" on #552, comment 6731243851). MIS-0002 6.4 holds it, binding, until this MIS is accepted; the accepting revision withdraws it there.*
+- **R77** [MUST · decidable: macf/tests/test_pd_association.py::test_the_association_reports_each_difference_between_declared_and_present] Where a daemon admits members, it MUST record each member that is undeclared, never present, offline or silent. (member_presence_MUST_be_recorded)
+  - *Proposed here from MIS-0002 R179 by the revision of 2026-11-09 (the requirement map, ruled "Accept as is" on #552, comment 6731243851). MIS-0002 6.4 holds it, binding, until this MIS is accepted; the accepting revision withdraws it there.*
+- **R78** [MUST · decidable: macf/tests/test_pd_broker.py::test_the_export_link_records_each_change_of_reason_once and macf/tests/test_pd_broker.py::test_macos_local_network_block_is_named_not_read_as_an_outage] When a member's export fails, the daemon MUST record the cause once for each change of cause. (export_failure_MUST_name_its_cause)
+  - *Proposed here from MIS-0002 R180 by the revision of 2026-11-09 (the requirement map, ruled "Accept as is" on #552, comment 6731243851). MIS-0002 6.4 holds it, binding, until this MIS is accepted; the accepting revision withdraws it there.*
+- **R79** [MUST NOT · judgment: the head maintainer, at review of each pull request touching associations] A daemon that admits members MUST NOT start, stop or signal any member's units. (association_MUST-NOT_control_members)
+  - *Proposed here from MIS-0002 R181 by the revision of 2026-11-09 (the requirement map, ruled "Accept as is" on #552, comment 6731243851). MIS-0002 6.4 holds it, binding, until this MIS is accepted; the accepting revision withdraws it there.*
+- **R80** [MUST · decidable: macf/tests/test_pd_association.py::test_links_start_at_the_end_of_a_log_that_has_history and macf/tests/test_pd_association.py::test_a_link_starts_with_each_units_current_state] When a daemon's MQTT link starts, it MUST publish from its log's end, after one summary of each unit's current state. (mqtt_link_MUST_start_at_log_end)
+  - *Proposed here from MIS-0002 R182 by the revision of 2026-11-09 (the requirement map, ruled "Accept as is" on #552, comment 6731243851). MIS-0002 6.4 holds it, binding, until this MIS is accepted; the accepting revision withdraws it there.*
 
 The rest of the link is MIS-0002's, because every daemon's stream is: each record carries its source's previous position (MIS-0002-R175 (mqtt_record_MUST_carry_previous_position)), a reader that reconnects catches up from the log (MIS-0002-R154 (subscriber_MUST_resume_from_last_record)), a backlog past its bound becomes one gap (MIS-0002-R176 (mqtt_backlog_MUST_become_one_gap)), and a member exports only its declared sources (MIS-0002-R178 (export_MUST_be_declared_and_contentless)) on its own subtree (MIS-0002-R177 (member_MUST_write_only_own_subtree)).
 
-### 6.6 The door and the system's crossings
+### 6.2 The System Daemon
+
+The system daemon is the base placed at one system, a host or a container, whose members are the system's agents' daemons and its services' daemons.
+
+#### 6.2.1 Its account
+
+- **R01** [MUST · decidable: macf/tests/test_pd_association.py::test_one_system_daemon_per_system] Each system MUST run at most one system daemon, a primal daemon on its own account, started by the system's own service manager. (system_daemon_MUST_be_one_per_system)
+- **R72** [MUST NOT · decidable: macf/tests/test_pd_association.py::test_a_system_or_fleet_daemon_refuses_to_run_as_root] A system or fleet daemon MUST NOT run as root. (system_daemon_MUST-NOT_run_as_root)
+- **R73** [MUST · judgment: the head maintainer, at review of each change to macf.pd] A system or fleet daemon MUST run the primal daemon's own code, and differ from an agent's only in its declaration. (association_MUST_be_a_primal_daemon)
+- **R07** [MUST NOT · decidable: macf/tests/test_pd_broker.py::test_a_member_writes_only_its_own_subtree_and_reads_nothing] An association MUST NOT take an instruction from a member, whose certificate writes only that member's own exports and presence. (association_MUST-NOT_take_member_instructions)
+- **R28** [MUST · decidable: macf/tests/test_sd_declaration.py::test_macos_door_in_system_domain] On macOS, a system or fleet daemon, and a door, MUST run in the system domain, never in a per-user domain. (macos_association_MUST_run_in_system_domain)
+
+#### 6.2.2 Its services
+
+A service on an account of its own is that account's primal daemon, a member of the system's association (R09). The mail broker is the first.
+
+- **R81** [MUST · decidable: macf/tests/test_pd_declaration.py::test_mail_units] Each mail broker and each mail watcher MUST be a managed unit of the broker account's own primal daemon, a member of its system's association. (mail_broker_MUST_be_managed)
+  - *Proposed here from MIS-0002 R53 by the revision of 2026-11-09 (the requirement map, ruled "Accept as is" on #552, comment 6731243851). MIS-0002 6.4 holds it, binding, until this MIS is accepted; the accepting revision withdraws it there.*
+- **R82** [MUST · decidable: macf/tests/test_pd_declaration.py::test_periodic_clock_is_schedule] A mail clock that checks on a period MUST be a schedule. (periodic_mail_clock_MUST_be_schedule)
+  - *Proposed here from MIS-0002 R54 by the revision of 2026-11-09 (the requirement map, ruled "Accept as is" on #552, comment 6731243851). MIS-0002 6.4 holds it, binding, until this MIS is accepted; the accepting revision withdraws it there.*
+
+#### 6.2.3 Its status
+
+- **R22** [MUST · decidable: macf/tests/test_sd_socket.py::test_status_reports_egress_rule] The system daemon's status MUST report the egress rule as enforced, not enforced or unknown, from a probe the rule refuses and a control it allows. (egress_rule_MUST_be_reported_by_status)
+
+#### 6.2.4 The door and the system's crossings
 
 - **R47** [MUST · decidable: macf/tests/test_sd_declaration.py::test_crossings_declared] The system declaration MUST list every crossing of the system's boundary: listeners, mounted directories and files, and passed-in sockets. (crossings_MUST_be_declared)
 - **R48** [MUST · decidable: macf/tests/test_sd_status.py::test_status_compares_crossings] Status MUST compare the declared crossings with what the system has bound and mounted, and report each difference without refusing to start. (status_MUST_compare_crossings)
@@ -240,7 +254,7 @@ The rest of the link is MIS-0002's, because every daemon's stream is: each recor
 - **R50** [MUST NOT · judgment: the head maintainer, at review of each route through the door] The door MUST NOT carry or terminate an agent's own outbound connections, which stay the agent's. (door_MUST-NOT_carry_agents_own_traffic)
 - **R51** [MUST · decidable: macf/tests/test_sd_door.py::test_egress_admits_door_and_members_only] The egress rule MUST let only the door's account reach other systems' doors, and each member's account only its declared association's broker. (peer_egress_MUST_match_door_and_member_accounts)
 
-### 6.7 The operator's input
+#### 6.2.5 The operator's input
 
 - **R29** [MUST · decidable: macf/tests/test_sd_operator_input.py::test_input_routed_and_verified_at_receiver] Operator input MUST travel only on a route declared for it, with provenance set by its receiving primal daemon from the transport and any signature, never its text. (operator_input_MUST_be_routed_and_verified_at_receiver)
 - **R52** [MUST · decidable: macf/tests/test_sd_operator_input.py::test_label_is_receivers_verdict] Operator input MUST reach a session labelled by its receiving primal daemon's verdict, never by a field the input carries. (operator_input_label_MUST_be_receivers_verdict)
@@ -256,13 +270,30 @@ The rest of the link is MIS-0002's, because every daemon's stream is: each recor
 - **R62** [MUST · decidable: macf/tests/test_sd_declaration.py::test_capture_unit_names_trigger_devices] A capture unit's declaration MUST name its trigger devices, and nothing else opens its microphone. (trigger_devices_MUST_be_declared)
 - **R63** [MUST · decidable: macf/tests/test_sd_status.py::test_live_microphone_reported] A capture unit MUST report a live microphone as a status entry, with its age. (live_microphone_MUST_be_a_status_entry)
 
-### 6.8 Presence, certificates and the fleet hop
+### 6.3 The Fleet Daemon, named
 
-- **R65** [MUST · decidable: macf/tests/test_pd_association_live.py::test_a_member_that_dies_is_marked_offline_by_its_will_and_reported] A member MUST publish its presence retained, with an `offline` last will, and retain nothing else on its association's broker. (presence_MUST_be_retained_with_a_will)
-- **R66** [MUST · decidable: macf/tests/test_pd_association_live.py::test_a_member_that_dies_is_marked_offline_by_its_will_and_reported] A member's last will MUST report only that its link was lost, never the state of the member. (last_will_MUST_report_the_link_only)
-- **R67** [MUST NOT · decidable: macf/tests/test_pd_association.py::test_a_members_link_subscribes_to_nothing_at_its_association] A member's link MUST NOT subscribe to anything on its association's broker, so nothing retained there can reach the member. (member_link_MUST-NOT_receive_from_association)
-- **R70** [MUST · decidable: macf/tests/test_amail_signing.py::test_a_certificate_is_recorded_by_name_serial_and_expiry] Each certificate the operator's authority issues MUST be recorded in the operator's registry by its name, serial and expiry, never its key. (certificate_MUST_be_recorded_in_registry)
-- **R71** [MUST · decidable: macf/tests/test_pd_association.py::test_the_association_reports_each_difference_between_declared_and_present] A daemon MUST join an association only by its own declaration naming that association's broker and the certificates it uses there. (membership_MUST_be_declared_by_member)
+A fleet daemon is the same base placed once more: a primal daemon on the fleet's own account, named from the fleet's calling card, whose members are system daemons. Every rule of 6.1 binds it as it binds a system daemon, and so do R72 and R73, which name both. Nothing in this MIS binds a fleet daemon alone. Its own units, the zone watch first among them, the hop between machines on a LAN, and the fleet's certificate authority are left to a fleet MIS (Q12).
+
+### 6.4 Withdrawn
+
+These rows were withdrawn by the revision of 2026-11-09 (the requirement map, ruled "Accept as is" on #552, comment 6731243851). Their IDs are not reused.
+
+- R46 (unit_SHOULD_declare_its_needs) moved to MIS-0002 as R186, since it binds every daemon of its kind, not only a system daemon.
+- R13 (system_daemon_MUST_declare_one_time_zone) moved to MIS-0002 as R187, since it binds every daemon of its kind, not only a system daemon.
+- R14 (unit_code_version_MUST_be_recorded) moved to MIS-0002 as R188, since it binds every daemon of its kind, not only a system daemon.
+- R45 (unit_failure_MUST_notify_once_per_stretch) moved to MIS-0002 as R189, since it binds every daemon of its kind, not only a system daemon.
+- R16 (agent_MUST_control_its_own_units) moved to MIS-0002 as R190, since it binds every daemon of its kind, not only a system daemon.
+- R10 (session_bound_unit_MUST_run_in_its_session) moved to MIS-0002 as R191, since it binds every daemon of its kind, not only a system daemon.
+- R19 (reload_MUST_wait_for_bootout) moved to MIS-0002 as R192, since it binds every daemon of its kind, not only a system daemon.
+- R11 (outer_tier_MUST_parent_in_container) moved to MIS-0002 as R195, since it binds every daemon of its kind, not only a system daemon.
+- R21 (pd_MUST_speak_to_outer_tier_by_exit_status) moved to MIS-0002 as R196, since it binds every daemon of its kind, not only a system daemon.
+- R20 (container_stop_timeout_MUST_exceed_unit_grace) moved to MIS-0002 as R197, since it binds every daemon of its kind, not only a system daemon.
+- R26 (outer_stop_timeout_MUST_match_declaration) moved to MIS-0002 as R198, since it binds every daemon of its kind, not only a system daemon.
+- R12 (unit_environment_MUST_be_declared_in_full) restated MIS-0002 R12 (pd_MUST_start_units_itself), with R186 for what a unit needs.
+- R15 (restart_report_MUST_reach_agent_store) restated MIS-0002 R47 (pd_MUST_report_carried_changed_lost).
+- R18 (system_daemon_MUST_have_outside_watch) restated MIS-0002 R74 (pd_MUST_have_outside_watch), which binds every primal daemon.
+- R40 (host_pd_MUST_be_run_by_its_service_manager) restated MIS-0002 R03 (outer_tier_MUST_restart_pd), with MIS-0002 R181 (association_MUST-NOT_control_members).
+- R44 (waiting_unit_MUST-NOT_be_restarted) restated MIS-0002 R22 (layer_MUST-NOT_restart_waiting_unit).
 
 ## 7 Rationale and Rejected Alternatives
 
@@ -272,30 +303,14 @@ Each requirement's reason, with its source. Numbers like 6471946844 are comments
 - **R73**: "The Primal Daemon is the unit of supervision" (the operator, quoted from the approved roadmap, P22). One program at every level gives every level MIS-0002's supervision, liveness, event log and outside watch, and a fix at one level reaches all of them. The system and fleet daemons ran on this code at both levels before this revision (#920, #926).
 - **R07**: this is the system-level form of MIS-0002-R78 (layer_MUST-NOT_widen_permissions). An agent reads the system daemon's state but never steers it (6472809029). Both prototypes held it: a seat's account sending `stop broker` got status, and the broker kept running (6510997994); on macOS every verb from another account got "status, verb ignored" (6538604020). The socket lives in the runtime directory, not beside the root-owned declaration, where the first macOS install put it and the unit couldn't bind it (6538604020). It stood on #867 (P02). This revision: the socket is gone. An association reads its members' exports on its own broker, and a member's certificate writes only its own subtree (MIS-0002-R177 (member_MUST_write_only_own_subtree)), so a member has no path to instruct it. The other direction is MIS-0002-R181 (association_MUST-NOT_control_members) (P22).
 - **R09**: whose secret a unit holds decides its account, and how many agents it serves decides its supervisor (6475537319). Asked as one question, the usage reading had no home (6476909402). On #867 the operator's "a service lives at the smallest group that shares it" (P01) became a rule every layer obeys, so a new layer has to justify itself by a service its members share (P05, agreed in P07). The sentence now names the three groups. One subscription shared by systems is the first service that belongs to the fleet (P03). This revision: a daemon runs units only as its own account (MIS-0002-R78 (layer_MUST-NOT_widen_permissions)), so a service on another account is that account's own daemon, a member of its group's association (P22).
-- **R10**: on macOS, privacy grants attach to the responsible process and the login session (persistent_layer 3.1, 3.2), so a primal daemon stays a LaunchAgent (6472809029, 6475350267). launchd holds a job's exit status for any watcher, so on macOS watching versus parenting comes down to who may start and stop the unit, not who can read its status (6481387490). The host-side maintainer found that a GUI-domain LaunchAgent and its descendants can read the login keychain (6476909402). Whether a system-domain job with `UserName` can read it is untested (Q02). The capture unit for dictation is session-bound for the same reason: the microphone grant and the hotkeys belong to the operator's session (P10, P11, P12). This revision: the session-bound unit is a unit of the login's own daemon, not one a system daemon watches (P22).
-- **R11**: an adopter can't read a unit's exit status, so every planned restart reported the session failed (Seat N, 6476229730). In a container no GUI session binds a primal daemon, so the system daemon can parent it there (6475537319). Parenting inside the container also retires an interim host tool that restarts the containers' agents whenever Docker reports a container started, an instruction flowing down through a root-equivalent channel (P02). Every participant on #867 agreed to parent in containers (P02, P03, P04). It lands only once Q07 says what keeps running when a parented primal daemon stops or restarts. This revision: the parent is the member's own platform, as the approved roadmap says: "A daemon never launches a member; the member's own platform starts it" (P22). In a container that is the outer tier, the start step running as container root, which already starts each seat's daemon as that seat, restarts it with backoff, and reads its exit status (P23). The operator's answer retired R11 from the system daemon's side and moved Q07 to MIS-0002 (P25), so the condition above, that R11 lands only once Q07 is answered, no longer gates it: the outer tier already parents and is tested, and whether a stop may end a long job is the primal daemon's question, MIS-0002's Q16.
-- **R40**: on a Linux host the container-management maintainer's own primal daemon is a unit of the login's user service manager, with lingering on and a restart policy of always; that manager records its exit code and status, so the problem behind R11, that only a parent reads an exit status, doesn't arise (P02). Moving it out would break what binds it there: its runtime directory, its user bus and its session's tmux (P02). On macOS launchd holds the status (P03). So hosts watch, Linux included (P04). This revision: no daemon watches another. On a host the login's service manager starts and restarts each primal daemon, and the outside watch checks it (P22).
-- **R12**: units that moved onto declarations lost a timezone and an agent name, and read healthy (#836). After one move, a PATH order made a tool act under a person's login (Seat N). A client running without `USER` filed its credential under a second keychain item (#853). Every variable looked fine except the identity the unit presented, so the check compares that identity too (6476909402). Four of five container seats lost something from the login when they moved onto a daemon: a time zone, a toolchain, a `PATH` order that decided which identity a tool acted as (P21; #905 fixes the last for the default session).
-- **R46**: R12's check under `env -i` tests that nothing is inherited, not that what a unit needs is there. A unit that states the commands and variables it needs lets the start refuse a gap by name, rather than the gap being found later by its symptom (a seat, P21).
-- **R13**: one restart moved a seat's time zone, and its scheduled wakes fired at the same clock numbers in the new zone (Seat L, 6476228404). A container's clock and its configured zone can disagree (Seat M). The same disagreement between a signer and a receiver is why R57 declares a clock allowance (P07).
-- **R14**: a worker without reload served stale code after an update until someone restarted it by hand. A supervisor can't know when a unit needs restarting for new code, so it records and reports, and doesn't guess (Seat L, 6476228404). After a re-exec in place (R43) it is how the operator sees which units still run older code (P02).
-- **R15**: the restart report is the most useful notice a seat gets, and it stays the seat's, written by the seat's account (Seat L, 6476228404).
-- **R45**: a failing unit woke one seat dozens of times in a night, each wake re-reading a large cached context, and that seat counts this as the most valuable thing a supervisor could fix (P21). A record of each attempt can still be kept; what reaches the agent is the start of the failure and its end.
-- **R44**: a service that holds a key and starts locked, waiting for the operator, has to count as healthy in that state, because a restart loop would drop an unlocked key (P21). MIS-0002 already names the state, waiting on a person (MIS-0002-R21 (pd_MUST_report_waiting_on_person)). The supervisor never holds or relays the passphrase: R02 keeps root to its verbs, and R31 keeps keys out of status.
-- **R16**: long-lived services survive restarts under a supervisor, but only if the seat keeps control of its own (Seat K, 6476228830). It covers the units under the agent's primal daemon. A primal daemon controlling itself through the system daemon would be instructing it, which R07 forbids (6479561476). A seat asked that this need no prompt that hangs when nobody is watching (P21).
 - **R39**: concentrating the network and the routes in one daemon makes it a single point of failure, so it fails local: each primal daemon keeps running and keeps its own log, and only cross-agent and network routes stop (P05). "The router must never be in an agent's own path. A primal daemon hands off and moves on" (P03). The container-management maintainer worded it so it doesn't contradict R11: in a container a primal daemon depends on the root process only to be started and reaped, and on none of the feature units (P07). This revision: the association replaces the feature units. A member's exports wait in a bounded backlog while its association is away, and its own log and units go on (MIS-0002-R153 (subscriber_MUST-NOT_block_layer), MIS-0002-R176 (mqtt_backlog_MUST_become_one_gap)).
-- **R21**: a parented primal daemon that asked through the socket would be instructing the system daemon, which R07 forbids, so its exit status is its one channel up (6479561476). The exit table is the primal daemon's own, read the way its core reads it (#856). This revision: the exit status goes to the outer tier, which reads 78 as a home it can't use and stops trying, and 75 as a daemon already running (P23).
 - **R17**: a fleet server, if it comes, aggregates the system daemons' reports, and each hop carries data the reader weighs (the host-side maintainer, 6475350267). Mode changes still come from the operator directly, as `public_voice` 2.5 says of relayed words. The one exception is the operator's own input, which section 6.7 governs. The seats who addressed this agreed, and one asked that a relayed request keep showing whose word it was (P21). This revision: nothing flows down an association at all. The operator's own input is section 6.7's, on a route declared for it (P22, P25).
-- **R18**: a watch that runs inside the thing it watches dies with it. Once the system daemon hosts the broker and the model, its failure takes them all down at once (6475537319). This extends MIS-0002-R74 (pd_MUST_have_outside_watch) to the new locus. This revision: the fleet daemon is held to it too.
 - **R27**: root reading an agent's status would be reading input an agent wrote; that is Seat M's R03 incident with a socket in place of a file (P03). A status unit pulling it would need a grant into each agent's 0700 runtime directory, and a push needs none, since the receiver takes the source from the peer credentials (P04). The container-management maintainer conceded push (P07), and the head maintainer withdrew pull (P06). Two sources stay apart, what the root process witnessed and what the agent says, each with its age (P03, P07). The host-side maintainer proposed it with a second sentence; the Secretary trimmed it to 30 words and made the second sentence R32. This revision: the status unit is the association, and the push is the member's exports to its association's broker (P22).
 - **R30**: "A roll-up that serves a stale entry as current is worse than a gap, because a gap is what a reader notices" (P02). The container-management maintainer asked that staleness be a requirement and not a habit (P07). The egress probe's last run carries its time like any other entry, so a probe that stopped can't leave "enforced" standing (P07). This revision: built as the association's silent finding, which tells a member that is alive but quiet from one that is gone (P23, P24).
-- **R31**: "Status, not content" (P02): liveness, exit codes, code versions and restart counts go up, logs stay the agent's (R16) and the restart report stays in the agent's store (R15). The seats agreed provided status never touches a key or a request's contents: "Status yes, contents no" (P21). This revision: an export carries summaries only (MIS-0002-R178 (export_MUST_be_declared_and_contentless)).
+- **R31**: "Status, not content" (P02): liveness, exit codes, code versions and restart counts go up, logs stay the agent's (MIS-0002 R190) and the restart report stays in the agent's store (MIS-0002 R47). The seats agreed provided status never touches a key or a request's contents: "Status yes, contents no" (P21). This revision: an export carries summaries only (MIS-0002-R178 (export_MUST_be_declared_and_contentless)).
 - **R33**: "The kernel names each source" holds only where each agent has a uid of its own (P04). On a macOS host and on the container-management maintainer's own Linux host, agents share the operator's login, so the peer credentials name the login (P07). Until agents have logins of their own (MIS-0004-R05 (reachable_agent_MUST_have_its_own_login)), what they push is claimed, as MIS-0004-R46 (shared_login_attestation_MUST_be_labelled) labels signatures (P03, P06). This revision: on a shared login every agent can read the others' certificate keys, so a certificate names the login no better than the kernel did.
 - **R42**: when the operator logs out, the session's routes go quiet, and status says the login is absent, not that the routes failed (P03). With nobody logged in there is no domain to restart in (Q01). This revision: the association reports it.
 - **R22**: loading a pf or iptables rule needs root, which R02 keeps from the root process. So the operator's install step loads it and makes it survive a reboot, as a container's start step does today (6481387490, 6481618179). Q05 asked who reads whether it is loaded. A root verb comparing the loaded rule's digest was proposed (P03) and withdrawn (P04): on macOS `pfctl -d` disables pf and leaves the anchor loaded, so a digest can match while nothing is enforced. The rule is read by its effect instead: an unprivileged probe tries a connection the rule forbids and must be refused, while the door's account reaches a declared peer as the control; without the control, a network outage reads as a working rule (P02). REJECT on Linux and `block return` on macOS give the probe an immediate refusal (P04). The three readings are enforced, not enforced and unknown (P04, P07). The probe runs at each status interval and right after the system daemon starts (P07).
-- **R19**: `launchctl bootout` returns before the job has exited, so a bootstrap straight after it fails with error 5 (#841, 6468749316).
-- **R20**: docker's default stop timeout is 10 s, shorter than a session unit's 30 s stop grace (persistent_layer 6.2), so `docker stop` kills units mid-grace, and does so today (6479561476). Units stop in reverse start order, so the graces add along each chain. #856 checks this at load, and a watched unit adds no grace but still orders the units on either side. The container prototype measured it: with a 60 s stop timeout the ordered stop took 25.3 s, both seats together and then the broker (6510997994). Whether launchd keeps any order among system-domain jobs at shutdown is untested (6496466005, 6538604020). This revision: the stop chain is each container's. #856, which checked it at load, retires with the root process, so the check moves to the outer tier.
-- **R26**: the system daemon can't see the outer manager's stop timeout from inside a container. With 10 s set outside, the prototype's seat was killed 10 s into its 25 s stop although the declaration said 60 (6510997994). On macOS, launchd's per-job `ExitTimeOut` plays the same part, set by the install step from `stop_timeout_s` (6515533280, P03). In a container the timeout is rendered from the declaration when the container is created, as compose's stop grace period, and the start step compares the two and refuses on a mismatch; a `docker stop -t` given by hand still overrides it, and that leftover is the operator's (P02).
 - **R28**: a door can't be a job in a per-user domain. It runs on its own account, and launchd runs a login's GUI-session agents as that login; Apple's TN3179 exempts launchd daemons and root processes from the Local Network grant, not agents, and nobody can answer a service account's prompt; and a door has to stay up when the operator logs out (P03). It applies unchanged to the one door (P04), and its author applied it to the bridge, whose outgoing connection to a broker on the LAN needs that grant from anything in a session: "On macOS, it is a system-domain job" (P17). The Secretary widened the sentence to "a door or bridge unit" to match. The loader can check it once a unit's listening addresses are in the declaration (P03). This revision: the bridge is the system daemon's export link, so the daemon itself is the job that needs the system domain.
 - **R38**: after a router restart, every primal daemon on the system would otherwise reconnect at once (P03). This revision: built in #935. Each client draws its own first delay and ceiling, since the MQTT client's backoff has no jitter of its own (#921).
 - **R47**: if only network listeners count as doors, "everything crosses through the door" is false on day one: between systems on one host, today's channels are mounted directories and the Docker socket, and MIS-0004's hand-off between brokers is a shared directory (P02). Loopback is a network on a shared host: about half the loopback listeners on the host-side maintainer's machine authenticate nobody, and Local Network privacy doesn't cover loopback (P03). MacEff's own API proxy, search service and voice service each listen on a loopback TCP port, where TCP has no peer credentials and a port is a name any local account can take while its owner is down (P07, P10); they are #868 (P14). A file a unit relies on as host-owned, such as a stop switch, is named too, so nothing routes it through a path a seat can reach (P21). The head maintainer added the list to the door's definition (P06).
@@ -309,7 +324,7 @@ Each requirement's reason, with its source. Numbers like 6471946844 are comments
 - **R54**: if a cleaner rewrites the text after the capture unit signs it, the signature no longer verifies; if processing runs before signing, every processor holds the operator's key (P10). So the capture unit signs the raw transcript, each processor signs a record of what it took and what it produced, and an agent's own interpretation after verification is that agent's reading, never the operator's words: recognition errs ("do" and "don't"), and a cleaner that rewrites "don't merge" as "merge" is the failure this prevents (P10, P11). The host-side maintainer withdrew his wording for this one (P12).
 - **R55**: a door that reads traffic can capture a signed instruction and send it again later, so the signature has to cover a target and a freshness, and the receiver checks both; without them, a signed mode change from yesterday is still valid today (P04). Agreed by the head maintainer (P06) and the container-management maintainer (P07).
 - **R56**: if the record of accepted nonces lives only in memory, a captured instruction replays cleanly right after a restart, which is when the operator is most likely to be sending one (P07). A dictated "go", replayed just after a restart, is the case it guards (P11).
-- **R57**: the signer and the receiver can sit on systems whose clocks disagree (P07; R13).
+- **R57**: the signer and the receiver can sit on systems whose clocks disagree (P07; MIS-0002 R187).
 - **R58**: a wake phrase can be said by anything with a speaker, including an agent's own spoken alerts; agents on the host-side maintainer's machine already speak aloud to call the operator (P11). It stands on either platform (P13). A hotkey is a physical act only while no process in the session holds the grant to post synthetic key events (P11).
 - **R59**: "retained nowhere it doesn't belong" should name audio explicitly (P10). The host-side maintainer keeps the audio in the session, processing what comes outside an utterance in memory and discarding it (P11). A cleaner that calls a remote model sends the operator's speech off the machine, which is egress under the owner-matched rule: from a declared account, or not at all (P11).
 - **R60**: speech must never vanish silently; this is MIS-0004-R18 (refusal_MUST_reach_the_sender) with the operator as the sender, through the capture unit (P11). The delivery receipt comes back up as data (P10). A wake phrase matched below a declared confidence goes to no agent, and the operator hears that it did (P11).
@@ -321,6 +336,10 @@ Each requirement's reason, with its source. Numbers like 6471946844 are comments
 - **R67**: a retained message on the down path is a replay engine: the broker would redeliver an operator instruction to every subscriber on every reconnect (P16, P17). The nonce makes the replay harmless; this makes it impossible (P16). Each system subscribes only to its own input topic, and the bridge drops anything retained before any other check (P16, P19). The bridge checks only these structural things, and the receiving primal daemon verifies the signature, so there is one verifier and it sits where the instruction acts (P19, P20). This revision: nothing is sent down an association, so a member's link subscribes to nothing there, and there is no retained input to replay (P22).
 - **R70**: one identity system, not two: each bridge's certificate fingerprint goes in the same operator-written registry as the MIS-0004 keys (MIS-0004-R42 (agent_key_MUST_be_declared_by_operator)), and rotates by the same declare, switch, retire procedure (MIS-0004-R45 (key_rotation_MUST_keep_signatures_verifiable); P16, P17, P19). This revision: the operator chose one root-owned registry file for agents' keys and for each certificate his authority issues: "One file for both" (P24). #927 built it.
 - **R71**: a fleet layer is a reader, with no root on any member (P03). No system is in a fleet unless its own declaration says so, and leaving one is a declaration change made by that system's operator (P07). Each declaration pins the broker's certificate (P16). This revision: built. A member's `export` section names its association, and the association's `association` section names the members it expects.
+- **The revision of 2026-11-09.** MIS-0002 now specifies the base every primal daemon is and the Agent Daemon built on it, and this MIS the recursion and the System Daemon (the requirement map, ruled "Accept as is" on #552, comment 6731243851). Eleven rows that bind every daemon of their kind moved to MIS-0002, and five that restated a MIS-0002 requirement were withdrawn (6.4). Their reasons travelled with them.
+- **R74**: the prototype ran the notice path, role duties and the login check in the system and fleet daemons, where they find nothing to do (Q11). An association adds no component, so it runs MIS-0002's base and nothing agent-specific.
+- **R75**, **R76**, **R77**, **R78**, **R79** and **R80**: MIS-0002 R177 to R182, the association rules the revision of 2026-11-08 put in MIS-0002 while it carried the broker. The map places them here, with the recursion they govern. Their reasons are MIS-0002 section 7's, from the live run on #920 and #921. They bind in MIS-0002 6.4 until this MIS is accepted, so no rule binds nowhere in between.
+- **R81** and **R82**: MIS-0002 R53 and R54. A mail broker runs as its own account's daemon, a member of its system's association, by R09; the mail clock is that daemon's schedule (MIS-0004).
 
 **Rejected**
 - **Units as threads of the root process.** A thread there runs as root (6475537319).
@@ -340,7 +359,7 @@ Each requirement's reason, with its source. Numbers like 6471946844 are comments
 - **A root process that starts units on declared accounts.** The previous revision's spine (its R02 to R06, R23 to R25, R32 and R43). Retired by the operator's ruling on the prototype (#920, "Keep it, merge it", comment 6723123027): each duty it held is either a member's own platform, which starts the member, or an association, which reads the member's exports (P22). A service that needs its own account runs as that account's daemon instead.
 - **A router, a status unit and a bridge as separate units.** Each daemon's own broker does the router's work, the association does the status unit's, and the export link is the bridge (P22). Three more units would be three more processes doing what one link already does at every level.
 - **An expiry on a member's retained presence.** It would make a member that is alive but quiet read as gone once it lapsed; the silent finding tells the two apart (P23, P24).
-- **Retiring R11 and R21 outright.** Proposed in the mapping (P22). They describe what runs in every container today, with the parent named wrongly: the parent is the outer tier, which is the member's own platform (P23).
+- **Retiring R11 and R21 outright.** Proposed in the mapping (P22). They describe what runs in every container today, with the parent named wrongly: the parent is the outer tier, which is the member's own platform (P23). They now bind every daemon in a container, as MIS-0002 R195 and R196.
 
 
 ## 8 Prior Art
@@ -362,7 +381,7 @@ Each requirement's reason, with its source. Numbers like 6471946844 are comments
 - **Accounts have a footprint on macOS.** A service account with no login session still got a per-user set of launchd services, which outlived the account's deletion until its user domain was booted out. Creating and retiring an account manages that domain.
 - **Installing it is the operator's act.** Creating the `maceff_system` account, a fleet's account, their service-manager units and their environments needs root, so each is an operator step, never the layer's own act (MIS-0002-R78 (layer_MUST-NOT_widen_permissions)). In a container, the start step does it once as container root.
 - **Every key and certificate is an operator step.** The operator's registry is one root-owned file per system, so every key declaration, rotation, and certificate record is a step the operator takes as root. A fleet adds his certificate authority and a certificate per daemon, each recorded by name, serial and expiry (R70).
-- **The stop timeout in a container.** Compose renders it from the declaration as the stop grace period when the container is created, and the start step compares (R26).
+- **The stop timeout in a container.** Compose renders it from the declaration as the stop grace period when the container is created, and the start step compares (MIS-0002 R198).
 - **Loopback listeners.** Until #868 moves MacEff's API proxy, search service and voice service off loopback TCP, they are declared crossings (R47). Each daemon's MQTT broker binds loopback only, unless it admits members (MIS-0002-R170 (mqtt_broker_MUST_bind_loopback)).
 - **MIS-0002 amendments dictation will need** (P11): a channel source for operator input (MIS-0002-R114 (channel_event_MUST_carry_notice_metadata), MIS-0002-R149 (pd_MUST_hold_sources_channel_did_not_declare)), counting it as the operator's activity (MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name), MIS-0002-R121 (hooks_MUST_read_source_from_origin_or_opening_tag)), and the notice class MIS-0002-R40 (layer_MUST-NOT_present_notice_as_instruction) separates from it. They are named now and decided when the feature is built, with the operator's decision.
 - **Long jobs.** Q07 moved to MIS-0002 as its Q16 at the operator's answer (P25): whether a primal daemon's stop may end a long job it started is that MIS's question.
@@ -382,41 +401,41 @@ No part of the grouping layer runs as root on a host (R72), so the previous revi
 
 | Requirement | Check | How | State |
 |---|---|---|---|
-| R01 | decidable | `macf/tests/test_pd_association.py::test_one_system_daemon_per_system` | planned |
-| R07 | decidable | `macf/tests/test_pd_broker.py::test_a_member_writes_only_its_own_subtree_and_reads_nothing` | passing |
+| R74 | decidable | `macf/tests/test_pd_composition.py::test_a_system_or_fleet_declaration_builds_no_agent_component` | planned: the test lands with MIS-0002's revision, where it passes; this row moves to passing once both are merged |
 | R09 | judgment | the head maintainer, at review of each new unit | standing |
-| R10 | judgment | the head maintainer, at review of each new unit | standing |
-| R11 | decidable | `macf/tests/test_container_outer_tier.py::test_a_failing_daemon_is_restarted_with_the_units_backoff` | passing |
-| R12 | decidable | `macf/tests/test_sd_units.py::test_declared_environment_and_identity` | planned |
-| R13 | decidable | `macf/tests/test_sd_units.py::test_one_time_zone` | planned |
-| R14 | decidable | `macf/tests/test_sd_units.py::test_code_version_recorded` | planned |
-| R15 | decidable | `macf/tests/test_sd_units.py::test_restart_report_in_agent_store` | planned |
-| R16 | decidable | `macf/tests/test_sd_units.py::test_agent_controls_own_units` | planned |
+| R39 | decidable | `macf/tests/test_pd_association.py::test_a_member_runs_and_records_without_its_association` | planned |
 | R17 | judgment | the head maintainer, at review of each export | standing |
-| R18 | decidable | `macf/tests/test_sd_watch.py::test_watch_outside_system_daemon` | planned |
-| R19 | decidable | `macf/tests/test_sd_platform.py::test_reload_waits_for_bootout` | planned |
-| R20 | decidable | `macf/tests/test_container_outer_tier.py::test_the_longest_stop_chain_fits_the_stop_timeout` | planned |
-| R21 | decidable | `macf/tests/test_container_outer_tier.py::test_an_unusable_home_is_not_restarted` | passing |
-| R22 | decidable | `macf/tests/test_sd_socket.py::test_status_reports_egress_rule` | planned |
-| R26 | decidable | `macf/tests/test_sd_platform.py::test_outer_stop_timeout_matches_declaration` | planned |
 | R27 | decidable | `macf/tests/test_pd_association.py::test_only_declared_sources_are_exported_on_the_members_own_subtree` | passing |
-| R28 | decidable | `macf/tests/test_sd_declaration.py::test_macos_door_in_system_domain` | planned |
-| R29 | decidable | `macf/tests/test_sd_operator_input.py::test_input_routed_and_verified_at_receiver` | planned |
 | R30 | decidable | `macf/tests/test_pd_association.py::test_the_association_reports_each_difference_between_declared_and_present` | passing |
 | R31 | decidable | `macf/tests/test_pd_association.py::test_an_export_carries_no_content_even_when_the_record_does` | passing |
 | R33 | decidable | `macf/tests/test_pd_association.py::test_shared_login_exports_labelled_claimed` | planned |
-| R38 | decidable | `macf/tests/test_pd_broker.py::test_reconnect_is_jittered` | passing |
-| R39 | decidable | `macf/tests/test_pd_association.py::test_a_member_runs_and_records_without_its_association` | planned |
-| R40 | judgment | the host-side maintainer, at review of each install path | standing |
 | R42 | decidable | `macf/tests/test_pd_association.py::test_absent_login_reads_absent` | planned |
-| R44 | decidable | `macf/tests/test_sd_units.py::test_waiting_unit_not_restarted` | planned |
-| R45 | decidable | `macf/tests/test_sd_units.py::test_failure_notifies_once_per_stretch` | planned |
-| R46 | decidable | `macf/tests/test_sd_units.py::test_declared_needs_refused_by_name` | planned |
+| R38 | decidable | `macf/tests/test_pd_broker.py::test_reconnect_is_jittered` | passing |
+| R65 | decidable | `macf/tests/test_pd_association_live.py::test_a_member_that_dies_is_marked_offline_by_its_will_and_reported` | passing |
+| R66 | decidable | `macf/tests/test_pd_association_live.py::test_a_member_that_dies_is_marked_offline_by_its_will_and_reported` | passing |
+| R67 | decidable | `macf/tests/test_pd_association.py::test_a_members_link_subscribes_to_nothing_at_its_association` | planned |
+| R70 | decidable | `macf/tests/test_amail_signing.py::test_a_certificate_is_recorded_by_name_serial_and_expiry` | passing |
+| R71 | decidable | `macf/tests/test_pd_association.py::test_the_association_reports_each_difference_between_declared_and_present` | passing |
+| R75 | decidable | `macf/tests/test_pd_broker.py::test_a_member_writes_only_its_own_subtree_and_reads_nothing` | passing |
+| R76 | decidable | `macf/tests/test_pd_association.py::test_an_export_carries_no_content_even_when_the_record_does` and `macf/tests/test_pd_association.py::test_only_declared_sources_are_exported_on_the_members_own_subtree` | passing |
+| R77 | decidable | `macf/tests/test_pd_association.py::test_the_association_reports_each_difference_between_declared_and_present` | passing |
+| R78 | decidable | `macf/tests/test_pd_broker.py::test_the_export_link_records_each_change_of_reason_once` and `macf/tests/test_pd_broker.py::test_macos_local_network_block_is_named_not_read_as_an_outage` | passing |
+| R79 | judgment | the head maintainer, at review of each pull request touching associations | standing |
+| R80 | decidable | `macf/tests/test_pd_association.py::test_links_start_at_the_end_of_a_log_that_has_history` and `macf/tests/test_pd_association.py::test_a_link_starts_with_each_units_current_state` | passing |
+| R01 | decidable | `macf/tests/test_pd_association.py::test_one_system_daemon_per_system` | planned |
+| R72 | decidable | `macf/tests/test_pd_association.py::test_a_system_or_fleet_daemon_refuses_to_run_as_root` | planned |
+| R73 | judgment | the head maintainer, at review of each change to macf.pd | standing |
+| R07 | decidable | `macf/tests/test_pd_broker.py::test_a_member_writes_only_its_own_subtree_and_reads_nothing` | passing |
+| R28 | decidable | `macf/tests/test_sd_declaration.py::test_macos_door_in_system_domain` | planned |
+| R81 | decidable | `macf/tests/test_pd_declaration.py::test_mail_units` | passing |
+| R82 | decidable | `macf/tests/test_pd_declaration.py::test_periodic_clock_is_schedule` | passing |
+| R22 | decidable | `macf/tests/test_sd_socket.py::test_status_reports_egress_rule` | planned |
 | R47 | decidable | `macf/tests/test_sd_declaration.py::test_crossings_declared` | planned |
 | R48 | decidable | `macf/tests/test_sd_status.py::test_status_compares_crossings` | planned |
 | R49 | decidable | `macf/tests/test_sd_door.py::test_door_authenticates_and_parses_nothing` | planned |
 | R50 | judgment | the head maintainer, at review of each route through the door | standing |
 | R51 | decidable | `macf/tests/test_sd_door.py::test_egress_admits_door_and_members_only` | planned |
+| R29 | decidable | `macf/tests/test_sd_operator_input.py::test_input_routed_and_verified_at_receiver` | planned |
 | R52 | decidable | `macf/tests/test_sd_operator_input.py::test_label_is_receivers_verdict` | planned |
 | R53 | judgment | the head maintainer, at review of each operator key's custody | standing |
 | R54 | decidable | `macf/tests/test_sd_operator_input.py::test_transformation_keeps_original` | planned |
@@ -429,13 +448,6 @@ No part of the grouping layer runs as root on a host (R72), so the previous revi
 | R61 | decidable | `macf/tests/test_sd_operator_input.py::test_expired_input_shown_expired` | planned |
 | R62 | decidable | `macf/tests/test_sd_declaration.py::test_capture_unit_names_trigger_devices` | planned |
 | R63 | decidable | `macf/tests/test_sd_status.py::test_live_microphone_reported` | planned |
-| R65 | decidable | `macf/tests/test_pd_association_live.py::test_a_member_that_dies_is_marked_offline_by_its_will_and_reported` | passing |
-| R66 | decidable | `macf/tests/test_pd_association_live.py::test_a_member_that_dies_is_marked_offline_by_its_will_and_reported` | passing |
-| R67 | decidable | `macf/tests/test_pd_association.py::test_a_members_link_subscribes_to_nothing_at_its_association` | planned |
-| R70 | decidable | `macf/tests/test_amail_signing.py::test_a_certificate_is_recorded_by_name_serial_and_expiry` | passing |
-| R71 | decidable | `macf/tests/test_pd_association.py::test_the_association_reports_each_difference_between_declared_and_present` | passing |
-| R72 | decidable | `macf/tests/test_pd_association.py::test_a_system_or_fleet_daemon_refuses_to_run_as_root` | planned |
-| R73 | judgment | the head maintainer, at review of each change to macf.pd | standing |
 
 **Cold-reader trial**: not yet held. A container seat that took no part in this deliberation is the natural reader, since it runs inside the layer this MIS describes.
 
@@ -466,7 +478,6 @@ This MIS lands by area, and each pull request carries its requirements' Conforma
   - R33's claimed label;
   - R39's test of a member running without its association;
   - R67's test that a member's link subscribes to nothing;
-  - the outer tier's stop chain (R20).
 - The door (6.6) lands when a second system needs it, the operator's input (6.7) when its first route is built, and the hop between machines when a fleet spans more than one host.
 
 ### 12.3 Tests the deliberation asked for
@@ -477,17 +488,18 @@ These were proposed during the deliberation and had not reported when it closed.
 
 ## 13 Open Questions
 
-- **Q01** On macOS, can the system daemon restart a primal daemon it watches, through the user's own service manager, or only report that it is down? Answered by the host-side maintainer: one restarter per unit, which on macOS is launchd (P03). This revision goes further: no daemon watches or restarts another, and each member's own platform restarts it (R40, MIS-0002-R181). (watched_unit_restart_on_macos)
+- **Q01** On macOS, can the system daemon restart a primal daemon it watches, through the user's own service manager, or only report that it is down? Answered by the host-side maintainer: one restarter per unit, which on macOS is launchd (P03). This revision goes further: no daemon watches or restarts another, and each member's own platform restarts it (MIS-0002 R03, MIS-0002-R181). (watched_unit_restart_on_macos)
 - **Q02** Can a system-domain job with `UserName` read the login keychain? Untested. A GUI-domain LaunchAgent and its descendants can. The host-side maintainer tests it at the next root sitting (section 12.3). (system_job_reads_login_keychain)
-- **Q03** Who installs and updates the system daemon, and how does an update avoid restarting every unit? Answered: the operator's install step creates its account and service unit, and it updates as any primal daemon does: a restart of the daemon alone, which its units survive and the next daemon adopts (MIS-0002), with R14 reporting units that run older code. (system_daemon_update_path)
+- **Q03** Who installs and updates the system daemon, and how does an update avoid restarting every unit? Answered: the operator's install step creates its account and service unit, and it updates as any primal daemon does: a restart of the daemon alone, which its units survive and the next daemon adopts (MIS-0002), with MIS-0002 R188 reporting units that run older code. (system_daemon_update_path)
 - **Q04** Does a fleet layer that reads several systems' reports belong in this MIS or a later one? Answered by the operator (P25): the same association rules serve every level, written once, here. The fleet's own units beyond its zone watch, and the hop between machines, belong to a fleet MIS when a fleet spans hosts. (fleet_layer_placement)
 - **Q05** Who reads whether the egress rule is loaded, for R22? Answered: nobody reads the rule; status reads its effect, from a probe the rule must refuse and a control that must get through, as enforced, not enforced or unknown (P02, P04, P07; R22). (egress_rule_read_by_whom)
 - **Q06** On macOS, should the root process fork and execute each parented unit itself, with launchd starting only the system daemon? Withdrawn with the root process: launchd starts every daemon, the system daemon included, and each daemon runs its own units. (linux_shape_on_macos)
 - **Q07** What keeps running when a parented primal daemon stops or restarts? Moved to MIS-0002 as its Q16 at the operator's answer (P25), with its substance: the seats' long jobs, the preliminary answer and its tie to MIS-0002-R47. R11 no longer parents from the system daemon's side, and whether a primal daemon's stop may end a long job it started is the primal daemon's question. (long_job_home)
 - **Q08** Which of the seats' status needs can a primal daemon read and push: a session waiting on a prompt, whether its channel is attached, who holds what on a shared GPU (P21)? Preliminary answer: the first two are states MIS-0002 already defines, waiting on a person (MIS-0002-R21 (pd_MUST_report_waiting_on_person)) and a dark channel (MIS-0002-R115 (dark_channel_MUST_raise_event)), which exports carry up; whether a prompt can be read from outside the session is unmeasured. A GPU lease is a shared service, placed by R09. (seat_status_sources)
 - **Q09** Should a member sign what it exports with a key of its own, so a reader that acts on a summary doesn't depend on the broker's honesty? Deferred until such a reader exists, as its author proposed (P17). (fleet_payload_signing)
-- **Q10** What does the hop between machines need beyond the same link over the LAN, with the same certificates? The broker binds beyond loopback only when it admits members (MIS-0002-R170), and R51 names whose account may reach it; nothing has crossed a machine yet. The first fleet that spans two hosts answers it. (lan_hop_beyond_one_host)
-- **Q11** Should the primal daemon have an explicit minimal base, its core supervisor, event log, control socket, scheduler and MQTT broker, with every agent part a component its declaration adds? The operator asked on 2026-11-08 whether the agent's daemon will be refactored onto such a base. Today one program composes its parts by what the declaration contains: the session, wake, dark-channel and mail parts appear only where declared. But the notice path, role duties and the login check run at every level and find nothing to do above an agent. The approved roadmap planned a principal kind (agent, system, fleet) for this, which was not built. The container-management maintainer's recommendation: components added by the declaration, not a fixed kind, so R73 holds and nothing agent-specific runs at a system or a fleet. (minimal_daemon_base)
+- **Q10** What does the hop between machines need beyond the same link over the LAN, with the same certificates? The broker binds beyond loopback only when it admits members (MIS-0002-R170), and R51 names whose account may reach it; nothing has crossed a machine yet. The first fleet that spans two hosts answers it, in the fleet MIS that Q12 defers to. (lan_hop_beyond_one_host)
+- **Q12** What does a fleet daemon run and need beyond the recursion: its own units, the zone watch first among them, the hop between machines (Q10), and the certificate authority that issues its members' certificates? Deferred, at the operator's word of 2026-11-08 that this MIS names the Fleet Daemon but doesn't specify it ("save for future MIS"). A fleet MIS answers it, and until then a fleet daemon is held only to 6.1, R72 and R73. (fleet_daemon_specification)
+- **Q11** Should the primal daemon have an explicit minimal base, its core supervisor, event log, control socket, scheduler and MQTT broker, with every agent part a component its declaration adds? Answered by the operator on 2026-11-08: "MIS-0002 needs to become the spec describing the minimal PD base and the Agent Daemon based on it", with this MIS describing the recursion. MIS-0002's revision of 2026-11-09 specifies the base and the components, each added by the declaration, as the container-management maintainer recommended; R74 keeps every component out of a system or fleet daemon; and the code follows in MIS-0002's landing step 10. (minimal_daemon_base)
 
 ## 14 Deliberation Record
 
@@ -549,6 +561,12 @@ None was raised as an objection. The seats' conflict with R05, R11 and R23 was c
   - Conformance: R07, R11, R21, R27, R30, R31, R38, R65, R66, R70 and R71 pass on tests already on main.
   - Q01, Q03 and Q04 answered or extended; Q06 withdrawn; Q07 moved to MIS-0002; Q10 and Q11 new.
   - The operator asked, with his word of 2026-11-08, that deliberation be opened on this revision. Convening it and setting its window are his.
+- 2026-11-09: a revision from the requirement map of mission 998, ruled "Accept as is" by the operator on #552 (comment 6731243851), drafted by the container-management maintainer for the Secretary. MIS-0002 now specifies the base and the Agent Daemon, and this MIS the recursion (6.1) and the System Daemon in full (6.2), and names the Fleet Daemon (6.3).
+  - Moved to MIS-0002, their reasons with them: R10, R11, R13, R14, R16, R19, R20, R21, R26, R45 and R46, as MIS-0002 R186 to R192 and R195 to R198.
+  - Withdrawn as restating a MIS-0002 requirement: R12, R15, R18, R40 and R44.
+  - New: R74 (an association adds no Agent Daemon component). Proposed here from MIS-0002, which holds them binding until this MIS is accepted: R75 to R80 (its R177 to R182, the association rules) and R81 and R82 (its R53 and R54, the mail broker and clock).
+  - Its citations of persistent_layer follow that policy as MIS-0002's revision of 2026-11-09 orders it, along the same seam.
+  - Q11 answered; Q12 new, the Fleet Daemon's own specification, deferred. The Status returns to Deliberation, at the operator's ruling of 2026-11-08, for him to convene.
 
 ## Wiki-Links
 
