@@ -563,9 +563,9 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
             # person hasn't seen, and "exit and stop tasks" would drop the jobs silently (#854).
             named = "; ".join(f"{j.id} ({j.schedule})" for j in jobs)
             print(f"[inject] This session has {len(jobs)} scheduled job(s), so {cmd} would stop on "
-                  f"the 'Background work is running' dialog instead of exiting: {named}. They live "
-                  f"only in this client and end with it: cancel them (CronDelete), note how to "
-                  f"re-create them after the restart, then run this again.", file=sys.stderr)
+                  f"the 'Background work is running' dialog instead of exiting: {named}. Cancel them "
+                  f"(CronDelete) and run this again. They may be restored when the session resumes: "
+                  f"after the restart, list them (CronList) before re-creating any.", file=sys.stderr)
             return 1
     if target:
         if then:
@@ -757,11 +757,12 @@ def _scheduled_jobs() -> list:
     try:
         from .utils import get_current_session_id
         from .utils.paths import get_session_transcript_path
-        from .utils.scheduled_jobs import client_start, live_jobs
+        from .utils.scheduled_jobs import live_jobs
         path = get_session_transcript_path(get_current_session_id())
         if not path:
             return []
-        return live_jobs(Path(path), since=client_start())
+        # No bound at the client's start: a resumed session gets its jobs back (#854 review).
+        return live_jobs(Path(path))
     except (OSError, ValueError, ImportError) as e:
         print(f"[inject] could not read this session's scheduled jobs ({e}); if /exit stops on "
               f"'Background work is running', a person has to answer it", file=sys.stderr)

@@ -25,8 +25,10 @@ def _created(job_id, at, recurring=True, due=None):
         "nextFireAt": (due if due is not None else at + 3600) * 1000}}
 
 
-def _cancelled(job_id, at):
-    return {"type": "user", "timestamp": _iso(at), "toolUseResult": {"id": job_id}}
+def _cancelled(job_id, at, text=None):
+    return {"type": "user", "timestamp": _iso(at), "toolUseResult": {"id": job_id},
+            "message": {"content": [{"type": "tool_result",
+                                     "content": text if text is not None else f"Cancelled job {job_id}."}]}}
 
 
 def _transcript(tmp_path, entries):
@@ -45,6 +47,18 @@ def test_jobs_from_before_the_client_started_or_expired_are_gone(tmp_path):
                                   _created("before", NOW - 3000), _created("after", NOW - 60)])
     assert [j.id for j in live_jobs(path, since=NOW - 1000, now=NOW)] == ["after"]
     assert [j.id for j in live_jobs(path, now=NOW)] == ["before", "after"]
+
+
+def test_a_job_from_before_the_client_restarted_is_still_live(tmp_path):
+    """The #967 review: a session resumed with -c gets its jobs back, so a job created before a
+    restart and never cancelled is still held, inside its seven days."""
+    path = _transcript(tmp_path, [_created("before-restart", NOW - 3 * 86400), _created("after", NOW - 60)])
+    assert [j.id for j in live_jobs(path, now=NOW)] == ["before-restart", "after"]
+
+
+def test_a_bare_id_result_from_another_tool_cancels_nothing(tmp_path):
+    path = _transcript(tmp_path, [_created("a1", NOW - 600), _cancelled("a1", NOW - 100, text="Task #a1 updated")])
+    assert [j.id for j in live_jobs(path, now=NOW)] == ["a1"]
 
 
 def test_a_one_shot_job_that_has_fired_is_gone_and_one_still_due_is_live(tmp_path):

@@ -2,10 +2,12 @@
 
 A session with a scheduled job answers ``/exit`` with a dialog ("Background work is running"),
 and an injected ``/exit`` then waits on it until a person picks an option. The client keeps such
-jobs in memory only, so the session's transcript is the record. Observed there: a CronCreate
-result carries ``toolUseResult`` ``{id, humanSchedule, recurring, durable, nextFireAt}``, and a
-CronDelete result ``{id}`` alone. A job dies with the client process, a recurring one expires
-after seven days, and a one-shot job is gone once it has fired.
+jobs in memory, so the session's transcript is the record. Observed there: a CronCreate result
+carries ``toolUseResult`` ``{id, humanSchedule, recurring, durable, nextFireAt}``, and a
+CronDelete result ``{id}`` with the text "Cancelled job <id>.". A recurring job expires after
+seven days, and a one-shot job is gone once it has fired. A job is NOT gone when the client
+restarts: a session resumed with ``-c`` gets its jobs back (seen on a seat whose job outlived a
+supervisor restart), so the client's start is no bound here.
 """
 from __future__ import annotations
 
@@ -38,10 +40,18 @@ def _when(entry: dict) -> Optional[float]:
         return None  # noqa: MACEFF003 - an unreadable stamp is no time: the read goes on past it
 
 
+def _cancels(entry: dict) -> bool:
+    """Whether a tool result is CronDelete's: its text, not only its shape, since other tools'
+    results can be ``{id}`` alone."""
+    content = (entry.get("message") or {}).get("content")
+    texts = [c.get("content") for c in content if isinstance(c, dict)] if isinstance(content, list) else []
+    return any(isinstance(t, str) and t.startswith("Cancelled job ") for t in texts)
+
+
 def live_jobs(transcript: Path, since: Optional[float] = None, now: Optional[float] = None) -> List[Job]:
-    """The jobs scheduled in ``transcript`` after ``since`` (the client's start) that are still
-    pending at ``now``: not cancelled, a recurring one not expired, a one-shot one not yet due.
-    Read newest first, and only as far back as either bound reaches."""
+    """The jobs scheduled in ``transcript`` after ``since`` that are still pending at ``now``: not
+    cancelled, a recurring one not expired, a one-shot one not yet due. Read newest first, and
+    only as far back as the seven days a recurring job lives (or ``since``, if later)."""
     from macf.utils.streaming import iter_lines_reverse
     now = time.time() if now is None else now
     floor = max(since or 0.0, now - RECURRING_LIFETIME_S)
@@ -59,7 +69,7 @@ def live_jobs(transcript: Path, since: Optional[float] = None, now: Optional[flo
         result = entry.get("toolUseResult")
         if not isinstance(result, dict) or not isinstance(result.get("id"), str):
             continue
-        if set(result) == {"id"}:                                  # CronDelete: {id}
+        if set(result) == {"id"} and _cancels(entry):             # CronDelete
             cancelled.add(result["id"])
         elif "humanSchedule" in result and result["id"] not in cancelled:   # CronCreate
             recurring = bool(result.get("recurring"))
@@ -68,13 +78,3 @@ def live_jobs(transcript: Path, since: Optional[float] = None, now: Optional[flo
                 continue                                           # a one-shot job that has fired
             live.append(Job(result["id"], str(result.get("humanSchedule", "")), recurring, when or now))
     return list(reversed(live))
-
-
-def client_start() -> Optional[float]:
-    """When the Claude Code client this process runs under started, or None when it doesn't run
-    under one (an `inject` sent from outside the session)."""
-    from macf.notify.session import proc_start
-    from macf.pd.core import start_epoch
-    from macf.pd.cutover import inside_session
-    pid = inside_session()
-    return start_epoch(proc_start(pid)) if pid else None
