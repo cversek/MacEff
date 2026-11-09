@@ -207,9 +207,11 @@ def _policy_name(root: "PolicyRoot", md_file: Path) -> str:
     return md_file.stem if root.framework else f"{root.name}:{md_file.stem}"
 
 
-def index_sources_path(db_path: Path) -> Path:
-    """Where the index at ``db_path`` records the content it was built from (#898)."""
-    return db_path.with_name(db_path.name + ".sources.json")
+#: The event a policy index build appends: the index's path and each policy's sha256 (#898).
+EVENT_POLICY_INDEX_BUILT = "policy_index_built"
+
+#: How long before the index's newest file a build's event may be stamped and still describe it.
+_BUILD_SLACK_S = 5.0
 
 
 def policy_digests(maceff_root: Optional[Path] = None) -> Dict[str, str]:
@@ -225,43 +227,50 @@ def policy_digests(maceff_root: Optional[Path] = None) -> Dict[str, str]:
     return digests
 
 
-def record_index_sources(db_path: Path, maceff_root: Optional[Path] = None) -> None:
-    """Record, beside the index just built at ``db_path``, the content of every policy it holds,
-    so a later check compares content, not times a checkout re-stamps (#898)."""
-    sources = index_sources_path(db_path)
-    tmp = sources.with_name(sources.name + ".tmp")
-    tmp.write_text(json.dumps(policy_digests(maceff_root), indent=1, sort_keys=True))
-    os.replace(tmp, sources)
+def record_index_build(db_path: Path, maceff_root: Optional[Path] = None) -> bool:
+    """Record, in the event log, what the index just built at ``db_path`` holds: each policy's
+    sha256, so a later check compares content, not times a checkout re-stamps (#898)."""
+    from macf.agent_events_log import append_event
+    return append_event(EVENT_POLICY_INDEX_BUILT,
+                        {"index": str(db_path.resolve()), "digests": policy_digests(maceff_root)})
+
+
+def _built_digests(db_path: Path, built: float) -> Optional[Dict[str, str]]:
+    """The digests the newest build of this index recorded, if that build is the one on disk:
+    an event older than the index's newest file was written for an earlier build, and an index
+    rebuilt without one (an older macf, the indexer run directly) has no record, so time decides."""
+    from macf.agent_events_log import read_events
+    index = str(db_path.resolve())
+    floor = built - _BUILD_SLACK_S
+    for event in read_events(reverse=True, scope="all", only=(EVENT_POLICY_INDEX_BUILT,), since=floor):
+        data = event.get("data") or {}
+        if data.get("index") == index and isinstance(data.get("digests"), dict):
+            return data["digests"]
+    return None
 
 
 def policies_newer_than_index(db_path: Path, maceff_root: Optional[Path] = None) -> List[str]:
     """Policies changed since the index at ``db_path`` was built, by name. A missing index says
     nothing here: the search that needs it reports that itself.
 
-    Where the build recorded its sources, content decides: a policy whose sha256 differs, one
+    Where the build recorded what it held, content decides: a policy whose sha256 differs, one
     added since, and one removed since (named with "(removed)") are changed, and a checkout that
-    only re-stamps files changes nothing (#898). An index built before that record existed is
-    judged by modification time, as before."""
+    only re-stamps files changes nothing (#898). An index with no such record for the build on
+    disk is judged by modification time, as before."""
     if not db_path.is_dir():
         return []
-    try:
-        recorded = json.loads(index_sources_path(db_path).read_text())
-    except FileNotFoundError:
-        recorded = None
-    except (OSError, ValueError) as e:
-        _report_once(f"could not read what the policy index was built from ({e}); judging it by time")
-        recorded = None
-    if isinstance(recorded, dict):
-        now = policy_digests(maceff_root)
-        changed = [name for name, digest in now.items() if recorded.get(name) != digest]
-        removed = [f"{name} (removed)" for name in recorded if name not in now]
-        return sorted(changed) + sorted(removed)
     try:
         built = max((p.stat().st_mtime for p in db_path.iterdir()), default=None)
     except OSError:
         return []
     if built is None:
         return []
+    recorded = _built_digests(db_path, built)
+    if recorded is not None:
+        now = policy_digests(maceff_root)
+        changed = [name for name, digest in now.items() if recorded.get(name) != digest]
+        removed = [f"{name} (removed)" for name in recorded if name not in now]
+        return sorted(changed) + sorted(removed)
     newer = []
     for root in policy_roots(maceff_root):
         for md_file in _files_of(root):

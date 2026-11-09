@@ -3829,12 +3829,12 @@ def cmd_policy_build_index(args: argparse.Namespace) -> int:
         )
         # What the index holds, by content, so its staleness check isn't fooled by a checkout's
         # new mtimes (#898). An index built from a named directory holds something other than the
-        # agent's roots, so it records nothing, and any old record goes, rather than mislead.
-        from .utils.manifest import index_sources_path, record_index_sources
-        if args.policies_dir:
-            index_sources_path(db_path).unlink(missing_ok=True)
-        else:
-            record_index_sources(db_path)
+        # agent's roots, so it records nothing, and its staleness is judged by time.
+        if not args.policies_dir:
+            from .utils.manifest import record_index_build
+            if not record_index_build(db_path):
+                print("⚠️ MACF: the index's contents could not be recorded in the event log; "
+                      "its staleness will be judged by time", file=sys.stderr)
 
         # Output
         if json_output:
