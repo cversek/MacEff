@@ -163,7 +163,7 @@ def elide_large_values(payload, threshold=ELIDE_THRESHOLD_BYTES,
 #: Called after each append this process makes, with the log's path, the byte offset the line
 #: starts at, and the line's bytes with its newline. The primal daemon's event stream listens,
 #: so a record the daemon wrote itself carries ``origin: daemon`` while a line anything else
-#: appended carries ``origin: log`` (persistent_layer 11.4). Nothing reads the line back to learn it.
+#: appended carries ``origin: log`` (persistent_layer 3.4). Nothing reads the line back to learn it.
 _APPEND_LISTENERS: List[Callable[[Path, int, bytes], None]] = []
 
 

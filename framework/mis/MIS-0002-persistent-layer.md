@@ -521,7 +521,7 @@ The positions are cited by their IDs in section 14.
   - the association records each difference between the members it declares and those present;
   - an export that fails says why once per change of cause, which on macOS names the Local Network block and its grant.
 
-  Unit names travel up in those summaries, and they are the only free text that leaves the host, so persistent_layer 11.5 asks that they carry nothing private.
+  Unit names travel up in those summaries, and they are the only free text that leaves the host, so persistent_layer 3.5 asks that they carry nothing private.
 - **R181** keeps supervision one-way: an association reads summaries and controls nothing, as **R07** keeps one agent's daemon from another's units.
 - **R182** came from the live run. Links that followed the log from its start read a long-lived host's whole log in one pass and flooded the association with every unit state ever recorded. They now start at the end, and readers catch up by replay. Each connect first sends one summary of every unit's current state, so a restarted member's association doesn't keep its states from before the restart (#921).
 
@@ -740,7 +740,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R146 | decidable | macf/tests/test_pd_entries.py::test_setting_the_mode_puts_pd_entry_add_in_ask_unless_the_operator_allowed_it and macf/tests/test_pd_entries.py::test_pd_entry_add_starts_in_ask_and_an_operator_who_loosens_it_keeps_that | passing |
 | R134 | judgment | the operator, at the verdict on each use trial | recorded: met, by the repo owner on 2026-10-24 for the scheduler's use trial (#552): woken agents acted on marked entries only within standing rules |
 | R135 | decidable | macf/tests/test_pd_entries.py::test_an_entry_is_removed_by_the_agent_or_the_operator_and_stops and macf/tests/test_pd_entry_edit_pause.py::test_edit_and_resume_come_only_from_the_live_session_and_pause_from_anyone | passing |
-| R136 | judgment | the operator, at review of the persistent_layer policy | recorded: met, by the repo owner on 2026-10-24 (#552): persistent_layer 10.6 states the shared-login limits |
+| R136 | judgment | the operator, at review of the persistent_layer policy | recorded: met, by the repo owner on 2026-10-24 (#552): persistent_layer 8.1 states the shared-login limits |
 | R143 | decidable | macf/tests/test_pd_entries.py::test_a_check_template_fills_whole_arguments_of_the_declared_kind and macf/tests/test_pd_entries.py::test_a_check_runs_its_template_with_no_shell and macf/tests/test_pd_entries.py::test_a_check_argument_with_a_brace_is_refused_even_by_a_loose_pattern and macf/tests/test_pd_entries.py::test_a_check_whose_program_the_agent_could_rewrite_or_that_changed_since_install_never_runs and macf/tests/test_pd_entries.py::test_a_template_must_name_its_program_by_absolute_path and macf/tests/test_pd_entries.py::test_the_daemon_checks_a_check_entry_against_its_template_when_it_is_made | passing |
 | R145 | decidable | macf/tests/test_pd_entries.py::test_pd_agenda_lists_both_tiers_each_marked and macf/tests/test_pd_entries.py::test_the_agenda_shows_both_tiers_soonest_first | passing |
 | R144 | decidable | macf/tests/test_pd_duties.py::test_a_duty_that_crossed_while_no_daemon_ran_is_announced_once_and_never_again | passing |
@@ -792,7 +792,7 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R191 | judgment | the head maintainer, at review of each new unit | standing |
 | R192 | decidable | macf/tests/test_pd_render.py::TestMacOSInstall::test_reload_waits_for_bootout | planned: the wait landed with #841; its test moves here from MIS-0007's draft |
 | R193 | decidable | macf/tests/test_pd_broker.py::test_macos_local_network_block_is_named_not_read_as_an_outage | passing |
-| R194 | judgment | the operator, at review of the persistent_layer policy | pending: persistent_layer 3.4 states it, for the operator's review |
+| R194 | judgment | the operator, at review of the persistent_layer policy | pending: persistent_layer 13.4 states it, for the operator's review |
 | R177 | decidable | macf/tests/test_pd_broker.py::test_a_member_writes_only_its_own_subtree_and_reads_nothing | passing |
 | R178 | decidable | macf/tests/test_pd_association.py::test_an_export_carries_no_content_even_when_the_record_does and macf/tests/test_pd_association.py::test_only_declared_sources_are_exported_on_the_members_own_subtree | passing |
 | R179 | decidable | macf/tests/test_pd_association.py::test_the_association_reports_each_difference_between_declared_and_present | passing |
@@ -898,7 +898,7 @@ Answered questions keep their IDs and slugs, so that citations of them still res
 - **Q12** Can a session record the time it takes a channel event, so that the Claude Code adapter meets R39's received time? Answered by test on 2026-10-09: yes; the prompt hook takes the event, with the channel's name in the tag that opens the prompt (section 7, "The Claude Code channel"); R120 and R121 carry it. (channel_receipt_time)
 - **Q13** A channel running older code drops a notice source it doesn't know, while the primal daemon, judging by its own code, records the notice delivered. The use trial's first wake was lost that way. Should the channel declare the sources it takes when it attaches, so the daemon never calls a notice delivered that the attached channel can't take? Answered: yes, by the repo owner during the comment window, after the macOS maintainer answered yes: for Claude Code, skew is the normal state after every upgrade, and the row is decidable, since a channel that attaches without `pd_entry_due` must leave an entry's notice held. R149 carries it. (channel_MUST_declare_sources)
 - **Q14** What carries the event stream: a socket per primal daemon, a log that subscribers follow, or a bus the host's agents share? Answered on 2026-11-08 by the repo owner's review on #923: each primal daemon's own MQTT broker, which replaces the socket stream; R150 and R169 carry it. (event_stream_transport)
-- **Q15** Should anything alert when one of the daemon's own notices is held because no attached channel takes its source? The cold-reader trial of 2026-10-23 found that nothing does: the outside watch alerts on a dark channel and on a typed wake held too long by something in the pane, and an attached channel that leaves a source out is neither (persistent_layer 1.8). Open, owned by the Secretary; the event stream's operator bridge (R42) is the natural place to answer it. Blocks no requirement. (held_source_SHOULD_alert)
+- **Q15** Should anything alert when one of the daemon's own notices is held because no attached channel takes its source? The cold-reader trial of 2026-10-23 found that nothing does: the outside watch alerts on a dark channel and on a typed wake held too long by something in the pane, and an attached channel that leaves a source out is neither (persistent_layer 6.8). Open, owned by the Secretary; the event stream's operator bridge (R42) is the natural place to answer it. Blocks no requirement. (held_source_SHOULD_alert)
 
 ## 14 Deliberation Record
 

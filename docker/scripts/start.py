@@ -295,7 +295,7 @@ def write_agent_cards(agents_config: AgentsConfig, *, chown=os.chown) -> Dict[st
         if card_name is None and spec.has_daemon():
             # An agent with only the default keeps the name its home already holds, its card or
             # its moniker, whatever the case of its key; only a home that names no agent takes the
-            # key (persistent_layer 10.1). A home with no usable name costs only that agent its
+            # key (persistent_layer 2.1). A home with no usable name costs only that agent its
             # daemon, said by name when the declaration renders.
             if home_agent_name(home) is not None:
                 continue
@@ -319,7 +319,7 @@ def daemon_accounts(agents_config: AgentsConfig) -> List[tuple]:
     watcher and the aged sweep (MIS-0002-R53 (mail_broker_MUST_be_managed)). A service that
     declares none has no home here, since it has no daemon to read one."""
     # Every agent that isn't vanilla and doesn't opt out gets the container default, with its own
-    # primal_daemon laid over it (persistent_layer 10.1).
+    # primal_daemon laid over it (persistent_layer 2.1).
     mail = agents_config.runs_mail()
     accounts = [(a.username, a.effective_primal_daemon(key, mail=mail), HOME_ROOT / a.username, None)
                 for key, a in agents_config.agents.items()]
@@ -2548,7 +2548,7 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
     (periodic_mail_clock_MUST_be_schedule)). The daemon restarts a unit that exits or goes
     silent, and the outside watch supervises the daemon. Each sweep run is recorded, and one
     that finds stuck mail is a failed run that `pd status` shows. That is detection, and not yet
-    notification: nothing alerts a person on a failed run (persistent_layer 13).
+    notification: nothing alerts a person on a failed run (persistent_layer 15).
 
     A deployment that configures the broker but declares no such daemon fails this step, by
     name, after everything else in it has run: mail would otherwise have no broker at all.
@@ -2679,7 +2679,7 @@ def _check_inbound_units(agents_config: AgentsConfig) -> None:
     a bare Popen and logged "started" at launch. On their first live start the tunnel exited at
     once on a bad config line while the log said it had started: nothing restarted it and nothing
     reported it. Each is now a declared unit of its account's primal daemon (persistent_layer
-    10.1), whose liveness means working: the receiver answers its health probe, the tunnel holds
+    2.1), whose liveness means working: the receiver answers its health probe, the tunnel holds
     an edge connection (macf.amail.daemons.receiver, macf.amail.daemons.tunnel).
 
     THE TUNNEL IS OPTIONAL AND THE BASE IMAGE STAYS AGNOSTIC. Which transport fronts the receiver
@@ -2713,7 +2713,7 @@ def _check_inbound_units(agents_config: AgentsConfig) -> None:
         raise RuntimeError(
             "amail: /opt/amail_ingest/receiver.env is placed, but no service's primal_daemon "
             "declares a unit running `macf.amail.daemons.receiver`, so nothing accepts inbound "
-            "mail. Declare it on the ingest account: persistent_layer section 8")
+            "mail. Declare it on the ingest account: persistent_layer section 14")
     else:
         log("amail ingest receiver: none configured (no receiver.env)")
     if tunnel:
@@ -2726,7 +2726,7 @@ def _check_inbound_units(agents_config: AgentsConfig) -> None:
         log("amail inbound tunnel: none configured (deployment choice)")
 
 
-#: Where an agent's primal daemon declaration sits in its home (persistent_layer 10.1). An
+#: Where an agent's primal daemon declaration sits in its home (persistent_layer 2.1). An
 #: agent with none is started exactly as before: the container outer tier is opt-in.
 PD_DECLARATION = Path('.maceff') / 'pd' / 'declaration.json'
 
@@ -2897,7 +2897,7 @@ def start_primal_daemons(agents_config: AgentsConfig) -> List[str]:
         log("primal daemons: none started")
     # Every agent that isn't vanilla and doesn't opt out has a daemon by default; one that couldn't
     # be rendered (its card refused or unusable, or its write failed) is a failed step, named, so
-    # an agent left without supervision isn't a line that scrolls past (persistent_layer 10.1).
+    # an agent left without supervision isn't a line that scrolls past (persistent_layer 2.1).
     unrendered = sorted(spec.username for spec in agents_config.agents.values()
                         if spec.has_daemon() and spec.username not in started)
     if unrendered:

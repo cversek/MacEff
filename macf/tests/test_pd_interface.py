@@ -334,7 +334,7 @@ def test_a_session_unit_must_restart_always():
 
 
 def test_the_wake_floor_is_never_above_the_window():
-    """The declared window, and the floor no pace goes under (persistent_layer 1.9)."""
+    """The declared window, and the floor no pace goes under (persistent_layer 6.9)."""
     with pytest.raises(ValidationError, match="floor"):
         pdi.Declaration.model_validate(_declaration(wake_refractory_s=60, wake_refractory_floor_s=120))
     d = pdi.Declaration.model_validate(_declaration(wake_refractory_s=600, wake_refractory_floor_s=120))

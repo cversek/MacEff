@@ -80,7 +80,7 @@ DAEMON_POINTERS: Dict[str, str] = {
     # MIS-0002-R60 (pd_MUST_notice_limit_exceeded)
     "pd_limit_exceeded": "A unit of yours is past its declared memory limit. Run `macf_tools pd status`; "
                          "the event log's pd_unit_over_limit entry names the unit, its use and its limit.",
-    # A unit that failed, under its restart policy (persistent_layer 10.2)
+    # A unit that failed, under its restart policy (persistent_layer 2.2)
     "pd_unit_failed": "A unit of yours failed: it exited with a failing code, missed its liveness, or "
                       "couldn't start. This notice's id is the unit, its failures in a row and an epoch "
                       "second, and a newer failure of the same unit replaces one not yet delivered. Run "

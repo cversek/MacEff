@@ -1,4 +1,4 @@
-"""Every container agent that isn't vanilla gets a primal daemon by default (persistent_layer 10.1).
+"""Every container agent that isn't vanilla gets a primal daemon by default (persistent_layer 2.1).
 
 Start-up renders, for each such agent, the container default (``pd.default_declaration
 .container_body``: the session as a unit) with whatever the agent's ``primal_daemon`` declares laid

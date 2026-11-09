@@ -159,7 +159,7 @@ def _identity_block() -> str:
 
 def _supervision_block(environ=None, ask=None) -> str:
     """A line when this agent has a primal daemon but this session isn't confirmed as its
-    session unit (persistent_layer 6.2): such a session isn't restarted by the daemon if it
+    session unit (persistent_layer 5.1): such a session isn't restarted by the daemon if it
     crashes, and nothing told the agent so until it asked ``macf_tools env``. Silent where
     the daemon confirms the session, and for an agent that declares no daemon at all. It
     is also the check for moving sessions onto their daemons: after the move, no session
@@ -187,7 +187,7 @@ def _supervision_block(environ=None, ask=None) -> str:
     else:
         text = ("🧭 You have a primal daemon, but this session isn't running as its session unit, "
                 "so the daemon won't restart it if it crashes. `macf_tools env` shows what supervises "
-                "it. Moving a session onto its daemon is the operator's step (persistent_layer 6.2).")
+                "it. Moving a session onto its daemon is the operator's step (persistent_layer 5.1).")
     return f"<system-reminder>\n{text}\n</system-reminder>\n"
 
 

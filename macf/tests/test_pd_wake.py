@@ -591,7 +591,7 @@ def test_the_daemon_keeps_held_screens_beside_the_event_log(tmp_path):
         shutil.rmtree(runtime, ignore_errors=True)
 
 
-# --- the agent paces its wake (persistent_layer 1.9) ---------------------------------------
+# --- the agent paces its wake (persistent_layer 6.9) ---------------------------------------
 
 def test_the_declared_window_and_the_wakes_default_are_one_value():
     from macf.pd.interface import DEFAULT_WAKE_REFRACTORY_S, Declaration

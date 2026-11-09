@@ -290,7 +290,7 @@ The protections a container gives a broker, one row each, with how a host meets 
 | A broker on an account no agent shares | the broker's service account | R02, under the system daemon (MIS-0007) |
 | Egress for the broker only | an owner-matched rule, today a deny-list | R33: pf `user` on macOS, iptables `--uid-owner` on Linux, as an allow-list |
 | An intake per declared peer | a shared filesystem as the wire | R09, R10 and R14 |
-| A declaration no agent can change | written by root (persistent_layer 10.1) | the system daemon's root-written declaration (MIS-0007) |
+| A declaration no agent can change | written by root (persistent_layer 2.1) | the system daemon's root-written declaration (MIS-0007) |
 | A restart after a recreate | the start step | the system daemon (MIS-0007) |
 | The job's environment, declared in full | in part, by the start step | MIS-0007, checked under `env -i` on both platforms (P02, P03) |
 

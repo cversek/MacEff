@@ -226,7 +226,7 @@ def load_declaration(agent_home: Path, card: str) -> Declaration:
             check_window(window)
         except ValueError as e:
             raise DeclarationRefused(f"{path}: quiet window: {e}") from e
-    # The daemon gives each unit this home (persistent_layer 11.2); a declared one may say so,
+    # The daemon gives each unit this home (persistent_layer 3.2); a declared one may say so,
     # but a different home would have the unit write its events where the daemon never reads.
     home = Path(agent_home).resolve()
     for unit in declaration.units:
@@ -1186,7 +1186,7 @@ class Core:
         if stopping is not None and r.kill_at is not None and r.pid is not None:
             # A stop this core sent reaped the leader before its deadline. A member of the
             # unit's group that ignored SIGTERM is still the unit's, and the stop must reach it
-            # (persistent_layer 10.2): keep the deadline for the group, not just the leader.
+            # (persistent_layer 2.2): keep the deadline for the group, not just the leader.
             # A member that forks and exits while the group is read can leave this first
             # listing empty, read before its replacement appeared and after it ended; the
             # second listing starts after the first ends, so it sees the replacement (#639 review).
@@ -1278,7 +1278,7 @@ class Core:
             # The respawn starts a client on this conversation as surely as the unit's own
             # start, so the hand-started guard stands here too, before the verb is issued. The
             # hosted worker(s) being decided on are a client in that directory and the unit's
-            # own, so they don't count; one resumed by hand meanwhile does (persistent_layer 6.2).
+            # own, so they don't count; one resumed by hand meanwhile does (persistent_layer 5.1).
             if self._held_by_hand_started(r, self._hosted_workers(r.client_session)):
                 return True
             out = self._client(client_command("start", r.client_session, claude=r.client_binary))
@@ -1390,7 +1390,7 @@ class Core:
 
     def _held_by_hand_started(self, r: _Runner, also_own: List[tuple] = ()) -> bool:
         """Whether a hand-started client keeps the session unit from starting now (persistent_layer
-        6.2): a session unit beside it would be a second client on one conversation. Held, the
+        5.1): a session unit beside it would be a second client on one conversation. Held, the
         unit reads failed, saying which pid and pointing at harness cutover, without counting a
         failure, and the pass looks again until the client has gone. Clients that can't be
         listed hold it too, failing closed: the unit reads failed naming that the process
@@ -1445,7 +1445,7 @@ class Core:
             env = {k: render(v, self._placeholders) for k, v in r.spec.environment.items()}
             # Which unit it is and how often it beats come from the unit itself, never typed
             # again in its environment, where a missing or mistyped value silently stopped
-            # its liveness (persistent_layer 11.2; two of three cutover trial runs).
+            # its liveness (persistent_layer 3.2; two of three cutover trial runs).
             env.setdefault(ENV_UNIT, r.spec.name)
             env.setdefault(ENV_INTERVAL, f"{r.spec.liveness_interval_s:g}")
             if "agent_home" in self._placeholders:

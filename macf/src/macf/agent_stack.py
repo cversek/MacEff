@@ -360,7 +360,7 @@ def legacy_harness_live(ctx: Context) -> Optional[str]:
     """Why a session for this agent may already be running outside its daemon, or None: the
     legacy harness's systemd unit, its LaunchAgent on macOS, or any live client in the
     project directory, however it was started. A session unit started beside any of them
-    would be a second client on one conversation (persistent_layer 6.2, 6.3)."""
+    would be a second client on one conversation (persistent_layer 5.1, 5.2)."""
     return _systemd_harness_live(ctx) or _launchd_harness_live(ctx) or live_client_here(ctx)
 
 
@@ -404,7 +404,7 @@ def pd_unit_installed(card: str, home: Path) -> bool:
 
 def daemon_restart(card: str) -> None:
     """Restart the daemon under its service manager. Its units outlive it and the next daemon
-    adopts them (persistent_layer 12.6), so the session keeps running."""
+    adopts them (persistent_layer 1.6), so the session keeps running."""
     tier = _adapter()
     restart = getattr(tier, "restart", None)
     if restart is None:

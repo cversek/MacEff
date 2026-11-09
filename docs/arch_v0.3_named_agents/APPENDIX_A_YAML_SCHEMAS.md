@@ -62,7 +62,7 @@ defaults:  # Optional
 | `assigned_projects` | list[string] | `[]` | List of assigned project names |
 | `consciousness_artifacts` | ConsciousnessArtifactsConfig | `null` | Consciousness artifact configuration |
 | `hooks` | dict | `null` | Hook configuration (enabled list, etc.) |
-| `primal_daemon` | dict | `null` | What to change in the agent's primal daemon declaration, without `agent` or `version`. Every agent that isn't vanilla gets the container default; a block given here is laid over it (a declared session replaces the default's, other units are added, other keys replace the default's). Rendered by start-up, owned by root (persistent_layer 10.1) |
+| `primal_daemon` | dict | `null` | What to change in the agent's primal daemon declaration, without `agent` or `version`. Every agent that isn't vanilla gets the container default; a block given here is laid over it (a declared session replaces the default's, other units are added, other keys replace the default's). Rendered by start-up, owned by root (persistent_layer 2.1) |
 | `calling_card` | string | `null` | The name the agent's daemon goes by, `^[A-Za-z][A-Za-z0-9]{0,47}$`. Required with `primal_daemon`. Without either, the agent keeps the name its home holds (card or moniker), and only a home with none takes the agent's key, when it can be a card's name. Written into the home's `.maceff/config.json` at every start; a different card already there is refused, and that agent gets no daemon |
 | `project_dir` | string | `null` | Where the default session starts, which is where its conversation is kept. Default: `active_project` with assigned projects, else the home |
 | `session_memory_mb` | int | `null` | The default session unit's memory limit. Default: the host default's |
@@ -123,7 +123,7 @@ agents:
     # Optional: what to change in this agent's primal daemon, which it has by default; the body
     # of a declaration without agent or version, laid over the container default.
     # Start-up renders it owned by root to /etc/maceff/pd/pa_sparrow/declaration.json, which the
-    # daemon reads; the agent can't change it (persistent_layer 10.1, MIS-0002-R33).
+    # daemon reads; the agent can't change it (persistent_layer 2.1, MIS-0002-R33).
     # calling_card is required with it: the name the daemon goes by. Start-up writes it into
     # the home's .maceff/config.json at every start, and refuses to overwrite a different one.
     calling_card: Orchard1
@@ -168,7 +168,7 @@ subagents:
 # Service accounts, which are not agents. The mail broker's account runs its own primal daemon:
 # the broker and the inbound watcher are its units, and the aged sweep its schedule. Start-up
 # renders it owned by root, like an agent's, and writes the account's identity from calling_card
-# (persistent_layer 10.1, MIS-0002-R53, MIS-0002-R54).
+# (persistent_layer 2.1, MIS-0002-R53, MIS-0002-R54).
 services:
   amail_broker:
     calling_card: AmailBroker

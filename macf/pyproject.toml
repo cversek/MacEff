@@ -12,7 +12,7 @@ authors = [{ name = "Craig Versek" }]
 dependencies = [
     "PyYAML>=6.0.0",  # Required for task system YAML parsing
     "pydantic>=2.0.0",  # Core: task/agent/project model validation, imported at CLI startup
-    # Every daemon's event stream is its own MQTT broker (persistent_layer 11.4): the client, and
+    # Every daemon's event stream is its own MQTT broker (persistent_layer 3.4): the client, and
     # the library each daemon makes its own certificate authority and certificate with.
     # mosquitto, the broker itself, is a host package.
     "paho-mqtt>=2.0",

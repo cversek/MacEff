@@ -162,7 +162,7 @@ class Daemon:
         from macf.agent_events_log import get_log_path
         from macf.pd.stream import Rules
         self.rules = Rules()
-        #: The event stream (persistent_layer 11.4): the daemon's own broker, its configuration
+        #: The event stream (persistent_layer 3.4): the daemon's own broker, its configuration
         #: rendered here, before units start, and its publisher run from the loop.
         self.export_link = None
         decl = self.core.declaration
@@ -933,7 +933,7 @@ class Daemon:
         ``pd_stream_rule`` event before it takes effect, so the next daemon folds it back, and
         takes effect at once. Where the declaration names the operator's own uid, as in a
         container, only that uid may set one; elsewhere the client's ask prompt on the command is
-        the operator's act (persistent_layer 11.4)."""
+        the operator's act (persistent_layer 3.4)."""
         operator_uid = self.core.declaration.operator_uid
         if operator_uid is not None and creds.uid != operator_uid:
             return Response(ok=False, error=(f"the event stream's rules are taken only from the operator's "
@@ -965,7 +965,7 @@ class Daemon:
 
     def _pace(self, request: PaceRequest, creds) -> Response:
         """The agent, or the operator, sets how long the keystroke wake rests (persistent_layer
-        1.9). The floor comes only from the declaration, never from this socket. The pace is
+        6.9). The floor comes only from the declaration, never from this socket. The pace is
         recorded like every act, and in ``pd_wake_paced``, which the next daemon re-asserts,
         before the waker changes and before it is answered."""
         from macf.pd.wake import EVENT_PACED, pace_refusal, pace_source

@@ -5,7 +5,7 @@ manager and take it out. Starting, stopping and restarting a unit over the contr
 must name who asks (MIS-0002-R52 (control_act_MUST_name_who_asked)), and which asker a
 command line typed in a session claims is still an open question, so no unit act is here.
 ``wake`` paces the keystroke wake, which acts on no unit: it is asked by the agent, or by the
-operator with ``--asked-by operator`` (persistent_layer 1.9).
+operator with ``--asked-by operator`` (persistent_layer 6.9).
 """
 import argparse
 import json
@@ -108,7 +108,7 @@ def add_pd_parser(sub) -> None:
         "agenda", help="what is scheduled: the declared schedules' next runs and your own entries")
     agenda.set_defaults(func=cmd_pd_agenda)
     wake = pd_sub.add_parser(
-        "wake", help="the keystroke wake's window: show it, or pace it (persistent_layer 1.9)")
+        "wake", help="the keystroke wake's window: show it, or pace it (persistent_layer 6.9)")
     wake.add_argument("--refractory", default=None, metavar="DURATION",
                       help="rest this long after each wake: seconds, or 90s, 5m, 1h; never under "
                            "the declared floor")
@@ -118,7 +118,7 @@ def add_pd_parser(sub) -> None:
                       help="who paces: the agent itself (default), or the operator")
     wake.set_defaults(func=cmd_pd_wake)
     stream = pd_sub.add_parser(
-        "stream", help="the layer's event stream: subscribe to it, or silence and reroute it (persistent_layer 11.4)")
+        "stream", help="the layer's event stream: subscribe to it, or silence and reroute it (persistent_layer 3.4)")
     stream_sub = stream.add_subparsers(dest="stream_cmd")
     sub_p = stream_sub.add_parser("subscribe", help="print the stream's records, one JSON line each, until Ctrl+C")
     sub_p.add_argument("--source", action="append", default=None, metavar="EVENT",

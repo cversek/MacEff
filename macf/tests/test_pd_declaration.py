@@ -515,7 +515,7 @@ def _mail_unit(name, *module_and_verb, account="amail_broker"):
             "restart": "always", "liveness_interval_s": 60, "memory_limit_mb": 256}
 
 
-#: The broker account's daemon, as a deployment declares it (persistent_layer section 8).
+#: The broker account's daemon, as a deployment declares it (persistent_layer section 14).
 BROKER_DAEMON = {
     "units": [_mail_unit("broker", "macf.amail.daemons.broker"),
               _mail_unit("inbound-watcher", "macf.amail.daemons.inbound", "watch")],

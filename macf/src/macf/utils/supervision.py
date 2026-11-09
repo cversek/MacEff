@@ -121,7 +121,7 @@ def primal_daemon_unit(card: Optional[str], environ=None, ask=None) -> Optional[
     """This session as its primal daemon's unit, or None when it says it is not one.
 
     The session unit's wrapper hands the session ``MACF_PD_SESSION_UNIT`` and
-    ``MACF_PD_SESSION_PID`` (persistent_layer 6.2). Those are the session's claim; the
+    ``MACF_PD_SESSION_PID`` (persistent_layer 5.1). Those are the session's claim; the
     daemon is asked whether it runs that unit on that pid, and only its answer confirms it.
     """
     from ..pd.liveness import ENV_SESSION_PID, ENV_SESSION_UNIT

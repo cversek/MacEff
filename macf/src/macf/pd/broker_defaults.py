@@ -1,4 +1,4 @@
-"""Every daemon's own broker, when its declaration says nothing more (persistent_layer 11.4).
+"""Every daemon's own broker, when its declaration says nothing more (persistent_layer 3.4).
 
 The event stream is the daemon's own MQTT broker for every daemon (MIS-0002 R150 to R156). A
 declaration may name its broker in full (``broker``): its port, the certificate authority and the
@@ -146,7 +146,7 @@ def dependency_remedy(missing: List[str], executable: str = sys.executable) -> s
     install = (f"{executable} -m pip install -e {project}" if project is not None
                else f"{executable} -m pip install --upgrade macf")
     return (f"this daemon's interpreter ({executable}) lacks {', '.join(missing)}, which every daemon's "
-            f"own broker needs (persistent_layer 11.4); an editable install doesn't gain new "
+            f"own broker needs (persistent_layer 3.4); an editable install doesn't gain new "
             f"dependencies when its checkout updates. Install them, then start again: {install}")
 
 
