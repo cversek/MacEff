@@ -192,7 +192,7 @@ def parse_breadcrumb(breadcrumb: str) -> Optional[Dict[str, Any]]:
 
 def _find_possible_agent_ids(session_id: str) -> list:
     """
-    Find all possible agent_id values by scanning /tmp/macf/ for session directories.
+    Find all possible agent_id values by scanning the session root (utils.paths.session_root) for session directories.
 
     Args:
         session_id: Session ID to search for
