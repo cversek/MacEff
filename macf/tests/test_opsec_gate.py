@@ -305,7 +305,7 @@ class TestProfileExemptions:
         assert ("agent uuid", "@abcdef") in labels and ("agent uuid", "@d4e5f6") not in labels
 
 
-def _merge_in_a_leak_from_main(repo, profile, published=True):
+def _merge_in_a_leak_from_main(repo, profile, published=True, clean=False):
     """main gains a line the profile refuses, committed past the gate as if
     under another profile; a feature branch has a commit of its own; the
     branch then merges main and stops before committing. With *published*,
@@ -330,6 +330,9 @@ def _merge_in_a_leak_from_main(repo, profile, published=True):
         _git(repo, "push", "-q", "origin", main)
         _git(repo, "fetch", "-q", "origin")
     _git(repo, "switch", "-q", "feature")
+    if clean:
+        # A merge with nothing to resolve: git completes it itself, running pre-merge-commit.
+        return _git(repo, "merge", "--no-ff", "-m", "merge main", main, check=False)
     _git(repo, "merge", "--no-ff", "--no-commit", main)
 
 
@@ -341,6 +344,48 @@ def test_a_merge_is_not_refused_for_what_the_incoming_side_brings(repo, profile)
     r = _git(repo, "commit", "-m", "merge main", check=False)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "only what the merge adds" in r.stdout + r.stderr
+
+
+def test_a_clean_merge_of_an_unpublished_side_is_scanned_too(repo, profile):
+    """#646: a merge git completes by itself runs pre-merge-commit, not pre-commit, so a leak
+    on a side never pushed went in unscanned. The same gate now runs there."""
+    r = _merge_in_a_leak_from_main(repo, profile, published=False, clean=True)
+    out = r.stdout + r.stderr
+    assert r.returncode != 0
+    assert "upstream.txt" in out and "not on any remote" in out
+    assert _git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0  # left to resolve
+
+
+def test_a_clean_merge_of_a_published_side_goes_through(repo, profile):
+    r = _merge_in_a_leak_from_main(repo, profile, clean=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "only what the merge adds" in r.stdout + r.stderr
+
+
+def test_a_pull_that_merges_a_published_side_names_it_from_fetch_head(repo, profile):
+    """A pull's merge has no MERGE_HEAD in pre-merge-commit either; FETCH_HEAD names its side."""
+    _merge_in_a_leak_from_main(repo, profile)
+    _git(repo, "merge", "--abort")
+    main = "main" if _git(repo, "rev-parse", "-q", "--verify", "main", check=False).returncode == 0 else "master"
+    r = _git(repo, "pull", "--no-rebase", "--no-ff", "-q", "origin", main, check=False)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "only what the merge adds" in r.stdout + r.stderr
+
+
+def test_a_clean_merge_whose_side_cant_be_named_is_let_through_and_says_so(repo, profile):
+    """An octopus names no single incoming side. It is let through unscanned, as every clean
+    merge was before, and the gate says it didn't scan."""
+    _merge_in_a_leak_from_main(repo, profile, published=False)
+    _git(repo, "merge", "--abort")
+    main = "main" if _git(repo, "rev-parse", "-q", "--verify", "main", check=False).returncode == 0 else "master"
+    _git(repo, "switch", "-q", "-c", "third", main + "~1")   # beside main, so neither head is redundant
+    (repo / "third.txt").write_text("third\n")
+    _git(repo, "add", "third.txt")
+    _git(repo, "commit", "-q", "-m", "third")
+    _git(repo, "switch", "-q", "feature")
+    r = _git(repo, "merge", "--no-ff", "-m", "octopus", main, "third", check=False)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "can't be named" in r.stdout + r.stderr
 
 
 def test_an_unpublished_incoming_side_is_scanned_whole(repo, profile):
