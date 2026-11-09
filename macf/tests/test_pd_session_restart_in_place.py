@@ -20,7 +20,7 @@ from macf.agent_events_log import get_log_path, read_events
 from macf.pd import core as pd_core
 from macf.pd.interface import EVENT_SESSION_PANE, EVENT_STATE, Unit
 
-from test_primal_daemon import CARD, MACF_SRC, ME, _crash, drive, make_core  # noqa: F401 - fixture
+from test_primal_daemon import CARD, MACF_SRC, ME, _crash, drive, make_core
 
 #: A stand-in for the session unit's wrapper: it announces its pane unless told not to, and
 #: answers SIGUSR1 with a respawn's announcement unless told not to. One that does not announce
@@ -82,7 +82,7 @@ def _announced(pid, respawns=0):
 
 
 def test_an_announced_wrapper_restarts_its_session_in_place(make_core, wrapper):
-    core = make_core([_session(wrapper)], hosted=lambda: [])
+    core = make_core([_session(wrapper)], hosted=list)
     core.boot()
     assert drive(core, lambda: core.state("session") == "running")
     pid = core.pid("session")
@@ -101,7 +101,7 @@ def test_an_announced_wrapper_restarts_its_session_in_place(make_core, wrapper):
 
 
 def test_a_wrapper_that_never_announced_is_restarted_whole(make_core, wrapper):
-    core = make_core([_session(wrapper, announce=False)], hosted=lambda: [])
+    core = make_core([_session(wrapper, announce=False)], hosted=list)
     core.boot()
     assert drive(core, lambda: core.state("session") == "running")
     pid = core.pid("session")
@@ -111,7 +111,7 @@ def test_a_wrapper_that_never_announced_is_restarted_whole(make_core, wrapper):
 
 
 def test_a_respawn_not_reported_within_the_grace_restarts_the_unit_whole(make_core, wrapper):
-    core = make_core([_session(wrapper, answer=False, stop_grace_s=1.0)], hosted=lambda: [])
+    core = make_core([_session(wrapper, answer=False, stop_grace_s=1.0)], hosted=list)
     core.boot()
     assert drive(core, lambda: core.state("session") == "running")
     pid = core.pid("session")
@@ -124,7 +124,7 @@ def test_a_respawn_not_reported_within_the_grace_restarts_the_unit_whole(make_co
 
 def test_a_daemon_that_adopted_the_wrapper_finds_its_announcement(make_core, wrapper):
     """The announcement came before this daemon's tail began, so it is read back from the log."""
-    first = make_core([_session(wrapper)], hosted=lambda: [])
+    first = make_core([_session(wrapper)], hosted=list)
     first.record_start(os.getpid(), "the first daemon's start")
     first.boot()
     assert drive(first, lambda: first.state("session") == "running")
@@ -132,7 +132,7 @@ def test_a_daemon_that_adopted_the_wrapper_finds_its_announcement(make_core, wra
     assert drive(first, lambda: _announced(pid))
     left = _crash(first)
     try:
-        second = make_core([_session(wrapper)], hosted=lambda: [])
+        second = make_core([_session(wrapper)], hosted=list)
         second.record_start(os.getpid(), "the second daemon's start")
         second.boot()
         assert drive(second, lambda: second.pid("session") == pid)

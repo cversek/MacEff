@@ -23,7 +23,7 @@ from macf.agent_events_log import read_events
 from macf.pd import session_unit as su
 from macf.pd.interface import EVENT_SESSION_PANE
 
-from test_pd_session_unit import _alive, _child, _unit_env, needs_tmux, short_base  # noqa: F401 - fixture
+from test_pd_session_unit import _alive, _child, _unit_env, needs_tmux, short_base
 
 AGENT = "Resident_1a2b3c"
 
