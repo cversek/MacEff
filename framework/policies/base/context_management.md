@@ -1,12 +1,14 @@
 # CONTEXT_MANAGEMENT
 
+**Type**: Framework Foundation
+**Scope**: All agents (PA and SA)
+**Status**: ACTIVE
+
 ## Meta-Policy: Policy Classification
 - **Tier**: MANDATORY
-- **Category**: Framework Foundation
 - **Version**: 1.1.0
 - **Dependencies**: policy_awareness, core_principles
 - **Authority**: MacEff Framework
-- **Status**: ACTIVE
 
 ## Policy Statement
 Agents must maintain awareness of time and token constraints, prepare for compaction trauma, and use checkpoint protocols to preserve continuity across context resets.

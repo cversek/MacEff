@@ -1,9 +1,10 @@
 # Autonomous Sprint Policy
 
+**Type**: Operations
+**Scope**: All agents (PA and SA)
+**Status**: ACTIVE
 **Version**: 2.0
 **Tier**: MANDATORY
-**Category**: Operations
-**Status**: ACTIVE
 **Related**: `autonomous_operation.md` (mode lifecycle), `mode_system.md` (mode system, Markov recommender), `play_time.md` (sibling — time-bounded autonomous play)
 
 **See also**: `maceff-sprint` skill (invocation wrapper for SPRINT) | `play_time.md` (sibling type for time-bounded work) | `maceff-play-time` skill (invocation wrapper for PLAY_TIME)

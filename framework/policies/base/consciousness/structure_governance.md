@@ -1,9 +1,10 @@
 # CA Structure Governance Policy
 
+**Type**: Consciousness
+**Scope**: All agents (PA and SA) with consciousness artifact directories
+**Status**: ACTIVE
 **Version**: 1.0
 **Tier**: CORE
-**Category**: Consciousness
-**Status**: ACTIVE
 **Updated**: 2025-11-11
 
 ---

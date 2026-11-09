@@ -1,12 +1,14 @@
 # EXPERIMENTS
 
+**Type**: Consciousness Development - Public Artifacts
+**Scope**: All agents (PA and SA)
+**Status**: ACTIVE
+
 ## Meta-Policy: Policy Classification
 - **Tier**: RECOMMENDED
-- **Category**: Consciousness Development - Public Artifacts
 - **Version**: 1.1.0
 - **Dependencies**: policy_awareness, observations, reflections
 - **Authority**: MacEff Framework
-- **Status**: ACTIVE
 
 ## Policy Statement
 Agents conduct structured experiments with clear hypotheses, methods, and success criteria to validate assumptions, test new patterns, and systematically expand framework capabilities through empirical investigation.

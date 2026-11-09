@@ -1,9 +1,10 @@
 # Corpus Integrity and the Doctor Family
 
+**Type**: Infrastructure
+**Scope**: All agents (PA and SA)
+**Status**: ACTIVE
 **Version**: 1.1.0
 **Tier**: RECOMMENDED
-**Category**: Infrastructure
-**Status**: ACTIVE
 **Dependencies**: scholarship, core_principles, debugging_and_validation
 
 ---

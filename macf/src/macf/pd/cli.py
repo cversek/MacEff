@@ -380,6 +380,7 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         return 0
     if report.source == "none":
         print(f"{card}: {report.why}")
+        _say_drafts()
         _say_tray(report)
         return 0
     print(f"{card}: from the {report.source} ({report.why})")
@@ -408,8 +409,21 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         print(f"  schedule {s['schedule']}: {s['verdict']}: {s['detail']}")
     if report.runs:
         print(f"  runs: {report.runs}")
+    _say_drafts()
     _say_tray(report)
     return 0
+
+
+def _say_drafts() -> None:
+    # Unsent feedback drafts block the session's restart through `inject exit`, so say so
+    # while there's time to deal with them, not first when they block (cversek/MacEff#903).
+    # They're read only: sending or discarding one is the operator's decision.
+    from macf.utils.feedback_drafts import age, unsent_drafts
+    drafts = unsent_drafts()
+    if drafts:
+        print(f"  ⚠️ the client holds {len(drafts)} unsent feedback draft(s), the oldest "
+              f"{age(drafts[0])}; a session restart through `inject exit` waits until the "
+              f"operator sends or discards them (/feedback)")
 
 
 def _say_tray(report) -> None:

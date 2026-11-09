@@ -69,6 +69,8 @@ Learnings (retrospective wisdom)
 - How do experiments and roadmaps pull from ideas?
 - How does the INDEX generator work?
 
+=== CEP_NAV_BOUNDARY ===
+
 ---
 
 ## 1. What Are Ideas?
