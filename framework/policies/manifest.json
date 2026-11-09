@@ -1379,6 +1379,10 @@
         "git_discipline",
         "task_management"
       ],
+      "GH_PR": [
+        "git_discipline",
+        "task_management"
+      ],
       "BUG": [
         "coding_standards",
         "debugging_and_validation",
