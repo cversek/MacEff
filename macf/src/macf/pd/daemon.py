@@ -431,7 +431,9 @@ class Daemon:
         from macf.pd.interface import EVENT_ALLOWLIST_MISMATCH
 
         try:
-            found = allowlist.findings(self.core.declaration, allowlist.managed_allowlist(self._managed))
+            managed = allowlist.managed_allowlist(self._managed)
+            found = (allowlist.findings(self.core.declaration, managed)
+                     + allowlist.unadmitted_without_allowlist(self.core.declaration, managed))
         except (OSError, ValueError) as e:
             found = [f"the managed settings can't be read, so the organization allowlist can't be "
                      f"compared with the declaration: {e}"]
