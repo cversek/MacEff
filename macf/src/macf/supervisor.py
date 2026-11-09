@@ -880,6 +880,17 @@ def capture_pane(target: str) -> Optional[str]:
     return r.stdout if r.returncode == 0 else None
 
 
+def pane_width(target: str) -> Optional[int]:
+    """The width in columns of *target*'s pane, or None when it can't be read (#800)."""
+    data = _resolve_pane_target(target)
+    if not (data or {}).get("tmux_session") or not _tmux_available():
+        return None
+    r = subprocess.run(["tmux", "display-message", "-p", "-t", _pane_of(data), "#{pane_width}"],
+                       capture_output=True, text=True)
+    text = r.stdout.strip() if r.returncode == 0 else ""
+    return int(text) if text.isdigit() else None
+
+
 def press_enter(target: str) -> int:
     """One Enter into *target*'s pane; the tmux exit status."""
     data = _resolve_pane_target(target)
