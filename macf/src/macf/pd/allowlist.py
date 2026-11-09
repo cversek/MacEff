@@ -20,6 +20,12 @@ MANAGED_SETTINGS = (Path("/etc/claude-code/managed-settings.json"),
 
 Plugin = Tuple[str, str]        # (plugin, marketplace)
 
+#: Marketplaces whose channel plugins the client admits with no organization allowlist. Observed,
+#: not documented: a channel from the official marketplace loads on a host with no managed
+#: settings, and one from another marketplace is skipped there, with only a line in the client's
+#: debug log to say so (cversek/MacEff#904).
+DEFAULT_ADMITTED_MARKETPLACES = frozenset({"claude-plugins-official"})
+
 
 def _entry(raw) -> Optional[Plugin]:
     """One allowlist entry: the documented object form, or the ``plugin@marketplace`` string the
@@ -79,3 +85,20 @@ def findings(declaration: Declaration, admitted: Optional[Set[Plugin]]) -> List[
         out.append(f"the declaration lists {_names(declared - admitted)}, which the organization "
                    f"allowlist leaves out, so it won't load {why}")
     return out
+
+
+def unadmitted_without_allowlist(declaration: Declaration, admitted: Optional[Set[Plugin]]) -> List[str]:
+    """Where no organization allowlist is set, the channels the declaration lists that the client
+    won't admit without one: a plugin from a marketplace outside its defaults. Each loads, connects
+    and is silent, and a notice the daemon writes to it reads as delivered (cversek/MacEff#904).
+    Empty when an allowlist is set, which ``findings`` compares instead."""
+    if admitted is not None or not declaration.allowlisted_channels:
+        return []
+    left_out = {(c.plugin, c.marketplace) for c in declaration.allowlisted_channels
+                if c.marketplace not in DEFAULT_ADMITTED_MARKETPLACES}
+    if not left_out:
+        return []
+    where = " or ".join(str(f) for f in MANAGED_SETTINGS)
+    return [f"no organization allowlist is set ({where} is absent or sets no allowedChannelPlugins), "
+            f"so the client admits only its default channel plugins, and {_names(left_out)} will "
+            f"load and stay silent: list every declared channel in allowedChannelPlugins there"]
