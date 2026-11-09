@@ -261,10 +261,10 @@ def run_test_queries(searcher: PolicySearch) -> list[dict]:
 
 
 if __name__ == "__main__":
-    from ..utils.paths import find_agent_home
 
-    agent_home = find_agent_home()
-    db_path = agent_home / ".maceff" / "policy_index.lance"
+    from ..utils.recommend import get_policy_db_path
+
+    db_path = get_policy_db_path()
 
     if not db_path.exists():
         print(f"Index not found: {db_path}")

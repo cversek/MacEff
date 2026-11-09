@@ -699,3 +699,34 @@ def test_the_cli_exit_code_says_whether_it_passed(roots, capsys):
     assert cli.cmd_policy_check(Namespace(policy_name="personal:merging")) == 1
     assert "no **Type**" in capsys.readouterr().out
     assert cli.cmd_policy_check(Namespace(policy_name="personal:absent")) == 2
+
+
+def test_with_its_build_recorded_the_index_is_judged_by_content(roots, tmp_path, isolated_events_log):
+    """#898: a checkout re-stamps files whose content didn't change. With the build's contents
+    recorded in the event log, only a real change, a new policy or a removed one reads as changed."""
+    root = _personal()
+    db = tmp_path / "index.lance"
+    (db / "documents.lance").mkdir(parents=True)
+    assert mf.record_index_build(db)
+    later = (db / "documents.lance").stat().st_mtime + 100
+    os.utime(root / "merging.md", (later, later))                 # re-stamped, same content
+    assert mf.policies_newer_than_index(db) == []
+    (root / "merging.md").write_text("# Merging, revised\n")
+    (roots.fw / "base" / "development" / "new_policy.md").write_text("# New\n")
+    (roots.fw / "base" / "development" / "task_management.md").unlink()
+    assert mf.policies_newer_than_index(db) == ["new_policy", "personal:merging", "task_management (removed)"]
+
+
+def test_a_record_from_an_earlier_build_does_not_judge_the_index_on_disk(roots, tmp_path, isolated_events_log):
+    """An index rebuilt without a record (an older macf, the indexer run directly) is newer than
+    the last build's event, so that event no longer describes it and time decides."""
+    db = tmp_path / "index.lance"
+    (db / "documents.lance").mkdir(parents=True)
+    assert mf.record_index_build(db)
+    rebuilt = (db / "documents.lance").stat().st_mtime + 600
+    os.utime(db / "documents.lance", (rebuilt, rebuilt))
+    root = _personal()
+    os.utime(root / "merging.md", (rebuilt - 10, rebuilt - 10))
+    assert mf.policies_newer_than_index(db) == []                 # by time: nothing is newer
+    os.utime(root / "merging.md", (rebuilt + 10, rebuilt + 10))
+    assert mf.policies_newer_than_index(db) == ["personal:merging"]
