@@ -112,15 +112,20 @@ def follow(target: str, since: float, text: str = DEFAULT_TEXT, *,
            send: Optional[Callable[[str, list], int]] = None,
            capture: Optional[Callable[[], Optional[str]]] = None,
            enter: Optional[Callable[[], int]] = None,
+           width: Optional[Callable[[], Optional[int]]] = None,
            clock: Callable[[], float] = time.time,
            sleep: Callable[[float], None] = time.sleep) -> str:
     """Wait for the compaction, then send, skip, or give up. Returns which, for the log."""
+    capture_is_default = capture is None
     if send is None or capture is None or enter is None:
         from .supervisor import capture_pane, press_enter, send_keys
         send = send or (lambda t, keys: send_keys(t, keys, enter=False, kind="compact-followup"))  # noqa: E731
         capture = capture or (lambda: capture_pane(target))  # noqa: E731
         enter = enter or (lambda: press_enter(target))  # noqa: E731
-    from .pd.wake import IDLE_EMPTY, classify
+    from .pd.wake import DIALOG, IDLE_EMPTY, classify
+    if width is None and capture_is_default:
+        from .supervisor import pane_width
+        width = lambda: pane_width(target)  # noqa: E731
     deadline = clock() + timeout
     box_seen = None
     while clock() < deadline:
@@ -140,8 +145,19 @@ def follow(target: str, since: float, text: str = DEFAULT_TEXT, *,
             return "skipped: a prompt started after the compaction"
         sleep(poll)
     if box_seen is not None:
-        return f"gave up: the input box was never idle and empty (last seen: {box_seen})"
+        return gave_up_reason(box_seen, width() if box_seen == DIALOG and width else None)
     return "gave up: no compaction within the timeout"
+
+
+def gave_up_reason(box_seen: str, pane_width: Optional[int]) -> str:
+    """Why the follower stopped waiting for the input box. A pane too narrow to read is said as
+    that, with its width, since 'dialog' sent the agent looking for a dialog that wasn't up (#800)."""
+    from .pd.wake import TOO_NARROW, readable_state
+    if pane_width is not None:
+        box_seen = readable_state(box_seen, pane_width)
+    if box_seen == TOO_NARROW:
+        return f"gave up: the session's pane is {pane_width} columns wide, too narrow to read; widen it"
+    return f"gave up: the input box was never idle and empty (last seen: {box_seen})"
 
 
 def _take_lock(path: Optional[Path] = None):

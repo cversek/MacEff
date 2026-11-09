@@ -1,7 +1,7 @@
 """
 Hook logging infrastructure with unified agent-scoped paths.
 
-All logging uses /tmp/macf/{agent_id}/{session_id}/hooks/
+All logging uses {session_root}/{agent_id}/{session_id}/hooks/ (utils.paths.session_root)
 """
 import json
 import logging

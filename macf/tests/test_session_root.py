@@ -8,7 +8,8 @@ def test_session_root_defaults_and_follows_the_environment(monkeypatch, tmp_path
     from macf.utils.paths import session_root
 
     monkeypatch.delenv("MACF_SESSION_ROOT", raising=False)
-    assert session_root() == Path("/tmp/macf")
+    from macf.utils.paths import user_runtime_dir
+    assert session_root() == user_runtime_dir() / "sessions"     # this user's own, never a shared /tmp/macf (#780)
     monkeypatch.setenv("MACF_SESSION_ROOT", str(tmp_path))
     assert session_root() == tmp_path
 

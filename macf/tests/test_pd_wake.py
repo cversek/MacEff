@@ -657,3 +657,32 @@ def test_a_window_paced_shorter_lets_the_next_tick_wake(tmp_path):
     notifier.pace(30.0)
     assert h.waker.refractory_s == 30.0
     assert h.waker.tick([ID1, ID2]) == "sent"
+
+
+# --- a pane too narrow to read (#800) ----------------------------------------------
+
+def test_a_pane_too_narrow_to_read_is_said_so_not_called_a_dialog():
+    """Failing closed stays right, but the reason was wrong: a 45-column pane wraps the footer
+    and the box away, and the hold read 'dialog' when no dialog was up."""
+    assert wk.readable_state(wk.DIALOG, 45) == wk.TOO_NARROW
+    assert wk.readable_state(wk.DIALOG, 120) == wk.DIALOG          # wide, and still no box: a dialog
+    assert wk.readable_state(wk.DIALOG, None) == wk.DIALOG         # width unknown: as before
+    assert wk.readable_state(wk.IDLE_EMPTY, 45) == wk.IDLE_EMPTY   # a narrow pane that reads is fine
+
+
+def test_a_held_wake_on_a_narrow_pane_names_the_width():
+    class Narrow(FakePane):
+        def width(self):
+            return 45
+    pane, events = Narrow(["garbled ─ wrapped │ footer"]), []
+    w = _waker(pane, events).waker
+    assert w.tick([ID1]) is None and not pane.typed
+    held = [d for e, d in events if e == wk.EVENT_HELD][-1]
+    assert held["reason"] == wk.TOO_NARROW and held["pane_width"] == 45
+
+
+def test_the_follower_gives_up_saying_the_pane_is_too_narrow():
+    from macf import compact_followup as cf
+    assert cf.gave_up_reason(wk.TOO_NARROW, 45) == ("gave up: the session's pane is 45 columns wide, "
+                                                    "too narrow to read; widen it")
+    assert cf.gave_up_reason("draft", None) == "gave up: the input box was never idle and empty (last seen: draft)"

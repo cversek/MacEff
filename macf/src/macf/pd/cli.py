@@ -823,7 +823,7 @@ def cmd_pd_tray_install(args: argparse.Namespace) -> int:
               f"interpreter with macf[tray] installed in it.", file=sys.stderr)
         return 1
     argv = [sys.executable, "-m", "macf.tray"]
-    steps = launchd.tray_install_plan(argv, str(Path.home()), _tray_log_dir(), os.getuid())
+    steps = launchd.tray_install_plan(argv, str(Path.home()), _tray_log_dir(), os.getuid(), reload=args.force)
     if args.plan:
         print(f"# the tray, not installed (--plan); it runs {sys.executable}, with macf from {planned}")
         for s in steps:

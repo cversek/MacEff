@@ -39,7 +39,9 @@ def acceptance_time(sidecar: Dict[str, Any], own_domain: str) -> Optional[dateti
 
     None unless the sidecar is this broker's own (rung ``local``, written under *own_domain*) and
     its time is a timezone-aware ISO time: a peer broker's sidecar is that broker's word."""
-    if sidecar.get("rung") != "local" or sidecar.get("origin_domain") != own_domain:
+    own = str(own_domain or "").strip().lower()
+    if (not own or sidecar.get("rung") != "local"
+            or str(sidecar.get("origin_domain") or "").strip().lower() != own):
         return None
     try:
         when = datetime.datetime.fromisoformat(str(sidecar.get("handed_off_at")))

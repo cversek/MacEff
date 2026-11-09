@@ -78,6 +78,14 @@ EVENT_PACED = "pd_wake_paced"
 
 # The screen states, from the most to the least cautious.
 DIALOG, RUNNING, DRAFT, WAKE_IN_BOX, IDLE_EMPTY = "dialog", "running", "draft", "wake_in_box", "idle_empty"
+#: A screen with no input box on it, in a pane narrower than ``MIN_READABLE_WIDTH`` (#800). Below that
+#: Claude Code's footer, prompt and status lines wrap into each other, so "dialog" would be the wrong
+#: reason. Still busy: nothing is typed into a screen that can't be read.
+TOO_NARROW = "too_narrow"
+#: The width under which an unreadable screen is put down to the pane, not a dialog. Not yet measured
+#: as the narrowest width the reader still finds the box at; it only explains a screen that didn't
+#: read, so a narrow pane that does read is used as before.
+MIN_READABLE_WIDTH = 80
 #: The hold reason while the refractory window runs: the agent's pace, not its screen.
 REFRACTORY = "refractory"
 
@@ -204,6 +212,14 @@ def _box(screen: str):
     if any(_RUNNING_MARKER in line.lower() or _SPINNER.search(line) for line in near):
         return RUNNING, text
     return None, text
+
+
+def readable_state(state: str, width: Optional[int]) -> str:
+    """*state* from ``classify``, with a ``dialog`` that a narrow pane explains told as
+    ``too_narrow`` (#800). Any other state, or a width unknown or wide enough, is left alone."""
+    if state == DIALOG and width is not None and width < MIN_READABLE_WIDTH:
+        return TOO_NARROW
+    return state
 
 
 def classify(screen: str) -> str:
@@ -413,10 +429,16 @@ class Waker:
                                   else "the transcript can't be read", fresh)
         screen = self.pane.capture()
         state = classify(screen) if screen is not None else DIALOG
+        width = None
+        if state == DIALOG and screen is not None and callable(getattr(self.pane, "width", None)):
+            width = self.pane.width()
+            state = readable_state(state, width)
         if state != IDLE_EMPTY:
             if self.held != state:                         # once per busy stretch
                 self.held = state
-                self._say(EVENT_HELD, {"reason": state, "waiting": len(fresh), **self._evidence(screen, state)})
+                extra = {"pane_width": width} if state == TOO_NARROW else {}
+                self._say(EVENT_HELD, {"reason": state, "waiting": len(fresh), **extra,
+                                       **self._evidence(screen, state)})
             return None
         self.held = None
         text = wake_text(waiting_ids)
@@ -537,6 +559,12 @@ class TmuxPane:
     def capture(self) -> Optional[str]:
         out = self._run("capture-pane", "-p", "-e", "-t", self._target())
         return out.stdout if out is not None and out.returncode == 0 else None
+
+    def width(self) -> Optional[int]:
+        """The pane's width in columns, or None when it can't be read (#800)."""
+        out = self._run("display-message", "-p", "-t", self._target(), "#{pane_width}")
+        text = out.stdout.strip() if out is not None and out.returncode == 0 else ""
+        return int(text) if text.isdigit() else None
 
     def type(self, text: str) -> bool:
         out = self._run("send-keys", "-t", self._target(), "-l", text)

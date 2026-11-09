@@ -744,7 +744,7 @@ def test_the_launchd_reinstall_boots_out_before_bootstrapping(tmp_path):
         return subprocess.CompletedProcess(argv, 113 if argv[1] == "print" else 0, "", "")
     tier = LaunchdAdapter(user_home=tmp_path, uid=501, run=run)
     tier.install(CARD, tmp_path)
-    assert [c[1] for c in calls] == ["bootstrap"], "a first install only bootstraps"
+    assert [c[1] for c in calls] == ["print", "bootstrap"], "a first install finds nothing loaded, then bootstraps"
     calls.clear()
     tier.install(CARD, tmp_path, force=True)
     from macf.platform.launchd import pd_label

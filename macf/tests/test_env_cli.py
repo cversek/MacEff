@@ -122,3 +122,18 @@ def test_env_prints_the_homes_card_in_a_container_shaped_environment(tmp_path):
     assert result.returncode == 0, result.stderr
     ident = json.loads(result.stdout)["identity"]
     assert ident["agent_id"] == "Example2_0a1b2c" and ident["source"] == "home"
+
+
+def test_the_installed_and_running_claude_code_are_told_apart():
+    """#866: the binary line names the installed copy; a session started before an update runs the
+    older one, and env says so rather than letting one line stand for both."""
+    from macf.utils.paths import cc_version_lines, installed_cc_version
+    line = "/Users/x/.local/share/claude/versions/2.1.310 (via /Users/x/.local/bin/claude)"
+    assert installed_cc_version(line) == "2.1.310"
+    assert installed_cc_version("/usr/local/bin/claude") is None
+    same = cc_version_lines(line, "2.1.310")
+    assert same[0].startswith("CC Installed:") and "2.1.310" in same[0] and len(same) == 1
+    differ = cc_version_lines(line, "2.1.308")
+    assert len(differ) == 2 and differ[1].startswith("CC Running:")
+    assert "2.1.308" in differ[1] and "restart" in differ[1]
+    assert cc_version_lines("/usr/local/bin/claude", "2.1.308") == ["CC Installed:   /usr/local/bin/claude"]

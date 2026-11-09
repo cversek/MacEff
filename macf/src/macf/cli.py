@@ -303,8 +303,10 @@ def cmd_env(args: argparse.Namespace) -> int:
             print(f"⚠️ MACF: path resolution failed: {e}", file=sys.stderr)
             return str(p) if p else "(not set)"
 
-    from macf.utils.paths import detect_cc_binary
-    _detect_cc_binary = detect_cc_binary
+    from macf.utils.paths import detect_cc_binary, installed_cc_version
+    _cc_binary = detect_cc_binary()
+    _cc_installed = installed_cc_version(_cc_binary)
+    _cc_running = get_claude_code_version() or None
 
     # Get agent identity
     # The card as the primal daemon reads it, from the home's own files (#924).
@@ -373,7 +375,9 @@ def cmd_env(args: argparse.Namespace) -> int:
             "settings_local": resolve_path(agent_home / ".claude" / "settings.local.json") if agent_home else "(not set)"
         },
         "cc_internal": {
-            "cc_binary": _detect_cc_binary(),
+            "cc_binary": _cc_binary,
+            "cc_installed_version": _cc_installed,
+            "cc_running_version": _cc_running,
             "cc_project_dir": resolve_path(cc_project_dir),
             "cc_tasks_dir": resolve_path(cc_tasks_dir)
         },
@@ -464,7 +468,9 @@ def cmd_env(args: argparse.Namespace) -> int:
         print()
 
         print("Claude Code Internal")
-        print(f"  CC Binary:      {data['cc_internal']['cc_binary']}")
+        from macf.utils.paths import cc_version_lines
+        for _line in cc_version_lines(data['cc_internal']['cc_binary'], data['cc_internal']['cc_running_version']):
+            print(f"  {_line}")
         print(f"  CC Project Dir: {data['cc_internal']['cc_project_dir']}")
         print(f"  CC Tasks Dir:   {data['cc_internal']['cc_tasks_dir']}")
         print()
