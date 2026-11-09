@@ -77,6 +77,7 @@ policy; it does not contain it.
 - Why does a notifier not decide?
 - Why must it not sit in a synchronous path?
 - What must it publish about itself?
+- Does "delivered" mean the agent received it?
 
 === CEP_NAV_BOUNDARY ===
 
@@ -281,6 +282,14 @@ delivery, each suppression, each failure. **Note the scope of this virtue**: sel
 is redundant instrumentation for a component that only notifies, and **self-attestation
 for one that also edits what the agent receives.** A component holding both roles cannot
 be its own witness.
+
+**8.5 Written is not received.** A notifier's "delivered" means it wrote the notice to the
+channel. The client can still drop it: a channel plugin it doesn't admit connects, accepts
+every notice and shows none. So a delivery record claims only what the notifier saw, and
+anything that can tell in advance that the far end won't take a notice says so where status
+is read. The primal daemon names a declared channel that no allowlist admits
+(`persistent_layer`, on the allowlist). Comparing what was written with what the session
+received is the check that catches every cause, including ones nobody has foreseen.
 
 ---
 

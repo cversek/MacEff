@@ -1,0 +1,3 @@
+### Fixed
+
+- **A declared channel no allowlist admits is named** (`pd/allowlist.py`, `pd/cli.py`, `pd/daemon.py`, #904). With no organization allowlist, Claude Code admits only its default channel plugins. A channel from another marketplace, the MacEff channel among them, connects and is silent, and every notice written to it was recorded as delivered. Where the declaration lists such a channel and no managed settings set an allowlist, `pd install` says so and goes on, the daemon records it at start in `pd_allowlist_mismatch`, and `pd status` says so. Each names the managed settings file to fix. Policies `persistent_layer` and `notification_delivery` (8.5, "written is not received") say the same.

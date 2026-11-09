@@ -245,6 +245,22 @@ def test_an_allowlist_the_declaration_does_not_match_installs_nothing(tmp_path, 
     assert tier.installed == [] and "telegram@claude-plugins-official" in err and "nothing installed" in err
 
 
+def test_a_channel_no_allowlist_admits_is_named_and_the_install_goes_on(tmp_path, monkeypatch, tier, capsys):
+    """cversek/MacEff#904: with no organization allowlist, a declared channel from outside the
+    client's default marketplace will connect and be silent. The install says so and goes on: it
+    has nothing to compare, and the channel may be admitted some way it can't read."""
+    import json
+    home = make_home(tmp_path)
+    path = declaration_path(home)
+    body = json.loads(path.read_text())
+    body["allowlisted_channels"] = [{"plugin": "maceff-channel", "marketplace": "maceff"}]
+    path.write_text(json.dumps(body))
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(home))
+    assert run("install") == 0
+    err = capsys.readouterr().err
+    assert tier.installed and "maceff-channel@maceff" in err and "no organization allowlist" in err
+
+
 def test_grants_tested_at_install(tmp_path, monkeypatch, tier, capsys):
     """MIS-0002-R64 (adapter_MUST_test_grants_at_install): installing tests each unit's declared
     grants through the adapter, records the verdicts as one pd_grant_probe event, and does so
