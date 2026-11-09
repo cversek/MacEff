@@ -52,6 +52,13 @@ def test_other_keys_are_kept_and_the_two_names_corrected(start_module, chowns, t
                                "socket": "/run/amail/broker.sock", "handoff": "/h"}
 
 
+def test_the_deployment_domain_is_written_so_ingest_can_trust_its_broker(start_module, chowns, tmp_path):
+    """The receiver judges a signature at its broker's record of acceptance only when it knows
+    which domain is its own (MIS-0004 R45); start-up names it from the addressing."""
+    start_module.write_amail_settings(tmp_path, Path("/h"), "orchard2", 1, 1, domain="Orchard.Local")
+    assert _read(tmp_path) == {"handoff": "/h", "agent": "orchard2", "domain": "orchard.local"}
+
+
 def test_nothing_is_rewritten_when_it_already_says_so(start_module, chowns, tmp_path):
     start_module.write_amail_settings(tmp_path, Path("/h"), "a", 1, 1)
     chowns.clear()
