@@ -1402,7 +1402,7 @@ def _child_pid(path):
 
 
 def test_a_stop_reaches_the_units_whole_group(tmp_path, script, make_core):
-    """A stop reaches every process the unit started (persistent_layer 10.2): a child in
+    """A stop reaches every process the unit started (persistent_layer 2.2): a child in
     the unit's group that ignores SIGTERM outlives its leader's exit, and is killed at the
     stop's deadline rather than left running."""
     marker = tmp_path / "child.pid"
@@ -1740,7 +1740,7 @@ def test_an_untested_newest_probe_speaks_for_the_grants(tmp_path, script, base, 
     assert not [o for o in daemon.notifier.owed.values() if o.source == "pd_grant_denied"]
 
 
-# ---- pacing the keystroke wake (persistent_layer 1.9) ------------------------------------
+# ---- pacing the keystroke wake (persistent_layer 6.9) ------------------------------------
 
 class _NoPane:
     """A pane for a waker that never ticks here: with no mail owed, the notifier types nothing."""

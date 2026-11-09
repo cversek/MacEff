@@ -1,4 +1,4 @@
-"""The plan for moving a session onto its primal daemon (persistent_layer 6.3): read from the
+"""The plan for moving a session onto its primal daemon (persistent_layer 5.2): read from the
 host, never acting on it. Every case is played on stand-in probes."""
 import json
 from dataclasses import replace

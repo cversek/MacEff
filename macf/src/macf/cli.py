@@ -1856,7 +1856,7 @@ def cmd_harness_attach(args: argparse.Namespace) -> int:
     and broke with "no sessions". The name is matched against every agent this endpoint
     and its declared remotes list (utils/roster.py); an agent on a remote is handed off
     to that remote's own ``harness attach --card``, which resolves it from its own daemon
-    (persistent_layer 4.1, 4.5). The decision is utils/attach_dispatch.py's.
+    (persistent_layer 9.1, 9.5). The decision is utils/attach_dispatch.py's.
     """
     from .pd.session_unit import client_environment
     from .utils.attach import plan_attach_for_card, plan_attach_for_home
@@ -1993,7 +1993,7 @@ def cmd_harness_unit(args: argparse.Namespace) -> int:
 
 def cmd_harness_cutover(args: argparse.Namespace) -> int:
     """Print the plan for moving the agent's session onto its primal daemon (persistent_layer
-    6.3). Read-only: exit 0 when every check holds, 1 when one doesn't or there is nothing
+    5.2). Read-only: exit 0 when every check holds, 1 when one doesn't or there is nothing
     to move, 2 when the agent can't be resolved."""
     import dataclasses
     from pathlib import Path
@@ -2009,7 +2009,7 @@ def cmd_harness_cutover(args: argparse.Namespace) -> int:
     card = calling_card_from_identifier(agent)
     # Without --home, the agent home as `macf_tools env` finds it, not the login's ~: on a host
     # the two differ, and a plan built for ~ finds neither the staged declaration nor the
-    # hand-started client it must stop (persistent_layer 6.3).
+    # hand-started client it must stop (persistent_layer 5.2).
     from .utils.paths import find_agent_home
     home = Path(args.home) if getattr(args, "home", None) else find_agent_home()
     import os

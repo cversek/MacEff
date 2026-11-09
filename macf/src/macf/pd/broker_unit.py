@@ -135,7 +135,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
     if shutil.which(args.mosquitto) is None:
         print(f"⚠️ MACF: pd: the broker unit can't find {args.mosquitto!r} on its PATH: every daemon runs "
-              f"its own broker (persistent_layer 11.4). Install mosquitto (apt install mosquitto; on macOS "
+              f"its own broker (persistent_layer 3.4). Install mosquitto (apt install mosquitto; on macOS "
               f"brew install mosquitto, without brew services start, which runs a second broker of its "
               f"own), then restart the daemon.", file=sys.stderr)
         return 127

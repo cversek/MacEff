@@ -91,7 +91,7 @@ def test_a_body_the_daemon_would_refuse_is_refused_when_agents_yaml_loads():
 
 
 def test_an_agent_daemon_needs_a_calling_card_when_agents_yaml_loads():
-    """persistent_layer 10.1: a container agent's daemon runs under the card agents.yaml declares,
+    """persistent_layer 2.1: a container agent's daemon runs under the card agents.yaml declares,
     so primal_daemon without calling_card is refused at load, naming the agent and the field,
     rather than found at start as a daemon whose card can't be read. A card alone is fine, a card
     takes a service card's form, and a vanilla account can't carry one."""

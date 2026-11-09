@@ -1,7 +1,7 @@
 """The MacEff channel: notices from an agent's primal daemon, delivered into its live
 Claude Code session as channel events instead of typed keystrokes.
 
-MIS-0002 section 6.14. A channel event that reaches an idle session starts a turn, and
+MIS-0002 section 6.2.3. A channel event that reaches an idle session starts a turn, and
 Claude Code sets its source from this server's configured name, never from the text.
 That is a wake that reads no screen, which is why it comes first and the keystroke wake
 is the fallback (MIS-0002-R104 (adapter_MUST_deliver_through_channel)).
@@ -80,7 +80,7 @@ DAEMON_POINTERS: Dict[str, str] = {
     # MIS-0002-R60 (pd_MUST_notice_limit_exceeded)
     "pd_limit_exceeded": "A unit of yours is past its declared memory limit. Run `macf_tools pd status`; "
                          "the event log's pd_unit_over_limit entry names the unit, its use and its limit.",
-    # A unit that failed, under its restart policy (persistent_layer 10.2)
+    # A unit that failed, under its restart policy (persistent_layer 2.2)
     "pd_unit_failed": "A unit of yours failed: it exited with a failing code, missed its liveness, or "
                       "couldn't start. This notice's id is the unit, its failures in a row and an epoch "
                       "second, and a newer failure of the same unit replaces one not yet delivered. Run "

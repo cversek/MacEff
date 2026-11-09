@@ -40,7 +40,7 @@ class PlatformAdapter(Protocol):
 
 
 # Two further verbs, which ``agent init --update`` uses to bring a daemon current
-# (persistent_layer 6.5). They are not in the protocol, so an adapter that lacks them is
+# (persistent_layer 5.4). They are not in the protocol, so an adapter that lacks them is
 # still an adapter; the caller asks for them by name and says when one is missing:
 #
 #   installed(card, agent_home) -> Optional[str]  the installed unit's text, None if none

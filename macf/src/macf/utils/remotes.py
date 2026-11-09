@@ -2,7 +2,7 @@
 
 ``harness attach lumen`` on a laptop has to find the Lumen seats on another machine
 without the operator carrying their port, account and socket directory in his head
-(persistent_layer 4). The operator declares each place once, in his own config; this
+(persistent_layer 9). The operator declares each place once, in his own config; this
 module asks each one who is there and hands an attach off to it.
 
 **Declared, not discovered.** The file lives in the operator's config directory
@@ -92,7 +92,7 @@ class Remote(BaseModel):
     #: A fixed login, or ``seat``: each agent's own account (a container's seats).
     login: str
     #: The account that asks for the roster when ``login`` is ``seat``: any one seat, since
-    #: a seat may read every home's published summary (persistent_layer 8).
+    #: a seat may read every home's published summary (persistent_layer 14).
     list_login: Optional[str] = None
     #: The remote's command, for a remote where it is not on a non-login shell's PATH.
     macf_tools: str = "macf_tools"

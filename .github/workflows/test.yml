@@ -56,7 +56,7 @@ jobs:
         # skipped security suite is the quietest way to stop testing something.
         run: pip install -e "./macf[test,proxy,amail]"
 
-      - name: Install mosquitto, the broker every daemon runs (persistent_layer 11.4)
+      - name: Install mosquitto, the broker every daemon runs (persistent_layer 3.4)
         # Ubuntu's package confines /usr/sbin/mosquitto with an AppArmor profile that lets it read
         # its configuration only under /etc/mosquitto, so a daemon's own broker, configured in its
         # runtime directory, fails with "Unable to open config file". The profile is unloaded and

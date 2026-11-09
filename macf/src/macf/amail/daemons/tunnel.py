@@ -1,7 +1,7 @@
 """The inbound tunnel as a primal daemon's unit: cloudflared, supervised, alive only when connected.
 
 A deployment that fronts its receiver with a Cloudflare tunnel declares this module as a unit of
-the tunnel account's primal daemon (persistent_layer 10.1). The account is the only holder of the
+the tunnel account's primal daemon (persistent_layer 2.1). The account is the only holder of the
 tunnel credential: a receiver that held it could be made to carry the tunnel, and with it the
 deployment's inbound mail, somewhere else.
 

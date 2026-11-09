@@ -96,7 +96,7 @@ def _no_test_reads_the_hosts_rendered_declarations(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _a_free_broker_port_for_each_test_daemon(monkeypatch):
-    """Every daemon runs its own broker on a port derived from its card (persistent_layer 11.4).
+    """Every daemon runs its own broker on a port derived from its card (persistent_layer 3.4).
     Test daemons share a few cards and run in parallel, so each test gets a free port of its own,
     and no test's broker unit fails to bind because another test holds the same port."""
     import socket as _socket

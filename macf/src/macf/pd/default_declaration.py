@@ -1,7 +1,7 @@
 """The primal daemon declaration ``macf_tools agent init`` writes for a host agent that has none.
 
 A host agent's declaration lives in its own home, ``<home>/.maceff/pd/declaration.json``
-(``names.declaration_path``; persistent_layer 10.1). This module builds the default one and
+(``names.declaration_path``; persistent_layer 2.1). This module builds the default one and
 compares an existing declaration against it. It never writes: the caller validates the result
 with the daemon's own ``Declaration`` model, writes it only where none exists, and otherwise
 reports what the existing one lacks.
@@ -9,12 +9,12 @@ reports what the existing one lacks.
 The default declares three units:
 
 - ``session``: the agent's Claude Code session, through ``macf_tools harness unit`` in the
-  agent's project directory (persistent_layer 6.2);
+  agent's project directory (persistent_layer 5.1);
 - ``monitor``: the transcript monitor, ``python -m macf.transcript_monitor --follow``;
 - ``search``: the search service, ``python -m macf.search_service.daemon --unit``.
 
 Every unit is started with the declared environment and nothing inherited (persistent_layer
-10.2), so each names ``PATH`` and ``HOME``.
+2.2), so each names ``PATH`` and ``HOME``.
 """
 import json
 import os
@@ -34,7 +34,7 @@ MONITOR_MODULE = "macf.transcript_monitor"
 SEARCH_MODULE = "macf.search_service.daemon"
 
 #: The session's wrapper reaps the pane for 10 s after its server goes, so the session's stop
-#: grace must exceed that (persistent_layer 6.2).
+#: grace must exceed that (persistent_layer 5.1).
 SESSION_STOP_GRACE_S = 30.0
 
 #: The variables that name the login a unit runs as. They belong to the unit's account, not its
@@ -110,10 +110,10 @@ def build(card: str, *, agent_home: Path, login_home: Path, account: str, python
     """The default declaration for *card*, as the JSON object written to disk.
 
     *runtime_dir* is the ``XDG_RUNTIME_DIR`` the session unit declares, so its tmux server is
-    where attach, harness status and the cutover look for it (persistent_layer 6.3). The
+    where attach, harness status and the cutover look for it (persistent_layer 5.2). The
     caller passes it on Linux and not on macOS, which sets none."""
     path = ":".join(dict.fromkeys(d for d in path_dirs if d))
-    # The declaration states a unit's whole environment (persistent_layer 6.3), so the login
+    # The declaration states a unit's whole environment (persistent_layer 5.2), so the login
     # each unit runs as is stated too: without it the session read its login as unknown, and a
     # home with no calling card would take "unknown" for its name (cversek/MacEff#848).
     env = {"PATH": path, "HOME": str(login_home), "MACEFF_AGENT_HOME_DIR": "{agent_home}",
@@ -127,7 +127,7 @@ def build(card: str, *, agent_home: Path, login_home: Path, account: str, python
          "memory_limit_mb": 16384, "stop_grace_s": SESSION_STOP_GRACE_S,
          "environment": {**env, **({"XDG_RUNTIME_DIR": runtime_dir} if runtime_dir else {})}},
         {"name": "monitor", "command": [py, "-m", MONITOR_MODULE, "--follow"],
-         # persistent_layer 6.4: measured 15-40 MB per monitor; 128 MB reports a leak early.
+         # persistent_layer 5.3: measured 15-40 MB per monitor; 128 MB reports a leak early.
          "account": account, "restart": "always", "liveness_interval_s": 30,
          "memory_limit_mb": 128, "environment": dict(env)},
         {"name": "search", "command": [py, "-m", SEARCH_MODULE, "--unit"],
@@ -143,7 +143,7 @@ def build(card: str, *, agent_home: Path, login_home: Path, account: str, python
         "units": units,
         "allowlisted_channels": channels,
         # The channel's events count as the operator's only for the operator's own channel;
-        # an empty list declares that none is (persistent_layer 1.4).
+        # an empty list declares that none is (persistent_layer 6.4).
         "operator_channels": [f"plugin:{telegram[0]}:{telegram[0]}"] if telegram else [],
         "notice_routes": {"amail": "agent"} if mail else {},
     }
@@ -239,7 +239,7 @@ def container_body(*, account: str, harness_session: str, project_dir: Optional[
                    timezone: Optional[str] = None) -> Dict[str, Any]:
     """The declaration body a container agent runs when agents.yaml writes none for it: the
     host default's session unit (``build``), as a body without ``agent`` and ``version``, which
-    container start-up fills in (persistent_layer 10.1).
+    container start-up fills in (persistent_layer 2.1).
 
     Only the session is declared. The host default's monitor and search are per-agent copies,
     and search holds over a gigabyte each, which a container shared by several seats doesn't

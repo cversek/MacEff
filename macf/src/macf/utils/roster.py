@@ -2,7 +2,7 @@
 
 ``harness attach`` used to take one exact tmux name, so the operator had to carry
 each seat's session name, account and socket directory in his head (persistent_layer
-4). The roster answers "who is here" from what each agent publishes, and the matcher
+9). The roster answers "who is here" from what each agent publishes, and the matcher
 turns a short name (``lumen``, ``Lumen2``, ``3f9a1c``) into one of those agents, or
 says plainly that it names several, or none.
 
@@ -14,11 +14,11 @@ every seat after that one agent. The sources, in the order they are believed:
 - a daemon record in this account's runtime directory, ``<id>.json``, whose name is the
   card through ``session_identifier``;
 - a home's published units summary (``agent/public/pd/units.json``, ``agent`` = card),
-  which peers already read (persistent_layer 8);
+  which peers already read (persistent_layer 14);
 - ``agent_card(home)`` for a home that has a card and no summary;
 - an installed legacy harness unit, ``cc-harness-<id>.service``.
 
-**What one seat may know of another's** (persistent_layer 8): its public summary and
+**What one seat may know of another's** (persistent_layer 14): its public summary and
 its card. Not its state: a peer's state lives with the peer's daemon, which answers only
 its own account. So a peer's ``state`` is ``unknown``, with that reason, rather than a
 guess made from a file that outlives its writer.
@@ -265,7 +265,7 @@ def _home_entry(home: Path, own_uid: int, probe: Optional["Probe"], legacy: Sequ
     else:
         state = "unknown"
         reasons["state"] = ("another account's agent: its state lives with its own daemon, "
-                            "which answers only that account (persistent_layer 8)")
+                            "which answers only that account (persistent_layer 14)")
     return _entry(card, account=account, home=str(home), session_kind=kind, state=state,
                   reasons=reasons)
 
@@ -298,7 +298,7 @@ def probe_local(ident: str, has_legacy_unit: bool,
     """This account's agent *ident*: which kind of session it has, and whether it runs.
 
     A session unit's server socket in the runtime directory makes it the daemon's session
-    unit (persistent_layer 6.2); otherwise an installed legacy unit makes it the legacy
+    unit (persistent_layer 5.1); otherwise an installed legacy unit makes it the legacy
     harness, asked on the default server. A name on the default server proves presence,
     not ownership; that is the start script's concern, not a listing's.
     """

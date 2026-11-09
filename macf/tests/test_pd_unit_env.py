@@ -1,4 +1,4 @@
-"""The daemon tells each unit which unit it is and how often it beats (persistent_layer 11.2).
+"""The daemon tells each unit which unit it is and how often it beats (persistent_layer 3.2).
 These were typed again into every declaration, where a missing or mistyped value silently
 stopped a unit's liveness: two of three cutover trial runs failed that way."""
 import getpass

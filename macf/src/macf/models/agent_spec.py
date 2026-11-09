@@ -589,7 +589,7 @@ class AgentSpec(BaseModel):
             "first six characters of the agent's identity file. Container start-up writes it into "
             "the agent's home as agent_identity.calling_card in .maceff/config.json, where the "
             "primal daemon reads it, and refuses to overwrite a different card already there. "
-            "Required with primal_daemon (persistent_layer 10.1)."
+            "Required with primal_daemon (persistent_layer 2.1)."
         ),
     )
 
@@ -599,7 +599,7 @@ class AgentSpec(BaseModel):
             "Where this agent's session starts in a container, which is also the directory its "
             "conversation is kept under. Absent: the agent's active_project link when it has "
             "assigned projects, else its home, as the login shell has always used, so a seat moved "
-            "onto its daemon continues the same conversation (persistent_layer 10.1)."
+            "onto its daemon continues the same conversation (persistent_layer 2.1)."
         ),
     )
 
@@ -614,7 +614,7 @@ class AgentSpec(BaseModel):
         description=(
             "Why this agent runs without a primal daemon in a container, where every agent that "
             "isn't vanilla gets one by default. Start-up logs the reason at every start. A reason "
-            "is required, so an agent left off the default says why (persistent_layer 10.1)."
+            "is required, so an agent left off the default says why (persistent_layer 2.1)."
         ),
     )
 

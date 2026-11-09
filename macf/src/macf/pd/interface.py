@@ -154,7 +154,7 @@ class Unit(_Closed):
 
     @model_validator(mode="after")
     def _liveness_names_this_unit(self) -> "Unit":
-        # The daemon sets both from the unit itself (persistent_layer 11.2); a declaration may
+        # The daemon sets both from the unit itself (persistent_layer 3.2); a declaration may
         # still state them, but never different, or the unit would beat as another or late.
         env = self.environment
         if "MACF_PD_UNIT" in env and env["MACF_PD_UNIT"] != self.name:
@@ -368,7 +368,7 @@ CHANNEL_SUBSCRIBER = "channel"
 
 class StreamGrant(_Closed):
     """A uid other than the agent's own that may subscribe to its event stream, and the sources
-    it may take (MIS-0002-R156 (subscriber_MUST_be_granted_agents); persistent_layer 11.4). Least
+    it may take (MIS-0002-R156 (subscriber_MUST_be_granted_agents); persistent_layer 3.4). Least
     privilege: a tray or a host-wide watch is granted unit states and notices, not tool events."""
 
     uid: int = Field(ge=0)
@@ -445,7 +445,7 @@ class Declaration(_Closed):
       local time and a container usually in UTC, so the same declaration would act at
       different moments.
     - ``stream_grants``: the other uids that may subscribe to the event stream, each with the
-      sources it may take; the agent's own uid needs none (persistent_layer 11.4).
+      sources it may take; the agent's own uid needs none (persistent_layer 3.4).
     - ``operator_uid``: where the operator has an account of its own, as in a container, the
       only uid the daemon takes the event stream's rules from. None: the daemon's own uid, as
       for every control act.
@@ -468,7 +468,7 @@ class Declaration(_Closed):
     #: health (MIS-0004-R31), and which the outside watch reads (R32). None: no broker here.
     mail_sweep_schedule: Optional[str] = None
     #: How long the keystroke wake rests after each wake, until the agent paces it otherwise
-    #: over the control socket (persistent_layer 1.9).
+    #: over the control socket (persistent_layer 6.9).
     wake_refractory_s: float = Field(default=DEFAULT_WAKE_REFRACTORY_S, gt=0, allow_inf_nan=False)
     #: The shortest window a pace may set. Only the declaration sets it, never the socket, and
     #: in a container the declaration is rendered by root. None: no floor.
@@ -643,7 +643,7 @@ EVENT_UNREAD_MAIL_CLEARED = "pd_unread_mail_cleared"
 #: (MIS-0002-R124). ``findings`` names each difference.
 EVENT_ALLOWLIST_MISMATCH = "pd_allowlist_mismatch"
 EVENT_DAEMON_START = "pd_daemon_start"
-#: An operator's rule for the event stream: what its rules in force fold to (persistent_layer 11.4).
+#: An operator's rule for the event stream: what its rules in force fold to (persistent_layer 3.4).
 EVENT_STREAM_RULE = "pd_stream_rule"
 
 
@@ -696,7 +696,7 @@ class Asker(_Closed):
     (MIS-0002-R127 (harness_compaction_MUST_be_recorded)); ``policy`` for the daemon
     acting on its own declared rules: a unit's restart policy after a failure, the start of
     declared units at boot, and the stops of a shutdown. ``agent`` is the agent itself, over
-    the control socket from its own command line, pacing its wake (persistent_layer 1.9).
+    the control socket from its own command line, pacing its wake (persistent_layer 6.9).
     """
 
     kind: Literal["operator", "wind_down", "policy", "harness", "agent"]
@@ -738,7 +738,7 @@ class Control(_Closed):
 
 
 class WakePaced(_Closed):
-    """The keystroke wake was paced over the control socket (persistent_layer 1.9): written
+    """The keystroke wake was paced over the control socket (persistent_layer 6.9): written
     before the daemon answers, beside the act's ``Control`` record, and read back by the next
     daemon at its start, which re-asserts it. ``refractory_s`` is the window asked for, or None
     to go back to the declared one; ``previous_s`` is the window it replaced."""
@@ -931,7 +931,7 @@ class EntryRemoveRequest(_Closed):
 class EntryEditRequest(_Closed):
     """Change an entry the agent holds: its time, its purpose or its missed-run policy, keeping
     its id. Like making one, it is taken only from the agent's live session, and the operator's
-    consent is the ask prompt on the command (persistent_layer 10.6)."""
+    consent is the ask prompt on the command (persistent_layer 8.1)."""
 
     op: Literal["entry_edit"]
     id: str = Field(pattern=r"^e-[0-9a-f]{12}$")
@@ -958,7 +958,7 @@ class EntryPauseRequest(_Closed):
 class PaceRequest(_Closed):
     """How long the keystroke wake rests after each wake, or None to go back to the declared
     window. The agent paces itself, or the operator paces it; it acts on no unit. No pace goes
-    under the declared floor, which only the declaration sets (persistent_layer 1.9)."""
+    under the declared floor, which only the declaration sets (persistent_layer 6.9)."""
 
     op: Literal["pace"]
     refractory_s: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
@@ -974,7 +974,7 @@ class PaceRequest(_Closed):
 
 class StreamRuleRequest(_Closed):
     """Silence, unsilence or reroute a source or a subscriber of the event stream, asked by the
-    operator; it takes effect at once and is recorded first (persistent_layer 11.4)."""
+    operator; it takes effect at once and is recorded first (persistent_layer 3.4)."""
 
     op: Literal["stream_rule"]
     act: Literal["silence", "unsilence", "route", "unroute"]

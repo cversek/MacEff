@@ -71,7 +71,7 @@ EVENT_HELD = "pd_wake_held"
 EVENT_RELEASED = "pd_wake_released"
 EVENT_TURN = "pd_wake_turn"
 EVENT_CAP = "pd_wake_cap_reached"
-#: The agent, or the operator, paced the wake over the control socket (persistent_layer 1.9):
+#: The agent, or the operator, paced the wake over the control socket (persistent_layer 6.9):
 #: the window asked for, the one it replaced, and who asked, why and from which process. The
 #: next daemon reads the newest back at its start.
 EVENT_PACED = "pd_wake_paced"

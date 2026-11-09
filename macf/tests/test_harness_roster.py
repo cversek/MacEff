@@ -33,11 +33,11 @@ def test_a_peer_lists_all_four_seats_with_cards_accounts_and_display_names(tmp_p
 
 
 def test_a_peers_state_is_unknown_with_the_shared_container_reason(tmp_path):
-    """persistent_layer 8: a peer's state lives with the peer's daemon; it isn't guessed."""
+    """persistent_layer 14: a peer's state lives with the peer's daemon; it isn't guessed."""
     r = peer_roster(tmp_path)
     for e in r.entries:
         assert e.state == "unknown"
-        assert "persistent_layer 8" in e.reasons["state"]
+        assert "persistent_layer 14" in e.reasons["state"]
 
 
 def test_an_unreadable_home_is_listed_with_its_reason(tmp_path, monkeypatch):
