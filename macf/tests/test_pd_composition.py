@@ -43,6 +43,21 @@ def test_each_agent_component_is_built_only_where_its_declaration_adds_it(tmp_pa
     assert system.core.on_notice is None and system.scheduler.on_notice is None
 
 
+def test_a_declaration_written_without_kind_stays_an_agents(tmp_path, base, isolated_events_log):
+    """Every deployed declaration so far was written without ``kind``; each must stay an agent's,
+    with its notice path, duties and login check. The raw file is written by hand, since a model
+    dump spells out the default and would hide a change to it (the host-side maintainer's review
+    on #947)."""
+    home = make_home(tmp_path, [])
+    raw = json.loads(declaration_path(home).read_text())
+    raw.pop("kind", None)
+    declaration_path(home).write_text(json.dumps(raw))
+    assert "kind" not in declaration_path(home).read_text()
+    daemon = Daemon(home, base=base)
+    assert daemon.agent
+    assert all(getattr(daemon, p) is not None for p in ("notifier", "duties", "login"))
+
+
 @pytest.mark.parametrize("kind", ["system", "fleet"])
 def test_a_system_or_fleet_declaration_builds_no_agent_component(kind, tmp_path, base, run_daemon,
                                                                  isolated_events_log):
