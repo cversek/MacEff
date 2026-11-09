@@ -61,7 +61,7 @@ def unsent_drafts() -> List[Draft]:
 
 
 def age(draft: Draft, now: Optional[datetime] = None) -> str:
-    """How old the draft is, in the largest whole unit: "18 days", "5 hours", "under an hour"."""
+    """How old the draft is, in the largest whole unit: "18 days old", "5 hours old", "under an hour old"."""
     if draft.created is None:
         return "of unknown age"
     seconds = ((now or datetime.now(timezone.utc)) - draft.created).total_seconds()

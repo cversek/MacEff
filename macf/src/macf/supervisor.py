@@ -742,8 +742,8 @@ def _record_box_cleared(text: str, presses: int, tmux_session: str) -> None:
 
 def _unsent_feedback_drafts() -> list:
     """The feedback drafts the client holds unsent, oldest name first; empty when there are none."""
-    base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
-    return sorted((base / "feedback" / "drafts").glob("*.json"))
+    from macf.utils.feedback_drafts import drafts_dir
+    return sorted(drafts_dir().glob("*.json"))
 
 
 def _draft_in_box(target: str) -> Optional[str]:
