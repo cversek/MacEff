@@ -999,3 +999,22 @@ def test_a_run_gets_the_prompt_read_at_start(tmp_path):
     s.tick()
     finish(s)
     assert json.loads((tmp_path / "started.json").read_text())["prompt"] == "Sweep the open pull requests.\n"
+
+
+def test_a_run_stopped_on_purpose_owes_no_failure_notice(tmp_path):
+    """A run the daemon's own stop ends reads `stopped`, and it raises no pd_run_failed (#746):
+    the failure notice is for a run that failed, not one that was asked to end."""
+    f = tmp_path / "run.pid"
+    log, now = Log(), [at("2026-10-14 12:00")]
+    channel = ChannelReceiver(tmp_path / "agent")
+    cmd = ["/bin/sh", "-c", f"echo $$ > {f}; while true; do sleep 1; done"]
+    s = make_scheduler(tmp_path, [command_schedule(cmd, timeout_s=600)], log, now, on_notice=channel)
+    now[0] = at("2026-10-14 12:05")
+    s.tick()
+    run = _pid_in(f)
+    try:
+        s.shutdown()
+        assert log.of(sc.EVENT_DONE)[0]["outcome"].startswith("stopped")
+        assert channel.received == []
+    finally:
+        _reap(run)
