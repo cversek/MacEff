@@ -193,3 +193,14 @@ class Controller:
                 return {"ok": False, "error": f"two installed agents claim the card {card!r}; neither is asked"}
             return {"ok": False, "error": f"no installed agent with the card {card!r}"}
         return self._ask(agent, act_request(act, unit)) or {"ok": False, "error": "no answer"}
+
+    def attach(self, card: str, opener: Optional[Callable] = None) -> dict:
+        """Open a terminal window attached to that agent's session (MacEff #726). No daemon
+        is asked anything: the window's own ``harness attach --card`` does the finding."""
+        if card not in self.agents:
+            if any(a.card == card for a in self.found):
+                return {"ok": False, "error": f"two installed agents claim the card {card!r}; neither is opened"}
+            return {"ok": False, "error": f"no installed agent with the card {card!r}"}
+        if opener is None:
+            from .attach import open_attach as opener
+        return opener(card)
