@@ -556,6 +556,17 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
                   f"{named}. Ask the operator to send or discard "
                   f"it (/feedback), then run this again.", file=sys.stderr)
             return 1
+        jobs = _scheduled_jobs() if not target else []
+        if jobs:
+            # A scheduled job puts /exit on a second dialog ("Background work is running") that
+            # nobody is there to answer. Answering it by keystroke would pick a menu entry a
+            # person hasn't seen, and "exit and stop tasks" would drop the jobs silently (#854).
+            named = "; ".join(f"{j.id} ({j.schedule})" for j in jobs)
+            print(f"[inject] This session has {len(jobs)} scheduled job(s), so {cmd} would stop on "
+                  f"the 'Background work is running' dialog instead of exiting: {named}. They live "
+                  f"only in this client and end with it: cancel them (CronDelete), note how to "
+                  f"re-create them after the restart, then run this again.", file=sys.stderr)
+            return 1
     if target:
         if then:
             # The follower reads THIS agent's event log, so it can only follow its own pane.
@@ -738,6 +749,23 @@ def _record_box_cleared(text: str, presses: int, tmux_session: str) -> None:
                                      "tmux_session": tmux_session})
     except (OSError, ValueError) as e:
         print(f"⚠️ MACF: could not record the cleared text: {e}", file=sys.stderr)
+
+
+def _scheduled_jobs() -> list:
+    """The jobs this session has scheduled and not cancelled, from its transcript; empty when the
+    transcript can't be found or read, which is said, since this check only advises (#854)."""
+    try:
+        from .utils import get_current_session_id
+        from .utils.paths import get_session_transcript_path
+        from .utils.scheduled_jobs import client_start, live_jobs
+        path = get_session_transcript_path(get_current_session_id())
+        if not path:
+            return []
+        return live_jobs(Path(path), since=client_start())
+    except (OSError, ValueError, ImportError) as e:
+        print(f"[inject] could not read this session's scheduled jobs ({e}); if /exit stops on "
+              f"'Background work is running', a person has to answer it", file=sys.stderr)
+        return []
 
 
 def _unsent_feedback_drafts() -> list:
