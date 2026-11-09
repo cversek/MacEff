@@ -57,6 +57,15 @@ def _a_refused_daemon_exits_at_once_in_tests(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_test_reads_the_hosts_claude_settings(monkeypatch):
+    """The mode-safety rules consult the allow lists of the user's and the project's own
+    settings files (#759). A developer's broad allow there would change what a test sees, so
+    each test starts with none; a test wanting some sets its own."""
+    from macf.utils import claude_settings as cs
+    monkeypatch.setattr(cs, "_other_allow_entries", lambda project_root=None: [])
+
+
+@pytest.fixture(autouse=True)
 def _no_test_reads_the_hosts_registry(tmp_path, monkeypatch):
     """Every ingest judges agent mail against the operator's registry (MIS-0004 R44), by default
     /etc/maceff/registry.yaml. A host that has one would make a test's verdicts depend on which
