@@ -401,7 +401,7 @@ No part of the grouping layer runs as root on a host (R72), so the previous revi
 
 | Requirement | Check | How | State |
 |---|---|---|---|
-| R74 | decidable | `macf/tests/test_pd_composition.py::test_a_system_or_fleet_declaration_builds_no_agent_component` | planned: lands with MIS-0002's landing step 10, the base in code |
+| R74 | decidable | `macf/tests/test_pd_composition.py::test_a_system_or_fleet_declaration_builds_no_agent_component` | planned: the test lands with MIS-0002's revision, where it passes; this row moves to passing once both are merged |
 | R09 | judgment | the head maintainer, at review of each new unit | standing |
 | R39 | decidable | `macf/tests/test_pd_association.py::test_a_member_runs_and_records_without_its_association` | planned |
 | R17 | judgment | the head maintainer, at review of each export | standing |
