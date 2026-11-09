@@ -229,6 +229,7 @@ def apply_plan(steps: List[Step], run=None, force: bool = False) -> List[str]:
                                           f"review it, then apply with force")
     done = []
     booted_out = None
+    wrote_new = False                     # did this run put a plist on disk that wasn't there?
     for s in steps:
         if s.what == "unloaded":
             deadline = _clock() + s.wait_s
@@ -240,6 +241,11 @@ def apply_plan(steps: List[Step], run=None, force: bool = False) -> List[str]:
             done.append(s.describe())
             continue
         if s.what == "write":
+            try:
+                with open(s.path, "rb") as fh:
+                    wrote_new = fh.read() != s.content
+            except FileNotFoundError:
+                wrote_new = True
             os.makedirs(os.path.dirname(s.path), exist_ok=True)
             # Whole or not at all: a full disk must not leave a half-written plist.
             write_text_atomic(s.path, s.content.decode("utf-8"))
@@ -248,6 +254,12 @@ def apply_plan(steps: List[Step], run=None, force: bool = False) -> List[str]:
                 os.unlink(s.path)
         elif s.what == "launchctl":
             if s.loaded_probe and run(s.loaded_probe).returncode == 0:
+                if wrote_new:
+                    # Loaded from a plist that isn't the one just written: launchd keeps running the
+                    # old definition, and saying "installed" would hide that (CTB on #944).
+                    raise RuntimeError(f"{s.loaded_probe[-1]} is already loaded with its previous definition, "
+                                       f"so the plist just written at {s.argv[-1]} is not in effect; install "
+                                       f"again with --force to replace the loaded job")
                 done.append(f"{s.describe()} (already loaded)")
                 continue
             r = run(s.argv)

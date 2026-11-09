@@ -64,3 +64,16 @@ def test_the_tray_reload_is_boot_out_wait_then_bootstrap(tmp_path):
     kinds = [s.what if s.what != "launchctl" else s.argv[1] for s in steps]
     assert kinds == ["write", "bootout", "unloaded", "bootstrap"]
     assert steps[1].not_loaded_ok
+
+
+@pytest.mark.parametrize("plan", [_pd_plan, _tray_plan])
+def test_a_new_plist_on_a_loaded_job_is_not_passed_off_as_installed(tmp_path, plan):
+    """CTB on #944: a plist written fresh (the old file gone) while launchd still runs the old
+    definition must not report success with the new one never loaded. It fails, naming --force."""
+    import os
+    fake = FakeLaunchd()
+    first = plan(tmp_path)
+    launchd.apply_plan(first, run=fake)
+    os.unlink(first[0].path)                      # the old plist gone; the old job still loaded
+    with pytest.raises(RuntimeError, match="--force"):
+        launchd.apply_plan(plan(tmp_path, arg="y"), run=fake)

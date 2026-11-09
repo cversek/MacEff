@@ -243,8 +243,9 @@ class TestMacOSInstall:
         with open(steps[0].path, "ab") as fh:
             fh.write(b"<!-- hand edit -->")
         with pytest.raises(FileExistsError):
-            apply_plan(steps, run=lambda argv: ok)
-        apply_plan(steps, run=lambda argv: ok, force=True)
+            apply_plan(steps, run=fresh)
+        ran.clear()
+        apply_plan(steps, run=fresh, force=True)
 
     def test_a_failed_launchctl_is_said_not_hidden(self, tmp_path):
         from macf.platform.launchd import apply_plan, uninstall_plan
@@ -259,7 +260,9 @@ class TestMacOSInstall:
         plist must go in each case."""
         from macf.platform.launchd import apply_plan, install_plan, uninstall_plan
         ok = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})
-        apply_plan(install_plan(CARD, ARGV, str(tmp_path), str(tmp_path), 501, self.SOCKETS), run=lambda argv: ok)
+        absent = type("R", (), {"returncode": 113, "stdout": "", "stderr": "Could not find service"})
+        apply_plan(install_plan(CARD, ARGV, str(tmp_path), str(tmp_path), 501, self.SOCKETS),
+                   run=lambda argv: absent if argv[1] == "print" else ok)     # a fresh launchd
         plist = tmp_path / "Library" / "LaunchAgents" / (pd_label(CARD) + ".plist")
         assert plist.exists()
         not_loaded = type("R", (), {"returncode": 3, "stdout": "", "stderr": "Boot-out failed: 3: No such process"})

@@ -311,7 +311,6 @@ class ConsciousnessConfig:
                 "checkpoint_format": "structured"
             },
             "paths": {
-                "temp_dir": "/tmp/macf",
                 "logs_dir": "logs"
             },
             "features": {
