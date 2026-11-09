@@ -410,8 +410,28 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
     if report.runs:
         print(f"  runs: {report.runs}")
     _say_drafts()
+    _say_allowlist(home)
     _say_tray(report)
     return 0
+
+
+def _say_allowlist(home) -> None:
+    # A declared channel the client won't admit loads, connects and is silent, and its notices
+    # read as delivered, so say so where status is read (cversek/MacEff#904).
+    from macf.pd import allowlist
+    from macf.pd.interface import Declaration, declaration_path
+    path = declaration_path(home)
+    if not path.is_file():
+        return
+    try:
+        # Only its channels are read, so a declaration the card check would refuse is read too.
+        declaration = Declaration.model_validate_json(path.read_text())
+        lines = allowlist.unadmitted_without_allowlist(declaration, allowlist.managed_allowlist())
+    except (OSError, ValueError, LookupError) as e:
+        print(f"  ⚠️ the channel allowlist couldn't be checked: {e}")
+        return
+    for line in lines:
+        print(f"  ⚠️ {line}")
 
 
 def _say_drafts() -> None:
@@ -670,7 +690,12 @@ def cmd_pd_install(args: argparse.Namespace) -> int:
         print(f"maceff_pd: nothing installed: {e}\n{POLICY_POINTER}", file=sys.stderr)
         return 1
     try:
-        mismatch = allowlist.findings(declaration, allowlist.managed_allowlist())
+        managed = allowlist.managed_allowlist()
+        mismatch = allowlist.findings(declaration, managed)
+        # Said, not refused: the install has nothing to compare, and the channel may be admitted
+        # some way this can't read (a configuration profile, an admin console) (#904).
+        for line in allowlist.unadmitted_without_allowlist(declaration, managed):
+            print(f"⚠️ maceff_pd: {line}", file=sys.stderr)
     except (OSError, ValueError) as e:
         mismatch = [f"the managed settings can't be read, so the organization allowlist can't be "
                     f"compared with the declaration: {e}"]
