@@ -336,6 +336,12 @@ class TestLocalSearch:
             (box / d).mkdir(parents=True)
         monkeypatch.setenv("TMPDIR", str(box / "tmp"))
         monkeypatch.setenv("HOME", str(box / "home"))
+        # The embedding model is the library's, not the index's: where it isn't cached yet (a fresh
+        # CI runner) it downloads on first use, into HF_HOME, which defaults to ~/.cache under the
+        # HOME set above. That cache holds model weights and the downloader's logs, never mail, so
+        # it goes outside the roots this test watches (#740). Set before the query first imports
+        # the model library.
+        monkeypatch.setenv("HF_HOME", str(tmp_path.parent / f"{tmp_path.name}-model-cache"))
         monkeypatch.chdir(box / "cwd")
         before = {str(p) for p in tmp_path.rglob("*")}
         seen_during = set()
