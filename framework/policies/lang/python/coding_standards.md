@@ -1,9 +1,10 @@
 # Python Coding Standards
 
+**Type**: Python
+**Scope**: All Python code written within MacEff framework projects
+**Status**: ACTIVE
 **Version**: 1.0
 **Tier**: LANG
-**Category**: Python
-**Status**: ACTIVE
 **Updated**: 2025-12-13
 **Parent**: base/development/coding_standards.md
 
@@ -59,6 +60,8 @@ Applies to all Python code written within MacEff framework projects.
 - What Python mechanism closes a schema at a trust boundary?
 - Where should a non-obvious constraint be enforced, and why there?
 - When does `.get()` answer a different question than `in`?
+
+=== CEP_NAV_BOUNDARY ===
 
 ---
 

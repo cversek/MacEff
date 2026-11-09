@@ -1,9 +1,10 @@
 # Coding Standards Policy
 
+**Type**: Development
+**Scope**: All code written within MacEff framework projects
+**Status**: ACTIVE
 **Version**: 1.0
 **Tier**: CORE
-**Category**: Development
-**Status**: ACTIVE
 **Updated**: 2025-12-13
 
 ---
@@ -80,6 +81,8 @@ Applies to all code written within MacEff framework projects.
 - How do I search for an existing helper whose NAME I do not know?
 - What do I do when I find a near-duplicate rather than an exact one?
 - Why does consolidating require comparing implementations rather than picking one?
+
+=== CEP_NAV_BOUNDARY ===
 
 ---
 

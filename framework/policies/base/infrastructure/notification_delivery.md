@@ -78,6 +78,8 @@ policy; it does not contain it.
 - Why must it not sit in a synchronous path?
 - What must it publish about itself?
 
+=== CEP_NAV_BOUNDARY ===
+
 ---
 
 ## 1. What a notice is, and what it is not

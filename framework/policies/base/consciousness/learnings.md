@@ -1,12 +1,14 @@
 # LEARNINGS - Consciousness Artifact Policy
 
+**Type**: Consciousness Layer
+**Scope**: All agents (PA and SA)
+**Status**: ACTIVE
+
 ## Meta-Policy: Policy Classification
 - **Tier**: OPTIONAL
-- **Category**: Consciousness Layer
 - **Version**: 1.0.0
 - **Dependencies**: core_principles, policy_awareness
 - **Authority**: MacEff Framework
-- **Status**: ACTIVE
 
 ## Policy Statement
 Agents accumulate reusable wisdom through learnings - compact, cross-referenced insights extracted from experience that form the foundation for personal policy development and constitutional override.

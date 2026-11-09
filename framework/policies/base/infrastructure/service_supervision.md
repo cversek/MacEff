@@ -64,6 +64,8 @@ does not exist.
 - Can I verify a supervision chain by reading it?
 - What is the control for "the alarm reaches someone"?
 
+=== CEP_NAV_BOUNDARY ===
+
 ---
 
 ## 1. The Fate-Sharing Rule

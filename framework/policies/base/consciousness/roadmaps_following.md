@@ -1,9 +1,10 @@
 # Roadmaps Policy: Following & Execution
 
+**Type**: Consciousness - Execution
+**Scope**: All agents (PA and SA)
+**Status**: ACTIVE
 **Version**: 2.0 (split from roadmaps.md v1.0)
 **Tier**: MANDATORY
-**Category**: Consciousness - Execution
-**Status**: ACTIVE
 **Updated**: 2025-11-18
 **Dependencies**: task_management.md, git_discipline.md (which governs the CODE
 repositories a phase delivers into — the consciousness artifact tree is not one)

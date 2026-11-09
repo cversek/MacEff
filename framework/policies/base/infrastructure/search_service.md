@@ -1,9 +1,10 @@
 # Search Service Policy
 
+**Type**: Infrastructure
+**Scope**: All MacEff agents and deployments, on hosts and in containers
+**Status**: ACTIVE
 **Version**: 2.0
 **Tier**: CORE
-**Category**: Infrastructure
-**Status**: ACTIVE
 **Updated**: 2026-10-25
 
 ---
@@ -32,6 +33,8 @@ All MacEff agents and deployments, on hosts and in containers.
 **3 Operating It**
 - How do I check it, restart it, or rebuild the index?
 - What if it doesn't answer, or answers slowly?
+
+=== CEP_NAV_BOUNDARY ===
 
 ---
 

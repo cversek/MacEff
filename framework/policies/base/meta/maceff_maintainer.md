@@ -1,10 +1,10 @@
 # MacEff Maintainer Conventions
 
+**Type**: Meta
+**Scope**: Anyone changing MacEff framework code, policies or provisioning
+**Status**: ACTIVE
 **Version**: 1.0.0
 **Tier**: RECOMMENDED
-**Category**: Meta
-**Status**: ACTIVE
-**Scope**: Anyone changing MacEff framework code, policies or provisioning
 
 ---
 

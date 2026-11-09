@@ -1,9 +1,10 @@
 # Context Recovery Policy
 
+**Type**: Recovery
+**Scope**: All agents (PA and SA)
+**Status**: ACTIVE
 **Version**: 1.0
 **Tier**: MANDATORY
-**Category**: Recovery
-**Status**: ACTIVE
 **Updated**: 2025-12-06
 **Dependencies**: checkpoints.md, task_management.md
 
