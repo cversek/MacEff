@@ -731,30 +731,38 @@ def test_ingest_works_with_no_broker_process_at_all(two_agents):
 
 
 def test_ingest_records_three_distinct_key_states(two_agents, tmp_path):
-    """keys_for's three states must not flatten: no key declared is not
-    declared-and-failed is not verified."""
+    """The verdict's three states must not flatten: a sender the registry doesn't
+    declare is not declared-and-failed is not verified (MIS-0004 R44)."""
+    import os
     from macf.amail.client import _verify_at_ingest
     from macf.amail.crypto import generate_keypair, load_private_key, sign
+    from macf.amail.registry import Registry
     from macf.amail.trust import TrustClass
 
-    # (a) unsigned, no key declared -> UNVERIFIED, nothing concluded
-    v = _verify_at_ingest(_bundle(), two_agents["contacts"], "beta")
-    assert v["trust"] == TrustClass.UNVERIFIED.value and v["keys_declared"] == 0
-
-    # (b) key declared, message unsigned -> SUSPECT (a broken commitment)
     key = tmp_path / "alpha.pem"
     pub = generate_keypair(key)
-    two_agents["contacts"].write_text(_addressing({
-        "beta": [{"address": f"alpha@{DOMAIN}", "key": pub}],
-        "alpha": [f"beta@{DOMAIN}"]}))
-    v = _verify_at_ingest(_bundle(), two_agents["contacts"], "beta")
+    d = tmp_path / "etc"
+    d.mkdir(mode=0o755)
+    (d / "registry.yaml").write_text(f"agents:\n  Alpha_0a1b2c:\n    account: alpha\n    keys: ['{pub}']\n")
+    os.chmod(d / "registry.yaml", 0o644)
+    reg = Registry(d / "registry.yaml", root_uid=os.getuid())
+
+    def verdict(m, card="Alpha_0a1b2c"):
+        # The broker's sidecar, naming this message and the card it resolved the sender to.
+        return _verify_at_ingest(m, {"message_id": m.message_id, "sender_card": card}, DOMAIN, reg)
+
+    # (a) a sender the registry doesn't declare -> UNVERIFIED, nothing concluded
+    v = verdict(_bundle(), card="Gamma_6a7b8c")
+    assert v["trust"] == TrustClass.UNVERIFIED.value and v["keys_declared"] == 0
+
+    # (b) declared, message unsigned -> SUSPECT (a broken commitment)
+    v = verdict(_bundle())
     assert v["trust"] == TrustClass.SUSPECT.value and v["keys_declared"] == 1
 
     # (c) signed and verifiable -> ATTESTED
     m = _bundle()
     m.signature = sign(m, load_private_key(key))
-    v = _verify_at_ingest(m, two_agents["contacts"], "beta")
-    assert v["trust"] == TrustClass.ATTESTED.value
+    assert verdict(m)["trust"] == TrustClass.ATTESTED.value
 
     # (d) signed but the signature does not check out -> SUSPECT, and NOT the
     #     same answer as (a): "we looked and it did not add up" is the case
@@ -762,9 +770,9 @@ def test_ingest_records_three_distinct_key_states(two_agents, tmp_path):
     m2 = _bundle()
     m2.signature = sign(m, load_private_key(key))   # signature for a different body
     m2.body = "swapped after signing"
-    v = _verify_at_ingest(m2, two_agents["contacts"], "beta")
+    v = verdict(m2)
     assert v["trust"] == TrustClass.SUSPECT.value
-    assert "did NOT verify" in v["reason"]
+    assert "verifies against no key" in v["reason"]
 
 
 def test_ingest_preserves_the_signature_for_re_verification(two_agents, tmp_path):

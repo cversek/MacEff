@@ -237,7 +237,8 @@ class Daemon:
         from macf.pd.receiver import Receiver, receiver_settings
         mail = receiver_settings(self.home)
         self.receiver = Receiver(self.card, self.home, mail["box"], mail["agent"], mail["contacts"],
-                                 _append, self.notifier.raise_notice) if mail else None
+                                 _append, self.notifier.raise_notice,
+                                 domain=str(mail.get("domain") or "")) if mail else None
         if mail is None and "amail" in self.core.declaration.notice_routes:
             print("⚠️ MACF: pd: mail notices are routed but the agent's amail settings name no agent, "
                   "so this daemon ingests no mail and a notice waits for `amail list`", file=sys.stderr)
