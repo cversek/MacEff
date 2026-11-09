@@ -191,6 +191,17 @@ def _supervision_block(environ=None, ask=None) -> str:
     return f"<system-reminder>\n{text}\n</system-reminder>\n"
 
 
+def _recovery_context(recovery_msg: str) -> str:
+    """The compaction-recovery context. The recovery message comes right after the identity, and
+    the other blocks after it: Claude Code shows the model only a preview of a context this long,
+    and what to read, and in what order, has to be in it (#802). Each block in front pushed the
+    message's essentials further out."""
+    return (_identity_block()
+            + f"<system-reminder>\n{recovery_msg}\n</system-reminder>\n"
+            + _supervision_block() + _feedback_drafts_block() + _ask_rules_block()
+            + _focused_charter_block())
+
+
 def _feedback_drafts_block() -> str:
     """A line when the client holds unsent feedback drafts (cversek/MacEff#903). A draft makes a
     restart through ``inject exit`` refuse, and until it did nothing said a draft was waiting, so the
@@ -660,9 +671,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 "systemMessage": recovery_msg,  # TOP LEVEL - user sees this
                 "hookSpecificOutput": {
                     "hookEventName": "SessionStart",
-                    "additionalContext": _identity_block() + _supervision_block() + _feedback_drafts_block() + _ask_rules_block()
-                                         + f"<system-reminder>\n{recovery_msg}\n</system-reminder>"
-                                         + _focused_charter_block()
+                    "additionalContext": _recovery_context(recovery_msg)
                 }
             }
 
