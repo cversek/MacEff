@@ -1617,6 +1617,9 @@ class Core:
         since = start_epoch(r.proc_start)
         if since is None:
             return False               # with no start to stop at, the look-back would walk the whole log
+        # The check below stops only at an announcement older than the wrapper, so for a wrapper
+        # that never announced this walks the whole log, once per wrapper. read_events' since=
+        # (#957) bounds it to the wrapper's lifetime; it is passed here once that lands.
         for event in read_events(reverse=True, scope="all", only=(EVENT_SESSION_PANE,)):
             at = _float_or_none(event.get("timestamp"))
             if at is not None and at < since - 60:
