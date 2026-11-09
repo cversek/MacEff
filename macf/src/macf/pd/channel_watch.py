@@ -21,7 +21,9 @@ from typing import Callable, Optional, Tuple
 from macf.agent_events_log import append_event
 from macf.pd.interface import EVENT_CHANNEL_BACK, EVENT_CHANNEL_DARK
 
-Incarnation = Tuple[int, str]          # the session unit's (pid, start), as the core reports it
+#: The session's (pid, start, incarnations), as the core counts them: a restart in the pane keeps
+#: the pid and start and is a new incarnation all the same (MacEff #726).
+Incarnation = Tuple[int, str, int]
 
 
 @dataclass
