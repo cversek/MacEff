@@ -58,3 +58,12 @@ def test_pd_status_says_so_from_the_event_log(capsys):
     _say_receipts()
     out = capsys.readouterr().out
     assert "1 notice(s) written to the channel in the last day were never received" in out
+
+
+def test_a_receipt_ends_what_came_before_it():
+    """Once a notice is received the channel works; earlier drops are history, so the watch's
+    stretch can end."""
+    events = [delivered("a1", T0), received("a2", T0 + 10), turn(T0 + 600)]
+    assert [n.arrival_id for n in receipts.unreceived(events)] == ["a1"]
+    assert receipts.after_last_receipt(events) == []
+    assert [n.arrival_id for n in receipts.after_last_receipt(events + [delivered("a3", T0 + 20)])] == ["a3"]

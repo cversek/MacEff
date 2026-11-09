@@ -49,3 +49,12 @@ def unreceived(events: Iterable[dict], grace_s: float = GRACE_S) -> List[Unrecei
     return sorted((n for n in sent if n.arrival_id not in received
                    and latest_turn is not None and latest_turn > n.sent_at + grace_s),
                   key=lambda n: n.sent_at)
+
+
+def after_last_receipt(events: Iterable[dict], grace_s: float = GRACE_S) -> List[Unreceived]:
+    """:func:`unreceived`, less every notice written before the newest receipt: once a receipt
+    arrives the channel works, and what it dropped earlier is history, not a live fault."""
+    events = list(events)
+    last = max((float(e.get("timestamp") or 0) for e in events if e.get("event") == RECEIVED),
+               default=None)
+    return [n for n in unreceived(events, grace_s) if last is None or n.sent_at > last]
