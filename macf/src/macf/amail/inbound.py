@@ -32,10 +32,12 @@ from __future__ import annotations
 import email
 import email.policy
 import email.utils
+import errno
 import hashlib
 import json
 import os
 import re
+import stat
 import sys
 import time
 from dataclasses import dataclass, field
@@ -108,6 +110,13 @@ class InboundConfig:
     #: enabling push-wake is a deliberate deployment act, never a side
     #: effect of granting a contact.
     push_wake_enabled: bool = False
+    #: How many times one spool entry may fail unexpectedly before it is set
+    #: aside in quarantine with its last error (MIS-0004 R20). Counted per
+    #: entry and content, in the consumer's own `failures_dir`.
+    max_failures: int = 3
+    #: Where those counts live: the consumer's, never the spool, which has one
+    #: writer. Defaults to `.failures` inside the quarantine directory.
+    failures_dir: Optional[Path] = None
 
     #: Orphan-sweep age bounds, in seconds. A spool entry older than this
     #: was never processed (a dead consumer, or one that crashed mid-run); a
@@ -474,12 +483,74 @@ def _quarantine(cfg: InboundConfig, eml: Path, sidecar: Path, reason: str) -> Pa
     qdir = cfg.quarantine_dir
     qdir.mkdir(mode=0o700, parents=True, exist_ok=True)
     dest = qdir / eml.name
-    os.rename(eml, dest)  # same filesystem by deployment contract
-    side_dest = qdir / sidecar.name
-    if sidecar.exists():
-        os.rename(sidecar, side_dest)
+    # Sidecar FIRST. The spool is scanned for .eml files only, so a sidecar left
+    # behind by a failed second move would never be looked at again, while a
+    # message left behind is found on the next pass and quarantined as having no
+    # readable sidecar. The order makes an interrupted move visible.
+    if sidecar.exists() or sidecar.is_symlink():
+        _move_into(sidecar, qdir / sidecar.name)
+    _move_into(eml, dest)
     (qdir / f"{eml.stem}.reason").write_text(reason + "\n")
     return dest
+
+
+def _move_into(src: Path, dest: Path) -> None:
+    """Move *src* to *dest*, copying when the two are on different filesystems.
+
+    A deployment that keeps the receiving account and the broker apart may give
+    the spool and the quarantine separate volumes, and then a rename fails with
+    EXDEV. The copy is written under a hidden name in the destination's own
+    directory, synced, and only then given its real name, so the quarantine never
+    holds a partial message under a final name. The source is removed last: a
+    failure at any step leaves the message in at least one place, and a rerun
+    replaces an identical copy rather than making a second one.
+
+    The copy reads only a regular file, opened without following a link. A
+    rename moves a symlink itself; a copy would read whatever it points at, so a
+    compromised receiver could plant a link in the spool and have the broker copy
+    any file the broker can read. A link, a FIFO or a device is refused with an
+    error, and the entry stays in the spool to be counted and reported.
+
+    The copy is written by the broker, so it takes the broker's owner and group
+    rather than the receiver's; only the permission bits are carried over. That
+    suits a quarantine only the broker reads.
+    """
+    try:
+        os.rename(src, dest)
+        return
+    except OSError as e:
+        if e.errno != errno.EXDEV:
+            raise
+    # O_NONBLOCK so a FIFO planted in the spool cannot hang the broker on open.
+    sfd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    tmp = dest.with_name(f".{dest.name}.partial")
+    try:
+        st = os.fstat(sfd)
+        if not stat.S_ISREG(st.st_mode):
+            raise OSError(errno.EINVAL, "spool entry is not a regular file; not copied", str(src))
+        tfd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+                      stat.S_IMODE(st.st_mode))
+        try:
+            os.fchmod(tfd, stat.S_IMODE(st.st_mode))
+            while chunk := os.read(sfd, 1 << 20):
+                view = memoryview(chunk)
+                while view:
+                    view = view[os.write(tfd, view):]
+            os.fsync(tfd)
+        finally:
+            os.close(tfd)
+        os.replace(tmp, dest)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    finally:
+        os.close(sfd)
+    dfd = os.open(dest.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+    os.unlink(src)
 
 
 def process_entry(cfg: InboundConfig, eml: Path, sidecar: Path) -> Dict[str, Any]:
@@ -491,6 +562,20 @@ def process_entry(cfg: InboundConfig, eml: Path, sidecar: Path) -> Dict[str, Any
              if cfg.broker_config.audit_path else None)
     raw = eml.read_bytes()
     sha = hashlib.sha256(raw).hexdigest()
+    handed = _handed_marker(cfg, eml)
+    try:
+        already = handed.read_text().strip() == sha
+    except OSError:
+        already = False
+    if already:
+        # A previous run handed this exact content off and then failed before the
+        # spool entry went. Delivering again would give the recipient a second copy,
+        # and nothing drops a repeated `.eml` at ingest. Finish the removal only.
+        os.unlink(eml)
+        sidecar.unlink(missing_ok=True)
+        handed.unlink(missing_ok=True)
+        return {"sha256": sha, "entry": eml.name, "disposition": HANDED_OFF,
+                "reason": "handed off by an earlier run; spool entry removed now"}
 
     def terminal(decision: str, reason: str, recipient: str = "") -> Dict[str, Any]:
         if audit is not None:
@@ -524,8 +609,10 @@ def process_entry(cfg: InboundConfig, eml: Path, sidecar: Path) -> Dict[str, Any
     recipient_agent = cfg.broker_config.agent_for(envelope_to)
     summary["recipient"] = envelope_to
     if recipient_agent is None:
-        _quarantine(cfg, eml, sidecar, f"no local agent for '{envelope_to}'")
-        return terminal(QUARANTINED, f"no local agent for '{envelope_to}'")
+        # The card part only: a zone address's token is never written (MIS-0004 R49).
+        from .zone import redact_address
+        _quarantine(cfg, eml, sidecar, f"no local agent for '{redact_address(envelope_to)}'")
+        return terminal(QUARANTINED, f"no local agent for '{redact_address(envelope_to)}'")
 
     try:
         sender, _ = sender_identity(raw)
@@ -572,10 +659,29 @@ def process_entry(cfg: InboundConfig, eml: Path, sidecar: Path) -> Dict[str, Any
     summary["handed_off_to"] = str(base.with_suffix(".eml"))
     summary["delivery_class"] = outcome
 
-    # Handoff COMPLETED; only now may the spool entry go.
+    # Handoff COMPLETED; only now may the spool entry go. The marker says so first,
+    # so a failure between here and the removal can't deliver it a second time.
+    # BEST EFFORT. The marker only guards a removal that fails after it; if the marker
+    # itself can't be written, the delivery must still complete, or an unwritable
+    # failures directory would turn every clean delivery into a repeated one.
+    try:
+        handed.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        handed.write_text(sha + "\n")
+    except OSError as e:
+        print(f"⚠️ MACF: hand-off marker for {eml.name} not written ({e}); removing the "
+              f"spool entry without it", file=sys.stderr)
     os.unlink(eml)
     os.unlink(sidecar)
+    try:
+        handed.unlink(missing_ok=True)
+    except OSError:
+        pass  # noqa: MACEFF003 - a marker left behind matches only this entry's content, now gone
     return terminal(HANDED_OFF, f"{outcome}: {reason}", recipient_agent)
+
+
+def _handed_marker(cfg: InboundConfig, eml: Path) -> Path:
+    """The consumer's note that *eml* was handed off, kept until its spool entry is gone."""
+    return (cfg.failures_dir or (cfg.quarantine_dir / ".failures")) / f"{eml.name}.handed"
 
 
 def process_spool(cfg: InboundConfig) -> List[Dict[str, Any]]:
@@ -585,8 +691,75 @@ def process_spool(cfg: InboundConfig) -> List[Dict[str, Any]]:
                                 cfg.broker_config)
     results = []
     for eml, sidecar in _spool_entries(cfg.spool_dir):
-        results.append(process_entry(cfg, eml, sidecar))
+        # ONE ENTRY'S FAULT IS ONE ENTRY'S (MIS-0004 R17, R20). An unexpected
+        # error used to end the whole run, and the watcher's retry met the
+        # same entry first every cycle, so every message spooled behind it,
+        # for any agent, waited until a person cleared it. Now the entry's
+        # failure is counted and the run goes on; after `max_failures` the
+        # entry is set aside in quarantine with its last error, and reported.
+        try:
+            results.append(process_entry(cfg, eml, sidecar))
+            # A success ends any count this entry had, so .failures holds live failures only.
+            try:
+                ((cfg.failures_dir or (cfg.quarantine_dir / ".failures"))
+                 / f"{eml.name}.json").unlink(missing_ok=True)
+            except OSError:
+                pass  # noqa: MACEFF003 - a stale count is keyed to content, so it is harmless
+        except Exception as e:  # noqa: BLE001 - per entry, so the rest of the spool still drains
+            try:
+                results.append(_entry_failed(cfg, eml, sidecar, e))
+            except Exception as ce:  # noqa: BLE001 - counting must not end the run it protects
+                print(f"⚠️ MACF: spool entry {eml.name} failed ({type(e).__name__}: {e}), and its "
+                      f"count was not recorded ({type(ce).__name__}: {ce}); the rest of the "
+                      f"spool goes on", file=sys.stderr)
+                results.append({"entry": eml.name, "disposition": "failed",
+                                "reason": f"{type(e).__name__}: {e}; count not recorded"})
     return results
+
+
+def _entry_failed(cfg: InboundConfig, eml: Path, sidecar: Path, error: Exception) -> Dict[str, Any]:
+    """Count one unexpected failure of a spool entry; set it aside at the limit."""
+    reason = f"{type(error).__name__}: {error}"
+    try:
+        sha = hashlib.sha256(eml.read_bytes()).hexdigest()
+    except OSError:
+        sha = ""
+    fdir = cfg.failures_dir or (cfg.quarantine_dir / ".failures")
+    fdir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    record = fdir / f"{eml.name}.json"
+    try:
+        held = json.loads(record.read_text())
+    except (OSError, json.JSONDecodeError):
+        held = {}
+    count = (held.get("count", 0) if held.get("sha256") == sha else 0) + 1
+    entry: Dict[str, Any] = {"entry": eml.name, "sha256": sha, "failures": count, "reason": reason}
+    audit = (AuditLog(cfg.broker_config.audit_path, tier=cfg.broker_config.tier)
+             if cfg.broker_config.audit_path else None)
+    if count >= cfg.max_failures:
+        why = f"failed {count} times, last: {reason}"
+        try:
+            _quarantine(cfg, eml, sidecar, why)
+        except OSError as qe:
+            # Can't even set it aside: keep counting, so the next run tries again and says so.
+            record.write_text(json.dumps({"sha256": sha, "count": count, "last": reason}))
+            print(f"⚠️ MACF: spool entry {eml.name} {why}, and quarantine failed ({qe})",
+                  file=sys.stderr)
+            entry.update(disposition="failed")
+            return entry
+        record.unlink(missing_ok=True)
+        if audit is not None:
+            audit.inbound(rung="internet", sender="unknown", recipient="unknown",
+                          message_id=sha, decision=QUARANTINED, reason=why)
+        entry.update(disposition=QUARANTINED, reason=why)
+        return entry
+    record.write_text(json.dumps({"sha256": sha, "count": count, "last": reason}))
+    if audit is not None:
+        audit.error(context="inbound", detail=(f"spool entry {eml.name} failed "
+                                               f"({count} of {cfg.max_failures}): {reason}"))
+    print(f"⚠️ MACF: spool entry {eml.name} failed ({count} of {cfg.max_failures}): {reason}; "
+          f"the rest of the spool goes on", file=sys.stderr)
+    entry.update(disposition="failed")
+    return entry
 
 
 # ------------------------------------------------------------- conservation

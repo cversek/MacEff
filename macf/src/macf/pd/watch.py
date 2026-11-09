@@ -45,11 +45,12 @@ from typing import Callable, Dict, List, Literal, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from macf.notify.session import verify_incarnation
+from macf.notify.session import proc_start_key, verify_incarnation
 from macf.pd import interface
-from macf.pd.health import read_liveness
+from macf.pd.health import SCHEDULE_EVENTS, broker_health, read_liveness, schedule_health
 from macf.platform import container_limits
 from macf.utils.streaming import iter_lines_reverse
+from macf import calling_card
 
 #: How far back a unit's last stamp is looked for. Older than this reads ABSENT: the
 #: verdict names the window, so it never claims more than was read.
@@ -58,7 +59,7 @@ LOOKBACK_S = 7 * 86400
 SEND_TIMEOUT_S = 30
 
 Verdict = Literal["ALIVE", "STALE", "GONE", "ABSENT", "UNREADABLE", "UNREACHABLE", "CHECK-FAILED", "DARK", "HELD", "UNREAD",
-                  "DRIFTED"]
+                  "DRIFTED", "SWEEP-FAILED", "FAILED", "AUTH-FAILED", "LOGIN-EXPIRED", "LOGIN-EXPIRING"]
 
 #: Exit codes, worst wins (``service_supervision`` section 4.2): each state its own code.
 EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_UNREACHABLE, EXIT_CHECK_FAILED = 0, 1, 2, 3
@@ -66,7 +67,9 @@ EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_UNREACHABLE, EXIT_CHECK_FAILED = 0, 1, 2, 3
 #: alert was sent, on every pass while a channel was dark or a wake held.
 _EXIT_FOR = {"ALIVE": EXIT_HEALTHY, "STALE": EXIT_UNHEALTHY, "GONE": EXIT_UNHEALTHY,
              "ABSENT": EXIT_UNHEALTHY, "DARK": EXIT_UNHEALTHY, "HELD": EXIT_UNHEALTHY, "UNREAD": EXIT_UNHEALTHY,
-             "DRIFTED": EXIT_UNHEALTHY,
+             "DRIFTED": EXIT_UNHEALTHY, "SWEEP-FAILED": EXIT_UNHEALTHY,
+             "FAILED": EXIT_UNHEALTHY, "AUTH-FAILED": EXIT_UNHEALTHY,
+             "LOGIN-EXPIRED": EXIT_UNHEALTHY, "LOGIN-EXPIRING": EXIT_UNHEALTHY,
              "UNREACHABLE": EXIT_UNREACHABLE,
              "UNREADABLE": EXIT_CHECK_FAILED, "CHECK-FAILED": EXIT_CHECK_FAILED}
 
@@ -149,13 +152,83 @@ def last_liveness(log_path: Path, card: str, units: Sequence[str], now: float,
         if event.get("event") != interface.EVENT_LIVENESS:
             continue
         data = event.get("data")
-        if not isinstance(data, dict) or data.get("agent") != card:
+        if not isinstance(data, dict) or not calling_card.is_agent(data.get("agent"), card):
             continue
         unit = data.get("unit")
         if isinstance(unit, str) and unit in wanted:   # a list or a dict would raise in the set
             found[unit] = event
             wanted.discard(unit)
     return found
+
+
+def last_unit_state(log_path: Path, card: str, units: Sequence[str], now: float,
+                    lookback_s: float = LOOKBACK_S) -> Dict[str, Optional[dict]]:
+    """The newest ``pd_unit_state`` record of each named unit of agent *card*, or None if
+    there is none within the lookback. Read the same way as ``last_liveness``: newest first,
+    this agent's events only, stopping at the lookback or once every unit is found."""
+    wanted = set(units)
+    found: Dict[str, Optional[dict]] = dict.fromkeys(units)
+    cutoff = now - lookback_s
+    for line in iter_lines_reverse(log_path):
+        if not wanted:
+            break
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        if event.get("event") != interface.EVENT_STATE:
+            continue
+        data = event.get("data")
+        if not isinstance(data, dict) or not calling_card.is_agent(data.get("agent"), card):
+            continue
+        unit = data.get("unit")
+        if isinstance(unit, str) and unit in wanted:
+            found[unit] = event
+            wanted.discard(unit)
+    return found
+
+
+def _beats_from_another_process(state: dict, data: dict, beat: Optional[dict]) -> bool:
+    """Whether *beat* came after the failed record, from a process other than the one recorded
+    failed: a unit the core marked failed and someone then started outside it. The same process
+    still beating is the auth case, where the failure stands however fresh the beat is."""
+    beat_data = beat.get("data") if isinstance(beat, dict) else None
+    if not isinstance(beat_data, dict):
+        return False
+    stamps = (state.get("timestamp"), beat.get("timestamp"))
+    if not all(isinstance(s, (int, float)) for s in stamps) or stamps[1] <= stamps[0]:
+        return False
+    if data.get("pid") is None:
+        return True  # the failure recorded no process, and something has beaten since
+    return (beat_data.get("pid") != data.get("pid")
+            or proc_start_key(beat_data.get("proc_start")) != proc_start_key(data.get("proc_start")))
+
+
+def check_unit_state(card: str, unit: interface.Unit, event: Optional[dict],
+                     beat: Optional[dict] = None) -> Optional[Finding]:
+    """A failed unit is unhealthy even while its liveness is fresh. A session that can't
+    authenticate keeps running, so it keeps beating, and a watch reading liveness alone
+    called it ALIVE while it could do no work (MIS-0002-R19 (auth_failure_MUST_read_failed)).
+    None when the unit's newest state isn't ``failed``, or when *beat* shows another process
+    has taken over since: liveness then decides alone."""
+    data = event.get("data") if isinstance(event, dict) else None
+    if not isinstance(data, dict) or data.get("state") != "failed":
+        return None
+    if _beats_from_another_process(event, data, beat):
+        return None
+    reason = data.get("reason") if isinstance(data.get("reason"), str) else "no reason recorded"
+    if reason.startswith(interface.AUTH_FAILED_REASON):
+        # The session runs on its daemon's own tmux socket, so a plain ``tmux ls`` can't find
+        # it: the alert names the command that can (#884).
+        return Finding(card, unit.name, "AUTH-FAILED",
+                       f"needs /login in its session, reached by "
+                       f"macf_tools harness attach --card {card}: {reason}")
+    return Finding(card, unit.name, "FAILED", reason)
 
 
 def last_channel_event(log_path: Path, card: str, now: float,
@@ -176,9 +249,60 @@ def last_channel_event(log_path: Path, card: str, now: float,
         if event.get("event") not in (interface.EVENT_CHANNEL_DARK, interface.EVENT_CHANNEL_BACK):
             continue
         data = event.get("data")
-        if isinstance(data, dict) and data.get("agent") == card:
+        if isinstance(data, dict) and calling_card.is_agent(data.get("agent"), card):
             return event
     return None
+
+
+def last_login_event(log_path: Path, card: str, now: float,
+                     lookback_s: float = LOOKBACK_S) -> Optional[dict]:
+    """The newest ``pd_login_state`` of agent *card* within the lookback, or None."""
+    from macf.pd.login import EVENT
+    cutoff = now - lookback_s
+    for line in iter_lines_reverse(log_path):
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        if event.get("event") != EVENT:
+            continue
+        data = event.get("data")
+        if isinstance(data, dict) and calling_card.is_agent(data.get("agent"), card):
+            return event
+    return None
+
+
+def check_login(card: str, event: Optional[dict], now: float) -> Optional[Finding]:
+    """The agent's login, from the daemon's own reading of its stored credential (#884), so an
+    expired login is heard of before the session needs to work, not at its first failed turn.
+    The verdict is re-judged against now from the recorded end date, so a login that ran out
+    since the daemon last recorded reads expired. None when no daemon here records logins."""
+    from macf.pd.login import EXPIRING_S
+    if event is None:
+        return None
+    data = event.get("data") or {}
+    if data.get("state") == "unknown":
+        # No date to judge: an API key, a credential without the field, or one of several on a
+        # shared macOS login. Not a fault, and paging for it at every pass would be forever.
+        # An expired login there still arrives as AUTH-FAILED at the session's next turn.
+        return None
+    ends = data.get("refresh_expires_at")
+    reach = f" (macf_tools harness attach --card {card})"
+    if not isinstance(ends, (int, float)) or isinstance(ends, bool):
+        return Finding(card, "login", "CHECK-FAILED", f"the login can't be judged: {data.get('detail', 'no end date')}")
+    left = ends - now
+    if left <= 0:
+        return Finding(card, "login", "LOGIN-EXPIRED",
+                       f"its refresh grant ended {_age(-left)} ago: run /login in its session{reach}")
+    if left <= EXPIRING_S:
+        return Finding(card, "login", "LOGIN-EXPIRING",
+                       f"its refresh grant ends in {_age(left)}: run /login in its session before then{reach}")
+    return Finding(card, "login", "ALIVE", f"its refresh grant ends in {_age(left)}")
 
 
 def check_channel(card: str, event: Optional[dict], now: float) -> Finding:
@@ -213,7 +337,7 @@ def last_unread_mail_event(log_path: Path, card: str, now: float,
         if event.get("event") not in (interface.EVENT_UNREAD_MAIL, interface.EVENT_UNREAD_MAIL_CLEARED):
             continue
         data = event.get("data")
-        if isinstance(data, dict) and data.get("agent") == card:
+        if isinstance(data, dict) and calling_card.is_agent(data.get("agent"), card):
             return event
     return None
 
@@ -228,6 +352,45 @@ def check_unread_mail(card: str, event: Optional[dict], now: float) -> Finding:
     stamp = event.get("timestamp")
     age = f", {_age(now - stamp)} ago" if isinstance(stamp, (int, float)) else ""
     return Finding(card, "mail", "UNREAD", f"{data.get('reason', 'mail unread past its threshold')}{age}")
+
+
+def mail_sweep_events(log_path: Path, card: str, schedule: str, now: float,
+                      lookback_s: float = LOOKBACK_S) -> List[dict]:
+    """The scheduler's events for agent *card*'s sweep schedule within the lookback, with the
+    daemon's starts, oldest first, as ``schedule_health`` reads them. A sweep whose last run
+    is older than the lookback has no run here, which reads as a missing sweep: unhealthy."""
+    cutoff = now - lookback_s
+    found: List[dict] = []
+    for line in iter_lines_reverse(log_path):
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        if event.get("event") not in SCHEDULE_EVENTS:
+            continue
+        data = event.get("data")
+        if not isinstance(data, dict) or not calling_card.is_agent(data.get("agent"), card):
+            continue
+        if event.get("event") == interface.EVENT_DAEMON_START or data.get("schedule") == schedule:
+            found.append(event)
+    found.reverse()
+    return found
+
+
+def check_mail_broker(card: str, declaration: interface.Declaration, events: Sequence[dict],
+                      now: float) -> Finding:
+    """The mail broker this home runs, judged by its last sweep (MIS-0004-R31, R32): a broker
+    that stopped sweeping, or whose sweep keeps finding mail stuck past its declared age,
+    reaches a person through the watch, by a path that is neither the broker nor a session."""
+    name = declaration.mail_sweep_schedule
+    sweep = next((h for h in schedule_health(declaration, events, now) if h.schedule == name), None)
+    verdict = broker_health(sweep)
+    return Finding(card, "mail-broker", "ALIVE" if verdict.healthy else "SWEEP-FAILED", verdict.detail)
 
 
 #: How long a typed wake may be held, by a dialog or a draft in the session's pane, before
@@ -281,7 +444,7 @@ def _wake_events(log_path: Path, card: str, cutoff: float):
         if event.get("event") not in _WAKE_EVENTS:
             continue
         data = event.get("data")
-        if isinstance(data, dict) and data.get("agent") == card:
+        if isinstance(data, dict) and calling_card.is_agent(data.get("agent"), card):
             yield event
 
 
@@ -348,12 +511,28 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
         events = {u.name: None for u in declaration.units}
     except OSError as e:
         return findings + [Finding(card, "home", "CHECK-FAILED", f"the event log cannot be read: {e.strerror}")]
-    findings += [check_unit(card, u, events[u.name], now, probe) for u in declaration.units]
+    try:
+        states = last_unit_state(log_path, card, [u.name for u in declaration.units], now)
+    except FileNotFoundError:
+        states = {u.name: None for u in declaration.units}
+    except OSError as e:
+        # Unknown is never healthy: without the states, liveness alone could say ALIVE.
+        return findings + [Finding(card, "home", "CHECK-FAILED", f"the event log cannot be read: {e.strerror}")]
+    # A unit's recorded failure outranks its fresh liveness; otherwise liveness decides.
+    findings += [check_unit_state(card, u, states[u.name], events[u.name])
+                 or check_unit(card, u, events[u.name], now, probe)
+                 for u in declaration.units]
     if any(u.kind == "session" for u in declaration.units):   # a session the fallback types into
         try:
             findings.append(check_wake(card, last_wake_event(log_path, card, now), now))
         except FileNotFoundError:
             findings.append(check_wake(card, None, now))
+        try:
+            login = check_login(card, last_login_event(log_path, card, now), now)
+        except FileNotFoundError:
+            login = None
+        if login is not None:
+            findings.append(login)
     if declaration.channel_connect_s is not None:      # a channel is expected, so watch it
         try:
             findings.append(check_channel(card, last_channel_event(log_path, card, now), now))
@@ -365,6 +544,17 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
             findings.append(check_unread_mail(card, last_unread_mail_event(log_path, card, now), now))
         except FileNotFoundError:
             findings.append(check_unread_mail(card, None, now))
+    if declaration.mail_sweep_schedule is not None:   # a broker runs here, so watch its sweep
+        try:
+            sweeps = mail_sweep_events(log_path, card, declaration.mail_sweep_schedule, now)
+        except FileNotFoundError:
+            sweeps = []
+        except OSError as e:
+            sweeps = None
+            findings.append(Finding(card, "mail-broker", "CHECK-FAILED",
+                                    f"the event log cannot be read: {e.strerror}"))
+        if sweeps is not None:
+            findings.append(check_mail_broker(card, declaration, sweeps, now))
     return findings
 
 

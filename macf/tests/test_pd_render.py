@@ -20,7 +20,7 @@ import pytest
 
 from macf.platform.launchd import launchctl_argv, pd_label, render_pd_launch_agent
 
-CARD = "IraMacEff@ee9a78"
+CARD = "IraMacEff_ee9a78"
 ARGV = ["/usr/bin/python3", "-m", "macf.pd", "/Users/someone/agent"]
 
 
@@ -51,7 +51,7 @@ class TestMacOSLaunchAgent:
         calling card, so two agents on one login never share a label. It is the form
         the primal daemon's interface gives ``launchd_label``."""
         assert pd_label(CARD) == "maceff_pd.IraMacEff_ee9a78"
-        assert pd_label("OtherAgent@0a1b2c") != pd_label(CARD)
+        assert pd_label("OtherAgent_0a1b2c") != pd_label(CARD)
         with pytest.raises(ValueError):
             pd_label("bad card/with slash")
 
@@ -306,8 +306,8 @@ _WITHOUT_TRAY = textwrap.dedent("""
     from macf.platform.launchd import render_pd_launch_agent
     from macf.platform.systemd import render_pd_user_unit
     argv = ["/usr/bin/python3", "-m", "macf.pd", "/home/someone/agent"]
-    _, plist = render_pd_launch_agent("IraMacEff@ee9a78", argv, "/Users/someone", "/tmp/logs")
-    _, unit = render_pd_user_unit("IraMacEff@ee9a78", argv, "/home/someone")
+    _, plist = render_pd_launch_agent("IraMacEff_ee9a78", argv, "/Users/someone", "/tmp/logs")
+    _, unit = render_pd_user_unit("IraMacEff_ee9a78", argv, "/home/someone")
     assert b"tray" not in plist and "tray" not in unit
     assert attempts == [], attempts
 """)

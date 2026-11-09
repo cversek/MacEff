@@ -41,16 +41,16 @@ def _app(mod, name, owner="acme"):
 
 
 def test_the_app_is_named_given_then_env_then_the_only_one(ghapp, monkeypatch):
-    _app(ghapp, "sparrow2")
-    assert ghapp.resolve_name(None) == "sparrow2"
+    _app(ghapp, "orchard2")
+    assert ghapp.resolve_name(None) == "orchard2"
     monkeypatch.setenv("GHAPP_NAME", "other")
     assert ghapp.resolve_name(None) == "other"
     assert ghapp.resolve_name("given") == "given"
 
 
 def test_several_apps_and_no_name_is_refused_not_guessed(ghapp):
-    _app(ghapp, "sparrow1")
-    _app(ghapp, "sparrow2")
+    _app(ghapp, "orchard1")
+    _app(ghapp, "orchard2")
     with pytest.raises(ghapp.NoApp, match="several apps"):
         ghapp.resolve_name(None)
     assert ghapp.main(["token", "--repo", "acme/x"]) == 2
@@ -58,7 +58,7 @@ def test_several_apps_and_no_name_is_refused_not_guessed(ghapp):
 
 def test_an_empty_token_cache_is_minted_anew(ghapp, monkeypatch, capsys):
     """A full disk left the cache at 0 bytes; the call must mint, not crash on parsing."""
-    d = _app(ghapp, "sparrow2")
+    d = _app(ghapp, "orchard2")
     (d / "token-acme-x.json").write_text("")
     later = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600))
 
@@ -123,7 +123,7 @@ def _later():
 
 def test_a_repository_added_after_the_cache_is_minted_for_not_refused(ghapp, monkeypatch, capsys):
     """Review of this PR: a cached token's list predates a newly installed repository."""
-    d = _app(ghapp, "sparrow2")
+    d = _app(ghapp, "orchard2")
     (d / "token-acme.json").write_text(json.dumps(
         {"token": "old", "expires_epoch": time.time() + 3000, "repos": ["acme/x"]}))
     monkeypatch.setattr(ghapp, "call", _api(_later(), [["acme/x", "acme/new"]], []))
@@ -132,7 +132,7 @@ def test_a_repository_added_after_the_cache_is_minted_for_not_refused(ghapp, mon
 
 
 def test_every_page_of_repositories_is_read(ghapp, monkeypatch, capsys):
-    _app(ghapp, "sparrow2")
+    _app(ghapp, "orchard2")
     pages = [[f"acme/r{i}" for i in range(100)], [f"acme/r{i}" for i in range(100, 150)]]
     calls = []
     monkeypatch.setattr(ghapp, "call", _api(_later(), pages, calls))
@@ -141,7 +141,7 @@ def test_every_page_of_repositories_is_read(ghapp, monkeypatch, capsys):
 
 
 def test_an_unknown_app_name_is_a_sentence_and_creates_nothing(ghapp, capsys):
-    _app(ghapp, "sparrow2")
+    _app(ghapp, "orchard2")
     assert ghapp.main(["--name", "nosuch", "token", "--repo", "acme/x"]) == 2
     assert "no app named 'nosuch'" in capsys.readouterr().err
     assert not (ghapp.ROOT / "nosuch").exists()
@@ -182,7 +182,7 @@ def test_a_name_that_is_not_an_app_slug_touches_nothing(ghapp, tmp_path, name, c
 
 def test_a_token_is_scoped_to_its_one_repository_and_marked(ghapp, monkeypatch, capsys):
     """OPSEC review: an unscoped token reached the whole installation."""
-    d = _app(ghapp, "sparrow2")
+    d = _app(ghapp, "orchard2")
     bodies = []
     base = _api(_later(), [["acme/x"]], [])
 
@@ -201,8 +201,8 @@ def test_the_backup_never_archives_an_app_key(tmp_path):
     """OPSEC review: macf.backup walked .maceff/ and took the key and the tokens."""
     from macf.backup.paths import iter_backup_files
     maceff = tmp_path / ".maceff"
-    (maceff / "ghapp" / "sparrow2").mkdir(parents=True)
+    (maceff / "ghapp" / "orchard2").mkdir(parents=True)
     for n in ("app.json", "private-key.pem", "token-acme-x.json"):
-        (maceff / "ghapp" / "sparrow2" / n).write_text("x")
+        (maceff / "ghapp" / "orchard2" / n).write_text("x")
     (maceff / "keep.json").write_text("{}")
     assert [p.name for p in iter_backup_files(maceff)] == ["keep.json"]

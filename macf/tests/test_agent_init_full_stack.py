@@ -21,7 +21,7 @@ from macf.pd.interface import Declaration
 REPO = Path(__file__).resolve().parents[2]
 #: The real live-session check, before the fixture stubs it out.
 REAL_LIVE_CHECK = agent_stack.legacy_harness_live
-CARD = "Tester@abc123"
+CARD = "Tester_abc123"
 
 
 def _args(*flags):
@@ -38,6 +38,9 @@ def stack(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("MACEFF_PROJECT_DIR", raising=False)
     monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
+    # The registry step reads the operator's registry; never the host's own /etc/maceff here.
+    monkeypatch.setenv("MACF_AMAIL_REGISTRY", str(tmp_path / "etc" / "registry.yaml"))
+    monkeypatch.delenv("MACF_AMAIL_SIGNING_KEY", raising=False)
     monkeypatch.setattr("macf.utils.paths.find_agent_home", lambda *a, **k: home)
 
     claude_calls = []
@@ -61,7 +64,7 @@ def stack(tmp_path, monkeypatch):
     def fake_pd_install(args):
         installs.append(args)
         installed["unit"], installed["stale"] = True, False
-        print("Tester@abc123: installed")
+        print("Tester_abc123: installed")
         return 0
 
     real_which = agent_stack.shutil.which
@@ -110,7 +113,9 @@ def test_plan_lists_every_step_and_changes_nothing(stack, capsys):
     assert results[0].status == PLANNED
     # Each checked, none acted. The fixture's home is already named, so that step finds it so.
     assert _by_step(results)["calling-card"].status == ALREADY, results
-    assert {r.status for r in results[1:] if r.step != "calling-card"} == {WOULD}, results
+    assert {r.status for r in results[1:] if r.step not in ("calling-card", "registry")} == {WOULD}, results
+    # The fixture's home has no signing key yet, so there is nothing to declare (MIS-0004 R42).
+    assert _by_step(results)["registry"].status == SKIPPED and "amail keygen" in _by_step(results)["registry"].detail
     assert {s for s, _w, _f in STEPS} >= {"preamble", "task-store", "calling-card", "declaration", "harness",
                                           "channel", "permissions", "daemon"}
     assert not (stack.home / ".maceff" / "pd").exists() and stack.claude == [] and stack.installs == []
@@ -190,7 +195,9 @@ def test_a_second_run_reports_everything_already_done(stack):
     claude_before, installs_before = len(stack.claude), len(stack.installs)
     rc2, results = _run(stack, preamble_status=ALREADY)
     assert rc1 == rc2 == 0
-    assert [r.status for r in results] == [ALREADY] * len(STEPS), results
+    # Every step already done, except the registry, which has no signing key to declare yet.
+    assert [r.status for r in results if r.step != "registry"] == [ALREADY] * (len(STEPS) - 1), results
+    assert _by_step(results)["registry"].status == SKIPPED
     assert len(stack.claude) == claude_before and len(stack.installs) == installs_before
 
 
@@ -808,7 +815,7 @@ def test_a_leftover_systemd_unit_on_macos_runs_nothing_but_on_linux_fails_closed
     import argparse
     from macf import agent_stack as real
     from macf.pd.names import pd_id
-    card = "Seat@abc123"
+    card = "Seat_abc123"
     units = tmp_path / ".config" / "systemd" / "user"
     units.mkdir(parents=True)
     (units / f"cc-harness-{pd_id(card)}.service").write_text("[Service]\n")
@@ -926,7 +933,7 @@ def test_an_unnamed_home_under_yes_refuses_naming_the_flag(stack):
     assert "agent_identity" not in json.loads((stack.home / ".maceff" / "config.json").read_text())
 
 
-@pytest.mark.parametrize("bad", ["Tester@abc123", "Name.suffix", "Name:suffix", "two words", "-lead"])
+@pytest.mark.parametrize("bad", ["Tester_abc123", "Name.suffix", "Name:suffix", "two words", "-lead"])
 def test_a_name_the_session_identifier_would_rewrite_is_refused_and_nothing_written(stack, bad):
     _unnamed(stack)
     _rc, results = _run(stack, f"--calling-card={bad}")

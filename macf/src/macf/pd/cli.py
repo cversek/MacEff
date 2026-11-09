@@ -59,6 +59,11 @@ def add_pd_parser(sub) -> None:
     alive.add_argument("--in-flight", type=int, default=None, metavar="N",
                        help="work started and not finished, which the daemon checks before a restart")
     alive.set_defaults(func=cmd_pd_alive)
+    login = pd_sub.add_parser(
+        "login", help="this account's Claude login, from its stored expiry dates, with no model turn: "
+                      "exit 0 ok, 1 expiring or expired, 2 unknown (#884)")
+    login.add_argument("--json", action="store_true", help="print the verdict as JSON")
+    login.set_defaults(func=cmd_pd_login)
     entry = pd_sub.add_parser(
         "entry", help="your own timed entries, made from your live session (policy: persistent_layer)")
     entry_sub = entry.add_subparsers(dest="entry_cmd")
@@ -120,7 +125,15 @@ def add_pd_parser(sub) -> None:
                        help="an event name to take, with * globs; repeat it (default: every source)")
     sub_p.add_argument("--position", default=None, metavar="LOG:OFFSET",
                        help="resume just after the record that carried this position")
-    sub_p.add_argument("--name", default=None, help="the name this subscriber goes by, for silence and route")
+    sub_p.add_argument("--broker-port", type=int, default=None, metavar="PORT",
+                       help="read another daemon's broker on this loopback port, as a reader it grants; "
+                            "needs --ca, --cert, --key and --reader. Without these, the agent's own "
+                            "stream is read as the agent, with its own certificate")
+    sub_p.add_argument("--ca", default=None, help="the CA certificate the broker's certificate is checked against")
+    sub_p.add_argument("--cert", default=None, help="this reader's client certificate")
+    sub_p.add_argument("--key", default=None, help="this reader's client key")
+    sub_p.add_argument("--reader", default=None, metavar="CARD",
+                       help="the card this reader's certificate names, for its replay topics")
     sub_p.set_defaults(func=cmd_pd_stream_subscribe)
     for act, helptext in (("silence", "stop delivering a source, or anything to a subscriber (@name); it still lands in the log"),
                           ("unsilence", "deliver a source or a subscriber (@name) again")):
@@ -138,6 +151,19 @@ def add_pd_parser(sub) -> None:
     route.set_defaults(func=cmd_pd_stream_rule, act="route")
 
 
+def cmd_pd_login(args: argparse.Namespace) -> int:
+    """The login verdict for the account running this command; a deployment runs it as a seat's
+    own user to check that seat from outside. Reads only the two expiry dates."""
+    import json
+    from macf.pd.login import read_assessment
+    verdict = read_assessment()
+    if getattr(args, "json", False):
+        print(json.dumps(verdict))
+    else:
+        print(f"login: {verdict['state']}, {verdict['detail']}")
+    return {"ok": 0, "expiring": 1, "expired": 1}.get(str(verdict["state"]), 2)
+
+
 def cmd_pd_alive(args: argparse.Namespace) -> int:
     """0 when written, or when the environment names no unit (run outside a daemon); 1 when it
     names one unusably or the event log refused the write."""
@@ -153,9 +179,7 @@ def cmd_pd_alive(args: argparse.Namespace) -> int:
 
 def cmd_pd_stream_subscribe(args: argparse.Namespace) -> int:
     """0 when the stream ends or on Ctrl+C; 1 when it refused or could not be reached."""
-    from macf.pd.interface import events_socket
-    from macf.pd.stream import subscribe
-    _, card = _this_agent()
+    home, card = _this_agent()
     position = None
     if args.position:
         log, sep, offset = args.position.rpartition(":")
@@ -163,21 +187,77 @@ def cmd_pd_stream_subscribe(args: argparse.Namespace) -> int:
             print("maceff_pd: --position is LOG:OFFSET, as a record's position names them", file=sys.stderr)
             return 1
         position = {"log": log, "offset": int(offset)}
-    try:
-        conn = subscribe(events_socket(card), args.source or ["*"], position=position, name=args.name)
-    except OSError as e:
-        print(f"maceff_pd: {card}: the event stream can't be reached: {e}", file=sys.stderr)
+    if args.broker_port is None and not any((args.ca, args.cert, args.key, args.reader)):
+        # The agent's own stream, read as the agent: its own broker and its own certificate.
+        from macf.pd.broker_defaults import pki_paths
+        from macf.pd.core import DeclarationRefused, load_declaration
+        from macf.pd.broker_defaults import with_own_broker
+        try:
+            section = with_own_broker(load_declaration(home, card), home, card).broker
+        except DeclarationRefused as e:
+            print(f"maceff_pd: {card}: the declaration can't be read: {e}", file=sys.stderr)
+            return 1
+        placeholders = {"agent_home": str(home), "card": card}
+        args.broker_port = section.port
+        args.ca = section.certificate_authority_file.format_map(placeholders)
+        args.cert = section.client_certificate_file.format_map(placeholders)
+        args.key = section.client_key_file.format_map(placeholders)
+        args.reader = card
+    return _subscribe_broker(args, card, position)
+
+
+def _subscribe_broker(args: argparse.Namespace, card: str, position) -> int:
+    """``pd stream subscribe`` over the daemon's own broker (prototype, mission B phase B2): the
+    same one-JSON-record-per-line output. A --position becomes a replay request, so the records
+    since it arrive first, each once, then the live stream."""
+    import json
+    import threading
+    missing = [f for f in ("ca", "cert", "key", "reader") if not getattr(args, f)]
+    if missing:
+        print(f"maceff_pd: --broker-port needs {', '.join('--' + m for m in missing)}", file=sys.stderr)
         return 1
     try:
-        for line in conn.makefile("rb"):
-            sys.stdout.write(line.decode("utf-8", errors="replace"))
-            sys.stdout.flush()
-            if line.startswith(b'{"type": "refused"'):
-                return 1
+        import paho.mqtt.client as mqtt
+    except ImportError:
+        print("maceff_pd: reading the broker needs paho-mqtt installed", file=sys.stderr)
+        return 1
+    from macf.pd.broker import LOOPBACK, CatchUp, grant_filters, replay_topics, topic_name
+    sources = args.source or ["*"]
+    filters = sorted({f for s in sources
+                      for f in (grant_filters(card, s, ()) if s != "*" else [f"{topic_name(card)}/events/#"])})
+    topics = replay_topics(card, args.reader)
+
+    def deliver(record) -> None:
+        sys.stdout.write(json.dumps(record) + "\n")
+        sys.stdout.flush()
+    catch = CatchUp(deliver)
+    catch.seen = position
+    c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv5)
+    c.tls_set(ca_certs=args.ca, certfile=args.cert, keyfile=args.key)
+    lock = threading.Lock()
+
+    def on_message(_c, _u, m) -> None:
+        with lock:
+            (catch.replayed if m.topic == topics["records"] else catch.live)(m.payload)
+
+    def on_connect(client, _u, _f, _r, _p=None) -> None:
+        client.subscribe([(f, 1) for f in filters] + [(topics["records"], 1)])
+        with lock:
+            request = catch.request(sources)
+        if request is not None:
+            client.publish(topics["request"], json.dumps(request), qos=1)
+    c.on_message, c.on_connect = on_message, on_connect
+    try:
+        c.connect(LOOPBACK, args.broker_port)
+    except OSError as e:
+        print(f"maceff_pd: {card}: the broker on port {args.broker_port} can't be reached: {e}", file=sys.stderr)
+        return 1
+    try:
+        c.loop_forever()
     except KeyboardInterrupt:
         return 0
     finally:
-        conn.close()
+        c.disconnect()
     return 0
 
 
@@ -560,12 +640,16 @@ def daemon_macf(python: str, modules: Tuple[str, ...] = ("macf.pd",)) -> Tuple[O
 
 def cmd_pd_install(args: argparse.Namespace) -> int:
     from macf.pd import adapter as adapters
-    from macf.pd.core import POLICY_POINTER, DeclarationRefused, load_declaration
+    from macf.pd.core import POLICY_POINTER, DeclarationRefused, cutover_declaration, load_declaration
 
     from macf.pd import allowlist
 
     try:
         home, card = _this_agent()
+        kept = cutover_declaration(home, card)
+        if kept is not None:
+            print(f"maceff_pd: the declaration named {card} in the old form; rewritten in place, "
+                  f"the original kept at {kept} (MIS-0002-R165)")
         declaration = load_declaration(home, card)
         tier = adapters.adapter_for(sys.platform)
     except (DeclarationRefused, LookupError) as e:
@@ -576,6 +660,11 @@ def cmd_pd_install(args: argparse.Namespace) -> int:
     except (OSError, ValueError) as e:
         mismatch = [f"the managed settings can't be read, so the organization allowlist can't be "
                     f"compared with the declaration: {e}"]
+    if declaration.broker is not None:
+        from macf.pd.broker_link import declared_broker_ports, port_clash
+        clash = port_clash(card, declaration.broker.port, declared_broker_ports(home))
+        if clash is not None:
+            mismatch.append(clash)
     if mismatch:
         # A channel the allowlist leaves out stops loading at the daemon's first unattended
         # restart, so the install stops here, where a person reads the reason.

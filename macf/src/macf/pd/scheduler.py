@@ -70,6 +70,7 @@ from macf.notify.session import proc_start, verify_incarnation
 from macf.pd.core import group_members
 from macf.pd.interface import CommandRun, Declaration, MissedRunPolicy, PromptRun, Schedule, render
 from macf.pd.schedule import CronExpr, plan_runs
+from macf import calling_card
 
 EVENT_SEEN = "pd_schedule_seen"
 EVENT_STARTED = "pd_run_started"
@@ -154,7 +155,7 @@ def installed_digests(card: str, events: Optional[Iterable[dict]] = None) -> Opt
     rows = events if events is not None else read_events(reverse=True, scope="all", only=(EVENT_INSTALLED,))
     for event in rows:
         data = event.get("data") or {}
-        if event.get("event") == EVENT_INSTALLED and data.get("agent") == card \
+        if event.get("event") == EVENT_INSTALLED and calling_card.is_agent(data.get("agent"), card) \
                 and isinstance(data.get("digests"), dict):
             return {str(k): str(v) for k, v in data["digests"].items()}
     return None
@@ -272,7 +273,7 @@ class Scheduler:
                                                          EVENT_MISSED)))
         for event in read():
             data = event.get("data") or {}
-            if not isinstance(data, dict) or data.get("agent") != self.card:
+            if not isinstance(data, dict) or not calling_card.is_agent(data.get("agent"), self.card):
                 continue
             name = data.get("schedule")
             if name not in names:
@@ -408,7 +409,7 @@ class Scheduler:
         for event in rows:
             data = event.get("data") or {}
             kind = event.get("event")
-            if kind == EVENT_ENTRY_FIRED and data.get("agent") == self.card:
+            if kind == EVENT_ENTRY_FIRED and calling_card.is_agent(data.get("agent"), self.card):
                 fired = _when(data.get("for"))
                 if fired is not None:
                     self.entry_fired.setdefault(data.get("id"), fired)

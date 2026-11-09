@@ -1,5 +1,6 @@
 """The keystroke wake, the notifier's fallback for a session with no MacEff channel
 (MIS-0002-R45, R77, R105, R43, R106), kept to the rules of the mail clock it replaces."""
+import json
 import socket
 import stat
 from datetime import date
@@ -16,8 +17,9 @@ from macf.utils.input_origin import WAKE_OPENING, opens_with_wake
 
 @pytest.fixture(autouse=True)
 def _mail_box_from_the_home(monkeypatch):
-    """These tests put mail in <home>/amail/pickup, the box chosen when nothing names one.
-    Inside a seat MACEFF_AGENT_NAME is set, which would point the daemon elsewhere."""
+    """These tests put unread mail straight into the store's `new`, with the sidecar ingest
+    writes, as the receiver would leave it (MIS-0004 R04, R25). With no amail settings there
+    is no receiver; inside a seat MACEFF_AGENT_NAME is set, which must not change that."""
     monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
     monkeypatch.delenv("MACF_AMAIL_HANDOFF", raising=False)
 
@@ -204,11 +206,15 @@ def test_the_daily_cap_is_recorded_once():
 # --- the notifier: channel first (R104, R105, R43) --------------------------------
 
 def _home_with_mail(tmp_path, *ids):
-    box = tmp_path / "agent" / "amail" / "pickup"
-    box.mkdir(parents=True)
-    for i in ids:
-        (box / f"1791990000-{i}.amsg").write_text("never read by the notifier")
-    return tmp_path / "agent"
+    home = tmp_path / "agent"
+    new, side = home / "Maildir" / "new", home / "Maildir" / "bundle_sidecars"
+    new.mkdir(parents=True)
+    side.mkdir(parents=True)
+    for n, i in enumerate(ids):
+        name = f"1791990000.{n}_1.host"
+        (new / name).write_text("never read by the notifier")
+        (side / f"{name}.json").write_text(json.dumps({"message_id": i}))
+    return home
 
 
 def test_wake_through_notifier(tmp_path, isolated_events_log):
@@ -361,7 +367,7 @@ def test_a_held_stretch_names_the_agent_and_is_released_when_nothing_waits():
     open for the watch to alert on."""
     events = []
     dialog = screen(below=("Do you want to proceed?", "❯ 1. Yes", "  2. No"))
-    rig = _waker(FakePane([dialog]), events, card="Tester@abc123")
+    rig = _waker(FakePane([dialog]), events, card="Tester_abc123")
     ids = ["msg-1790000001-aaaaaaaaaaaa"]
     rig.waker.tick(ids)
     rig.waker.tick(ids)
@@ -369,12 +375,12 @@ def test_a_held_stretch_names_the_agent_and_is_released_when_nothing_waits():
     rig.waker.tick([])
     names = [e for e, _ in events]
     assert names == [wk.EVENT_HELD, wk.EVENT_RELEASED]
-    assert all(d.get("agent") == "Tester@abc123" for _, d in events)
+    assert all(d.get("agent") == "Tester_abc123" for _, d in events)
 
 
 def test_the_outside_watch_alerts_only_on_a_hold_past_its_allowance():
     from macf.pd import watch
-    card, now = "Tester@abc123", 10_000.0
+    card, now = "Tester_abc123", 10_000.0
     held = {"timestamp": now - 2000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}}
     assert watch.check_wake(card, held, now).verdict == "HELD"
     young = dict(held, timestamp=now - 60)
@@ -387,11 +393,11 @@ def test_the_outside_watch_alerts_only_on_a_hold_past_its_allowance():
 def test_the_outside_watch_reads_this_agents_newest_wake_event(tmp_path):
     import json
     from macf.pd import watch
-    card, now = "Tester@abc123", 10_000.0
+    card, now = "Tester_abc123", 10_000.0
     log = tmp_path / "log.jsonl"
     log.write_text("".join(json.dumps(r) + "\n" for r in [
         {"timestamp": now - 3000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}},
-        {"timestamp": now - 100, "event": "pd_wake_sent", "data": {"agent": "Other@000000"}},
+        {"timestamp": now - 100, "event": "pd_wake_sent", "data": {"agent": "Other_000000"}},
     ]))
     assert watch.last_wake_event(log, card, now)["event"] == "pd_wake_held"
 
@@ -399,7 +405,7 @@ def test_the_outside_watch_reads_this_agents_newest_wake_event(tmp_path):
 def test_a_hold_followed_by_a_sent_wake_is_not_alerted(tmp_path):
     import json
     from macf.pd import watch
-    card, now = "Tester@abc123", 10_000.0
+    card, now = "Tester_abc123", 10_000.0
     log = tmp_path / "log.jsonl"
     log.write_text("".join(json.dumps(r) + "\n" for r in [
         {"timestamp": now - 3000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}},
@@ -413,13 +419,13 @@ def test_a_hold_whose_reason_changes_is_measured_from_its_first_hold(tmp_path):
     not start again with it. A hold after a sent wake starts a new stretch."""
     import json
     from macf.pd import watch
-    card, now = "Tester@abc123", 10_000.0
+    card, now = "Tester_abc123", 10_000.0
     log = tmp_path / "log.jsonl"
     rows = [
         {"timestamp": now - 5000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}},
         {"timestamp": now - 4000, "event": "pd_wake_sent", "data": {"agent": card}},
         {"timestamp": now - 2000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}},
-        {"timestamp": now - 900, "event": "pd_wake_sent", "data": {"agent": "Other@000000"}},
+        {"timestamp": now - 900, "event": "pd_wake_sent", "data": {"agent": "Other_000000"}},
         {"timestamp": now - 60, "event": "pd_wake_held", "data": {"agent": card, "reason": "draft"}},
     ]
     log.write_text("".join(json.dumps(r) + "\n" for r in rows))
@@ -438,7 +444,7 @@ def test_a_hold_that_a_channel_ends_is_released(tmp_path, isolated_events_log):
     n.boot()
     events = []
     dialog = screen(below=("Do you want to proceed?", "❯ 1. Yes", "  2. No"))
-    n.waker = _waker(FakePane([dialog]), events, card="Tester@abc123").waker
+    n.waker = _waker(FakePane([dialog]), events, card="Tester_abc123").waker
     clock[0] += nt.CHANNEL_GRACE_S + 1
     n.wake()
     assert [e for e, _ in events] == [wk.EVENT_HELD]
@@ -449,7 +455,7 @@ def test_a_hold_that_a_channel_ends_is_released(tmp_path, isolated_events_log):
     n.wake()
     assert [e for e, _ in events] == [wk.EVENT_HELD, wk.EVENT_RELEASED]
     newest = {"timestamp": 0.0, "event": events[-1][0], "data": events[-1][1]}
-    assert watch.check_wake("Tester@abc123", newest, 3600.0).verdict == "ALIVE"
+    assert watch.check_wake("Tester_abc123", newest, 3600.0).verdict == "ALIVE"
     n.detach(ours)
     theirs.close()
 
@@ -551,7 +557,7 @@ def test_the_outside_watch_takes_a_refractory_hold_for_pacing(tmp_path):
     newest all day never alerts."""
     import json
     from macf.pd import watch
-    card, now = "Tester@abc123", 10_000.0
+    card, now = "Tester_abc123", 10_000.0
     log = tmp_path / "log.jsonl"
     rows = [
         {"timestamp": now - 4000, "event": "pd_wake_sent", "data": {"agent": card}},

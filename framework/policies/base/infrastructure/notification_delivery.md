@@ -50,6 +50,7 @@ policy; it does not contain it.
 - What is the only action a notice licenses?
 - What must I never infer from a notice?
 - What should I conclude from silence?
+- Why must I read the store each time, even for an entry or a thread I know well?
 
 **4 Routing: who gets told**
 - How is an alert routed, and by what property?
@@ -165,6 +166,20 @@ including from any wrapper the transport added.
 *no event* are different facts and must be distinguishable. An agent that cannot tell
 them apart MUST treat silence as unknown rather than as quiet — and the correct response
 is to check the notifier, not to assume the world is calm.
+
+**3.4 Read the store every time, even one you know.** A notice for a recurring entry, a
+familiar thread or a standing duty invites acting on what you remember it says. Don't. Run
+the command the notice names (`macf_tools pd entry show <id>`, `macf_tools amail read`,
+`macf_tools events query`) and act on what it returns.
+
+Your memory of the store is not the store. A compaction rewrites what you carry into a
+summary, and a summary keeps the gist and drops clauses, with nothing to show which. After a
+few cycles, a remembered instruction is a shorter, different instruction that still feels
+complete. The failure this prevents was observed: an agent ran a recurring check-in for hours
+from its recollection of the entry, which had lost the clauses requiring each reviewer's
+latest review, CI and merge state, so it checked less than the entry asked and reported
+"nothing changed". Reading an entry costs a few hundred tokens, and nothing else catches the
+drift.
 
 ## 4. Routing: who gets told
 

@@ -79,7 +79,7 @@ def test_env_var_still_takes_precedence_over_config(tmp_path, monkeypatch):
     monkeypatch.setenv("MACEFF_AGENT_NAME", "ExplicitOverride")
     with patch("macf.utils.paths.find_agent_home", return_value=home), \
          patch("macf.utils.identity._resolve_uuid_prefix", return_value=("abcdef", "global")):
-        assert get_agent_identity() == "ExplicitOverride@abcdef"
+        assert get_agent_identity() == "ExplicitOverride_abcdef"
 
 
 def test_config_wins_over_gecos_when_env_unset(tmp_path, monkeypatch):
@@ -90,7 +90,7 @@ def test_config_wins_over_gecos_when_env_unset(tmp_path, monkeypatch):
     with patch("macf.utils.paths.find_agent_home", return_value=home), \
          patch("macf.utils.identity._get_gecos_name", return_value="GecosName"), \
          patch("macf.utils.identity._resolve_uuid_prefix", return_value=("abcdef", "global")):
-        assert get_agent_identity() == "Card@abcdef"
+        assert get_agent_identity() == "Card_abcdef"
 
 
 def test_falls_through_to_gecos_when_no_config(tmp_path, monkeypatch):
@@ -99,4 +99,4 @@ def test_falls_through_to_gecos_when_no_config(tmp_path, monkeypatch):
     with patch("macf.utils.paths.find_agent_home", return_value=tmp_path), \
          patch("macf.utils.identity._get_gecos_name", return_value="GecosName"), \
          patch("macf.utils.identity._resolve_uuid_prefix", return_value=("abcdef", "global")):
-        assert get_agent_identity() == "GecosName@abcdef"
+        assert get_agent_identity() == "GecosName_abcdef"

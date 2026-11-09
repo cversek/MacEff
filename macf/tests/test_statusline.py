@@ -222,7 +222,7 @@ class TestGetStatuslineData:
         result = get_statusline_data()
 
         # Should return safe defaults for caught exceptions
-        assert result["agent_name"] == "unknown@unknown"  # Fallback value from get_statusline_data
+        assert result["agent_name"] == "unknown_unknown"  # Fallback value from get_statusline_data
         assert result["project"] is None
         assert result["environment"] == "Unknown"
         assert result["tokens_used"] == 0

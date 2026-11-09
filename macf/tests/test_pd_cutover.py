@@ -7,7 +7,7 @@ from pathlib import Path
 from macf.pd.cutover import Probes, build_plan, format_plan, staged_path
 from macf.pd.interface import Declaration, Unit, declaration_path
 
-CARD, AGENT = "Resident@1a2b3c", "Resident_1a2b3c"
+CARD, AGENT = "Resident_1a2b3c", "Resident_1a2b3c"
 RUNTIME = "/run/user/4242"
 
 
@@ -81,7 +81,7 @@ def test_an_already_moved_session_has_nothing_to_do(tmp_path):
 def test_each_unmet_check_says_not_ready(tmp_path):
     cases = {
         "no staged declaration": (lambda: None, _probes(), "none at"),
-        "another agent's": (lambda: _stage(tmp_path, agent="Other@000000"), _probes(), "declares Other"),
+        "another agent's": (lambda: _stage(tmp_path, agent="Other_000000"), _probes(), "declares Other"),
         "no session unit": (lambda: _stage(tmp_path, session=False), _probes(), "no session unit"),
         "grace too short": (lambda: _stage(tmp_path, grace=5.0), _probes(), "must exceed"),
         "no runtime dir": (lambda: _stage(tmp_path, runtime=None), _probes(), "must declare XDG_RUNTIME_DIR"),

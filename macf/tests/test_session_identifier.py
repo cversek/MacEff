@@ -27,21 +27,25 @@ from macf.utils.identity import (
     session_identifier,
 )
 
-CARD = "TheHarborMaster@ee5cd8"
-IDENT = "TheHarborMaster_ee5cd8"
+CARD = "ExampleAgent_0a1b2c"
+IDENT = "ExampleAgent_0a1b2c"
 
 
 class TestSubstitution:
-    def test_the_calling_card_maps_to_a_derivable_identifier(self):
+    def test_the_calling_card_is_its_own_identifier(self):
+        """A card in its current form is already a session identifier (MIS-0002-R160)."""
         assert session_identifier(CARD) == IDENT
+
+    def test_an_old_spelling_still_maps_to_the_same_identifier(self):
+        """An '@' is substituted like any character a tool won't keep."""
+        assert session_identifier("ExampleAgent@0a1b2c") == IDENT
 
     def test_an_operator_can_get_back_from_the_identifier_to_the_agent(self):
         """The direction that lets status name the agent behind a session."""
         assert calling_card_from_identifier(IDENT) == CARD
 
-    def test_a_moniker_containing_the_separator_survives_the_round_trip(self):
-        """Split on the LAST separator: the one that was the '@'."""
-        assert calling_card_from_identifier(session_identifier("Under_Score@ff0011")) == "Under_Score@ff0011"
+    def test_a_card_survives_the_round_trip_unchanged(self):
+        assert calling_card_from_identifier(session_identifier(CARD)) == CARD
 
     @pytest.mark.parametrize("card", [
         "A.B@abc123",     # tmux rewrites '.' silently

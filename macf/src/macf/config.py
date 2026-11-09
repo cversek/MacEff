@@ -605,6 +605,14 @@ RESOLVED_SETTINGS: List[Dict[str, Any]] = [
         "description": "Minutes of no user input before USER_IDLE engages",
     },
     {
+        "name": "permissions.deny_under_full_autonomy",
+        "env_var": "MACF_DENY_UNDER_FULL_AUTONOMY",
+        "config_path": "permissions.deny_under_full_autonomy",
+        "default": False,
+        "coerce": None,
+        "description": "Deny at once a permission dialog nobody can answer (AUTO_MODE with the operator away, or a sprint or play time)",
+    },
+    {
         "name": "hooks.output",
         "env_var": "MACF_HOOK_OUTPUT",
         "config_path": "hooks.output",

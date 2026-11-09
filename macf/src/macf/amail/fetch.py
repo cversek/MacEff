@@ -100,7 +100,8 @@ def read_imap_credential(path: Optional[Path]) -> ImapCredential:
 
 
 def fetch_raw(correlation: str, credential: ImapCredential, *,
-              mailbox: str = "INBOX", client_factory: Optional[Any] = None) -> bytes:
+              mailbox: str = "INBOX", client_factory: Optional[Any] = None,
+              tls_context: Optional[Any] = None) -> bytes:
     """The raw bytes of one received copy, found by a CORRELATION TOKEN.
 
     THE FIRST VERSION KEYED ON OUR MESSAGE-ID AND THAT WAS WRONG, measured on
@@ -128,13 +129,22 @@ def fetch_raw(correlation: str, credential: ImapCredential, *,
     network. It is not a substitute for running against a real mailbox, and
     that distinction is the whole reason this module exists -- the two defects
     above were both invisible to a suite that was green.
+
+    `tls_context` is how the mailbox's certificate is checked. A deployment's
+    caller MUST pass the pinned context its configuration builds for outbound
+    mail (MIS-0004 R34), so inbound and outbound trust the same declared bundle.
+    None checks against the system store; only tests and a deployment that
+    declares no bundle should get that. No production code calls this yet, so
+    the first caller carries the duty (CTB on #925).
     """
     if not credential or not credential.complete:
         raise FetchError("no complete IMAP credential; refusing to open a mailbox")
 
     if client_factory is None:
         import imaplib
-        client_factory = lambda host: imaplib.IMAP4_SSL(host)  # noqa: E731
+        # With a pinned context (MIS-0004 R34) the mailbox is verified against the operator's
+        # bundle only; without one, the platform's default verification, as before.
+        client_factory = lambda host: imaplib.IMAP4_SSL(host, ssl_context=tls_context)  # noqa: E731
 
     # THE CONNECTION IS MADE INSIDE THE TRY. It was outside, so a refused
     # connection escaped as a raw OSError -- a caller catching FetchError

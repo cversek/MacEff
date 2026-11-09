@@ -387,7 +387,7 @@ def _telegram_is_the_operators():
 
 
 def _declared(channels=None):
-    decl = {"version": 1, "agent": "Resident@1a2b3c"}
+    decl = {"version": 1, "agent": "Resident_1a2b3c"}
     if channels is not None:
         decl["operator_channels"] = channels
     return json.dumps(decl)

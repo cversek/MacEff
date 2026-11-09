@@ -15,7 +15,7 @@ from macf.cli import main
 from macf.pd import adapter as adapters
 from macf.pd.interface import Declaration, Unit, declaration_path
 
-CARD = "Tester@abc123"
+CARD = "Tester_abc123"
 ME = pwd.getpwuid(os.getuid()).pw_name
 
 

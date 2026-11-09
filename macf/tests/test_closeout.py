@@ -151,7 +151,7 @@ def test_the_real_hooklets_pass_the_cli_footer_and_refuse_a_private_reference():
     """The italic card footer the CLI writes passes the gate; a task number in the report does not."""
     if closeout._maceff_tree() is None:
         pytest.skip("not inside a MacEff source tree")
-    card = "*[IraMacEff@ee9a78: task#323 s_89f47c46/c_61/p_d9244919/t_1791685324]*"
+    card = "*[ExampleAgent_0a1b2c: task#7 s_abc12345/c_40/p_def67890/t_1700000000]*"
     clean = f"## Review Close-out\n\nMerged after both reviews.\n\n**Outcome:** MERGED\n\n---\n{card}\n"
     assert closeout.check_body(clean, signed=False) is None
     leaky = clean.replace("Merged after both reviews.", "Merged; see task #12 for the rest.")

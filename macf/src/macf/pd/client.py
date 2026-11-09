@@ -34,6 +34,7 @@ from macf.pd.interface import (
 from macf.pd.scheduler import EVENT_DONE, EVENT_NOT_RUN, EVENT_SEEN, EVENT_STARTED
 from macf.platform.tray_host import TrayHost, tray_host
 from macf.utils.peercred import peer_credentials
+from macf import calling_card
 
 #: How long a client waits for the daemon to connect and reply.
 REPLY_TIMEOUT_S = 5.0
@@ -201,7 +202,7 @@ def _schedule_events(declaration: Declaration, card: str) -> List[dict]:
     booted: Optional[float] = None
     for event in read_events(reverse=True, scope="all", only=SCHEDULE_EVENTS):
         data = event.get("data") or {}
-        if data.get("agent") != card:
+        if not calling_card.is_agent(data.get("agent"), card):
             continue
         if event.get("event") == EVENT_DAEMON_START:
             if booted is None:                       # newest first: the current daemon's
@@ -236,7 +237,7 @@ def _last_unit_events(declaration: Declaration, card: str) -> List[dict]:
     found: Dict[tuple, dict] = {}
     for event in read_events(reverse=True, scope="all", only=(EVENT_STATE, EVENT_LIVENESS)):
         data = event.get("data") or {}
-        if data.get("agent") != card:
+        if not calling_card.is_agent(data.get("agent"), card):
             continue
         found.setdefault((event.get("event"), data.get("unit")), event)
         if all((kind, unit) in found for unit in wanted

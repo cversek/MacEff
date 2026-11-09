@@ -331,6 +331,7 @@ class SessionInfo:
     proc_start: str
     updated_at: float
     tmux: Optional[str] = None
+    started_at: Optional[float] = None
 
 
 def read_session_info(pid: int, missing_ok: bool = False) -> Optional[SessionInfo]:
@@ -366,6 +367,7 @@ def read_session_info(pid: int, missing_ok: bool = False) -> Optional[SessionInf
         socket_path=str(data.get("messagingSocketPath") or (socket_dir() / f"{pid}.sock")),
         proc_start=str(data.get("procStart") or ""),
         updated_at=float(data.get("updatedAt") or 0) / 1000.0,
+        started_at=float(data["startedAt"]) / 1000.0 if data.get("startedAt") else None,
         tmux=data.get("tmux"),
     )
 
@@ -437,8 +439,52 @@ def harness_hosted_sessions() -> list:
     return hosted
 
 
+#: How far a process's start may read later than the session's own record and still be that
+#: session. On macOS the start comes from local time, which reads an hour off for a process
+#: started in the repeated hour when daylight saving ends. On Linux it's exact to a tick.
+_START_SLACK_S = {"darwin": 3660.0}
+_DEFAULT_START_SLACK_S = 1.0
+
+
+def _start_epoch(actual: str) -> Optional[float]:
+    """A ``proc_start`` value as epoch seconds, or None when it can't be converted."""
+    key = proc_start_key(actual)
+    if key is None:
+        return None
+    if not sys.platform.startswith("linux"):
+        return float(key)  # the stored form is already a UTC instant
+    try:
+        with open("/proc/stat") as fh:
+            btime = next(int(line.split()[1]) for line in fh if line.startswith("btime "))
+        return btime + key / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError, StopIteration) as e:
+        print(f"⚠️ MACF: boot time unreadable: {e}", file=sys.stderr)
+        return None
+
+
+def _number_came_back(info: SessionInfo, actual: str) -> bool:
+    """Whether the process now holding this sidecar's number is provably not its session: its
+    start differs from the recorded one, and it began after the session did. A recycled number
+    can only belong to a later process. Anything less certain reads as the same session."""
+    declared = proc_start_key(info.proc_start) if info.proc_start else None
+    if declared is None or declared == proc_start_key(actual) or info.started_at is None:
+        return False
+    began = _start_epoch(actual)
+    if began is None:
+        return False
+    slack = _START_SLACK_S.get(sys.platform, _DEFAULT_START_SLACK_S)
+    return began > info.started_at + slack
+
+
 def live_sessions() -> list:
-    """Every session with a sidecar whose process is still alive."""
+    """Every session with a sidecar whose process is still alive.
+
+    A sidecar outlives its process, and its number can come back: pids start over when a
+    container is recreated, and /proc answers for a thread id too, though no process listing
+    shows one. So a sidecar is dropped when its number provably belongs to a later process
+    (``_number_came_back``). When that can't be shown it stays counted: the callers that guard
+    a second client would rather wait than start beside a live session, so a false mismatch
+    costs more here than a false match."""
     out = []
     try:
         names = os.listdir(sessions_dir())
@@ -452,11 +498,15 @@ def live_sessions() -> list:
             pid = int(name[: -len(".json")])
         except ValueError:
             continue
-        if proc_start(pid) is None:
+        actual = proc_start(pid)
+        if actual is None:
             continue
         info = read_session_info(pid)
-        if info is not None:
-            out.append(info)
+        if info is None:
+            continue
+        if _number_came_back(info, actual):
+            continue
+        out.append(info)
     return sorted(out, key=lambda i: i.pid)
 
 

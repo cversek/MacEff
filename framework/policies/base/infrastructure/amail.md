@@ -3,6 +3,15 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.15.0 — §3.2.3: the operator's registry. Each MacEff agent's public key is declared with its account in a root-owned file only the operator can write, which also records each certificate his authority issues by name, serial and expiry; anything else can write it and it is refused when read (MIS-0004 R42). `amail registry check` reports it.
+**Version**: 1.14.0 — §3.4: the broker's health is its last sweep (MIS-0004 R31). A deployment names the schedule that runs the inbound `sweep` in its declaration's `mail_sweep_schedule`; the broker is healthy only when that sweep's last run ended ok, and the outside watch alerts as `mail-broker: SWEEP-FAILED` when it failed, is overdue, or never ran, so stuck mail reaches a person (R32). Minor: a new declaration field and a new alert an operator can meet.
+**Version**: 1.13.0 — the spool consumer: an entry that fails unexpectedly is counted and the run goes on; after `max_failures` (default 3) it is quarantined with its last error and audited (MIS-0004 R17, R20). Minor: an outcome an operator can meet in the quarantine.
+**Version**: 1.12.0 — §2.4: the mail notice is a level (MIS-0004 R26). A channel that takes mail is told at each attach while mail waits unread; a notice still owed when the mail is read is withdrawn, recorded as `pd_notice_withdrawn`; nothing is re-asserted while the operator silences mail to the session, and after an unsilence still-unread mail is told on the next pass. Minor: a notice an agent may now meet again in a new session.
+**Version**: 1.11.0 — §3.2.2: the agent's signing key is a 0600 file in a 0700 directory of the agent's own account, outside any synced folder and any git work tree path git does not ignore; an agent declared to sign refuses to send without one, and any other sends unsigned with a warning (MIS-0004 R41). Minor: a new refusal an agent can meet, and a new verb, `amail key-status`.
+**Version**: 1.10.0 — §2.1.1: the message id crosses a shared hand-off unchanged. The receiving broker keeps a well-formed peer id, drops a pair whose id the recipient already holds from the same peer and sender and audits it as `duplicate-dropped`, treats any other held match as an `id-collision` and mints fresh, and mints a fresh id for anything else and for quarantined mail (MIS-0004 R15). Minor: a behavior an agent can meet in its ids and its audit.
+**Version**: 1.9.0 — §2.3 and §2.4: the agent's primal daemon ingests its mail each pass (MIS-0004 R04), from the box its own settings name, never the environment; one ingest runs at a time per store, and an entry another ingest took is not reported as damage. §2.4: the read cursor is the Maildir's `new` and `cur`; `amail read` moves what it printed and records who read it, notices follow `new` (R25), and `amail list` shows unread mail by default (R30). Minor: behaviors an agent meets in its store and its listing.
+**Version**: 1.7.0 — §2.3: a message is held once. Ingest drops a copy whose id the store already holds, and records the drop in that message's sidecar as `duplicates_dropped` (MIS-0004 R16). Minor: a behavior an agent can meet in its store.
+**Version**: 1.6.0 — §2.3: ingest believes only what the broker wrote. A box entry is taken only as a regular file the box's owner owns, with one link, checked on the open descriptor; anything else is refused and set aside as `.refused` (MIS-0004 R37). Minor: a new refusal an agent can meet.
 **Version**: 1.5.0 — adds §9: mail joins the knowledge web, each message and markdown attachment a temporal-record node, with its links in a `.wiki-links` sidecar under `amail/.links/` so a message's bytes stay as sent and no sender can supply its links. Minor: a new section a type policy owes the scholarship policy.
 **Version**: 1.4.2 — §2.3 says how a recipient learns where its pickup box is: provisioning names `handoff` and `agent` in its own `amail.json`, which its daemon needs, since an outer tier passes it no agent-configured variables. Patch.
 **Version**: 1.4.1 — §5.1 and §6b.1 say who mints the message id (the broker, on
@@ -86,6 +95,7 @@ becomes tractable once the address stops encoding how the message travels.
   one, and what does a custody check report on absent input?
 - What must the audit record contain, and why is it mandatory?
 - How does the audit say the way a submitting identity was established, and why are there two words for it?
+- How is the broker's health known, and who hears when mail is stuck?
 
 **4 Contact Lists**
 - What is the default contact list for an agent?
@@ -295,6 +305,21 @@ adding one declaration and one mount.
 judgement. The audit records `shared` at the sender and *via shared hand-off
 from <domain>* at the receiver.
 
+**The id crosses the mount unchanged.** The sending broker minted the message id
+when it accepted the message (§5.1), and the sender's own copy records it
+(§6b.1). The receiving broker keeps that id when it is well formed, so one message
+has one id from acceptance to the recipient's read (MIS-0004 R15). If the
+recipient already holds that id from the same peer and the same sender, the pair is
+the same message again: the broker drops it and audits `duplicate-dropped`, so the
+second copy never reaches the box. If the held id came by another route or from
+another sender, it is a collision, not a duplicate: the broker mints a fresh id,
+delivers, and audits `id-collision`. Otherwise a peer that learned another domain's
+id could claim it first and have the genuine message dropped. An
+id that is not a broker id is minted fresh, as internet mail always is: it is a
+sender's claim, and a claimed id can shadow a real message. Quarantined mail
+always gets a fresh id, so a repeated id can't overwrite earlier evidence; the
+peer's id is kept in the audit reason.
+
 The consequence worth stating plainly: adding a second host, moving an agent between
 hosts, or gaining and losing a private network changes **nothing** about addressing,
 contact lists, or stored messages. Only the broker's rung choice changes.
@@ -319,6 +344,35 @@ custody transfer by ingesting into its own store, as itself. This holds for ever
 kind of mail — agent-to-agent, peer-inbound, and internet — and for refused mail,
 which is retained in a broker-owned store rather than anywhere inside the
 recipient's home.
+
+**The recipient believes only what the broker wrote.** The recipient's group may remove
+files from its box, so it may create them there too, and a name in the box proves nothing
+about who wrote it. Ingest opens the box once, by descriptor, and reads each entry relative
+to it without following a link. It takes an entry only if it is a regular file, owned by
+the box's owner (the broker's account), with a single link, all checked on the descriptor
+it opened (MIS-0004 R37). Any other entry is refused: a symlink, a second hard link, a file
+the recipient's own account wrote, a FIFO. It is renamed with a `.refused` suffix, so it is
+reported once and kept as evidence, and it is listed among ingest's failures. **A
+`.refused` file in your box is that record.** Read it before trusting anything in it, and
+remove it once it is explained.
+
+**A message is held once.** A broker restarted between writing the box and clearing its
+intake can hand the same message off again. Ingest drops a copy whose id the store already
+holds, removes it from the box, and records the drop in the held message's own sidecar,
+under `duplicates_dropped` (MIS-0004 R16). Ids are minted by the broker that accepts a
+message, so a repeated id is a repeated hand-off, never a second message.
+
+**Ingest runs under the agent's own primal daemon.** The receiver is a duty of the
+primal daemon's loop: each pass it ingests the box as the agent, through the same ingest
+`amail list` uses, so the checks above hold on one path (MIS-0004 R04). A listing still
+ingests first, so a stopped daemon never hides mail. One ingest runs at a time per store,
+under a lock in the store itself; a pass that finds the lock held tries again next pass.
+An entry gone between the listing and its open was taken by the other ingest, and is not
+reported as damage. Its first pass checks that the box can be listed and the store
+written, and raises a notice when either can't (MIS-0002-R65): on macOS the daemon's
+privacy grants are not the terminal's, and a container's daemon whose supplementary groups
+were cleared loses a box it reached through one, so the box's group should be the agent's
+primary group. Neither failure may read as an empty box.
 
 **Why this is a policy statement and not an implementation note.** The obvious
 design has the broker write each recipient's mailbox directly. That requires a
@@ -390,9 +444,11 @@ than creating or correcting it.
 
 **The recipient is told where its box is, by provisioning, in its own settings.** Each
 agent's `.maceff/amail.json` names `handoff` (the root the broker hands off into) and
-`agent` (its box's name under it). `amail list` and the agent's primal daemon find the box
-from these two keys, and fall back to `MACF_AMAIL_HANDOFF` and `MACEFF_AGENT_NAME` only
-when the file doesn't name it. A session has those variables from its shell, but a daemon
+`agent` (its box's name under it). `amail list` finds the box from these two keys, and falls
+back to `MACF_AMAIL_HANDOFF` and `MACEFF_AGENT_NAME` only when the file doesn't name it. The
+primal daemon's receiver never reads either variable: without an `agent` key it doesn't run,
+and without a `handoff` key it uses the fixed default. On a shared login every daemon can
+reach every box, and a variable naming another agent would move this agent's receiver to it. A session has those variables from its shell, but a daemon
 started by a container's outer tier has identity variables only, so a seat without the file
 would watch a guessed path and see no mail. A container's start script writes the two keys
 from the same addressing entry that provisions the box, keeps any other keys in the file,
@@ -415,6 +471,25 @@ Two constraints follow, and both are deliberate:
 - **Local storage is authoritative.** Where a remote service also holds copies, the
   local store is the record of truth. A deployment MUST be able to lose its
   transport provider without losing its correspondence.
+
+**The read cursor is the Maildir's own `new` and `cur`.** Mail waits unread in `new`.
+`amail read` moves the message it printed to `cur`, in the reading home's own store only,
+and records the reader's calling card and the time in the message's sidecar, so a notice
+that cleared can be explained afterwards. Nothing else moves a message, and a restart of
+any unit moves none (MIS-0004 R27). There is no second record of what was read: the store
+is it. Mail notices watch `new`, so a notice names only mail `amail read` can already find
+(R25). `amail list` shows unread mail by default with a count of the rest (R30); `--all`
+shows everything, and `--thread` shows a whole thread, since a reply needs its context.
+
+**The mail notice is a level, not an edge (MIS-0004 R26).** While mail waits unread, every
+channel that attaches and takes mail is told, even if an earlier session was told about the
+same mail: a session that missed a notice, or a channel that restarted, hears it again, and
+a repeat is harmless because it names only what is still unread. A notice still owed when the
+mail it named is read is withdrawn rather than delivered, and the withdrawal is recorded as
+`pd_notice_withdrawn`, so a restart doesn't owe it again. The operator's rules still
+decide: while mail is silenced to the session nothing is re-asserted, and once it is
+unsilenced, mail that is still unread is told on the daemon's next pass, to the channel
+already attached. A channel once told isn't told again while the same mail stays unread.
 
 ---
 
@@ -545,6 +620,102 @@ The demonstration owed is a *break*, in both polarities — exposed and absent �
 with its paired acceptance in the same run. Inspecting a configuration file is not a
 demonstration of a refusal.
 
+### 3.2.2 The agent's signing key
+
+Every MacEff agent signs every message it submits, with a key only its own account
+can read (MIS-0004 R41). The key is the agent's, never the broker's: a signature then
+means something to a party that doesn't trust the broker.
+
+- The private key is a file of mode 0600 in a directory of mode 0700, both owned by
+  the agent's account. `amail keygen` creates the directory when it doesn't exist and
+  refuses one that is not already 0700 and the agent's own. The default place is
+  `.maceff/keys/` in the agent home; a key already directly under `.maceff` keeps
+  working, and `amail key-status` says to move it.
+- The key never lives in a synced folder, or in a git work tree at a path git doesn't
+  ignore. Keygen refuses both; an agent home that is itself a repository keeps its key
+  under an ignored `.maceff`.
+- A key in a directory that group or other can write is refused at load, because
+  whoever can write the directory can replace the key.
+  That refusal stops the agent's mail, so before this reaches a deployment, run
+  `amail key-status` on each agent and fix any warning first.
+- `amail key-status` reports where the key is, how it and its directory are held,
+  whether it loads, and its public line for the operator to declare (MIS-0004 R42).
+  It never prints the private key.
+- **The declare step.** An agent whose configuration sets `signing_required` refuses
+  to send without a usable key. Any other agent without a key sends unsigned and is
+  told on stderr. Receivers classify mail exactly as before; refusing unsigned agent
+  mail (R43) and marking it suspect (R44) switch on only once every key is declared.
+
+### 3.2.3 The operator's registry
+
+Each MacEff agent's public key is declared, with the account that holds it, in a
+registry only the operator can write and every broker and receiver can read (MIS-0004
+R42). A key the agent declares in its own contact list proves nothing to anyone else,
+because anything that can run as the agent can declare a key of its choosing. The same
+file records each certificate the operator's authority issues, by its name, serial and
+expiry, never its key; the repo owner chose one file for both.
+
+- The registry is `/etc/maceff/registry.yaml` unless a deployment names another path.
+  It is owned by root, mode 644, in a directory only root can write, under ancestors
+  only root can write (a sticky directory such as `/tmp` passes). Anything else is
+  refused when the registry is read, with the reason: whoever can write the file, or
+  any directory above it, could put their own key in it.
+- It maps each card to its account and its keys:
+
+  ```yaml
+  agents:
+    ExampleAgent_0a1b2c:
+      account: exampleagent_0a1b2c
+      keys:
+        - "ed25519:<base64>"
+        - key: "ed25519:<base64>"
+          valid_from: 2026-11-08T00:00:00Z
+          valid_until: 2027-11-08T00:00:00Z
+  certificates:
+    - name: exampleagent_0a1b2c
+      serial: "3f9a01"
+      not_after: 2036-11-08
+  ```
+
+  A card must be `Name_shortid` (MIS-0002 R165), each card appears once in any case,
+  each agent has an account and at least one key, each key appears once, and a
+  certificate entry holds only its name, serial, expiry and, once retired, a
+  timezone-aware `retired_at`.
+- A key is a bare line, valid from the start, or a mapping with `valid_from` and
+  `valid_until`, written with a timezone. A key with `valid_until` is retired: it never
+  signs, and it verifies only what the broker accepted inside its window (R45).
+- Two cards may declare one account. That is a shared login, and a receiver sees every
+  card on it (R46).
+- **Nobody edits it by hand** (the repo owner, on #927). `agent init` declares the
+  agent's own key, and five commands make every other change: `amail registry declare`,
+  `rotate`, `retire`, `cert-record` and `cert-retire`. Each one:
+  - shows the change as a diff before anything is written, and with `--dry-run` writes
+    nothing at all, not even a staged copy;
+  - writes nothing when the change is already made, so running it twice is the same as
+    running it once, and a retired key or certificate keeps its first end date;
+  - is refused, with the reason, when the result would break any rule above;
+  - when run as root (the operator, or a container's start), writes beside the file,
+    renames it into place and loads it as every reader does;
+  - otherwise stages the new file in a temporary file, prints its sha256, and prints the
+    one root step that installs exactly those bytes, root-owned and mode 644, then runs
+    `amail registry check`. On macOS the group is `wheel`. The staged file stays the
+    stager's to change, so the step checks root's own copy against the printed sha256
+    and installs nothing if they differ.
+- **Rotation follows R45's order.** `rotate --card C --key NEW --at T` declares the new
+  key from T and retires every other open key of C at T. Mail the broker accepted
+  before T verifies against the old key, exactly one key verifies at any moment, and two
+  keys never sign at once. Set T for when the agent switches to the new key. A second
+  key is never declared beside one that may still sign: after a fresh `keygen`, `agent
+  init` refuses and names `rotate`. A rotation to a key declared to start after T, or to
+  a retired key, is refused, since it would leave a time when no key verifies.
+- `amail key-status` prints the public line. `amail registry check` says whether the
+  registry is root's alone to write and lists what it declares, retired keys and
+  certificates counted, never a key's bytes.
+- Lookups compare cards without regard to case, and the file is read at each decision,
+  so an edit takes effect without a restart.
+- The registry only declares. Refusing an agent's unsigned mail (R43) and marking a
+  failed signature suspect (R44) read it once every key is declared.
+
 ### 3.3 The audit record
 
 The broker MUST append a record for every submission and every inbound message,
@@ -569,6 +740,48 @@ silence is indistinguishable from working.
 
 The log is append-only. Refusals are as important as deliveries — they are the
 evidence the control fired.
+
+### 3.4 The broker's health is its last sweep
+
+A broker that is quiet because nothing arrived and one that is quiet because mail is
+stuck look the same from its socket. What tells them apart is the **sweep**: the
+scheduled run of `python -m macf.amail.daemons.inbound sweep`, which ages the spool and
+the pickup boxes against their declared bounds (`spool_age_bound_s`,
+`pickup_age_bound_s`) and exits non-zero on anything stuck past them.
+
+**The broker's health is that sweep's last verdict** [MIS-0004-R31
+(broker_health_MUST_be_its_sweep)], read from the scheduler's own records of the run, never
+from anything the broker says about itself:
+
+- the last sweep that ended ended `ok`, an empty one included: healthy, so an idle
+  broker is not a failing one;
+- it ended any other way (failed, killed at its limit, stopped, abandoned, never
+  started): unhealthy;
+- no sweep has ended, or the next one is overdue, or the daemon does not run it:
+  unhealthy, because a missing sweep is no verdict.
+
+A sweep in flight, or due and not yet late, leaves the last ended one's verdict standing.
+
+**Stuck mail reaches a person** [MIS-0004-R32 (stuck_mail_MUST_reach_a_person)] through the
+outside watch (persistent_layer §7.1), which reads that verdict for every home that
+declares a sweep and alerts once per stretch as `mail-broker: SWEEP-FAILED`, by a path
+that is neither the broker nor any session. Mail an agent leaves unread past its own
+threshold reaches the same watch as `mail: UNREAD` (persistent_layer, the unread-mail
+notice).
+
+**What a deployment must do:** declare the sweep as a schedule of the broker account's
+primal daemon, and name it in that declaration's `mail_sweep_schedule`. A name that no
+schedule declares is refused when the declaration loads, since it would read unhealthy
+forever. A deployment that names no sweep gets no broker verdict and no alert: the watch
+says nothing about a broker it was not told of, so leaving the field out is a choice to be
+unwatched, not a default that covers you.
+
+**What to do with a SWEEP-FAILED alert:** read the alert's detail, which says how the last
+sweep ended. For a failed one, run the sweep by hand as the broker account to see what it
+found: an aged spool entry it moved to quarantine, or an aged pickup entry, which names the
+box whose recipient is not draining it. An overdue or missing sweep
+means the broker account's daemon is not running it: check that daemon and its schedule.
+The stretch closes at the first clean sweep.
 
 ---
 
@@ -1105,10 +1318,9 @@ and a refusal for every combination that would have meant something else.
 
 **Deferred, with reasons:**
 
-- **Per-message authorship signing.** Genuinely wanted, and §5.1 leaves room for a
-  signature field. Deferred because signing without key custody and rotation is
-  ceremony, and key management deserves its own decision rather than being smuggled
-  in beneath a mail spec.
+- **Per-message authorship signing.** Decided by MIS-0004 (R41 to R46). Key custody
+  is §3.2.2 (R41). The key registry is §3.2.3 (R42). Rotation (R45) and the
+  shared-login label (R46) follow it.
 - **Encryption at rest and in transit beyond transport TLS.** Same reasoning.
 - **A dedicated task type for inbound mail.** Wanted so mail is tracked natively
   rather than becoming a generic task with hand-built structure. Deferred to
@@ -1192,6 +1404,23 @@ The sidecars sit apart from the mail because a bundle carried by hand (§6b.6) i
   whose acceptor (the receiver) must be coupled to its processor (the inbound
   watcher), and the orphan sweep's age bound is the mail-specific instance of the
   liveness signal that policy requires someone outside to read.
+
+  **One entry's failure is that entry's alone (MIS-0004 R17, R20).** The watcher handles
+  the spool one entry at a time. An entry it can't parse is quarantined at once, with
+  its reason. An entry whose handling fails unexpectedly is counted and the run goes on,
+  so mail spooled after it, for any agent, still lands. After `max_failures` tries
+  (default 3) it is quarantined with its last error and audited as `quarantined`. The
+  count is kept per entry and content in the consumer's own `.failures` directory,
+  never in the spool, which has one writer, and it starts again if the content changes.
+  The counting itself can fail (a failures directory that can't be written); the entry
+  is then reported `failed` with "count not recorded", and the run still goes on. A
+  success clears the entry's count. An entry handed off whose spool removal then fails
+  isn't handed off again: the consumer writes a `.handed` marker before removing it, and
+  a retry that finds the marker only finishes the removal, since nothing drops a repeated
+  `.eml` at ingest. The marker is best effort: if it can't be written, the delivery still
+  completes, so an unwritable failures directory never repeats a clean delivery.
+  Before this, one such entry ended every run, and everything behind it waited until a
+  person cleared it.
 
 ---
 

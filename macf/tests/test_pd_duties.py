@@ -2,7 +2,7 @@
 from macf.pd.duties import NOTICE_DUTY_DUE, HostedDuties
 from macf.roles.source import EVENT
 
-CARD = "Tester@abc123"
+CARD = "Tester_abc123"
 
 
 def hosted(tmp_path, log, notices, current, clock):
