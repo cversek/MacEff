@@ -13,8 +13,8 @@ Protocol (newline-delimited JSON):
     Request:  {"action": "status"}
     Response: {"status": "ready", "engine": "mlx-whisper", "model": "...", "uptime_s": 3600}
 
-    Request:  {"action": "shutdown"}
-    Response: {"status": "shutting_down"}
+    There is no stop verb: the port answers any local caller, so stopping is the service's
+    own account's act, by signal (``macf_tools voice service stop``) (cversek/MacEff#868).
 
 Usage:
     macf_tools voice service start
@@ -121,12 +121,17 @@ def handle_request(request: dict) -> dict:
         }
 
     elif action == "shutdown":
-        return {"status": "shutting_down"}
+        # Any local process can reach the port, so a stop verb here let anyone stop the service.
+        # Stopping is a signal from the service's own account (cversek/MacEff#868).
+        return {"error": "shutdown is not a request this service takes; stop it with "
+                         "`macf_tools voice service stop`"}
 
     elif action == "transcribe":
         file_path = request.get("file")
         if not file_path or not Path(file_path).exists():
-            return {"error": f"File not found: {file_path}"}
+            # The reply never echoes the path or says whether it exists: any local caller can ask,
+            # and naming it would answer "does this path exist?" for them (cversek/MacEff#868).
+            return {"error": "the audio file can't be read"}
 
         language = request.get("language", "en")
         conditioned = request.get("conditioned", True)
@@ -276,10 +281,6 @@ def start_service(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
                 request = json.loads(data.decode('utf-8').strip())
                 response = handle_request(request)
                 conn.sendall(json.dumps(response).encode('utf-8') + b'\n')
-
-                if request.get("action") == "shutdown":
-                    conn.close()
-                    break
         except Exception as e:
             try:
                 conn.sendall(json.dumps({"error": str(e)}).encode('utf-8') + b'\n')
@@ -309,17 +310,7 @@ def stop_service() -> int:
         get_pid_file_path().unlink(missing_ok=True)
         return 1
 
-    # Try graceful shutdown via TCP first
-    try:
-        send_request({"action": "shutdown"}, timeout=5.0)
-        print(f"Voice service stopped (PID {pid})")
-        time.sleep(0.5)
-        get_pid_file_path().unlink(missing_ok=True)
-        return 0
-    except (ConnectionError, OSError):
-        pass
-
-    # Fallback: SIGTERM
+    # By signal: the service takes no stop request over its port (cversek/MacEff#868).
     try:
         os.kill(pid, signal.SIGTERM)
         print(f"Voice service stopped via SIGTERM (PID {pid})")
