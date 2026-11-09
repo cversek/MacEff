@@ -152,6 +152,10 @@ class Step:
     not_loaded_ok: bool = False
     #: For an ``unloaded`` step: how long to wait for the label to leave launchd.
     wait_s: float = 0.0
+    #: For a bootstrap that may find its job already loaded: the ``print`` that tells, and when it
+    #: answers, the bootstrap is skipped as done. launchd refuses to bootstrap a loaded label, and
+    #: an install that isn't replacing anything has nothing to load (#749).
+    loaded_probe: Optional[List[str]] = None
 
     def describe(self) -> str:
         if self.what == "launchctl":
@@ -191,7 +195,8 @@ def install_plan(card: str, program_argv: List[str], home: str, log_dir: str, ui
         steps.append(Step("launchctl", argv=launchctl_argv("bootout", label, uid), not_loaded_ok=True))
         # bootout returns while the job is still stopping; a bootstrap before it's gone fails.
         steps.append(Step("unloaded", argv=launchctl_argv("print", label, uid), wait_s=RELOAD_WAIT_S))
-    steps.append(Step("launchctl", argv=launchctl_argv("bootstrap", label, uid, plist_path=path)))
+    steps.append(Step("launchctl", argv=launchctl_argv("bootstrap", label, uid, plist_path=path),
+                      loaded_probe=None if reload else launchctl_argv("print", label, uid)))
     return steps
 
 
@@ -242,6 +247,9 @@ def apply_plan(steps: List[Step], run=None, force: bool = False) -> List[str]:
             if os.path.exists(s.path):
                 os.unlink(s.path)
         elif s.what == "launchctl":
+            if s.loaded_probe and run(s.loaded_probe).returncode == 0:
+                done.append(f"{s.describe()} (already loaded)")
+                continue
             r = run(s.argv)
             if r.returncode == BOOTOUT_NOT_LOADED and s.not_loaded_ok:
                 done.append(f"{s.describe()} (not loaded)")
@@ -310,11 +318,19 @@ def render_tray_launch_agent(program_argv: List[str], home: str, log_dir: str) -
     return path, plistlib.dumps(plist, fmt=plistlib.FMT_XML, sort_keys=True)
 
 
-def tray_install_plan(program_argv: List[str], home: str, log_dir: str, uid: int) -> List[Step]:
-    """What installing the tray does, in order, without doing it."""
+def tray_install_plan(program_argv: List[str], home: str, log_dir: str, uid: int,
+                      reload: bool = False) -> List[Step]:
+    """What installing the tray does, in order, without doing it. As for a primal daemon
+    (``install_plan``): ``reload`` boots a loaded tray out and waits for it to go before the new
+    plist is bootstrapped; without it, a tray already loaded is left as it is (#749)."""
     path, data = render_tray_launch_agent(program_argv, home, log_dir)
-    return [Step("write", path=path, content=data),
-            Step("launchctl", argv=launchctl_argv("bootstrap", TRAY_LABEL, uid, plist_path=path))]
+    steps = [Step("write", path=path, content=data)]
+    if reload:
+        steps.append(Step("launchctl", argv=launchctl_argv("bootout", TRAY_LABEL, uid), not_loaded_ok=True))
+        steps.append(Step("unloaded", argv=launchctl_argv("print", TRAY_LABEL, uid), wait_s=RELOAD_WAIT_S))
+    steps.append(Step("launchctl", argv=launchctl_argv("bootstrap", TRAY_LABEL, uid, plist_path=path),
+                      loaded_probe=None if reload else launchctl_argv("print", TRAY_LABEL, uid)))
+    return steps
 
 
 def tray_uninstall_plan(home: str, uid: int) -> List[Step]:

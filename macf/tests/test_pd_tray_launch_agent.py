@@ -44,7 +44,8 @@ def test_install_then_uninstall_through_the_plan(tmp_path):
 
     def run(argv):
         calls.append(argv)
-        return SimpleNamespace(returncode=3 if argv[1] == "bootout" else 0, stdout="", stderr="")
+        # A fresh launchd: print finds no job (113), a boot-out finds none to end (3).
+        return SimpleNamespace(returncode={"bootout": 3, "print": 113}.get(argv[1], 0), stdout="", stderr="")
 
     home = str(tmp_path)
     steps = tray_install_plan(ARGV, home, "/tmp/logs", 501)
@@ -52,7 +53,8 @@ def test_install_then_uninstall_through_the_plan(tmp_path):
     apply_plan(steps, run=run)
     plist_path = tmp_path / "Library" / "LaunchAgents" / f"{TRAY_LABEL}.plist"
     assert plist_path.exists()
-    assert calls == [["launchctl", "bootstrap", "gui/501", str(plist_path)]]
+    assert calls == [["launchctl", "print", f"gui/501/{TRAY_LABEL}"],
+                     ["launchctl", "bootstrap", "gui/501", str(plist_path)]]
 
     done = apply_plan(tray_uninstall_plan(home, 501), run=run)
     assert calls[-1] == ["launchctl", "bootout", f"gui/501/{TRAY_LABEL}"]

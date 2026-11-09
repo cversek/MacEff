@@ -235,8 +235,11 @@ class TestMacOSInstall:
         steps = install_plan(CARD, ARGV, str(tmp_path), str(tmp_path), 501, self.SOCKETS)
         ran = []
         ok = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})
-        assert apply_plan(steps, run=lambda argv: ran.append(argv) or ok)[0].startswith("write ")
-        assert ran == [steps[1].argv]
+        absent = type("R", (), {"returncode": 113, "stdout": "", "stderr": "Could not find service"})
+        # A fresh launchd: print finds no job, so the bootstrap runs (#749).
+        fresh = lambda argv: ran.append(argv) or (absent if argv[1] == "print" else ok)
+        assert apply_plan(steps, run=fresh)[0].startswith("write ")
+        assert ran == [steps[1].loaded_probe, steps[1].argv]
         with open(steps[0].path, "ab") as fh:
             fh.write(b"<!-- hand edit -->")
         with pytest.raises(FileExistsError):
