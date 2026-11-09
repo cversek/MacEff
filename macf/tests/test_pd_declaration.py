@@ -298,6 +298,9 @@ class _Ran:
     def __call__(self, argv):
         from types import SimpleNamespace
         self.argvs.append(list(argv))
+        # As a fresh launchd answers: no job loaded yet, so an install's probe finds none (#749).
+        if list(argv[:2]) == ["launchctl", "print"]:
+            return SimpleNamespace(returncode=113, stdout="", stderr="Could not find service")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
 
