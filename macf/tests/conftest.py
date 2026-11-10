@@ -86,6 +86,15 @@ def _no_test_reads_the_hosts_feedback_drafts(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_test_reads_the_hosts_scheduled_jobs(monkeypatch):
+    """`inject exit` refuses while the session has scheduled jobs, read from the current
+    session's transcript (#854). A test run inside a developer's session would read theirs, so
+    each test sees none; a test of the check sets its own."""
+    from macf import supervisor
+    monkeypatch.setattr(supervisor, "_scheduled_jobs", lambda: [])
+
+
+@pytest.fixture(autouse=True)
 def _no_test_reads_the_hosts_registry(tmp_path, monkeypatch):
     """Every ingest judges agent mail against the operator's registry (MIS-0004 R44), by default
     /etc/maceff/registry.yaml. A host that has one would make a test's verdicts depend on which
