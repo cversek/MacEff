@@ -171,8 +171,10 @@ def handle_request(request: dict) -> dict:
                         {"original": c.original, "corrected": c.corrected, "confidence": c.confidence}
                         for c in corrected.corrections
                     ]
-                except Exception as e:
-                    response["correction_error"] = str(e)
+                except Exception as e:  # noqa: BLE001 - any failure becomes the fixed reply below
+                    # A fixed reply, like the transcription's: the detail goes to the log only.
+                    print(f"⚠️ MACF: voice: correction failed: {e}", file=sys.stderr)
+                    response["correction_error"] = "the correction failed"
 
             return response
 
