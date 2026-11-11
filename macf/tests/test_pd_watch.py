@@ -629,6 +629,27 @@ def test_a_container_home_names_its_user():
         watch.WatchedHome(path="/agents/seat4", container="deploy-box")
 
 
+@pytest.mark.parametrize("entry, says", [
+    ({"container": "--privileged"}, "not a container name"),
+    ({"container": "-it"}, "not a container name"),
+    ({"container": "box;rm"}, "not a container name"),
+    ({"user": "root"}, "never root"),
+    ({"user": "0"}, "never root"),
+    ({"user": "0:0"}, "never root"),
+    ({"user": "-uroot"}, "never root"),
+    ({"python": "python3"}, "absolute path"),
+    ({"python": "-c"}, "absolute path"),
+    ({"path": "seat4"}, "absolute path"),
+])
+def test_a_container_entry_refuses_what_a_home_check_never_needs(entry, says):
+    """docker exec is root-equivalent on the host: an entry names a seat, a container and paths,
+    and nothing that could read as an option, run as root, or run another program."""
+    fields = {"path": "/agents/seat4", "container": "deploy-box", "user": "seat4"} | entry
+    with pytest.raises(ValueError, match=says):
+        watch.WatchedHome(**fields)
+    assert watch.WatchedHome(path="/agents/seat4", container="deploy-box", user="seat4").user == "seat4"
+
+
 def test_home_findings_prints_a_home_s_findings_as_json(tmp_path, capsys):
     home = _home(tmp_path)
     assert watch.main(["--home-findings", str(home), "--no-probe"]) == watch.EXIT_HEALTHY

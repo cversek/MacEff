@@ -35,6 +35,7 @@ the watch cannot tell what to check. Unknown is never healthy.
 """
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -728,6 +729,12 @@ def _write_kept(path: Path, kept: Dict[str, dict]) -> None:
 # The config the outer tier renders, and the alert path
 # ============================================================================
 
+#: Docker's own rule for a container name; it can't begin with '-', so it can't read as an option.
+_CONTAINER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+#: A seat's account name: a name, never a numeric uid (``0`` is root by number).
+_SEAT_USER = re.compile(r"[a-z_][a-z0-9_-]*")
+
+
 class WatchedHome(BaseModel):
     """One agent home. With ``container`` set, the home is inside that container, where the
     host's user can't read it: the watch runs the check there, as ``user``, through
@@ -743,8 +750,21 @@ class WatchedHome(BaseModel):
 
     @model_validator(mode="after")
     def _container_names_its_user(self) -> "WatchedHome":
-        if self.container is not None and not self.user:
+        """``docker exec`` is root-equivalent on the host, so an entry may name only what a home
+        check needs: a container name that can't read as an option, a seat that isn't root, and
+        an interpreter and home given as absolute paths."""
+        if self.container is None:
+            return self
+        if not self.user:
             raise ValueError("a home in a container names the user to check it as")
+        if not _CONTAINER_NAME.fullmatch(self.container):
+            raise ValueError(f"container {self.container!r} is not a container name "
+                             "(letters, digits, '_', '.', '-', not starting with '-')")
+        if not _SEAT_USER.fullmatch(self.user) or self.user == "root":
+            raise ValueError(f"user {self.user!r}: a home check runs as the seat, never root or a uid")
+        for field, value in (("python", self.python), ("path", self.path)):
+            if not value.startswith("/") or "\n" in value:
+                raise ValueError(f"{field} {value!r} must be an absolute path")
         return self
 
 
