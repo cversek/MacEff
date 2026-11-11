@@ -321,7 +321,11 @@ def daemon_accounts(agents_config: AgentsConfig) -> List[tuple]:
     # Every agent that isn't vanilla and doesn't opt out gets the container default, with its own
     # primal_daemon laid over it (persistent_layer 2.1).
     mail = agents_config.runs_mail()
-    accounts = [(a.username, a.effective_primal_daemon(key, mail=mail), HOME_ROOT / a.username, None)
+    # The deployment's container_env reaches each default session too, not only login shells (#895).
+    defaults = getattr(agents_config, "defaults", None)
+    env = defaults.container_env if defaults is not None else None
+    accounts = [(a.username, a.effective_primal_daemon(key, mail=mail, container_env=env),
+                 HOME_ROOT / a.username, None)
                 for key, a in agents_config.agents.items()]
     for name, spec in agents_config.services.items():
         declared = spec.primal_daemon is not None
