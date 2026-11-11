@@ -166,9 +166,12 @@ def test_on_an_unshared_uid_a_disagreeing_claim_is_still_refused(tmp_path, sock_
 def test_status_on_a_shared_uid_answers_for_the_claimed_agent(host_deployment):
     from macf.amail.client import status
     sock = host_deployment["cfg"].socket_path
-    r = status(sock, sender="beta")
-    assert r["ok"] is True, r
-    assert "quarantined" in r and "budget" in r
+    sent = submit("beta", Message(sender=f"beta@{DOMAIN}", to=[f"alpha@{DOMAIN}"], subject="s", body="b"), sock)
+    assert sent["ok"] is True, sent
+    beta, alpha = status(sock, sender="beta"), status(sock, sender="alpha")
+    assert beta["ok"] is True and alpha["ok"] is True, (beta, alpha)
+    #the counts are the claimed agent's, not the uid's: beta's message waits in alpha's box
+    assert (alpha["pending_pickup"], beta["pending_pickup"]) == (1, 0)
     refused = status(sock, sender="gamma")
     assert refused["ok"] is False and "bound to alpha, beta" in refused["error"]
 
