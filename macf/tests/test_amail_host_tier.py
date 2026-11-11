@@ -159,3 +159,28 @@ def test_on_an_unshared_uid_a_disagreeing_claim_is_still_refused(tmp_path, sock_
         assert allowed[-1]["authorship"] == "so_peercred:alpha" and allowed[-1]["tier"] == "container"
     finally:
         srv.shutdown()
+
+
+# ---- status and probes on a shared uid (#983) ----------------------------------------
+
+def test_status_on_a_shared_uid_answers_for_the_claimed_agent(host_deployment):
+    from macf.amail.client import status
+    sock = host_deployment["cfg"].socket_path
+    r = status(sock, sender="beta")
+    assert r["ok"] is True, r
+    assert "quarantined" in r and "budget" in r
+    refused = status(sock, sender="gamma")
+    assert refused["ok"] is False and "bound to alpha, beta" in refused["error"]
+
+
+def test_a_connection_closed_before_any_request_is_not_audited_as_an_error(host_deployment):
+    import socket as _socket
+    audit = host_deployment["audit"]
+    before = len(_records(audit)) if audit.exists() else 0
+    for _ in range(3):   # what a client's readiness probe does: connect, then close
+        s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        s.connect(str(host_deployment["cfg"].socket_path))
+        s.close()
+    time.sleep(0.3)
+    after = _records(audit)[before:] if audit.exists() else []
+    assert [r for r in after if r.get("decision") == "error"] == []
