@@ -12,18 +12,32 @@ go overdue. Like the broker's wrapper (``broker_unit``), it ends with the child'
 passes a stop on to the child (killing it after a grace), passes SIGHUP on, and records the child
 so that a wrapper killed with SIGKILL doesn't leave a second copy running beside the next one.
 
+A program that writes no such file, such as a web server whose log moves only when a request
+arrives, is judged instead by an HTTP probe (#977): the unit beats while a loopback URL has
+answered below 500 within the bound. Probes reach loopback only, and ignore proxy settings, so a
+unit can't be used to reach the network.
+
 Declared as:
     python -m macf.pd.watched_unit --fresh <file> --within <seconds> -- <command> [args...]
+    python -m macf.pd.watched_unit --probe <loopback url> --within <seconds> --pidfile <file> -- <command> [args...]
 """
 import argparse
+import ipaddress
 import os
 import signal
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Callable, List, Optional
 
 from macf.pd.broker_unit import end_orphan, record_child, run
+
+# One request never waits longer than this, whatever the bound, so a hung server can't hold the
+# wrapper's loop past the next beat.
+PROBE_TIMEOUT_S = 5.0
 
 
 def fresh(path: Path, within_s: float, now: Callable[[], float] = time.time) -> bool:
@@ -32,6 +46,55 @@ def fresh(path: Path, within_s: float, now: Callable[[], float] = time.time) -> 
         return now() - os.stat(path).st_mtime <= within_s
     except OSError:
         return False
+
+
+def loopback_url(url: str) -> str:
+    """*url* if it is an http(s) URL naming a loopback host; ValueError, saying why, if not."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        raise ValueError(f"{url}: a probe is an http:// or https:// URL")
+    host = parts.hostname
+    if host == "localhost":
+        return url
+    try:
+        loopback = host is not None and ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        loopback = False
+    if not loopback:
+        raise ValueError(f"{url}: probes go to loopback only (127.0.0.1, ::1 or localhost), "
+                         "so a unit can't be used to reach the network")
+    return url
+
+
+_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def answers(url: str, timeout_s: float, open_url: Callable = _DIRECT.open) -> bool:
+    """Whether *url* answers with a status below 500 within *timeout_s*. A refusal, a timeout
+    or a server error is no answer. Proxy settings are ignored: the request stays on loopback."""
+    try:
+        with open_url(url, timeout=timeout_s) as response:
+            return response.status < 500
+    except urllib.error.HTTPError as error:     # a 4xx means the server is up and answering
+        return error.code < 500
+    except (OSError, ValueError):               # refused, reset, timed out, unreadable
+        return False
+
+
+class Probe:
+    """Alive while *url* last answered within *within_s*, the way ``fresh`` judges a file. One
+    slow request doesn't drop the unit; a server that stopped answering does, within the bound.
+    A server still starting has never answered, so it reads as not alive yet."""
+
+    def __init__(self, url: str, within_s: float, ask: Callable[[str, float], bool] = answers,
+                 now: Callable[[], float] = time.monotonic):
+        self.url, self.within_s, self._ask, self._now = url, within_s, ask, now
+        self.last_answer: Optional[float] = None
+
+    def __call__(self, _port: object = None) -> bool:
+        if self._ask(self.url, min(self.within_s, PROBE_TIMEOUT_S)):
+            self.last_answer = self._now()
+        return self.last_answer is not None and self._now() - self.last_answer <= self.within_s
 
 
 def pidfile_for(fresh_file: Path) -> Path:
@@ -43,13 +106,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     from macf.pd.liveness import heartbeat_from_env
     parser = argparse.ArgumentParser(
         prog="python -m macf.pd.watched_unit",
-        description="Run a program that isn't MacEff code as a unit, alive while its heartbeat file is fresh.")
-    parser.add_argument("--fresh", type=Path, required=True,
-                        help="the file the program modifies while it is working")
+        description="Run a program that isn't MacEff code as a unit, alive while its heartbeat file "
+                    "is fresh or while it answers on loopback.")
+    judge = parser.add_mutually_exclusive_group(required=True)
+    judge.add_argument("--fresh", type=Path,
+                       help="the file the program modifies while it is working")
+    judge.add_argument("--probe",
+                       help="a loopback http(s) URL the program answers while it is working")
     parser.add_argument("--within", type=float, required=True,
-                        help="seconds: the file must have been modified this recently for the unit to beat")
+                        help="seconds: the file was modified, or the URL answered, this recently")
     parser.add_argument("--pidfile", type=Path, default=None,
-                        help="where the child is recorded (default: beside the heartbeat file)")
+                        help="where the child is recorded (default: beside the heartbeat file; "
+                             "required with --probe)")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="-- then the program and its arguments")
     args = parser.parse_args(argv)
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
@@ -57,6 +125,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("no program given: put it after --")
     if args.within <= 0:
         parser.error("--within must be more than 0 seconds")
+    if args.probe is not None:
+        try:
+            loopback_url(args.probe)
+        except ValueError as refused:
+            parser.error(str(refused))
+        if args.pidfile is None:
+            parser.error("--probe needs --pidfile: there is no heartbeat file to record the child beside")
+        alive: Callable[[object], bool] = Probe(args.probe, args.within)
+    else:
+        alive = lambda _port: fresh(args.fresh, args.within)
     pidfile = args.pidfile or pidfile_for(args.fresh)
     end_orphan(pidfile, what=f"{Path(command[0]).name}")   # a copy a SIGKILLed wrapper left (#921)
     beat = heartbeat_from_env()
@@ -72,7 +150,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # Look a little more often than a beat is owed, so a beat is never missed for want of one.
         every = beat.interval_s / 2 if beat is not None else 60.0
         return run(command, 0, beat.tick if beat is not None else (lambda: None), probe_every_s=every,
-                   probe=lambda _port: fresh(args.fresh, args.within),
+                   probe=alive,
                    stopping=lambda: stop["asked"], reloading=reloading,
                    on_start=lambda pid: record_child(pidfile, pid))
     finally:
