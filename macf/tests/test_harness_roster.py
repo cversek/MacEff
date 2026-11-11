@@ -375,8 +375,8 @@ def test_nothing_a_seat_can_put_in_the_identity_slot_breaks_the_listing(tmp_path
 
 
 def test_verbose_listing_gives_each_carded_row_its_attach_command():
-    """harness list --verbose names the exact command for each row it can attach to (mission 849 Phase 8:
-    an expired seat was hard to reach because its session name had to be reconstructed by hand)."""
+    """harness list --verbose names the exact command for each row it can attach to (a seat whose login
+    had expired was hard to reach because its session name had to be reconstructed by hand)."""
     known = RosterEntry(card="Lumen2MacEff_3f9a1c", moniker="Lumen2MacEff", uuid="3f9a1c", account="pa_lumen2",
                         display_name="Lumen 2", session_kind="daemon", state="running", home="/home/pa_lumen2")
     nameless = RosterEntry(reasons={f: "home unreadable" for f in roster._EXPLAINED} | {"state": "home unreadable"})
