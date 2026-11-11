@@ -15,16 +15,21 @@ so that a wrapper killed with SIGKILL doesn't leave a second copy running beside
 A program that writes no such file, such as a web server whose log moves only when a request
 arrives, is judged instead by an HTTP probe (#977): the unit beats while a loopback URL has
 answered below 500 within the bound. Probes reach loopback only, and ignore proxy settings, so a
-unit can't be used to reach the network.
+unit can't be used to reach the network. A program that answers on no port but ships its own
+health check, such as a job worker, is judged by that command instead: the unit beats while the
+check exited 0 within the bound.
 
 Declared as:
     python -m macf.pd.watched_unit --fresh <file> --within <seconds> -- <command> [args...]
     python -m macf.pd.watched_unit --probe <loopback url> --within <seconds> --pidfile <file> -- <command> [args...]
+    python -m macf.pd.watched_unit --check '<check command>' --within <seconds> --pidfile <file> -- <command> [args...]
 """
 import argparse
 import ipaddress
 import os
+import shlex
 import signal
+import subprocess
 import sys
 import time
 import urllib.error
@@ -81,18 +86,33 @@ def answers(url: str, timeout_s: float, open_url: Callable = _DIRECT.open) -> bo
         return False
 
 
+# A health check runs its own program (an interpreter, a client), so it gets longer than a request.
+CHECK_TIMEOUT_S = 15.0
+
+
+def check_passes(argv: List[str], timeout_s: float) -> bool:
+    """Whether the check *argv* exits 0 within *timeout_s*. Its output is discarded; a check that
+    can't start, or doesn't finish in time, fails."""
+    try:
+        return subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, timeout=timeout_s).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 class Probe:
     """Alive while *url* last answered within *within_s*, the way ``fresh`` judges a file. One
     slow request doesn't drop the unit; a server that stopped answering does, within the bound.
     A server still starting has never answered, so it reads as not alive yet."""
 
     def __init__(self, url: str, within_s: float, ask: Callable[[str, float], bool] = answers,
-                 now: Callable[[], float] = time.monotonic):
+                 now: Callable[[], float] = time.monotonic, cap_s: float = PROBE_TIMEOUT_S):
         self.url, self.within_s, self._ask, self._now = url, within_s, ask, now
+        self.cap_s = cap_s
         self.last_answer: Optional[float] = None
 
     def __call__(self, _port: object = None) -> bool:
-        if self._ask(self.url, min(self.within_s, PROBE_TIMEOUT_S)):
+        if self._ask(self.url, min(self.within_s, self.cap_s)):
             self.last_answer = self._now()
         return self.last_answer is not None and self._now() - self.last_answer <= self.within_s
 
@@ -113,6 +133,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                        help="the file the program modifies while it is working")
     judge.add_argument("--probe",
                        help="a loopback http(s) URL the program answers while it is working")
+    judge.add_argument("--check",
+                       help="a health-check command, one quoted string, that exits 0 while the "
+                            "program is working")
     parser.add_argument("--within", type=float, required=True,
                         help="seconds: the file was modified, or the URL answered, this recently")
     parser.add_argument("--pidfile", type=Path, default=None,
@@ -133,6 +156,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.pidfile is None:
             parser.error("--probe needs --pidfile: there is no heartbeat file to record the child beside")
         alive: Callable[[object], bool] = Probe(args.probe, args.within)
+    elif args.check is not None:
+        check = shlex.split(args.check)
+        if not check:
+            parser.error("--check needs a command")
+        if args.pidfile is None:
+            parser.error("--check needs --pidfile: there is no heartbeat file to record the child beside")
+        alive = Probe(args.check, args.within, ask=lambda _what, t: check_passes(check, t),
+                      cap_s=CHECK_TIMEOUT_S)
     else:
         alive = lambda _port: fresh(args.fresh, args.within)
     pidfile = args.pidfile or pidfile_for(args.fresh)

@@ -174,3 +174,41 @@ def test_the_wrapper_with_a_probe_runs_the_program_and_records_it(tmp_path, monk
     assert code == 4
     assert beat.stopped
     assert pidfile.read_text().split()[0].isdigit()
+
+
+# --- a health-check command: a program that answers on no port, such as a job worker ---------
+
+def test_a_check_that_exits_0_passes_and_any_other_ending_fails():
+    assert wu.check_passes([sys.executable, "-c", "pass"], 5.0) is True
+    assert wu.check_passes([sys.executable, "-c", "import sys; sys.exit(1)"], 5.0) is False
+    assert wu.check_passes(["/nonexistent/health-check"], 5.0) is False, "a check that can't start fails"
+    assert wu.check_passes([sys.executable, "-c", "import time; time.sleep(5)"], 0.3) is False, \
+        "a check that doesn't finish in time fails"
+
+
+def test_the_wrapper_with_a_check_judges_the_unit_by_it(tmp_path, monkeypatch):
+    import macf.pd.liveness as liveness
+    beat = _Beat()
+    monkeypatch.setattr(liveness, "heartbeat_from_env", lambda: beat)
+    seen = []
+    monkeypatch.setattr(wu, "check_passes", lambda argv, t: seen.append((argv, t)) or True)
+    pidfile = tmp_path / "child.pid"
+    code = wu.main(["--check", "arq --check workers.main.WorkerSettings", "--within", "120",
+                    "--pidfile", str(pidfile), "--",
+                    sys.executable, "-c", "import time; time.sleep(0.6)"])
+    assert code == 0
+    assert seen, "the check ran while the program did"
+    argv, timeout = seen[0]
+    assert argv == ["arq", "--check", "workers.main.WorkerSettings"], "the string is split as a shell would"
+    assert timeout == wu.CHECK_TIMEOUT_S, "a check gets the check's cap, not the request's"
+
+
+@pytest.mark.parametrize("argv", [
+    ["--check", "true", "--within", "30", "--", "true"],               # no pidfile
+    ["--check", "", "--within", "30", "--pidfile", "p", "--", "true"],  # no command
+    ["--check", "true", "--probe", "http://127.0.0.1:1/", "--within", "30", "--pidfile", "p", "--", "true"],
+])
+def test_a_check_without_a_pidfile_a_command_or_alone_is_refused(argv):
+    with pytest.raises(SystemExit) as refused:
+        wu.main(argv)
+    assert refused.value.code == 2
