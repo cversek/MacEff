@@ -133,6 +133,54 @@ def test_a_server_answering_below_500_is_an_answer(server):
     assert wu.answers(server["url"], 2.0) is False, "a 5xx is no answer"
 
 
+def _serve(status, location=None):
+    """A loopback server answering *status* (with *location*, if given), counting its requests."""
+    import http.server
+    import threading
+
+    hits = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(self.path)
+            self.send_response(status)
+            if location:
+                self.send_header("Location", location)
+            self.end_headers()
+
+        def log_message(self, *_):
+            pass
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return {"httpd": httpd, "url": f"http://127.0.0.1:{httpd.server_address[1]}/", "hits": hits}
+
+
+def test_a_redirect_is_an_answer_and_is_never_followed():
+    """A probe follows nowhere: a Location naming another host would take it off loopback."""
+    target = _serve(200)
+    first = _serve(302, location=target["url"] + "elsewhere")
+    try:
+        assert wu.answers(first["url"], 2.0) is True, "a 3xx is a server up and replying"
+        assert first["hits"] == ["/"]
+        assert target["hits"] == [], "the probe followed the redirect"
+    finally:
+        for served in (first, target):
+            served["httpd"].shutdown()
+            served["httpd"].server_close()
+
+
+def test_localhost_that_resolves_off_loopback_is_refused(monkeypatch):
+    monkeypatch.setattr(wu, "_resolve", lambda name: ["127.0.0.1", "192.0.2.7"])
+    with pytest.raises(ValueError, match="loopback only"):
+        wu.loopback_url("http://localhost:8000/")
+    monkeypatch.setattr(wu, "_resolve", lambda name: [])
+    with pytest.raises(ValueError, match="loopback only"):
+        wu.loopback_url("http://localhost:8000/")
+    monkeypatch.setattr(wu, "_resolve", lambda name: ["127.0.0.1", "::1"])
+    assert wu.loopback_url("http://localhost:8000/") == "http://localhost:8000/"
+
+
 def test_a_stopped_server_is_no_answer(server):
     url = server["url"]
     server["stop"]()

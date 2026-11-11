@@ -29,6 +29,7 @@ import ipaddress
 import os
 import shlex
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -60,9 +61,12 @@ def loopback_url(url: str) -> str:
         raise ValueError(f"{url}: a probe is an http:// or https:// URL")
     host = parts.hostname
     if host == "localhost":
-        return url
+        # A name is only as loopback as the resolver says: a hosts file can map it elsewhere.
+        addresses = _resolve(host)
+    else:
+        addresses = [host] if host else []
     try:
-        loopback = host is not None and ipaddress.ip_address(host).is_loopback
+        loopback = bool(addresses) and all(ipaddress.ip_address(a).is_loopback for a in addresses)
     except ValueError:
         loopback = False
     if not loopback:
@@ -71,16 +75,36 @@ def loopback_url(url: str) -> str:
     return url
 
 
-_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+def _resolve(name: str) -> List[str]:
+    """Every address *name* resolves to, or none if it doesn't resolve."""
+    try:
+        return sorted({info[4][0].split("%")[0] for info in socket.getaddrinfo(name, None)})
+    except OSError:
+        return []
+
+
+def _direct_opener() -> urllib.request.OpenerDirector:
+    """An opener that makes exactly the one request it is given. No proxy, so the request stays
+    on loopback; no redirect handler, so a 3xx is reported, never followed off the host; no FTP
+    or file handler. With no error processor, every status comes back as a response."""
+    opener = urllib.request.OpenerDirector()
+    for handler in (urllib.request.ProxyHandler({}), urllib.request.HTTPHandler(),
+                    urllib.request.HTTPSHandler()):
+        opener.add_handler(handler)
+    return opener
+
+
+_DIRECT = _direct_opener()
 
 
 def answers(url: str, timeout_s: float, open_url: Callable = _DIRECT.open) -> bool:
-    """Whether *url* answers with a status below 500 within *timeout_s*. A refusal, a timeout
-    or a server error is no answer. Proxy settings are ignored: the request stays on loopback."""
+    """Whether *url* answers with a status below 500 within *timeout_s*. A 3xx or 4xx is an
+    answer: the server is up and replying, and a redirect is never followed. A refusal, a
+    timeout or a server error is no answer. Proxy settings are ignored."""
     try:
         with open_url(url, timeout=timeout_s) as response:
             return response.status < 500
-    except urllib.error.HTTPError as error:     # a 4xx means the server is up and answering
+    except urllib.error.HTTPError as error:     # an opener that raises on 4xx (tests pass one)
         return error.code < 500
     except (OSError, ValueError):               # refused, reset, timed out, unreadable
         return False
