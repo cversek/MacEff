@@ -1,7 +1,7 @@
 ---
 name: maceff-jotewr
 description: "Use when a cycle is closing and needs its JOTEWR, the cycle-closing reflection that synthesizes what was learned. Takes an optional token count and description."
-argument-hint: [token_count] [description]
+argument-hint: '[token_count] [description]'
 allowed-tools: Read, Bash(macf_tools policy:*, macf_tools context:*)
 ---
 

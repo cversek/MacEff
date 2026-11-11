@@ -1,7 +1,7 @@
 ---
 name: maceff-learnings-curate
 description: "Use when session discoveries should be curated into learnings, one or several, with scholarly cross-links into the knowledge web."
-argument-hint: [topic hint] or "multiple" for batch mode
+argument-hint: '[topic hint] or "multiple" for batch mode'
 allowed-tools: Read, Bash
 ---
 

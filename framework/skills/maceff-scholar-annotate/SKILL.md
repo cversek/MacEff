@@ -1,7 +1,7 @@
 ---
 name: maceff-scholar-annotate
 description: "Use when a consciousness artifact's citations should be brought up to the scholarship policy, such as after a CCP written at low context."
-argument-hint: [file_path] [--workers=N]
+argument-hint: '[file_path] [--workers=N]'
 allowed-tools: Read, Edit, Bash(macf_tools:*), Task, Glob, Grep
 ---
 

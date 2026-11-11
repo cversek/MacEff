@@ -1,7 +1,7 @@
 ---
 name: maceff-task-start
 description: "Use when starting work on a task, new or existing, especially one last touched in an earlier cycle. Restores its context the way the task management policy describes."
-argument-hint: [task_id_or_description]
+argument-hint: '[task_id_or_description]'
 allowed-tools: Read, TaskCreate, TaskUpdate, TaskGet, TaskList, Bash(macf_tools:*)
 ---
 

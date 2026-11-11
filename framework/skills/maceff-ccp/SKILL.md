@@ -1,7 +1,7 @@
 ---
 name: maceff-ccp
 description: "Use when a cycle needs a consciousness checkpoint (CCP): before compaction, at a milestone, or when the operator asks for one. Writes it with policy-guided structure and archaeological citations."
-argument-hint: [optional description or cycle context]
+argument-hint: '[optional description or cycle context]'
 allowed-tools: Read, Bash, Grep
 ---
 

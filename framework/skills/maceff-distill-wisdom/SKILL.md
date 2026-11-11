@@ -1,7 +1,7 @@
 ---
 name: maceff-distill-wisdom
 description: "Use when accumulated consciousness artifacts should be distilled into an agent definition, the primary agent's or a subagent's."
-argument-hint: [PA | SA:role]
+argument-hint: '[PA | SA:role]'
 ---
 
 Distill wisdom nuggets from uncataloged consciousness artifacts into agent definition's "Accumulated Wisdom" section.

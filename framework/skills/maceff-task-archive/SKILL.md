@@ -1,7 +1,7 @@
 ---
 name: maceff-task-archive
 description: "Use when completed tasks should be hidden from Claude Code's task scanner without deleting their history."
-argument-hint: [task_id]
+argument-hint: '[task_id]'
 allowed-tools: Read, Bash(macf_tools:*)
 ---
 

@@ -1,7 +1,7 @@
 ---
 name: maceff-task-create-detour
 description: "Use when work must leave its planned path for a DETOUR. Creates the DETOUR task and its roadmap folder atomically, with policy-guided metadata."
-argument-hint: "Title" [--repo REPO] [--version X.Y.Z]
+argument-hint: '"Title" [--repo REPO] [--version X.Y.Z]'
 allowed-tools: Bash
 ---
 

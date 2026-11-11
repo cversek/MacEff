@@ -1,7 +1,7 @@
 ---
 name: maceff-task-create-mission
 description: "Use when a body of work needs a MISSION task. Creates the task and its roadmap folder atomically, with policy-guided metadata."
-argument-hint: "Title" [--repo REPO] [--version X.Y.Z]
+argument-hint: '"Title" [--repo REPO] [--version X.Y.Z]'
 allowed-tools: Bash
 ---
 

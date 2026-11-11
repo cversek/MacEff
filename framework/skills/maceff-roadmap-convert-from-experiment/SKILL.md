@@ -1,7 +1,7 @@
 ---
 name: maceff-roadmap-convert-from-experiment
 description: "Use when a completed experiment has validated its hypothesis and should become a MISSION roadmap."
-argument-hint: [experiment_id_or_path]
+argument-hint: '[experiment_id_or_path]'
 ---
 
 Convert a validated experiment into a MISSION roadmap.

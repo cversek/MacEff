@@ -1,7 +1,7 @@
 ---
 name: maceff-roadmap-draft
 description: "Use when multi-phase work needs a MacEff-compliant roadmap. Runs the pre-draft ceremony the roadmaps policy requires before drafting."
-argument-hint: [brief topic description]
+argument-hint: '[brief topic description]'
 allowed-tools: Read, Bash(macf_tools:*), Grep, AskUserQuestion, Task(Explore), EnterPlanMode, ExitPlanMode
 ---
 

@@ -243,3 +243,18 @@ def test_every_framework_command_is_a_pointer_to_a_skill_that_exists():
         assert named, f"{rel}: not a pointer to a skill"
         assert set(named) <= skills, f"{rel}: names a skill that doesn't exist: {sorted(set(named) - skills)}"
         assert len(text.splitlines()) <= 6, f"{rel}: has a body of its own, so it is reachable only from the terminal"
+
+
+def test_every_skill_frontmatter_parses_and_names_its_folder():
+    """A command's frontmatter was read leniently; a skill's should parse as YAML. Five hints
+    such as `[token_count] [description]` read as a list followed by stray text, and a skill
+    whose header doesn't parse may not load at all (#975)."""
+    import yaml
+    for path in sorted((FRAMEWORK / "skills").glob("*/SKILL.md")):
+        head = re.match(r"\A---\n(.*?)\n---\n", path.read_text(), re.S)
+        assert head, f"{path.parent.name}: no frontmatter"
+        fields = yaml.safe_load(head.group(1))
+        assert fields["name"] == path.parent.name, f"{path.parent.name}: name is {fields['name']!r}"
+        assert isinstance(fields.get("description"), str) and fields["description"], path.parent.name
+        hint = fields.get("argument-hint")
+        assert hint is None or isinstance(hint, str), f"{path.parent.name}: argument-hint is {hint!r}, not text"
