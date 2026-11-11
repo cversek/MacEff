@@ -845,7 +845,8 @@ _COLUMNS = ("CARD", "ENDPOINT", "ACCOUNT", "KIND", "STATE", "DISPLAY NAME")
 def render_table(entries: Sequence[RosterEntry], verbose: bool = False) -> str:
     """``harness list``'s table: one row per agent. Under a row whose card is unknown, why,
     since that row can't be attached to by name. ``verbose`` adds the reason for every field
-    left unknown, fields that share a reason on one line, and each row's detail."""
+    left unknown, fields that share a reason on one line, each row's detail, and, for each row
+    with a card, the exact command that attaches to it."""
     if not entries:
         return "No agents on this endpoint."
     rows = [_COLUMNS] + [(e.card or "?", e.endpoint, e.account or "?", e.session_kind or "?",
@@ -867,6 +868,10 @@ def render_table(entries: Sequence[RosterEntry], verbose: bool = False) -> str:
             lines.append(f"    {', '.join(fields)} unknown: {why}")
         if e.detail:
             lines.append(f"    {e.detail}")
+        if e.card:
+            # The exact command, so nobody has to reconstruct the socket or session name; the card
+            # resolves the same way on every endpoint the roster gathers.
+            lines.append(f"    attach: macf_tools harness attach {e.card}")
     if quiet:
         lines.append("(--verbose says why each unknown field is unknown)")
     return "\n".join(lines)

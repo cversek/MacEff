@@ -372,3 +372,15 @@ def test_nothing_a_seat_can_put_in_the_identity_slot_breaks_the_listing(tmp_path
     seat = next(e for e in got[0].entries if e.account == "pa_lumen3")
     assert seat.card is None and "agents.yaml declares 'Lumen3MacEff'" in seat.reasons["card"]
     assert sum(1 for e in got[0].entries if e.card) == len(SEATS) - 1
+
+
+def test_verbose_listing_gives_each_carded_row_its_attach_command():
+    """harness list --verbose names the exact command for each row it can attach to (mission 849 Phase 8:
+    an expired seat was hard to reach because its session name had to be reconstructed by hand)."""
+    known = RosterEntry(card="Lumen2MacEff_3f9a1c", moniker="Lumen2MacEff", uuid="3f9a1c", account="pa_lumen2",
+                        display_name="Lumen 2", session_kind="daemon", state="running", home="/home/pa_lumen2")
+    nameless = RosterEntry(reasons={f: "home unreadable" for f in roster._EXPLAINED} | {"state": "home unreadable"})
+    verbose = roster.render_table([known, nameless], verbose=True)
+    assert "    attach: macf_tools harness attach Lumen2MacEff_3f9a1c" in verbose.splitlines()
+    assert verbose.count("attach: macf_tools harness attach") == 1   # none for the row with no card
+    assert "attach:" not in roster.render_table([known], verbose=False)
