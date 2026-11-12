@@ -639,7 +639,7 @@ MACF={p.macf_tools}
 # restart does not stack writers onto one file.
 LOG="{p.log_path}"
 mkdir -p "$(dirname "$LOG")"
-{{ echo; echo "=== $(date -Is) starting: claude -c{channels} ==="; }} >> "$LOG"
+{{ echo; echo "=== $(date +%Y-%m-%dT%H:%M:%S%z) starting: claude -c{channels} ==="; }} >> "$LOG"
 # NO -t: pipe-pane takes a PANE target, and `=name` is exact-match syntax for a
 # SESSION. `pipe-pane -t "=$SESS"` therefore fails with "can't find pane" every
 # single time -- which the first version of this line hid behind
@@ -872,6 +872,10 @@ set -ga terminal-overrides ",*256col*:Tc"
 # A short escape delay keeps the client's key handling responsive; the default
 # 500ms makes a TUI feel broken on attach.
 set -sg escape-time 10
+# Shift-Tab and other modified keys reach the client only with extended keys on; without them
+# Claude Code's Shift-Tab (cycle modes) did nothing in a harness pane (measured, tmux 3.6a, iTerm2).
+set -s extended-keys on
+set -as terminal-features 'xterm*:extkeys'
 set -g history-limit 50000
 set -g mouse on
 """
