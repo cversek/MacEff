@@ -4955,10 +4955,11 @@ def cmd_task_list(args: argparse.Namespace) -> int:
 
     # Apply archive visibility filters (before other filters)
     # By default, hide archived tasks unless --all or --archived is specified
+    from .task.archive import is_archived
     if args.show_archived_only:
-        tasks = [t for t in tasks if t.status == "archived"]
+        tasks = [t for t in tasks if is_archived(t)]
     elif not args.show_all:
-        tasks = [t for t in tasks if t.status != "archived"]
+        tasks = [t for t in tasks if not is_archived(t)]
 
     # Apply filters
     if args.type_filter:
@@ -6114,7 +6115,8 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
         print(f"   • macf_tools task start {task_id}    → in_progress")
         print(f"   • macf_tools task pause {task_id}    → pending")
         print(f"   • macf_tools task complete {task_id} → completed")
-        print(f"   • macf_tools task archive {task_id}  → archived")
+        print(f"   • macf_tools task archive {task_id} --reason \"...\"  → archived")
+        print(f"   • macf_tools task unarchive {task_id}  → back to its prior status")
         return 1
 
     # Block direct description editing - preserves MTMD metadata
@@ -7992,31 +7994,74 @@ def cmd_task_create_play_time(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_task_archive(args: argparse.Namespace) -> int:
-    """DEPRECATED: task archive no longer performs meaningful archiving.
+def _archive_report_lines(report, verb: str, dry_run: bool = False):
+    """Human lines for an archive or unarchive report (counts come from read-back)."""
+    lines = []
+    if dry_run:
+        lines.append(f"📦 Dry run: {verb} would touch {len(report.planned)} task(s); nothing was changed")
+        for t in report.planned:
+            lines.append(f"   #{t.id} [{t.status}] {_strip_ansi(t.subject or '')[:90]}")
+    else:
+        lines.append(f"📦 {len(report.changed)} {verb}, {len(report.unchanged)} already so, "
+                     f"{len(report.failed)} failed")
+    for f in report.failed:
+        lines.append(f"❌ #{f['id']} failed: {f['why']}")
+    for m in report.missing:
+        lines.append(f"❌ #{m} not found")
+    if report.descoped:
+        lines.append(f"   removed from sprint scope: {', '.join('#' + t for t in report.descoped)}")
+    return lines
 
-    The operator retired this command (2026-08-06): it printed a ✅ success line
-    while writing nothing — a report of a state change that did not happen, the
-    exact failure mode to avoid. Rather than repair an unwanted feature it now
-    fails closed with a pointer to the supported alternative. Kept as a stub (not
-    removed) so the subcommand still resolves and explains itself rather than
-    vanishing from under existing muscle memory.
+
+def cmd_task_archive(args: argparse.Namespace) -> int:
+    """Archive tasks: status `archived`, the reason and prior status recorded, read back.
+
+    Retired on 2026-08-06 because it printed a success line while writing
+    nothing; restored as a command whose every reported change was read back
+    from disk, and which exits nonzero naming any task whose write did not stick.
     """
+    import json
+    from .task.archive import archive_tasks, tracked_by_duties
+    ids = [str(_parse_task_id_arg(t)) for t in (getattr(args, "task_ids", None) or [])]
+    reason = (getattr(args, "reason", "") or "").strip()
+    if not reason:
+        print("❌ --reason is required: archiving puts work down, and the record says why")
+        return 1
+    dry_run = getattr(args, "dry_run", False)
+    report = archive_tasks(ids, reason, cascade=not getattr(args, "no_cascade", False), dry_run=dry_run)
+    tracked = tracked_by_duties([t.id for t in report.planned])
     if getattr(args, "json_output", False):
-        import json
         print(json.dumps({
-            "success": False,
-            "deprecated": True,
-            "message": "task archive is deprecated; it performed no archiving. "
-                       "Use `task hide-completed` to declutter.",
+            "success": report.ok, "dry_run": dry_run,
+            "planned": [t.id for t in report.planned], "archived": report.changed,
+            "already_archived": report.unchanged, "failed": report.failed,
+            "missing": report.missing, "descoped": report.descoped, "tracked_by_duties": tracked,
         }, indent=2))
     else:
-        print("⚠️  `task archive` is DEPRECATED and performs no archiving.")
-        print("    It used to print a success checkmark while writing nothing — a")
-        print("    false report of a state change. To declutter the task tree, use:")
-        print("        macf_tools task hide-completed")
-    # Fail closed: never exit 0, so nothing can read this as a successful archive.
-    return 2
+        for line in _archive_report_lines(report, "archived", dry_run):
+            print(line)
+        for tid, titles in tracked.items():
+            print(f"   #{tid} is tracked by a role duty: {'; '.join(titles)}")
+        if report.ok and not dry_run and report.changed:
+            print("   undo with: macf_tools task unarchive " + " ".join(ids))
+    return 0 if report.ok else 1
+
+
+def cmd_task_unarchive(args: argparse.Namespace) -> int:
+    """Put archived tasks back at the status each had when it was archived."""
+    import json
+    from .task.archive import unarchive_tasks
+    ids = [str(_parse_task_id_arg(t)) for t in (getattr(args, "task_ids", None) or [])]
+    report = unarchive_tasks(ids, cascade=not getattr(args, "no_cascade", False))
+    if getattr(args, "json_output", False):
+        print(json.dumps({
+            "success": report.ok, "unarchived": report.changed, "not_archived": report.unchanged,
+            "failed": report.failed, "missing": report.missing,
+        }, indent=2))
+    else:
+        for line in _archive_report_lines(report, "unarchived"):
+            print(line)
+    return 0 if report.ok else 1
 
 
 def cmd_task_restore(args: argparse.Namespace) -> int:
@@ -8034,17 +8079,14 @@ def cmd_task_restore(args: argparse.Namespace) -> int:
         print(json.dumps({
             "success": False,
             "deprecated": True,
-            "message": "task restore is deprecated; the archive subsystem it "
-                       "depended on performed no real archiving. Use "
-                       "`task hide-completed` / `task unhide-all` to manage tree clutter.",
+            "message": "task restore is retired: archives are no longer copied out of "
+                       "the store. Use `task unarchive ID` to put an archived task back.",
         }, indent=2))
     else:
-        print("⚠️  `task restore` is DEPRECATED — the archive/restore/archived")
-        print("    trio is retired. `task archive` reported success while writing")
-        print("    nothing, so there is no supported archive to restore from. To")
-        print("    manage task-tree clutter, use:")
-        print("        macf_tools task hide-completed")
-        print("        macf_tools task unhide-all")
+        print("⚠️  `task restore` is DEPRECATED. Archived tasks stay in the store")
+        print("    (status `archived`), so there is no archive file to restore from.")
+        print("    To put an archived task back where it was:")
+        print("        macf_tools task unarchive ID")
     # Fail closed: never exit 0, so nothing reads this as a successful restore.
     return 2
 
@@ -8063,16 +8105,13 @@ def cmd_task_archived_list(args: argparse.Namespace) -> int:
         print(json.dumps({
             "success": False,
             "deprecated": True,
-            "message": "task archived is deprecated; the archive subsystem "
-                       "produced no real archives. Use `task hide-completed` / "
-                       "`task unhide-all` to manage tree clutter.",
+            "message": "task archived is retired: archived tasks stay in the store. "
+                       "Use `task tree --archived` (or `task list --archived`) to see them.",
         }, indent=2))
     else:
-        print("⚠️  `task archived` is DEPRECATED — the archive/restore/archived")
-        print("    trio is retired. `task archive` produced no real archives, so this")
-        print("    list has nothing to show. To manage task-tree clutter, use:")
-        print("        macf_tools task hide-completed")
-        print("        macf_tools task unhide-all")
+        print("⚠️  `task archived` is DEPRECATED. Archived tasks stay in the store")
+        print("    with status `archived`. To see them:")
+        print("        macf_tools task tree --archived")
     # Fail closed: never exit 0, so nothing reads this as an authoritative listing.
     return 2
 
@@ -13484,23 +13523,38 @@ def _build_parser() -> argparse.ArgumentParser:
     task_create_play_time_parser.set_defaults(func=cmd_task_create_play_time)
 
     # task archive
-    task_archive_parser = task_sub.add_parser("archive", help="(DEPRECATED — no-op; use `task hide-completed`)")
-    task_archive_parser.add_argument("task_id", help="task ID to archive (e.g., #67 or 67)")
+    task_archive_parser = task_sub.add_parser(
+        "archive", help="put tasks down: status archived, reason recorded, read back (undo: task unarchive)")
+    task_archive_parser.add_argument("task_ids", nargs="+", help="task IDs to archive (e.g., #67 or 67)")
+    task_archive_parser.add_argument("--reason", required=True,
+                                     help="why the work is put down (recorded on every task)")
     task_archive_parser.add_argument("--no-cascade", dest="no_cascade", action="store_true",
-                                     help="archive only this task, not children (default: cascade)")
+                                     help="archive only the named tasks, not their descendants")
+    task_archive_parser.add_argument("--dry-run", dest="dry_run", action="store_true",
+                                     help="list what would be archived and change nothing")
     task_archive_parser.add_argument("--json", dest="json_output", action="store_true",
                                      help="output as JSON")
     task_archive_parser.set_defaults(func=cmd_task_archive)
 
+    # task unarchive
+    task_unarchive_parser = task_sub.add_parser(
+        "unarchive", help="put archived tasks back at the status each had when archived")
+    task_unarchive_parser.add_argument("task_ids", nargs="+", help="task IDs to unarchive")
+    task_unarchive_parser.add_argument("--no-cascade", dest="no_cascade", action="store_true",
+                                       help="unarchive only the named tasks, not their descendants")
+    task_unarchive_parser.add_argument("--json", dest="json_output", action="store_true",
+                                       help="output as JSON")
+    task_unarchive_parser.set_defaults(func=cmd_task_unarchive)
+
     # task restore
-    task_restore_parser = task_sub.add_parser("restore", help="restore task from archive")
+    task_restore_parser = task_sub.add_parser("restore", help="(DEPRECATED; use `task unarchive`)")
     task_restore_parser.add_argument("archive_path_or_id", help="archive file path or original task ID")
     task_restore_parser.add_argument("--json", dest="json_output", action="store_true",
                                      help="output as JSON")
     task_restore_parser.set_defaults(func=cmd_task_restore)
 
     # task archived (subcommand group)
-    task_archived_parser = task_sub.add_parser("archived", help="archived task operations")
+    task_archived_parser = task_sub.add_parser("archived", help="(DEPRECATED; use `task tree --archived`)")
     task_archived_sub = task_archived_parser.add_subparsers(dest="archived_cmd")
 
     # task archived list

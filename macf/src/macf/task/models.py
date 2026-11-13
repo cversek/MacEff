@@ -34,7 +34,10 @@ class MacfTaskUpdate:
 
     # Future extensibility
     agent: Optional[str] = None  # Who made the update (PA, SA:DevOpsEng, etc.)
-    type: Optional[str] = None   # None=lifecycle update, "note"=user note
+    type: Optional[str] = None   # None=lifecycle update, "note"=user note, "archive"/"unarchive"
+    # The status a task had before `task archive` set it to "archived", so that
+    # `task unarchive` can put it back exactly; carried only on archive updates.
+    prior_status: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MacfTaskUpdate":
@@ -47,6 +50,7 @@ class MacfTaskUpdate:
             description=data.get("description", ""),
             agent=data.get("agent"),
             type=data.get("type"),
+            prior_status=data.get("prior_status"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -58,6 +62,8 @@ class MacfTaskUpdate:
             result["agent"] = self.agent
         if self.type:
             result["type"] = self.type
+        if self.prior_status:
+            result["prior_status"] = self.prior_status
         return result
 
 
