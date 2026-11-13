@@ -182,6 +182,40 @@ def test_localhost_that_resolves_off_loopback_is_refused(monkeypatch):
     assert wu.loopback_url("http://localhost:8000/") == "http://localhost:8000/"
 
 
+def test_a_listener_that_does_not_speak_http_is_no_answer_with_a_reason():
+    """Something else on the port (an SSH banner, say) makes http.client raise, not OSError."""
+    import socket
+    import threading
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+
+    def banner():
+        conn, _ = listener.accept()
+        conn.sendall(b"SSH-2.0-not-http\r\n")
+        conn.close()
+    threading.Thread(target=banner, daemon=True).start()
+    url = f"http://127.0.0.1:{listener.getsockname()[1]}/"
+    try:
+        why = wu.answer_failure(url, 2.0)
+    finally:
+        listener.close()
+    assert why is not None and why.startswith(f"{url} gave no answer: "), why
+
+
+def test_an_ask_that_raises_is_a_failed_attempt_with_its_reason():
+    def ask(_u, _t):
+        raise RuntimeError("boom")
+    clock = {"t": 0.0}
+    said = []
+    probe = wu.Probe("http://127.0.0.1:8000/", 30.0, ask=ask, now=lambda: clock["t"], say=said.append)
+    assert probe() is False
+    clock["t"] = 31.0
+    probe()
+    assert said == [("http://127.0.0.1:8000/ has not answered within 30 s; "
+                     "last: the attempt raised RuntimeError: boom")]
+
+
 def test_a_stopped_server_is_no_answer(server):
     url = server["url"]
     server["stop"]()
@@ -262,6 +296,22 @@ def test_a_hung_ask_in_the_background_never_holds_the_loop():
     release.set()
     probe._asking.join(2)
     assert probe() is True, "the answer the thread got is the verdict on the next pass"
+
+
+def test_a_hang_after_a_recovery_does_not_report_the_earlier_outage():
+    clock = {"t": 0.0}
+    answer = {"why": "http://127.0.0.1:8000/ answered 503"}
+    said = []
+    probe = wu.Probe("http://127.0.0.1:8000/", 30.0, ask=lambda _u, _t: answer["why"],
+                     now=lambda: clock["t"], say=said.append)
+    probe()                     # the outage: a 503
+    answer["why"] = None
+    probe()                     # it answers
+    probe._ask_once = lambda: None   # from here every attempt hangs: none finishes
+    clock["t"] = 31.0
+    probe()
+    assert said[-1].endswith("last: no attempt has finished yet"), \
+        "the reason given was the outage before the recovery"
 
 
 def test_the_wrapper_with_a_probe_runs_the_program_and_records_it(tmp_path, monkeypatch):

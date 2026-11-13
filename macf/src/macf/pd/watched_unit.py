@@ -27,6 +27,7 @@ Declared as:
     python -m macf.pd.watched_unit --check '<check command>' --within <seconds> --pidfile <file> -- <command> [args...]
 """
 import argparse
+import http.client
 import ipaddress
 import os
 import shlex
@@ -110,7 +111,9 @@ def answer_failure(url: str, timeout_s: float, open_url: Callable = _DIRECT.open
             status = response.status
     except urllib.error.HTTPError as error:     # an opener that raises on 4xx (tests pass one)
         status = error.code
-    except (OSError, ValueError) as error:      # refused, reset, timed out, unreadable
+    # Refused, reset, timed out, unreadable; or something on the port that doesn't speak HTTP,
+    # which http.client reports as an HTTPException (BadStatusLine for a banner, say).
+    except (OSError, ValueError, http.client.HTTPException) as error:
         return f"{url} gave no answer: {type(error).__name__}: {error}"
     return None if status < 500 else f"{url} answered {status}"
 
@@ -190,9 +193,13 @@ class Probe:
         self._asking: Optional[threading.Thread] = None
 
     def _ask_once(self) -> None:
-        failure = self._ask(self.what, min(self.within_s, self.cap_s))
+        try:
+            failure = self._ask(self.what, min(self.within_s, self.cap_s))
+        except Exception as error:  # noqa: BLE001 - an ask that raises is a failed attempt; its reason is said on the transition line, not lost with the thread
+            failure = f"the attempt raised {type(error).__name__}: {error}"
         if failure is None:
             self.last_answer = self._now()
+            self.last_failure = None    # a later hang mustn't report an earlier outage as its reason
         else:
             self.last_failure = failure
 
