@@ -3,7 +3,7 @@
 **Number**: 0008
 **Type**: Standards
 **Status**: Draft
-**Authors**: the host-side maintainer
+**Authors**: the container-management maintainer
 **Secretary**: none
 **Deliberation**: pending
 **Created**: 2026-11-13
@@ -21,7 +21,7 @@ This MIS gives MacEff agents a voice in both directions, and it renames the chan
 - **The MacEff Notification Channel** is the channel known until now as the MacEff channel. It still carries the daemon's doorbells and nothing a sender chose. Only its name and identifiers change.
 - **The MacEff Voice Input Channel** carries the operator's dictated words into an agent's session as a labeled message.
   - A capture unit opens the microphone on a wake phrase or on one of two hotkeys: one held to talk, one toggled for continual voice.
-  - A recording indicator with a waveform and volume trace shows whenever a microphone is open.
+  - A recording indicator with a waveform and volume trace shows whenever the capture unit is recording.
   - On a system with a system daemon, one capture unit serves every member agent. It dispatches each utterance to the agent whose wake phrase or hotkey fired.
 - **Voice generation** lets each agent answer aloud. The agent chooses its voice with the operator through a process it leads: inferred traits, a dialog, generated samples.
 - **A voice lock** delivers an utterance only when the speaker matches the enrolled operator.
@@ -42,7 +42,7 @@ It concerns every agent that will take dictation or speak, every deployment that
   - Evidence: MIS-0007 sections 3 and 4 (reasoning).
 - **Wake models mislead when measured carelessly.** In November 2026, a dozen wake and speaker experiments on this host first reported numbers that turned out to measure clip length, not the speaker.
   - A held-out test measures only what it was built to hold out.
-  - Evidence: the host-side maintainer's experiment records of November 6, 2026 (measurement).
+  - Evidence: the container-management maintainer's experiment records of November 6, 2026 (measurement).
 - **One voice server per machine, many agents.** The operator asked for one server on the system daemon, with a wake phrase and hotkeys per agent, and for a voice lock with a lockout (November 13, 2026, at the terminal).
   - Evidence: the operator's request (reasoning; no build yet).
 - **"The MacEff channel" no longer says which channel.** Once a second channel exists, the old name is ambiguous in every policy and log.
@@ -96,11 +96,13 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **capture unit**: a declared unit that opens a microphone on a declared trigger, turns speech into utterances, and hands each to its target agent's primal daemon.
 - **continual voice**: a capture mode, opened by the toggle key, in which each pause ends one utterance and the microphone stays open.
 - **hold key**: a declared key that records an utterance only while it is held.
-- **indicator**: the on-screen sign of an open microphone, showing the agent's name, the mode, a waveform and a volume trace.
+- **indicator**: the on-screen sign that the capture unit is recording, showing the agent's name, the mode, a waveform and a volume trace.
+- **listening**: the capture unit reading audio only to detect a wake, keeping none of it and showing no indicator.
 - **lockout**: a declared period during which voice contact with an agent delivers nothing, started by repeated failures of its voice lock.
 - **member**: a primal daemon associated with a system daemon, which exports to it.
 - **operator input**: input that claims to be the operator's own words, as MIS-0007 defines it.
 - **raised guard**: an agent's recorded state, after a lockout, in which it treats voice input with suspicion and tells its operator on another channel.
+- **recording**: the capture unit capturing an utterance, from a wake or a key press until the utterance ends.
 - **speech worker**: the one unit per system that plays all spoken output, sentence by sentence.
 - **toggle key**: a declared key that opens and closes continual voice.
 - **trigger device**: an input device declared to a capture unit as a source of hotkey presses.
@@ -117,6 +119,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **R01** [MUST · decidable: macf/tests/test_channel_names.py::test_notification_channel_name_and_id] The channel that carries notices MUST be named MacEff Notification Channel, with plugin id maceff-notification-channel. (notification_channel_MUST_carry_its_name)
 - **R02** [MUST · decidable: macf/tests/test_channel_names.py::test_voice_input_channel_name_and_id] The channel that carries utterances MUST be named MacEff Voice Input Channel, with plugin id maceff-voice-input-channel. (voice_input_channel_MUST_carry_its_name)
 - **R03** [MUST · decidable: macf/tests/test_channel_names.py::test_old_source_refused_by_name] When a reader meets the source plugin:maceff-channel:maceff, it MUST refuse that source and name the new one. (old_channel_source_MUST_be_refused_by_name)
+- **R54** [MUST · decidable: macf/tests/test_channel_names.py::test_refused_old_source_recorded] When a reader refuses the old source, it MUST record the refusal as an event and as a status entry. (old_source_refusal_MUST_be_recorded)
 
 ### 6.2 Utterances and the Voice Input Channel
 
@@ -125,17 +128,18 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **R06** [MUST · decidable: macf/tests/test_voice_channel.py::test_label_precedes_text] A voice message MUST show its label before its text: trigger, time spoken, voice-lock result and screen state. (voice_label_MUST_precede_text)
 - **R07** [MUST · decidable: macf/tests/test_voice_channel.py::test_locked_or_unknown_screen_marks_information_only] While the screen is locked or its state is unknown, the Voice Input Channel MUST mark an utterance as information only. (locked_screen_utterance_MUST_be_information_only)
 - **R08** [MUST · decidable: macf/tests/test_voice_channel.py::test_markup_in_text_is_neutralized] The Voice Input Channel MUST neutralize any utterance text that a session could read as channel or tool markup. (utterance_text_MUST_be_defanged)
-- **R09** [MUST NOT · decidable: macf/tests/test_voice_authorization.py::test_utterance_satisfies_no_authorization] An utterance MUST NOT satisfy anything an authorization depends on, whatever its trigger or voice-lock result. (utterance_MUST-NOT_authorize)
+- **R09** [MUST NOT · judgment: the maintainers, at review of each path that checks an authorization] An utterance MUST NOT satisfy anything an authorization depends on, whatever its trigger or voice-lock result. (utterance_MUST-NOT_authorize)
 - **R10** [MUST NOT · decidable: macf/tests/test_voice_channel.py::test_event_holds_no_text] The event log MUST NOT hold an utterance's text; the utterance's event holds its metadata only. (event_log_MUST-NOT_hold_utterance_text)
 - **R11** [MUST · decidable: macf/tests/test_voice_channel.py::test_every_utterance_ends_in_receipt] Each utterance MUST end in a receipt to its capture unit: delivered, refused, locked out, or matched to no agent. (utterance_MUST_end_in_a_receipt)
+- **R53** [MUST NOT · judgment: the operator, at review of each agent's handling] An agent MUST NOT act on an information-only utterance until the operator confirms it on a channel that isn't voice. (information_only_utterance_MUST-NOT_be_acted_on)
 
 ### 6.3 The capture unit
 
 - **R12** [MUST · decidable: macf/tests/test_voice_capture.py::test_undeclared_capture_unit_refused] A primal daemon MUST accept utterances only from a capture unit that a declaration names. (capture_unit_MUST_be_declared)
-- **R13** [MUST · decidable: macf/tests/test_voice_capture.py::test_raw_audio_never_written] Raw audio MUST stay in the capture unit's memory and leave its system only for a declared transcription service. (raw_audio_MUST_stay_in_capture_memory)
+- **R13** [MUST · decidable: macf/tests/test_voice_capture.py::test_raw_audio_never_written] Raw audio MUST stay in the capture unit's memory, never written to disk and never leaving its system. (raw_audio_MUST_stay_in_capture_memory)
 - **R14** [MUST · decidable: macf/tests/test_voice_backends.py::test_every_backend_passes_its_contract] A capture unit MUST reach audio, lock state, the indicator and trigger devices only through backend interfaces with contract tests. (capture_MUST_use_backend_interfaces)
 - **R15** [MUST NOT · decidable: macf/tests/test_voice_capture.py::test_no_audio_read_while_listening_off] While its listening is off, a capture unit MUST NOT read any audio from its microphone. (capture_MUST-NOT_read_audio_while_off)
-- **R16** [MUST · decidable: macf/tests/test_voice_capture.py::test_live_microphone_is_status_entry] A capture unit MUST report an open microphone as a status entry, with its age and the agent it records for. (live_microphone_MUST_be_a_status_entry)
+- **R16** [MUST · decidable: macf/tests/test_voice_capture.py::test_live_microphone_is_status_entry] A capture unit MUST report listening and recording as status entries, each with its age, and recording with its agent. (live_microphone_MUST_be_a_status_entry)
 
 ### 6.4 Triggers, hotkeys and the indicator
 
@@ -143,21 +147,21 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **R18** [MUST NOT · decidable: macf/tests/test_voice_capture.py::test_no_trigger_over_socket] A capture unit MUST NOT accept a trigger over any socket, pipe or command line. (capture_MUST-NOT_take_triggers_over_sockets)
 - **R19** [MAY · judgment: the operator, in each declaration] An agent's voice section MAY declare a hold key, which records an utterance only while it is held. (hold_key_MAY_be_declared)
 - **R20** [MAY · judgment: the operator, in each declaration] An agent's voice section MAY declare a toggle key, which opens continual voice until it is pressed again or a declared silence passes. (toggle_key_MAY_be_declared)
-- **R21** [MUST · decidable: macf/tests/test_voice_indicator.py::test_indicator_shown_while_microphone_open] Whenever a microphone is open for an agent, the indicator MUST show the agent's name, a waveform and a volume trace. (indicator_MUST_show_open_microphone)
-- **R22** [MUST · decidable: macf/tests/test_voice_indicator.py::test_indicator_shows_mode] The indicator MUST show which mode opened the microphone: wake phrase, hold key or continual voice. (indicator_MUST_show_mode)
+- **R21** [MUST · decidable: macf/tests/test_voice_indicator.py::test_indicator_shown_while_microphone_open] While the capture unit is recording for an agent, the indicator MUST show the agent's name, a waveform and a volume trace. (indicator_MUST_show_open_microphone)
+- **R22** [MUST · decidable: macf/tests/test_voice_indicator.py::test_indicator_shows_mode] The indicator MUST show which mode started the recording: wake phrase, hold key or continual voice. (indicator_MUST_show_mode)
 
 ### 6.5 Wake phrases
 
-- **R23** [MUST · decidable: macf/tests/test_voice_wake.py::test_wake_passes_three_checks_in_order] A wake MUST pass, in order, the agent's wake model, a speech check, and a transcription that contains the declared phrase. (wake_MUST_pass_three_checks)
-- **R24** [MUST · decidable: macf/tests/test_voice_wake.py::test_model_stored_with_report] A wake model MUST be stored with its test report: misses, false alarms per hour, and the conditions measured. (wake_model_MUST_carry_its_report)
+- **R23** [MUST · decidable: macf/tests/test_voice_wake.py::test_wake_passes_its_checks_in_order] A wake MUST pass, in order, the wake model, a speech check, any declared voice lock, and a transcription containing the phrase. (wake_MUST_pass_its_checks_in_order)
+- **R24** [MUST · decidable: macf/tests/test_voice_wake.py::test_model_stored_with_report] A wake model MUST be stored with its test report: misses, false alarms per hour, false wakes on other agents' phrases, and conditions. (wake_model_MUST_carry_its_report)
 - **R25** [MUST NOT · decidable: macf/tests/test_voice_wake.py::test_test_set_disjoint_from_training] A wake model's test MUST NOT use any clip that its training used. (wake_test_MUST-NOT_reuse_training_clips)
 - **R26** [MUST · decidable: macf/tests/test_voice_declaration.py::test_duplicate_phrase_or_key_refused] A capture unit MUST refuse two agents that declare the same wake phrase or the same hotkey. (wake_phrase_and_keys_MUST_be_unique_per_capture_unit)
-- **R27** [MUST NOT · decidable: macf/tests/test_voice_capture.py::test_no_wake_during_own_speech] A capture unit MUST NOT accept a wake while its system's speech worker is playing. (capture_MUST-NOT_wake_on_own_speech)
+- **R27** [MUST NOT · decidable: macf/tests/test_voice_capture.py::test_no_wake_during_own_speech] A capture unit MUST NOT take a wake or record an utterance while its system's speech worker is playing. (capture_MUST-NOT_wake_on_own_speech)
 
 ### 6.6 Voice generation and selection
 
 - **R28** [MUST · decidable: macf/tests/test_voice_speech.py::test_one_worker_serializes_agents] Spoken output MUST pass through one speech worker per system, so two agents never speak at once. (speech_MUST_pass_one_worker)
-- **R29** [MUST NOT · decidable: macf/tests/test_voice_speech.py::test_no_playback_while_microphone_open] The speech worker MUST NOT play while a microphone is open on its system. (speech_MUST-NOT_play_while_microphone_open)
+- **R29** [MUST NOT · decidable: macf/tests/test_voice_speech.py::test_no_playback_while_microphone_open] The speech worker MUST NOT play while the capture unit is recording on its system. (speech_MUST-NOT_play_while_microphone_open)
 - **R30** [MUST · decidable: macf/tests/test_voice_select.py::test_choice_recorded_with_traits] An agent's chosen voice MUST be recorded in its voice section with the traits the operator accepted for it. (voice_choice_MUST_record_traits)
 - **R31** [MUST · judgment: the operator, at each selection] Before it generates samples, a selecting agent MUST put its inferred traits to the operator and take the operator's answer. (voice_selection_MUST_ask_operator_first)
 - **R32** [MUST NOT · judgment: the operator, at each selection] An agent's voice MUST NOT be built to imitate a real person's voice. (voice_MUST-NOT_imitate_a_real_person)
@@ -168,7 +172,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **R34** [MUST · decidable: macf/tests/test_voice_lock.py::test_only_matching_speaker_delivered] Where an agent declares a voice lock, its capture unit MUST deliver an utterance only if the speaker score passes the stored threshold. (voice_lock_MUST_gate_delivery)
 - **R35** [MUST · decidable: macf/tests/test_voice_lock.py::test_threshold_needs_report] A voice lock's threshold MUST be stored with the test report that chose it: false accepts, false rejects, and the conditions. (voice_lock_threshold_MUST_carry_its_report)
 - **R36** [MUST · decidable: macf/tests/test_voice_lock.py::test_test_set_includes_impostors] A voice lock's test set MUST include other speakers and synthetic speech, each annotated as such. (voice_lock_test_MUST_include_impostors)
-- **R37** [MUST · decidable: macf/tests/test_voice_lock.py::test_failure_drops_text_and_sends_contentless_notice] If an utterance fails the voice lock, then the capture unit MUST drop its text and have the agent sent a notice without content. (failed_voice_lock_MUST_send_contentless_notice)
+- **R37** [MUST · decidable: macf/tests/test_voice_lock.py::test_failure_discards_audio_untranscribed_and_sends_contentless_notice] If an utterance fails the voice lock, then the capture unit MUST discard its audio untranscribed and have the agent sent a notice without content. (failed_voice_lock_MUST_send_contentless_notice)
 - **R38** [MAY · judgment: the maintainers, at review of the voice_lock policy] An agent that receives an unmatched-voice notice MAY say aloud that its voice couldn't be matched, and to try again. (unmatched_notice_MAY_license_a_spoken_reply)
 - **R39** [MUST · decidable: macf/tests/test_voice_lock.py::test_failures_in_window_start_lockout] When an agent's failed attempts reach the declared count within the declared window, its voice contact MUST lock out for the declared duration. (failed_attempts_MUST_start_lockout)
 - **R40** [MUST · decidable: macf/tests/test_voice_declaration.py::test_lockout_defaults] An agent's lockout settings MUST default to three attempts and ten minutes, each settable in its voice section. (lockout_defaults_MUST_be_three_attempts_and_ten_minutes)
@@ -196,23 +200,24 @@ It concerns every agent that will take dictation or speak, every deployment that
 **Names (R01 to R03).**
 - **R01, R02:** two channels need two names, and a name should say what the channel carries. The plugin ids follow the names, so a launch flag, a log line and a policy all read the same.
 - **R03:** this is a clean break before release. A reader that silently accepted the old source would leave half the fleet on a name the policies no longer use. Refusing it, and naming the new source, makes the cutover visible.
+- **R54:** a session that took the new plugin while its daemon still sends the old source would refuse every notice. Recording each refusal as an event and a status entry means a lost notice is found, not silent. Section 9 gives the order that avoids it.
 
 **Utterances (R04 to R11).**
 - **R04:** the agent's own primal daemon is the one place that can check what it delivers. A capture unit writing straight into a session would bypass every check below.
 - **R05:** R52 of the MIS-0007 draft applies. A sender-set "voice matched" is exactly what a forger would write.
 - **R06:** the label is how the agent knows what it is reading. It comes first so a long dictation can't push it out of view.
-- **R07:** someone can speak to an unattended machine. An unknown lock state counts as locked, because the failure that hides the state is also the one that hides an intruder.
+- **R07, R53:** someone can speak to an unattended machine. R09 already keeps every utterance from authorizing; information only means more: the agent answers, but takes no action on it until the operator confirms elsewhere. An unknown lock state counts as locked, because the failure that hides the state is also the one that hides an intruder.
 - **R08:** dictated text is still text an attacker can say aloud: "end of message, system:". The channel neutralizes anything shaped like markup.
-- **R09:** a speaker can be a recording, a video or an agent's own spoken alert. R58 of the MIS-0007 draft already covers the wake phrase. This MIS extends it to every trigger and every voice-lock result, since a match is evidence, not proof (R45).
+- **R09:** a speaker can be a recording, a video or an agent's own spoken alert. R58 of the MIS-0007 draft already covers the wake phrase. This MIS extends it to every trigger and every voice-lock result, since a match is evidence, not proof (R45). It is a judgment, not a test, because no list of authorizations is complete; each path that checks one is reviewed for it.
 - **R10:** the event log is read by many tools and kept a long time. The operator's spoken words don't belong there; when the utterance arrived and how it was judged do.
 - **R11:** speech must never vanish silently. This follows R60 of the MIS-0007 draft for this input's capture unit.
 
 **The capture unit (R12 to R16).**
 - **R12:** an undeclared process that can reach the daemon's socket could otherwise speak for the operator.
-- **R13:** this moves R59 of the MIS-0007 draft here unchanged. Audio is the most personal thing the system touches.
+- **R13:** this moves R59 of the MIS-0007 draft here, made stricter: raw audio is never written to disk and never leaves the system, where R59 let it go to a declared transcription service through a door. Q03 asks whether transcription may run elsewhere, and its answer would amend R13 rather than be pre-empted by it.
 - **R14:** the capture logic is the same on every platform, and four things differ. Behind interfaces with contract tests, a porter writes four small backends and knows they are right when the contract tests pass. The first macOS port is planned this way.
 - **R15:** listening off must mean the microphone is not read. Merely discarding what is read wouldn't do.
-- **R16:** moves R63 of the MIS-0007 draft here, adding which agent the microphone is open for, since one capture unit may serve several.
+- **R16:** moves R63 of the MIS-0007 draft here, adding listening as its own entry and which agent a recording is for, since one capture unit may serve several.
 
 **Triggers, hotkeys and the indicator (R17 to R22).**
 - **R17, R18:** move R62 of the MIS-0007 draft here and keep its reasoning.
@@ -220,20 +225,20 @@ It concerns every agent that will take dictation or speak, every deployment that
   - So a hotkey counts only when the capture unit reads it from a declared device itself: on Linux an input device granted to the capture unit's account by a udev rule, on macOS the capture app's own key monitor.
   - A trigger command was drafted first and rejected for this reason.
 - **R19, R20:** the operator asked for both. Hold suits a sentence; toggle suits a conversation. They are optional because a wake phrase alone works.
-- **R21, R22:** an open microphone the operator can't see is a breach of trust even when nothing goes wrong. The waveform and volume trace show that sound is reaching the right agent. The mode shows how long the microphone will stay open.
+- **R21, R22:** a recording the operator can't see is a breach of trust even when nothing goes wrong. The waveform and volume trace show that sound is reaching the right agent. The mode shows how long the recording will last. Listening shows no indicator, because it keeps nothing; status reports it (R16).
 
 **Wake phrases (R23 to R27).**
-- **R23:** each check catches what the one before misses.
+- **R23:** each check catches what the one before misses, and the speaker check comes before transcription, so a stranger's speech is never turned into text anywhere.
   - The classifier is fast but fooled by similar sounds.
   - The speech check rejects noise.
   - The transcription rejects similar words.
-  - This order has run on the host-side maintainer's machine since November 2026.
-- **R24, R25:** these are the measurement lessons of those November experiments. A model with no report invites trust it hasn't earned. A test that shares clips with training measures memory, not detection.
+  - This order has run on the container-management maintainer's machine since November 2026.
+- **R24, R25:** with one capture unit for several agents, the error that matters most is one agent's phrase waking another's model, so the report counts it. these are the measurement lessons of those November experiments. A model with no report invites trust it hasn't earned. A test that shares clips with training measures memory, not detection.
 - **R26:** with one capture unit for many agents, a shared phrase or key would make the target ambiguous.
-- **R27:** an agent's own spoken alert can contain its wake phrase. The speech worker marks when it plays, and the capture unit doesn't listen then.
+- **R27:** an agent's own spoken alert can contain its wake phrase. The speech worker marks when it plays, and the capture unit takes nothing then. In continual voice, speech plays in the pauses between utterances.
 
 **Voice generation (R28 to R33).**
-- **R28, R29:** two agents talking over each other, or an agent talking into its own open microphone, make both channels useless. One worker per system is the simplest way to serialize them.
+- **R28, R29:** two agents talking over each other, or an agent talking into its own recording, make both channels useless. In continual voice, replies queue and play in the pauses between utterances. One worker per system is the simplest way to serialize them.
 - **R30, R31:** the operator asked that an agent infer its voice from its own identity and role, put the traits to the operator first, then generate samples. Recording the traits with the choice lets a later selection start from them rather than from nothing.
 - **R32:** imitating a real person's voice is impersonation, whatever the intent.
 - **R33:** a locked screen often means the operator is away and others may be near. What the agent says aloud then is the operator's choice.
@@ -243,7 +248,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **R35, R36:**
   - A threshold is a trade between locking out the operator and letting someone else in. The report shows which trade was made.
   - Without other speakers and synthetic speech in the test, the false-accept rate is unmeasured, and the lock's whole purpose is unmeasured with it.
-- **R37:** the operator's words. A failure sends a notice without content, so nothing a stranger said reaches the session.
+- **R37:** the operator's words. A failure sends a notice without content. Because the speaker check runs before transcription (R23), nothing a stranger said is ever turned into text.
 - **R38:** a notice usually licenses one act, consulting the store. This one licenses a second, saying aloud that the voice wasn't matched, because the person speaking is waiting for an answer. It is stated as its own requirement so it doesn't loosen the Notification Channel's rule for any other notice.
 - **R39, R40, R41:** the operator's numbers: three attempts, then ten minutes, each configurable. Counting attempts during the lockout shows whether someone kept trying.
 - **R42, R43:** the operator asked that the agent's suspicion be raised. A state the status shows and the hooks surface reaches the agent even after a compaction. Telling the operator on another channel matters because the voice path is the one under suspicion.
@@ -270,7 +275,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 
 - **MIS-0002:** the persistent layer, notices and the channel this MIS renames. R77 (wake_MUST_carry_no_sender_text), R106 and R107 (what counts as the operator's), and R112 and R113 (the channel adapter) are kept as they are.
 - **MIS-0007:** the operator-input class, its route, signatures, nonces, receipts and expiry. This MIS takes over its three capture-specific requirements (R59, R62, R63) and cites the rest.
-- **A working setup on the host-side maintainer's Linux desktop** (November 2026):
+- **A working setup on the container-management maintainer's Linux desktop** (November 2026):
   - a wake classifier on openWakeWord audio features with a speech check and a Whisper confirmation;
   - dictation through a third-party tool (VoxType) with its own waveform overlay;
   - a spool-folder channel plugin;
@@ -281,10 +286,11 @@ It concerns every agent that will take dictation or speak, every deployment that
 
 ## 9 Compatibility and Deployment
 
-- **The rename is a clean break.** Every deployment does the following, at a session restart:
+- **The rename is a clean break.** Every deployment does the following in one step, at a session restart, so its daemon and its plugin change together (R54 records any notice refused in between):
   - reinstalls the channel plugin with `macf_tools agent init --update`;
   - takes the new launch flag;
   - updates any policy override or script that names the old source.
+- **Every reader of the channel's source string changes in the same commit:** the input-origin classifier and the taint check each hold the old source as a constant, and one left behind would misclassify every notice.
 - **Containers** take the new plugin id from `docker/scripts/start.py` at their next start.
 - **Voice is opt-in.** An agent without a voice section is unchanged.
 - **A machine that takes voice installs** the optional `voice` extra and, on Linux, a udev rule granting the trigger devices to the capture unit's account.
@@ -320,7 +326,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R06 | decidable | macf/tests/test_voice_channel.py::test_label_precedes_text | planned |
 | R07 | decidable | macf/tests/test_voice_channel.py::test_locked_or_unknown_screen_marks_information_only | planned |
 | R08 | decidable | macf/tests/test_voice_channel.py::test_markup_in_text_is_neutralized | planned |
-| R09 | decidable | macf/tests/test_voice_authorization.py::test_utterance_satisfies_no_authorization | planned |
+| R09 | judgment | the maintainers, at review of each path that checks an authorization | standing |
 | R10 | decidable | macf/tests/test_voice_channel.py::test_event_holds_no_text | planned |
 | R11 | decidable | macf/tests/test_voice_channel.py::test_every_utterance_ends_in_receipt | planned |
 | R12 | decidable | macf/tests/test_voice_capture.py::test_undeclared_capture_unit_refused | planned |
@@ -334,7 +340,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R20 | judgment | the operator, in each declaration | pending |
 | R21 | decidable | macf/tests/test_voice_indicator.py::test_indicator_shown_while_microphone_open | planned |
 | R22 | decidable | macf/tests/test_voice_indicator.py::test_indicator_shows_mode | planned |
-| R23 | decidable | macf/tests/test_voice_wake.py::test_wake_passes_three_checks_in_order | planned |
+| R23 | decidable | macf/tests/test_voice_wake.py::test_wake_passes_its_checks_in_order | planned |
 | R24 | decidable | macf/tests/test_voice_wake.py::test_model_stored_with_report | planned |
 | R25 | decidable | macf/tests/test_voice_wake.py::test_test_set_disjoint_from_training | planned |
 | R26 | decidable | macf/tests/test_voice_declaration.py::test_duplicate_phrase_or_key_refused | planned |
@@ -348,7 +354,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R34 | decidable | macf/tests/test_voice_lock.py::test_only_matching_speaker_delivered | planned |
 | R35 | decidable | macf/tests/test_voice_lock.py::test_threshold_needs_report | planned |
 | R36 | decidable | macf/tests/test_voice_lock.py::test_test_set_includes_impostors | planned |
-| R37 | decidable | macf/tests/test_voice_lock.py::test_failure_drops_text_and_sends_contentless_notice | planned |
+| R37 | decidable | macf/tests/test_voice_lock.py::test_failure_discards_audio_untranscribed_and_sends_contentless_notice | planned |
 | R38 | judgment | the maintainers, at review of the voice_lock policy | pending |
 | R39 | decidable | macf/tests/test_voice_lock.py::test_failures_in_window_start_lockout | planned |
 | R40 | decidable | macf/tests/test_voice_declaration.py::test_lockout_defaults | planned |
@@ -364,6 +370,8 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R50 | decidable | macf/tests/test_voice_dispatch.py::test_bad_signature_expiry_or_nonce_refused | planned |
 | R51 | judgment | the maintainers, at review of the landing pull request | pending |
 | R52 | judgment | the maintainers, at review of the landing pull request | pending |
+| R53 | judgment | the operator, at review of each agent's handling | pending |
+| R54 | decidable | macf/tests/test_channel_names.py::test_refused_old_source_recorded | planned |
 
 **Cold-reader trial**: not yet held. The first macOS port is planned as the trial. A maintainer who didn't write this MIS brings voice up on a Mac from the pull request and its documents alone, and reports each place they had to guess.
 
@@ -385,7 +393,7 @@ If the pull request grows too large to review, it splits after stage 4 and after
 
 ## 13 Open Questions
 
-- **Q01** Does a declared Voice Input Channel count toward operator presence, as MIS-0002-R97 (keyboard_surface_MUST_set_presence) treats a keyboard? The operator decides, before Final-Comment. (voice_presence_question)
+- **Q01** Is listing the Voice Input Channel among a declaration's operator channels (MIS-0002 R107) enough for it to set operator presence, as MIS-0002-R97 (keyboard_surface_MUST_set_presence) does for a keyboard? The operator decides, before Final-Comment. (voice_presence_question)
 - **Q02** Does the voice lock cover hold-key and toggle-key input too, or only the wake phrase? The operator decides, per declaration or framework-wide, before Final-Comment. (voice_lock_hotkey_coverage)
 - **Q03** May speech-to-text run off the machine, through a declared transcription service, when the machine can't run it locally? The maintainers decide, before Final-Comment. (remote_transcription_question)
 - **Q04** How does a macOS capture app hold its key monitor and microphone grants under the code-identity custody R53 of the MIS-0007 draft describes? The first macOS porter proposes, and the maintainers decide. (macos_capture_custody)
@@ -400,6 +408,8 @@ None.
 ## 15 Revision History
 
 - 2026-11-13: first draft, from the operator's request of the same day.
+- 2026-11-13: after the second review: raw audio never written to disk (R13); R09 a judgment; Q01 reworded; the readers of the source string change together (section 9).
+- 2026-11-13: after the first review: listening and recording defined (R16, R21, R22, R27, R29); raw audio never leaves the system (R13); the speaker check runs before transcription (R23, R37); information only defined (R53); refused old-source notices recorded (R54); cross-agent false wakes reported (R24); authorship role corrected.
 
 ## Wiki-Links
 
