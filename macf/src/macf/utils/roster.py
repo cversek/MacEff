@@ -190,7 +190,7 @@ def _agent_home_markers(home: Path) -> Tuple[Optional[bool], str]:
         try:
             os.stat(marker)
             return True, ""
-        except FileNotFoundError:
+        except FileNotFoundError:  # noqa: S112 - a home holds one marker, not both, so a missing one is normal
             continue
         except OSError as e:
             return None, f"{home} cannot be read by this account: {e.strerror or type(e).__name__}"

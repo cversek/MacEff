@@ -71,7 +71,7 @@ def end_orphan(pidfile: Path, *, grace_s: float = 5.0, what: str = "broker") -> 
             time.sleep(0.1)
         if verify_incarnation(pid, start.strip()):
             os.kill(pid, signal.SIGKILL)
-    except ProcessLookupError:
+    except ProcessLookupError:  # noqa: S110 - it ended between the liveness check and the signal, the goal
         pass  # noqa: MACEFF003 - it ended on its own between the check and the signal, which is the goal
     print(f"⚠️ MACF: pd: ended the {what} a previous wrapper left running (pid {pid})", file=sys.stderr)
     return pid

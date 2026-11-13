@@ -108,7 +108,7 @@ def user_runtime_dir() -> Path:
     path = Path(_TMP_ROOT) / f"macf-{os.getuid()}"
     try:
         path.mkdir(mode=0o700)
-    except FileExistsError:
+    except FileExistsError:  # noqa: S110 - an existing dir is normal; lstat checks it below
         pass
     st = os.lstat(path)
     if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022:
