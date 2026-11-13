@@ -52,7 +52,7 @@ Before creating tasks, pause and think deeply:
 ## Execution
 
 1. Record the transition in task notes: "CURATE mode activated via maceff-curative-self-motivation. Curating: {what needs preservation}."
-2. Curate learnings: invoke `/maceff:learnings:curate` if multiple learnings pending
+2. Curate learnings: invoke `/maceff-learnings-curate` if multiple learnings pending
 3. Capture ideas: use `macf_tools idea create` for any tangential seeds
 4. Regenerate indexes if stale
 5. Update cross-references in existing learnings/KB files

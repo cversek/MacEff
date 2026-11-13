@@ -1748,6 +1748,9 @@ class _NoPane:
     def capture(self):
         return ""
 
+    def width(self):
+        return None
+
     def type(self, text):
         return False
 

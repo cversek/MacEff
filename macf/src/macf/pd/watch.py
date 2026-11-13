@@ -46,7 +46,7 @@ from typing import Callable, Dict, List, Literal, Optional, Sequence, Tuple
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from macf.notify.session import proc_start_key, verify_incarnation
-from macf.pd import interface
+from macf.pd import interface, receipts
 from macf.pd.health import SCHEDULE_EVENTS, broker_health, read_liveness, schedule_health
 from macf.platform import container_limits
 from macf.utils.streaming import iter_lines_reverse
@@ -59,7 +59,7 @@ LOOKBACK_S = 7 * 86400
 SEND_TIMEOUT_S = 30
 
 Verdict = Literal["ALIVE", "STALE", "GONE", "ABSENT", "UNREADABLE", "UNREACHABLE", "CHECK-FAILED", "DARK", "HELD", "UNREAD",
-                  "DRIFTED", "SWEEP-FAILED", "FAILED", "AUTH-FAILED", "LOGIN-EXPIRED", "LOGIN-EXPIRING"]
+                  "UNRECEIVED", "DRIFTED", "SWEEP-FAILED", "FAILED", "AUTH-FAILED", "LOGIN-EXPIRED", "LOGIN-EXPIRING"]
 
 #: Exit codes, worst wins (``service_supervision`` section 4.2): each state its own code.
 EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_UNREACHABLE, EXIT_CHECK_FAILED = 0, 1, 2, 3
@@ -67,6 +67,7 @@ EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_UNREACHABLE, EXIT_CHECK_FAILED = 0, 1, 2, 3
 #: alert was sent, on every pass while a channel was dark or a wake held.
 _EXIT_FOR = {"ALIVE": EXIT_HEALTHY, "STALE": EXIT_UNHEALTHY, "GONE": EXIT_UNHEALTHY,
              "ABSENT": EXIT_UNHEALTHY, "DARK": EXIT_UNHEALTHY, "HELD": EXIT_UNHEALTHY, "UNREAD": EXIT_UNHEALTHY,
+             "UNRECEIVED": EXIT_UNHEALTHY,
              "DRIFTED": EXIT_UNHEALTHY, "SWEEP-FAILED": EXIT_UNHEALTHY,
              "FAILED": EXIT_UNHEALTHY, "AUTH-FAILED": EXIT_UNHEALTHY,
              "LOGIN-EXPIRED": EXIT_UNHEALTHY, "LOGIN-EXPIRING": EXIT_UNHEALTHY,
@@ -142,7 +143,7 @@ def last_liveness(log_path: Path, card: str, units: Sequence[str], now: float,
             break
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -174,7 +175,7 @@ def last_unit_state(log_path: Path, card: str, units: Sequence[str], now: float,
             break
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -239,7 +240,7 @@ def last_channel_event(log_path: Path, card: str, now: float,
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -262,7 +263,7 @@ def last_login_event(log_path: Path, card: str, now: float,
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -317,6 +318,39 @@ def check_channel(card: str, event: Optional[dict], now: float) -> Finding:
     return Finding(card, "channel", "DARK", f"{data.get('reason', 'dark')}{age}")
 
 
+def receipt_events(log_path: Path, now: float, lookback_s: float = LOOKBACK_S) -> List[dict]:
+    """The deliveries, receipts and turn starts in an agent's log within the lookback, oldest
+    first. None carries the agent: the log is the one agent's."""
+    cutoff, found = now - lookback_s, []
+    for line in iter_lines_reverse(log_path):
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        if event.get("event") in receipts.EVENTS:
+            found.append(event)
+    return found[::-1]
+
+
+def check_receipts(card: str, events: Sequence[dict], now: float) -> Finding:
+    """Channel notices the session never took (cversek/MacEff#904). The daemon counts a notice
+    delivered when it writes it, so a client that won't admit the channel drops every notice
+    while the daemon reads healthy; only the session's receipts tell. Counted after the newest
+    receipt, so the stretch ends when one arrives."""
+    missing = receipts.after_last_receipt(events)
+    if not missing:
+        return Finding(card, "receipts", "ALIVE", "no channel notice went unreceived")
+    return Finding(card, "receipts", "UNRECEIVED",
+                   f"{len(missing)} channel notice(s) written and never received by the session, "
+                   f"the oldest {_age(now - missing[0].sent_at)} ago, though it took turns since: "
+                   f"is the channel admitted by Claude Code's allowlist?")
+
+
 def last_unread_mail_event(log_path: Path, card: str, now: float,
                            lookback_s: Optional[float] = None) -> Optional[dict]:
     """The newest ``pd_unread_mail`` or ``pd_unread_mail_cleared`` of agent *card*, or None.
@@ -327,7 +361,7 @@ def last_unread_mail_event(log_path: Path, card: str, now: float,
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -364,7 +398,7 @@ def mail_sweep_events(log_path: Path, card: str, schedule: str, now: float,
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -434,7 +468,7 @@ def _wake_events(log_path: Path, card: str, cutoff: float):
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -527,6 +561,12 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
             findings.append(check_wake(card, last_wake_event(log_path, card, now), now))
         except FileNotFoundError:
             findings.append(check_wake(card, None, now))
+        # Not only where a channel is declared expected: a seat whose daemon writes to a
+        # channel without channel_connect_s set drops notices just the same (#904).
+        try:
+            findings.append(check_receipts(card, receipt_events(log_path, now), now))
+        except FileNotFoundError:
+            findings.append(check_receipts(card, [], now))
         try:
             login = check_login(card, last_login_event(log_path, card, now), now)
         except FileNotFoundError:
@@ -797,11 +837,11 @@ def open_stretches(durable_log: Path) -> Dict[str, dict]:
         for line in iter_lines_reverse(durable_log):
             try:
                 record = json.loads(line)
-            except ValueError:
+            except ValueError:  # noqa: S112 - a torn or partial line in the durable alert log is skipped
                 continue
             if isinstance(record, dict) and record.get("delivered") and "open_after" in record:
                 return dict(record["open_after"])
-    except FileNotFoundError:
+    except FileNotFoundError:  # noqa: S110 - no alert log exists before the first alert is sent
         pass
     return {}
 

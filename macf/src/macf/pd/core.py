@@ -404,7 +404,7 @@ def tree_rss_mb(root: int) -> Optional[float]:
                 continue
             try:
                 stat = (entry / "stat").read_text()
-            except OSError:
+            except OSError:  # noqa: S112 - a process that ended while the table was read holds no memory
                 continue  # noqa: MACEFF003 - ended while the table was read; it holds no memory now
             fields = stat[stat.rfind(")") + 2:].split()
             if len(fields) > 21:

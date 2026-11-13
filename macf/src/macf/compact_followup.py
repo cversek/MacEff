@@ -112,22 +112,24 @@ def follow(target: str, since: float, text: str = DEFAULT_TEXT, *,
            send: Optional[Callable[[str, list], int]] = None,
            capture: Optional[Callable[[], Optional[str]]] = None,
            enter: Optional[Callable[[], int]] = None,
+           width: Optional[Callable[[], Optional[int]]] = None,
            clock: Callable[[], float] = time.time,
            sleep: Callable[[float], None] = time.sleep) -> str:
     """Wait for the compaction, then send, skip, or give up. Returns which, for the log."""
-    if send is None or capture is None or enter is None:
-        from .supervisor import capture_pane, press_enter, send_keys
+    if send is None or capture is None or enter is None or width is None:
+        from .supervisor import capture_pane, pane_width, press_enter, send_keys
         send = send or (lambda t, keys: send_keys(t, keys, enter=False, kind="compact-followup"))  # noqa: E731
         capture = capture or (lambda: capture_pane(target))  # noqa: E731
         enter = enter or (lambda: press_enter(target))  # noqa: E731
-    from .pd.wake import IDLE_EMPTY, classify
+        width = width or (lambda: pane_width(target))  # noqa: E731
+    from .pd.wake import IDLE_EMPTY, TOO_NARROW, classify
     deadline = clock() + timeout
-    box_seen = None
+    box_seen, columns = None, None
     while clock() < deadline:
         verdict = decide(read(since), since, clock())
         if verdict == "send":
-            screen = capture()
-            box_seen = classify(screen) if screen is not None else "unreadable"
+            screen, columns = capture(), width()
+            box_seen = classify(screen, columns) if screen is not None else "unreadable"
             if box_seen != IDLE_EMPTY:
                 sleep(poll)                    # typed after a draft, both would go as one
                 continue
@@ -139,6 +141,9 @@ def follow(target: str, since: float, text: str = DEFAULT_TEXT, *,
         if verdict == "skip":
             return "skipped: a prompt started after the compaction"
         sleep(poll)
+    if box_seen == TOO_NARROW:
+        return (f"gave up: the session's pane is {columns} columns wide, too narrow to read "
+                f"its input box; widen it")
     if box_seen is not None:
         return f"gave up: the input box was never idle and empty (last seen: {box_seen})"
     return "gave up: no compaction within the timeout"

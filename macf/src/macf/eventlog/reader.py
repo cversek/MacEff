@@ -185,7 +185,7 @@ def follow(path, keep: Callable[[dict], bool], sleep: Callable[[float], None] = 
         sleep(poll_s)
         try:
             size = os.path.getsize(path)
-        except OSError:
+        except OSError:  # noqa: S112 - the log is absent or rotating; the next poll retries
             continue
         if size < position:
             position, partial = 0, ""
@@ -200,7 +200,7 @@ def follow(path, keep: Callable[[dict], bool], sleep: Callable[[float], None] = 
         for line in lines:
             try:
                 event = json.loads(line)
-            except ValueError:
+            except ValueError:  # noqa: S112 - foreign or partial log lines are expected; skipped
                 continue
             if isinstance(event, dict) and keep(event):
                 yield event
