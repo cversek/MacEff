@@ -13,7 +13,12 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from macf.voice.wake.dataset import KINDS, PhraseRefused, WakeSet
+from typing import TYPE_CHECKING
+
+from macf.voice.wake import KINDS, PhraseRefused
+
+if TYPE_CHECKING:
+    from macf.voice.wake.dataset import WakeSet
 
 #: How long each kind of clip runs, in seconds.
 SECONDS = {"phrase": 2.5, "near_miss": 2.5, "other_phrase": 2.5, "speech": 30.0, "room": 60.0}
@@ -51,7 +56,8 @@ def _home() -> Path:
     return find_agent_home()
 
 
-def _wake_set(phrase: Optional[str]) -> WakeSet:
+def _wake_set(phrase: Optional[str]) -> "WakeSet":
+    from macf.voice.wake.dataset import WakeSet
     home = _home()
     if not phrase:
         from macf.pd.core import load_declaration
@@ -64,6 +70,7 @@ def _wake_set(phrase: Optional[str]) -> WakeSet:
 
 
 def cmd_define(args) -> int:
+    from macf.voice.wake.dataset import WakeSet
     try:
         wake = WakeSet(_home(), args.phrase)
     except PhraseRefused as e:

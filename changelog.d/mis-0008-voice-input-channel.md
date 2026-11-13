@@ -10,6 +10,8 @@
 
 - **Wake-phrase training, its policy and skill** (`macf_tools voice wake define|record|train|test|status`, MIS-0008 R24, R25). Each kept clip's set, train or test, is fixed when it's recorded. The threshold is chosen from training scores only, and the held-out report travels in the model file, which holds plain weights and is never unpickled. The live detector fires at that measured threshold unless the voice section overrides it. The new `voice_input` policy says how a wake model is measured, what a wake may authorize (nothing), what the indicator shows and what audio is kept. The `maceff-voice-wake-training` skill coaches an operator through it.
 
+- **Voice generation and selection** (`python -m macf.voice.speech`, `macf_tools voice speak|show|select`, MIS-0008 R27 to R33). One speech worker per system plays queued speech a sentence at a time. It gives way to the operator: a recording stops it mid-sentence, and `--stop` is immediate. It stays silent while locked where the voice section says so. With no worker running, nothing is queued, so nothing is spoken out of its time. The agent leads its voice selection: traits put to the operator first, then samples, and the choice recorded with its traits. Governed by the new `voice_generation` policy and the `maceff-voice-select` skill.
+
 ### Fixed
 
 - **Transcription on Linux** (`macf.voice.transcribe`): detection offered faster-whisper, but the dispatch had no branch for it, so every Linux transcription raised "Unknown engine". It now runs, and `transcribe_array` transcribes samples held in memory.

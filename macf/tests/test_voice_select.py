@@ -67,18 +67,20 @@ def test_a_choice_that_cannot_be_recorded_is_refused_by_name(tmp_path, prepare, 
     assert declaration_path(home).read_text() == before, "a refused choice changed the declaration"
 
 
-def test_speak_queues_and_says_when_no_worker_runs(tmp_path, monkeypatch, capsys):
+def test_speak_queues_only_for_a_running_worker(tmp_path, monkeypatch, capsys):
+    """With no worker, nothing is queued: it would be spoken whenever one next started, out of its time."""
     monkeypatch.setattr(speech_cli, "_home", lambda: tmp_path)
     monkeypatch.setattr(speech, "lock_path", lambda: tmp_path / "speech.lock")
     args = SimpleNamespace(text=["Hello", "there."], stop=False, voice=None, speed=1.1, say_as=None, unsay=None)
     assert speech_cli.cmd_speak(args) == 1
-    [queued] = list(speech.queue_dir(tmp_path).glob("*.json"))
-    assert json.loads(queued.read_text()) == {"text": "Hello there.", "speed": 1.1}
-    assert "no speech worker is running" in capsys.readouterr().err
+    assert not list(speech.queue_dir(tmp_path).glob("*.json"))
+    assert "not spoken: no speech worker is running" in capsys.readouterr().err
     held = speech.WorkerLock(tmp_path / "speech.lock")
     assert held.acquire()
     assert speech_cli.cmd_speak(args) == 0
     held.release()
+    [queued] = list(speech.queue_dir(tmp_path).glob("*.json"))
+    assert json.loads(queued.read_text()) == {"text": "Hello there.", "speed": 1.1}
 
 
 def test_say_as_keeps_a_respelling(tmp_path, monkeypatch):

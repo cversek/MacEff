@@ -31,7 +31,7 @@ VOICES: Dict[str, str] = {
 ACCENT = {"british": "b", "english": "b", "american": "a"}
 PACE = {"calm": -0.05, "measured": -0.05, "steady": -0.03, "slow": -0.1, "deliberate": -0.05,
         "brisk": 0.07, "quick": 0.1, "energetic": 0.08, "lively": 0.05}
-LINE = "Ahoy. I'm ready when you are; the harbor is quiet and every berth is accounted for."
+LINE = "Hello. This is how I would sound reading you a short update, so listen for whether it suits me."
 
 
 @dataclass(frozen=True)

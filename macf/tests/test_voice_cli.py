@@ -58,3 +58,16 @@ def test_a_reading_says_why_it_has_no_microphone(tmp_path):
     from test_primal_daemon import make_home
     reading = voice_cli.microphone(make_home(tmp_path, []))
     assert reading.mic is None and reading.why == "this agent declares no voice section"
+
+
+def test_building_the_cli_loads_no_voice_models():
+    """Every macf_tools command builds the whole parser; the voice commands must not make each one
+    import numpy and the audio code, which only a voice command uses."""
+    import subprocess
+    import sys
+    probe = ("import sys, macf.cli; macf.cli._build_parser(); "
+             "heavy = [m for m in (\"numpy\", \"macf.voice.wake.dataset\", \"macf.voice.speech.backends\") if m in sys.modules]; "
+             "print(\",\".join(heavy))")
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr[-500:]
+    assert out.stdout.strip() == "", f"building the parser imported {out.stdout.strip()}"

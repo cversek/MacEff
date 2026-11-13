@@ -20,7 +20,10 @@ from pathlib import Path
 from typing import Callable, Dict, Optional
 
 from macf.voice import state
-from macf.voice.speech.backends import AudioOut, SpeechEngine
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from macf.voice.speech.backends import AudioOut, SpeechEngine
 from macf.voice.speech.text import clean, sentences
 
 #: The longest the worker holds a sentence for a recording, before it says so and drops the message.
@@ -48,7 +51,7 @@ def enqueue(home: Path, text: str, overrides: Optional[dict] = None) -> Path:
 
 
 def stop(home: Path) -> int:
-    """Drop every queued message; the worker stops the one playing when it sees its file gone."""
+    """Drop every queued message; the worker stops the sentence playing within a twentieth of a second."""
     dropped = 0
     for item in queue_dir(home).glob("*.json"):
         item.unlink(missing_ok=True)
@@ -89,7 +92,7 @@ class WorkerLock:
 
 
 class SpeechWorker:
-    def __init__(self, home: Path, engine: SpeechEngine, out: AudioOut, settings: Callable[[], object],
+    def __init__(self, home: Path, engine: "SpeechEngine", out: "AudioOut", settings: Callable[[], object],
                  recording: Callable[[], bool], screen_locked: Callable[[], bool],
                  sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic,
                  log: Callable[[str], None] = lambda s: print(f"🔊 MACF: voice: {s}", file=sys.stderr)):
@@ -111,15 +114,16 @@ class SpeechWorker:
             self.sleep(0.2)
         return True
 
-    def _play_unless_recording(self, spoken) -> bool:
-        """Play one sentence, stopping it the moment a recording opens: an operator who presses
-        a key while the agent talks is heard, not talked over (R29). Returns whether it was cut."""
+    def _play_unless_recording(self, spoken, item: Path) -> bool:
+        """Play one sentence, stopping it the moment a recording opens, or the moment ``voice speak
+        --stop`` empties the queue: an operator who presses a key while the agent talks is heard, not
+        talked over (R29), and a stop is immediate. Returns whether it was cut."""
         done = threading.Event()
         cut = threading.Event()
 
         def watch():
             while not done.is_set():
-                if self._recording():
+                if self._recording() or not item.exists():
                     cut.set()
                     self.out.stop()
                     return
@@ -163,8 +167,8 @@ class SpeechWorker:
             if not item.exists():
                 break
             self._mark()
-            if self._play_unless_recording(spoken):
-                self.log("a recording opened while speaking: the sentence stopped, the rest of the message dropped")
+            if self._play_unless_recording(spoken, item):
+                self.log("a recording opened, or a stop came, while speaking: the sentence stopped, the rest dropped")
                 break
             self.played += 1
             self._mark()

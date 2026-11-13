@@ -1419,6 +1419,9 @@
     "notification_channel": ["base/infrastructure/persistent_layer"],
     "voice_input": ["base/infrastructure/voice_input"],
     "wake_model": ["base/infrastructure/voice_input"],
+    "voice_generation": ["base/infrastructure/voice_generation"],
+    "voice_selection": ["base/infrastructure/voice_generation"],
+    "speech_worker": ["base/infrastructure/voice_generation"],
     "specification": ["mis"],
     "ratification": ["mis"],
     "amail": [
@@ -1997,6 +2000,30 @@
           "hotkey",
           "indicator",
           "dictation"
+        ]
+      },
+      {
+        "name": "voice_generation",
+        "short_name": "SPEECH",
+        "path": "base/infrastructure/voice_generation.md",
+        "CEP_triggers": [
+          "What may I say aloud, what never, and what do I do while the screen is locked?",
+          "How do I stop my speech, and how does it give way to a recording?",
+          "How is my voice chosen with the operator, and what must the dialog show before any sample?",
+          "May a voice be made to sound like a real person?",
+          "How do I respell a name the speech engine says wrong?"
+        ],
+        "keywords": [
+          "voice",
+          "speech",
+          "speak",
+          "spoken output",
+          "speech worker",
+          "voice selection",
+          "voice samples",
+          "pronunciation",
+          "text to speech",
+          "locked screen"
         ]
       }
     ]

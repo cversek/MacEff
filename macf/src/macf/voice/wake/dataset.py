@@ -36,7 +36,7 @@ from macf.voice.state import voice_dir
 #:   speech        ordinary talk, read or spoken
 #:   room          the room with nobody speaking: fans, keys, the street
 #:   other_phrase  another agent's wake phrase on this machine, which must not wake this one (R24)
-KINDS = ("phrase", "near_miss", "speech", "room", "other_phrase")
+from macf.voice.wake import KINDS, PhraseRefused  # noqa: E402,F401 - defined in the light package init for the CLI
 #: One clip in this many, of each kind, is held out for the test.
 HOLD_OUT_EVERY = 4
 #: Phrases too common in ordinary talk to make a wake: they would fire all day.
@@ -44,8 +44,6 @@ COMMON = {"hey", "hello", "hi", "okay", "ok", "yes", "no", "stop", "go", "wait",
           "hey you", "excuse me", "thank you", "thanks"}
 
 
-class PhraseRefused(ValueError):
-    """A phrase that can't make a working wake, with the reason."""
 
 
 def slug(phrase: str) -> str:

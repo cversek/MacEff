@@ -51,6 +51,9 @@ def _worker_running() -> bool:
 
 def cmd_speak(args) -> int:
     home = _home()
+    if args.stop:
+        print(f"stopped; {speech.stop(home)} queued message(s) dropped")
+        return 0
     if args.say_as or args.unsay:
         path = speech.pronounce_path(home)
         table = speech.pronunciations(home)
@@ -68,19 +71,18 @@ def cmd_speak(args) -> int:
         print(f"{len(table)} respelling(s) in {path}")
         if not args.text:
             return 0
-    if args.stop:
-        print(f"stopped; {speech.stop(home)} queued message(s) dropped")
-        return 0
     text = " ".join(args.text) if args.text else ("" if sys.stdin.isatty() else sys.stdin.read())
     if not text.strip():
         print("nothing to say", file=sys.stderr)
         return 2
-    overrides = {k: v for k, v in (("voice", args.voice), ("speed", args.speed)) if v is not None}
-    speech.enqueue(home, text, overrides)
+    # Speech nobody can play now would be spoken whenever a worker next starts, out of its time:
+    # so with no worker, nothing is queued.
     if not _worker_running():
-        print("queued, but no speech worker is running: declare the speech unit (python -m macf.voice.speech)",
+        print("not spoken: no speech worker is running (declare the speech unit: python -m macf.voice.speech)",
               file=sys.stderr)
         return 1
+    overrides = {k: v for k, v in (("voice", args.voice), ("speed", args.speed)) if v is not None}
+    speech.enqueue(home, text, overrides)
     return 0
 
 
@@ -95,14 +97,14 @@ def cmd_show(args) -> int:
 
 def cmd_samples(args) -> int:
     home = _home()
+    if not _worker_running():
+        print("no speech worker is running to play samples; nothing was made", file=sys.stderr)
+        return 1
     found = select.candidates(args.traits, args.count)
     select.keep_candidates(home, args.traits, found)
     for c in found:
         speech.enqueue(home, f"Candidate {c.number}. {args.line}", {"voice": c.voice, "speed": c.speed})
         print(f"candidate {c.number}: voice {c.voice}, speed {c.speed}")
-    if not _worker_running():
-        print("queued, but no speech worker is running to play them", file=sys.stderr)
-        return 1
     return 0
 
 

@@ -134,3 +134,13 @@ def test_a_word_is_respelled_only_standing_alone():
 
 def test_the_fake_audio_out_keeps_the_contract():
     check_audio_out(lambda: FakeOut(seconds=5.0))
+
+
+def test_a_stop_cuts_the_sentence_playing(tmp_path):
+    """voice speak --stop is immediate: the sentence playing stops, not only the ones after it."""
+    out = FakeOut(seconds=5.0, during=lambda: threading.Timer(0.05, speech.stop, args=(tmp_path,)).start())
+    w, engine = make_worker(tmp_path, out=out)
+    speech.enqueue(tmp_path, "A long sentence. Never heard.")
+    started = time.monotonic()
+    w.take()
+    assert time.monotonic() - started < 2.0 and [c[0] for c in engine.said] == ["A long sentence."]
