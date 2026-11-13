@@ -142,7 +142,7 @@ If you cannot explain a perfect score, treat the model as unmeasured.
 
 **A rejected fire still counts.** The wake passes in order: the model scores at or above the bar, and after a short wait for the phrase to finish the audio must hold speech, and then a transcription of it must contain the phrase (MIS-0008 R23). A fire that is rejected by the later checks never reaches the agent, but it still occupied the listener, and the capture unit is deaf for a moment after each rejection. A real call during that moment is lost. Count rejected fires, which the capture unit's log names without the words, as well as accepted ones. The later checks are not a reason to accept a noisy model.
 
-The voice lock step of the wake order arrives with that capability; until then the order is the model, the speech check, and the transcription.
+Where a voice lock is declared, it checks the speaker after the speech check and before the transcription, so a voice that does not match is never transcribed (`voice_lock` policy). Without one the order is the model, the speech check, and the transcription.
 
 ### 1.4 Reporting Results
 

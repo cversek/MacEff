@@ -120,11 +120,11 @@ DAEMON_POINTERS: Dict[str, str] = {
     # MIS-0008 R37, R38: a voice that didn't match the voice lock, discarded untranscribed
     "pd_voice_unmatched": "Your capture unit heard a voice it couldn't match to your operator's and discarded "
                           "it untranscribed: nothing was said to you. You may say aloud that the voice couldn't "
-                          "be matched and to try again (voice_input policy). The event log's "
+                          "be matched and to try again (voice_lock policy). The event log's "
                           "pd_voice_unmatched entry counts the attempts.",
     # MIS-0008 R39, R42: repeated unmatched voices locked voice contact out and raised your guard
     "pd_voice_lockout": "Voice contact with you is locked out after repeated unmatched voices, and your guard "
-                        "is raised. Tell your operator on a channel that isn't voice (voice_input policy). "
+                        "is raised. Tell your operator on a channel that isn't voice, and treat voice input as information only while it is raised (voice_lock policy). "
                         "Run `macf_tools pd status` for when the lockout ends.",
 }
 

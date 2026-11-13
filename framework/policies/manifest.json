@@ -1422,6 +1422,8 @@
     "voice_generation": ["base/infrastructure/voice_generation"],
     "voice_selection": ["base/infrastructure/voice_generation"],
     "speech_worker": ["base/infrastructure/voice_generation"],
+    "voice_lock": ["base/infrastructure/voice_lock"],
+    "raised_guard": ["base/infrastructure/voice_lock"],
     "specification": ["mis"],
     "ratification": ["mis"],
     "amail": [
@@ -2024,6 +2026,29 @@
           "pronunciation",
           "text to speech",
           "locked screen"
+        ]
+      },
+      {
+        "name": "voice_lock",
+        "short_name": "VLOCK",
+        "path": "base/infrastructure/voice_lock.md",
+        "CEP_triggers": [
+          "What does a voice lock prove, and what may I do on a match?",
+          "What do I do on an unmatched-voice notice, and what must I never do?",
+          "What does a lockout and a raised guard require of me, and who may lower the guard?",
+          "How can the lockout be used against the operator?",
+          "How is a voice lock enrolled and measured, and how do I trust a speaker embedding?"
+        ],
+        "keywords": [
+          "voice lock",
+          "speaker check",
+          "speaker verification",
+          "lockout",
+          "raised guard",
+          "voice guard",
+          "unmatched voice",
+          "speaker embedding",
+          "enrollment"
         ]
       }
     ]

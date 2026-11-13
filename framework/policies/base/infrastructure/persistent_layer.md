@@ -891,7 +891,7 @@ A key with no declared device is refused at load (MIS-0008 R17). Nothing else ca
 - **It never wakes on your own speech** (R27): it stays deaf while your speech worker marks itself speaking, and for three seconds after.
 - **Audio stays in its memory** (R13). It's transcribed from memory and dropped, never written. Its own log, like the daemon's, names each utterance by id and outcome, never by its words.
 
-**Status in this pull request.** The channel, the daemon's carriage and the capture unit are built, with Linux backends and tests on recorded stand-ins. Wake models are defined, recorded, trained and measured with `macf_tools voice wake`, under the `voice_input` policy, which also governs what a wake may authorize. The speech worker and the voice lock come next.
+**Status in this pull request.** The channel, the daemon's carriage and the capture unit are built, with Linux backends and tests on recorded stand-ins. Wake models are defined, recorded, trained and measured with `macf_tools voice wake`, under the `voice_input` policy, which also governs what a wake may authorize. The speech worker (`voice_generation` policy) and the voice lock (`voice_lock` policy) are built too; a speaker embedder for the lock is chosen by measuring it on the operator's own voice before any lock is declared.
 
 ## 7 The Harness's Own Compactions
 
