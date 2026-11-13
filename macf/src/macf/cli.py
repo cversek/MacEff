@@ -4955,10 +4955,11 @@ def cmd_task_list(args: argparse.Namespace) -> int:
 
     # Apply archive visibility filters (before other filters)
     # By default, hide archived tasks unless --all or --archived is specified
+    from .task.archive import is_archived
     if args.show_archived_only:
-        tasks = [t for t in tasks if t.status == "archived"]
+        tasks = [t for t in tasks if is_archived(t)]
     elif not args.show_all:
-        tasks = [t for t in tasks if t.status != "archived"]
+        tasks = [t for t in tasks if not is_archived(t)]
 
     # Apply filters
     if args.type_filter:
@@ -5470,6 +5471,19 @@ def cmd_task_roles(args: argparse.Namespace) -> int:
     return 0
 
 
+_PARENT_MARKER = re.compile(r"(?:\x1b\[[0-9;]*m)?\[\^#\d+\](?:\x1b\[[0-9;]*m)?\s*")
+
+
+def _without_parent_marker(subject: str) -> str:
+    """A subject without its `[^#N]` parent marker, for the tree.
+
+    The marker exists so Claude Code's flat task list can show a child's
+    parent; in the tree the indentation already says it, so it is noise there.
+    The stored subject keeps it.
+    """
+    return _PARENT_MARKER.sub("", subject or "")
+
+
 def cmd_task_tree(args: argparse.Namespace) -> int:
     """Display task hierarchy tree from a root task."""
     from .task.create import subject_with_live_parent
@@ -5478,7 +5492,28 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
     from .task import TaskReader
 
     succinct = getattr(args, 'succinct', False)
-    verbose = getattr(args, 'verbose', False)
+    # Verbosity: 0 = notes counted on the task line; 1 (-v, --verbose) = notes,
+    # plans and reports listed and truncated; 2 (-vv, --verbose 2) = every
+    # note, plan, report, breadcrumb and update in full, wrapped to 80% of the
+    # terminal. `verbose` may be a bool from older callers.
+    _v = getattr(args, 'verbose', 0)
+    level = 1 if _v is True else int(_v or 0)
+    # `--verbose` takes an optional LEVEL, so argparse hands it the next word
+    # even when that word is a task id (`task tree --verbose 892`, which worked
+    # before levels existed). A word that is not 1 or 2 is the root task when
+    # no root was given; otherwise it is a bad level, refused by name.
+    _lv = getattr(args, 'verbose_level', None)
+    if _lv is not None:
+        _lv = str(_lv)
+        if _lv in ("1", "2"):
+            level = max(level, int(_lv))
+        elif str(getattr(args, 'task_id', '000')) == "000":
+            args.task_id = _lv
+            level = max(level, 1)
+        else:
+            print(f"❌ --verbose LEVEL must be 1 or 2, not {_lv!r}")
+            return 2
+    verbose = level >= 2
     # Title width: succinct mode is a scanning view, so it trims harder. An
     # explicit --title-width overrides both defaults; 0 disables truncation.
     title_width = getattr(args, 'title_width', None)
@@ -5508,15 +5543,22 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         from .task.scope import get_scope_state
         scope_state = get_scope_state()
 
-        # Archive filtering (default: hide archived)
-        def is_archived(task):
-            return task.mtmd and getattr(task.mtmd, 'archived', False)
-
+        # Archived work (status `archived`, or the legacy MTMD flag). Default:
+        # each archived subtree is ONE 📦 line; --succinct: not drawn at all;
+        # --all: drawn expanded; --archived: only archived tasks, with the
+        # ancestors that give them a path to the root.
+        from .task.archive import is_archived
+        collapse_archived = not (show_all or show_archived_only)
         if show_archived_only:
-            all_tasks = [t for t in all_tasks if is_archived(t)]
-        elif not show_all:
-            all_tasks = [t for t in all_tasks if not is_archived(t)]
-        # else show_all: no filtering
+            _by_id = {t.id: t for t in all_tasks}
+            _keep = {root_id}
+            for t in all_tasks:
+                if is_archived(t):
+                    node, hops = t, 0
+                    while node is not None and node.id not in _keep and hops < 1000:
+                        _keep.add(node.id)
+                        node, hops = _by_id.get(str(node.parent_id)) if node.parent_id else None, hops + 1
+            all_tasks = [t for t in all_tasks if t.id in _keep]
 
         task_map = {t.id: t for t in all_tasks}
 
@@ -5538,6 +5580,28 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         def get_children(parent_id):
             target = str(parent_id) if parent_id is not None else None
             return list(children_of.get(target, ()))
+
+        _live_cache = {}
+
+        def has_live(task, _seen=None):
+            """True when this task or any descendant is NOT archived (cycle-safe)."""
+            if task.id in _live_cache:
+                return _live_cache[task.id]
+            _seen = set() if _seen is None else _seen
+            if task.id in _seen:
+                return False
+            _seen.add(task.id)
+            live = (not is_archived(task)) or any(has_live(c, _seen) for c in get_children(task.id))
+            _live_cache[task.id] = live
+            return live
+
+        def count_archived_below(task_id, _seen=None):
+            _seen = set() if _seen is None else _seen
+            if task_id in _seen:
+                return 0
+            _seen.add(task_id)
+            return sum(int(is_archived(c)) + count_archived_below(c.id, _seen)
+                       for c in get_children(task_id))
 
         def has_active_sibling(task, siblings):
             """Check if any sibling is active (in_progress or pending)."""
@@ -5561,7 +5625,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             could clear by exiting and re-entering, and no amount of exiting
             would have cleared it.
             """
-            if not is_terminal_status(task.status):
+            if not (is_terminal_status(task.status) or is_archived(task)):
                 return False
             # Same cycle guard as count_descendants: a self-parenting task is
             # malformed but reachable, and must not take the render down.
@@ -5580,6 +5644,12 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             renders an in-progress parent as a bare line with nothing under it,
             which reads as "nothing was done here" — the opposite of the truth.
             """
+            # Archived work: in --succinct it is not drawn unless it is the
+            # only path to something still open; otherwise it is drawn (as one
+            # collapsed line by default). Checked before the recency marker so
+            # archiving a task does not pull it back into view.
+            if collapse_archived and is_archived(task):
+                return has_live(task) if succinct else True
             if not succinct:
                 return True
             # Always show root sentinel (depth 0)
@@ -5709,7 +5779,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             return " ".join(parts) if parts else ""
 
         def print_task_details(task, detail_prefix):
-            """Print plan and notes for a task."""
+            """Print plan, notes and reports for a task at the current verbosity level."""
             if succinct:
                 return
 
@@ -5723,45 +5793,65 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             def fmt_green(text):
                 return f"{ANSI_GREEN}{text}{ANSI_RESET}"
 
+            import shutil
+            import textwrap
+            wrap_width = max(40, int(shutil.get_terminal_size(fallback=(100, 24)).columns * 0.8))
+
+            def emit(lead, text, style=fmt):
+                """Full text at level 2, wrapped so every line fits 80% of the terminal."""
+                # The lead's emoji draws two columns wide; leave room for it.
+                avail = max(20, wrap_width - len(detail_prefix) - len(lead) - 1)
+                pad = " " * (len(lead) + 1)
+                for i, part in enumerate(textwrap.wrap(text.replace("\n", " "), avail) or [""]):
+                    print(f"{detail_prefix}{style((lead if i == 0 else pad) + part)}")
+
             plan, plan_ca_ref = get_task_plan(task)
+
+            # At level 0 a subtask's plan line is left out: its parent's plan
+            # already says where the work is planned. A GitHub issue or PR keeps
+            # its line at any depth, because that line is its link.
+            task_type = getattr(task.mtmd, "task_type", None) if task.mtmd else None
+            is_subtask = str(task.parent_id or "000").lstrip("#") not in ("000", "null", "None")
+            if level == 0 and is_subtask and task_type not in ("GH_ISSUE", "GH_PR"):
+                plan = plan_ca_ref = None
 
             # Show plan_ca_ref or plan
             if plan_ca_ref:
                 if verbose:
-                    print(f"{detail_prefix}{fmt('📄 ' + plan_ca_ref)}")
+                    emit("📄 ", plan_ca_ref)
                 else:
                     print(f"{detail_prefix}{fmt('→ ' + truncate(plan_ca_ref, 60))}")
             elif plan:
                 if verbose:
-                    for line in plan.split('\n'):
-                        print(f"{detail_prefix}{fmt('📋 ' + line)}")
+                    emit("📋 ", plan)
                 else:
                     print(f"{detail_prefix}{fmt('→ ' + truncate(plan, 60))}")
 
-            # Show notes
-            notes = get_task_notes(task)
-            for note in notes:
-                if verbose:
-                    print(f"{detail_prefix}{fmt('📝 ' + note.description)}")
-                    if note.breadcrumb:
-                        print(f"{detail_prefix}{fmt('   🔖 ' + note.breadcrumb)}")
-                else:
-                    print(f"{detail_prefix}{fmt('📝 ' + truncate(note.description, 60))}")
+            # Notes: counted on the task line at level 0 (see note_count_marker),
+            # listed truncated at level 1, whole at level 2.
+            if level >= 1:
+                for note in get_task_notes(task):
+                    if verbose:
+                        emit("📝 ", note.description)
+                        if note.breadcrumb:
+                            print(f"{detail_prefix}{fmt('   🔖 ' + note.breadcrumb)}")
+                    else:
+                        print(f"{detail_prefix}{fmt('📝 ' + truncate(note.description, 60))}")
 
-            # In verbose mode, show all updates (not just notes, excluding completion reports)
+            # At level 2, show all updates (not just notes, excluding completion reports)
             if verbose and task.mtmd and task.mtmd.updates:
                 lifecycle_updates = [u for u in task.mtmd.updates
                                    if getattr(u, 'type', None) not in ('note', 'completion')]
                 for update in lifecycle_updates:
-                    desc = update.description or "(lifecycle update)"
-                    print(f"{detail_prefix}{fmt('🔄 ' + desc)}")
+                    emit("🔄 ", update.description or "(lifecycle update)")
                     if update.breadcrumb:
                         print(f"{detail_prefix}{fmt('   🔖 ' + update.breadcrumb)}")
 
-            # Always show completion reports (both modes)
+            # Completion reports from -v up; the default view leaves them out
+            # entirely (the ✔ and strikethrough already say the task is done).
             # Last completion report = green, previous = strikethrough
             completion_reports = []
-            if task.mtmd:
+            if task.mtmd and level >= 1:
                 # Get completion reports from updates with type='completion'
                 for u in (task.mtmd.updates or []):
                     if getattr(u, 'type', None) == 'completion' and u.description:
@@ -5772,23 +5862,20 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                     completion_reports.append((task.mtmd.completion_report, bc))
 
             for i, (report, breadcrumb) in enumerate(completion_reports):
-                is_last = (i == len(completion_reports) - 1)
-                if is_last:
-                    # Last completion report: green
-                    if verbose:
-                        print(f"{detail_prefix}{fmt_green('✅ ' + report)}")
-                        if breadcrumb:
-                            print(f"{detail_prefix}{fmt_green('   🔖 ' + breadcrumb)}")
-                    else:
-                        print(f"{detail_prefix}{fmt_green('✅ ' + truncate(report, 60))}")
+                style = fmt_green if i == len(completion_reports) - 1 else fmt
+                if verbose:
+                    emit("✅ ", report, style)
+                    if breadcrumb:
+                        print(f"{detail_prefix}{style('   🔖 ' + breadcrumb)}")
                 else:
-                    # Previous completion reports: strikethrough
-                    if verbose:
-                        print(f"{detail_prefix}{fmt('✅ ' + report)}")
-                        if breadcrumb:
-                            print(f"{detail_prefix}{fmt('   🔖 ' + breadcrumb)}")
-                    else:
-                        print(f"{detail_prefix}{fmt('✅ ' + truncate(report, 60))}")
+                    print(f"{detail_prefix}{style('✅ ' + truncate(report, 60))}")
+
+        def note_count_marker(task):
+            """At level 0 a task's notes are a count on its line, not lines of their own."""
+            if succinct or level >= 1:
+                return ""
+            n = len(get_task_notes(task))
+            return f" {ANSI_DIM}📝 {n}{ANSI_RESET}" if n else ""
 
         _rendered = set()
 
@@ -5810,8 +5897,28 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
             # CC-style markers with colors - subject now contains #N prefix
             suffix = format_task_suffix(task)
-            subject = _truncate_subject_title(subject_with_live_parent(task), title_width)
-            if task.status == "completed":
+            subject = _truncate_subject_title(_without_parent_marker(subject_with_live_parent(task)), title_width)
+
+            if is_archived(task) and collapse_archived:
+                # One line for the whole archived subtree. Only a still-open
+                # descendant (left by --no-cascade) is drawn beneath it.
+                below = count_archived_below(task.id)
+                text = f"{ANSI_DIM}{_strip_ansi(subject)}{ANSI_RESET}"
+                if below:
+                    text += f" {ANSI_DIM}({below} archived){ANSI_RESET}"
+                if suffix:
+                    text = f"{text} {suffix}"
+                print(f"{prefix}{connector}📦 {text}")
+                live_children = [c for c in get_children(task.id) if has_live(c)]
+                for i, child in enumerate(live_children):
+                    print_tree(child, prefix + extension, i == len(live_children) - 1,
+                               depth + 1, live_children)
+                return
+
+            if is_archived(task):
+                status_icon = "📦"
+                text = f"{ANSI_DIM}{_strip_ansi(subject)}{ANSI_RESET}"
+            elif task.status == "completed":
                 status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
                 text = f"{ANSI_DIM}{ANSI_STRIKE}{subject}{ANSI_RESET}"
             elif task.status == "in_progress":
@@ -5835,6 +5942,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                 elif scope_state[task.id] == "paused":
                     text += " ⏸️"
 
+            text += note_count_marker(task)
             text += recency_marker(task)
 
             print(f"{prefix}{connector}{status_icon} {text}")
@@ -5883,7 +5991,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
         # Print root specially with CC-style markers - subject now contains #N prefix
         root_suffix = format_task_suffix(root)
-        root_subject = _truncate_subject_title(subject_with_live_parent(root), title_width)
+        root_subject = _truncate_subject_title(_without_parent_marker(subject_with_live_parent(root)), title_width)
         if root.status == "completed":
             status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
             root_text = f"{ANSI_DIM}{ANSI_STRIKE}{root_subject}{ANSI_RESET}"
@@ -5898,6 +6006,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         if scope_state and root.id in scope_state:
             if scope_state[root.id] == "active":
                 root_text += " 👀"
+        root_text += note_count_marker(root)
         root_text += recency_marker(root)
         print(f"{status_icon} {root_text}")
 
@@ -6114,7 +6223,8 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
         print(f"   • macf_tools task start {task_id}    → in_progress")
         print(f"   • macf_tools task pause {task_id}    → pending")
         print(f"   • macf_tools task complete {task_id} → completed")
-        print(f"   • macf_tools task archive {task_id}  → archived")
+        print(f"   • macf_tools task archive {task_id} --reason \"...\"  → archived")
+        print(f"   • macf_tools task unarchive {task_id}  → back to its prior status")
         return 1
 
     # Block direct description editing - preserves MTMD metadata
@@ -7992,31 +8102,78 @@ def cmd_task_create_play_time(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_task_archive(args: argparse.Namespace) -> int:
-    """DEPRECATED: task archive no longer performs meaningful archiving.
+def _archive_report_lines(report, verb: str, dry_run: bool = False):
+    """Human lines for an archive or unarchive report (counts come from read-back)."""
+    lines = []
+    if dry_run:
+        lines.append(f"📦 Dry run: {verb} would touch {len(report.planned)} task(s); nothing was changed")
+        for t in report.planned:
+            lines.append(f"   #{t.id} [{t.status}] {_strip_ansi(t.subject or '')[:90]}")
+    else:
+        lines.append(f"📦 {len(report.changed)} {verb}, {len(report.unchanged)} already so, "
+                     f"{len(report.failed)} failed")
+    for f in report.failed:
+        lines.append(f"❌ #{f['id']} failed: {f['why']}")
+    for m in report.missing:
+        lines.append(f"❌ #{m} not found")
+    if report.descoped:
+        lines.append(f"   removed from sprint scope: {', '.join('#' + t for t in report.descoped)}")
+    if report.kept:
+        lines.append(f"   left archived (put down earlier, by another call): "
+                     f"{', '.join('#' + t for t in report.kept)}")
+    return lines
 
-    The operator retired this command (2026-08-06): it printed a ✅ success line
-    while writing nothing — a report of a state change that did not happen, the
-    exact failure mode to avoid. Rather than repair an unwanted feature it now
-    fails closed with a pointer to the supported alternative. Kept as a stub (not
-    removed) so the subcommand still resolves and explains itself rather than
-    vanishing from under existing muscle memory.
+
+def cmd_task_archive(args: argparse.Namespace) -> int:
+    """Archive tasks: status `archived`, the reason and prior status recorded, read back.
+
+    Retired on 2026-08-06 because it printed a success line while writing
+    nothing; restored as a command whose every reported change was read back
+    from disk, and which exits nonzero naming any task whose write did not stick.
     """
+    import json
+    from .task.archive import archive_tasks, tracked_by_duties
+    ids = [str(_parse_task_id_arg(t)) for t in (getattr(args, "task_ids", None) or [])]
+    reason = (getattr(args, "reason", "") or "").strip()
+    if not reason:
+        print("❌ --reason is required: archiving puts work down, and the record says why")
+        return 1
+    dry_run = getattr(args, "dry_run", False)
+    report = archive_tasks(ids, reason, cascade=not getattr(args, "no_cascade", False), dry_run=dry_run)
+    tracked = tracked_by_duties([t.id for t in report.planned])
     if getattr(args, "json_output", False):
-        import json
         print(json.dumps({
-            "success": False,
-            "deprecated": True,
-            "message": "task archive is deprecated; it performed no archiving. "
-                       "Use `task hide-completed` to declutter.",
+            "success": report.ok, "dry_run": dry_run,
+            "planned": [t.id for t in report.planned], "archived": report.changed,
+            "already_archived": report.unchanged, "failed": report.failed,
+            "missing": report.missing, "descoped": report.descoped, "tracked_by_duties": tracked,
         }, indent=2))
     else:
-        print("⚠️  `task archive` is DEPRECATED and performs no archiving.")
-        print("    It used to print a success checkmark while writing nothing — a")
-        print("    false report of a state change. To declutter the task tree, use:")
-        print("        macf_tools task hide-completed")
-    # Fail closed: never exit 0, so nothing can read this as a successful archive.
-    return 2
+        for line in _archive_report_lines(report, "archived", dry_run):
+            print(line)
+        for tid, titles in tracked.items():
+            print(f"   #{tid} is tracked by a role duty: {'; '.join(titles)}")
+        if report.ok and not dry_run and report.changed:
+            print("   undo with: macf_tools task unarchive " + " ".join(ids))
+    return 0 if report.ok else 1
+
+
+def cmd_task_unarchive(args: argparse.Namespace) -> int:
+    """Put archived tasks back at the status each had when it was archived."""
+    import json
+    from .task.archive import unarchive_tasks
+    ids = [str(_parse_task_id_arg(t)) for t in (getattr(args, "task_ids", None) or [])]
+    report = unarchive_tasks(ids, cascade=not getattr(args, "no_cascade", False))
+    if getattr(args, "json_output", False):
+        print(json.dumps({
+            "success": report.ok, "unarchived": report.changed, "not_archived": report.unchanged,
+            "left_archived": report.kept,
+            "failed": report.failed, "missing": report.missing,
+        }, indent=2))
+    else:
+        for line in _archive_report_lines(report, "unarchived"):
+            print(line)
+    return 0 if report.ok else 1
 
 
 def cmd_task_restore(args: argparse.Namespace) -> int:
@@ -8034,17 +8191,14 @@ def cmd_task_restore(args: argparse.Namespace) -> int:
         print(json.dumps({
             "success": False,
             "deprecated": True,
-            "message": "task restore is deprecated; the archive subsystem it "
-                       "depended on performed no real archiving. Use "
-                       "`task hide-completed` / `task unhide-all` to manage tree clutter.",
+            "message": "task restore is retired: archives are no longer copied out of "
+                       "the store. Use `task unarchive ID` to put an archived task back.",
         }, indent=2))
     else:
-        print("⚠️  `task restore` is DEPRECATED — the archive/restore/archived")
-        print("    trio is retired. `task archive` reported success while writing")
-        print("    nothing, so there is no supported archive to restore from. To")
-        print("    manage task-tree clutter, use:")
-        print("        macf_tools task hide-completed")
-        print("        macf_tools task unhide-all")
+        print("⚠️  `task restore` is DEPRECATED. Archived tasks stay in the store")
+        print("    (status `archived`), so there is no archive file to restore from.")
+        print("    To put an archived task back where it was:")
+        print("        macf_tools task unarchive ID")
     # Fail closed: never exit 0, so nothing reads this as a successful restore.
     return 2
 
@@ -8063,16 +8217,13 @@ def cmd_task_archived_list(args: argparse.Namespace) -> int:
         print(json.dumps({
             "success": False,
             "deprecated": True,
-            "message": "task archived is deprecated; the archive subsystem "
-                       "produced no real archives. Use `task hide-completed` / "
-                       "`task unhide-all` to manage tree clutter.",
+            "message": "task archived is retired: archived tasks stay in the store. "
+                       "Use `task tree --archived` (or `task list --archived`) to see them.",
         }, indent=2))
     else:
-        print("⚠️  `task archived` is DEPRECATED — the archive/restore/archived")
-        print("    trio is retired. `task archive` produced no real archives, so this")
-        print("    list has nothing to show. To manage task-tree clutter, use:")
-        print("        macf_tools task hide-completed")
-        print("        macf_tools task unhide-all")
+        print("⚠️  `task archived` is DEPRECATED. Archived tasks stay in the store")
+        print("    with status `archived`. To see them:")
+        print("        macf_tools task tree --archived")
     # Fail closed: never exit 0, so nothing reads this as an authoritative listing.
     return 2
 
@@ -13195,8 +13346,17 @@ def _build_parser() -> argparse.ArgumentParser:
                                   help="roles stanza below the tree (default: roles.tree_display in .maceff/config.json, else focused)")
     task_tree_parser.add_argument("--succinct", "-s", action="store_true",
                                   help="hide notes/plans, show only active/pending tasks")
-    task_tree_parser.add_argument("--verbose", "-v", action="store_true",
-                                  help="show full plans, breadcrumbs, and all updates")
+    task_tree_parser.add_argument("-v", dest="verbose", action="count", default=0,
+                                  help="-v lists notes, plans and completion reports (truncated); "
+                                       "-vv shows every note, plan, report, breadcrumb and update in "
+                                       "full, wrapped to 80%% of the terminal. Default: notes counted "
+                                       "on each task's line, no completion reports, and plan lines "
+                                       "only for top-level tasks and GitHub issues and PRs")
+    task_tree_parser.add_argument("--verbose", dest="verbose_level", nargs="?", const="1",
+                                  metavar="LEVEL",
+                                  help="same as -v (LEVEL 1, the default) or -vv (LEVEL 2); "
+                                       "`--verbose ID` still reads ID as the root task, "
+                                       "except ids 1 and 2, which read as levels")
     task_tree_parser.add_argument("--title-width", dest="title_width", type=int, default=None,
                                   metavar="N",
                                   help="truncate task titles to N chars (default: 40 with "
@@ -13484,23 +13644,38 @@ def _build_parser() -> argparse.ArgumentParser:
     task_create_play_time_parser.set_defaults(func=cmd_task_create_play_time)
 
     # task archive
-    task_archive_parser = task_sub.add_parser("archive", help="(DEPRECATED — no-op; use `task hide-completed`)")
-    task_archive_parser.add_argument("task_id", help="task ID to archive (e.g., #67 or 67)")
+    task_archive_parser = task_sub.add_parser(
+        "archive", help="put tasks down: status archived, reason recorded, read back (undo: task unarchive)")
+    task_archive_parser.add_argument("task_ids", nargs="+", help="task IDs to archive (e.g., #67 or 67)")
+    task_archive_parser.add_argument("--reason", required=True,
+                                     help="why the work is put down (recorded on every task)")
     task_archive_parser.add_argument("--no-cascade", dest="no_cascade", action="store_true",
-                                     help="archive only this task, not children (default: cascade)")
+                                     help="archive only the named tasks, not their descendants")
+    task_archive_parser.add_argument("--dry-run", dest="dry_run", action="store_true",
+                                     help="list what would be archived and change nothing")
     task_archive_parser.add_argument("--json", dest="json_output", action="store_true",
                                      help="output as JSON")
     task_archive_parser.set_defaults(func=cmd_task_archive)
 
+    # task unarchive
+    task_unarchive_parser = task_sub.add_parser(
+        "unarchive", help="put archived tasks back at the status each had when archived")
+    task_unarchive_parser.add_argument("task_ids", nargs="+", help="task IDs to unarchive")
+    task_unarchive_parser.add_argument("--no-cascade", dest="no_cascade", action="store_true",
+                                       help="unarchive only the named tasks, not their descendants")
+    task_unarchive_parser.add_argument("--json", dest="json_output", action="store_true",
+                                       help="output as JSON")
+    task_unarchive_parser.set_defaults(func=cmd_task_unarchive)
+
     # task restore
-    task_restore_parser = task_sub.add_parser("restore", help="restore task from archive")
+    task_restore_parser = task_sub.add_parser("restore", help="(DEPRECATED; use `task unarchive`)")
     task_restore_parser.add_argument("archive_path_or_id", help="archive file path or original task ID")
     task_restore_parser.add_argument("--json", dest="json_output", action="store_true",
                                      help="output as JSON")
     task_restore_parser.set_defaults(func=cmd_task_restore)
 
     # task archived (subcommand group)
-    task_archived_parser = task_sub.add_parser("archived", help="archived task operations")
+    task_archived_parser = task_sub.add_parser("archived", help="(DEPRECATED; use `task tree --archived`)")
     task_archived_sub = task_archived_parser.add_subparsers(dest="archived_cmd")
 
     # task archived list
