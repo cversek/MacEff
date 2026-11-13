@@ -283,9 +283,10 @@ class VoiceCarriage:
                                    voice_lock=env.voice_lock, text=env.text)
         if not self._send(record):
             reply = self._receipt(request, utterance_id, env.capture_unit, "refused", NO_CHANNEL,
-                                  dispatched_by=env.signer)
+                                  dispatched_by=env.signer, route="system_signed")
         else:
-            reply = self._receipt(request, utterance_id, env.capture_unit, "delivered", None, dispatched_by=env.signer)
+            reply = self._receipt(request, utterance_id, env.capture_unit, "delivered", None, dispatched_by=env.signer,
+                                  route="system_signed")
         return {**receipt, "receipt": reply.receipt, "utterance_id": utterance_id}
 
     def _receipt(self, request: UtteranceRequest, utterance_id: str, unit: Optional[str], receipt: str,
@@ -312,7 +313,10 @@ class VoiceCarriage:
         content for the agent (R37), and on a lockout the guard raised (R42). Taken only from the
         declared capture unit, as an utterance is (R12)."""
         unit = self.voice.capture_unit
-        live = self._incarnation(unit) if unit is not None else None
+        if unit is None:
+            return Response(ok=False, error=f"this agent's voice events come only from {self.voice.dispatched_by}'s "
+                                            f"capture unit, signed, through its association (MIS-0008 R46, R48)")
+        live = self._incarnation(unit)
         if live is None or not descends_from(peer.pid, *live):
             return Response(ok=False, error=f"a voice event comes only from the declared capture unit {unit!r} (MIS-0008 R12)")
         return self._voice_lock_event(request.kind, request.attempts, request.of, request.until, raise_notice)

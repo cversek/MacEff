@@ -64,7 +64,8 @@ DEFAULT_CLOCK_ALLOWANCE_S = 5.0
 #: not an utterance.
 MAX_PAYLOAD = 4 * MAX_UTTERANCE_TEXT + 4096
 
-Verdict = Literal["accepted", "retained", "malformed", "unknown_signer", "bad_signature", "wrong_target",
+Verdict = Literal["accepted", "retained", "malformed", "unknown_signer", "registry_unreadable", "bad_signature",
+                  "wrong_target", "issued_in_future",
                   "expired", "expiry_too_far", "replayed"]
 
 
@@ -277,14 +278,18 @@ class Verifier:
         try:
             keys = self.keys(self.dispatcher)
         except (OSError, ValueError) as e:      # RegistryError is a ValueError
-            return Check("unknown_signer", f"the operator's registry can't be read, so no key verifies: {e}", env)
-        if not keys:
-            return Check("unknown_signer", f"the operator's registry holds no key valid now for {self.dispatcher}",
+            return Check("registry_unreadable", f"the operator's registry can't be read, so no key verifies: {e}",
                          env)
+        if not keys:
+            return Check("unknown_signer", f"the operator's registry holds no key {self.dispatcher} may sign with "
+                                           f"now", env)
         if not signature_verifies(env, keys):
             return Check("bad_signature", f"the signature doesn't verify against {self.dispatcher}'s keys", env)
         if not calling_card.same(env.target, self.card):
             return Check("wrong_target", f"signed for {env.target}, not this agent", env)
+        if env.issued_at > now + self.allowance_s:
+            return Check("issued_in_future", f"issued {env.issued_at - now:.1f} s from now, past the "
+                                             f"{self.allowance_s:g} s clock allowance (MIS-0007 R57)", env)
         if now > env.expires_at + self.allowance_s:
             return Check("expired", f"expired {now - env.expires_at:.1f} s ago, past the "
                                     f"{self.allowance_s:g} s clock allowance (MIS-0007 R57)", env)

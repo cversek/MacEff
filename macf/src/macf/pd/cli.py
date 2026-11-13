@@ -457,7 +457,10 @@ def _say_voice_dispatch(home) -> None:
         return
     if declaration.voice_dispatch is None and (declaration.voice is None or declaration.voice.dispatched_by is None):
         return
-    last = next(iter(read_events(reverse=True, scope="all", only=(EVENT_VOICE_DISPATCH,))), None)
+    from macf import calling_card
+    # The log can be shared by agents on one login, so only this agent's own records count.
+    last = next((e for e in read_events(reverse=True, scope="all", only=(EVENT_VOICE_DISPATCH,))
+                 if calling_card.same(str((e.get("data") or {}).get("agent", "")), declaration.agent)), None)
     for line in voice_dispatch_lines(declaration, last):
         print(line)
 

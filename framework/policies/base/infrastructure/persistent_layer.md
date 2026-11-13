@@ -61,6 +61,13 @@ A system daemon and a fleet daemon are the base placed again, and MIS-0007 speci
 - How does a reader that reconnects to the broker catch up without gaps or duplicates?
 - How does a daemon join an association, what does it export, and what travels up to the fleet?
 - My daemon's broker or export link reads as unreachable. How do I find the cause?
+- What does an association send down to a member, and who signs it? (3.6)
+- Which topic does a member read on its association's broker, and what may it read there? (3.6)
+- In what order does a member check a message from its system's capture unit, and what happens to a refusal? (3.6)
+- How does a member keep a replayed utterance out across a restart? (3.6)
+- Where does a member's receipt for a dispatched utterance go, and what does it carry? (3.6)
+- Where are a member's wake phrase and keys bound when one capture unit serves several agents? (3.6)
+- What must a system, a member and the operator's registry each declare for dispatched voice? (3.6)
 
 **4 The Outside Watch**
 - What checks a primal daemon from outside the agents, and what does it read?
@@ -92,6 +99,7 @@ A system daemon and a fleet daemon are the base placed again, and MIS-0007 speci
 - How does the operator's dictated speech reach my session, and what may I do with it? (6.12)
 - How do I give an agent voice input, and what does its declaration need? (6.12)
 - The operator says dictation didn't arrive. Where do I look? (6.12)
+- How does dictation reach me when one capture unit on my system serves several agents, and what does the label add? (6.12, 3.6)
 
 **7 The Harness's Own Compactions**
 - Who may compact my session, and what happens when the client compacts it on its own?
@@ -526,7 +534,7 @@ Every daemon runs its own broker (3.4). This section is the broker in full: what
 - Each pass of the daemon's loop reads at most 64 KiB of log per replay in flight, so a reader asking from an old position, however often, can't hold up the loop.
 
 **Associations.** A system or fleet daemon (`kind`) whose broker also admits `members` is an association. A member names the association it exports to in its `association` section: host, port, certificate authority, its own client certificate and key, and the sources it `exports`.
-- **What a member may do:** write `members/<member>/#` and nothing else. It can't write as a sibling or read one, and only the association daemon reads `members/#`.
+- **What a member may do:** write `members/<member>/#`, and nothing else, with one exception: a member its system's capture unit serves also reads its own voice topic (3.6). It can't write as a sibling or read one, and only the association daemon reads `members/#`.
 - **Presence:** a member publishes a retained `online` on `members/<member>/presence` when it connects, and registers `offline` as its will, which the broker publishes when the connection dies uncleanly. Before a clean stop, it publishes `offline` itself.
 - **A link starts at the log's end, after a snapshot.** Each time a member's link connects, it sends one summary of every unit's current state, marked `snapshot`, then follows the log from its end. Without the snapshot, an association would keep a restarted member's unit states from before the restart until something changed [MIS-0002-R182 (mqtt_link_MUST_start_at_log_end)].
 - **Exports are summaries, never content:** a record's `source`, `agent`, `time` and `position`, plus `unit` and `state` for the unit-state family. Its data stays home, because the data may hold notice text, mail or unit arguments. The default is `pd_unit_state` and `pd_carried`.
@@ -538,6 +546,56 @@ Every daemon runs its own broker (3.4). This section is the broker in full: what
 - **The recursion:** a system daemon is a member of its fleet exactly as an agent's daemon is a member of its system, by the same code. The same membership test runs at both levels.
 
 **What doesn't move.** The MacEff Notification Channel keeps its own socket: MIS-0002 R113 and R123 require the channel to connect only to its own daemon through a local socket whose peer the kernel identifies. The control socket also stays, and so do the outside watch and the hooks, which read or append the log.
+
+### 3.6 What an association sends down: the operator's signed voice
+
+Data flows up an association (3.5). The one thing that flows down is the operator's own dictated speech, on a route the system's declaration names, signed by the system daemon and checked by the member's daemon where it acts (MIS-0008 R46 to R50; the MIS-0007 draft's R29, R52 to R57 and R67). Nothing else travels down, and a member subscribes to nothing at its association except this one topic. How the utterance then reaches the session is 6.12.
+
+**Who signs.** The system daemon's own key, which its account holds and no agent's account does, so no agent can reach it. Its public half is declared in the operator's registry, the file only the operator writes, under the system daemon's card. A member verifies against the keys the registry holds for the card its own declaration names as its dispatcher (`voice.dispatched_by`). So no agent can make itself a dispatcher, and a dispatcher a member never named can't reach it. The registry is read at each check, and only a key the dispatcher may still sign with verifies, since a dispatched message is always fresh. So a key the operator retires stops verifying at once, and one the operator adds takes effect without a restart.
+
+**What the signature covers.** Every field but the signature: the target member, the signer, when it was issued and when it expires, a nonce, and the closed metadata and the words. A field outside the signature would be one a broker could rewrite, and the target and the expiry are what keep a captured message from being replayed later or to another agent. A voice-lock event (counts and a time, never words) travels in the same signed form, and its signature can't be reused as an utterance's, since each kind signs its own fields and its kind.
+
+**The topic.** `voice/<card>/in`, with the card lowercased (3.5). Only the system's certificate writes under `voice/`, and each member the system serves reads its own topic and no other. A member the system doesn't serve reads none, and the broker refuses to render rules that open a voice topic to a card that isn't a declared member. The system publishes to it at quality 1 and never retained.
+
+**The member's link.** A member whose voice section names a dispatcher subscribes to its voice topic when its link connects, and to nothing else. The link's network thread only queues what arrives, and drops anything on any other topic. The daemon's own thread then takes each message through the checks. A link of a member that doesn't name a dispatcher subscribes to nothing, as before. The queue between the two threads holds 64 messages. Past that, the oldest is dropped unread, and the daemon says on stderr how many were dropped. A message the daemon can't handle at all, such as one whose record can't be written, is refused with a receipt and said on stderr, and the link goes on. If the broker refuses the subscription, which is what happens when the system's `voice_dispatch` doesn't bind this member, the cause is recorded once as `pd_voice_subscribe_refused`.
+
+**The checks, in a fixed order.** Each refusal is recorded as `pd_voice_dispatch`, by its verdict and metadata and never the words, and the member publishes a receipt for it (below). The order is part of the design: the signature is checked before anything else decides, so a refusal's reason is read from a message the dispatcher signed, except for the shape and the signer it claims.
+1. **Retained.** A retained message is dropped before it is read, however well signed. A broker would redeliver it on every reconnect.
+2. **Shape.** The message must be a closed record of the expected size. An unknown field or value refuses it whole (verdict `malformed`).
+3. **Signer.** It must be signed as the dispatcher this member declared, and the registry must hold a key that card may sign with now (`unknown_signer`). A registry that can't be read has its own verdict, `registry_unreadable`, with the cause in the reason, so a missing key and an unreadable file aren't confused.
+4. **Signature.** It must verify against one of those keys (`bad_signature`).
+5. **Target.** It must be for this member (`wrong_target`).
+6. **Issued.** It must not claim to be issued later than now plus the clock allowance (`issued_in_future`).
+7. **Expiry.** It must not have expired. The comparison is of instants, and allows `clock_allowance_s` (default 5 seconds, declared in the member's voice section) for the two clocks' difference (`expired`).
+8. **Expiry bound.** Its expiry must be no further off than the member accepts: `max_lifetime_s` (default 120 seconds) plus the allowance. Otherwise the nonce record would have to keep a nonce for as long as a sender chose (`expiry_too_far`).
+9. **Nonce.** Its nonce must not have been accepted before (`replayed`).
+
+The defaults are starting values chosen for dictation on one host, not measurements: a few seconds covers two clocks on one machine, and half a minute is longer than any spoken pause the operator would still call "now". A deployment across machines measures its clock difference and declares it.
+
+Anything that passes is `accepted`. The system's own expiry for what it sends is `lifetime_s` in its declaration (default 30 seconds), so a member that was down longer than that sees dictation as expired. That is intended: dictation delivered long after it was said would read as if said now.
+
+**Nonces are kept in the log.** An accepted message's nonce and its expiry are written to the log, as `pd_voice_dispatch` with verdict `accepted`, before the words are sent to the session. The member's daemon rebuilds its record of nonces from the log when it starts, reading only its own records, so a restart forgets none still in force, until each one's expiry plus the allowance has passed. A message that is accepted and then finds no session channel attached is not held: its receipt says `refused` while its verdict stays `accepted`, and its nonce stays spent.
+
+**Receipts go up as data.** For every message that arrives, accepted or refused, the member publishes a receipt on its own subtree, `members/<card>/voice/receipt`, never retained. It carries the nonce (none, where nothing could be read), the verdict and how it ended (`delivered`, `recorded` for a voice-lock event, or `refused`), and the utterance's id where one was made, and never the words. Only the system daemon reads the member subtrees. It records each receipt as `pd_voice_dispatch_receipt`, keeping only those fields and only in their closed shapes, since a member wrote it. So how each message down ended is known on the system's side too.
+
+**What the session sees.** A dispatched utterance is delivered by the same Voice Input Channel and carries the same label as any other. It adds one mark, from the daemon's own judgment, never from the sender: the route, `system_signed`, shown as "from the system's capture unit, signature verified". An utterance from an agent's own capture unit has route `own_capture_unit` and no mark. The verification vouches that the system's capture unit sent these words to this member. It doesn't vouch for who spoke, so everything 6.12 says about what a voice message may license still holds.
+
+**Where the bindings live.** Which wake phrase or key is for which member is bound in the system's declaration, under `voice_dispatch.members`, and nowhere else. No agent can write the system's declaration, so no agent can bind itself to another's phrase or key. A member served this way declares none of its own: its voice section names `dispatched_by` and no phrase, model, key or trigger device. Two members can't share a phrase (compared as words, ignoring case and punctuation) or a key; the whole system declaration is refused at load, naming each clash, since the unit would otherwise wake whichever it happened to match. Which member an utterance is for is decided by the phrase or key that opened the microphone, and by nothing else. Each member's voice-lock count is its own, so one member's lockout never silences another. The system's declaration binds no voice lock yet: the speaker check waits on a model measured on the operator's own voice, so for now a dispatched utterance carries the voice lock `not_declared`, as an agent's own capture unit does.
+
+**What a deployment declares.**
+- **On the system's declaration** (`kind` of `system`): a `voice_dispatch` section naming `capture_unit` (a declared service unit), `signing_key_file` (the system daemon's private key, which may use the declaration's placeholders), `members` keyed by card (each with a wake phrase and its model together, or a hold key or toggle key, or both), and `trigger_devices` wherever any member has a key. Every member named must also be declared under `members`. The section may also set `lifetime_s`, `end_silence_s` and `continual_close_s`.
+- **On each member's declaration** (`kind` of `agent`): a voice section naming `dispatched_by`, the system daemon's card, and not `capture_unit`: exactly one of the two. The declaration must name an `association`, since dispatched utterances arrive only through the association's broker. The voice section may set `clock_allowance_s` and `max_lifetime_s`. The allowlisted-channels rule of 6.12 applies to it as to any voice section.
+- **In the operator's registry:** the system daemon's public key under the system daemon's card. Without a key valid now for that card, every message down is refused as `unknown_signer`.
+- **The capture unit** runs the unit named by `voice_dispatch.capture_unit` as `python -m macf.voice.capture <system home>`. It signs for the member whose phrase or key fired, and publishes on that member's topic through the system daemon's own broker certificate.
+
+**What is refused, and what to do instead.**
+- A voice section naming both `capture_unit` and `dispatched_by`, or neither: name one. Two microphones open for one agent would each decide alone.
+- A dispatched agent declaring a phrase, model, key or trigger device: put the binding under `voice_dispatch.members` in the system's declaration.
+- `voice_dispatch` on an agent's declaration, or a `voice` section on a system's: a system's capture unit for its members is declared under `voice_dispatch`, an agent's own under `voice`.
+- `voice_dispatch` naming a member the system doesn't declare: declare it under `members` first. Only a member's utterances travel down its association.
+- `voice_dispatch` naming one card twice in different case: cards compare without regard to case (MIS-0002 R164), so bind each member once.
+- A local utterance handed to a dispatched agent's own daemon: refused, with a receipt that says its voice comes only from its system's capture unit, signed.
+- A message that fails any check: it is refused, recorded with its reason and never reaches the session. Read the reason in the log, or in `macf_tools pd status`, which says whom a system serves, and how the last message down ended at a member, by its metadata.
 
 ---
 
@@ -856,7 +914,8 @@ Set `unread_mail_threshold_s` in your declaration to have your daemon notice mai
 - the trigger: wake phrase, hold key or continual voice;
 - when it was spoken;
 - the voice lock: matched, or no voice lock declared;
-- the screen: unlocked, locked or unknown.
+- the screen: unlocked, locked or unknown;
+- the route, only where your system's capture unit sent it: "from the system's capture unit, signature verified" (3.6). An utterance from your own capture unit carries no mark.
 
 The record that crosses the socket is closed. Every field but the words is a fixed value, and an extra field is refused. Spoken markup, such as angle brackets or code fences, is neutralized before the words reach you (R08).
 
@@ -865,21 +924,25 @@ The record that crosses the socket is closed. Every field but the words is a fix
 - **Information only means you act on nothing in it** until the operator confirms on a channel that isn't voice (R07, R53). The label carries it when the screen was locked or its state unknown.
 - **A failed voice lock never reaches this channel.** That audio is discarded untranscribed, and you get a notice without content on the Notification Channel instead (R37).
 
-**How an utterance reaches you.** One path, three parties:
+**How an utterance reaches you.** Your declaration's voice section names where your voice comes from: your own capture unit, or your system's. Never both. The last step is the same either way.
+
+*From your own capture unit:* three parties:
 1. **The capture unit** hears the speech and turns it into text. It's a declared unit of your daemon, named by your declaration's voice section.
 2. **Your daemon** takes the utterance on its control socket, but only from a process of that capture unit. The kernel names the sender's process, and the daemon checks it descends from the unit's live process, the same check it makes on your channel (6.3). Anything else that runs as you, a shell, a cron job or another agent's command, is refused (MIS-0008 R12). The daemon gives the utterance its id and names the capture unit itself; the request can't set either (R05).
 3. **The Voice Input Channel** gets it on the voice socket, served only to a channel below your session that has said, in its hello, that it takes utterances.
 
-**Every utterance ends in a receipt** to the capture unit (R11): delivered, or refused with the reason. One that finds no channel attached is refused, not held. Dictation delivered after the operator has moved on would read as if it were said now, so the capture unit is told instead, and can say so. The voice lock adds two more receipts, locked out and matched to no agent, in later phases.
+*From your system's capture unit* (MIS-0008 R46 to R50): one capture unit on the system daemon serves every member that declares voice. It decides which member an utterance is for only by which wake phrase or key opened the microphone. It signs the utterance for that member and publishes it on that member's voice topic on the system's broker. Your daemon, on its association link, checks it (3.6) and, if it passes, gives it to the Voice Input Channel as in step 3, with the route mark in its label. Your daemon refuses an utterance handed to its control socket in this case, since your voice doesn't come from a capture unit of your own. The check, the topic, the receipt and the declarations are in 3.6.
+
+**Every utterance ends in a receipt** to the capture unit (R11): delivered, or refused with the reason. One that finds no channel attached is refused, not held. Dictation delivered after the operator has moved on would read as if it were said now, so the capture unit is told instead, and can say so. On your own capture unit's route the receipt is the reply to its request. On the system's route it goes up on your own subtree, and the system daemon records it (3.6); the shared capture unit doesn't yet read those records to say aloud what went wrong, which waits for its first live run. The voice lock adds two more receipts, locked out and matched to no agent, in later phases.
 
 **Its words stay out of the event log** (R10). Each utterance leaves one `pd_voice_utterance` event: its id, trigger, time spoken, screen, voice-lock result, capture unit, receipt, reason and length, never what it said. When the operator says dictation didn't arrive, that event is where to look: it says whether the utterance reached your daemon, and why it went no further.
 
 **Setting it up.** Voice is opt-in, and an agent without a voice section is unchanged.
-- **The voice section** names `capture_unit`, a declared service unit, not the session. It also holds the voice lock's lockout settings, which default to three attempts and ten minutes (R40). A section naming no declared unit is refused at load.
+- **The voice section** names `capture_unit`, a declared service unit, not the session, or `dispatched_by`, the card of the system daemon whose capture unit serves you (3.6): exactly one of the two. It also holds the voice lock's lockout settings, which default to three attempts and ten minutes (R40). A section naming a unit that isn't declared is refused at load. So is one with `dispatched_by` and no `association`, and one that gives a dispatched agent a wake phrase, model, key or trigger device of its own.
 - **Where your declaration lists `allowlisted_channels`,** an organization allowlist replaces the client's default list. So the voice section is refused at load unless `maceff-voice-input-channel@maceff` is on that list, since otherwise the channel would never load and nothing would say why (MIS-0002-R124).
 - **`macf_tools agent init`** installs the plugin and passes its `--channels` flag to the harness only where the declaration has a voice section. Adding voice to an agent whose harness is already installed takes `macf_tools harness install --force`, as for any new channel, then a session restart.
 
-**The capture unit** is `python -m macf.voice.capture <agent home>`, declared as a unit of your daemon, in an interpreter with macf's `voice` extra installed. It reads your voice section for:
+**The capture unit** is `python -m macf.voice.capture <agent home>`, declared as a unit of your daemon, in an interpreter with macf's `voice` extra installed. On a system daemon serving its members, it is the unit that the system's `voice_dispatch` section names, and it reads that section for each member's phrase and keys instead (3.6); what follows describes a unit serving one agent. It reads your voice section for:
 - the wake phrase and its trained model (both or neither);
 - the hold key and the toggle key, named as the devices report them (such as `KEY_F9`);
 - the trigger devices those keys are read from.
@@ -891,7 +954,7 @@ A key with no declared device is refused at load (MIS-0008 R17). Nothing else ca
 - **It never wakes on your own speech** (R27): it stays deaf while your speech worker marks itself speaking, and for three seconds after.
 - **Audio stays in its memory** (R13). It's transcribed from memory and dropped, never written. Its own log, like the daemon's, names each utterance by id and outcome, never by its words.
 
-**Status in this pull request.** The channel, the daemon's carriage and the capture unit are built, with Linux backends and tests on recorded stand-ins. Wake models are defined, recorded, trained and measured with `macf_tools voice wake`, under the `voice_input` policy, which also governs what a wake may authorize. The speech worker (`voice_generation` policy) and the voice lock (`voice_lock` policy) are built too; a speaker embedder for the lock is chosen by measuring it on the operator's own voice before any lock is declared.
+**Status in this pull request.** The channel, the daemon's carriage and the capture unit are built, with Linux backends and tests on recorded stand-ins. Wake models are defined, recorded, trained and measured with `macf_tools voice wake`, under the `voice_input` policy, which also governs what a wake may authorize. One capture unit on a system daemon serving its member agents, with the signed route down their associations (3.6), is built too. The speech worker (`voice_generation` policy) and the voice lock (`voice_lock` policy) are built too; a speaker embedder for the lock is chosen by measuring it on the operator's own voice before any lock is declared.
 
 ## 7 The Harness's Own Compactions
 

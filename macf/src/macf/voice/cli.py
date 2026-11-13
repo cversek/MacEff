@@ -47,18 +47,26 @@ def microphone(home: Path) -> Reading:
     from macf.pd.interface import agent_card
     try:
         card = agent_card(home)
-        voice = load_declaration(home, card).voice
+        declaration = load_declaration(home, card)
     except (OSError, ValueError, DeclarationRefused) as e:
         return Reading(None, f"the declaration can't be read: {e}")
-    if voice is None:
+    voice = declaration.voice
+    if declaration.voice_dispatch is not None:
+        unit_name = declaration.voice_dispatch.capture_unit       # a system's one unit for its members
+    elif voice is None:
         return Reading(None, "this agent declares no voice section")
+    elif voice.capture_unit is None:
+        return Reading(None, f"this agent's voice comes from {voice.dispatched_by}'s capture unit; that system's "
+                             f"status shows its microphone")
+    else:
+        unit_name = voice.capture_unit
     try:
         reply = ask(card, {"op": "status"})
     except (DaemonUnavailable, OSError) as e:
         return Reading(None, f"the primal daemon can't be asked: {e}")
-    unit = next((u for u in reply.units or [] if u.unit == voice.capture_unit), None)
+    unit = next((u for u in reply.units or [] if u.unit == unit_name), None)
     if unit is None or unit.state != "running":
-        return Reading(None, f"the capture unit {voice.capture_unit!r} is {unit.state if unit else 'not declared'}")
+        return Reading(None, f"the capture unit {unit_name!r} is {unit.state if unit else 'not declared'}")
     return Reading(unit.microphone.model_dump(exclude_none=True) if unit.microphone else {})
 
 

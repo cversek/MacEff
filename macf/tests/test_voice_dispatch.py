@@ -204,6 +204,7 @@ def test_dispatched_utterance_signed():
     (lambda: signed(signer=BRAVO).model_dump_json().encode(), NOW, "unknown_signer"),
     (lambda: signed(target=BRAVO).model_dump_json().encode(), NOW, "wrong_target"),
     (lambda: signed().model_dump_json().encode(), NOW + 30 + 5.1, "expired"),
+    (lambda: signed(now=NOW + 60).model_dump_json().encode(), NOW, "issued_in_future"),
     (lambda: signed(lifetime=3600).model_dump_json().encode(), NOW, "expiry_too_far"),
 ])
 def test_bad_signature_expiry_or_nonce_refused(make, when, verdict):
@@ -236,7 +237,7 @@ def test_an_unreadable_registry_refuses_rather_than_raises():
     def broken(card):
         raise ValueError("registry owned by uid 1000")
     check = Verifier(ALPHA, SYSTEM, broken).check(signed().model_dump_json().encode(), retained=False, now=NOW)
-    assert check.verdict == "unknown_signer" and "can't be read" in check.reason
+    assert check.verdict == "registry_unreadable" and "can't be read" in check.reason
 
 
 # ---------------------------------------------------------------- the carriage: delivered, recorded, and a restart
@@ -547,3 +548,111 @@ def test_a_dispatched_member_needs_an_association():
     """R49: dispatched utterances arrive only through the association's broker."""
     with pytest.raises(ValidationError, match="names no association"):
         Declaration.model_validate({"version": 1, "agent": ALPHA, "voice": {"dispatched_by": SYSTEM}})
+
+
+# ---------------------------------------------------------------- what the policy writer's review found
+
+def test_the_daemon_verifies_only_with_keys_that_may_still_sign(monkeypatch, isolated_events_log):
+    """A key the operator retired stops verifying at once: a dispatched message is fresh, so the
+    daemon asks the registry for the keys its dispatcher may sign with now, not every key whose
+    window is still open."""
+    import types
+    from macf.amail import registry as reg
+    from macf.pd.daemon import Daemon
+    asked = []
+
+    class Registry:
+        def __init__(self, path):
+            pass
+
+        def keys_for(self, card, at=None):
+            asked.append("keys_for")
+            return [public_key_line(KEY)]          # the retired key, still inside its window
+
+        def signing_keys(self, card, at=None):
+            asked.append("signing_keys")
+            return []                              # retired: may sign nothing now
+
+    monkeypatch.setattr(reg, "Registry", Registry)
+    me = types.SimpleNamespace(card=ALPHA, _voice_verifier=None,
+                               core=types.SimpleNamespace(declaration=types.SimpleNamespace(
+                                   voice=VoiceSection(dispatched_by=SYSTEM))))
+    v = Daemon.voice_verifier(me)
+    check = v.check(signed().model_dump_json().encode(), retained=False, now=NOW)
+    assert check.verdict == "unknown_signer" and asked == ["signing_keys"]
+
+
+def test_the_system_records_only_a_receipts_closed_fields(capsys):
+    """MIS-0007 R60: the system learns how each message down ended; a member wrote the receipt, so
+    only its closed fields are kept, and junk is said, not recorded."""
+    from macf.pd.broker_link import voice_receipt
+    topic = receipt_topic(ALPHA)
+    payload = json.dumps({"nonce": "a" * 32, "verdict": "accepted", "receipt": "delivered",
+                          "utterance_id": "utt-1-abc", "text": "words", "verdict2": "x"}).encode()
+    assert voice_receipt(topic, payload) == {"member": "alpha_aaa111", "nonce": "a" * 32, "verdict": "accepted",
+                                             "receipt": "delivered", "utterance_id": "utt-1-abc"}
+    assert voice_receipt(topic, json.dumps({"verdict": "<script>"}).encode()) == {"member": "alpha_aaa111"}
+    assert voice_receipt(topic, b"[1, 2]") is None
+    assert "isn't a JSON object" in capsys.readouterr().err
+
+
+def test_a_system_link_hands_receipts_on(tmp_path):
+    from macf.pd.broker_link import BrokerLink
+    from macf.pd.interface import BrokerSection
+    section = BrokerSection(port=18885, certificate_authority_file="a", server_certificate_file="b",
+                            server_key_file="c", client_certificate_file="d", client_key_file="e")
+    got = []
+    link = BrokerLink(SYSTEM, tmp_path / "log.jsonl", section, {}, client=FakeClient(), members=[ALPHA],
+                      on_voice_receipt=got.append)
+    link._on_message(None, None, Message(receipt_topic(ALPHA), json.dumps({"verdict": "expired"}).encode()))
+    link._members_tick(NOW)
+    assert got == [{"member": "alpha_aaa111", "verdict": "expired"}]
+
+
+def test_a_refused_voice_subscription_is_recorded_once(tmp_path, capsys):
+    """R49: if the broker refuses this agent's voice topic, the cause is recorded, not a silence."""
+    refused = []
+    link, client = export_link(tmp_path, lambda p, r: {})
+    link.on_voice_refused = refused.append
+
+    class Code(int):
+        is_failure = True
+
+    link._on_subscribe(client, None, 1, [Code(0x87)])
+    link.tick()
+    link.tick()
+    assert len(refused) == 1 and "voice_dispatch" in refused[0]
+    assert "refused this agent's voice topic" in capsys.readouterr().err
+
+
+def test_status_reads_only_this_agents_records(tmp_path, isolated_events_log, capsys):
+    """The log can be shared on one login: another agent's newer verdict never shows as this one's."""
+    from macf.agent_events_log import append_event
+    from macf.pd import cli
+    from macf.pd.names import declaration_path
+    member = {"version": 1, "agent": ALPHA, "voice": {"dispatched_by": SYSTEM},
+              "association": {"port": 18883, "certificate_authority_file": "a", "client_certificate_file": "b",
+                              "client_key_file": "c"}}
+    path = declaration_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(member))
+    append_event("pd_voice_dispatch", {"agent": ALPHA, "verdict": "accepted", "type": "utterance"})
+    append_event("pd_voice_dispatch", {"agent": BRAVO, "verdict": "bad_signature", "type": "utterance",
+                                       "reason": "theirs"})
+    cli._say_voice_dispatch(tmp_path)
+    out = capsys.readouterr().out
+    assert "was accepted" in out and "theirs" not in out
+
+
+def test_the_voice_commands_name_who_serves_a_dispatched_agent(tmp_path, monkeypatch):
+    """The voice commands never say "None": a dispatched agent is told whose capture unit serves it."""
+    from macf.pd import core
+    from macf.pd import interface
+    from macf.voice import cli as voice_cli
+    member = Declaration.model_validate({"version": 1, "agent": ALPHA, "voice": {"dispatched_by": SYSTEM},
+                                         "association": {"port": 18883, "certificate_authority_file": "a",
+                                                         "client_certificate_file": "b", "client_key_file": "c"}})
+    monkeypatch.setattr(interface, "agent_card", lambda home: ALPHA)
+    monkeypatch.setattr(core, "load_declaration", lambda home, card: member)
+    reading = voice_cli.microphone(tmp_path)
+    assert reading.mic is None and SYSTEM in reading.why and "None" not in reading.why

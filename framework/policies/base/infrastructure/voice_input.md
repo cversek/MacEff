@@ -286,7 +286,7 @@ Read the report with 1.1 and 1.2 first. Then:
 
 Do not retrain only to move a number. Each cycle weakens the held-out set (1.1).
 
-**Declare** the model only after the report and live measurement are acceptable to the operator. The voice section names the phrase and the model together (`wake_phrase` and `wake_model`), the model's path being relative to the agent's home; `voice wake define` prints both. The capture unit loads the model when it starts, so a new or retrained model takes effect at its next start, and the operator decides when that is. After a restart, measure live again.
+**Declare** the model only after the report and live measurement are acceptable to the operator. The voice section names the phrase and the model together (`wake_phrase` and `wake_model`), the model's path being relative to the agent's home; `voice wake define` prints both. An agent whose voice comes from its system's capture unit (`dispatched_by`) declares neither: the operator binds its phrase and model under `voice_dispatch.members` in the system's declaration, and the commands below then take `--phrase`. The capture unit loads the model when it starts, so a new or retrained model takes effect at its next start, and the operator decides when that is. After a restart, measure live again.
 
 ---
 
@@ -315,7 +315,7 @@ Without `--phrase`, the commands use the voice section's phrase. `macf_tools voi
 - `mis.md` - MIS-0008 is the specification this policy implements; open questions there are not decided here
 - `scholarship.md` - Linking and citing artifacts when a measurement is written up
 
-The voice lock (MIS-0008 6.7), voice generation and the system capture unit for many agents are not built yet. Their rules arrive with those capabilities, in their own policies.
+The voice lock (MIS-0008 6.7) and voice generation have their own policies. The system capture unit for many agents, with its signed route down to each member, is in `persistent_layer.md`.
 
 ---
 

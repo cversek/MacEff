@@ -53,7 +53,9 @@ class DispatchSender:
     retained message would be replayed to the member on every reconnect (MIS-0007 R67).
 
     ``publish(topic, payload)`` is the system daemon's link to its own broker; it returns whether
-    the broker took the message. ``now`` is the wall clock the expiry is counted from."""
+    the client queued the message, not that the member got it: the member's receipt says that, and
+    one queued while the link was down is refused as expired if it arrives past its lifetime.
+    ``now`` is the wall clock the expiry is counted from."""
 
     def __init__(self, signer: str, private, capture_unit: str, members: Iterable[str],
                  publish: Callable[[str, bytes], bool], *, lifetime_s: float, now: Callable[[], float] = time.time,

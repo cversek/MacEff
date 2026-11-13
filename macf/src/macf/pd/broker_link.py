@@ -140,6 +140,31 @@ def nowait_publish(client):
     return publish
 
 
+#: What a member's voice receipt may carry into the system's log: closed values, never words.
+_RECEIPT_FIELDS = {"nonce": r"^[0-9a-f]{32}$", "verdict": r"^[a-z_]{1,32}$", "receipt": r"^[a-z_]{1,32}$",
+                   "utterance_id": r"^[A-Za-z0-9._:-]{1,128}$"}
+
+
+def voice_receipt(topic: str, payload: bytes) -> Optional[dict]:
+    """A member's receipt, as the system records it: the member its topic names, and only the
+    receipt fields whose values have their closed shapes. A member wrote it, so nothing else in it
+    is carried, and one that isn't a JSON object is dropped (said on stderr)."""
+    import re
+    parts = topic.split("/")
+    if len(parts) != 4 or parts[0] != "members":
+        return None
+    try:
+        data = json.loads(payload)
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        print(f"⚠️ MACF: pd: {parts[1]}'s voice receipt isn't a JSON object, so it wasn't recorded", file=sys.stderr)
+        return None
+    kept = {k: v for k, v in data.items()
+            if k in _RECEIPT_FIELDS and isinstance(v, str) and re.fullmatch(_RECEIPT_FIELDS[k], v)}
+    return {"member": parts[1], **kept}
+
+
 class BrokerLink:
     """One daemon's publisher and replay responder, over one MQTT client. For an association,
     also its view of its members: each change in what differs from the declaration is handed to
@@ -148,8 +173,12 @@ class BrokerLink:
     def __init__(self, card: str, log_path: Path, section: BrokerSection, placeholders: Dict[str, str],
                  *, client=None, members: Sequence[str] = (),
                  on_findings: Optional[Callable[[List[str]], None]] = None,
-                 rules: Optional[Callable[[], object]] = None):
+                 rules: Optional[Callable[[], object]] = None,
+                 on_voice_receipt: Optional[Callable[[dict], None]] = None):
         self.card = card
+        #: For a system whose capture unit serves members: each member's receipt for a message sent
+        #: down, so the system learns how each ended (MIS-0007 R60).
+        self.on_voice_receipt = on_voice_receipt
         #: The operator's rules in force, read live (MIS-0002-R152); a silenced source isn't published.
         self.rules = rules
         self.section = section
@@ -219,6 +248,10 @@ class BrokerLink:
             messages, self.member_messages = list(self.member_messages), collections.deque(maxlen=1000)
         for topic, payload in messages:
             self.view.observe(topic, payload, now)
+            if topic.endswith("/voice/receipt") and self.on_voice_receipt is not None:
+                receipt = voice_receipt(topic, payload)
+                if receipt is not None:
+                    self.on_voice_receipt(receipt)
         findings = self.view.findings(now)
         if findings != self.reported:
             self.reported = findings
@@ -290,7 +323,8 @@ class ExportLink:
                  *, client=None, on_unreachable: Optional[Callable[[Optional[str]], None]] = None,
                  prober: Callable[[str, int], Optional[OSError]] = probe,
                  snapshot: Optional[Callable[[], List[Tuple[str, str]]]] = None,
-                 on_voice: Optional[Callable[[bytes, bool], dict]] = None):
+                 on_voice: Optional[Callable[[bytes, bool], dict]] = None,
+                 on_voice_refused: Optional[Callable[[str], None]] = None):
         self.card, self.link = card, link
         #: For an agent its system's capture unit serves (MIS-0008 R49): the one topic this link
         #: subscribes to, its own voice topic, and what takes each message from it. None: the link
@@ -309,6 +343,11 @@ class ExportLink:
         self.client.on_connect = self._on_connect
         self.client.on_connect_fail = self._on_connect_fail
         self.client.on_message = self._on_message
+        self.client.on_subscribe = self._on_subscribe
+        #: Why the broker refused the voice topic, set on the network thread; reported once.
+        self.voice_refused: Optional[str] = None
+        self._voice_refused_said: Optional[str] = None
+        self.on_voice_refused = on_voice_refused
         self.on_unreachable = on_unreachable
         self.prober = prober
         self.reason: Optional[str] = None           # written on the network thread
@@ -338,6 +377,16 @@ class ExportLink:
         if self.on_voice is not None:
             from macf.voice.dispatch import voice_topic
             client.subscribe(voice_topic(self.card), qos=1)
+
+    def _on_subscribe(self, _client, _userdata, _mid, reason_codes, _props=None) -> None:
+        """The broker refuses the voice topic when the system doesn't serve this agent, such as a
+        dispatched_by naming a system whose voice_dispatch doesn't bind it. Kept here, and recorded
+        once on the daemon's thread, so the silence has a cause (MIS-0008 R49)."""
+        failed = [str(rc) for rc in reason_codes or [] if getattr(rc, "is_failure", False) or
+                  (isinstance(rc, int) and rc >= 0x80)]
+        if failed:
+            self.voice_refused = (f"the association's broker refused this agent's voice topic ({', '.join(failed)}): "
+                                  f"its system must bind this agent under voice_dispatch")
 
     def _on_message(self, _client, _userdata, message) -> None:
         """The network thread only queues. A message on any topic but this agent's own voice topic
@@ -379,6 +428,12 @@ class ExportLink:
 
     def tick(self) -> int:
         if self.on_voice is not None:
+            refused = self.voice_refused
+            if refused and refused != self._voice_refused_said:
+                self._voice_refused_said = refused
+                print(f"⚠️ MACF: pd: {refused}", file=sys.stderr)
+                if self.on_voice_refused is not None:
+                    self.on_voice_refused(refused)
             self._voice_tick()
         reason = self.reason
         if reason != self.reported:

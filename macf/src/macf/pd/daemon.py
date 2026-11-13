@@ -193,14 +193,18 @@ class Daemon:
                      voice_members=voice_members(decl))
         self.broker_link = BrokerLink(self.card, get_log_path(), decl.broker, placeholders,
                                       members=decl.members, on_findings=self._member_findings,
-                                      rules=lambda: self.rules)
+                                      rules=lambda: self.rules,
+                                      on_voice_receipt=(lambda r: append_event("pd_voice_dispatch_receipt", r))
+                                      if decl.voice_dispatch is not None else None)
         if decl.association is not None:
             from macf.pd.broker_link import ExportLink
             dispatched = decl.kind == "agent" and decl.voice is not None and decl.voice.dispatched_by is not None
             self.export_link = ExportLink(self.card, get_log_path(), decl.association, placeholders,
                                           on_unreachable=self._export_unreachable,
                                           snapshot=lambda: [(s.unit, s.state) for s in self.core.statuses()],
-                                          on_voice=self._voice_dispatched if dispatched else None)
+                                          on_voice=self._voice_dispatched if dispatched else None,
+                                          on_voice_refused=lambda why: append_event(
+                                              "pd_voice_subscribe_refused", {"agent": self.card, "reason": why}))
         self._voice_verifier = None
         self._listener: Optional[socket.socket] = None
         self._channel_listener: Optional[socket.socket] = None
@@ -229,6 +233,8 @@ class Daemon:
             check_socket_path(voice_path)
             self.voice = VoiceCarriage(self.card, voice_path, decl.voice, self._outside_session,
                                        self.core.incarnation)
+            if decl.voice.dispatched_by is not None:
+                self.voice_verifier()      # the nonce record is rebuilt now, at start (MIS-0007 R56)
         #: The build this daemon started from, said in every status (MacEff #816). Read once:
         #: the code it runs can't change under it, only the checkout beside it.
         from macf.pd.build import build_id
@@ -579,7 +585,9 @@ class Daemon:
             registry = Registry(registry_path())
             nonces = NonceRecord.from_events(read_events(scope="all", only=(EVENT_VOICE_DISPATCH,)), self.card,
                                              voice.clock_allowance_s)
-            self._voice_verifier = Verifier(self.card, voice.dispatched_by, registry.keys_for, nonces=nonces,
+            # A dispatched message is fresh, so only a key that may still sign verifies it: a key the
+            # operator retired stops verifying at once, not when its window lapses.
+            self._voice_verifier = Verifier(self.card, voice.dispatched_by, registry.signing_keys, nonces=nonces,
                                             allowance_s=voice.clock_allowance_s,
                                             max_lifetime_s=voice.max_lifetime_s)
         return self._voice_verifier
