@@ -92,7 +92,7 @@ def _recovery_header() -> str:
     path = find_agent_home() / ".maceff" / RECOVERY_HEADER_FILE
     try:
         own = path.read_text(encoding="utf-8").strip()
-    except FileNotFoundError:  # noqa: S110 - no file is the normal case: the agent uses the framework's banner
+    except FileNotFoundError:  # no file is the normal case: the agent uses the framework's banner
         return DEFAULT_RECOVERY_HEADER
     except (OSError, UnicodeDecodeError) as e:
         print(f"⚠️ MACF: could not read {path} (using the framework's recovery banner): {e}", file=sys.stderr)
