@@ -662,3 +662,44 @@ def test_home_findings_prints_a_home_s_findings_as_json(tmp_path, capsys):
     rows = json.loads(capsys.readouterr().out)
     assert {r["subject"] for r in rows} == {"broker"}
     assert all(set(r) == {"agent", "subject", "verdict", "detail"} for r in rows)
+
+def _declare_session(home):
+    path = pdi.declaration_path(home)
+    declaration = json.loads(path.read_text())
+    declaration["units"][0]["kind"] = "session"
+    path.write_text(json.dumps(declaration))
+
+
+def _log(home, event, age_s, **data):
+    with (home / ".maceff" / "agent_events_log.jsonl").open("a") as fh:
+        fh.write(json.dumps({"timestamp": NOW - age_s, "event": event, "data": data}) + "\n")
+
+
+def test_notices_the_session_never_received_are_one_alert_until_a_receipt(tmp_path):
+    """#904: with no managed settings the client refused the channel for two days, and every
+    notice read as delivered. The watch counts channel notices with no receipt though the
+    session took a turn since, one alert per stretch; a receipt ends it."""
+    home = _home(tmp_path)
+    _declare_session(home)          # no channel_connect_s: the seat this was found on set none
+    _stamp(home, "broker", 5)
+    _log(home, "pd_notice_delivered", 900, source="amail", arrival_id="a1", sent_at=NOW - 900, via="channel")
+    _log(home, "dev_drv_started", 300)
+    found = [f for f in watch.check_home(home, NOW) if f.subject == "receipts"]
+    assert [f.verdict for f in found] == ["UNRECEIVED"]
+    assert "1 channel notice(s)" in found[0].detail and "15 min ago" in found[0].detail
+    lines, after = watch.transitions(found, {}, NOW)
+    assert len(lines) == 1 and lines[0].startswith(f"ALERT: {CARD} receipts: UNRECEIVED")
+    assert watch.transitions(found, after, NOW + 60)[0] == []          # still open: nothing more
+    _log(home, "pd_notice_delivered", 120, source="amail", arrival_id="a2", sent_at=NOW - 120, via="channel")
+    _log(home, "notice_received", 119, notice_id="a2")
+    found = [f for f in watch.check_home(home, NOW) if f.subject == "receipts"]
+    assert [f.verdict for f in found] == ["ALIVE"]
+    assert watch.transitions(found, after, NOW)[0][0].startswith("recovered:")
+
+
+def test_receipts_are_watched_only_where_a_session_is_declared(tmp_path):
+    home = _home(tmp_path)
+    _stamp(home, "broker", 5)
+    _log(home, "pd_notice_delivered", 900, source="amail", arrival_id="a1", sent_at=NOW - 900, via="channel")
+    _log(home, "dev_drv_started", 300)
+    assert [f for f in watch.check_home(home, NOW) if f.subject == "receipts"] == []

@@ -307,8 +307,8 @@ created_by: PA
 3. Each phase task gets `[^#MISSION_ID]` prefix and optional 📋 emoji if it has subplan CA
 
 **Enforcement**:
-- `/maceff:roadmap:draft` prompts to pin after approval
-- `/maceff:task:start` offers expansion if MISSION has no children
+- `/maceff-roadmap-draft` prompts to pin after approval
+- `/maceff-task-start` offers expansion if MISSION has no children
 
 **Why Mandatory**: Task hierarchy provides observability - user tracks progress through phases in task UI.
 

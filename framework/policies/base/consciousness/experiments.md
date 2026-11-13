@@ -1278,7 +1278,7 @@ Failed experiments (REJECTED, INCONCLUSIVE, ABANDONED) are often MORE valuable t
 ✅ User validated
 ✅ Scope definable
 
-ACTION: Create roadmap via /maceff:roadmap:convert_from_experiment
+ACTION: Create roadmap via /maceff-roadmap-convert-from-experiment
 ```
 
 **Missing Validation** → Continue Experimenting:
@@ -1555,9 +1555,9 @@ Experiment → MISSION conversion complete.
 **Task Structure Created**:
 - MISSION pinned with roadmap path
 - [N] phase tasks expanded
-- Ready for /maceff:task:start when you authorize
+- Ready for /maceff-task-start when you authorize
 
-**Next Step**: Review roadmap, then authorize start with `/maceff:task:start [MISSION]`
+**Next Step**: Review roadmap, then authorize start with `/maceff-task-start [MISSION]`
 
 **Important**: Do NOT begin implementation until you explicitly authorize. Roadmap drafted, awaiting your strategic approval.
 ```
