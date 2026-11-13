@@ -23,7 +23,7 @@ from macf.agent_events_log import read_events
 from macf.pd.interface import (EVENT_VOICE_UTTERANCE, Declaration, Unit, UtteranceRecord, VoiceSection,
                                control_socket, declaration_path, voice_socket)
 
-from test_primal_daemon import CARD, ME, ask, base, make_home, run_daemon  # noqa: F401 - fixtures
+from test_primal_daemon import CARD, ME, ask, base, make_core, make_home, run_daemon, script  # noqa: F401 - fixtures
 from voice_fakes import SILENCE, SPEECH, WAKE, FakeAudio, ScriptedTranscriber, make_unit, secs
 
 WORDS = "merge the voice branch when CI is green"
@@ -350,3 +350,33 @@ def test_no_wake_during_own_speech():
     rig = make_unit(wake_script(), transcriber, speaking=lambda: True)
     rig.run(len(rig.audio.script))
     assert (transcriber.calls, rig.delivered, rig.unit.recording) == ([], [], None)
+
+
+def test_the_daemon_shows_a_capture_units_microphone_in_status(tmp_path, script, make_core, isolated_events_log):
+    """R16, the daemon's half: a capture unit's beat says what its microphone is doing, and status shows it."""
+    from test_primal_daemon import drive
+    from test_primal_daemon import make_unit as make_beating_unit
+    recording = {"recording_since": 1794600000.0, "recording_for": "Tester_abc123", "mode": "hold_key"}
+    core = make_core([make_beating_unit("capture", script, {"microphone": recording})])
+    core.boot()
+    assert drive(core, lambda: (core.statuses()[0].microphone or None) is not None), "no microphone in status"
+    shown = core.statuses()[0].microphone
+    assert (shown.recording_for, shown.mode, shown.recording_since) == ("Tester_abc123", "hold_key", 1794600000.0)
+
+
+def test_the_heartbeat_carries_the_microphone_and_beats_early_when_it_changes():
+    """R16, the unit's half: each beat carries the microphone, and a change, a recording opening,
+    goes out within seconds rather than a whole interval later."""
+    from macf.pd import liveness
+    beats, mic = [], [{"listening_since": 1794600000.0}]
+    hb = liveness.Heartbeat(CARD, "capture", 60.0, append=lambda kind, data: beats.append(data) or True,
+                            microphone=lambda: mic[0])
+    hb.start()
+    hb.tick()
+    wait_for(lambda: beats, "the first beat")
+    mic[0] = {"recording_since": 1794600001.0, "recording_for": CARD, "mode": "hold_key"}
+    hb.tick()
+    wait_for(lambda: len(beats) > 1, "an early beat for the change", timeout=liveness.CHANGE_CHECK_S + 3)
+    hb.stop()
+    assert beats[0]["microphone"] == {"listening_since": 1794600000.0}
+    assert beats[1]["microphone"]["mode"] == "hold_key"

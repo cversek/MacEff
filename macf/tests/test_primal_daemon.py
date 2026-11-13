@@ -105,7 +105,7 @@ while True:
             data["pid"], data["proc_start"] = os.getppid(), proc_start(os.getppid())
         if spec.get("wrong_start"):
             data["proc_start"] = "not this process's start"
-        for key in ("waiting_on", "in_flight", "auth_failed"):
+        for key in ("waiting_on", "in_flight", "auth_failed", "microphone"):
             if key in spec and t < spec.get(key + "_for", 1e9):
                 data[key] = spec[key]
         write(json.dumps({"timestamp": time.time(), "event": "pd_unit_alive", "data": data}))

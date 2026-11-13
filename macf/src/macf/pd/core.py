@@ -48,6 +48,7 @@ from macf.pd.interface import (
     DaemonStart,
     Declaration,
     Liveness,
+    MicrophoneState,
     Peer,
     State,
     Unit,
@@ -483,6 +484,7 @@ class _Runner:
     alive_at: Optional[float] = None    # monotonic, at the last accepted liveness
     alive_interval_s: Optional[float] = None
     in_flight: Optional[int] = None     # as the unit last reported it; None if it never has
+    microphone: Optional[MicrophoneState] = None # a capture unit's microphone, as its last credited beat said (MIS-0008 R16)
     auth_failed: Optional[str] = None   # what the harness said while it can't authenticate (R19)
     failures: int = 0
     want_up: bool = False               # whether the unit should be running
@@ -721,7 +723,8 @@ class Core:
         """Every declared unit as the core sees it now, for the control socket's status."""
         return [UnitStatus(unit=r.spec.name, state=r.state, pid=r.pid if r.proc else None,
                            proc_start=r.proc_start if r.proc else None, since=r.since,
-                           restart_held_until=self._restart_held_until(r))
+                           restart_held_until=self._restart_held_until(r),
+                           microphone=r.microphone if r.proc else None)
                 for r in self._units.values()]
 
     def _restart_held_until(self, r: _Runner) -> Optional[str]:
@@ -1128,6 +1131,7 @@ class Core:
         r.alive_at = now
         r.alive_interval_s = live.interval_s
         r.in_flight = live.in_flight
+        r.microphone = live.microphone
         if live.auth_failed:
             # The harness can't authenticate. The session is running but can't work, and that
             # must never read as idle (MIS-0002-R19 (auth_failure_MUST_read_failed)). It is not

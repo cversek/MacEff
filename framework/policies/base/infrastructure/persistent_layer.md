@@ -879,7 +879,19 @@ The record that crosses the socket is closed. Every field but the words is a fix
 - **Where your declaration lists `allowlisted_channels`,** an organization allowlist replaces the client's default list. So the voice section is refused at load unless `maceff-voice-input-channel@maceff` is on that list, since otherwise the channel would never load and nothing would say why (MIS-0002-R124).
 - **`macf_tools agent init`** installs the plugin and passes its `--channels` flag to the harness only where the declaration has a voice section. Adding voice to an agent whose harness is already installed takes `macf_tools harness install --force`, as for any new channel, then a session restart.
 
-**Status in this pull request.** The channel and the daemon's carriage are built and tested with a stand-in capture unit. The real capture unit, with microphone, wake phrase, hotkeys and indicator, comes next (MIS-0008 6.3 and 6.4).
+**The capture unit** is `python -m macf.voice.capture <agent home>`, declared as a unit of your daemon, in an interpreter with macf's `voice` extra installed. It reads your voice section for:
+- the wake phrase and its trained model (both or neither);
+- the hold key and the toggle key, named as the devices report them (such as `KEY_F9`);
+- the trigger devices those keys are read from.
+
+A key with no declared device is refused at load (MIS-0008 R17). Nothing else can trigger it: no socket, pipe or command opens its microphone (R18).
+- **On Linux** it records through `pw-record`, reads keys straight from the declared `/dev/input` devices, and draws the indicator as an overlay. The account needs read access to those devices, granted by a udev rule (a root step for the operator). Its declared environment must name `WAYLAND_DISPLAY`. Without a display it refuses to start rather than record unseen (R21).
+- **Its status** is your daemon's status for that unit: listening since when, or recording since when, for which agent and in which mode (R16). `macf_tools voice capture status` says it in a line.
+- **`macf_tools voice listen off`** closes the microphone between recordings, and nothing is read while it's off (R15); `on` opens it again. It survives restarts. The command waits for the capture unit's status to agree, and says so if it doesn't. A declared hotkey still opens one recording while listening is off: that's a deliberate press on a declared device, not listening.
+- **It never wakes on your own speech** (R27): it stays deaf while your speech worker marks itself speaking, and for three seconds after.
+- **Audio stays in its memory** (R13). It's transcribed from memory and dropped, never written. Its own log, like the daemon's, names each utterance by id and outcome, never by its words.
+
+**Status in this pull request.** The channel, the daemon's carriage and the capture unit are built, with Linux backends and tests on recorded stand-ins. Training a wake model (`voice wake`) is next, with its own policy; until then a wake model trained elsewhere can be named in the voice section.
 
 ## 7 The Harness's Own Compactions
 

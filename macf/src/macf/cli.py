@@ -14189,6 +14189,12 @@ def _build_parser() -> argparse.ArgumentParser:
     voice_svc_sub.add_parser("stop", help="stop voice service daemon").set_defaults(func=cmd_voice_service_stop)
     voice_svc_sub.add_parser("status", help="show voice service status").set_defaults(func=cmd_voice_service_status)
 
+    # listen on|off and capture status: the capture unit (MIS-0008)
+    from .voice.cli import add_parsers as add_voice_capture_parsers
+    from .voice.wake.cli import add_parsers as add_voice_wake_parsers
+    add_voice_capture_parsers(voice_sub)
+    add_voice_wake_parsers(voice_sub)
+
     # ── idea ─────────────────────────────────────────────────────────────
     from .roles.cli import add_role_parser
     add_role_parser(sub)

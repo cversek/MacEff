@@ -34,6 +34,17 @@ test = [
     "tomli>=2.0.0; python_version < '3.11'",  # pyproject introspection in test_ci_extras_coverage (tomllib is 3.11+)
     "PyJWT>=2.0.0",  # the ingest receiver imports it at module scope; its drain-coupling logic is under test
     "markdown>=3.0",  # markdown present's heading rule is under test; without it the renderer falls back to <pre>
+    "numpy>=1.24",  # the capture unit's frames are arrays (MIS-0008); its tests build them
+]
+voice = [
+    # The capture unit and its models (MIS-0008). Each is imported only where it is used, so an
+    # agent without a voice section never needs them; the capture unit names this extra when one
+    # is missing.
+    "numpy>=1.24",
+    "openwakeword>=0.6",  # wake-phrase features and the Silero speech gate
+    "onnxruntime>=1.16",
+    "faster-whisper>=1.0; sys_platform != 'darwin'",
+    "mlx-whisper>=0.4; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 viz = [
     "markdown>=3.0",  # Markdown-to-HTML for CA presentation

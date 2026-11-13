@@ -455,6 +455,35 @@ class VoiceSection(_Closed):
     lockout_attempts: int = Field(default=3, ge=1, le=100)
     lockout_window_s: float = Field(default=600.0, gt=0, allow_inf_nan=False)
     lockout_s: float = Field(default=600.0, gt=0, allow_inf_nan=False)
+    #: The words that open the microphone for this agent, and the trained model that listens for
+    #: them (MIS-0008 6.5). Without both, the capture unit takes no wake: keys only.
+    wake_phrase: Optional[str] = Field(default=None, min_length=3, max_length=60)
+    wake_model: Optional[str] = Field(default=None, min_length=1)
+    #: Key names as the trigger devices report them, such as ``KEY_F9`` (R19, R20).
+    hold_key: Optional[str] = Field(default=None, pattern=r"^KEY_[A-Z0-9_]{1,24}$")
+    toggle_key: Optional[str] = Field(default=None, pattern=r"^KEY_[A-Z0-9_]{1,24}$")
+    #: The input devices the capture unit reads its keys from, and nothing else opens its
+    #: microphone (R17). On Linux, ``/dev/input/by-id/...`` paths.
+    trigger_devices: List[str] = Field(default_factory=list, max_length=8)
+    #: The pause that ends an utterance, and the silence that closes continual voice (R20).
+    end_silence_s: float = Field(default=1.2, gt=0, le=30, allow_inf_nan=False)
+    continual_close_s: float = Field(default=30.0, gt=0, le=3600, allow_inf_nan=False)
+    #: The level at which the wake model's score counts as a fire, before the speech and
+    #: transcription checks (R23).
+    detector_bar: float = Field(default=0.85, gt=0, le=1)
+
+    @model_validator(mode="after")
+    def _keys_need_devices_and_differ(self) -> "VoiceSection":
+        keys = [k for k in (self.hold_key, self.toggle_key) if k]
+        if keys and not self.trigger_devices:
+            raise ValueError(f"voice declares {', '.join(keys)} but no trigger_devices to read them from; "
+                             f"the capture unit reads keys only from declared devices (MIS-0008 R17)")
+        if self.hold_key and self.hold_key == self.toggle_key:
+            raise ValueError(f"voice uses {self.hold_key} as both the hold key and the toggle key")
+        if bool(self.wake_phrase) != bool(self.wake_model):
+            raise ValueError("voice declares a wake phrase without a wake model, or a model without its phrase; "
+                             "a wake needs both (MIS-0008 R23)")
+        return self
 
 
 class Declaration(_Closed):
@@ -741,6 +770,21 @@ class Liveness(_Closed):
     in_flight: Optional[int] = Field(default=None, ge=0)
     waiting_on: Optional[str] = Field(default=None, max_length=200)
     auth_failed: Optional[str] = Field(default=None, max_length=200)
+    #: A capture unit's microphone, on each beat (MIS-0008 R16).
+    microphone: Optional["MicrophoneState"] = None
+
+
+class MicrophoneState(_Closed):
+    """What a capture unit's microphone is doing (MIS-0008 R16): listening since when, or recording
+    since when, for which agent, started by which mode. Neither set: closed."""
+
+    listening_since: Optional[float] = None
+    recording_since: Optional[float] = None
+    recording_for: Optional[str] = Field(default=None, max_length=128)
+    mode: Optional[Literal["wake_phrase", "hold_key", "continual_voice"]] = None
+
+
+Liveness.model_rebuild()
 
 
 class UnitState(_Closed):
@@ -1121,6 +1165,8 @@ class UnitStatus(_Closed):
     proc_start: Optional[str] = None
     since: float
     restart_held_until: Optional[str] = None
+    #: A capture unit's microphone as its last credited beat said (MIS-0008 R16).
+    microphone: Optional[MicrophoneState] = None
 
 
 class Response(_Closed):

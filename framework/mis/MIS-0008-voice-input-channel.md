@@ -138,7 +138,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **R12** [MUST · decidable: macf/tests/test_voice_capture.py::test_undeclared_capture_unit_refused] A primal daemon MUST accept utterances only from a capture unit that a declaration names. (capture_unit_MUST_be_declared)
 - **R13** [MUST · decidable: macf/tests/test_voice_capture.py::test_raw_audio_never_written] Raw audio MUST stay in the capture unit's memory, never written to disk and never leaving its system. (raw_audio_MUST_stay_in_capture_memory)
 - **R14** [MUST · decidable: macf/tests/test_voice_backends.py::test_every_backend_passes_its_contract] A capture unit MUST reach audio, lock state, the indicator and trigger devices only through backend interfaces with contract tests. (capture_MUST_use_backend_interfaces)
-- **R15** [MUST NOT · decidable: macf/tests/test_voice_capture.py::test_no_audio_read_while_listening_off] While its listening is off, a capture unit MUST NOT read any audio from its microphone. (capture_MUST-NOT_read_audio_while_off)
+- **R15** [MUST NOT · decidable: macf/tests/test_voice_capture.py::test_no_audio_read_while_listening_off] While its listening is off and it is not recording, a capture unit MUST NOT read any audio from its microphone. (capture_MUST-NOT_read_audio_while_off)
 - **R16** [MUST · decidable: macf/tests/test_voice_capture.py::test_live_microphone_is_status_entry] A capture unit MUST report listening and recording as status entries, each with its age, and recording with its agent. (live_microphone_MUST_be_a_status_entry)
 
 ### 6.4 Triggers, hotkeys and the indicator
@@ -216,7 +216,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **R12:** an undeclared process that can reach the daemon's socket could otherwise speak for the operator.
 - **R13:** this moves R59 of the MIS-0007 draft here, made stricter: raw audio is never written to disk and never leaves the system, where R59 let it go to a declared transcription service through a door. Q03 asks whether transcription may run elsewhere, and its answer would amend R13 rather than be pre-empted by it.
 - **R14:** the capture logic is the same on every platform, and four things differ. Behind interfaces with contract tests, a porter writes four small backends and knows they are right when the contract tests pass. The first macOS port is planned this way.
-- **R15:** listening off must mean the microphone is not read. Merely discarding what is read wouldn't do.
+- **R15:** listening off must mean the microphone is not read. Merely discarding what is read wouldn't do. A declared hotkey still opens one recording while listening is off: it is a deliberate press on a declared device (R17), and the indicator shows it (R21). Turning listening off is about the always-open ear, not about the operator's own keys. The first draft said "any audio" without that exception; the prototype showed the case, and this wording is offered for review.
 - **R16:** moves R63 of the MIS-0007 draft here, adding listening as its own entry and which agent a recording is for, since one capture unit may serve several.
 
 **Triggers, hotkeys and the indicator (R17 to R22).**
@@ -330,21 +330,21 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R10 | decidable | macf/tests/test_voice_channel.py::test_event_holds_no_text | passing |
 | R11 | decidable | macf/tests/test_voice_channel.py::test_every_utterance_ends_in_receipt | passing |
 | R12 | decidable | macf/tests/test_voice_capture.py::test_undeclared_capture_unit_refused | passing |
-| R13 | decidable | macf/tests/test_voice_capture.py::test_raw_audio_never_written | planned |
-| R14 | decidable | macf/tests/test_voice_backends.py::test_every_backend_passes_its_contract | planned |
-| R15 | decidable | macf/tests/test_voice_capture.py::test_no_audio_read_while_listening_off | planned |
-| R16 | decidable | macf/tests/test_voice_capture.py::test_live_microphone_is_status_entry | planned |
-| R17 | decidable | macf/tests/test_voice_declaration.py::test_trigger_devices_declared | planned |
-| R18 | decidable | macf/tests/test_voice_capture.py::test_no_trigger_over_socket | planned |
+| R13 | decidable | macf/tests/test_voice_capture.py::test_raw_audio_never_written | passing |
+| R14 | decidable | macf/tests/test_voice_backends.py::test_every_backend_passes_its_contract | passing (the real microphone and overlay run under MACF_VOICE_LIVE_TESTS=1) |
+| R15 | decidable | macf/tests/test_voice_capture.py::test_no_audio_read_while_listening_off | passing |
+| R16 | decidable | macf/tests/test_voice_capture.py::test_live_microphone_is_status_entry | passing |
+| R17 | decidable | macf/tests/test_voice_declaration.py::test_trigger_devices_declared | passing |
+| R18 | decidable | macf/tests/test_voice_capture.py::test_no_trigger_over_socket | passing |
 | R19 | judgment | the operator, in each declaration | pending |
 | R20 | judgment | the operator, in each declaration | pending |
-| R21 | decidable | macf/tests/test_voice_indicator.py::test_indicator_shown_while_microphone_open | planned |
-| R22 | decidable | macf/tests/test_voice_indicator.py::test_indicator_shows_mode | planned |
-| R23 | decidable | macf/tests/test_voice_wake.py::test_wake_passes_its_checks_in_order | planned |
+| R21 | decidable | macf/tests/test_voice_indicator.py::test_indicator_shown_while_microphone_open | passing |
+| R22 | decidable | macf/tests/test_voice_indicator.py::test_indicator_shows_mode | passing |
+| R23 | decidable | macf/tests/test_voice_wake.py::test_wake_passes_its_checks_in_order | planned (model, speech and transcription pass in order; the voice lock takes its place between them with the lock's phase) |
 | R24 | decidable | macf/tests/test_voice_wake.py::test_model_stored_with_report | planned |
 | R25 | decidable | macf/tests/test_voice_wake.py::test_test_set_disjoint_from_training | planned |
 | R26 | decidable | macf/tests/test_voice_declaration.py::test_duplicate_phrase_or_key_refused | planned |
-| R27 | decidable | macf/tests/test_voice_capture.py::test_no_wake_during_own_speech | planned |
+| R27 | decidable | macf/tests/test_voice_capture.py::test_no_wake_during_own_speech | passing |
 | R28 | decidable | macf/tests/test_voice_speech.py::test_one_worker_serializes_agents | planned |
 | R29 | decidable | macf/tests/test_voice_speech.py::test_no_playback_while_microphone_open | planned |
 | R30 | decidable | macf/tests/test_voice_select.py::test_choice_recorded_with_traits | planned |
@@ -409,6 +409,7 @@ None.
 
 - 2026-11-13: first draft, from the operator's request of the same day.
 - 2026-11-13: after the second review: raw audio never written to disk (R13); R09 a judgment; Q01 reworded; the readers of the source string change together (section 9).
+- 2026-11-13: from building the capture unit: R15 excepts a recording, so a declared hotkey still works while listening is off; flagged for review.
 - 2026-11-13: after the first review: listening and recording defined (R16, R21, R22, R27, R29); raw audio never leaves the system (R13); the speaker check runs before transcription (R23, R37); information only defined (R53); refused old-source notices recorded (R54); cross-agent false wakes reported (R24); authorship role corrected.
 
 ## Wiki-Links
