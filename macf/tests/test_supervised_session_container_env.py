@@ -88,3 +88,14 @@ def test_absent_container_env_script_is_harmless(start, tmp_path):
     start.create_bash_init("pa_x", "x")
     home = start.HOME_ROOT / "pa_x"
     assert _shell(home, 'echo "${MACEFF_AGENT_NAME}"') == "x"
+
+
+def test_a_declared_path_is_added_ahead_of_the_shells_own_never_in_its_place(start, tmp_path):
+    """#895: a container_env PATH names directories to add. Quoted whole, "$PATH" became a
+    literal and replaced the login shell PATH; now the directories go ahead of it."""
+    text = start.render_container_env_script(None, {"PATH": "/opt/bun/bin:$PATH:${HOME}/x"})
+    script = tmp_path / "env.sh"
+    script.write_text(text)
+    out = subprocess.run(["env", "-i", "PATH=/usr/bin:/bin", "bash", "-c", f". {script} && printf %s \"$PATH\""],
+                         capture_output=True, text=True, check=True).stdout
+    assert out == "/opt/bun/bin:/usr/bin:/bin"

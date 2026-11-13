@@ -558,6 +558,111 @@ def test_another_agents_failure_in_the_same_log_is_not_this_agents(tmp_path):
     assert watch.check_home(home, NOW, tmp_path / "run", ALL_RUNNING)[1].verdict == "ALIVE"
 
 
+# --- homes inside containers (#979) -----------------------------------------------------------
+# A seat's home is on a container volume the host's user can't read, so the watch runs the
+# same check in the container and reads back its findings. Before this, no container seat was
+# watched at all, and one's expired login went unalerted for about 15 days.
+
+import subprocess  # noqa: E402 -- grouped with the tests that need it
+
+
+def _answering(rows=None, error=None):
+    """A docker runner in container_limits' shape: answers *rows* as JSON, or raises *error*;
+    records each argv it was given."""
+    sent = []
+
+    def run(argv):
+        sent.append(argv)
+        if error is not None:
+            raise error
+        return json.dumps(rows)
+    run.sent = sent
+    return run
+
+
+def test_a_container_seat_s_findings_come_back_from_inside_it():
+    run = _answering([{"agent": "Seat4_7efebd", "subject": "login", "verdict": "LOGIN-EXPIRED",
+                       "detail": "the login ended 362 h ago"}])
+    found = watch.check_container_home("deploy-box", "seat4", "/agents/seat4", run=run)
+    assert [(f.agent, f.subject, f.verdict) for f in found] == [("Seat4_7efebd", "login", "LOGIN-EXPIRED")]
+
+
+def test_the_watch_only_runs_the_read_only_home_check_in_the_container():
+    run = _answering([])
+    watch.check_container_home("deploy-box", "seat4", "/agents/seat4", probe=False, run=run)
+    assert run.sent == [["docker", "exec", "-u", "seat4", "deploy-box", "/opt/maceff-venv/bin/python",
+                         "-m", "macf.pd.watch", "--home-findings", "/agents/seat4", "--no-probe"]]
+
+
+@pytest.mark.parametrize("stderr, verdict, says", [
+    ("Error response from daemon: container abc is not running", "UNREACHABLE", "not running"),
+    ("Error: No such container: deploy-box", "UNREACHABLE", "not running"),
+    ("usage: ...\nerror: unrecognized arguments: --home-findings /agents/seat4", "CHECK-FAILED", "#979"),
+    # What an older MacEff actually says (review): its --config was required, so argparse asks for it.
+    ("usage: python -m macf.pd.watch [-h] --config CONFIG\n"
+     "python -m macf.pd.watch: error: the following arguments are required: --config", "CHECK-FAILED", "#979"),
+    ("Traceback ...\nRuntimeError: boom", "CHECK-FAILED", "RuntimeError: boom"),
+])
+def test_a_container_that_can_t_answer_is_never_healthy(stderr, verdict, says):
+    error = subprocess.CalledProcessError(1, ["docker"], output="", stderr=stderr)
+    found = watch.check_container_home("deploy-box", "seat4", "/agents/seat4", run=_answering(error=error))
+    assert len(found) == 1 and found[0].verdict == verdict and says in found[0].detail
+    assert found[0].agent == "deploy-box:/agents/seat4"
+
+
+@pytest.mark.parametrize("answer", ["not json", json.dumps([{"agent": "x"}]),
+                                    json.dumps([{"agent": "x", "subject": "y", "verdict": "FINE", "detail": ""}]),
+                                    # Review: an unhashable verdict used to raise out of the pass.
+                                    json.dumps([{"agent": "x", "subject": "y", "verdict": ["ALIVE"], "detail": ""}]),
+                                    json.dumps({"agent": "x"}), json.dumps(["ALIVE"])])
+def test_an_answer_the_watch_can_t_read_is_check_failed(answer):
+    found = watch.check_container_home("deploy-box", "seat4", "/agents/seat4", run=lambda argv: answer)
+    assert [f.verdict for f in found] == ["CHECK-FAILED"]
+
+
+def test_a_pass_alerts_on_a_container_seat(tmp_path):
+    sink = tmp_path / "sink.txt"
+    command = [sys.executable, "-c", f"import sys; open({str(sink)!r}, 'a').write(sys.stdin.read())"]
+    config = watch.WatchConfig(homes=[watch.WatchedHome(path="/agents/seat4", container="deploy-box", user="seat4")],
+                               alert_command=command, state_dir=str(tmp_path / "state"))
+    run = _answering([{"agent": "Seat4_7efebd", "subject": "login", "verdict": "LOGIN-EXPIRED", "detail": "ended"}])
+    assert watch.run_pass(config, now=NOW, run=run) == watch.EXIT_UNHEALTHY
+    assert "Seat4_7efebd login: LOGIN-EXPIRED" in sink.read_text()
+
+
+def test_a_container_home_names_its_user():
+    with pytest.raises(ValueError, match="names the user"):
+        watch.WatchedHome(path="/agents/seat4", container="deploy-box")
+
+
+@pytest.mark.parametrize("entry, says", [
+    ({"container": "--privileged"}, "not a container name"),
+    ({"container": "-it"}, "not a container name"),
+    ({"container": "box;rm"}, "not a container name"),
+    ({"user": "root"}, "never root"),
+    ({"user": "0"}, "never root"),
+    ({"user": "0:0"}, "never root"),
+    ({"user": "-uroot"}, "never root"),
+    ({"python": "python3"}, "absolute path"),
+    ({"python": "-c"}, "absolute path"),
+    ({"path": "seat4"}, "absolute path"),
+])
+def test_a_container_entry_refuses_what_a_home_check_never_needs(entry, says):
+    """docker exec is root-equivalent on the host: an entry names a seat, a container and paths,
+    and nothing that could read as an option, run as root, or run another program."""
+    fields = {"path": "/agents/seat4", "container": "deploy-box", "user": "seat4"} | entry
+    with pytest.raises(ValueError, match=says):
+        watch.WatchedHome(**fields)
+    assert watch.WatchedHome(path="/agents/seat4", container="deploy-box", user="seat4").user == "seat4"
+
+
+def test_home_findings_prints_a_home_s_findings_as_json(tmp_path, capsys):
+    home = _home(tmp_path)
+    assert watch.main(["--home-findings", str(home), "--no-probe"]) == watch.EXIT_HEALTHY
+    rows = json.loads(capsys.readouterr().out)
+    assert {r["subject"] for r in rows} == {"broker"}
+    assert all(set(r) == {"agent", "subject", "verdict", "detail"} for r in rows)
+
 def _declare_session(home):
     path = pdi.declaration_path(home)
     declaration = json.loads(path.read_text())
