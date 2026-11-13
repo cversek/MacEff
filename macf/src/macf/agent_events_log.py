@@ -297,8 +297,8 @@ def _leave_shared_reads_in_child() -> None:
     for window in getattr(_shared, "windows", None) or []:
         try:
             window.source.close()
-        except Exception:  # noqa: BLE001 - GUARD, not handler: a reader that will not close must not stop the child
-            pass
+        except Exception as e:  # noqa: BLE001 - GUARD: a reader that will not close must not stop the child
+            print(f"⚠️ MACF: closing an inherited log reader failed (child goes on): {e}", file=sys.stderr)
     _shared.active, _shared.window, _shared.windows = False, None, []
 
 

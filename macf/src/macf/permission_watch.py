@@ -411,7 +411,11 @@ def ask_rules(project_dir: str, home: Path, environ=None) -> List[str]:
     for f in settings_files(project_dir, home, environ):
         try:
             ask = (json.loads(f.read_text(encoding="utf-8")).get("permissions") or {}).get("ask") or []
-        except (OSError, ValueError, AttributeError):
+        except (OSError, ValueError, AttributeError) as e:
+            # Most settings paths are absent on any one host, which is normal; any other failure is
+            # a settings file whose rules are now missing from this answer, so it is said.
+            if not isinstance(e, FileNotFoundError):
+                print(f"⚠️ MACF: reading permissions from {f} failed (its rules are left out): {e}", file=sys.stderr)
             continue
         rules += [r for r in ask if isinstance(r, str) and r not in rules]
     return rules
@@ -430,7 +434,11 @@ def rules_in_force(project_dir: str, home: Path, environ=None) -> List[Tuple[str
     for f in settings_files(project_dir, home, environ):
         try:
             perms = json.loads(f.read_text(encoding="utf-8")).get("permissions") or {}
-        except (OSError, ValueError, AttributeError):
+        except (OSError, ValueError, AttributeError) as e:
+            # Most settings paths are absent on any one host, which is normal; any other failure is
+            # a settings file whose rules are now missing from this answer, so it is said.
+            if not isinstance(e, FileNotFoundError):
+                print(f"⚠️ MACF: reading permissions from {f} failed (its rules are left out): {e}", file=sys.stderr)
             continue
         for kind in RULE_KINDS:
             for rule in perms.get(kind) or []:

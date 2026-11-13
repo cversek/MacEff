@@ -144,7 +144,7 @@ def last_liveness(log_path: Path, card: str, units: Sequence[str], now: float,
             break
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -176,7 +176,7 @@ def last_unit_state(log_path: Path, card: str, units: Sequence[str], now: float,
             break
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -241,7 +241,7 @@ def last_channel_event(log_path: Path, card: str, now: float,
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -264,7 +264,7 @@ def last_login_event(log_path: Path, card: str, now: float,
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -362,7 +362,7 @@ def last_unread_mail_event(log_path: Path, card: str, now: float,
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -399,7 +399,7 @@ def mail_sweep_events(log_path: Path, card: str, schedule: str, now: float,
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -469,7 +469,7 @@ def _wake_events(log_path: Path, card: str, cutoff: float):
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -919,11 +919,11 @@ def open_stretches(durable_log: Path) -> Dict[str, dict]:
         for line in iter_lines_reverse(durable_log):
             try:
                 record = json.loads(line)
-            except ValueError:
+            except ValueError:  # noqa: S112 - a torn or partial line in the durable alert log is skipped
                 continue
             if isinstance(record, dict) and record.get("delivered") and "open_after" in record:
                 return dict(record["open_after"])
-    except FileNotFoundError:
+    except FileNotFoundError:  # noqa: S110 - no alert log exists before the first alert is sent
         pass
     return {}
 
