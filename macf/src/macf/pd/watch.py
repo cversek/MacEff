@@ -579,7 +579,10 @@ def check_container_home(container: str, user: str, path: str, python: str = "/o
         said = (e.stderr or "").strip()
         if "is not running" in said or "No such container" in said:
             return [Finding(where, "home", "UNREACHABLE", f"container {container} is not running; nothing was measured")]
-        if "unrecognized arguments" in said or "--home-findings" in said:
+        # An older MacEff's argparse refuses the unknown option, or, since --config was required
+        # there, asks for it first: "the following arguments are required: --config".
+        if ("unrecognized arguments" in said or "--home-findings" in said
+                or "required: --config" in said):
             return [Finding(where, "home", "CHECK-FAILED",
                             f"the MacEff in {container} has no home check yet (#979): rebuild it on a MacEff that does")]
         last = said.splitlines()[-1] if said else f"exit {e.returncode}"
@@ -588,8 +591,14 @@ def check_container_home(container: str, user: str, path: str, python: str = "/o
         return [Finding(where, "home", "CHECK-FAILED", f"docker exec into {container} did not run: {type(e).__name__}")]
     try:
         rows = json.loads(out)
+        if not isinstance(rows, list) or not all(
+                isinstance(row, dict) and set(row) == {"agent", "subject", "verdict", "detail"}
+                and all(isinstance(v, str) for v in row.values()) for row in rows):
+            raise TypeError("not a list of findings with four string fields")
         findings = [Finding(**row) for row in rows]
     except (ValueError, TypeError) as e:
+        # Anything a seat could answer, a list for a verdict included, ends here: one seat's
+        # answer must never raise out of the pass that checks every other seat.
         return [Finding(where, "home", "CHECK-FAILED", f"the check in {container} did not answer in JSON: {type(e).__name__}")]
     unknown = sorted({f.verdict for f in findings} - set(_EXIT_FOR))
     if unknown:

@@ -598,6 +598,9 @@ def test_the_watch_only_runs_the_read_only_home_check_in_the_container():
     ("Error response from daemon: container abc is not running", "UNREACHABLE", "not running"),
     ("Error: No such container: deploy-box", "UNREACHABLE", "not running"),
     ("usage: ...\nerror: unrecognized arguments: --home-findings /agents/seat4", "CHECK-FAILED", "#979"),
+    # What an older MacEff actually says (review): its --config was required, so argparse asks for it.
+    ("usage: python -m macf.pd.watch [-h] --config CONFIG\n"
+     "python -m macf.pd.watch: error: the following arguments are required: --config", "CHECK-FAILED", "#979"),
     ("Traceback ...\nRuntimeError: boom", "CHECK-FAILED", "RuntimeError: boom"),
 ])
 def test_a_container_that_can_t_answer_is_never_healthy(stderr, verdict, says):
@@ -608,7 +611,10 @@ def test_a_container_that_can_t_answer_is_never_healthy(stderr, verdict, says):
 
 
 @pytest.mark.parametrize("answer", ["not json", json.dumps([{"agent": "x"}]),
-                                    json.dumps([{"agent": "x", "subject": "y", "verdict": "FINE", "detail": ""}])])
+                                    json.dumps([{"agent": "x", "subject": "y", "verdict": "FINE", "detail": ""}]),
+                                    # Review: an unhashable verdict used to raise out of the pass.
+                                    json.dumps([{"agent": "x", "subject": "y", "verdict": ["ALIVE"], "detail": ""}]),
+                                    json.dumps({"agent": "x"}), json.dumps(["ALIVE"])])
 def test_an_answer_the_watch_can_t_read_is_check_failed(answer):
     found = watch.check_container_home("deploy-box", "seat4", "/agents/seat4", run=lambda argv: answer)
     assert [f.verdict for f in found] == ["CHECK-FAILED"]
