@@ -33,7 +33,8 @@ from pydantic import ValidationError
 
 from macf.agent_events_log import append_event
 from macf.notify.session import descends_from
-from macf.pd.interface import (EVENT_VOICE_CHANNEL_DECLARED, EVENT_VOICE_UTTERANCE, ChannelHello, Response,
+from macf.pd.interface import (EVENT_VOICE_CHANNEL_DECLARED, EVENT_VOICE_GUARD, EVENT_VOICE_UNMATCHED,
+                               EVENT_VOICE_UTTERANCE, ChannelHello, Response, VoiceEventRequest, VoiceGuardRequest,
                                UtteranceRecord, UtteranceRequest, VoiceSection)
 from macf.utils.peercred import peer_credentials
 
@@ -237,6 +238,50 @@ class VoiceCarriage:
     def _receipt(self, request: UtteranceRequest, utterance_id: str, unit: Optional[str], receipt: str,
                  reason: Optional[str], **extra) -> Response:
         return receipt_for(self.card, request, utterance_id, unit, receipt, reason, **extra)
+
+
+    # ------------------------------------------------------------------ the voice lock's notices and the guard
+
+    def guard_until(self, now: Optional[float] = None) -> Optional[float]:
+        """When the raised guard ends, or None when none is raised. Read from the log, the one
+        durable record, so a daemon restart never lowers a guard (R42)."""
+        from macf.agent_events_log import read_events
+        for event in read_events(reverse=True, scope="all", only=(EVENT_VOICE_GUARD,)):
+            data = event.get("data") or {}
+            if data.get("agent") != self.card:
+                continue
+            until = data.get("raised_until")
+            return until if until is not None and until > (now or time.time()) else None
+        return None
+
+    def voice_event(self, request: VoiceEventRequest, peer, raise_notice: Callable[[str, str], bool]) -> Response:
+        """The capture unit's word that the voice lock failed or locked out: a notice without
+        content for the agent (R37), and on a lockout the guard raised (R42). Taken only from the
+        declared capture unit, as an utterance is (R12)."""
+        unit = self.voice.capture_unit
+        live = self._incarnation(unit)
+        if live is None or not descends_from(peer.pid, *live):
+            return Response(ok=False, error=f"a voice event comes only from the declared capture unit {unit!r} (MIS-0008 R12)")
+        stamp = time.time_ns()
+        if request.kind == "unmatched":
+            append_event(EVENT_VOICE_UNMATCHED, {"agent": self.card, "attempts": request.attempts, "of": request.of})
+            raise_notice("pd_voice_unmatched", f"pd_voice_unmatched:{stamp}")
+            return Response(ok=True)
+        until = request.until if request.until is not None else time.time() + self.voice.lockout_s
+        append_event(EVENT_VOICE_GUARD, {"agent": self.card, "raised_until": until, "by": "lockout"})
+        raise_notice("pd_voice_lockout", f"pd_voice_lockout:{stamp}")
+        return Response(ok=True, voice_guard_until=until)
+
+    def lower_guard(self, request: VoiceGuardRequest) -> Response:
+        """Only the operator lowers a raised guard before its period ends (R44)."""
+        if request.asked_by.kind != "operator":
+            return Response(ok=False, error="only the operator lowers a raised voice guard before its period ends "
+                                            "(MIS-0008 R44)")
+        if self.guard_until() is None:
+            return Response(ok=True)
+        append_event(EVENT_VOICE_GUARD, {"agent": self.card, "raised_until": None, "by": "operator",
+                                         "reason": request.reason})
+        return Response(ok=True)
 
 
 def receipt_for(card: str, request: UtteranceRequest, utterance_id: str, unit: Optional[str], receipt: str,

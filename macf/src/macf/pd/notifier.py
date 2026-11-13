@@ -76,7 +76,7 @@ SETTLED = (EVENT_DELIVERED, EVENT_SILENCED, EVENT_WITHDRAWN)
 #: (MIS-0002-R42).
 INTERNAL_SOURCES = frozenset({"pd_limit_exceeded", "pd_unread_mail", "pd_carried", "pd_run_failed",
                               "pd_run_missed", "pd_schedule_changed", "pd_grant_denied", "pd_entry_due", "pd_duty_due",
-                              "pd_unit_failed"})
+                              "pd_unit_failed", "pd_voice_unmatched", "pd_voice_lockout"})
 #: What each boot still owes, after reading back: the checkpoint the next boot reads back to
 #: (MIS-0002-R41). Its data lists each owed notice's source, arrival id, count and read time.
 EVENT_NOTICES_OWED = "pd_notices_owed"

@@ -41,6 +41,23 @@ class NoKeys(TriggerSource):
         """Nothing to release."""
 
 
+def voice_event(card: str, kind: str, data: dict) -> None:
+    """Tell the daemon the voice lock failed or locked out: counts and a time, never words (R37, R39)."""
+    from macf.pd.interface import control_socket
+    request = {"op": "voice_event", "kind": kind, **{k: v for k, v in data.items() if k in ("attempts", "of", "until")}}
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+            conn.settimeout(5)
+            conn.connect(str(control_socket(card)))
+            conn.sendall(json.dumps(request).encode() + b"\n")
+            reply = conn.recv(65536)
+    except OSError as e:
+        print(f"⚠️ MACF: voice: the daemon wasn't told of a voice-lock {kind}: {e}", file=sys.stderr)
+        return
+    if not json.loads(reply or b"{}").get("ok"):
+        print(f"⚠️ MACF: voice: the daemon refused a voice-lock {kind} event: {reply[:300]!r}", file=sys.stderr)
+
+
 def deliver(card: str, utterance: Utterance) -> None:
     """Hand one utterance to the agent's daemon and log its receipt, by id and outcome only."""
     from macf.pd.interface import control_socket
@@ -103,7 +120,8 @@ def build(home: Path):
         config, audio=PipeWireAudio(), lock=LinuxLockState(), indicator=OverlayIndicator(),
         triggers=EvdevTriggers(voice.trigger_devices) if voice.trigger_devices else NoKeys(),
         gate=SileroGate(), detector=detector, transcribe=transcribe,
-        deliver=lambda u: deliver(card, u), listening_on=lambda: state.listening_on(home),
+        deliver=lambda u: deliver(card, u), on_voice_event=lambda kind, data: voice_event(card, kind, data),
+        listening_on=lambda: state.listening_on(home),
         speaking=lambda: state.speaking(home), log=lambda s: print(f"🎙️ MACF: voice: {s}", file=sys.stderr))
 
 

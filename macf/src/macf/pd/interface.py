@@ -762,6 +762,10 @@ EVENT_CHANNEL_DECLARED = "pd_channel_declared"
 EVENT_VOICE_UTTERANCE = "pd_voice_utterance"
 #: A Voice Input Channel attached below the session and said it takes utterances.
 EVENT_VOICE_CHANNEL_DECLARED = "pd_voice_channel_declared"
+#: The voice lock failed for an utterance: counts only (MIS-0008 R37).
+EVENT_VOICE_UNMATCHED = "pd_voice_unmatched"
+#: The agent's guard was raised by a lockout, with when it ends, or lowered by the operator (R42, R44).
+EVENT_VOICE_GUARD = "pd_voice_guard"
 #: Mail sat in the agent's pickup box past its declared threshold, and the box was then
 #: emptied (MIS-0002-R55). One of each per unread spell.
 EVENT_UNREAD_MAIL = "pd_unread_mail"
@@ -1172,9 +1176,29 @@ class UtteranceRequest(_Closed):
     text: str = Field(min_length=1, max_length=MAX_UTTERANCE_TEXT)
 
 
+class VoiceEventRequest(_Closed):
+    """The capture unit tells its daemon the voice lock failed, or locked voice contact out
+    (MIS-0008 R37, R39). It carries counts and a time, never anything that was said."""
+
+    op: Literal["voice_event"]
+    kind: Literal["unmatched", "lockout"]
+    attempts: Optional[int] = Field(default=None, ge=1, le=1000)
+    of: Optional[int] = Field(default=None, ge=1, le=1000)
+    until: Optional[float] = Field(default=None, allow_inf_nan=False)
+
+
+class VoiceGuardRequest(_Closed):
+    """Lower a raised guard before its period ends: the operator's act alone (MIS-0008 R44)."""
+
+    op: Literal["voice_guard"]
+    act: Literal["lower"]
+    asked_by: Asker
+    reason: str = Field(min_length=1, max_length=300)
+
+
 Request = Union[StatusRequest, BuildRequest, ActRequest, CompactRequest, PaceRequest, EntryAddRequest,
                 EntryListRequest, EntryRemoveRequest, EntryEditRequest, EntryPauseRequest,
-                StreamRuleRequest, UtteranceRequest]
+                StreamRuleRequest, UtteranceRequest, VoiceEventRequest, VoiceGuardRequest]
 
 #: How an utterance ended, as its receipt says (MIS-0008 R11). ``locked_out`` and ``no_agent``
 #: are given by the voice lock and the shared capture unit, built in later phases.
@@ -1221,6 +1245,8 @@ class Response(_Closed):
     #: How an utterance ended, answering an utterance (MIS-0008 R11), and the id the daemon gave it.
     receipt: Optional[_RECEIPT] = None
     utterance_id: Optional[str] = None
+    #: When a raised voice guard ends, answering a status where one is raised (MIS-0008 R42).
+    voice_guard_until: Optional[float] = None
 
 
 _REQUEST = TypeAdapter(Annotated[Request, Field(discriminator="op")])

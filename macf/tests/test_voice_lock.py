@@ -119,3 +119,56 @@ def test_test_set_includes_impostors(tmp_path):
     report = train(enrolled(tmp_path / "b", np.random.default_rng(6)), pitch_embed).report
     assert report["held_out"]["other_speaker"] == 2 and report["held_out"]["synthetic"] == 2
     assert set(report["false_accepts"]) == {"other_speaker", "synthetic"}
+
+
+# ---------------------------------------------------------------- the daemon: notices and the raised guard (R37, R42, R44)
+
+import json  # noqa: E402
+import time  # noqa: E402
+
+from macf.agent_events_log import read_events  # noqa: E402
+from test_primal_daemon import ask, base, run_daemon  # noqa: E402,F401 - fixtures
+from test_voice_capture import receipt_of, voice_home  # noqa: E402
+
+
+def send_from_unit(vh, request):
+    """Have the declared capture unit itself send ``request`` to its daemon, and return the reply."""
+    tmp = vh.go.with_suffix(".tmp")
+    tmp.write_text(json.dumps(request))
+    tmp.replace(vh.go)
+    return receipt_of(vh.out)
+
+
+def test_lockout_raises_guard(tmp_path, base, run_daemon, isolated_events_log):
+    """R42: a lockout from the capture unit raises the guard, recorded, shown in status, and kept
+    across a daemon restart, since it is read from the log; the agent gets a notice without content."""
+    vh = voice_home(tmp_path, base)
+    daemon = run_daemon(vh.home, base)
+    until = time.time() + 600
+    assert send_from_unit(vh, {"op": "voice_event", "kind": "lockout", "until": until})["ok"]
+    assert abs(ask(daemon, {"op": "status"})["voice_guard_until"] - until) < 1
+    raised = [e["data"] for e in read_events(reverse=False, scope="all", only=("pd_voice_guard",))]
+    assert raised and raised[-1]["raised_until"] == until
+    assert daemon.voice.guard_until() == until, "the guard must be read from the log, so a restart keeps it"
+
+
+def test_a_voice_event_comes_only_from_the_capture_unit(tmp_path, base, run_daemon, isolated_events_log):
+    """R12 for voice events: a process that is not the capture unit can neither raise nor fake one."""
+    vh = voice_home(tmp_path, base)
+    daemon = run_daemon(vh.home, base)
+    reply = ask(daemon, {"op": "voice_event", "kind": "lockout", "until": time.time() + 600})
+    assert not reply["ok"] and "only from the declared capture unit" in reply["error"]
+    assert ask(daemon, {"op": "status"}).get("voice_guard_until") is None
+
+
+def test_agent_cannot_lower_own_guard(tmp_path, base, run_daemon, isolated_events_log):
+    """R44: the agent cannot lower its raised guard; the operator can."""
+    vh = voice_home(tmp_path, base)
+    daemon = run_daemon(vh.home, base)
+    send_from_unit(vh, {"op": "voice_event", "kind": "lockout", "until": time.time() + 600})
+    lower = {"op": "voice_guard", "act": "lower", "reason": "I am sure it was them"}
+    refused = ask(daemon, {**lower, "asked_by": {"kind": "agent"}})
+    assert not refused["ok"] and "only the operator" in refused["error"]
+    assert ask(daemon, {"op": "status"})["voice_guard_until"] is not None
+    assert ask(daemon, {**lower, "asked_by": {"kind": "operator"}})["ok"]
+    assert ask(daemon, {"op": "status"}).get("voice_guard_until") is None

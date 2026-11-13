@@ -47,6 +47,8 @@ from macf.pd.interface import (
     StreamRule,
     StreamRuleRequest,
     UtteranceRequest,
+    VoiceEventRequest,
+    VoiceGuardRequest,
     WakePaced,
     agent_card,
     channel_socket,
@@ -829,8 +831,16 @@ class Daemon:
             if self.voice is None:
                 return refuse_without_voice(self.card, request, creds)
             return self.voice.utterance(request, creds)
+        if isinstance(request, (VoiceEventRequest, VoiceGuardRequest)):
+            if self.voice is None:
+                return Response(ok=False, error="this agent's declaration has no voice section (MIS-0008)")
+            if isinstance(request, VoiceGuardRequest):
+                return self.voice.lower_guard(request)
+            notice = self.notifier.raise_notice if self.notifier is not None else (lambda source, notice_id: False)
+            return self.voice.voice_event(request, creds, notice)
         if isinstance(request, StatusRequest):
-            return Response(ok=True, units=self.core.statuses(), **self._wake_window())
+            guard = self.voice.guard_until() if self.voice is not None else None
+            return Response(ok=True, units=self.core.statuses(), voice_guard_until=guard, **self._wake_window())
         if isinstance(request, BuildRequest):
             return Response(ok=True, build=self._build)
         if isinstance(request, PaceRequest):
