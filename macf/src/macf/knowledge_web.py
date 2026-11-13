@@ -436,7 +436,7 @@ def _pointer_node(pointer: str, path_to_node: Dict[str, str], ca_nodes: Dict[str
                 t = TaskReader().read_task(tid)
                 if t:
                     title = re_mod.sub(r"\x1b\[[0-9;]*m", "", t.subject).strip()[:50]
-            except (OSError, ValueError, ImportError, AttributeError):
+            except (OSError, ValueError, ImportError, AttributeError):  # noqa: S110 - title is cosmetic; store may be absent by design
                 pass  # the store may be absent under a scan_dirs build; the id still names the task
             ca_nodes[node_id] = {"type": "tasks", "title": title, "path": f"task:{tid}",
                                  "node_class": node_class_for("tasks")}
@@ -508,7 +508,8 @@ def build_knowledge_web(scan_dirs: Optional[List[Path]] = None) -> Dict[str, Any
         if ca_type == "duties":
             try:
                 rec = json.loads(content)
-            except ValueError:
+            except ValueError as e:
+                print(f"⚠️ MACF: duty record {md_file} unreadable (skipped, its edges are missing from the web): {e}", file=sys.stderr)
                 continue
             node_id = f"duties:{rec.get('id', md_file.stem)}"
             ca_nodes[node_id] = {"type": "duties", "title": str(rec.get("title", md_file.stem))[:50],

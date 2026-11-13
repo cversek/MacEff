@@ -170,7 +170,7 @@ def _model_from_transcript(path: Path) -> Optional[str]:
             continue
         try:
             data = json.loads(line)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError:  # noqa: S112 - reverse scan over a live transcript; a partly written line is expected
             continue
         if data.get("type") == "assistant":
             m = (data.get("message") or {}).get("model")

@@ -136,7 +136,7 @@ class AuditLog:
         except Exception as e:  # noqa: BLE001 - teardown: anything may be half-gone
             try:
                 print(f"⚠️ MACF: audit log close at teardown: {e}", file=sys.stderr)
-            except (OSError, ValueError, AttributeError, TypeError):
+            except (OSError, ValueError, AttributeError, TypeError):  # noqa: S110 - stderr itself may be gone at teardown
                 pass    # stderr itself may be gone at interpreter teardown
 
     @contextmanager

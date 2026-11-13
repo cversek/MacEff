@@ -260,7 +260,8 @@ def return_point(pairs: Sequence[Tuple[Role, Sequence[Duty]]]) -> Optional[Tuple
                 continue
             try:
                 ts = datetime.fromisoformat(last.at).timestamp()
-            except ValueError:
+            except ValueError as e:
+                print(f"⚠️ MACF: return-point time {last.at!r} parse failed (duty not offered as a return point): {e}", file=sys.stderr)
                 continue
             if best is None or ts > best[1]:
                 best = (d, ts, m.group(1))

@@ -119,7 +119,7 @@ def ensure_runtime_dir(path: Optional[Path] = None) -> Path:
     path = path or runtime_dir()
     try:
         path.mkdir(mode=0o700, parents=False)
-    except FileExistsError:
+    except FileExistsError:  # noqa: S110 - an existing directory is expected; the checks below judge it
         pass
     info = path.lstat()
     if not stat.S_ISDIR(info.st_mode):

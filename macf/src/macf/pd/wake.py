@@ -300,7 +300,7 @@ def turn_ended(lines: Iterable[str]) -> Optional[bool]:
     for raw in lines:
         try:
             rec = json.loads(raw)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError):  # noqa: S112 - a torn or foreign line in a live transcript is skipped each poll; the last readable record decides
             continue
         if not isinstance(rec, dict) or rec.get("type") not in ("user", "assistant"):
             continue
