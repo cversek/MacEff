@@ -347,7 +347,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R27 | decidable | macf/tests/test_voice_capture.py::test_no_wake_during_own_speech | passing |
 | R28 | decidable | macf/tests/test_voice_speech.py::test_one_worker_serializes_agents | passing |
 | R29 | decidable | macf/tests/test_voice_speech.py::test_no_playback_while_microphone_open | passing |
-| R30 | decidable | macf/tests/test_voice_select.py::test_choice_recorded_with_traits | planned |
+| R30 | decidable | macf/tests/test_voice_select.py::test_choice_recorded_with_traits | passing |
 | R31 | judgment | the operator, at each selection | pending |
 | R32 | judgment | the operator, at each selection | pending |
 | R33 | judgment | the operator, in each declaration | pending |
