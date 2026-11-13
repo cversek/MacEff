@@ -190,3 +190,15 @@ def test_the_operator_lowering_the_guard_ends_the_lockout():
     attempt(rig.audio)
     rig.run(len(rig.audio.script))
     assert [u.text for u in rig.delivered] == ["check"] and rig.unit.locked_out_until is None
+
+
+def test_an_unmatched_voice_leaves_the_agent_a_notice_without_content(tmp_path, base, run_daemon, isolated_events_log):
+    """R37 across both halves: the capture unit's unmatched event leaves the agent owed a
+    pd_voice_unmatched notice, whose record and event hold counts only."""
+    vh = voice_home(tmp_path, base)
+    daemon = run_daemon(vh.home, base)
+    assert send_from_unit(vh, {"op": "voice_event", "kind": "unmatched", "attempts": 1, "of": 3})["ok"]
+    owed = [a for a in daemon.notifier.owed if a.startswith("pd_voice_unmatched:")]
+    assert len(owed) == 1
+    [event] = [e["data"] for e in read_events(reverse=False, scope="all", only=("pd_voice_unmatched",))]
+    assert set(event) == {"agent", "attempts", "of"}

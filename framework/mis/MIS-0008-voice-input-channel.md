@@ -354,7 +354,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R34 | decidable | macf/tests/test_voice_lock.py::test_only_matching_speaker_delivered | passing |
 | R35 | decidable | macf/tests/test_voice_lock.py::test_threshold_needs_report | passing |
 | R36 | decidable | macf/tests/test_voice_lock.py::test_test_set_includes_impostors | passing |
-| R37 | decidable | macf/tests/test_voice_lock.py::test_failure_discards_audio_untranscribed_and_sends_contentless_notice | planned (the capture unit discards untranscribed and the daemon raises the content-free notice; one test across both halves is still owed) |
+| R37 | decidable | macf/tests/test_voice_lock.py::test_failure_discards_audio_untranscribed_and_sends_contentless_notice | passing (the daemon half: test_an_unmatched_voice_leaves_the_agent_a_notice_without_content) |
 | R38 | judgment | the maintainers, at review of the voice_lock policy | pending |
 | R39 | decidable | macf/tests/test_voice_lock.py::test_failures_in_window_start_lockout | passing |
 | R40 | decidable | macf/tests/test_voice_declaration.py::test_lockout_defaults | passing |
