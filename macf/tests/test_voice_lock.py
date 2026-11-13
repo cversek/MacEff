@@ -172,3 +172,21 @@ def test_agent_cannot_lower_own_guard(tmp_path, base, run_daemon, isolated_event
     assert ask(daemon, {"op": "status"})["voice_guard_until"] is not None
     assert ask(daemon, {**lower, "asked_by": {"kind": "operator"}})["ok"]
     assert ask(daemon, {"op": "status"}).get("voice_guard_until") is None
+
+
+def test_the_operator_lowering_the_guard_ends_the_lockout():
+    """R44: once the operator lowers the guard, the lockout ends and the enrolled voice is heard again;
+    until then, the same call is ignored and counted."""
+    lowered = [False]
+    audio = FakeAudio()
+    for _ in range(3):
+        attempt(audio, OTHER_WAKE)
+    attempt(audio)
+    rig = make_unit(audio, ScriptedTranscriber("yo tom", "yo tom check"), speaker=same_voice, lockout_s=600.0,
+                    guard_lowered=lambda: lowered[0])
+    rig.run(len(rig.audio.script))
+    assert rig.delivered == [] and rig.unit.locked_out_attempts == 1
+    lowered[0] = True
+    attempt(rig.audio)
+    rig.run(len(rig.audio.script))
+    assert [u.text for u in rig.delivered] == ["check"] and rig.unit.locked_out_until is None

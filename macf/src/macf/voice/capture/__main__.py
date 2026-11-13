@@ -41,6 +41,17 @@ class NoKeys(TriggerSource):
         """Nothing to release."""
 
 
+def guard_lowered(card: str) -> bool:
+    """Whether the agent's daemon no longer shows a raised guard: the operator lowered it (R44).
+    Asked only while the capture unit is locked out. A daemon that can't be asked keeps the lockout."""
+    from macf.pd.client import DaemonUnavailable, ask
+    try:
+        return ask(card, {"op": "status"}).voice_guard_until is None
+    except (DaemonUnavailable, OSError) as e:
+        print(f"⚠️ MACF: voice: the daemon can't be asked about the guard, so the lockout stands: {e}", file=sys.stderr)
+        return False
+
+
 def voice_event(card: str, kind: str, data: dict) -> None:
     """Tell the daemon the voice lock failed or locked out: counts and a time, never words (R37, R39)."""
     from macf.pd.interface import control_socket
@@ -121,6 +132,7 @@ def build(home: Path):
         triggers=EvdevTriggers(voice.trigger_devices) if voice.trigger_devices else NoKeys(),
         gate=SileroGate(), detector=detector, transcribe=transcribe,
         deliver=lambda u: deliver(card, u), on_voice_event=lambda kind, data: voice_event(card, kind, data),
+        guard_lowered=lambda: guard_lowered(card),
         listening_on=lambda: state.listening_on(home),
         speaking=lambda: state.speaking(home), log=lambda s: print(f"🎙️ MACF: voice: {s}", file=sys.stderr))
 

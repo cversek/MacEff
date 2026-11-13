@@ -122,7 +122,8 @@ class CaptureUnit:
                  clock: Callable[[], float] = time.monotonic, wall: Callable[[], float] = time.time,
                  executor: Optional[Executor] = None, log: Callable[[str], None] = lambda s: None,
                  speaker: Optional[Callable[[np.ndarray], bool]] = None,
-                 on_voice_event: Callable[[str, dict], None] = lambda kind, data: None):
+                 on_voice_event: Callable[[str, dict], None] = lambda kind, data: None,
+                 guard_lowered: Callable[[], bool] = lambda: False):
         self.config = config
         self.audio, self.lock, self.indicator, self.triggers = audio, lock, indicator, triggers
         self.gate, self.detector, self._transcribe, self._deliver = gate, detector, transcribe, deliver
@@ -141,6 +142,8 @@ class CaptureUnit:
         #: The voice lock (R34): True when the audio's speaker matches the enrolled voice. None: no lock.
         self._speaker = speaker
         self._on_voice_event = on_voice_event
+        #: Whether the operator lowered the agent's raised guard, which ends the lockout early (R44).
+        self._guard_lowered = guard_lowered
         self._failures: List[float] = []
         self.locked_out_until: Optional[float] = None
         self.locked_out_attempts = 0
@@ -323,7 +326,10 @@ class CaptureUnit:
         if self._speaker is None:
             return True
         if self.locked_out_until is not None:
-            if now < self.locked_out_until:
+            if now < self.locked_out_until and self._guard_lowered():
+                self.log("the operator lowered the guard: the lockout ends early")
+                self.locked_out_until, self.locked_out_attempts = None, 0
+            elif now < self.locked_out_until:
                 self.locked_out_attempts += 1
                 self.log(f"voice locked out: attempt {self.locked_out_attempts} ignored")
                 return False

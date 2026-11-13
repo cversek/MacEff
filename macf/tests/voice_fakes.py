@@ -150,7 +150,7 @@ class ScriptedTranscriber:
 def make_unit(audio: FakeAudio, transcriber: ScriptedTranscriber, *, phrase="yo tom", hold="KEY_F9",
               toggle="KEY_F10", listening_on: Callable[[], bool] = lambda: True,
               speaking: Callable[[], bool] = lambda: False, screen="unlocked", speaker=None,
-              on_voice_event=None, **config) -> "Rig":
+              on_voice_event=None, guard_lowered=None, **config) -> "Rig":
     delivered = []
     keys = PushedKeys()
     indicator = RecordingIndicator()
@@ -161,7 +161,8 @@ def make_unit(audio: FakeAudio, transcriber: ScriptedTranscriber, *, phrase="yo 
                        listening_on=listening_on, speaking=speaking,
                        clock=lambda: audio.reads * FRAME_S, wall=lambda: 1794600000.0 + audio.reads * FRAME_S,
                        executor=InlineExecutor(), speaker=speaker,
-                       on_voice_event=on_voice_event or (lambda kind, data: None))
+                       on_voice_event=on_voice_event or (lambda kind, data: None),
+                       guard_lowered=guard_lowered or (lambda: False))
     return Rig(unit=unit, keys=keys, indicator=indicator, delivered=delivered, audio=audio)
 
 
