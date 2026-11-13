@@ -372,7 +372,7 @@ def test_a_malformed_hello_detaches_the_channel(tmp_path, base, run_daemon, isol
     conn.close()
 
 
-def test_the_notification_channel_declares_every_source_its_record_takes(tmp_path, base, run_daemon,
+def test_the_maceff_channel_declares_every_source_its_record_takes(tmp_path, base, run_daemon,
                                                                    isolated_events_log, monkeypatch):
     """The real channel, against the real daemon: its hello declares exactly the sources its
     record accepts, so an entry's notice reaches it."""

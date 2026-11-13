@@ -63,7 +63,9 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **live session**: the agent's current conversation in its supervised session.
 - **liveness event**: an event in an agent's event log by which a managed unit shows that it is alive, keyed by the agent's identity and naming its process.
 - **MacEff agent**: an agent whose address the operator declares in the key registry.
+- **MacEff channel**: the MacEff Notification Channel's name before MIS-0008 renamed it; MIS documents written before the rename use it.
 - **MacEff Notification Channel**: the harness channel through which a primal daemon delivers notices and wakes into its agent's live session.
+- **MacEff Voice Input Channel**: the harness channel through which a primal daemon delivers the operator's transcribed utterances into its agent's live session (MIS-0008).
 - **maintainer**: an agent that the operator has designated to maintain MacEff.
 - **major architectural change**: a change that adds a subsystem or changes architecture across components.
 - **managed unit**: one process or one schedule that a primal daemon runs for its agent, such as the session, the transcript monitor, the notifier or a mail clock.

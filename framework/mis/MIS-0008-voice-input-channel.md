@@ -85,7 +85,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 5. The agent's guard is raised: its status shows it, its hooks surface it, and it tells the operator on another channel.
 
 **Setting it up.**
-- `macf_tools voice wake define`, `record`, `train` and `test` take the operator from a chosen phrase to a measured wake model. The `maceff-voice-wake-training` skill has the agent coach each step.
+- `macf_tools voice wake define`, `record`, `train` and `test` take the operator from a chosen phrase to a measured wake model. A skill has the agent coach each step.
 - `macf_tools voice lock enroll`, `annotate`, `train` and `test` do the same for the voice lock.
 - `macf_tools voice select` runs the voice selection. The agent infers traits for its voice from its own identity and role, puts them to the operator, plays generated samples, and records the voice the operator accepts.
 
