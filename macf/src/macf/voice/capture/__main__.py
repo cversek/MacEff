@@ -103,8 +103,12 @@ def build(home: Path):
     from macf.voice.transcribe import transcribe_array
     card = agent_card(home)
     declaration = load_declaration(home, card)
+    if declaration.voice_dispatch is not None:
+        return card, build_system(home, card, declaration)
     voice = declaration.voice
     unit_name = os.environ.get("MACF_PD_UNIT")
+    if voice is not None and voice.capture_unit is None:
+        raise RuntimeError(f"{card}'s voice comes from {voice.dispatched_by}'s capture unit; it runs none of its own")
     if voice is None:
         raise RuntimeError(f"{home} declares no voice section, so there is nothing to capture for")
     if unit_name and unit_name != voice.capture_unit:
@@ -135,6 +139,77 @@ def build(home: Path):
         guard_lowered=lambda: guard_lowered(card),
         listening_on=lambda: state.listening_on(home),
         speaking=lambda: state.speaking(home), log=lambda s: print(f"🎙️ MACF: voice: {s}", file=sys.stderr))
+
+
+def broker_publisher(card: str, home: Path, declaration):
+    """``publish(topic, payload) -> bool`` on the system daemon's own broker, as the daemon's own
+    certificate, which alone may write the members' voice topics (R49). Never retained (MIS-0007 R67)."""
+    import paho.mqtt.client as mqtt
+    from macf.pd import broker as b
+    from macf.pd.broker_defaults import with_own_broker
+    from macf.pd.broker_link import BrokerLink
+    from macf.pd.names import runtime_dir
+    section = with_own_broker(declaration, home, card).broker
+    placeholders = {"agent_home": str(home), "card": card, "runtime_dir": str(runtime_dir())}
+    client = BrokerLink._client(section, placeholders)
+    client.connect_async(b.LOOPBACK, section.port)
+    client.loop_start()
+
+    def publish(topic: str, payload: bytes) -> bool:
+        return client.publish(topic, payload, qos=1, retain=False).rc == mqtt.MQTT_ERR_SUCCESS
+    return publish
+
+
+def build_system(home: Path, card: str, declaration, *, backends=None, publish=None, detector_for=None):
+    """A system daemon's one capture unit for its members (MIS-0008 R46): a binding per member from
+    the system declaration, each utterance and voice-lock event signed for the member it is for and
+    sent down its own voice topic (R47, R48). ``backends``, ``publish`` and ``detector_for`` are for
+    tests; by default this platform's backends, the daemon's broker, and each member's trained model."""
+    from macf.amail.crypto import load_private_key
+    from macf.voice.capture.members import DispatchSender
+    from macf.voice.capture.unit import AgentBinding
+    vd = declaration.voice_dispatch
+    unit_name = os.environ.get("MACF_PD_UNIT")
+    if unit_name and unit_name != vd.capture_unit:
+        raise RuntimeError(f"this unit is {unit_name!r}, but voice_dispatch names {vd.capture_unit!r} as its capture unit")
+    from macf.pd.names import runtime_dir
+    key_path = Path(vd.signing_key_file.format_map({"agent_home": str(home), "card": card,
+                                                    "runtime_dir": str(runtime_dir())}))
+    sender = DispatchSender(card, load_private_key(key_path), vd.capture_unit, list(vd.members),
+                            publish or broker_publisher(card, home, declaration), lifetime_s=vd.lifetime_s,
+                            log=lambda s: print(f"🎙️ MACF: voice: {s}", file=sys.stderr))
+    if detector_for is None:
+        from macf.voice.capture.models import TrainedWakeDetector
+
+        def detector_for(path):
+            model = Path(path)
+            return TrainedWakeDetector(model if model.is_absolute() else home / model)
+    members = []
+    for member, binding in sorted(vd.members.items()):
+        detector = detector_for(binding.wake_model) if binding.wake_model else None
+        bar = binding.detector_bar if binding.detector_bar is not None else getattr(detector, "threshold", 0.85)
+        members.append(AgentBinding(agent=member, wake_phrase=binding.wake_phrase, hold_key=binding.hold_key,
+                                    toggle_key=binding.toggle_key, detector=detector, detector_bar=bar,
+                                    on_voice_event=lambda kind, data, m=member: sender.voice_event(m, kind, data)))
+    b = backends or _platform_backends(vd.trigger_devices)
+    config = CaptureConfig(agent=card, end_silence_s=vd.end_silence_s, continual_close_s=vd.continual_close_s)
+    return CaptureUnit(config, members=members, deliver=sender, listening_on=lambda: state.listening_on(home),
+                       speaking=lambda: state.speaking(home), log=lambda s: print(f"🎙️ MACF: voice: {s}", file=sys.stderr),
+                       **b)
+
+
+def _platform_backends(trigger_devices) -> dict:
+    if not sys.platform.startswith("linux"):
+        raise RuntimeError("this platform has no capture backends yet; MIS-0008's porting guide says what to write (R14)")
+    from macf.voice.capture.linux import EvdevTriggers, LinuxLockState, OverlayIndicator, PipeWireAudio
+    from macf.voice.capture.models import SileroGate
+    from macf.voice.transcribe import transcribe_array
+
+    def transcribe(audio, phrase):
+        return transcribe_array(audio, initial_prompt=f"{phrase.capitalize()}, " if phrase else None).text
+    return dict(audio=PipeWireAudio(), lock=LinuxLockState(), indicator=OverlayIndicator(),
+                triggers=EvdevTriggers(trigger_devices) if trigger_devices else NoKeys(), gate=SileroGate(),
+                transcribe=transcribe)
 
 
 def main(argv=None) -> int:

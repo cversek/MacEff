@@ -71,14 +71,54 @@ class CaptureConfig:
 
 
 @dataclass
+class AgentBinding:
+    """One agent a capture unit listens for: its card, the phrase and keys that open the microphone
+    for it, its wake model, and its voice lock with the lockout counted for it alone (MIS-0008 R46,
+    R47). A unit for one agent builds its single binding from its ``CaptureConfig``; a system's
+    unit is given one per member, from the system declaration."""
+
+    agent: str
+    wake_phrase: Optional[str] = None
+    hold_key: Optional[str] = None
+    toggle_key: Optional[str] = None
+    detector: Optional[WakeDetector] = None
+    detector_bar: float = 0.85
+    #: True when the audio's speaker matches this agent's enrolled voice. None: no voice lock.
+    speaker: Optional[Callable[[np.ndarray], bool]] = None
+    on_voice_event: Callable[[str, dict], None] = lambda kind, data: None
+    guard_lowered: Callable[[], bool] = lambda: False
+    lockout_attempts: int = 3
+    lockout_window_s: float = 600.0
+    lockout_s: float = 600.0
+    lock_keys: bool = False
+
+
+class _Agent:
+    """A binding with its running state: the phrase as a pattern, and the voice lock's count."""
+
+    def __init__(self, binding: AgentBinding):
+        self.b = binding
+        self.phrase = _phrase_pattern(binding.wake_phrase) if binding.wake_phrase else None
+        self.failures: List[float] = []
+        self.locked_out_until: Optional[float] = None
+        self.locked_out_attempts = 0
+
+    @property
+    def wakeable(self) -> bool:
+        return self.phrase is not None and self.b.detector is not None
+
+
+@dataclass
 class Utterance:
-    """One utterance, ready for the daemon: the words and the closed metadata."""
+    """One utterance, ready for the daemon: the words and the closed metadata, and the agent it is
+    for, which only the binding that fired decides (R47)."""
 
     trigger: Mode
     spoken_at: float
     screen: str
     text: str
     voice_lock: str = "not_declared"
+    agent: str = ""
 
 
 @dataclass
@@ -86,6 +126,7 @@ class _Recording:
     mode: Mode
     started: float
     spoken_at: float
+    agent: "_Agent"
     frames: List[np.ndarray] = field(default_factory=list)
     heard_speech: bool = False
     last_speech: float = 0.0
@@ -112,8 +153,12 @@ class InlineExecutor(Executor):
 
 
 class CaptureUnit:
-    """One capture unit for one agent. Call ``tick`` in a loop; it returns after one frame, or at
-    once while the microphone is closed."""
+    """One capture unit: for one agent, or on a system daemon for each member agent (R46). Call
+    ``tick`` in a loop; it returns after one frame, or at once while the microphone is closed.
+
+    For one agent, the phrase and keys come from ``config`` and the wake model and voice lock from
+    the keyword arguments. For several, ``members`` gives one binding each, and ``config`` supplies
+    only what every recording shares: its pauses and its longest length."""
 
     def __init__(self, config: CaptureConfig, *, audio: AudioIn, lock: LockState, indicator: Indicator,
                  triggers: TriggerSource, gate: SpeechGate, transcribe: Callable[[np.ndarray, Optional[str]], str],
@@ -123,30 +168,43 @@ class CaptureUnit:
                  executor: Optional[Executor] = None, log: Callable[[str], None] = lambda s: None,
                  speaker: Optional[Callable[[np.ndarray], bool]] = None,
                  on_voice_event: Callable[[str, dict], None] = lambda kind, data: None,
-                 guard_lowered: Callable[[], bool] = lambda: False):
+                 guard_lowered: Callable[[], bool] = lambda: False,
+                 members: Optional[List[AgentBinding]] = None):
         self.config = config
         self.audio, self.lock, self.indicator, self.triggers = audio, lock, indicator, triggers
-        self.gate, self.detector, self._transcribe, self._deliver = gate, detector, transcribe, deliver
+        self.gate, self._transcribe, self._deliver = gate, transcribe, deliver
         self._listening_on, self._speaking = listening_on, speaking
         self.clock, self.wall, self.log = clock, wall, log
         self.executor = executor or ThreadPoolExecutor(max_workers=1, thread_name_prefix="voice-transcribe")
-        self._phrase = _phrase_pattern(config.wake_phrase) if config.wake_phrase else None
+        if members is None:
+            members = [AgentBinding(agent=config.agent, wake_phrase=config.wake_phrase, hold_key=config.hold_key,
+                                    toggle_key=config.toggle_key, detector=detector,
+                                    detector_bar=config.detector_bar, speaker=speaker,
+                                    on_voice_event=on_voice_event, guard_lowered=guard_lowered,
+                                    lockout_attempts=config.lockout_attempts,
+                                    lockout_window_s=config.lockout_window_s, lockout_s=config.lockout_s,
+                                    lock_keys=config.lock_keys)]
+        if not members:
+            raise ValueError("a capture unit listens for at least one agent")
+        self.agents: List[_Agent] = [_Agent(m) for m in members]
         self.ring: Deque[np.ndarray] = collections.deque(maxlen=int(WAKE_WINDOW_S * RATE / FRAME))
         self.recording: Optional[_Recording] = None
-        self._pending_since: Optional[float] = None
+        #: The agent whose wake model fired, and when, while the phrase settles.
+        self._pending: Optional[tuple] = None
         self._quiet_until = 0.0
         #: When listening and the current recording began, for the status entries (R16).
         self.listening_since: Optional[float] = None
         self.recording_since: Optional[float] = None
         self.frames_read = 0
-        #: The voice lock (R34): True when the audio's speaker matches the enrolled voice. None: no lock.
-        self._speaker = speaker
-        self._on_voice_event = on_voice_event
-        #: Whether the operator lowered the agent's raised guard, which ends the lockout early (R44).
-        self._guard_lowered = guard_lowered
-        self._failures: List[float] = []
-        self.locked_out_until: Optional[float] = None
-        self.locked_out_attempts = 0
+
+    # A unit for one agent reads its lockout as its own.
+    @property
+    def locked_out_until(self) -> Optional[float]:
+        return self.agents[0].locked_out_until
+
+    @property
+    def locked_out_attempts(self) -> int:
+        return self.agents[0].locked_out_attempts
 
     # ------------------------------------------------------------------ the loop
 
@@ -156,11 +214,14 @@ class CaptureUnit:
             return "recording"
         return "listening" if self.audio.is_open else "off"
 
+    def _wakeable(self) -> bool:
+        return any(a.wakeable for a in self.agents)
+
     def tick(self) -> None:
         for event in self.triggers.poll():
             self._key(event.key, event.down)
         if self.recording is None:
-            on = self._listening_on() and self._phrase is not None and self.detector is not None
+            on = self._listening_on() and self._wakeable()
             if on and not self.audio.is_open:
                 self._open("listening")
             elif not on and self.audio.is_open:
@@ -179,10 +240,9 @@ class CaptureUnit:
     def _open(self, why: str) -> None:
         self.audio.open()
         self.ring.clear()
-        if self.detector is not None:
-            self.detector.reset()
+        self._reset_detectors()
         self.gate.reset()
-        self._pending_since = None
+        self._pending = None
         if why == "listening":
             self.listening_since = self.wall()
         self.log(f"microphone open ({why})")
@@ -195,54 +255,73 @@ class CaptureUnit:
     # ------------------------------------------------------------------ keys
 
     def _key(self, key: str, down: bool) -> None:
-        cfg = self.config
-        if key == cfg.hold_key:
-            if down and self.recording is None:
-                self._start("hold_key")
-            elif not down and self.recording is not None and self.recording.mode == "hold_key":
-                self._finish(self.clock())
-        elif key == cfg.toggle_key and down:
-            if self.recording is not None and self.recording.mode == "continual_voice":
-                self._finish(self.clock(), closing=True)
-            elif self.recording is None:
-                self._start("continual_voice")
+        """A key opens or closes a recording for the agent whose key it is, and only that agent
+        (R47). A key nobody declared does nothing; while one agent's recording runs, another
+        agent's key waits its turn rather than cutting it off."""
+        rec = self.recording
+        for agent in self.agents:
+            if key == agent.b.hold_key:
+                if down and rec is None:
+                    self._start("hold_key", agent)
+                elif not down and rec is not None and rec.mode == "hold_key" and rec.agent is agent:
+                    self._finish(self.clock())
+                return
+            if key == agent.b.toggle_key and down:
+                if rec is not None and rec.mode == "continual_voice" and rec.agent is agent:
+                    self._finish(self.clock(), closing=True)
+                elif rec is None:
+                    self._start("continual_voice", agent)
+                return
 
     # ------------------------------------------------------------------ listening
 
+    def _reset_detectors(self) -> None:
+        for agent in self.agents:
+            if agent.b.detector is not None:
+                agent.b.detector.reset()
+
     def _listen(self, frame: np.ndarray, now: float) -> None:
-        if self.detector is None or self._phrase is None:
+        if not self._wakeable():
             return
-        if self._speaking():                 # R27: never wake on the agent's own voice
-            self._pending_since = None
-            self.detector.reset()
+        if self._speaking():                 # R27: never wake on an agent's own voice
+            self._pending = None
+            self._reset_detectors()
             return
-        score = self.detector.score(frame)
+        # Every wake model hears every frame, so each keeps its own state; the first to fire
+        # decides whose phrase is checked (R47).
+        fired = None
+        for agent in self.agents:
+            if agent.wakeable:
+                score = agent.b.detector.score(frame)
+                if fired is None and score >= agent.b.detector_bar:
+                    fired = agent
         if now < self._quiet_until:
             return
-        if self._pending_since is None:
-            if score >= self.config.detector_bar:
-                self._pending_since = now
+        if self._pending is None:
+            if fired is not None:
+                self._pending = (fired, now)
             return
-        if now - self._pending_since < SETTLE_AFTER_FIRE_S:
+        agent, since = self._pending
+        if now - since < SETTLE_AFTER_FIRE_S:
             return
-        self._pending_since = None
+        self._pending = None
         window = np.concatenate(self.ring)
         if not self._window_has_speech(window):
             self.log("wake fired with no speech in the window: rejected")
             self._quiet_until = now + REJECT_COOLDOWN_S
             return
-        if not self._voice_lock_passes(window, now):
+        if not self._voice_lock_passes(agent, window, now):
             self._quiet_until = now + REJECT_COOLDOWN_S
             return
-        heard = self._transcribe(window, self.config.wake_phrase)
-        found = self._phrase.search(heard or "")
+        heard = self._transcribe(window, agent.b.wake_phrase)
+        found = agent.phrase.search(heard or "")
         if not found:
             self.log("wake fired but the phrase wasn't heard: rejected")
             self._quiet_until = now + REJECT_COOLDOWN_S
             return
-        self.log("wake")
-        self._start("wake_phrase", preroll=list(self.ring))
-        if self._speaker is not None:
+        self.log(f"wake for {agent.b.agent}")
+        self._start("wake_phrase", agent, preroll=list(self.ring))
+        if agent.b.speaker is not None:
             self.recording.voice_lock = "matched"
         if heard[found.end():].strip(" ,.!?;:-"):
             # Words run on in the same breath as the phrase are already in the window: the
@@ -257,18 +336,18 @@ class CaptureUnit:
 
     # ------------------------------------------------------------------ recording
 
-    def _start(self, mode: Mode, preroll: Optional[List[np.ndarray]] = None) -> None:
+    def _start(self, mode: Mode, agent: _Agent, preroll: Optional[List[np.ndarray]] = None) -> None:
         if not self.audio.is_open:
             self._open(mode)
         now = self.clock()
         if preroll is None:
             keep = int(KEY_PREROLL_S * RATE / FRAME)
             preroll = list(self.ring)[-keep:] if keep else []
-        self.recording = _Recording(mode=mode, started=now, spoken_at=self.wall(), frames=list(preroll),
-                                    last_speech=now, utterance_started=now)
+        self.recording = _Recording(mode=mode, started=now, spoken_at=self.wall(), agent=agent,
+                                    frames=list(preroll), last_speech=now, utterance_started=now)
         self.recording_since = self.wall()
         self.gate.reset()
-        self.indicator.show(self.config.agent, mode)
+        self.indicator.show(agent.b.agent, mode)     # R21: which agent the microphone is open for
 
     def _record(self, frame: np.ndarray, now: float) -> None:
         rec = self.recording
@@ -296,13 +375,14 @@ class CaptureUnit:
         rec = self.recording
         if rec.heard_speech:
             audio = np.concatenate(rec.frames)
-            if rec.mode != "wake_phrase" and self.config.lock_keys and self._speaker is not None:
-                if self._voice_lock_passes(audio, now):
+            if rec.mode != "wake_phrase" and rec.agent.b.lock_keys and rec.agent.b.speaker is not None:
+                if self._voice_lock_passes(rec.agent, audio, now):
                     rec.voice_lock = "matched"
                 else:
                     audio = None             # discarded untranscribed (R37)
             if audio is not None:
-                self.executor.submit(self._transcribe_and_deliver, audio, rec.mode, rec.spoken_at, rec.voice_lock)
+                self.executor.submit(self._transcribe_and_deliver, audio, rec.mode, rec.spoken_at, rec.voice_lock,
+                                     rec.agent)
         else:
             self.log(f"{rec.mode} recording heard no speech: nothing sent")
         rec.frames = []                      # the audio is now the worker's alone, and is dropped after
@@ -313,44 +393,47 @@ class CaptureUnit:
         self.recording_since = None
         self.indicator.hide()
         self._quiet_until = now + COOLDOWN_S
-        if not (self._listening_on() and self._phrase is not None and self.detector is not None):
+        if not (self._listening_on() and self._wakeable()):
             self._close()
         else:
             self.ring.clear()
-            self.detector.reset()
+            self._reset_detectors()
 
-    def _voice_lock_passes(self, audio: np.ndarray, now: float) -> bool:
-        """The voice lock's verdict on ``audio``, before any transcription (R23, R37). A failure
-        discards the audio and tells the agent without content; enough failures in the window lock
-        voice contact out, and during a lockout every attempt is counted and none delivered (R39, R41)."""
-        if self._speaker is None:
+    def _voice_lock_passes(self, agent: _Agent, audio: np.ndarray, now: float) -> bool:
+        """``agent``'s voice lock on ``audio``, before any transcription (R23, R37). A failure
+        discards the audio and tells that agent without content; enough failures in its window lock
+        voice contact with it out, and during a lockout every attempt is counted and none delivered
+        (R39, R41). Each agent's count is its own, so one agent's lockout never silences another."""
+        b = agent.b
+        if b.speaker is None:
             return True
-        if self.locked_out_until is not None:
-            if now < self.locked_out_until and self._guard_lowered():
-                self.log("the operator lowered the guard: the lockout ends early")
-                self.locked_out_until, self.locked_out_attempts = None, 0
-            elif now < self.locked_out_until:
-                self.locked_out_attempts += 1
-                self.log(f"voice locked out: attempt {self.locked_out_attempts} ignored")
+        if agent.locked_out_until is not None:
+            if now < agent.locked_out_until and b.guard_lowered():
+                self.log(f"the operator lowered {b.agent}'s guard: the lockout ends early")
+                agent.locked_out_until, agent.locked_out_attempts = None, 0
+            elif now < agent.locked_out_until:
+                agent.locked_out_attempts += 1
+                self.log(f"voice locked out for {b.agent}: attempt {agent.locked_out_attempts} ignored")
                 return False
-            self.locked_out_until, self.locked_out_attempts = None, 0
-        if self._speaker(audio):
+            agent.locked_out_until, agent.locked_out_attempts = None, 0
+        if b.speaker(audio):
             return True
-        cfg = self.config
-        self._failures = [t for t in self._failures if now - t < cfg.lockout_window_s] + [now]
-        self.log(f"voice not matched ({len(self._failures)} of {cfg.lockout_attempts}): discarded untranscribed")
-        self._on_voice_event("unmatched", {"attempts": len(self._failures), "of": cfg.lockout_attempts})
-        if len(self._failures) >= cfg.lockout_attempts:
-            self.locked_out_until = now + cfg.lockout_s
-            self._failures = []
-            self._on_voice_event("lockout", {"until": self.wall() + cfg.lockout_s})
+        agent.failures = [t for t in agent.failures if now - t < b.lockout_window_s] + [now]
+        self.log(f"voice not matched for {b.agent} ({len(agent.failures)} of {b.lockout_attempts}): "
+                 f"discarded untranscribed")
+        b.on_voice_event("unmatched", {"attempts": len(agent.failures), "of": b.lockout_attempts})
+        if len(agent.failures) >= b.lockout_attempts:
+            agent.locked_out_until = now + b.lockout_s
+            agent.failures = []
+            b.on_voice_event("lockout", {"until": self.wall() + b.lockout_s})
         return False
 
     def _transcribe_and_deliver(self, audio: np.ndarray, mode: Mode, spoken_at: float,
-                                voice_lock: str = "not_declared") -> None:
-        text = (self._transcribe(audio, self.config.wake_phrase if mode == "wake_phrase" else None) or "").strip()
-        if mode == "wake_phrase" and self._phrase is not None:
-            found = self._phrase.search(text)
+                                voice_lock: str = "not_declared", agent: Optional[_Agent] = None) -> None:
+        agent = agent or self.agents[0]
+        text = (self._transcribe(audio, agent.b.wake_phrase if mode == "wake_phrase" else None) or "").strip()
+        if mode == "wake_phrase" and agent.phrase is not None:
+            found = agent.phrase.search(text)
             if found:
                 text = text[found.end():]
         text = text.strip(" ,.!?;:-")
@@ -358,7 +441,7 @@ class CaptureUnit:
             self.log(f"{mode} utterance transcribed to nothing: nothing sent")
             return
         self._deliver(Utterance(trigger=mode, spoken_at=spoken_at, screen=self.lock.state(), text=text,
-                                voice_lock=voice_lock))
+                                voice_lock=voice_lock, agent=agent.b.agent))
 
     # ------------------------------------------------------------------ status
 
@@ -368,7 +451,7 @@ class CaptureUnit:
         rec = self.recording
         return {"listening_since": self.listening_since if rec is None else None,
                 "recording_since": self.recording_since,
-                "recording_for": self.config.agent if rec is not None else None,
+                "recording_for": rec.agent.b.agent if rec is not None else None,
                 "mode": rec.mode if rec is not None else None}
 
     def shutdown(self) -> None:

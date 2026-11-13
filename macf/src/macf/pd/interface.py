@@ -439,6 +439,10 @@ class AssociationLink(_Closed):
         default_factory=lambda: ["pd_unit_state", "pd_carried"])
 
 
+#: A capture unit's name, as a unit is named.
+CAPTURE_UNIT_NAME = r"^[a-z][a-z0-9_-]{0,47}$"
+
+
 class SpeechSettings(_Closed):
     """How an agent sounds (MIS-0008 6.6): the voice, or a blend such as ``am_michael:0.6,bm_george:0.4``,
     its speed, language and an optional ffmpeg filter chain, with the traits the operator accepted
@@ -476,7 +480,14 @@ class VoiceSection(_Closed):
       and ten minutes unless declared otherwise).
     """
 
-    capture_unit: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,47}$")
+    #: The agent's own capture unit; or, on a system whose daemon runs one capture unit for its
+    #: members, None, and ``dispatched_by`` names that system daemon by its card (MIS-0008 R46).
+    capture_unit: Optional[str] = Field(default=None, pattern=r"^[a-z][a-z0-9_-]{0,47}$")
+    dispatched_by: Optional[str] = None
+    #: For a dispatched agent: how far its clock and the dispatcher's may differ, and the longest
+    #: expiry it accepts on a dispatched utterance (MIS-0007 R57; MIS-0008 R50).
+    clock_allowance_s: float = Field(default=5.0, ge=0, le=300, allow_inf_nan=False)
+    max_lifetime_s: float = Field(default=120.0, gt=0, le=3600, allow_inf_nan=False)
     lockout_attempts: int = Field(default=3, ge=1, le=100)
     lockout_window_s: float = Field(default=600.0, gt=0, allow_inf_nan=False)
     lockout_s: float = Field(default=600.0, gt=0, allow_inf_nan=False)
@@ -502,6 +513,29 @@ class VoiceSection(_Closed):
     speech: Optional[SpeechSettings] = None
 
     @model_validator(mode="after")
+    def _one_source(self) -> "VoiceSection":
+        """An agent's voice comes from its own capture unit or from its system's, never both: two
+        microphones open for one agent would each decide alone (R46). A dispatched agent declares
+        no phrase or keys of its own, since the binding from each phrase or key to an agent lives
+        in the system declaration, which no agent can write, so no agent can bind itself to
+        another's phrase or key (MIS-0007 R29)."""
+        if (self.capture_unit is None) == (self.dispatched_by is None):
+            raise ValueError("voice names either its own capture_unit or dispatched_by, the system daemon whose "
+                             "capture unit serves it, and not both (MIS-0008 R46)")
+        if self.dispatched_by is not None:
+            from macf import calling_card
+            try:
+                calling_card.read_declared(self.dispatched_by)
+            except calling_card.CardError as e:
+                raise ValueError(f"voice.dispatched_by names a system daemon by its card: {e}") from e
+            own = [n for n in ("wake_phrase", "wake_model", "hold_key", "toggle_key") if getattr(self, n)]
+            if own or self.trigger_devices:
+                raise ValueError(f"a dispatched agent declares no {', '.join(own) or 'trigger_devices'} of its own: "
+                                 f"its system declaration binds its phrase and keys, which no agent can write "
+                                 f"(MIS-0007 R29)")
+        return self
+
+    @model_validator(mode="after")
     def _keys_need_devices_and_differ(self) -> "VoiceSection":
         keys = [k for k in (self.hold_key, self.toggle_key) if k]
         if keys and not self.trigger_devices:
@@ -512,6 +546,69 @@ class VoiceSection(_Closed):
         if bool(self.wake_phrase) != bool(self.wake_model):
             raise ValueError("voice declares a wake phrase without a wake model, or a model without its phrase; "
                              "a wake needs both (MIS-0008 R23)")
+        return self
+
+
+class MemberVoiceBinding(_Closed):
+    """What opens the microphone for one member agent, as its system declaration binds it
+    (MIS-0008 R47; MIS-0007 R29): its wake phrase and model, and its keys."""
+
+    wake_phrase: Optional[str] = Field(default=None, min_length=3, max_length=60)
+    wake_model: Optional[str] = Field(default=None, min_length=1)
+    hold_key: Optional[str] = Field(default=None, pattern=r"^KEY_[A-Z0-9_]{1,24}$")
+    toggle_key: Optional[str] = Field(default=None, pattern=r"^KEY_[A-Z0-9_]{1,24}$")
+    detector_bar: Optional[float] = Field(default=None, gt=0, le=1)
+
+    @model_validator(mode="after")
+    def _something_opens_it(self) -> "MemberVoiceBinding":
+        if bool(self.wake_phrase) != bool(self.wake_model):
+            raise ValueError("a member's binding declares a wake phrase without its model, or a model without "
+                             "its phrase; a wake needs both (MIS-0008 R23)")
+        if not (self.wake_phrase or self.hold_key or self.toggle_key):
+            raise ValueError("a member's binding names a wake phrase or a key; with neither, nothing could "
+                             "open the microphone for it")
+        if self.hold_key and self.hold_key == self.toggle_key:
+            raise ValueError(f"a member's binding uses {self.hold_key} as both the hold key and the toggle key")
+        return self
+
+
+class VoiceDispatchSection(_Closed):
+    """A system daemon's one capture unit for its member agents (MIS-0008 6.8, R46 to R50): the
+    unit, the key it signs dispatched utterances with, how long each stays valid, the devices its
+    keys come from, and each member's binding."""
+
+    capture_unit: str = Field(pattern=CAPTURE_UNIT_NAME)
+    #: The system daemon's own private key, held by its account, which no agent runs as. Its public
+    #: half is declared in the operator's registry under the system daemon's card (MIS-0007 R53).
+    signing_key_file: str = Field(min_length=1)
+    lifetime_s: float = Field(default=30.0, gt=0, le=600, allow_inf_nan=False)
+    trigger_devices: List[str] = Field(default_factory=list, max_length=8)
+    end_silence_s: float = Field(default=1.2, gt=0, le=30, allow_inf_nan=False)
+    continual_close_s: float = Field(default=30.0, gt=0, le=3600, allow_inf_nan=False)
+    members: Dict[str, MemberVoiceBinding] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _members_told_apart(self) -> "VoiceDispatchSection":
+        from macf import calling_card
+        from macf.voice.capture.members import check_members
+        seen: Dict[str, str] = {}
+        for card in self.members:
+            try:
+                calling_card.read_declared(card)
+            except calling_card.CardError as e:
+                raise ValueError(f"voice_dispatch.members is keyed by each member's card: {e}") from e
+            # Cards compare without regard to case (MIS-0002 R164), so two spellings are one member
+            # with two bindings, which the clash check would never compare.
+            key = calling_card.lowercase(card)
+            if key in seen:
+                raise ValueError(f"voice_dispatch binds {seen[key]} and {card}, which are one card in two cases; "
+                                 f"bind each member once")
+            seen[key] = card
+        check_members(self.members)          # R26: a phrase or key two members share is refused
+        keyed = [c for c, m in self.members.items() if m.hold_key or m.toggle_key]
+        if keyed and not self.trigger_devices:
+            raise ValueError(f"voice_dispatch binds keys for {', '.join(sorted(keyed))} but names no trigger_devices "
+                             f"to read them from (MIS-0008 R17)")
         return self
 
 
@@ -590,23 +687,48 @@ class Declaration(_Closed):
     #: The agent's voice section (MIS-0008). None: the agent takes no voice input, and its
     #: daemon serves no voice socket.
     voice: Optional[VoiceSection] = None
+    #: A system daemon's one capture unit for its members (MIS-0008 6.8). None: it runs none.
+    voice_dispatch: Optional[VoiceDispatchSection] = None
+
+    def _capture_unit_declared(self, name: str, where: str) -> None:
+        # MIS-0008 R12: utterances come only from a capture unit a declaration names, so the
+        # name must be a unit this daemon runs, and one that isn't the session.
+        unit = next((u for u in self.units if u.name == name), None)
+        if unit is None:
+            raise ValueError(f"{where} names {name!r}, which is not a declared unit; declare the capture unit "
+                             f"under units (MIS-0008 R12)")
+        if unit.kind == "session":
+            raise ValueError(f"{where} names the session unit {unit.name!r}; the capture unit is a service of "
+                             f"its own (MIS-0008 R12)")
+
+    @model_validator(mode="after")
+    def _voice_dispatch_serves_declared_members(self) -> "Declaration":
+        if self.voice_dispatch is None:
+            return self
+        if self.kind != "system":
+            raise ValueError("voice_dispatch belongs to a system daemon's declaration: one capture unit serves "
+                             "the system's member agents (MIS-0008 R46)")
+        self._capture_unit_declared(self.voice_dispatch.capture_unit, "voice_dispatch.capture_unit")
+        from macf import calling_card
+        strangers = [c for c in self.voice_dispatch.members if not any(calling_card.same(c, m) for m in self.members)]
+        if strangers:
+            raise ValueError(f"voice_dispatch binds {', '.join(sorted(strangers))}, which this system doesn't "
+                             f"declare as members; only a member's utterances travel down its association")
+        return self
 
     @model_validator(mode="after")
     def _voice_names_a_declared_capture_unit(self) -> "Declaration":
-        # MIS-0008 R12: utterances come only from a capture unit a declaration names, so the
-        # name must be a unit this daemon runs, and one that isn't the session.
         if self.voice is None:
             return self
         if self.kind != "agent":
-            raise ValueError("a voice section belongs to an agent's declaration; one capture unit for "
-                             "several agents on a system daemon is not built yet (MIS-0008 6.8)")
-        unit = next((u for u in self.units if u.name == self.voice.capture_unit), None)
-        if unit is None:
-            raise ValueError(f"voice.capture_unit names {self.voice.capture_unit!r}, which is not a declared "
-                             f"unit; declare the capture unit under units (MIS-0008 R12)")
-        if unit.kind == "session":
-            raise ValueError(f"voice.capture_unit names the session unit {unit.name!r}; the capture unit is "
-                             f"a service of its own (MIS-0008 R12)")
+            raise ValueError("a voice section belongs to an agent's declaration; a system daemon's capture unit "
+                             "for its members is declared under voice_dispatch (MIS-0008 6.8)")
+        if self.voice.capture_unit is not None:
+            self._capture_unit_declared(self.voice.capture_unit, "voice.capture_unit")
+        elif self.association is None:
+            raise ValueError(f"voice.dispatched_by names {self.voice.dispatched_by}, but this declaration names no "
+                             f"association; dispatched utterances arrive only through the association's broker "
+                             f"(MIS-0008 R49)")
         # An organization allowlist replaces the client's default list, so a voice channel it leaves
         # out would never load, and nothing would say why (MIS-0002-R124).
         listed = {c.plugin for c in self.allowlisted_channels or []}
@@ -766,6 +888,9 @@ EVENT_VOICE_CHANNEL_DECLARED = "pd_voice_channel_declared"
 EVENT_VOICE_UNMATCHED = "pd_voice_unmatched"
 #: The agent's guard was raised by a lockout, with when it ends, or lowered by the operator (R42, R44).
 EVENT_VOICE_GUARD = "pd_voice_guard"
+#: A dispatched utterance's check by the member daemon: the verdict, the nonce and expiry of an
+#: accepted one (which is the nonce record a restart rebuilds, MIS-0007 R56), never the words.
+EVENT_VOICE_DISPATCH = "pd_voice_dispatch"
 #: Mail sat in the agent's pickup box past its declared threshold, and the box was then
 #: emptied (MIS-0002-R55). One of each per unread spell.
 EVENT_UNREAD_MAIL = "pd_unread_mail"
@@ -1007,6 +1132,8 @@ MAX_UTTERANCE_TEXT = 8000
 _TRIGGER = Literal["wake_phrase", "hold_key", "continual_voice"]
 _SCREEN = Literal["unlocked", "locked", "unknown"]
 _VOICE_LOCK = Literal["matched", "not_declared"]
+#: The closed values an utterance's metadata takes, for the signed form a system dispatches (6.8).
+UtteranceTrigger, UtteranceScreen, UtteranceVoiceLock = _TRIGGER, _SCREEN, _VOICE_LOCK
 
 
 class UtteranceRecord(_Closed):
@@ -1025,6 +1152,10 @@ class UtteranceRecord(_Closed):
     voice_lock: _VOICE_LOCK
     capture_unit: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,47}$")
     text: str = Field(min_length=1, max_length=MAX_UTTERANCE_TEXT)
+    #: How it reached the daemon, as the daemon judged it, never as the sender said (MIS-0007 R52):
+    #: from the agent's own capture unit, checked by the kernel's peer pid, or dispatched by its
+    #: system's capture unit with the signature verified (MIS-0008 R48).
+    route: Literal["own_capture_unit", "system_signed"] = "own_capture_unit"
 
 
 class StatusRequest(_Closed):

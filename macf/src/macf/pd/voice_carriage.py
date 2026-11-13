@@ -33,7 +33,8 @@ from pydantic import ValidationError
 
 from macf.agent_events_log import append_event
 from macf.notify.session import descends_from
-from macf.pd.interface import (EVENT_VOICE_CHANNEL_DECLARED, EVENT_VOICE_GUARD, EVENT_VOICE_UNMATCHED,
+from macf.pd.interface import (EVENT_VOICE_CHANNEL_DECLARED, EVENT_VOICE_DISPATCH, EVENT_VOICE_GUARD,
+                               EVENT_VOICE_UNMATCHED,
                                EVENT_VOICE_UTTERANCE, ChannelHello, Response, VoiceEventRequest, VoiceGuardRequest,
                                UtteranceRecord, UtteranceRequest, VoiceSection)
 from macf.utils.peercred import peer_credentials
@@ -44,6 +45,9 @@ HELLO_TIMEOUT_S = 2.0
 MAX_HELLO_BYTES = 8 * 1024
 #: The source a voice channel's hello must name to be sent utterances.
 TAKES = "utterance"
+#: Why an utterance with no channel to take it is refused rather than held.
+NO_CHANNEL = ("no Voice Input Channel is attached to the session, so the words were dropped, not held "
+              "(MIS-0008 R11)")
 
 
 def new_utterance_id() -> str:
@@ -209,6 +213,10 @@ class VoiceCarriage:
         capture unit gets a receipt (R11) and the log gets the metadata (R10)."""
         utterance_id = new_utterance_id()
         unit = self.voice.capture_unit
+        if unit is None:
+            return self._receipt(request, utterance_id, None, "refused",
+                                 f"this agent's voice comes only from {self.voice.dispatched_by}'s capture unit, "
+                                 f"signed, through its association (MIS-0008 R46, R48)", peer_pid=peer.pid)
         live = self._incarnation(unit)
         if live is None or not descends_from(peer.pid, *live):
             why = (f"the capture unit {unit!r} isn't running" if live is None
@@ -219,6 +227,12 @@ class VoiceCarriage:
         record = UtteranceRecord(utterance_id=utterance_id, trigger=request.trigger, spoken_at=request.spoken_at,
                                  screen=request.screen, voice_lock=request.voice_lock, capture_unit=unit,
                                  text=request.text)
+        if not self._send(record):
+            return self._receipt(request, utterance_id, unit, "refused", NO_CHANNEL)
+        return self._receipt(request, utterance_id, unit, "delivered", None)
+
+    def _send(self, record: UtteranceRecord) -> int:
+        """Hand one utterance to every voice channel that said it takes them; how many took it."""
         line = record.model_dump_json().encode() + b"\n"
         sent = 0
         for conn, attached in list(self.channels.items()):
@@ -229,11 +243,50 @@ class VoiceCarriage:
                 sent += 1
             except OSError as e:
                 self._drop(conn, f"sending an utterance failed: {e}")
-        if not sent:
-            return self._receipt(request, utterance_id, unit, "refused",
-                                 "no Voice Input Channel is attached to the session, so the words were dropped, "
-                                 "not held (MIS-0008 R11)")
-        return self._receipt(request, utterance_id, unit, "delivered", None)
+        return sent
+
+    def dispatched(self, payload: bytes, *, retained: bool, verifier, now: Optional[float] = None,
+                   raise_notice: Callable[[str, str], bool] = lambda source, notice_id: False) -> dict:
+        """One message from the system's capture unit, on this agent's voice topic (MIS-0008 R48 to
+        R50). The verifier decides; every verdict is recorded without the words (R10), and a refusal
+        is recorded with its reason (R50). An accepted nonce is recorded before anything is sent, so
+        a restart that follows can't accept it again (MIS-0007 R56). Returns the receipt the member
+        publishes on its own subtree: verdict and metadata, never the words."""
+        now = time.time() if now is None else now
+        check = verifier.check(payload, retained=retained, now=now)
+        env = check.envelope
+        data = {"agent": self.card, "verdict": check.verdict}
+        if env is not None:
+            data.update(signer=env.signer, nonce=env.nonce, expires_at=env.expires_at, type=env.type)
+            if env.type == "utterance":
+                data.update(trigger=env.trigger, chars=len(env.text))
+            else:
+                data.update(kind=env.kind)
+        else:
+            data["bytes"] = len(payload)
+        if check.reason:
+            data["reason"] = check.reason
+        append_event(EVENT_VOICE_DISPATCH, data)
+        receipt = {"nonce": env.nonce if env is not None else None, "verdict": check.verdict}
+        if not check.accepted:
+            print(f"⚠️ MACF: pd: refused a dispatched utterance ({check.verdict}): {check.reason}", file=sys.stderr)
+            return {**receipt, "receipt": "refused"}
+        if env.type == "voice_event":
+            # The same notices without content as from the agent's own capture unit (R37, R42).
+            reply = self._voice_lock_event(env.kind, env.attempts, env.of, env.until, raise_notice)
+            return {**receipt, "receipt": "recorded" if reply.ok else "refused"}
+        utterance_id = new_utterance_id()
+        record = UtteranceRecord(utterance_id=utterance_id, trigger=env.trigger, spoken_at=env.spoken_at,
+                                 screen=env.screen, voice_lock=env.voice_lock, capture_unit=env.capture_unit,
+                                 text=env.text, route="system_signed")
+        request = UtteranceRequest(op="utterance", trigger=env.trigger, spoken_at=env.spoken_at, screen=env.screen,
+                                   voice_lock=env.voice_lock, text=env.text)
+        if not self._send(record):
+            reply = self._receipt(request, utterance_id, env.capture_unit, "refused", NO_CHANNEL,
+                                  dispatched_by=env.signer)
+        else:
+            reply = self._receipt(request, utterance_id, env.capture_unit, "delivered", None, dispatched_by=env.signer)
+        return {**receipt, "receipt": reply.receipt, "utterance_id": utterance_id}
 
     def _receipt(self, request: UtteranceRequest, utterance_id: str, unit: Optional[str], receipt: str,
                  reason: Optional[str], **extra) -> Response:
@@ -259,15 +312,19 @@ class VoiceCarriage:
         content for the agent (R37), and on a lockout the guard raised (R42). Taken only from the
         declared capture unit, as an utterance is (R12)."""
         unit = self.voice.capture_unit
-        live = self._incarnation(unit)
+        live = self._incarnation(unit) if unit is not None else None
         if live is None or not descends_from(peer.pid, *live):
             return Response(ok=False, error=f"a voice event comes only from the declared capture unit {unit!r} (MIS-0008 R12)")
+        return self._voice_lock_event(request.kind, request.attempts, request.of, request.until, raise_notice)
+
+    def _voice_lock_event(self, kind: str, attempts, of, until, raise_notice: Callable[[str, str], bool]) -> Response:
+        """Record a voice-lock event and owe the agent its notice, whichever route it came by."""
         stamp = time.time_ns()
-        if request.kind == "unmatched":
-            append_event(EVENT_VOICE_UNMATCHED, {"agent": self.card, "attempts": request.attempts, "of": request.of})
+        if kind == "unmatched":
+            append_event(EVENT_VOICE_UNMATCHED, {"agent": self.card, "attempts": attempts, "of": of})
             raise_notice("pd_voice_unmatched", f"pd_voice_unmatched:{stamp}")
             return Response(ok=True)
-        until = request.until if request.until is not None else time.time() + self.voice.lockout_s
+        until = until if until is not None else time.time() + self.voice.lockout_s
         append_event(EVENT_VOICE_GUARD, {"agent": self.card, "raised_until": until, "by": "lockout"})
         raise_notice("pd_voice_lockout", f"pd_voice_lockout:{stamp}")
         return Response(ok=True, voice_guard_until=until)

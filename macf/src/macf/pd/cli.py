@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 
 def add_pd_parser(sub) -> None:
@@ -416,8 +416,50 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
     _say_allowlist(home)
     _say_receipts()
     _say_refused_sources()
+    _say_voice_dispatch(home)
     _say_tray(report)
     return 0
+
+
+def voice_dispatch_lines(declaration, last: Optional[dict]) -> List[str]:
+    """What status says of one capture unit serving several agents (MIS-0008 R46): on a system,
+    whom its capture unit serves; on a member it serves, by whom, and how the last message down
+    ended, by its metadata and never its words. ``last`` is the newest pd_voice_dispatch record."""
+    lines = []
+    if declaration.voice_dispatch is not None:
+        served = ", ".join(sorted(declaration.voice_dispatch.members))
+        lines.append(f"  voice: the capture unit {declaration.voice_dispatch.capture_unit} serves {served}")
+    voice = declaration.voice
+    if voice is not None and voice.dispatched_by is not None:
+        line = f"  voice: from {voice.dispatched_by}'s capture unit, signed"
+        if last is None:
+            line += "; nothing has come down yet"
+        else:
+            data = last.get("data") or {}
+            line += (f"; the last message down, a {data.get('type', 'message')}, was {data.get('verdict')} "
+                     f"at {_when(last.get('timestamp'))}")
+            if data.get("verdict") != "accepted" and data.get("reason"):
+                line += f": {data['reason']}"
+        lines.append(line)
+    return lines
+
+
+def _say_voice_dispatch(home) -> None:
+    from macf.agent_events_log import read_events
+    from macf.pd.interface import EVENT_VOICE_DISPATCH, Declaration, declaration_path
+    path = declaration_path(home)
+    if not path.is_file():
+        return
+    try:
+        declaration = Declaration.model_validate_json(path.read_text())
+    except (OSError, ValueError) as e:
+        print(f"  ⚠️ voice: can't read the declaration to say how voice reaches this agent: {e}")
+        return
+    if declaration.voice_dispatch is None and (declaration.voice is None or declaration.voice.dispatched_by is None):
+        return
+    last = next(iter(read_events(reverse=True, scope="all", only=(EVENT_VOICE_DISPATCH,))), None)
+    for line in voice_dispatch_lines(declaration, last):
+        print(line)
 
 
 def _say_refused_sources() -> None:

@@ -110,6 +110,11 @@ class AlreadyRunning(RuntimeError):
     (agent_MUST_have_one_primal_daemon))."""
 
 
+def voice_members(decl) -> List[str]:
+    """The members a system's capture unit serves, whose voice topics its broker opens (MIS-0008 R49)."""
+    return sorted(decl.voice_dispatch.members) if decl.voice_dispatch is not None else []
+
+
 def card_for_home(agent_home: Path) -> str:
     """The calling card of the agent whose home this is, read from that home's own files
     by the step 1 interface and never from the environment (MIS-0002-R02
@@ -184,15 +189,19 @@ class Daemon:
         self._rendered_silenced: List[str] = []
         #: Whether the broker must be asked to reread rules rendered while it ran (R152).
         self._reload_owed = False
-        render_files(self.card, decl.broker, self.base, placeholders, members=decl.members)
+        render_files(self.card, decl.broker, self.base, placeholders, members=decl.members,
+                     voice_members=voice_members(decl))
         self.broker_link = BrokerLink(self.card, get_log_path(), decl.broker, placeholders,
                                       members=decl.members, on_findings=self._member_findings,
                                       rules=lambda: self.rules)
         if decl.association is not None:
             from macf.pd.broker_link import ExportLink
+            dispatched = decl.kind == "agent" and decl.voice is not None and decl.voice.dispatched_by is not None
             self.export_link = ExportLink(self.card, get_log_path(), decl.association, placeholders,
                                           on_unreachable=self._export_unreachable,
-                                          snapshot=lambda: [(s.unit, s.state) for s in self.core.statuses()])
+                                          snapshot=lambda: [(s.unit, s.state) for s in self.core.statuses()],
+                                          on_voice=self._voice_dispatched if dispatched else None)
+        self._voice_verifier = None
         self._listener: Optional[socket.socket] = None
         self._channel_listener: Optional[socket.socket] = None
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound
@@ -365,7 +374,7 @@ class Daemon:
             return
         decl = self.core.declaration
         render_files(self.card, decl.broker, self.base, self._broker_placeholders, members=decl.members,
-                     silenced_readers=silenced)
+                     silenced_readers=silenced, voice_members=voice_members(decl))
         self._rendered_silenced = silenced
         self._reload_owed = reload
 
@@ -556,6 +565,29 @@ class Daemon:
         link = self.core.declaration.association
         append_event("pd_export_unreachable", {"agent": self.card, "host": link.host, "port": link.port,
                                                "reason": reason})
+
+    def voice_verifier(self):
+        """The check this agent's dispatched utterances pass (MIS-0008 R48, R50), built once: the
+        dispatcher its voice section names, that card's keys from the operator's registry read at
+        each check, and the accepted nonces rebuilt from the log, so a restart forgets none still
+        in force (MIS-0007 R56)."""
+        if self._voice_verifier is None:
+            from macf.amail.registry import Registry, registry_path
+            from macf.pd.interface import EVENT_VOICE_DISPATCH
+            from macf.voice.dispatch import NonceRecord, Verifier
+            voice = self.core.declaration.voice
+            registry = Registry(registry_path())
+            nonces = NonceRecord.from_events(read_events(scope="all", only=(EVENT_VOICE_DISPATCH,)), self.card,
+                                             voice.clock_allowance_s)
+            self._voice_verifier = Verifier(self.card, voice.dispatched_by, registry.keys_for, nonces=nonces,
+                                            allowance_s=voice.clock_allowance_s,
+                                            max_lifetime_s=voice.max_lifetime_s)
+        return self._voice_verifier
+
+    def _voice_dispatched(self, payload: bytes, retained: bool) -> dict:
+        """One message on this agent's voice topic, from the export link on the daemon's thread."""
+        notice = self.notifier.raise_notice if self.notifier is not None else (lambda source, notice_id: False)
+        return self.voice.dispatched(payload, retained=retained, verifier=self.voice_verifier(), raise_notice=notice)
 
     def stop(self, units: bool = False) -> None:
         """Ask ``serve`` to finish, and with ``units`` to stop every unit first; a plain stop,

@@ -261,6 +261,13 @@ It concerns every agent that will take dictation or speak, every deployment that
   - signed as MIS-0007 requires of operator input;
   - readable only by its target;
   - refused and recorded when a check fails.
+- **What building them settled** (none changes a requirement):
+  - **The bindings live in the system declaration.** Each member's phrase and keys are bound there, under `voice_dispatch`, and a member served this way declares none of its own. MIS-0007's R29 reasoning applies: no agent can write the system declaration, so no agent can bind itself to another's phrase or key.
+  - **The key is the system daemon's.** It runs as an account no agent runs as (MIS-0007 R53), and its public key is declared in the operator's registry under the system daemon's card. A member verifies against the keys the registry holds for the dispatcher its own voice section names.
+  - **The member checks in a fixed order.** A retained message is dropped before it is read, since the broker would replay it on every reconnect (MIS-0007 R67's reasoning). Then the signature is checked, before the target, expiry and nonce, so a refusal's reason is read from a message the dispatcher signed. A member also refuses an expiry further off than it accepts, since its nonce record would otherwise have to hold a nonce as long as a sender chose.
+  - **Accepted nonces are log records.** They are recorded before the words are sent, and rebuilt from the log at start, so a restart forgets none still in force (MIS-0007 R56).
+  - **The receipt goes up as data.** The member publishes it on its own subtree, carrying the verdict and ids, never the words (MIS-0007 R60).
+  - **Each member's voice lock is counted alone.** One member's lockout never silences another.
 
 **Policy and skills (R51, R52).** Policy ships with the capability (`core_principles`). The operator asked that the guided procedures be policy invoked by skills. A skill that held its own rules would drift from the policy.
 
@@ -363,11 +370,11 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R43 | judgment | the operator, after each lockout | pending |
 | R44 | decidable | macf/tests/test_voice_lock.py::test_agent_cannot_lower_own_guard | passing |
 | R45 | judgment | the maintainers, at review of the voice_lock policy | pending |
-| R46 | decidable | macf/tests/test_voice_dispatch.py::test_system_capture_serves_members | planned |
-| R47 | decidable | macf/tests/test_voice_dispatch.py::test_target_follows_trigger | planned |
-| R48 | decidable | macf/tests/test_voice_dispatch.py::test_dispatched_utterance_signed | planned |
-| R49 | decidable | macf/tests/test_voice_dispatch.py::test_member_reads_only_own_voice_subtree | planned |
-| R50 | decidable | macf/tests/test_voice_dispatch.py::test_bad_signature_expiry_or_nonce_refused | planned |
+| R46 | decidable | macf/tests/test_voice_dispatch.py::test_system_capture_serves_members | passing |
+| R47 | decidable | macf/tests/test_voice_dispatch.py::test_target_follows_trigger | passing |
+| R48 | decidable | macf/tests/test_voice_dispatch.py::test_dispatched_utterance_signed | passing |
+| R49 | decidable | macf/tests/test_voice_dispatch.py::test_member_reads_only_own_voice_subtree | passing |
+| R50 | decidable | macf/tests/test_voice_dispatch.py::test_bad_signature_expiry_or_nonce_refused | passing |
 | R51 | judgment | the maintainers, at review of the landing pull request | pending |
 | R52 | judgment | the maintainers, at review of the landing pull request | pending |
 | R53 | judgment | the operator, at review of each agent's handling | pending |
@@ -400,6 +407,7 @@ If the pull request grows too large to review, it splits after stage 4 and after
 - **Q05** Which speech engines beyond Kokoro does voice generation support, and may a voice blend several? The maintainers decide, after the selection prototype. (speech_engine_scope)
 - **Q06** How long are kept training clips for the wake model and the voice lock retained, and may an operator require their deletion at any time? The operator decides, before Final-Comment. (voice_clip_retention)
 - **Q07** Is 0008 the right number? It is provisional until the Secretary, or before one is designated the operator, confirms it. (mis_number_confirmation)
+- **Q08** Where does a system's shared capture unit get its microphone? The MIS-0007 draft places a capture unit in the operator's login session, where the microphone grant and the audio server are, while R46 runs the shared unit on the system daemon's account, which has neither on a desktop. Either the system account is given the audio device directly, or the shared unit runs in the login session and still signs with a key out of every agent's reach. The prototype runs it on injected backends. The maintainers decide, from the first live run of the shared unit. (shared_capture_audio_source)
 
 ## 14 Deliberation Record
 
