@@ -181,6 +181,23 @@ class Unit(_Closed):
         return v
 
     @model_validator(mode="after")
+    def _wrapper_outlasts_its_stop_path(self) -> "Unit":
+        # A unit that runs a MacEff wrapper is killed stop_grace_s after its stop. The wrapper
+        # needs a poll to notice the stop and then gives its child a grace, so a shorter unit
+        # grace kills the wrapper first and the child runs on, orphaned (#992, #1001).
+        wrappers = {"macf.pd.watched_unit", "macf.pd.broker_unit"}
+        runs = [b for a, b in zip(self.command, self.command[1:]) if a == "-m" and b in wrappers]
+        if runs:
+            from macf.pd.broker_unit import WRAPPER_UNIT_STOP_GRACE_S
+            if self.stop_grace_s < WRAPPER_UNIT_STOP_GRACE_S:
+                raise ValueError(f"unit {self.name}: runs {runs[0]} with stop_grace_s {self.stop_grace_s:g}; "
+                                 f"declare stop_grace_s: {WRAPPER_UNIT_STOP_GRACE_S:g} or more, since the "
+                                 f"wrapper needs that long to stop its program, and with less the daemon "
+                                 f"kills the wrapper first and leaves the program running "
+                                 f"(persistent_layer 3.2)")
+        return self
+
+    @model_validator(mode="after")
     def _session_restarts_always(self) -> "Unit":
         # The session unit's wrapper exits 0 however the session ends, since it reports its
         # tmux server, not claude: under on-failure or never, an ended session stays down.
