@@ -570,8 +570,8 @@ def cmd_budget(_: argparse.Namespace) -> int:
     if used is not None:
         try:
             payload["used"] = float(used)
-        except ValueError:
-            pass
+        except ValueError as e:
+            print(f"⚠️ MACF: MACEFF_TOKEN_USED is not a number (ignoring it): {e}", file=sys.stderr)
     print(json.dumps(payload, indent=2))
     return 0
 
@@ -1660,7 +1660,7 @@ def cmd_statusline(args: argparse.Namespace) -> int:
                 stdin_data = sys.stdin.read().strip()
                 if stdin_data:
                     cc_json = json.loads(stdin_data)
-            except (json.JSONDecodeError, Exception):
+            except (json.JSONDecodeError, Exception):  # noqa: S110 - statusline runs on every refresh and its stderr must stay clean; non-JSON stdin is normal when run by hand, and MACF data is used instead
                 # Ignore stdin parsing failures - use MACF data only
                 pass
 
@@ -2742,7 +2742,8 @@ def other_claude_md_in_load_path(reconciled_path):
     for c in candidates:
         try:
             rc = c.resolve()
-        except OSError:
+        except OSError as e:
+            print(f"⚠️ MACF: could not resolve {c} (skipping it): {e}", file=sys.stderr)
             continue
         if rc == reconciled or rc in seen or not c.exists():
             continue
@@ -4079,8 +4080,8 @@ def cmd_mode_set_work(args: argparse.Namespace) -> int:
                     })
             except Exception as e:
                 print(f"⚠️ MACF: PLAY_TIME mode_transitions update failed: {e}", file=sys.stderr)
-    except (ImportError, OSError, ValueError):
-        pass
+    except (ImportError, OSError, ValueError) as e:
+        print(f"⚠️ MACF: PLAY_TIME transition recording skipped (mode change not recorded on the play-time task): {e}", file=sys.stderr)
 
     return 0
 
@@ -5221,7 +5222,7 @@ def get_display_mtime(tasks_dir) -> float:
         log_path = get_log_path()
         if log_path and log_path.exists():
             latest = max(latest, _display_events_mtime(log_path))
-    except (OSError, ImportError):
+    except (OSError, ImportError):  # noqa: S110 - polled on every redraw tick, so a warning here would corrupt the live frame; store-only detection is the fallback
         pass  # event log unreadable: fall back to store-only detection
     return latest
 
@@ -8128,7 +8129,8 @@ def cmd_task_hide_completed(args: argparse.Namespace) -> int:
                     hidden_count += 1
                 else:
                     skipped_count += 1
-        except (json.JSONDecodeError, IOError):
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"⚠️ MACF: could not read task file {task_file.name} to check its status (skipping it): {e}", file=sys.stderr)
             continue
 
     # Re-count after all renames complete. Same dotfile trap: an unfiltered
@@ -9225,7 +9227,8 @@ def _commit_landed_in_merged_pr(repo_slug: str, commits: list) -> bool:
             )
             if result.returncode == 0 and result.stdout.strip() not in ("", "[]"):
                 return True
-        except (FileNotFoundError, _subprocess.TimeoutExpired):
+        except (FileNotFoundError, _subprocess.TimeoutExpired) as e:
+            print(f"⚠️ MACF: gh pr list for {sha[:7]} failed (trying next commit): {e}", file=sys.stderr)
             continue
     return False
 
@@ -9485,7 +9488,7 @@ def _autowork_counts(task, reader, scoped_ids):
             for p in ldir.glob("*.md"):
                 try:
                     named = _dt.strptime(p.name[:17], "%Y-%m-%d_%H%M%S")
-                except ValueError:
+                except ValueError:  # noqa: S112 - non-timestamped files (INDEX.md and similar) are expected here; a warning per file would flood
                     continue      # INDEX.md, and anything else not named for a moment
                 if named >= since:
                     learnings += 1
@@ -10284,7 +10287,7 @@ def _check_port_available(port: int, host: str = "127.0.0.1") -> tuple:
         try:
             s.bind((host, port))
             return True, None
-        except OSError:
+        except OSError:  # noqa: S110 - a failed bind is how a busy port is detected; the lsof lookup below names the owner
             pass
     # Port in use — try to find owner via lsof
     try:
@@ -10295,8 +10298,8 @@ def _check_port_available(port: int, host: str = "127.0.0.1") -> tuple:
         if result.returncode == 0 and result.stdout.strip():
             owner_pid = int(result.stdout.strip().split("\n")[0])
             return False, owner_pid
-    except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
-        pass
+    except (subprocess.TimeoutExpired, ValueError, FileNotFoundError) as e:
+        print(f"⚠️ MACF: lsof port owner lookup failed (port {port} reported busy, owner unknown): {e}", file=sys.stderr)
     return False, None
 
 
@@ -14722,7 +14725,7 @@ def main(argv=None) -> None:
     try:
         import argcomplete
         argcomplete.autocomplete(parser)
-    except ImportError:
+    except ImportError:  # noqa: S110 - argcomplete is optional; a warning on every CLI run would reach users who never installed it
         pass  # argcomplete not installed — completions silently disabled
 
     args = parser.parse_args(argv)

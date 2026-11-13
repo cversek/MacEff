@@ -639,7 +639,7 @@ def read_events(
 
             try:
                 event = json.loads(line)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError:  # noqa: S112 - the log is appended to while it is read, so a torn trailing line is expected, and a warning would fire on every overlapping read
                 # Skip malformed lines
                 continue
 

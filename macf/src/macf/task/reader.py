@@ -268,7 +268,8 @@ class TaskReader:
                     file_path=str(task_file),
                 )
                 tasks.append(task)
-            except (json.JSONDecodeError, IOError):
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"⚠️ MACF: could not read task file {task_file} (left out of the list): {e}", file=sys.stderr)
                 continue
         return tasks
 

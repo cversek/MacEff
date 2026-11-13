@@ -677,7 +677,7 @@ class Scheduler:
                 kept.write_bytes(b"")
         try:
             run.stdout_path.unlink()
-        except FileNotFoundError:
+        except FileNotFoundError:  # noqa: S110 - the run removed the output or never wrote it; nothing is lost
             pass  # noqa: MACEFF003 - the run removed it or never wrote it; nothing is lost
         self._say(EVENT_DONE, {"schedule": run.schedule.name, "scheduled_for": _iso(run.scheduled_for),
                                "outcome": outcome, "exit_code": code, "wake": wake})
@@ -745,7 +745,7 @@ class Scheduler:
     def _signal(self, run: _Run, sig) -> None:
         try:
             os.killpg(run.proc.pid, sig)
-        except ProcessLookupError:
+        except ProcessLookupError:  # noqa: S110 - the group ended between the poll and the signal; there is nothing left to signal
             pass  # noqa: MACEFF003 - the group ended between the poll and the signal
 
     def stop_run(self, name: str, why: str) -> None:

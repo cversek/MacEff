@@ -1123,8 +1123,8 @@ def configure_claude_settings(
     if settings_file.exists():
         try:
             existing_settings = json.loads(settings_file.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass  # Start fresh if file is corrupted
+        except (json.JSONDecodeError, OSError) as e:
+            log(f"⚠️ MACF: could not parse {settings_file} (starting it fresh, so its contents are overwritten): {e}")
     # Merge: existing user keys + managed keys (managed keys win on conflict)
     final_settings = {**existing_settings, **merged_settings.model_dump(exclude_none=True)}
     settings_file.write_text(json.dumps(final_settings, indent=2))
@@ -1135,8 +1135,8 @@ def configure_claude_settings(
     if prefs_file.exists():
         try:
             existing_prefs = json.loads(prefs_file.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass  # Start fresh if file is corrupted
+        except (json.JSONDecodeError, OSError) as e:
+            log(f"⚠️ MACF: could not parse {prefs_file} (starting it fresh, so its contents are overwritten): {e}")
     # Merge: existing user keys + managed keys (managed keys win on conflict)
     final_prefs = {**existing_prefs, **merged_prefs.model_dump()}
     prefs_file.write_text(json.dumps(final_prefs, indent=2))

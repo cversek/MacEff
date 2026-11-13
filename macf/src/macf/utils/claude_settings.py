@@ -385,7 +385,7 @@ def _other_allow_entries(project_root: Optional[Path] = None) -> list:
     for path in (user_dir / "settings.json", Path(project_root) / ".claude" / "settings.json"):
         try:
             allow = (json.loads(path.read_text()).get("permissions") or {}).get("allow") or []
-        except FileNotFoundError:
+        except FileNotFoundError:  # noqa: S112 - a settings file that does not exist is the normal case; only unreadable ones are reported below
             continue
         except (OSError, ValueError, AttributeError) as e:
             print(f"⚠️ MACF: {path} unreadable, its allow rules not consulted: {e}", file=sys.stderr)

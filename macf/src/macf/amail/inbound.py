@@ -850,7 +850,8 @@ def sweep_aged(cfg: InboundConfig, now: Optional[float] = None,
             for entry in entries:
                 try:
                     age = now - entry.stat().st_mtime
-                except OSError:
+                except OSError as e:
+                    print(f"⚠️ MACF: stat of handoff entry {entry.name} failed (leaving it out of the pickup age check): {e}", file=sys.stderr)
                     continue
                 if age < cfg.pickup_age_bound_s:
                     continue

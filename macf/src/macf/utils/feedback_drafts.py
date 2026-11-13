@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,8 +37,8 @@ def _created(data: dict, path: Path) -> datetime:
         try:
             when = datetime.fromisoformat(raw.replace("Z", "+00:00"))
             return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
-        except ValueError:
-            pass  # noqa: MACEFF003 - an unreadable stamp falls back to the file's own time below
+        except ValueError as e:
+            print(f"⚠️ MACF: created_at {raw!r} unreadable (using the file's modification time): {e}", file=sys.stderr)  # noqa: MACEFF003 - an unreadable stamp falls back to the file's own time below
     return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
 
 
@@ -54,7 +55,7 @@ def unsent_drafts() -> List[Draft]:
         title = data.get("title") if isinstance(data.get("title"), str) else ""
         try:
             created = _created(data, path)
-        except OSError:
+        except OSError:  # noqa: S112 - the draft was sent or discarded after the listing, the normal way a draft stops blocking an exit
             continue   # sent or discarded since the listing, so it no longer blocks an exit
         found.append(Draft(path, title.strip(), created))
     return sorted(found, key=lambda d: d.created or datetime.max.replace(tzinfo=timezone.utc))

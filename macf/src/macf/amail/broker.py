@@ -2125,7 +2125,7 @@ class Broker:
                     continue
                 try:
                     age = now - entry.lstat().st_mtime
-                except FileNotFoundError:
+                except FileNotFoundError:  # noqa: S112 - the entry was ingested between the listing and the stat, a normal race in which it correctly does not count as pending
                     continue  # ingested between the listing and the stat
                 pending_pickup += 1
                 oldest_pending_s = max(oldest_pending_s or 0.0, age)
@@ -2684,7 +2684,7 @@ class _Server(socketserver.ThreadingUnixStreamServer):
                               f"per agent ({MAX_CONCURRENT_CONNECTIONS} total). "
                               "The message was NOT sent. Retry."),
                 }) + "\n").encode("utf-8"))
-            except OSError:
+            except OSError:  # noqa: S110 - the refused client has usually gone already, and under a connection flood a warning per refusal would bury the broker's log; the refusal itself is what protects the broker
                 pass
             self.shutdown_request(request)
             return

@@ -59,7 +59,7 @@ def write_json_safely(path: Path, data: dict) -> bool:
             os.fsync(f.fileno())
         try:
             os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
-        except FileNotFoundError:
+        except FileNotFoundError:  # noqa: S110 - a missing file on first write is the normal case, so a warning would fire on every new file
             # First write of a new file: no prior mode to carry, so the
             # caller's umask decides. Deliberate, and distinguished from a
             # failed stat on an existing file, which is a real error.

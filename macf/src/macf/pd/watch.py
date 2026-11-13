@@ -326,7 +326,8 @@ def receipt_events(log_path: Path, now: float, lookback_s: float = LOOKBACK_S) -
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError as e:
+            print(f"⚠️ MACF: parsing a line of {log_path.name} failed (skipping it): {e}", file=sys.stderr)
             continue
         if not isinstance(event, dict):
             continue
