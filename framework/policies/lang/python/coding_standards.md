@@ -465,6 +465,21 @@ except Exception:
     return None  # Where did the error go?
 ```
 
+### Silent Continue
+
+```python
+# FORBIDDEN
+for path in paths:
+    try:
+        load(path)
+    except ValueError:
+        continue  # The bad file is skipped, and nobody learns it was there
+```
+
+All three are one fault: a handler whose whole body drops the error. The linter
+reports pass and continue as S110 and S112, for any exception type, and a whole-body
+`return None` as MACEFF003.
+
 ### Correct Alternative
 
 ```python

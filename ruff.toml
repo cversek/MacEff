@@ -25,7 +25,9 @@
 #     F821   undefined name     — a NameError waiting for its branch to run
 #
 #   SELECTED, REPORTED, NOT YET BLOCKING (run `ruff check .` to see the debt)
-#     everything else below, 48 findings at the time of writing
+#     everything else below: `ruff check --statistics .` gives the count. Once
+#     S110/S112 covered typed handlers (#988) it was 631, 180 of them silent
+#     pass or continue in an except handler.
 #
 # Burn a rule's count to zero, then move it into the hook's blocking set. The
 # count is recorded on the task rather than left to be rediscovered.
@@ -92,6 +94,12 @@ ignore = [
 # names across fixtures. Holding them to the production rules produces noise
 # that is not about test quality.
 "**/tests/**" = ["S110", "S112", "BLE001", "F811"]
+
+[lint.flake8-bandit]
+# S110/S112 default to flagging only `except Exception` and `except BaseException`,
+# which hides the silent pass the policy's own example shows: `except
+# FileNotFoundError: pass`. The policy forbids it regardless of breadth (#988).
+check-typed-exception = true
 
 [lint.flake8-bugbear]
 # The framework passes Path and Namespace objects into defaults routinely.
