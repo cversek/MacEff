@@ -5479,7 +5479,14 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
     from .task import TaskReader
 
     succinct = getattr(args, 'succinct', False)
-    verbose = getattr(args, 'verbose', False)
+    # Verbosity: 0 = notes counted on the task line; 1 (-v, --verbose) = notes,
+    # plans and reports listed and truncated; 2 (-vv, --verbose 2) = every
+    # note, plan, report, breadcrumb and update in full, wrapped to 80% of the
+    # terminal. `verbose` may be a bool from older callers.
+    _v = getattr(args, 'verbose', 0)
+    level = 1 if _v is True else int(_v or 0)
+    level = max(level, int(getattr(args, 'verbose_level', 0) or 0))
+    verbose = level >= 2
     # Title width: succinct mode is a scanning view, so it trims harder. An
     # explicit --title-width overrides both defaults; 0 disables truncation.
     title_width = getattr(args, 'title_width', None)
@@ -5745,7 +5752,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             return " ".join(parts) if parts else ""
 
         def print_task_details(task, detail_prefix):
-            """Print plan and notes for a task."""
+            """Print plan, notes and reports for a task at the current verbosity level."""
             if succinct:
                 return
 
@@ -5759,42 +5766,53 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             def fmt_green(text):
                 return f"{ANSI_GREEN}{text}{ANSI_RESET}"
 
+            import shutil
+            import textwrap
+            wrap_width = max(40, int(shutil.get_terminal_size(fallback=(100, 24)).columns * 0.8))
+
+            def emit(lead, text, style=fmt):
+                """Full text at level 2, wrapped so every line fits 80% of the terminal."""
+                # The lead's emoji draws two columns wide; leave room for it.
+                avail = max(20, wrap_width - len(detail_prefix) - len(lead) - 1)
+                pad = " " * (len(lead) + 1)
+                for i, part in enumerate(textwrap.wrap(text.replace("\n", " "), avail) or [""]):
+                    print(f"{detail_prefix}{style((lead if i == 0 else pad) + part)}")
+
             plan, plan_ca_ref = get_task_plan(task)
 
             # Show plan_ca_ref or plan
             if plan_ca_ref:
                 if verbose:
-                    print(f"{detail_prefix}{fmt('📄 ' + plan_ca_ref)}")
+                    emit("📄 ", plan_ca_ref)
                 else:
                     print(f"{detail_prefix}{fmt('→ ' + truncate(plan_ca_ref, 60))}")
             elif plan:
                 if verbose:
-                    for line in plan.split('\n'):
-                        print(f"{detail_prefix}{fmt('📋 ' + line)}")
+                    emit("📋 ", plan)
                 else:
                     print(f"{detail_prefix}{fmt('→ ' + truncate(plan, 60))}")
 
-            # Show notes
-            notes = get_task_notes(task)
-            for note in notes:
-                if verbose:
-                    print(f"{detail_prefix}{fmt('📝 ' + note.description)}")
-                    if note.breadcrumb:
-                        print(f"{detail_prefix}{fmt('   🔖 ' + note.breadcrumb)}")
-                else:
-                    print(f"{detail_prefix}{fmt('📝 ' + truncate(note.description, 60))}")
+            # Notes: counted on the task line at level 0 (see note_count_marker),
+            # listed truncated at level 1, whole at level 2.
+            if level >= 1:
+                for note in get_task_notes(task):
+                    if verbose:
+                        emit("📝 ", note.description)
+                        if note.breadcrumb:
+                            print(f"{detail_prefix}{fmt('   🔖 ' + note.breadcrumb)}")
+                    else:
+                        print(f"{detail_prefix}{fmt('📝 ' + truncate(note.description, 60))}")
 
-            # In verbose mode, show all updates (not just notes, excluding completion reports)
+            # At level 2, show all updates (not just notes, excluding completion reports)
             if verbose and task.mtmd and task.mtmd.updates:
                 lifecycle_updates = [u for u in task.mtmd.updates
                                    if getattr(u, 'type', None) not in ('note', 'completion')]
                 for update in lifecycle_updates:
-                    desc = update.description or "(lifecycle update)"
-                    print(f"{detail_prefix}{fmt('🔄 ' + desc)}")
+                    emit("🔄 ", update.description or "(lifecycle update)")
                     if update.breadcrumb:
                         print(f"{detail_prefix}{fmt('   🔖 ' + update.breadcrumb)}")
 
-            # Always show completion reports (both modes)
+            # Always show completion reports (every level)
             # Last completion report = green, previous = strikethrough
             completion_reports = []
             if task.mtmd:
@@ -5808,23 +5826,20 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                     completion_reports.append((task.mtmd.completion_report, bc))
 
             for i, (report, breadcrumb) in enumerate(completion_reports):
-                is_last = (i == len(completion_reports) - 1)
-                if is_last:
-                    # Last completion report: green
-                    if verbose:
-                        print(f"{detail_prefix}{fmt_green('✅ ' + report)}")
-                        if breadcrumb:
-                            print(f"{detail_prefix}{fmt_green('   🔖 ' + breadcrumb)}")
-                    else:
-                        print(f"{detail_prefix}{fmt_green('✅ ' + truncate(report, 60))}")
+                style = fmt_green if i == len(completion_reports) - 1 else fmt
+                if verbose:
+                    emit("✅ ", report, style)
+                    if breadcrumb:
+                        print(f"{detail_prefix}{style('   🔖 ' + breadcrumb)}")
                 else:
-                    # Previous completion reports: strikethrough
-                    if verbose:
-                        print(f"{detail_prefix}{fmt('✅ ' + report)}")
-                        if breadcrumb:
-                            print(f"{detail_prefix}{fmt('   🔖 ' + breadcrumb)}")
-                    else:
-                        print(f"{detail_prefix}{fmt('✅ ' + truncate(report, 60))}")
+                    print(f"{detail_prefix}{style('✅ ' + truncate(report, 60))}")
+
+        def note_count_marker(task):
+            """At level 0 a task's notes are a count on its line, not lines of their own."""
+            if succinct or level >= 1:
+                return ""
+            n = len(get_task_notes(task))
+            return f" {ANSI_DIM}📝 {n}{ANSI_RESET}" if n else ""
 
         _rendered = set()
 
@@ -5891,6 +5906,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                 elif scope_state[task.id] == "paused":
                     text += " ⏸️"
 
+            text += note_count_marker(task)
             text += recency_marker(task)
 
             print(f"{prefix}{connector}{status_icon} {text}")
@@ -5954,6 +5970,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         if scope_state and root.id in scope_state:
             if scope_state[root.id] == "active":
                 root_text += " 👀"
+        root_text += note_count_marker(root)
         root_text += recency_marker(root)
         print(f"{status_icon} {root_text}")
 
@@ -8065,6 +8082,9 @@ def _archive_report_lines(report, verb: str, dry_run: bool = False):
         lines.append(f"❌ #{m} not found")
     if report.descoped:
         lines.append(f"   removed from sprint scope: {', '.join('#' + t for t in report.descoped)}")
+    if report.kept:
+        lines.append(f"   left archived (put down earlier, by another call): "
+                     f"{', '.join('#' + t for t in report.kept)}")
     return lines
 
 
@@ -8111,6 +8131,7 @@ def cmd_task_unarchive(args: argparse.Namespace) -> int:
     if getattr(args, "json_output", False):
         print(json.dumps({
             "success": report.ok, "unarchived": report.changed, "not_archived": report.unchanged,
+            "left_archived": report.kept,
             "failed": report.failed, "missing": report.missing,
         }, indent=2))
     else:
@@ -13289,8 +13310,14 @@ def _build_parser() -> argparse.ArgumentParser:
                                   help="roles stanza below the tree (default: roles.tree_display in .maceff/config.json, else focused)")
     task_tree_parser.add_argument("--succinct", "-s", action="store_true",
                                   help="hide notes/plans, show only active/pending tasks")
-    task_tree_parser.add_argument("--verbose", "-v", action="store_true",
-                                  help="show full plans, breadcrumbs, and all updates")
+    task_tree_parser.add_argument("-v", dest="verbose", action="count", default=0,
+                                  help="-v lists notes, plans and reports (truncated); -vv shows "
+                                       "every note, plan, report, breadcrumb and update in full, "
+                                       "wrapped to 80%% of the terminal. Default: notes counted on "
+                                       "each task's line")
+    task_tree_parser.add_argument("--verbose", dest="verbose_level", nargs="?", const=1, type=int,
+                                  choices=(1, 2), metavar="LEVEL",
+                                  help="same as -v (LEVEL 1, the default) or -vv (LEVEL 2)")
     task_tree_parser.add_argument("--title-width", dest="title_width", type=int, default=None,
                                   metavar="N",
                                   help="truncate task titles to N chars (default: 40 with "

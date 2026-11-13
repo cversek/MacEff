@@ -178,3 +178,40 @@ def test_restore_and_archived_list_fail_closed(fn, ns, capsys):
     out = capsys.readouterr().out
     assert "DEPRECATED" in out
     assert "task unarchive" in out or "task tree --archived" in out
+
+
+# --- review of PR 1006 (CTB): re-archive and earlier archives -----------------
+
+def test_archiving_twice_keeps_the_first_prior_status(store, tree):
+    """A second archive must skip the task, or it records prior_status 'archived'."""
+    assert run(store, "task", "archive", tree.b, "--reason", "first").returncode == 0
+    r = run(store, "task", "archive", tree.b, "--reason", "second")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "0 archived, 2 already so" in r.stdout
+    desc = json.loads(task_file(store, tree.b).read_text())["description"]
+    assert "second" not in desc
+    assert run(store, "task", "unarchive", tree.b).returncode == 0
+    assert (status(store, tree.b), status(store, tree.c)) == ("completed", "pending")
+
+
+def test_cascading_unarchive_leaves_earlier_archives_alone(store, tree):
+    """Unarchiving a root restores what that call archived, not what was put down before it."""
+    assert run(store, "task", "archive", tree.c, "--reason", "earlier, on its own").returncode == 0
+    assert run(store, "task", "archive", tree.a, "--reason", "later, the whole tree").returncode == 0
+    r = run(store, "task", "unarchive", tree.a)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (status(store, tree.a), status(store, tree.b)) == ("in_progress", "completed")
+    assert status(store, tree.c) == "archived"
+    assert f"#{tree.c}" in r.stdout and "earlier" in r.stdout.lower()
+
+
+def test_unarchiving_a_legacy_flagged_task_keeps_its_status(store, tree):
+    """THM's review: a task with only the old MTMD flag was never set to `archived`."""
+    p = task_file(store, tree.b)
+    d = json.loads(p.read_text())
+    d["description"] = d["description"].replace("task_type: TASK", "task_type: TASK\narchived: true")
+    p.write_text(json.dumps(d))
+    r = run(store, "task", "unarchive", tree.b, "--no-cascade")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert status(store, tree.b) == "completed"
+    assert "archived: true" not in json.loads(p.read_text())["description"]

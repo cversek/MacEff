@@ -902,7 +902,7 @@ macf_tools task note <task_id> "message"
 
 **Why Notes Matter**:
 - **Forensic Recovery**: Post-compaction context restoration relies on task notes trail
-- **User Visibility**: Notes appear in `task tree --verbose`, giving user insight into progress
+- **User Visibility**: Notes are counted on each task's line in `task tree`, listed with `-v` and shown whole with `-vv`, giving user insight into progress
 - **Handoff Context**: If task is delegated or resumed later, notes preserve decision rationale
 - **Completion Reports**: Notes inform comprehensive `--report` text at task completion
 
@@ -1151,8 +1151,14 @@ archived, already archived, failed. A write that did not stick is named by task
 id and the command exits `1`. `--dry-run` lists every task it would touch and
 changes none.
 
-**Reversal.** `task unarchive ID` puts each archived task (and, by default, its
-archived descendants) back at the status recorded when it was archived.
+**Reversal.** `task unarchive ID` puts each archived task back at the status
+recorded when it was archived. With cascade (the default) it restores the
+descendants archived by the same call as the named task, identified by the
+call's one `archived_at` stamp; a descendant put down earlier, on its own, stays
+archived and is named in the output. A task carrying only the legacy MTMD flag
+was never moved to `archived`, so unarchiving it clears the flag and leaves its
+status as it is. Archiving an already-archived task changes nothing, so its
+recorded prior status survives.
 
 **How it shows.** In `task tree`, an archived subtree is one 📦 line with a count
 of the archived tasks beneath it; an open task left under an archived parent
@@ -1417,7 +1423,7 @@ macf_tools task note #67 "Investigated root cause, found in create.py"
 macf_tools task note #67 "Fix applied, awaiting user verification"
 ```
 
-Notes appear in `task tree --verbose` output and provide lightweight progress documentation.
+Notes are counted on each task's line in `task tree`, listed (truncated) with `-v` and shown in full with `-vv`; they provide lightweight progress documentation.
 
 ### 9.7 Dependency Management
 
@@ -1438,7 +1444,9 @@ macf_tools task unblocked-by #68 #67   # Remove blocked-by
 macf_tools task tree                   # Default: from sentinel #000
 macf_tools task tree #67               # From specific task
 macf_tools task tree --succinct        # Compact one-line display
-macf_tools task tree --verbose         # Full details with notes and reports
+macf_tools task tree                   # Notes counted on each task's line
+macf_tools task tree -v                # Notes, plans and reports listed, truncated
+macf_tools task tree -vv               # Everything in full, wrapped to 80% of the terminal
 macf_tools task tree --loop            # Live monitoring (refreshes)
 ```
 

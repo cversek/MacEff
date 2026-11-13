@@ -46,6 +46,8 @@ class ArchiveReport:
     missing: List[str] = field(default_factory=list)       # requested ids not in the store
     planned: List[MacfTask] = field(default_factory=list)  # the tasks considered, in order
     descoped: List[str] = field(default_factory=list)      # removed from sprint scope
+    kept: List[str] = field(default_factory=list)          # archived by an earlier call; left archived
+    root_of: Dict[str, str] = field(default_factory=dict)  # task id -> the requested id it came under
 
     @property
     def ok(self) -> bool:
@@ -83,7 +85,21 @@ def plan(task_ids: List[str], cascade: bool, reader: TaskReader) -> ArchiveRepor
             if t.id not in seen:
                 seen.add(t.id)
                 report.planned.append(t)
+                report.root_of[t.id] = root.id
     return report
+
+
+def _same_archive_call(task: MacfTask, root: MacfTask) -> bool:
+    """True when `task` was put down by the same `task archive` call as `root`.
+
+    One call stamps every task it archives with one `archived_at` to the
+    microsecond, so a descendant archived earlier, on its own, carries a
+    different stamp and stays archived when its ancestor is unarchived. (The
+    breadcrumb cannot serve: two calls in the same second share one.)
+    """
+    def stamp(t):
+        return getattr(t.mtmd, "archived_at", None) if t.mtmd else None
+    return stamp(task) == stamp(root)
 
 
 def _prior_status(task: MacfTask) -> str:
@@ -95,13 +111,13 @@ def _prior_status(task: MacfTask) -> str:
 
 
 def _write(task: MacfTask, new_status: str, update: MacfTaskUpdate, archived_flag: bool,
-           session_uuid: Optional[str]) -> bool:
+           call_stamp: str, session_uuid: Optional[str]) -> bool:
     fields = {"status": new_status}
     if task.mtmd:
         new_mtmd = copy.deepcopy(task.mtmd)
         new_mtmd.updates.append(update)
         new_mtmd.archived = archived_flag
-        new_mtmd.archived_at = datetime.now().isoformat(timespec="seconds") if archived_flag else None
+        new_mtmd.archived_at = call_stamp if archived_flag else None
         fields["description"] = task.description_with_updated_mtmd(new_mtmd)
     return update_task_file(task.id, fields, session_uuid)
 
@@ -113,19 +129,27 @@ def _apply(task_ids: List[str], *, archive: bool, reason: str, cascade: bool,
     if dry_run:
         return report
 
+    by_id = {t.id: t for t in report.planned}
+    call_stamp = datetime.now().isoformat(timespec="microseconds")
     for t in report.planned:
         if is_archived(t) == archive:
             report.unchanged.append(t.id)
+            continue
+        root = by_id.get(report.root_of.get(t.id, t.id), t)
+        if not archive and t.id != root.id and not _same_archive_call(t, root):
+            report.kept.append(t.id)
             continue
         if archive:
             new_status = ARCHIVED
             update = MacfTaskUpdate(breadcrumb=breadcrumb, agent="PA", type=ARCHIVE_UPDATE,
                                     description=f"Archived: {reason}", prior_status=t.status)
         else:
-            new_status = _prior_status(t)
+            # A task carrying only the legacy flag was never moved to `archived`:
+            # its status is still its own, so unarchiving clears the flag only.
+            new_status = _prior_status(t) if t.status == ARCHIVED else t.status
             update = MacfTaskUpdate(breadcrumb=breadcrumb, agent="PA", type=UNARCHIVE_UPDATE,
                                     description=f"Unarchived, back to {new_status}")
-        wrote = _write(t, new_status, update, archive, reader.session_uuid)
+        wrote = _write(t, new_status, update, archive, call_stamp, reader.session_uuid)
 
         # Read back: the report counts what is on disk, never what was attempted.
         back = TaskReader(session_uuid).read_task(t.id)
