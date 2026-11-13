@@ -73,3 +73,25 @@ def test_two_v_shows_every_note_whole_and_wrapped(env, tid, flags):
     note_lines = [l for l in out.splitlines() if "word" in l or "ENDMARK" in l]
     assert len(note_lines) > 1, "a long note must wrap onto several lines"
     assert all(len(l) <= width for l in note_lines), max(note_lines, key=len)
+
+
+def test_verbose_followed_by_a_task_id_still_reads_it_as_the_root(env, tid):
+    """Review of PR 1006 (THM): `task tree --verbose 892` worked on main; keep it working.
+
+    Ids 1 and 2 are also levels, so they read as levels; the root needs an id above 2.
+    """
+    for title in ("filler a", "filler b"):
+        run(env, "task", "create", "task", "--plan", "p", title)
+    root = run(env, "task", "create", "task", "--plan", "p", "--parent", tid, "Child root")
+    root = root.split("Created task #")[1].split()[0]
+    run(env, "task", "note", root, "child note CHILDMARK")
+    assert int(root) > 2
+    out = tree(env, "--verbose", root)
+    assert "Task Tree from #" + root in out
+    assert "CHILDMARK" in out and "SHORTMARK" not in out   # level 1, rooted at the child
+
+
+def test_verbose_level_out_of_range_is_refused(env, tid):
+    r = subprocess.run([sys.executable, "-m", "macf.cli", "task", "tree", tid, "--verbose", "3"],
+                       capture_output=True, text=True, env=env)
+    assert r.returncode != 0 and "1 or 2" in (r.stdout + r.stderr)

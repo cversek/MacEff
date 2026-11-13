@@ -5485,7 +5485,21 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
     # terminal. `verbose` may be a bool from older callers.
     _v = getattr(args, 'verbose', 0)
     level = 1 if _v is True else int(_v or 0)
-    level = max(level, int(getattr(args, 'verbose_level', 0) or 0))
+    # `--verbose` takes an optional LEVEL, so argparse hands it the next word
+    # even when that word is a task id (`task tree --verbose 892`, which worked
+    # before levels existed). A word that is not 1 or 2 is the root task when
+    # no root was given; otherwise it is a bad level, refused by name.
+    _lv = getattr(args, 'verbose_level', None)
+    if _lv is not None:
+        _lv = str(_lv)
+        if _lv in ("1", "2"):
+            level = max(level, int(_lv))
+        elif str(getattr(args, 'task_id', '000')) == "000":
+            args.task_id = _lv
+            level = max(level, 1)
+        else:
+            print(f"❌ --verbose LEVEL must be 1 or 2, not {_lv!r}")
+            return 2
     verbose = level >= 2
     # Title width: succinct mode is a scanning view, so it trims harder. An
     # explicit --title-width overrides both defaults; 0 disables truncation.
@@ -13315,9 +13329,11 @@ def _build_parser() -> argparse.ArgumentParser:
                                        "every note, plan, report, breadcrumb and update in full, "
                                        "wrapped to 80%% of the terminal. Default: notes counted on "
                                        "each task's line")
-    task_tree_parser.add_argument("--verbose", dest="verbose_level", nargs="?", const=1, type=int,
-                                  choices=(1, 2), metavar="LEVEL",
-                                  help="same as -v (LEVEL 1, the default) or -vv (LEVEL 2)")
+    task_tree_parser.add_argument("--verbose", dest="verbose_level", nargs="?", const="1",
+                                  metavar="LEVEL",
+                                  help="same as -v (LEVEL 1, the default) or -vv (LEVEL 2); "
+                                       "`--verbose ID` still reads ID as the root task, "
+                                       "except ids 1 and 2, which read as levels")
     task_tree_parser.add_argument("--title-width", dest="title_width", type=int, default=None,
                                   metavar="N",
                                   help="truncate task titles to N chars (default: 40 with "
