@@ -1585,7 +1585,7 @@ class _AnnouncementTail:
                 continue
             try:
                 event = json.loads(line)
-            except ValueError:
+            except ValueError:  # noqa: S112 - a line cut short by an interrupted append; the scan reads on
                 continue
             if event.get("event") == EVENT_SESSION_ANNOUNCED:
                 newest = AnnouncedSession.from_event(event) or newest

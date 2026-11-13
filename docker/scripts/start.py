@@ -150,7 +150,7 @@ def check_image_ids(ids) -> None:
         want = ids.slot(name)
         try:
             entry = pwd.getpwnam(name)
-        except KeyError:
+        except KeyError:  # noqa: S112 - the image may not create this account; absence skips its id check
             continue
         if (entry.pw_uid, entry.pw_gid) != (want, want):
             raise DeclaredIdMismatch(
@@ -2875,7 +2875,7 @@ def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] 
             for leftover in (tmp, target):
                 try:
                     leftover.unlink(missing_ok=True)
-                except OSError:
+                except OSError:  # noqa: S110 - best-effort removal of leftovers; the log below reports the failure
                     pass
             log(f"primal daemon of {account}: not rendered; {e}")
             continue

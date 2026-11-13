@@ -35,6 +35,7 @@ the watch cannot tell what to check. Unknown is never healthy.
 """
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -43,7 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Literal, Optional, Sequence, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from macf.notify.session import proc_start_key, verify_incarnation
 from macf.pd import interface, receipts
@@ -143,7 +144,7 @@ def last_liveness(log_path: Path, card: str, units: Sequence[str], now: float,
             break
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -175,7 +176,7 @@ def last_unit_state(log_path: Path, card: str, units: Sequence[str], now: float,
             break
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -240,7 +241,7 @@ def last_channel_event(log_path: Path, card: str, now: float,
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -263,7 +264,7 @@ def last_login_event(log_path: Path, card: str, now: float,
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -361,7 +362,7 @@ def last_unread_mail_event(log_path: Path, card: str, now: float,
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -398,7 +399,7 @@ def mail_sweep_events(log_path: Path, card: str, schedule: str, now: float,
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -468,7 +469,7 @@ def _wake_events(log_path: Path, card: str, cutoff: float):
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -595,6 +596,54 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
                                     f"the event log cannot be read: {e.strerror}"))
         if sweeps is not None:
             findings.append(check_mail_broker(card, declaration, sweeps, now))
+    return findings
+
+
+def home_check_argv(container: str, user: str, path: str, python: str, probe: bool) -> List[str]:
+    """The one command the watch runs in a container: the home check, which only reads."""
+    argv = ["docker", "exec", "-u", user, container, python, "-m", "macf.pd.watch", "--home-findings", path]
+    return argv if probe else argv + ["--no-probe"]
+
+
+def check_container_home(container: str, user: str, path: str, python: str = "/opt/maceff-venv/bin/python",
+                         probe: bool = True,
+                         run: container_limits.Runner = container_limits._run) -> List[Finding]:
+    """Every finding for a home inside *container*, made there by the same check, as *user*
+    (#979). The host's user can't read a container's volumes, so the check goes to the home
+    rather than the home's files to the host. A container that isn't running is UNREACHABLE,
+    and an answer the watch can't read is CHECK-FAILED: unknown is never healthy."""
+    where = f"{container}:{path}"
+    try:
+        out = run(home_check_argv(container, user, path, python, probe))
+    except subprocess.CalledProcessError as e:
+        said = (e.stderr or "").strip()
+        if "is not running" in said or "No such container" in said:
+            return [Finding(where, "home", "UNREACHABLE", f"container {container} is not running; nothing was measured")]
+        # An older MacEff's argparse refuses the unknown option, or, since --config was required
+        # there, asks for it first: "the following arguments are required: --config".
+        if ("unrecognized arguments" in said or "--home-findings" in said
+                or "required: --config" in said):
+            return [Finding(where, "home", "CHECK-FAILED",
+                            f"the MacEff in {container} has no home check yet (#979): rebuild it on a MacEff that does")]
+        last = said.splitlines()[-1] if said else f"exit {e.returncode}"
+        return [Finding(where, "home", "CHECK-FAILED", f"the check in {container} failed: {last}")]
+    except (OSError, subprocess.SubprocessError) as e:     # no docker here, or the check hung
+        return [Finding(where, "home", "CHECK-FAILED", f"docker exec into {container} did not run: {type(e).__name__}")]
+    try:
+        rows = json.loads(out)
+        if not isinstance(rows, list) or not all(
+                isinstance(row, dict) and set(row) == {"agent", "subject", "verdict", "detail"}
+                and all(isinstance(v, str) for v in row.values()) for row in rows):
+            raise TypeError("not a list of findings with four string fields")
+        findings = [Finding(**row) for row in rows]
+    except (ValueError, TypeError) as e:
+        # Anything a seat could answer, a list for a verdict included, ends here: one seat's
+        # answer must never raise out of the pass that checks every other seat.
+        return [Finding(where, "home", "CHECK-FAILED", f"the check in {container} did not answer in JSON: {type(e).__name__}")]
+    unknown = sorted({f.verdict for f in findings} - set(_EXIT_FOR))
+    if unknown:
+        return [Finding(where, "home", "CHECK-FAILED",
+                        f"the check in {container} answered verdict(s) this watch doesn't know: {', '.join(unknown)}")]
     return findings
 
 
@@ -729,10 +778,43 @@ def _write_kept(path: Path, kept: Dict[str, dict]) -> None:
 # The config the outer tier renders, and the alert path
 # ============================================================================
 
+#: Docker's own rule for a container name; it can't begin with '-', so it can't read as an option.
+_CONTAINER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+#: A seat's account name: a name, never a numeric uid (``0`` is root by number).
+_SEAT_USER = re.compile(r"[a-z_][a-z0-9_-]*")
+
+
 class WatchedHome(BaseModel):
+    """One agent home. With ``container`` set, the home is inside that container, where the
+    host's user can't read it: the watch runs the check there, as ``user``, through
+    ``docker exec`` (#979), and reads back its findings. ``path`` is then the home's path
+    inside the container, and ``python`` the interpreter there that has MacEff."""
+
     model_config = ConfigDict(extra="forbid")
     path: str = Field(min_length=1)
     probe: bool = True
+    container: Optional[str] = None
+    user: Optional[str] = None
+    python: str = "/opt/maceff-venv/bin/python"
+
+    @model_validator(mode="after")
+    def _container_names_its_user(self) -> "WatchedHome":
+        """``docker exec`` is root-equivalent on the host, so an entry may name only what a home
+        check needs: a container name that can't read as an option, a seat that isn't root, and
+        an interpreter and home given as absolute paths."""
+        if self.container is None:
+            return self
+        if not self.user:
+            raise ValueError("a home in a container names the user to check it as")
+        if not _CONTAINER_NAME.fullmatch(self.container):
+            raise ValueError(f"container {self.container!r} is not a container name "
+                             "(letters, digits, '_', '.', '-', not starting with '-')")
+        if not _SEAT_USER.fullmatch(self.user) or self.user == "root":
+            raise ValueError(f"user {self.user!r}: a home check runs as the seat, never root or a uid")
+        for field, value in (("python", self.python), ("path", self.path)):
+            if not value.startswith("/") or "\n" in value:
+                raise ValueError(f"{field} {value!r} must be an absolute path")
+        return self
 
 
 class WatchConfig(BaseModel):
@@ -837,11 +919,11 @@ def open_stretches(durable_log: Path) -> Dict[str, dict]:
         for line in iter_lines_reverse(durable_log):
             try:
                 record = json.loads(line)
-            except ValueError:
+            except ValueError:  # noqa: S112 - a torn or partial line in the durable alert log is skipped
                 continue
             if isinstance(record, dict) and record.get("delivered") and "open_after" in record:
                 return dict(record["open_after"])
-    except FileNotFoundError:
+    except FileNotFoundError:  # noqa: S110 - no alert log exists before the first alert is sent
         pass
     return {}
 
@@ -854,7 +936,11 @@ def run_pass(config: WatchConfig, now: Optional[float] = None,
     durable_log = Path(config.state_dir) / "alerts.jsonl"
     findings: List[Finding] = []
     for home in config.homes:
-        findings += check_home(Path(home.path), now, base, probe if home.probe else None)
+        if home.container is not None:
+            findings += check_container_home(home.container, home.user, home.path, home.python,
+                                             home.probe, run)
+        else:
+            findings += check_home(Path(home.path), now, base, probe if home.probe else None)
     if config.containers:
         kept_path = Path(config.state_dir) / LIMITS_STATE
         kept, now_kept = _read_kept(kept_path), {}
@@ -874,8 +960,20 @@ def run_pass(config: WatchConfig, now: Optional[float] = None,
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m macf.pd.watch",
                                      description="One pass of the outside watch over the primal daemons.")
-    parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--home-findings", type=Path, metavar="HOME",
+                        help="check one home and print its findings as JSON, sending nothing: "
+                             "what a watch outside a container runs inside it (#979)")
+    parser.add_argument("--no-probe", action="store_true",
+                        help="with --home-findings: skip the process probes")
     args = parser.parse_args(argv)
+    if args.home_findings is not None:
+        found = check_home(args.home_findings, time.time(), None,
+                           None if args.no_probe else verify_incarnation)
+        print(json.dumps([dataclasses.asdict(f) for f in found]))
+        return EXIT_HEALTHY      # the findings are the answer; the watch outside judges them
+    if args.config is None:
+        parser.error("--config is required, unless --home-findings is given")
     try:
         config = WatchConfig.model_validate_json(args.config.read_text())
     except (OSError, ValidationError, ValueError) as e:

@@ -674,7 +674,7 @@ def process_entry(cfg: InboundConfig, eml: Path, sidecar: Path) -> Dict[str, Any
     os.unlink(sidecar)
     try:
         handed.unlink(missing_ok=True)
-    except OSError:
+    except OSError:  # noqa: S110 - a marker left behind matches only this entry's content, now gone
         pass  # noqa: MACEFF003 - a marker left behind matches only this entry's content, now gone
     return terminal(HANDED_OFF, f"{outcome}: {reason}", recipient_agent)
 
@@ -703,7 +703,7 @@ def process_spool(cfg: InboundConfig) -> List[Dict[str, Any]]:
             try:
                 ((cfg.failures_dir or (cfg.quarantine_dir / ".failures"))
                  / f"{eml.name}.json").unlink(missing_ok=True)
-            except OSError:
+            except OSError:  # noqa: S110 - a stale count is keyed to content, so it is harmless
                 pass  # noqa: MACEFF003 - a stale count is keyed to content, so it is harmless
         except Exception as e:  # noqa: BLE001 - per entry, so the rest of the spool still drains
             try:
