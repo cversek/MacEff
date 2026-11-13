@@ -359,7 +359,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R39 | decidable | macf/tests/test_voice_lock.py::test_failures_in_window_start_lockout | passing |
 | R40 | decidable | macf/tests/test_voice_declaration.py::test_lockout_defaults | passing |
 | R41 | decidable | macf/tests/test_voice_lock.py::test_lockout_delivers_nothing_and_counts | passing |
-| R42 | decidable | macf/tests/test_voice_lock.py::test_lockout_raises_guard | planned (raised, recorded, kept across restarts and shown in status; the session hooks surfacing it is not built) |
+| R42 | decidable | macf/tests/test_voice_lock.py::test_lockout_raises_guard | passing (the hook half: test_a_raised_guard_is_in_every_prompt_until_it_ends) |
 | R43 | judgment | the operator, after each lockout | pending |
 | R44 | decidable | macf/tests/test_voice_lock.py::test_agent_cannot_lower_own_guard | passing |
 | R45 | judgment | the maintainers, at review of the voice_lock policy | pending |

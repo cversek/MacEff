@@ -202,3 +202,16 @@ def test_an_unmatched_voice_leaves_the_agent_a_notice_without_content(tmp_path, 
     assert len(owed) == 1
     [event] = [e["data"] for e in read_events(reverse=False, scope="all", only=("pd_voice_unmatched",))]
     assert set(event) == {"agent", "attempts", "of"}
+
+
+def test_a_raised_guard_is_in_every_prompt_until_it_ends(isolated_events_log):
+    """R42, the hook half: the prompt hook shows the guard while raised, and not once it ends or the
+    operator lowers it, reading the newest guard event."""
+    from macf.agent_events_log import append_event
+    from macf.voice import guard
+    assert guard.prompt_line() == ""
+    append_event("pd_voice_guard", {"agent": "Tester_abc123", "raised_until": time.time() + 600, "by": "lockout"})
+    assert "Voice guard raised until" in guard.prompt_line() and "Only the operator lowers it" in guard.prompt_line()
+    assert guard.prompt_line(now=time.time() + 601) == ""
+    append_event("pd_voice_guard", {"agent": "Tester_abc123", "raised_until": None, "by": "operator"})
+    assert guard.prompt_line() == ""

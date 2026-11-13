@@ -443,6 +443,14 @@ Breadcrumb: {breadcrumb}"""
         except (OSError, ValueError, ImportError, AttributeError) as e:
             emit_warning(Warning(source="user_prompt_submit", kind="focus_line_failed", detail=f"focus line skipped: {e}"))
 
+        guard_line = ""
+        try:
+            from macf.voice.guard import prompt_line as guard_prompt_line
+            guard_line = guard_prompt_line()
+        except (OSError, ValueError, ImportError) as e:
+            emit_warning(Warning(source="user_prompt_submit", kind="voice_guard_line_failed",
+                                 detail=f"voice guard line skipped: {e}"))
+
         # Format footer
         footer = format_macf_footer()
 
@@ -454,6 +462,7 @@ Breadcrumb: {breadcrumb}"""
             boundary_guidance if boundary_guidance else "",
             memory_injection if memory_injection else "",  # EXPERIMENT: associative memories
             focus_line,
+            guard_line,  # MIS-0008 R42: a raised voice guard, every prompt until it ends
             footer
         ]
         plain_content = chr(10).join([s for s in sections if s])
