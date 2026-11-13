@@ -128,3 +128,5 @@ def test_default_hides_subtask_plans_but_keeps_github_links(env, tid):
     assert "CHILDPLAN" not in out
     assert "github.com/o/r/pull/77" in out
     assert "CHILDPLAN" in tree(env, "-v")
+    rooted = tree(env, top)          # a subtask is a subtask in a rooted view too
+    assert "TOPPLAN" in rooted and "CHILDPLAN" not in rooted

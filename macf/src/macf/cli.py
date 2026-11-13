@@ -5765,7 +5765,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                 parts.append(time_str)
             return " ".join(parts) if parts else ""
 
-        def print_task_details(task, detail_prefix, depth=0):
+        def print_task_details(task, detail_prefix):
             """Print plan, notes and reports for a task at the current verbosity level."""
             if succinct:
                 return
@@ -5798,7 +5798,8 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             # already says where the work is planned. A GitHub issue or PR keeps
             # its line at any depth, because that line is its link.
             task_type = getattr(task.mtmd, "task_type", None) if task.mtmd else None
-            if level == 0 and depth >= 2 and task_type not in ("GH_ISSUE", "GH_PR"):
+            is_subtask = str(task.parent_id or "000").lstrip("#") not in ("000", "null", "None")
+            if level == 0 and is_subtask and task_type not in ("GH_ISSUE", "GH_PR"):
                 plan = plan_ca_ref = None
 
             # Show plan_ca_ref or plan
@@ -5935,7 +5936,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
             # Print task details (plan, notes) with proper indentation
             detail_prefix = prefix + extension + "   "  # Extra indent beyond task header
-            print_task_details(task, detail_prefix, depth)
+            print_task_details(task, detail_prefix)
 
             children = get_children(task.id)
             # Filter children in succinct mode
