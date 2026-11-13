@@ -233,6 +233,26 @@ def deployment_timezone() -> Optional[str]:
     return name
 
 
+def extra_path_dirs(value: str) -> List[str]:
+    """The directories a ``container_env`` ``PATH`` adds (#895). It names directories to add,
+    never a whole PATH: its ``$PATH`` or ``${PATH}`` is dropped, since every reader puts the
+    directories ahead of a PATH it already has. Any other entry holding ``$``, ``{`` or ``}``
+    can't be expanded where it is used (a unit's environment, ``/etc/environment``) and would
+    read as a daemon placeholder in a declaration, so it is left out with a warning rather than
+    refusing the whole agents.yaml. Only absolute directories are kept, in order, once each."""
+    out: List[str] = []
+    for d in value.split(":"):
+        if not d or d in ("$PATH", "${PATH}"):
+            continue
+        if any(c in d for c in "${}") or not d.startswith("/"):
+            print(f"⚠️ MACF: container_env PATH entry {d!r} is left out: name an absolute directory, "
+                  f"with no $ or braces", file=sys.stderr)
+            continue
+        if d not in out:
+            out.append(d)
+    return out
+
+
 def deployment_env(container_env: Dict[str, str], path_dirs: List[str]) -> Tuple[List[str], Dict[str, str]]:
     """What the deployment's ``defaults.container_env`` adds to a container session (#895): the
     session's PATH directories, and every other variable.
@@ -244,8 +264,7 @@ def deployment_env(container_env: Dict[str, str], path_dirs: List[str]) -> Tuple
     PATH is stated whole. Any other variable is added unless the default already sets it. A value
     still holding a ``{name}`` would read as a daemon placeholder, so it is left out, with a
     warning naming it."""
-    extra_path = [d for d in (container_env.get("PATH") or "").split(":")
-                  if d and d not in ("$PATH", "${PATH}")]
+    extra_path = extra_path_dirs(container_env.get("PATH") or "")
     system = list(CONTAINER_SYSTEM_PATH)
     head = [d for d in path_dirs if d not in system]
     merged = head + [d for d in extra_path if d not in path_dirs] + system

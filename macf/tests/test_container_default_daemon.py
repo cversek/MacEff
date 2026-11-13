@@ -270,3 +270,12 @@ def test_a_value_with_braces_is_left_out_with_a_warning(capsys):
 
 def test_no_container_env_leaves_the_default_unchanged():
     assert _session(_body())["environment"] == _session(_env_body({}))["environment"]
+
+
+def test_a_braced_path_entry_is_left_out_and_agents_yaml_still_loads(capsys):
+    """#895 review: ${HOME}/x would read as a daemon placeholder and refuse all of agents.yaml."""
+    env = _session(_env_body({"PATH": "${HOME}/x:/opt/bun/bin:relative"}))["environment"]
+    parts = env["PATH"].split(":")
+    assert "/opt/bun/bin" in parts and not any("{" in p or "$" in p or p == "relative" for p in parts)
+    err = capsys.readouterr().err
+    assert "${HOME}/x" in err and "relative" in err
