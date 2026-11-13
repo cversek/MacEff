@@ -62,6 +62,12 @@ class CaptureConfig:
     end_silence_s: float = 1.2
     continual_close_s: float = 30.0
     max_utterance_s: float = 120.0
+    #: The voice lock's lockout (MIS-0008 R39, R40), and whether it also covers key recordings
+    #: (open question Q02: by default it covers the wake phrase only).
+    lockout_attempts: int = 3
+    lockout_window_s: float = 600.0
+    lockout_s: float = 600.0
+    lock_keys: bool = False
 
 
 @dataclass
@@ -84,6 +90,7 @@ class _Recording:
     heard_speech: bool = False
     last_speech: float = 0.0
     utterance_started: float = 0.0     # continual voice: when the current utterance began
+    voice_lock: str = "not_declared"     # "matched" once the voice lock passed it
 
 
 def _phrase_pattern(phrase: str) -> re.Pattern:
@@ -113,7 +120,9 @@ class CaptureUnit:
                  deliver: Callable[[Utterance], object], detector: Optional[WakeDetector] = None,
                  listening_on: Callable[[], bool] = lambda: True, speaking: Callable[[], bool] = lambda: False,
                  clock: Callable[[], float] = time.monotonic, wall: Callable[[], float] = time.time,
-                 executor: Optional[Executor] = None, log: Callable[[str], None] = lambda s: None):
+                 executor: Optional[Executor] = None, log: Callable[[str], None] = lambda s: None,
+                 speaker: Optional[Callable[[np.ndarray], bool]] = None,
+                 on_voice_event: Callable[[str, dict], None] = lambda kind, data: None):
         self.config = config
         self.audio, self.lock, self.indicator, self.triggers = audio, lock, indicator, triggers
         self.gate, self.detector, self._transcribe, self._deliver = gate, detector, transcribe, deliver
@@ -129,6 +138,12 @@ class CaptureUnit:
         self.listening_since: Optional[float] = None
         self.recording_since: Optional[float] = None
         self.frames_read = 0
+        #: The voice lock (R34): True when the audio's speaker matches the enrolled voice. None: no lock.
+        self._speaker = speaker
+        self._on_voice_event = on_voice_event
+        self._failures: List[float] = []
+        self.locked_out_until: Optional[float] = None
+        self.locked_out_attempts = 0
 
     # ------------------------------------------------------------------ the loop
 
@@ -213,6 +228,9 @@ class CaptureUnit:
             self.log("wake fired with no speech in the window: rejected")
             self._quiet_until = now + REJECT_COOLDOWN_S
             return
+        if not self._voice_lock_passes(window, now):
+            self._quiet_until = now + REJECT_COOLDOWN_S
+            return
         heard = self._transcribe(window, self.config.wake_phrase)
         found = self._phrase.search(heard or "")
         if not found:
@@ -221,6 +239,8 @@ class CaptureUnit:
             return
         self.log("wake")
         self._start("wake_phrase", preroll=list(self.ring))
+        if self._speaker is not None:
+            self.recording.voice_lock = "matched"
         if heard[found.end():].strip(" ,.!?;:-"):
             # Words run on in the same breath as the phrase are already in the window: the
             # recording has heard speech, so its pause ends it rather than a no-speech cancel.
@@ -273,7 +293,13 @@ class CaptureUnit:
         rec = self.recording
         if rec.heard_speech:
             audio = np.concatenate(rec.frames)
-            self.executor.submit(self._transcribe_and_deliver, audio, rec.mode, rec.spoken_at)
+            if rec.mode != "wake_phrase" and self.config.lock_keys and self._speaker is not None:
+                if self._voice_lock_passes(audio, now):
+                    rec.voice_lock = "matched"
+                else:
+                    audio = None             # discarded untranscribed (R37)
+            if audio is not None:
+                self.executor.submit(self._transcribe_and_deliver, audio, rec.mode, rec.spoken_at, rec.voice_lock)
         else:
             self.log(f"{rec.mode} recording heard no speech: nothing sent")
         rec.frames = []                      # the audio is now the worker's alone, and is dropped after
@@ -290,7 +316,32 @@ class CaptureUnit:
             self.ring.clear()
             self.detector.reset()
 
-    def _transcribe_and_deliver(self, audio: np.ndarray, mode: Mode, spoken_at: float) -> None:
+    def _voice_lock_passes(self, audio: np.ndarray, now: float) -> bool:
+        """The voice lock's verdict on ``audio``, before any transcription (R23, R37). A failure
+        discards the audio and tells the agent without content; enough failures in the window lock
+        voice contact out, and during a lockout every attempt is counted and none delivered (R39, R41)."""
+        if self._speaker is None:
+            return True
+        if self.locked_out_until is not None:
+            if now < self.locked_out_until:
+                self.locked_out_attempts += 1
+                self.log(f"voice locked out: attempt {self.locked_out_attempts} ignored")
+                return False
+            self.locked_out_until, self.locked_out_attempts = None, 0
+        if self._speaker(audio):
+            return True
+        cfg = self.config
+        self._failures = [t for t in self._failures if now - t < cfg.lockout_window_s] + [now]
+        self.log(f"voice not matched ({len(self._failures)} of {cfg.lockout_attempts}): discarded untranscribed")
+        self._on_voice_event("unmatched", {"attempts": len(self._failures), "of": cfg.lockout_attempts})
+        if len(self._failures) >= cfg.lockout_attempts:
+            self.locked_out_until = now + cfg.lockout_s
+            self._failures = []
+            self._on_voice_event("lockout", {"until": self.wall() + cfg.lockout_s})
+        return False
+
+    def _transcribe_and_deliver(self, audio: np.ndarray, mode: Mode, spoken_at: float,
+                                voice_lock: str = "not_declared") -> None:
         text = (self._transcribe(audio, self.config.wake_phrase if mode == "wake_phrase" else None) or "").strip()
         if mode == "wake_phrase" and self._phrase is not None:
             found = self._phrase.search(text)
@@ -300,7 +351,8 @@ class CaptureUnit:
         if not text:
             self.log(f"{mode} utterance transcribed to nothing: nothing sent")
             return
-        self._deliver(Utterance(trigger=mode, spoken_at=spoken_at, screen=self.lock.state(), text=text))
+        self._deliver(Utterance(trigger=mode, spoken_at=spoken_at, screen=self.lock.state(), text=text,
+                                voice_lock=voice_lock))
 
     # ------------------------------------------------------------------ status
 

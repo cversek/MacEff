@@ -351,14 +351,14 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R31 | judgment | the operator, at each selection | pending |
 | R32 | judgment | the operator, at each selection | pending |
 | R33 | judgment | the operator, in each declaration | pending |
-| R34 | decidable | macf/tests/test_voice_lock.py::test_only_matching_speaker_delivered | planned |
-| R35 | decidable | macf/tests/test_voice_lock.py::test_threshold_needs_report | planned |
-| R36 | decidable | macf/tests/test_voice_lock.py::test_test_set_includes_impostors | planned |
-| R37 | decidable | macf/tests/test_voice_lock.py::test_failure_discards_audio_untranscribed_and_sends_contentless_notice | planned |
+| R34 | decidable | macf/tests/test_voice_lock.py::test_only_matching_speaker_delivered | passing |
+| R35 | decidable | macf/tests/test_voice_lock.py::test_threshold_needs_report | passing |
+| R36 | decidable | macf/tests/test_voice_lock.py::test_test_set_includes_impostors | passing |
+| R37 | decidable | macf/tests/test_voice_lock.py::test_failure_discards_audio_untranscribed_and_sends_contentless_notice | planned (the capture unit discards untranscribed and raises a content-free event; the daemon sending the notice comes next) |
 | R38 | judgment | the maintainers, at review of the voice_lock policy | pending |
-| R39 | decidable | macf/tests/test_voice_lock.py::test_failures_in_window_start_lockout | planned |
+| R39 | decidable | macf/tests/test_voice_lock.py::test_failures_in_window_start_lockout | passing |
 | R40 | decidable | macf/tests/test_voice_declaration.py::test_lockout_defaults | passing |
-| R41 | decidable | macf/tests/test_voice_lock.py::test_lockout_delivers_nothing_and_counts | planned |
+| R41 | decidable | macf/tests/test_voice_lock.py::test_lockout_delivers_nothing_and_counts | passing |
 | R42 | decidable | macf/tests/test_voice_lock.py::test_lockout_raises_guard | planned |
 | R43 | judgment | the operator, after each lockout | pending |
 | R44 | decidable | macf/tests/test_voice_lock.py::test_agent_cannot_lower_own_guard | planned |

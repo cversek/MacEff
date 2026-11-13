@@ -25,6 +25,9 @@ SILENCE = np.zeros(FRAME, dtype=np.int16)
 SPEECH = np.full(FRAME, SPEECH_MARK, dtype=np.int16)
 WAKE = np.full(FRAME, WAKE_MARK, dtype=np.int16)
 QUIET_WAKE = np.full(FRAME, QUIET_WAKE_MARK, dtype=np.int16)
+#: The phrase in another voice: the wake model fires on it, the fake voice lock does not match it.
+OTHER_VOICE_MARK = 7003
+OTHER_WAKE = np.full(FRAME, OTHER_VOICE_MARK, dtype=np.int16)
 
 
 def secs(seconds: float) -> int:
@@ -122,7 +125,7 @@ class MarkerDetector(WakeDetector):
 
     def score(self, frame):
         self.scored += 1
-        return 1.0 if frame[0] in (WAKE_MARK, QUIET_WAKE_MARK) else 0.0
+        return 1.0 if frame[0] in (WAKE_MARK, QUIET_WAKE_MARK, OTHER_VOICE_MARK) else 0.0
 
 
 class LoudGate(SpeechGate):
@@ -146,7 +149,8 @@ class ScriptedTranscriber:
 
 def make_unit(audio: FakeAudio, transcriber: ScriptedTranscriber, *, phrase="yo tom", hold="KEY_F9",
               toggle="KEY_F10", listening_on: Callable[[], bool] = lambda: True,
-              speaking: Callable[[], bool] = lambda: False, screen="unlocked", **config) -> "Rig":
+              speaking: Callable[[], bool] = lambda: False, screen="unlocked", speaker=None,
+              on_voice_event=None, **config) -> "Rig":
     delivered = []
     keys = PushedKeys()
     indicator = RecordingIndicator()
@@ -156,7 +160,8 @@ def make_unit(audio: FakeAudio, transcriber: ScriptedTranscriber, *, phrase="yo 
                        transcribe=transcriber, deliver=delivered.append, detector=MarkerDetector(),
                        listening_on=listening_on, speaking=speaking,
                        clock=lambda: audio.reads * FRAME_S, wall=lambda: 1794600000.0 + audio.reads * FRAME_S,
-                       executor=InlineExecutor())
+                       executor=InlineExecutor(), speaker=speaker,
+                       on_voice_event=on_voice_event or (lambda kind, data: None))
     return Rig(unit=unit, keys=keys, indicator=indicator, delivered=delivered, audio=audio)
 
 

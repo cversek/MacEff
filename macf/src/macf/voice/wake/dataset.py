@@ -76,6 +76,9 @@ class Clip:
 class WakeSet:
     """The clips for one agent's wake phrase."""
 
+    #: The kinds of clip this store keeps; a voice lock's store keeps its own.
+    kinds = KINDS
+
     def __init__(self, home: Path, phrase: str):
         self.phrase = check_phrase(phrase)
         self.root = voice_dir(home) / "wake" / slug(self.phrase)
@@ -101,7 +104,7 @@ class WakeSet:
         return out
 
     def counts(self) -> Dict[str, Dict[str, int]]:
-        out: Dict[str, Dict[str, int]] = {k: {"train": 0, "test": 0} for k in KINDS}
+        out: Dict[str, Dict[str, int]] = {k: {"train": 0, "test": 0} for k in self.kinds}
         for clip in self.clips():
             out[clip.kind][clip.split] += 1
         return out
@@ -109,8 +112,8 @@ class WakeSet:
     def add(self, kind: str, samples: np.ndarray, conditions: str = "") -> Clip:
         """Keep one clip of ``kind``. Its set is decided now, by its place among the clips of its
         kind, and written beside it; nothing ever changes it."""
-        if kind not in KINDS:
-            raise ValueError(f"unknown clip kind {kind!r}; one of {', '.join(KINDS)}")
+        if kind not in self.kinds:
+            raise ValueError(f"unknown clip kind {kind!r}; one of {', '.join(self.kinds)}")
         self.define()
         index = len(self.clips(kind))
         split = "test" if index % HOLD_OUT_EVERY == HOLD_OUT_EVERY - 1 else "train"
