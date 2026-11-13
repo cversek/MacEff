@@ -508,7 +508,7 @@ allowed-tools: Read, Task                          # Delegation preparation
 
 This pattern forces comprehensive policy reading BEFORE execution, preventing incomplete citations.
 
-### 7.2 Minimal Task Engagement Command (/maceff:task:start)
+### 7.2 Minimal Task Engagement Command (now the /maceff-task-start skill)
 
 **Structure Highlights**:
 - **Policy Engagement**: 3 policies (task_management, delegation_guidelines, roadmaps_following)
