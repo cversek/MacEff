@@ -49,3 +49,17 @@ def test_the_display_name_in_prose_is_caught(agent_home):
 
 def test_the_full_uuid_is_caught_as_a_uuid(agent_home):
     assert "agent uuid" in _labels_matching(f"the session for {UUID} restarted")
+
+
+def test_the_username_is_the_uids_account_whatever_logname_says(agent_home, monkeypatch):
+    """getpass reads LOGNAME first, and one host's session set it to root while running as an
+    ordinary uid, so the gate protected 'root' and passed the real account name (#972)."""
+    import os
+    import pwd
+    account = pwd.getpwuid(os.getuid()).pw_name
+    if len(account) < 4:
+        pytest.skip("names under four characters are dropped by design")
+    monkeypatch.setenv("LOGNAME", "someone-else")
+    assert opsec.own_username() == account
+    assert "local username" in _labels_matching(f"signed off by {account} today")
+    assert "local username" not in _labels_matching("signed off by someone-else today")
