@@ -122,7 +122,7 @@ def write_secret(path: Path, data: str) -> None:
     except BaseException:
         try:
             os.unlink(tmp)
-        except FileNotFoundError:
+        except FileNotFoundError:  # noqa: S110 - cleanup on failure path; tmp may be gone; the real error re-raises
             pass
         raise
 

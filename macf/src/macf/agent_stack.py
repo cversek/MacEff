@@ -292,8 +292,8 @@ def _clients_from_proc(proc: Path = Path("/proc")) -> List[Tuple[int, str]]:
             if not _is_claude(argv):
                 continue
             found.append((int(entry.name), os.readlink(entry / "cwd")))
-        except (OSError, ValueError):
-            continue  # it ended while we looked, or is not ours to read
+        except (OSError, ValueError):  # noqa: S112 - it ended while we looked, or is not ours to read
+            continue
     return found
 
 
@@ -313,7 +313,8 @@ def _clients_from_ps() -> List[Tuple[int, str]]:
         try:
             cwd = subprocess.run(["lsof", "-a", "-p", fields[0], "-d", "cwd", "-Fn"],
                                  capture_output=True, text=True, timeout=10, env=env).stdout
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, subprocess.SubprocessError) as e:
+            print(f"⚠️ MACF: lsof for client pid {fields[0]} failed (skipping it): {e}", file=sys.stderr)
             continue
         names = [ln[1:] for ln in cwd.splitlines() if ln.startswith("n")]
         if names:

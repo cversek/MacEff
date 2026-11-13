@@ -38,6 +38,7 @@ import math
 import os
 import random
 import re
+import sys
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -109,12 +110,14 @@ def build_snapshot(agent_home: Optional[Path] = None, exclude: Sequence[str] = (
             continue
         try:
             raw = path.read_text(errors="replace")
-        except OSError:
+        except OSError as e:
+            print(f"⚠️ MACF: reading {path} failed (skipping it): {e}", file=sys.stderr)
             continue
         if ca_type in ("tasks", "duties"):
             try:
                 rec = json.loads(raw)
-            except ValueError:
+            except ValueError as e:
+                print(f"⚠️ MACF: parsing {path} failed (skipping it): {e}", file=sys.stderr)
                 continue
             if ca_type == "tasks":
                 nid, text = f"tasks:#{rec.get('id')}", f"{rec.get('subject', '')}\n\n{rec.get('description') or ''}"

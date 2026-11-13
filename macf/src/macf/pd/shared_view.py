@@ -93,7 +93,7 @@ def publish(agent_home: Path, declaration: interface.Declaration, now: Optional[
     except BaseException:
         try:
             os.unlink(tmp)
-        except FileNotFoundError:
+        except FileNotFoundError:  # noqa: S110 - the temp file may already be gone; the original error re-raises
             pass
         raise
     return path
@@ -162,7 +162,7 @@ def declared_homes(rendered: Optional[Path] = None,
     for entry in entries:
         try:
             os.stat(entry / "declaration.json")
-        except FileNotFoundError:
+        except FileNotFoundError:  # noqa: S112 - no declaration.json means not a declared account
             continue
         except OSError as e:
             out.append(AgentView(home=str(entry), status="UNREADABLE",
@@ -206,7 +206,7 @@ def read_agents(homes: Path = HOMES, rendered: Optional[Path] = None,
             continue
         try:
             is_tree = stat.S_ISDIR(os.stat(home / "agent" / "public").st_mode)
-        except (FileNotFoundError, NotADirectoryError):
+        except (FileNotFoundError, NotADirectoryError):  # noqa: S112 - no agent/public tree means not an agent home
             continue
         except OSError as e:
             views.append(AgentView(home=str(home), status="UNREADABLE",
