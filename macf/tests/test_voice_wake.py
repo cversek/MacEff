@@ -130,7 +130,7 @@ def test_test_set_disjoint_from_training(tmp_path):
 
 def test_too_few_clips_are_refused_with_what_is_missing(tmp_path):
     wake = recorded_set(tmp_path, np.random.default_rng(1), phrases=6)
-    with pytest.raises(NotEnoughClips, match="record at least 16 of the phrase"):
+    with pytest.raises(NotEnoughClips, match="record at least 15 of the phrase"):
         train(wake, band_embed)
 
 

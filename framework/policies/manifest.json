@@ -1417,6 +1417,8 @@
     "persistent_layer": ["base/infrastructure/persistent_layer"],
     "primal_daemon": ["base/infrastructure/persistent_layer"],
     "notification_channel": ["base/infrastructure/persistent_layer"],
+    "voice_input": ["base/infrastructure/voice_input"],
+    "wake_model": ["base/infrastructure/voice_input"],
     "specification": ["mis"],
     "ratification": ["mis"],
     "amail": [
@@ -1971,6 +1973,30 @@
           "notice",
           "wake",
           "receipt"
+        ]
+      },
+      {
+        "name": "voice_input",
+        "short_name": "VOICE",
+        "path": "base/infrastructure/voice_input.md",
+        "CEP_triggers": [
+          "How is a wake model recorded, trained and measured, and what does a measurement not show?",
+          "What may a wake phrase or any spoken utterance authorize?",
+          "What must the recording indicator show, and when?",
+          "What happens to raw audio, and which training clips are kept on purpose?",
+          "What does listening off do, and why does a declared hotkey still record?"
+        ],
+        "keywords": [
+          "voice",
+          "wake word",
+          "wake model",
+          "wake phrase",
+          "listening",
+          "microphone",
+          "capture unit",
+          "hotkey",
+          "indicator",
+          "dictation"
         ]
       }
     ]

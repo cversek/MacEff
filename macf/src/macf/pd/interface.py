@@ -439,6 +439,31 @@ class AssociationLink(_Closed):
         default_factory=lambda: ["pd_unit_state", "pd_carried"])
 
 
+class SpeechSettings(_Closed):
+    """How an agent sounds (MIS-0008 6.6): the voice, or a blend such as ``am_michael:0.6,bm_george:0.4``,
+    its speed, language and an optional ffmpeg filter chain, with the traits the operator accepted
+    when the voice was chosen (R30), and what it may say while the screen is locked (R33)."""
+
+    engine: Literal["kokoro"] = "kokoro"
+    voice: str = Field(default="am_michael", pattern=r"^[a-z]{2}_[a-z]+(:[0-9.]+)?(,[a-z]{2}_[a-z]+(:[0-9.]+)?){0,3}$")
+    speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    lang: str = Field(default="en-us", pattern=r"^[a-z]{2}(-[a-z]{2})?$")
+    fx: str = Field(default="", max_length=300)
+    traits: List[str] = Field(default_factory=list, max_length=12)
+    chosen_at: Optional[float] = None
+    #: While the screen is locked: ``speak`` as usual, or ``silent``, so nobody nearby hears the
+    #: agent while the operator is away (R33).
+    while_locked: Literal["speak", "silent"] = "speak"
+
+    @field_validator("traits")
+    @classmethod
+    def _short_traits(cls, v: List[str]) -> List[str]:
+        bad = [t for t in v if not t.strip() or len(t) > 60]
+        if bad:
+            raise ValueError(f"each trait is a few words, at most 60 characters: {bad}")
+        return v
+
+
 class VoiceSection(_Closed):
     """An agent's voice section (MIS-0008): the capture unit its utterances come from, and the
     voice lock's lockout settings. Wake phrase, hotkeys, voice lock and voice are added by the
@@ -470,7 +495,11 @@ class VoiceSection(_Closed):
     continual_close_s: float = Field(default=30.0, gt=0, le=3600, allow_inf_nan=False)
     #: The level at which the wake model's score counts as a fire, before the speech and
     #: transcription checks (R23).
-    detector_bar: float = Field(default=0.85, gt=0, le=1)
+    #: Overrides the threshold stored with the wake model, which its test report measured (R24).
+    #: None: the model's own threshold, so the numbers in the report are the bar in use.
+    detector_bar: Optional[float] = Field(default=None, gt=0, le=1)
+    #: How the agent sounds, once chosen (MIS-0008 6.6). None: the framework's default voice.
+    speech: Optional[SpeechSettings] = None
 
     @model_validator(mode="after")
     def _keys_need_devices_and_differ(self) -> "VoiceSection":

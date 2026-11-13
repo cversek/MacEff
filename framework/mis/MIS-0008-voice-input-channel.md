@@ -156,7 +156,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **R24** [MUST · decidable: macf/tests/test_voice_wake.py::test_model_stored_with_report] A wake model MUST be stored with its test report: misses, false alarms per hour, false wakes on other agents' phrases, and conditions. (wake_model_MUST_carry_its_report)
 - **R25** [MUST NOT · decidable: macf/tests/test_voice_wake.py::test_test_set_disjoint_from_training] A wake model's test MUST NOT use any clip that its training used. (wake_test_MUST-NOT_reuse_training_clips)
 - **R26** [MUST · decidable: macf/tests/test_voice_declaration.py::test_duplicate_phrase_or_key_refused] A capture unit MUST refuse two agents that declare the same wake phrase or the same hotkey. (wake_phrase_and_keys_MUST_be_unique_per_capture_unit)
-- **R27** [MUST NOT · decidable: macf/tests/test_voice_capture.py::test_no_wake_during_own_speech] A capture unit MUST NOT take a wake or record an utterance while its system's speech worker is playing. (capture_MUST-NOT_wake_on_own_speech)
+- **R27** [MUST NOT · decidable: macf/tests/test_voice_capture.py::test_no_wake_during_own_speech] A capture unit MUST NOT take a wake while its system's speech worker is playing; a declared key still opens its recording, and the speech gives way (R29). (capture_MUST-NOT_wake_on_own_speech)
 
 ### 6.6 Voice generation and selection
 
@@ -233,9 +233,9 @@ It concerns every agent that will take dictation or speak, every deployment that
   - The speech check rejects noise.
   - The transcription rejects similar words.
   - This order has run on the container-management maintainer's machine since November 2026.
-- **R24, R25:** with one capture unit for several agents, the error that matters most is one agent's phrase waking another's model, so the report counts it. these are the measurement lessons of those November experiments. A model with no report invites trust it hasn't earned. A test that shares clips with training measures memory, not detection.
+- **R24, R25:** with one capture unit for several agents, the error that matters most is one agent's phrase waking another's model, so the report counts it. These are measurement lessons learned on the first host that ran a wake model. A model with no report invites trust it hasn't earned. A test that shares clips with training measures memory, not detection.
 - **R26:** with one capture unit for many agents, a shared phrase or key would make the target ambiguous.
-- **R27:** an agent's own spoken alert can contain its wake phrase. The speech worker marks when it plays, and the capture unit takes nothing then. In continual voice, speech plays in the pauses between utterances.
+- **R27:** an agent's own spoken alert can contain its wake phrase. The speech worker marks when it plays, and the capture unit takes no wake then. A key is different: it is a deliberate press, so it opens its recording and the speech stops (R29), rather than the operator being made to wait for the agent to finish. While continual voice is open the microphone stays open, so speech waits until it closes. The first draft also refused key recordings during speech; building the worker showed that the operator should be able to interrupt, and this wording is offered for review.
 
 **Voice generation (R28 to R33).**
 - **R28, R29:** two agents talking over each other, or an agent talking into its own recording, make both channels useless. In continual voice, replies queue and play in the pauses between utterances. One worker per system is the simplest way to serialize them.
@@ -341,12 +341,12 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R21 | decidable | macf/tests/test_voice_indicator.py::test_indicator_shown_while_microphone_open | passing |
 | R22 | decidable | macf/tests/test_voice_indicator.py::test_indicator_shows_mode | passing |
 | R23 | decidable | macf/tests/test_voice_wake.py::test_wake_passes_its_checks_in_order | planned (model, speech and transcription pass in order; the voice lock takes its place between them with the lock's phase) |
-| R24 | decidable | macf/tests/test_voice_wake.py::test_model_stored_with_report | planned |
-| R25 | decidable | macf/tests/test_voice_wake.py::test_test_set_disjoint_from_training | planned |
+| R24 | decidable | macf/tests/test_voice_wake.py::test_model_stored_with_report | passing |
+| R25 | decidable | macf/tests/test_voice_wake.py::test_test_set_disjoint_from_training | passing |
 | R26 | decidable | macf/tests/test_voice_declaration.py::test_duplicate_phrase_or_key_refused | planned |
 | R27 | decidable | macf/tests/test_voice_capture.py::test_no_wake_during_own_speech | passing |
-| R28 | decidable | macf/tests/test_voice_speech.py::test_one_worker_serializes_agents | planned |
-| R29 | decidable | macf/tests/test_voice_speech.py::test_no_playback_while_microphone_open | planned |
+| R28 | decidable | macf/tests/test_voice_speech.py::test_one_worker_serializes_agents | passing |
+| R29 | decidable | macf/tests/test_voice_speech.py::test_no_playback_while_microphone_open | passing |
 | R30 | decidable | macf/tests/test_voice_select.py::test_choice_recorded_with_traits | planned |
 | R31 | judgment | the operator, at each selection | pending |
 | R32 | judgment | the operator, at each selection | pending |
@@ -409,7 +409,7 @@ None.
 
 - 2026-11-13: first draft, from the operator's request of the same day.
 - 2026-11-13: after the second review: raw audio never written to disk (R13); R09 a judgment; Q01 reworded; the readers of the source string change together (section 9).
-- 2026-11-13: from building the capture unit: R15 excepts a recording, so a declared hotkey still works while listening is off; flagged for review.
+- 2026-11-13: from building the capture unit: R15 excepts a recording, so a declared hotkey still works while listening is off; R27 lets a key interrupt the agent's speech, which stops for it; both flagged for review.
 - 2026-11-13: after the first review: listening and recording defined (R16, R21, R22, R27, R29); raw audio never leaves the system (R13); the speaker check runs before transcription (R23, R37); information only defined (R53); refused old-source notices recorded (R54); cross-agent false wakes reported (R24); authorship role corrected.
 
 ## Wiki-Links

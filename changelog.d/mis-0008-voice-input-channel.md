@@ -8,6 +8,8 @@
 
 - **The capture unit** (`python -m macf.voice.capture`, MIS-0008 R13 to R18, R21, R22, R27). A declared unit that listens for its agent's wake phrase and takes the hold key and continual voice from declared trigger devices. It shows a recording indicator with the agent, the mode, a waveform and a volume trace, and hands each utterance to its daemon. The logic is platform-free behind four backends with contract checks a porter runs (`macf.voice.capture.contract`). The Linux backends use `pw-record`, kernel input events read directly, the screen locker or logind's lock hint, and a GTK layer-shell overlay. Its microphone state rides its liveness beat into the daemon's status. New commands: `macf_tools voice listen [on|off]` and `voice capture status`. Its models are in the new `voice` extra.
 
+- **Wake-phrase training, its policy and skill** (`macf_tools voice wake define|record|train|test|status`, MIS-0008 R24, R25). Each kept clip's set, train or test, is fixed when it's recorded. The threshold is chosen from training scores only, and the held-out report travels in the model file, which holds plain weights and is never unpickled. The live detector fires at that measured threshold unless the voice section overrides it. The new `voice_input` policy says how a wake model is measured, what a wake may authorize (nothing), what the indicator shows and what audio is kept. The `maceff-voice-wake-training` skill coaches an operator through it.
+
 ### Fixed
 
 - **Transcription on Linux** (`macf.voice.transcribe`): detection offered faster-whisper, but the dispatch had no branch for it, so every Linux transcription raised "Unknown engine". It now runs, and `transcribe_array` transcribes samples held in memory.

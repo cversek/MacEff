@@ -95,7 +95,9 @@ def build(home: Path):
         return transcribe_array(audio, initial_prompt=f"{phrase.capitalize()}, " if phrase else None).text
 
     config = CaptureConfig(agent=card, wake_phrase=voice.wake_phrase, hold_key=voice.hold_key,
-                           toggle_key=voice.toggle_key, detector_bar=voice.detector_bar,
+                           toggle_key=voice.toggle_key,
+                           detector_bar=voice.detector_bar if voice.detector_bar is not None else (
+                               detector.threshold if detector is not None else 0.85),
                            end_silence_s=voice.end_silence_s, continual_close_s=voice.continual_close_s)
     return card, CaptureUnit(
         config, audio=PipeWireAudio(), lock=LinuxLockState(), indicator=OverlayIndicator(),
@@ -129,6 +131,8 @@ def main(argv=None) -> int:
     try:
         while not stopping:
             unit.tick()
+            if unit.recording is not None:
+                state.mark_recording(home)   # the speech worker holds, and stops, while this is fresh (R29)
             if heartbeat is not None:
                 heartbeat.tick()
             if unit.state == "off":

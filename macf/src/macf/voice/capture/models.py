@@ -63,6 +63,8 @@ class TrainedWakeDetector(WakeDetector):
         utils = _need("openwakeword.utils", "the wake detector")
         try:
             self._clf = WakeModel.load(model_path)
+            #: The bar its test report measured (R24), used unless the voice section overrides it.
+            self.threshold = self._clf.threshold
         except (OSError, ValueError) as e:
             raise RuntimeError(f"the wake model can't be read: {e}") from e
         self._features_cls = utils.AudioFeatures

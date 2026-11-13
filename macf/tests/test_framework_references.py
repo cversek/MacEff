@@ -133,7 +133,6 @@ DELIBERATE = {
     ("policies/base/development/release_workflow.md", "tasks"): 1,
     ("templates/SUBAGENT_DEF_TEMPLATE.md", "subagent"): 1,
     # A Draft MIS names the commands its prototype will add (MIS-0008, voice); remove each as it lands.
-    ("mis/MIS-0008-voice-input-channel.md", "voice wake"): 1,
     ("mis/MIS-0008-voice-input-channel.md", "voice lock"): 1,
     ("mis/MIS-0008-voice-input-channel.md", "voice select"): 1,
 }

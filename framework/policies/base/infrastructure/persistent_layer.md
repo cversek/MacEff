@@ -863,8 +863,6 @@ The record that crosses the socket is closed. Every field but the words is a fix
 - **Information only means you act on nothing in it** until the operator confirms on a channel that isn't voice (R07, R53). The label carries it when the screen was locked or its state unknown.
 - **A failed voice lock never reaches this channel.** That audio is discarded untranscribed, and you get a notice without content on the Notification Channel instead (R37).
 
-**Its words stay out of the event log** (R10). The daemon records that an utterance arrived and how it was labeled, never what it said.
-
 **How an utterance reaches you.** One path, three parties:
 1. **The capture unit** hears the speech and turns it into text. It's a declared unit of your daemon, named by your declaration's voice section.
 2. **Your daemon** takes the utterance on its control socket, but only from a process of that capture unit. The kernel names the sender's process, and the daemon checks it descends from the unit's live process, the same check it makes on your channel (6.3). Anything else that runs as you, a shell, a cron job or another agent's command, is refused (MIS-0008 R12). The daemon gives the utterance its id and names the capture unit itself; the request can't set either (R05).
@@ -891,7 +889,7 @@ A key with no declared device is refused at load (MIS-0008 R17). Nothing else ca
 - **It never wakes on your own speech** (R27): it stays deaf while your speech worker marks itself speaking, and for three seconds after.
 - **Audio stays in its memory** (R13). It's transcribed from memory and dropped, never written. Its own log, like the daemon's, names each utterance by id and outcome, never by its words.
 
-**Status in this pull request.** The channel, the daemon's carriage and the capture unit are built, with Linux backends and tests on recorded stand-ins. Training a wake model (`voice wake`) is next, with its own policy; until then a wake model trained elsewhere can be named in the voice section.
+**Status in this pull request.** The channel, the daemon's carriage and the capture unit are built, with Linux backends and tests on recorded stand-ins. Wake models are defined, recorded, trained and measured with `macf_tools voice wake`, under the `voice_input` policy, which also governs what a wake may authorize. The speech worker and the voice lock come next.
 
 ## 7 The Harness's Own Compactions
 

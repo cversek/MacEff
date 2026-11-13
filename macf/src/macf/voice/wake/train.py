@@ -40,7 +40,11 @@ class NotEnoughClips(ValueError):
 
 def openwakeword_embed() -> Embed:
     """openWakeWord's speech features for whole windows, as the live detector computes them."""
-    from openwakeword.utils import AudioFeatures
+    try:
+        from openwakeword.utils import AudioFeatures
+    except ImportError as e:
+        raise RuntimeError("training needs openwakeword, which macf's voice extra installs: "
+                           "pip install 'macf[voice]'") from e
     features = AudioFeatures()
 
     def embed(windows: List[np.ndarray]) -> np.ndarray:
@@ -105,7 +109,7 @@ def train(wake: WakeSet, embed: Embed, seed: int = 7) -> WakeModel:
     test_phrases = wake.clips("phrase", "test")
     if len(train_phrases) < MIN_TRAIN_PHRASES or len(test_phrases) < MIN_TEST_PHRASES:
         raise NotEnoughClips(f"{len(train_phrases)} phrase clips to train on and {len(test_phrases)} held out; "
-                             f"record at least {MIN_TRAIN_PHRASES + MIN_TEST_PHRASES + 1} of the phrase")
+                             f"record at least {MIN_TRAIN_PHRASES + MIN_TEST_PHRASES} of the phrase")
     positives: List[np.ndarray] = []
     negatives: List[np.ndarray] = []
     used = []

@@ -26,6 +26,30 @@ def speaking_path(home: Path) -> Path:
     return voice_dir(home) / "speaking"
 
 
+#: How fresh the recording mark must be to count: the capture unit touches it every frame it records.
+RECORDING_FRESH_S = 1.0
+
+
+def recording_path(home: Path) -> Path:
+    """Touched by the capture unit on every frame it records, so the speech worker holds (R29)."""
+    return voice_dir(home) / "recording"
+
+
+def mark_recording(home: Path) -> None:
+    path = recording_path(home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch()
+
+
+def recording(home: Path, now: float = None) -> bool:
+    """Whether the capture unit is recording now, by how fresh its mark is."""
+    try:
+        touched = recording_path(home).stat().st_mtime
+    except FileNotFoundError:
+        return False
+    return (now or time.time()) - touched < RECORDING_FRESH_S
+
+
 def listening_on(home: Path) -> bool:
     return not listen_off_path(home).exists()
 
