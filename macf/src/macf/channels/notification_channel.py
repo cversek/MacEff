@@ -216,8 +216,24 @@ def verify_peer(conn: socket.socket, daemon: DaemonRecord) -> bool:
 class Channel:
     """The server: MCP over stdin and stdout, the daemon over a Unix socket."""
 
+    #: What a subclass for another channel replaces: the socket it reads, the record it
+    #: accepts, the event it builds, its hello, and what it tells the session.
+    instructions = None
+
+    def socket_for(self, card: str, base: Optional[Path]) -> Path:
+        return channel_socket(card, base)
+
+    def parse(self, line: str):
+        return parse_record(line)
+
+    def event(self, record) -> dict:
+        return build_event(record)
+
+    def hello(self) -> bytes:
+        return hello_line()
+
     def __init__(self, card: str, base: Optional[Path] = None, out=None):
-        self.sock_path = channel_socket(card, base)
+        self.sock_path = self.socket_for(card, base)
         self.rec_path = record_path(card, base)
         self.out = out or sys.stdout
         self._out_lock = threading.Lock()
@@ -251,7 +267,7 @@ class Channel:
             conn.close()
             return None
         try:
-            conn.sendall(hello_line())
+            conn.sendall(self.hello())
         except OSError as e:
             # The daemon closed already, a refusal (R122); what it sent before is still read.
             print(f"⚠️ MACF: channel could not send its hello to the daemon: {e}", file=sys.stderr)
@@ -265,9 +281,9 @@ class Channel:
             for line in lines:
                 if not line.strip():
                     continue
-                record = parse_record(line)
+                record = self.parse(line)
                 if record is not None:
-                    self.send(build_event(record))
+                    self.send(self.event(record))
                     delivered += 1
         print("⚠️ MACF: channel lost its daemon connection (reconnecting)", file=sys.stderr)
         return delivered
@@ -299,7 +315,7 @@ class Channel:
                 # reply path. No "claude/channel/permission": prompts are not relayed.
                 "capabilities": {"experimental": {"claude/channel": {}}},
                 "serverInfo": {"name": SERVER_NAME, "version": "1"},
-                "instructions": _INSTRUCTIONS,
+                "instructions": self.instructions or _INSTRUCTIONS,
             }})
         elif method == "notifications/initialized":
             if self._listener is None:

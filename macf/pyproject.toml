@@ -87,6 +87,7 @@ amail-receiver = "macf.amail.daemons.receiver:main"
 # .mcp.json, which names this command, so it has to resolve on PATH wherever macf
 # is installed rather than depend on which interpreter a session finds first.
 maceff-notification-channel = "macf.channels.notification_channel:main"
+maceff-voice-input-channel = "macf.channels.voice_input_channel:main"
 
 # The tray's state glyphs are files, not modules, so a wheel carries them only when
 # they are named here (an editable install reads them from the tree either way).
@@ -99,4 +100,6 @@ maceff-notification-channel = "macf.channels.notification_channel:main"
     "maceff_marketplace/.claude-plugin/marketplace.json",
     "maceff_marketplace/plugins/maceff-notification-channel/.mcp.json",
     "maceff_marketplace/plugins/maceff-notification-channel/.claude-plugin/plugin.json",
+    "maceff_marketplace/plugins/maceff-voice-input-channel/.mcp.json",
+    "maceff_marketplace/plugins/maceff-voice-input-channel/.claude-plugin/plugin.json",
 ]

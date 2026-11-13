@@ -38,6 +38,7 @@ from macf.pd.names import (  # re-exported: interface's callers import these fro
     launchd_label,
     pd_id,
     record_path,
+    voice_socket,
     runtime_dir,
     systemd_unit,
 )
