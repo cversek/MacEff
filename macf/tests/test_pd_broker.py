@@ -751,3 +751,14 @@ def test_a_refused_start_holds_before_it_exits_so_keepalive_is_paced(tmp_path, m
     assert main([str(home)], hold=held.append) == 78 and held[-1] == 5.0
     monkeypatch.setenv("MACF_PD_REFUSED_HOLD_S", "soon")
     assert main([str(home)], hold=held.append) == 78 and held[-1] == REFUSED_HOLD_S
+
+
+def test_the_broker_unit_is_declared_with_more_grace_than_its_wrappers_stop_path():
+    """The daemon SIGKILLs a unit stop_grace_s after its stop. The wrapper needs a pass to notice
+    the stop and then gives mosquitto its own grace; a shorter unit grace kills the wrapper first and
+    leaves mosquitto running on its port (#992)."""
+    from macf.pd import broker_unit as bu
+    from macf.pd.broker_defaults import broker_unit
+    unit = broker_unit("Resident_1a2b3c", "resident")
+    assert unit.stop_grace_s > bu.POLL_S + bu.CHILD_STOP_GRACE_S, \
+        f"{unit.stop_grace_s} s is not longer than the wrapper stop path"
