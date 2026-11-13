@@ -18,6 +18,11 @@ CHANNEL_PLUGIN = "maceff-notification-channel"
 CHANNEL_PLUGIN_ID = f"{CHANNEL_PLUGIN}@{MARKETPLACE}"
 #: The channel as the harness's ``--channels`` takes it.
 CHANNEL_FLAG = f"plugin:{CHANNEL_PLUGIN_ID}"
+#: The MacEff Voice Input Channel (MIS-0008 R02), installed and launched only for an agent whose
+#: declaration has a voice section.
+VOICE_PLUGIN = "maceff-voice-input-channel"
+VOICE_PLUGIN_ID = f"{VOICE_PLUGIN}@{MARKETPLACE}"
+VOICE_FLAG = f"plugin:{VOICE_PLUGIN_ID}"
 
 
 def packaged_marketplace() -> Path:

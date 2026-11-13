@@ -66,3 +66,44 @@ def test_metadata_carries_no_words():
     """The words go in the content only; metadata holds closed values."""
     event = vic.build_voice_event(vic.UtteranceRecord.model_validate_json(_record(text="secret plan")))
     assert "secret plan" not in json.dumps(event["params"]["meta"])
+
+
+# ---------------------------------------------------------------- the daemon side (R10, R11)
+
+from test_primal_daemon import ask, base, run_daemon  # noqa: E402,F401 - fixtures
+from test_voice_capture import (WORDS, attach_voice_channel, receipt_of, speak,  # noqa: E402
+                                utterance_events, utterance_request, voice_home)
+
+
+def _whole_log() -> str:
+    from macf.agent_events_log import read_events
+    return json.dumps(list(read_events(reverse=False, scope="all")))
+
+
+def test_event_holds_no_text(tmp_path, base, run_daemon, isolated_events_log):
+    """R10: a delivered utterance and a refused one each leave an event with their metadata, and
+    nothing anywhere in the log holds the words."""
+    vh = voice_home(tmp_path, base)
+    daemon = run_daemon(vh.home, base)
+    ask(daemon, utterance_request())                     # refused: not the capture unit
+    conn = attach_voice_channel(daemon)
+    speak(vh.go)                                            # delivered
+    assert receipt_of(vh.out)["receipt"] == "delivered"
+    conn.close()
+    events = utterance_events()
+    assert [e["receipt"] for e in events] == ["refused", "delivered"]
+    assert all(e["chars"] == len(WORDS) and "text" not in e for e in events)
+    assert WORDS not in _whole_log(), "the words of an utterance reached the event log"
+
+
+def test_every_utterance_ends_in_receipt(tmp_path, base, run_daemon, isolated_events_log):
+    """R11: each utterance is answered with a receipt and an id, and its event records the same
+    receipt under the same id: refused from outside the unit, and refused with no channel."""
+    vh = voice_home(tmp_path, base)
+    daemon = run_daemon(vh.home, base)
+    outside = ask(daemon, utterance_request())
+    speak(vh.go)
+    inside = receipt_of(vh.out)
+    answers = {r["utterance_id"]: r["receipt"] for r in (outside, inside)}
+    assert set(answers.values()) == {"refused"} and len(answers) == 2
+    assert {e["utterance_id"]: e["receipt"] for e in utterance_events()} == answers

@@ -318,18 +318,18 @@ It concerns every agent that will take dictation or speak, every deployment that
 
 | Requirement | Check | How | State |
 |---|---|---|---|
-| R01 | decidable | macf/tests/test_channel_names.py::test_notification_channel_name_and_id | planned |
-| R02 | decidable | macf/tests/test_channel_names.py::test_voice_input_channel_name_and_id | planned |
-| R03 | decidable | macf/tests/test_channel_names.py::test_old_source_refused_by_name | planned |
-| R04 | decidable | macf/tests/test_voice_channel.py::test_utterance_reaches_session_through_voice_channel | planned |
-| R05 | decidable | macf/tests/test_voice_channel.py::test_label_is_daemon_verdict | planned |
-| R06 | decidable | macf/tests/test_voice_channel.py::test_label_precedes_text | planned |
-| R07 | decidable | macf/tests/test_voice_channel.py::test_locked_or_unknown_screen_marks_information_only | planned |
-| R08 | decidable | macf/tests/test_voice_channel.py::test_markup_in_text_is_neutralized | planned |
+| R01 | decidable | macf/tests/test_channel_names.py::test_notification_channel_name_and_id | passing |
+| R02 | decidable | macf/tests/test_channel_names.py::test_voice_input_channel_name_and_id | passing |
+| R03 | decidable | macf/tests/test_channel_names.py::test_old_source_refused_by_name | passing |
+| R04 | decidable | macf/tests/test_voice_channel.py::test_utterance_reaches_session_through_voice_channel | passing |
+| R05 | decidable | macf/tests/test_voice_channel.py::test_label_is_daemon_verdict | passing |
+| R06 | decidable | macf/tests/test_voice_channel.py::test_label_precedes_text | passing |
+| R07 | decidable | macf/tests/test_voice_channel.py::test_locked_or_unknown_screen_marks_information_only | passing |
+| R08 | decidable | macf/tests/test_voice_channel.py::test_markup_in_text_is_neutralized | passing |
 | R09 | judgment | the maintainers, at review of each path that checks an authorization | standing |
-| R10 | decidable | macf/tests/test_voice_channel.py::test_event_holds_no_text | planned |
-| R11 | decidable | macf/tests/test_voice_channel.py::test_every_utterance_ends_in_receipt | planned |
-| R12 | decidable | macf/tests/test_voice_capture.py::test_undeclared_capture_unit_refused | planned |
+| R10 | decidable | macf/tests/test_voice_channel.py::test_event_holds_no_text | passing |
+| R11 | decidable | macf/tests/test_voice_channel.py::test_every_utterance_ends_in_receipt | passing |
+| R12 | decidable | macf/tests/test_voice_capture.py::test_undeclared_capture_unit_refused | passing |
 | R13 | decidable | macf/tests/test_voice_capture.py::test_raw_audio_never_written | planned |
 | R14 | decidable | macf/tests/test_voice_backends.py::test_every_backend_passes_its_contract | planned |
 | R15 | decidable | macf/tests/test_voice_capture.py::test_no_audio_read_while_listening_off | planned |
@@ -357,7 +357,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R37 | decidable | macf/tests/test_voice_lock.py::test_failure_discards_audio_untranscribed_and_sends_contentless_notice | planned |
 | R38 | judgment | the maintainers, at review of the voice_lock policy | pending |
 | R39 | decidable | macf/tests/test_voice_lock.py::test_failures_in_window_start_lockout | planned |
-| R40 | decidable | macf/tests/test_voice_declaration.py::test_lockout_defaults | planned |
+| R40 | decidable | macf/tests/test_voice_declaration.py::test_lockout_defaults | passing |
 | R41 | decidable | macf/tests/test_voice_lock.py::test_lockout_delivers_nothing_and_counts | planned |
 | R42 | decidable | macf/tests/test_voice_lock.py::test_lockout_raises_guard | planned |
 | R43 | judgment | the operator, after each lockout | pending |
@@ -371,7 +371,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R51 | judgment | the maintainers, at review of the landing pull request | pending |
 | R52 | judgment | the maintainers, at review of the landing pull request | pending |
 | R53 | judgment | the operator, at review of each agent's handling | pending |
-| R54 | decidable | macf/tests/test_channel_names.py::test_refused_old_source_recorded | planned |
+| R54 | decidable | macf/tests/test_channel_names.py::test_refused_old_source_recorded | planned (the event is recorded and tested; the status entry is not built yet) |
 
 **Cold-reader trial**: not yet held. The first macOS port is planned as the trial. A maintainer who didn't write this MIS brings voice up on a Mac from the pull request and its documents alone, and reports each place they had to guess.
 

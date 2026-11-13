@@ -90,6 +90,8 @@ A system daemon and a fleet daemon are the base placed again, and MIS-0007 speci
 - Where do notices wait while the session is down, and what happens to mail that arrived while no daemon ran?
 - When does the daemon type a wake instead, and what may it type?
 - How does the operator's dictated speech reach my session, and what may I do with it? (6.12)
+- How do I give an agent voice input, and what does its declaration need? (6.12)
+- The operator says dictation didn't arrive. Where do I look? (6.12)
 
 **7 The Harness's Own Compactions**
 - Who may compact my session, and what happens when the client compacts it on its own?
@@ -863,7 +865,21 @@ The record that crosses the socket is closed. Every field but the words is a fix
 
 **Its words stay out of the event log** (R10). The daemon records that an utterance arrived and how it was labeled, never what it said.
 
-**Status in this pull request.** The plugin side is built: the record, the label, the information-only mark and the neutralizing. The daemon side that serves the voice socket, accepts utterances only from a declared capture unit (R12) and records their metadata comes next. Until it lands, nothing serves the socket, and the plugin waits and retries as its sibling does.
+**How an utterance reaches you.** One path, three parties:
+1. **The capture unit** hears the speech and turns it into text. It's a declared unit of your daemon, named by your declaration's voice section.
+2. **Your daemon** takes the utterance on its control socket, but only from a process of that capture unit. The kernel names the sender's process, and the daemon checks it descends from the unit's live process, the same check it makes on your channel (6.3). Anything else that runs as you, a shell, a cron job or another agent's command, is refused (MIS-0008 R12). The daemon gives the utterance its id and names the capture unit itself; the request can't set either (R05).
+3. **The Voice Input Channel** gets it on the voice socket, served only to a channel below your session that has said, in its hello, that it takes utterances.
+
+**Every utterance ends in a receipt** to the capture unit (R11): delivered, or refused with the reason. One that finds no channel attached is refused, not held. Dictation delivered after the operator has moved on would read as if it were said now, so the capture unit is told instead, and can say so. The voice lock adds two more receipts, locked out and matched to no agent, in later phases.
+
+**Its words stay out of the event log** (R10). Each utterance leaves one `pd_voice_utterance` event: its id, trigger, time spoken, screen, voice-lock result, capture unit, receipt, reason and length, never what it said. When the operator says dictation didn't arrive, that event is where to look: it says whether the utterance reached your daemon, and why it went no further.
+
+**Setting it up.** Voice is opt-in, and an agent without a voice section is unchanged.
+- **The voice section** names `capture_unit`, a declared service unit, not the session. It also holds the voice lock's lockout settings, which default to three attempts and ten minutes (R40). A section naming no declared unit is refused at load.
+- **Where your declaration lists `allowlisted_channels`,** an organization allowlist replaces the client's default list. So the voice section is refused at load unless `maceff-voice-input-channel@maceff` is on that list, since otherwise the channel would never load and nothing would say why (MIS-0002-R124).
+- **`macf_tools agent init`** installs the plugin and passes its `--channels` flag to the harness only where the declaration has a voice section. Adding voice to an agent whose harness is already installed takes `macf_tools harness install --force`, as for any new channel, then a session restart.
+
+**Status in this pull request.** The channel and the daemon's carriage are built and tested with a stand-in capture unit. The real capture unit, with microphone, wake phrase, hotkeys and indicator, comes next (MIS-0008 6.3 and 6.4).
 
 ## 7 The Harness's Own Compactions
 

@@ -439,6 +439,24 @@ class AssociationLink(_Closed):
         default_factory=lambda: ["pd_unit_state", "pd_carried"])
 
 
+class VoiceSection(_Closed):
+    """An agent's voice section (MIS-0008): the capture unit its utterances come from, and the
+    voice lock's lockout settings. Wake phrase, hotkeys, voice lock and voice are added by the
+    phases that build them.
+
+    - ``capture_unit``: the declared unit whose processes alone may hand this daemon an
+      utterance (MIS-0008 R12).
+    - ``lockout_attempts``, ``lockout_window_s``, ``lockout_s``: how many unmatched attempts
+      inside the window start a lockout, and how long it lasts (MIS-0008 R40: three attempts
+      and ten minutes unless declared otherwise).
+    """
+
+    capture_unit: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,47}$")
+    lockout_attempts: int = Field(default=3, ge=1, le=100)
+    lockout_window_s: float = Field(default=600.0, gt=0, allow_inf_nan=False)
+    lockout_s: float = Field(default=600.0, gt=0, allow_inf_nan=False)
+
+
 class Declaration(_Closed):
     """Everything an agent declares to its primal daemon. Audited by reading it.
 
@@ -511,6 +529,34 @@ class Declaration(_Closed):
     #: The member daemons this association expects, by card (prototype, B3). Its broker admits
     #: each to write its own subtree, and status reports each difference from those present.
     members: List[str] = Field(default_factory=list)
+    #: The agent's voice section (MIS-0008). None: the agent takes no voice input, and its
+    #: daemon serves no voice socket.
+    voice: Optional[VoiceSection] = None
+
+    @model_validator(mode="after")
+    def _voice_names_a_declared_capture_unit(self) -> "Declaration":
+        # MIS-0008 R12: utterances come only from a capture unit a declaration names, so the
+        # name must be a unit this daemon runs, and one that isn't the session.
+        if self.voice is None:
+            return self
+        if self.kind != "agent":
+            raise ValueError("a voice section belongs to an agent's declaration; one capture unit for "
+                             "several agents on a system daemon is not built yet (MIS-0008 6.8)")
+        unit = next((u for u in self.units if u.name == self.voice.capture_unit), None)
+        if unit is None:
+            raise ValueError(f"voice.capture_unit names {self.voice.capture_unit!r}, which is not a declared "
+                             f"unit; declare the capture unit under units (MIS-0008 R12)")
+        if unit.kind == "session":
+            raise ValueError(f"voice.capture_unit names the session unit {unit.name!r}; the capture unit is "
+                             f"a service of its own (MIS-0008 R12)")
+        # An organization allowlist replaces the client's default list, so a voice channel it leaves
+        # out would never load, and nothing would say why (MIS-0002-R124).
+        listed = {c.plugin for c in self.allowlisted_channels or []}
+        if self.allowlisted_channels is not None and "maceff-voice-input-channel" not in listed:
+            raise ValueError("a voice section needs the Voice Input Channel admitted: add {\"plugin\": "
+                             "\"maceff-voice-input-channel\", \"marketplace\": \"maceff\"} to allowlisted_channels "
+                             "and to the organization allowlist (MIS-0002-R124)")
+        return self
 
     @model_validator(mode="after")
     def _members_belong_to_an_association(self) -> "Declaration":
@@ -653,6 +699,11 @@ EVENT_CHANNEL_BACK = "pd_channel_back"
 #: An attached MacEff Notification Channel said which notice sources it takes (MIS-0002-R149). ``takes``
 #: lists them; a channel that sent no hello declares nothing and has no such event.
 EVENT_CHANNEL_DECLARED = "pd_channel_declared"
+#: One utterance and how it ended (MIS-0008 R10, R11): its id, trigger, time spoken, screen,
+#: voice-lock result, capture unit, receipt and length, and never its words.
+EVENT_VOICE_UTTERANCE = "pd_voice_utterance"
+#: A Voice Input Channel attached below the session and said it takes utterances.
+EVENT_VOICE_CHANNEL_DECLARED = "pd_voice_channel_declared"
 #: Mail sat in the agent's pickup box past its declared threshold, and the box was then
 #: emptied (MIS-0002-R55). One of each per unread spell.
 EVENT_UNREAD_MAIL = "pd_unread_mail"
@@ -873,6 +924,32 @@ class ChannelHello(_Closed):
     hello: HelloBody
 
 
+#: How long one utterance may be. A dictated message longer than this is not a message.
+MAX_UTTERANCE_TEXT = 8000
+
+_TRIGGER = Literal["wake_phrase", "hold_key", "continual_voice"]
+_SCREEN = Literal["unlocked", "locked", "unknown"]
+_VOICE_LOCK = Literal["matched", "not_declared"]
+
+
+class UtteranceRecord(_Closed):
+    """One utterance as the primal daemon sends it to the Voice Input Channel, one JSON object
+    per line (MIS-0008 R04, R05).
+
+    Closed, because this is a trust boundary. Every field but ``text`` is a closed value, and
+    ``utterance_id`` and ``capture_unit`` are set by the daemon from the transport, never taken
+    from the request, so nothing a speaker says can become part of the label.
+    """
+
+    utterance_id: str = Field(pattern=r"^[A-Za-z0-9._:-]{1,128}$")
+    trigger: _TRIGGER
+    spoken_at: float
+    screen: _SCREEN
+    voice_lock: _VOICE_LOCK
+    capture_unit: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,47}$")
+    text: str = Field(min_length=1, max_length=MAX_UTTERANCE_TEXT)
+
+
 class StatusRequest(_Closed):
     op: Literal["status"]
 
@@ -1009,9 +1086,27 @@ class StreamRuleRequest(_Closed):
         return self
 
 
+class UtteranceRequest(_Closed):
+    """A capture unit hands its agent's daemon one utterance (MIS-0008 R12). The daemon takes it
+    only from a process of the declared capture unit, names the unit and the utterance itself,
+    and answers with a receipt (R11). The words travel to the session and nowhere else (R10)."""
+
+    op: Literal["utterance"]
+    trigger: _TRIGGER
+    spoken_at: float = Field(allow_inf_nan=False)
+    screen: _SCREEN
+    voice_lock: _VOICE_LOCK
+    text: str = Field(min_length=1, max_length=MAX_UTTERANCE_TEXT)
+
+
 Request = Union[StatusRequest, BuildRequest, ActRequest, CompactRequest, PaceRequest, EntryAddRequest,
                 EntryListRequest, EntryRemoveRequest, EntryEditRequest, EntryPauseRequest,
-                StreamRuleRequest]
+                StreamRuleRequest, UtteranceRequest]
+
+#: How an utterance ended, as its receipt says (MIS-0008 R11). ``locked_out`` and ``no_agent``
+#: are given by the voice lock and the shared capture unit, built in later phases.
+_RECEIPT = Literal["delivered", "refused", "locked_out", "no_agent"]
+RECEIPTS = get_args(_RECEIPT)
 
 
 class UnitStatus(_Closed):
@@ -1048,6 +1143,9 @@ class Response(_Closed):
     stream_rules: Optional[Dict[str, Any]] = None
     #: The build of macf the daemon runs, answering a build request (MacEff #816).
     build: Optional[str] = None
+    #: How an utterance ended, answering an utterance (MIS-0008 R11), and the id the daemon gave it.
+    receipt: Optional[_RECEIPT] = None
+    utterance_id: Optional[str] = None
 
 
 _REQUEST = TypeAdapter(Annotated[Request, Field(discriminator="op")])

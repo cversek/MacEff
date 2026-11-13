@@ -27,15 +27,13 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import ValidationError
 
 from macf.channels.notification_channel import Channel, channel_card
-from macf.pd.interface import voice_socket
-
-#: How long one utterance may be. A dictated message longer than this is not a message.
-MAX_TEXT = 8000
+from macf.pd.interface import MAX_UTTERANCE_TEXT as MAX_TEXT
+from macf.pd.interface import UtteranceRecord, voice_socket
 
 _TRIGGER_WORDS = {"wake_phrase": "wake phrase", "hold_key": "hold key", "continual_voice": "continual voice"}
 _LOCK_WORDS = {"matched": "voice matched", "not_declared": "no voice lock declared"}
@@ -50,22 +48,8 @@ _INSTRUCTIONS = (
 )
 
 
-class UtteranceRecord(BaseModel):
-    """One utterance, as the primal daemon sends it: a closed record, one JSON object per line.
-
-    ``extra="forbid"`` because this is a trust boundary. Every field but ``text`` is a closed
-    value, so nothing a speaker says can become part of the label (MIS-0008 R05).
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    utterance_id: str = Field(pattern=r"^[A-Za-z0-9._:-]{1,128}$")
-    trigger: Literal["wake_phrase", "hold_key", "continual_voice"]
-    spoken_at: float
-    screen: Literal["unlocked", "locked", "unknown"]
-    voice_lock: Literal["matched", "not_declared"]
-    capture_unit: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,47}$")
-    text: str = Field(min_length=1, max_length=MAX_TEXT)
+__all__ = ["MAX_TEXT", "UtteranceRecord", "VoiceChannel", "build_voice_event", "defang",
+           "information_only", "label", "parse_utterance"]
 
 
 def information_only(record: UtteranceRecord) -> bool:

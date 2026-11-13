@@ -55,7 +55,8 @@ STEPS: List[Tuple[str, str, str]] = [
                      "exists; report what an existing one lacks"), "no_declaration"),
     ("harness", "install the session's child script with the declared channels (harness install)",
      "no_harness"),
-    ("channel", "add the packaged maceff marketplace and install maceff-notification-channel@maceff", "no_channel"),
+    ("channel", ("add the packaged maceff marketplace and install maceff-notification-channel@maceff, and "
+                 "maceff-voice-input-channel@maceff where the declaration has a voice section"), "no_channel"),
     ("permissions", "add the mode-safety permission entries to the project's settings.local.json",
      "no_permissions"),
     ("daemon", "put the primal daemon under the service manager (pd install)", "no_daemon"),
@@ -692,15 +693,29 @@ def step_declaration(ctx: Context) -> Result:
     return Result("declaration", DONE, f"{target}: units {', '.join(u['name'] for u in default['units'])}")
 
 
+def _declares_voice(ctx: Context) -> bool:
+    """Whether the agent's declaration has a voice section (MIS-0008): the one on disk, or the
+    one the declaration step would write. Voice is opt-in, so an unreadable declaration is no."""
+    from macf.pd.names import declaration_path
+    path = declaration_path(ctx.home)
+    try:
+        declaration = json.loads(path.read_text()) if path.exists() else (ctx.declaration or {})
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: agent init: {path} can't be read, so no voice channel is set up: {e}", file=sys.stderr)
+        return False
+    return isinstance(declaration, dict) and bool(declaration.get("voice"))
+
+
 def _declared_channel_flags(ctx: Context) -> List[str]:
-    from macf.channels.marketplace import CHANNEL_FLAG
+    from macf.channels.marketplace import CHANNEL_FLAG, VOICE_FLAG
     from macf.pd import default_declaration as dd
     declared = (ctx.declaration or {}).get("allowlisted_channels")
     if declared is None:
         declared = (default_declaration(ctx) if ctx.card else {}).get("allowlisted_channels") or []
     flags = [dd.channel_flag(c["plugin"], c["marketplace"]) for c in declared]
-    if CHANNEL_FLAG not in flags:
-        flags.append(CHANNEL_FLAG)
+    for flag in [CHANNEL_FLAG] + ([VOICE_FLAG] if _declares_voice(ctx) else []):
+        if flag not in flags:
+            flags.append(flag)
     # Channels already recorded for the harness are kept, first: a reinstall that dropped one
     # would take that inbound link down with nothing to see.
     recorded = list(_harness_settings(ctx).get("channels") or [])
@@ -745,11 +760,13 @@ def _plugin_state(login_home: Path) -> Tuple[set, set]:
 
 
 def step_channel(ctx: Context) -> Result:
-    from macf.channels.marketplace import CHANNEL_PLUGIN_ID, MARKETPLACE, packaged_marketplace
+    from macf.channels.marketplace import CHANNEL_PLUGIN_ID, MARKETPLACE, VOICE_PLUGIN_ID, packaged_marketplace
     known, installed = _plugin_state(ctx.login_home)
     update = getattr(ctx.args, "update", False)
-    if MARKETPLACE in known and CHANNEL_PLUGIN_ID in installed and not update:
-        return Result("channel", ALREADY, CHANNEL_PLUGIN_ID)
+    # The Voice Input Channel only where the declaration has a voice section (MIS-0008).
+    wanted = [CHANNEL_PLUGIN_ID] + ([VOICE_PLUGIN_ID] if _declares_voice(ctx) else [])
+    if MARKETPLACE in known and all(p in installed for p in wanted) and not update:
+        return Result("channel", ALREADY, ", ".join(wanted))
     claude = shutil.which("claude")
     if claude is None:
         return Result("channel", REFUSED, "the claude CLI is not on PATH; install Claude Code, then "
@@ -761,15 +778,16 @@ def step_channel(ctx: Context) -> Result:
     commands = []
     if ctx.dry_run:
         todo = ([f"add the marketplace {source}"] if MARKETPLACE not in known else
-                [f"refresh the marketplace {MARKETPLACE}"] if update else []) + \
-            ([f"install {CHANNEL_PLUGIN_ID}"] if CHANNEL_PLUGIN_ID not in installed else
-             [f"refresh {CHANNEL_PLUGIN_ID}"] if update else [])
+                [f"refresh the marketplace {MARKETPLACE}"] if update else [])
+        for plugin in wanted:
+            todo += ([f"install {plugin}"] if plugin not in installed else [f"refresh {plugin}"] if update else [])
         return Result("channel", WOULD, "; ".join(todo))
     # Under --update, what is already there is refreshed, as a container's start step does.
     commands.append([claude, "plugin", "marketplace", "add", str(source)] if MARKETPLACE not in known
                     else [claude, "plugin", "marketplace", "update", MARKETPLACE])
-    commands.append([claude, "plugin", "install", CHANNEL_PLUGIN_ID] if CHANNEL_PLUGIN_ID not in installed
-                    else [claude, "plugin", "update", CHANNEL_PLUGIN_ID])
+    for plugin in wanted:
+        commands.append([claude, "plugin", "install", plugin] if plugin not in installed
+                        else [claude, "plugin", "update", plugin])
     if not update:
         commands = [c for c in commands if "update" not in c[2:4]]
     for argv in commands:
@@ -780,7 +798,7 @@ def step_channel(ctx: Context) -> Result:
         if out.returncode != 0:
             said = _last_line(out.stderr) or _last_line(out.stdout) or f"exit {out.returncode}"
             return Result("channel", REFUSED, f"claude {' '.join(argv[1:])} failed: {said}")
-    return Result("channel", DONE, f"{CHANNEL_PLUGIN_ID} from {source}" + (
+    return Result("channel", DONE, f"{', '.join(wanted)} from {source}" + (
         " (refreshed; the session loads it at its next start)" if update and CHANNEL_PLUGIN_ID in installed else ""))
 
 

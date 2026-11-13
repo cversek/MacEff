@@ -180,6 +180,64 @@ def transcribe_whisper(wav_path: str, model: str = "turbo",
     )
 
 
+#: Models loaded once per process, by (engine, model): a capture unit transcribes many times, and
+#: loading a model costs seconds each time.
+_LOADED: dict = {}
+
+#: The model each engine uses when none is named.
+DEFAULT_MODELS = {"mlx": "mlx-community/whisper-large-v3-turbo", "faster-whisper": "large-v3-turbo",
+                  "whisper": "turbo"}
+
+
+def _faster_whisper_model(model: str):
+    key = ("faster-whisper", model)
+    if key not in _LOADED:
+        from faster_whisper import WhisperModel
+        _LOADED[key] = WhisperModel(model, device="auto", compute_type="default")
+    return _LOADED[key]
+
+
+def _segments_result(segments, text: str, language: str, engine: str, model: str, elapsed: float) -> TranscriptResult:
+    return TranscriptResult(text=text.strip(), segments=segments, language=language, engine=engine, model=model,
+                            duration_audio=segments[-1].end if segments else 0.0, duration_transcribe=elapsed)
+
+
+def transcribe_faster_whisper(audio, model: str = "large-v3-turbo", language: str = "en",
+                              initial_prompt: Optional[str] = None) -> TranscriptResult:
+    """Transcribe with faster-whisper, the Linux engine. ``audio`` is a WAV path, or float32
+    samples at 16 kHz held in memory, which is how a capture unit calls it (MIS-0008 R13)."""
+    whisper_model = _faster_whisper_model(model)
+    t0 = time.time()
+    found, info = whisper_model.transcribe(audio, language=language, initial_prompt=initial_prompt)
+    segments = [TranscriptSegment(text=s.text.strip(), start=s.start, end=s.end, confidence=1.0 - s.no_speech_prob)
+                for s in found]       # the generator does the work, so the time is taken after it
+    return _segments_result(segments, " ".join(s.text for s in segments), info.language or language,
+                            "faster-whisper", model, time.time() - t0)
+
+
+def transcribe_array(audio, engine: Optional[str] = None, model: Optional[str] = None, language: str = "en",
+                     initial_prompt: Optional[str] = None) -> TranscriptResult:
+    """Transcribe samples held in memory: float32 or int16, mono, 16 kHz. Nothing is written to
+    disk, so raw audio stays in the caller's memory (MIS-0008 R13). Every engine takes an array."""
+    import numpy as np
+    samples = np.asarray(audio)
+    if samples.dtype == np.int16:
+        samples = samples.astype(np.float32) / 32768.0
+    samples = samples.astype(np.float32, copy=False)
+    engine = engine or detect_engine()
+    if engine is None:
+        raise RuntimeError("No transcription engine available. Install one of: "
+                           "mlx-whisper (Mac), faster-whisper (Linux), openai-whisper (universal)")
+    model = model or DEFAULT_MODELS.get(engine, "")
+    if engine == "faster-whisper":
+        return transcribe_faster_whisper(samples, model=model, language=language, initial_prompt=initial_prompt)
+    if engine == "mlx":
+        return transcribe_mlx(samples, model=model, language=language, initial_prompt=initial_prompt)
+    if engine == "whisper":
+        return transcribe_whisper(samples, model=model, language=language, initial_prompt=initial_prompt)
+    raise ValueError(f"Unknown engine: {engine}")
+
+
 def transcribe(audio_path: str, engine: Optional[str] = None,
                model: Optional[str] = None, language: str = "en",
                initial_prompt: Optional[str] = None) -> TranscriptResult:
@@ -229,6 +287,15 @@ def transcribe(audio_path: str, engine: Optional[str] = None,
             result = transcribe_whisper(
                 wav_path,
                 model=model or "turbo",
+                language=language,
+                initial_prompt=initial_prompt,
+            )
+        elif engine == "faster-whisper":
+            # detect_engine has offered this engine on Linux all along; the dispatch had no
+            # branch for it, so every Linux transcription raised "Unknown engine".
+            result = transcribe_faster_whisper(
+                wav_path,
+                model=model or DEFAULT_MODELS["faster-whisper"],
                 language=language,
                 initial_prompt=initial_prompt,
             )

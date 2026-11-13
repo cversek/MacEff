@@ -46,6 +46,7 @@ from macf.pd.interface import (
     BuildRequest,
     StreamRule,
     StreamRuleRequest,
+    UtteranceRequest,
     WakePaced,
     agent_card,
     channel_socket,
@@ -55,7 +56,9 @@ from macf.pd.interface import (
     ensure_runtime_dir,
     record_path,
     runtime_dir,
+    voice_socket,
 )
+from macf.pd.voice_carriage import VoiceCarriage, refuse_without_voice
 from macf.pd.channel_watch import DarkChannel
 from macf.pd.unread_mail import UnreadMail, pickup_box
 from macf.pd.notifier import Notifier
@@ -207,6 +210,14 @@ class Daemon:
         self._wake_from = "the declaration"
         if self.agent:
             self._build_agent_components()
+        #: The Voice Input Channel's carriage, only where the declaration has a voice section
+        #: (MIS-0008): an agent without one serves no voice socket and takes no utterance.
+        self.voice: Optional[VoiceCarriage] = None
+        if self.agent and decl.voice is not None:
+            voice_path = voice_socket(self.card, self.base)
+            check_socket_path(voice_path)
+            self.voice = VoiceCarriage(self.card, voice_path, decl.voice, self._outside_session,
+                                       self.core.incarnation)
         #: The build this daemon started from, said in every status (MacEff #816). Read once:
         #: the code it runs can't change under it, only the checkout beside it.
         from macf.pd.build import build_id
@@ -313,6 +324,8 @@ class Daemon:
             channel.listen(4)
             channel.setblocking(False)
             self._channel_listener = channel
+        if self.voice is not None:
+            self.voice.bind()
         self._fold_rules()
         record = self._record = self._write_record()
         self.core.record_start(record.pid, record.proc_start)
@@ -453,6 +466,9 @@ class Daemon:
         sel.register(self._listener, selectors.EVENT_READ, "control")
         if self._channel_listener is not None:
             sel.register(self._channel_listener, selectors.EVENT_READ, "channel")
+        if self.voice is not None:
+            self.voice.selector = sel
+            sel.register(self.voice.listener, selectors.EVENT_READ, "voice")
         sel.register(self._wake_r, selectors.EVENT_READ, "wake")
         for link in (self.broker_link, self.export_link):
             if link is not None:
@@ -466,11 +482,17 @@ class Daemon:
                         self._accept_channel()
                     elif key.data == "attached":
                         self._channel_readable(key.fileobj)
+                    elif key.data == "voice":
+                        self.voice.accept()
+                    elif key.data == "voice_attached":
+                        self.voice.readable(key.fileobj)
                     else:
                         os.read(self._wake_r, 512)
                 self.core.tick()
                 self.scheduler.tick()
                 self._hellos_due()
+                if self.voice is not None:
+                    self.voice.hellos_due()
                 if self.receiver is not None:
                     self.receiver.tick(time.monotonic())
                 if self.notifier is not None:
@@ -498,6 +520,8 @@ class Daemon:
                 if link is not None:
                     link.stop()
             self.scheduler.shutdown()
+            if self.voice is not None:
+                self.voice.selector = None
             sel.close()
             self._sel = None
             if self._stop_units:
@@ -605,6 +629,8 @@ class Daemon:
             self._listener.close()
         if self._channel_listener is not None:
             self._channel_listener.close()
+        if self.voice is not None:
+            self.voice.release()
         from macf.agent_events_log import remove_append_listener
         remove_append_listener(self.broker_link.stream.note_own_append)
         for path, still_mine in ((self.control_path, self._socket_is_mine),
@@ -799,6 +825,10 @@ class Daemon:
         if isinstance(request, (EntryAddRequest, EntryListRequest, EntryRemoveRequest, EntryEditRequest,
                                 EntryPauseRequest)):
             return self._entry_request(request, creds)
+        if isinstance(request, UtteranceRequest):
+            if self.voice is None:
+                return refuse_without_voice(self.card, request, creds)
+            return self.voice.utterance(request, creds)
         if isinstance(request, StatusRequest):
             return Response(ok=True, units=self.core.statuses(), **self._wake_window())
         if isinstance(request, BuildRequest):

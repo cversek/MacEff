@@ -53,7 +53,9 @@ def stack(tmp_path, monkeypatch):
         if argv[1:4] == ["plugin", "marketplace", "add"]:
             (plugins / "known_marketplaces.json").write_text(json.dumps({"maceff": {"source": argv[4]}}))
         if argv[1:3] == ["plugin", "install"]:
-            (plugins / "installed_plugins.json").write_text(json.dumps({"version": 2, "plugins": {argv[3]: []}}))
+            record = plugins / "installed_plugins.json"
+            held = json.loads(record.read_text())["plugins"] if record.exists() else {}
+            record.write_text(json.dumps({"version": 2, "plugins": {**held, argv[3]: []}}))
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     installs = []
@@ -146,6 +148,34 @@ def test_fresh_home_gets_a_valid_declaration_and_the_whole_stack(stack):
     harness = json.loads((stack.home / ".maceff" / "harness_Tester_abc123.json").read_text())
     assert "plugin:maceff-notification-channel@maceff" in harness["channels"]
     assert len(stack.installs) == 1
+
+
+def test_the_voice_channel_is_set_up_only_where_a_voice_section_is_declared(stack):
+    """MIS-0008: voice is opt-in. A fresh home gets no Voice Input Channel; a home whose declaration
+    has a voice section when init runs gets the plugin installed and the harness given its flag.
+    (Adding voice to a harness already installed is the harness's own --force, as for any channel.)"""
+    voice_install = ["/fake/bin/claude", "plugin", "install", "maceff-voice-input-channel@maceff"]
+    rc, _ = _run(stack)
+    assert rc == 0 and voice_install not in stack.claude
+    harness_path = stack.home / ".maceff" / "harness_Tester_abc123.json"
+    assert "plugin:maceff-voice-input-channel@maceff" not in json.loads(harness_path.read_text())["channels"]
+    # The same home, set up again from a declaration that has a voice section.
+    harness_path.unlink()
+    (stack.home / ".local" / "bin" / "maceff_cc_child_Tester_abc123").unlink()
+    (stack.home / ".claude" / "plugins" / "installed_plugins.json").unlink()
+    declaration = _declaration(stack)
+    capture = dict(declaration["units"][-1], name="capture", command=["true"])
+    declaration["units"].append(capture)
+    declaration["voice"] = {"capture_unit": "capture"}
+    declaration["allowlisted_channels"].append({"plugin": "maceff-voice-input-channel", "marketplace": "maceff"})
+    Declaration.model_validate(declaration)
+    (stack.home / ".maceff" / "pd" / "declaration.json").write_text(json.dumps(declaration))
+    rc, results = _run(stack)
+    steps = _by_step(results)
+    assert steps["channel"].status == DONE and voice_install in stack.claude, results
+    assert "plugin:maceff-voice-input-channel@maceff" in json.loads(harness_path.read_text())["channels"]
+    rc, results = _run(stack)
+    assert _by_step(results)["channel"].status == ALREADY
 
 
 def test_telegram_and_mail_are_declared_when_the_agent_uses_them(stack):

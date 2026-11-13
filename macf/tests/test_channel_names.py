@@ -17,6 +17,17 @@ def test_notification_channel_name_and_id():
     assert "MacEff Notification Channel" in manifest["description"]
 
 
+def test_voice_input_channel_name_and_id():
+    """R02: the plugin, its manifest, its catalog entry and its launch flag all carry the one name."""
+    assert marketplace.VOICE_PLUGIN == "maceff-voice-input-channel"
+    assert marketplace.VOICE_FLAG == "plugin:maceff-voice-input-channel@maceff"
+    manifest = json.loads((PLUGINS / "maceff-voice-input-channel" / ".claude-plugin" / "plugin.json").read_text())
+    assert manifest["name"] == "maceff-voice-input-channel"
+    assert "MacEff Voice Input Channel" in manifest["description"]
+    catalog = json.loads((PLUGINS.parent / ".claude-plugin" / "marketplace.json").read_text())
+    assert "maceff-voice-input-channel" in {p["name"] for p in catalog["plugins"]}
+
+
 def test_the_classifier_and_the_taint_check_share_one_source():
     assert taint._OWN_CHANNEL is input_origin.NOTIFICATION_CHANNEL_SOURCE, \
         "a rename must not leave the two readers disagreeing"

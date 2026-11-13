@@ -690,9 +690,16 @@ class Core:
         """The session unit's live process as (pid, proc_start), or None when no session
         unit is declared or running. A channel is accepted only below this process
         (MIS-0002-R122 (pd_MUST_check_channel_peer_lineage))."""
-        for r in self._units.values():
-            if r.spec.kind == "session" and r.proc is not None and r.pid and r.proc_start:
-                return r.pid, r.proc_start
+        session = next((r for r in self._units.values() if r.spec.kind == "session"), None)
+        return self.incarnation(session.spec.name) if session is not None else None
+
+    def incarnation(self, unit: str) -> Optional[tuple]:
+        """``unit``'s live process as (pid, proc_start), or None when it isn't declared or isn't
+        running. A peer is taken as the unit only below this process: an utterance only from
+        the declared capture unit (MIS-0008 R12), as a channel only from the session."""
+        r = self._units.get(unit)
+        if r is not None and r.proc is not None and r.pid and r.proc_start:
+            return r.pid, r.proc_start
         return None
 
     def session_active_since(self) -> Optional[float]:
