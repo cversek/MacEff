@@ -124,7 +124,12 @@ def connect_voice(daemon, hello: bytes) -> socket.socket:
     conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     conn.settimeout(5)
     conn.connect(str(daemon.voice.path))
-    conn.sendall(hello)
+    try:
+        conn.sendall(hello)
+    except (BrokenPipeError, ConnectionResetError):
+        # The daemon refused at accept, before the hello was written: the refusal arrived early,
+        # not a failure of the test. The caller's own assertion reads the closed connection.
+        pass  # noqa: S110 - an early refusal is the outcome the caller checks next
     return conn
 
 
