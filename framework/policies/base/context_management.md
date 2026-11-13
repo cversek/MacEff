@@ -359,6 +359,8 @@ YYYY-MM-DD_HHMMSS_Description_ccp.md
 - Injects strong consciousness activation via `additionalContext`
 - Provides artifact list and recovery instructions
 
+**An agent's own banner**: the banner that opens the recovery message is the framework's unless the agent's home holds `.maceff/recovery_header.md`, whose text then replaces it. The recovery essentials (the mode and the artifacts to open) still come first, and the mode's own section still follows, whichever banner is used. An empty file is ignored; one that can't be read is reported and the framework's banner is used. This exists so that a banner's wording can be tried in one agent's sessions without changing every other agent's (#995).
+
 **Output Format**:
 ```json
 {
