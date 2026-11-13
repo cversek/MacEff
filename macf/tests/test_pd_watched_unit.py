@@ -384,3 +384,32 @@ def test_a_check_without_a_pidfile_a_command_or_alone_is_refused(argv):
     with pytest.raises(SystemExit) as refused:
         wu.main(argv)
     assert refused.value.code == 2
+
+
+# --- a wrapper unit must be declared with more grace than the wrapper's stop path (#1001) -------
+
+def _wrapper_unit(module, grace=None):
+    from macf.pd.interface import Unit
+    fields = {"name": "web", "command": [sys.executable, "-m", module, "--probe", "http://127.0.0.1:8000/",
+                                         "--within", "60", "--pidfile", "/tmp/web.pid", "--", "web"],
+              "account": "resident", "restart": "always", "liveness_interval_s": 60, "memory_limit_mb": 256}
+    if grace is not None:
+        fields["stop_grace_s"] = grace
+    return Unit(**fields)
+
+
+@pytest.mark.parametrize("module", ["macf.pd.watched_unit", "macf.pd.broker_unit"])
+def test_a_wrapper_unit_with_less_grace_than_its_stop_path_is_refused_naming_the_fix(module):
+    from pydantic import ValidationError
+    from macf.pd.broker_unit import WRAPPER_UNIT_STOP_GRACE_S
+    for grace in (None, WRAPPER_UNIT_STOP_GRACE_S - 1):      # the default of 10, and just under
+        with pytest.raises(ValidationError, match=f"stop_grace_s: {WRAPPER_UNIT_STOP_GRACE_S:g} or more"):
+            _wrapper_unit(module, grace)
+    assert _wrapper_unit(module, WRAPPER_UNIT_STOP_GRACE_S).stop_grace_s == WRAPPER_UNIT_STOP_GRACE_S
+
+
+def test_a_unit_that_only_names_a_wrapper_elsewhere_is_not_judged_by_it():
+    from macf.pd.interface import Unit
+    unit = Unit(name="notes", command=["cat", "macf.pd.watched_unit"], account="resident", restart="always",
+                liveness_interval_s=60, memory_limit_mb=64)
+    assert unit.stop_grace_s == 10.0, "only a command that runs the module with -m is a wrapper unit"
