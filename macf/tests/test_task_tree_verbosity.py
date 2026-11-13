@@ -105,3 +105,26 @@ def test_default_hides_completion_reports_and_v_shows_them(env, tid):
     out = tree(env)
     assert "DONEMARK" not in out and "✅" not in out
     assert "DONEMARK" in tree(env, "-v")
+
+
+def test_default_hides_subtask_plans_but_keeps_github_links(env, tid):
+    """Operator, 13:21: plan lines only for top-level tasks by default; GH issues and PRs keep their link."""
+    import json
+    tasks_dir = env["MACF_TASK_STORE_DIR"]
+    top = run(env, "task", "create", "task", "--plan", "TOPPLAN", "Top")
+    top = top.split("Created task #")[1].split()[0]
+    child = run(env, "task", "create", "task", "--plan", "CHILDPLAN", "--parent", top, "Sub")
+    child = child.split("Created task #")[1].split()[0]
+    pr = run(env, "task", "create", "task", "--plan", "x", "--parent", top, "A PR")
+    pr = pr.split("Created task #")[1].split()[0]
+    p = os.path.join(tasks_dir, f"{pr}.json")
+    d = json.load(open(p))
+    d["description"] = (d["description"].replace("task_type: TASK", "task_type: GH_PR")
+                        .replace("plan: x", "plan_ca_ref: https://github.com/o/r/pull/77"))
+    json.dump(d, open(p, "w"))
+
+    out = tree(env)
+    assert "TOPPLAN" in out
+    assert "CHILDPLAN" not in out
+    assert "github.com/o/r/pull/77" in out
+    assert "CHILDPLAN" in tree(env, "-v")

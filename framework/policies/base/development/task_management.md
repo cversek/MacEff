@@ -1444,7 +1444,7 @@ macf_tools task unblocked-by #68 #67   # Remove blocked-by
 macf_tools task tree                   # Default: from sentinel #000
 macf_tools task tree #67               # From specific task
 macf_tools task tree --succinct        # Compact one-line display
-macf_tools task tree                   # Notes counted on each task's line; no completion reports
+macf_tools task tree                   # Notes counted; no completion reports; plan lines for top-level tasks and GH issues/PRs only
 macf_tools task tree -v                # Notes, plans and completion reports listed, truncated
 macf_tools task tree -vv               # Everything in full, wrapped to 80% of the terminal
 macf_tools task tree --loop            # Live monitoring (refreshes)

@@ -5765,7 +5765,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                 parts.append(time_str)
             return " ".join(parts) if parts else ""
 
-        def print_task_details(task, detail_prefix):
+        def print_task_details(task, detail_prefix, depth=0):
             """Print plan, notes and reports for a task at the current verbosity level."""
             if succinct:
                 return
@@ -5793,6 +5793,13 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                     print(f"{detail_prefix}{style((lead if i == 0 else pad) + part)}")
 
             plan, plan_ca_ref = get_task_plan(task)
+
+            # At level 0 a subtask's plan line is left out: its parent's plan
+            # already says where the work is planned. A GitHub issue or PR keeps
+            # its line at any depth, because that line is its link.
+            task_type = getattr(task.mtmd, "task_type", None) if task.mtmd else None
+            if level == 0 and depth >= 2 and task_type not in ("GH_ISSUE", "GH_PR"):
+                plan = plan_ca_ref = None
 
             # Show plan_ca_ref or plan
             if plan_ca_ref:
@@ -5928,7 +5935,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
             # Print task details (plan, notes) with proper indentation
             detail_prefix = prefix + extension + "   "  # Extra indent beyond task header
-            print_task_details(task, detail_prefix)
+            print_task_details(task, detail_prefix, depth)
 
             children = get_children(task.id)
             # Filter children in succinct mode
@@ -13329,7 +13336,8 @@ def _build_parser() -> argparse.ArgumentParser:
                                   help="-v lists notes, plans and completion reports (truncated); "
                                        "-vv shows every note, plan, report, breadcrumb and update in "
                                        "full, wrapped to 80%% of the terminal. Default: notes counted "
-                                       "on each task's line, completion reports not shown")
+                                       "on each task's line, no completion reports, and plan lines "
+                                       "only for top-level tasks and GitHub issues and PRs")
     task_tree_parser.add_argument("--verbose", dest="verbose_level", nargs="?", const="1",
                                   metavar="LEVEL",
                                   help="same as -v (LEVEL 1, the default) or -vv (LEVEL 2); "
