@@ -100,3 +100,37 @@ def test_a_failed_discovery_says_unknown_in_the_preview_too(tmp_path):
         session_id="test-session", auto_mode=True, compaction_count=1, artifacts=artifacts)
     preview = message.encode()[:PREVIEW_BYTES].decode(errors="ignore")
     assert "UNKNOWN: artifact discovery failed" in preview and "none found" not in preview
+
+
+# --- an agent's own recovery banner (.maceff/recovery_header.md) ---------------------------------
+
+def _message(monkeypatch, home, auto_mode=True):
+    monkeypatch.setattr("macf.hooks.recovery.find_agent_home", lambda: home)
+    return format_consciousness_recovery_message(session_id="s", auto_mode=auto_mode, compaction_count=1,
+                                                 artifacts=ConsciousnessArtifacts())
+
+
+def test_without_a_header_file_the_framework_banner_is_used(monkeypatch, tmp_path):
+    assert "COMPACTION TRAUMA DETECTED" in _message(monkeypatch, tmp_path)
+
+
+def test_an_agents_own_header_replaces_the_banner_and_keeps_the_essentials_first(monkeypatch, tmp_path):
+    (tmp_path / ".maceff").mkdir()
+    (tmp_path / ".maceff" / "recovery_header.md").write_text("A compaction happened. Read the record.\n")
+    message = _message(monkeypatch, tmp_path)
+    assert "A compaction happened. Read the record." in message
+    assert "COMPACTION TRAUMA DETECTED" not in message
+    # The essentials still open the message (#802), and the mode's section still follows.
+    assert message.index("RECOVERY ESSENTIALS") < message.index("A compaction happened")
+    assert "AUTHORIZED" in message
+    assert "MANUAL MODE" in _message(monkeypatch, tmp_path, auto_mode=False)
+
+
+def test_an_empty_or_unreadable_header_file_falls_back_and_an_unreadable_one_says_so(monkeypatch, tmp_path, capsys):
+    (tmp_path / ".maceff").mkdir()
+    header = tmp_path / ".maceff" / "recovery_header.md"
+    header.write_text("  \n")
+    assert "COMPACTION TRAUMA DETECTED" in _message(monkeypatch, tmp_path)
+    header.write_bytes(b"\xff\xfe not utf-8 \xff")
+    assert "COMPACTION TRAUMA DETECTED" in _message(monkeypatch, tmp_path)
+    assert "could not read" in capsys.readouterr().err
