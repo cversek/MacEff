@@ -27,6 +27,14 @@ from macf.pd.broker import LOOPBACK
 #: The longest a pass waits; the heartbeat's interval sets how often a beat is owed.
 POLL_S = 2.0
 
+#: How long a wrapper gives its child after a stop before killing it.
+CHILD_STOP_GRACE_S = 10.0
+
+#: The stop_grace_s a wrapper unit must be declared with: longer than the wrapper's own stop path
+#: (a pass to notice the stop, then the child's grace), with margin. With less, the daemon kills the
+#: wrapper first and the child runs on, orphaned, until the next start ends it (#992).
+WRAPPER_UNIT_STOP_GRACE_S = POLL_S + CHILD_STOP_GRACE_S + 3.0
+
 
 def listener_port(conf: Path) -> int:
     """The port of the ``listener`` line in a rendered mosquitto.conf."""
@@ -89,7 +97,8 @@ def run(command: List[str], port: int, tick: Callable[[], None], *, poll_s: floa
         probe_every_s: float = 0.0, probe: Callable[[int], bool] = accepts,
         stopping: Callable[[], bool] = lambda: False,
         reloading: Callable[[], bool] = lambda: False,
-        on_start: Callable[[int], None] = lambda pid: None, stop_grace_s: float = 10.0) -> int:
+        on_start: Callable[[int], None] = lambda pid: None,
+        stop_grace_s: float = CHILD_STOP_GRACE_S) -> int:
     """Run *command* until it ends, ticking after each probe that finds it accepting on *port*;
     its exit status. A probe runs at most once per *probe_every_s* (each one is a connection
     the broker logs as a protocol error), while the child's exit and a stop are checked every
