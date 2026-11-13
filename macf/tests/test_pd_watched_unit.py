@@ -126,11 +126,12 @@ def server():
 
 
 def test_a_server_answering_below_500_is_an_answer(server):
-    assert wu.answers(server["url"], 2.0) is True
+    assert wu.answer_failure(server["url"], 2.0) is None
     server["status"] = 404
-    assert wu.answers(server["url"], 2.0) is True, "a 4xx is a server that is up and answering"
+    assert wu.answer_failure(server["url"], 2.0) is None, "a 4xx is a server that is up and answering"
     server["status"] = 503
-    assert wu.answers(server["url"], 2.0) is False, "a 5xx is no answer"
+    assert wu.answer_failure(server["url"], 2.0) == f"{server['url']} answered 503", \
+        "a 5xx is no answer, and the reason names the status"
 
 
 def _serve(status, location=None):
@@ -161,7 +162,7 @@ def test_a_redirect_is_an_answer_and_is_never_followed():
     target = _serve(200)
     first = _serve(302, location=target["url"] + "elsewhere")
     try:
-        assert wu.answers(first["url"], 2.0) is True, "a 3xx is a server up and replying"
+        assert wu.answer_failure(first["url"], 2.0) is None, "a 3xx is a server up and replying"
         assert first["hits"] == ["/"]
         assert target["hits"] == [], "the probe followed the redirect"
     finally:
@@ -184,12 +185,14 @@ def test_localhost_that_resolves_off_loopback_is_refused(monkeypatch):
 def test_a_stopped_server_is_no_answer(server):
     url = server["url"]
     server["stop"]()
-    assert wu.answers(url, 1.0) is False
+    why = wu.answer_failure(url, 1.0)
+    assert why.startswith(f"{url} gave no answer: ") and "Error" in why, \
+        "a refusal says it was one, with the error, not just that it failed"
 
 
 def test_the_probe_beats_until_the_server_has_failed_for_longer_than_the_bound(server):
     clock = {"t": 100.0}
-    probe = wu.Probe(server["url"], 30.0, now=lambda: clock["t"])
+    probe = wu.Probe(server["url"], 30.0, now=lambda: clock["t"], say=lambda _line: None)
     assert probe() is True
     server["status"] = 503
     clock["t"] = 120.0
@@ -201,15 +204,64 @@ def test_the_probe_beats_until_the_server_has_failed_for_longer_than_the_bound(s
 
 
 def test_a_server_that_never_answered_is_not_alive_yet():
-    probe = wu.Probe("http://127.0.0.1:1/", 30.0, ask=lambda _url, _t: False)
+    probe = wu.Probe("http://127.0.0.1:1/", 30.0, ask=lambda _url, _t: "refused",
+                     say=lambda _line: None)
     assert probe() is False
 
 
 def test_the_probe_bounds_each_request():
     asked = []
-    probe = wu.Probe("http://127.0.0.1:1/", 120.0, ask=lambda url, t: asked.append(t) or True)
+    probe = wu.Probe("http://127.0.0.1:1/", 120.0, ask=lambda url, t: asked.append(t))
     probe()
     assert asked == [wu.PROBE_TIMEOUT_S], "a hung server can't hold the loop past the next beat"
+
+
+def test_the_reason_is_said_once_when_the_unit_stops_answering_and_once_when_it_answers_again():
+    clock = {"t": 0.0}
+    answer = {"why": None}
+    said = []
+    probe = wu.Probe("http://127.0.0.1:8000/", 30.0, ask=lambda _u, _t: answer["why"],
+                     now=lambda: clock["t"], say=said.append)
+    assert probe() is True and said == []
+    answer["why"] = "http://127.0.0.1:8000/ answered 503"
+    for t in (10.0, 20.0, 31.0, 40.0, 50.0):
+        clock["t"] = t
+        probe()
+    assert said == [("http://127.0.0.1:8000/ has not answered within 30 s; "
+                     "last: http://127.0.0.1:8000/ answered 503")], \
+        "one line, with the last reason, when the verdict turns; none on the passes after"
+    answer["why"] = None
+    probe()
+    probe()
+    assert said[1:] == ["http://127.0.0.1:8000/ is answering again"]
+
+
+def test_a_program_that_never_answers_is_reported_once_its_bound_has_passed():
+    clock = {"t": 0.0}
+    said = []
+    probe = wu.Probe("http://127.0.0.1:8000/", 30.0, ask=lambda _u, _t: "refused",
+                     now=lambda: clock["t"], say=said.append)
+    probe()
+    assert said == [], "a program still starting isn't reported"
+    clock["t"] = 31.0
+    probe()
+    probe()
+    assert said == ["http://127.0.0.1:8000/ has not answered within 30 s; last: refused"]
+
+
+def test_a_hung_ask_in_the_background_never_holds_the_loop():
+    import threading
+    import time
+    release = threading.Event()
+    probe = wu.Probe("http://127.0.0.1:8000/", 30.0, ask=lambda _u, _t: release.wait(5) and None,
+                     say=lambda _line: None, background=True)
+    began = time.monotonic()
+    assert probe() is False
+    assert probe() is False, "a second pass doesn't start a second ask beside the hung one"
+    assert time.monotonic() - began < 1.0, "the loop waited on the ask"
+    release.set()
+    probe._asking.join(2)
+    assert probe() is True, "the answer the thread got is the verdict on the next pass"
 
 
 def test_the_wrapper_with_a_probe_runs_the_program_and_records_it(tmp_path, monkeypatch):
@@ -226,12 +278,34 @@ def test_the_wrapper_with_a_probe_runs_the_program_and_records_it(tmp_path, monk
 
 # --- a health-check command: a program that answers on no port, such as a job worker ---------
 
-def test_a_check_that_exits_0_passes_and_any_other_ending_fails():
-    assert wu.check_passes([sys.executable, "-c", "pass"], 5.0) is True
-    assert wu.check_passes([sys.executable, "-c", "import sys; sys.exit(1)"], 5.0) is False
-    assert wu.check_passes(["/nonexistent/health-check"], 5.0) is False, "a check that can't start fails"
-    assert wu.check_passes([sys.executable, "-c", "import time; time.sleep(5)"], 0.3) is False, \
-        "a check that doesn't finish in time fails"
+def test_a_check_that_exits_0_passes_and_any_other_ending_fails_saying_why():
+    assert wu.Check([sys.executable, "-c", "pass"])(None, 5.0) is None
+    why = wu.Check([sys.executable, "-c",
+                    ("import sys; print('noise'); print('db: connection refused', file=sys.stderr); "
+                     "sys.exit(3)")])(None, 5.0)
+    assert why.startswith("the check python") and "exited 3" in why
+    assert "db: connection refused" in why, "the check's own error is kept in the reason"
+    why = wu.Check(["/nonexistent/health-check"])(None, 5.0)
+    assert why.startswith("the check health-check could not start: "), "a check that can't start fails"
+    why = wu.Check([sys.executable, "-c", "import time; time.sleep(5)"])(None, 0.3)
+    assert why.endswith("did not finish within 0.3 s"), "a check that doesn't finish in time fails"
+
+
+def test_closing_a_check_ends_a_run_still_under_way():
+    import threading
+    import time
+    check = wu.Check([sys.executable, "-c", "import time; time.sleep(30)"])
+    result = {}
+    thread = threading.Thread(target=lambda: result.setdefault("why", check(None, 60.0)))
+    thread.start()
+    for _ in range(100):
+        if check._running is not None:
+            break
+        time.sleep(0.05)
+    check.close()
+    thread.join(5)
+    assert not thread.is_alive(), "a stopping wrapper left its check running"
+    assert result["why"].startswith("the check python") and "exited" in result["why"]
 
 
 def test_the_wrapper_with_a_check_judges_the_unit_by_it(tmp_path, monkeypatch):
@@ -239,7 +313,7 @@ def test_the_wrapper_with_a_check_judges_the_unit_by_it(tmp_path, monkeypatch):
     beat = _Beat()
     monkeypatch.setattr(liveness, "heartbeat_from_env", lambda: beat)
     seen = []
-    monkeypatch.setattr(wu, "check_passes", lambda argv, t: seen.append((argv, t)) or True)
+    monkeypatch.setattr(wu.Check, "__call__", lambda self, _w, t: seen.append((self.argv, t)))
     pidfile = tmp_path / "child.pid"
     code = wu.main(["--check", "arq --check workers.main.WorkerSettings", "--within", "120",
                     "--pidfile", str(pidfile), "--",

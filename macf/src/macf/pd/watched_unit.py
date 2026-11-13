@@ -17,7 +17,9 @@ arrives, is judged instead by an HTTP probe (#977): the unit beats while a loopb
 answered below 500 within the bound. Probes reach loopback only, and ignore proxy settings, so a
 unit can't be used to reach the network. A program that answers on no port but ships its own
 health check, such as a job worker, is judged by that command instead: the unit beats while the
-check exited 0 within the bound.
+check exited 0 within the bound. Either way, when the unit stops answering the wrapper says why on
+stderr, once, and the probe or check runs in a thread the loop doesn't wait on, so a hung one never
+delays a stop.
 
 Declared as:
     python -m macf.pd.watched_unit --fresh <file> --within <seconds> -- <command> [args...]
@@ -32,6 +34,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -41,8 +44,8 @@ from typing import Callable, List, Optional
 
 from macf.pd.broker_unit import end_orphan, record_child, run
 
-# One request never waits longer than this, whatever the bound, so a hung server can't hold the
-# wrapper's loop past the next beat.
+# One request never waits longer than this, whatever the bound. Requests run off the wrapper's loop
+# (Probe's background), so this bounds how long a verdict can lag, not how long the loop waits.
 PROBE_TIMEOUT_S = 5.0
 
 
@@ -97,48 +100,125 @@ def _direct_opener() -> urllib.request.OpenerDirector:
 _DIRECT = _direct_opener()
 
 
-def answers(url: str, timeout_s: float, open_url: Callable = _DIRECT.open) -> bool:
-    """Whether *url* answers with a status below 500 within *timeout_s*. A 3xx or 4xx is an
-    answer: the server is up and replying, and a redirect is never followed. A refusal, a
-    timeout or a server error is no answer. Proxy settings are ignored."""
+def answer_failure(url: str, timeout_s: float, open_url: Callable = _DIRECT.open) -> Optional[str]:
+    """Why *url* gave no answer within *timeout_s*, or None if it answered with a status below
+    500. A 3xx or 4xx is an answer: the server is up and replying, and a redirect is never
+    followed. A refusal, a timeout or a server error is no answer, and the reason says which.
+    Proxy settings are ignored."""
     try:
         with open_url(url, timeout=timeout_s) as response:
-            return response.status < 500
+            status = response.status
     except urllib.error.HTTPError as error:     # an opener that raises on 4xx (tests pass one)
-        return error.code < 500
-    except (OSError, ValueError):               # refused, reset, timed out, unreadable
-        return False
+        status = error.code
+    except (OSError, ValueError) as error:      # refused, reset, timed out, unreadable
+        return f"{url} gave no answer: {type(error).__name__}: {error}"
+    return None if status < 500 else f"{url} answered {status}"
 
 
 # A health check runs its own program (an interpreter, a client), so it gets longer than a request.
 CHECK_TIMEOUT_S = 15.0
 
+# How much of a failed check's output its reason keeps: the last lines are where errors land.
+CHECK_TAIL_LINES = 3
 
-def check_passes(argv: List[str], timeout_s: float) -> bool:
-    """Whether the check *argv* exits 0 within *timeout_s*. Its output is discarded; a check that
-    can't start, or doesn't finish in time, fails."""
-    try:
-        return subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL, timeout=timeout_s).returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return False
+
+class Check:
+    """Runs the health check *argv*. Calling it gives why the check failed, or None if it
+    exited 0 within the time allowed. The check's output, stdout and stderr together, is kept
+    only for the reason, as its last few lines. ``close`` ends a run still under way, so a
+    wrapper that is stopping never leaves a check behind it."""
+
+    def __init__(self, argv: List[str]):
+        self.argv = argv
+        self._running: Optional[subprocess.Popen] = None
+
+    def __call__(self, _what: object, timeout_s: float) -> Optional[str]:
+        name = Path(self.argv[0]).name
+        try:
+            child = subprocess.Popen(self.argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT)
+        except OSError as error:
+            return f"the check {name} could not start: {error}"
+        self._running = child
+        try:
+            output, _ = child.communicate(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.communicate()
+            return f"the check {name} did not finish within {timeout_s:g} s"
+        finally:
+            self._running = None
+        if child.returncode == 0:
+            return None
+        tail = output.decode(errors="replace").strip().splitlines()[-CHECK_TAIL_LINES:]
+        return f"the check {name} exited {child.returncode}" + (f": {' | '.join(tail)}" if tail else "")
+
+    def close(self) -> None:
+        child = self._running
+        if child is not None and child.poll() is None:
+            child.kill()
+
+
+def _say(line: str) -> None:
+    print(f"⚠️ MACF: watched_unit: {line}", file=sys.stderr, flush=True)
 
 
 class Probe:
-    """Alive while *url* last answered within *within_s*, the way ``fresh`` judges a file. One
-    slow request doesn't drop the unit; a server that stopped answering does, within the bound.
-    A server still starting has never answered, so it reads as not alive yet."""
+    """Alive while *what* (a URL, or a check) last answered within *within_s*, the way ``fresh``
+    judges a file. One slow or failed answer doesn't drop the unit; a program that stopped
+    answering does, within the bound. A program still starting has never answered, so it reads
+    as not alive yet.
 
-    def __init__(self, url: str, within_s: float, ask: Callable[[str, float], bool] = answers,
-                 now: Callable[[], float] = time.monotonic, cap_s: float = PROBE_TIMEOUT_S):
-        self.url, self.within_s, self._ask, self._now = url, within_s, ask, now
-        self.cap_s = cap_s
+    *ask* gives why *what* didn't answer, or None if it did. When the verdict turns from
+    answering to not, the last reason is written to stderr once, and once more when it answers
+    again, so a flapping unit logs its transitions rather than every pass. A program that hasn't
+    answered within the bound of its start is reported the same way.
+
+    With *background*, each ask runs in a thread the caller doesn't wait on, so a hung server or
+    check never holds the wrapper's loop: a stop is still seen within one poll."""
+
+    def __init__(self, what: str, within_s: float,
+                 ask: Callable[[str, float], Optional[str]] = answer_failure,
+                 now: Callable[[], float] = time.monotonic, cap_s: float = PROBE_TIMEOUT_S,
+                 say: Callable[[str], None] = _say, background: bool = False):
+        self.what, self.within_s, self._ask, self._now = what, within_s, ask, now
+        self.cap_s, self._say, self._background = cap_s, say, background
         self.last_answer: Optional[float] = None
+        self.last_failure: Optional[str] = None
+        self._started_at = now()
+        self._said_down = False
+        self._asking: Optional[threading.Thread] = None
+
+    def _ask_once(self) -> None:
+        failure = self._ask(self.what, min(self.within_s, self.cap_s))
+        if failure is None:
+            self.last_answer = self._now()
+        else:
+            self.last_failure = failure
 
     def __call__(self, _port: object = None) -> bool:
-        if self._ask(self.url, min(self.within_s, self.cap_s)):
-            self.last_answer = self._now()
-        return self.last_answer is not None and self._now() - self.last_answer <= self.within_s
+        if not self._background:
+            self._ask_once()
+        elif self._asking is None or not self._asking.is_alive():
+            self._asking = threading.Thread(target=self._ask_once, daemon=True)
+            self._asking.start()
+        now = self._now()
+        alive = self.last_answer is not None and now - self.last_answer <= self.within_s
+        if alive and self._said_down:
+            self._say(f"{self.what} is answering again")
+            self._said_down = False
+        elif not alive and not self._said_down and \
+                (self.last_answer is not None or now - self._started_at > self.within_s):
+            why = self.last_failure or "no attempt has finished yet"
+            self._say(f"{self.what} has not answered within {self.within_s:g} s; last: {why}")
+            self._said_down = True
+        return alive
+
+    def close(self) -> None:
+        """End a check still running, if *ask* runs one."""
+        close = getattr(self._ask, "close", None)
+        if close is not None:
+            close()
 
 
 def pidfile_for(fresh_file: Path) -> Path:
@@ -179,15 +259,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             parser.error(str(refused))
         if args.pidfile is None:
             parser.error("--probe needs --pidfile: there is no heartbeat file to record the child beside")
-        alive: Callable[[object], bool] = Probe(args.probe, args.within)
+        alive: Callable[[object], bool] = Probe(args.probe, args.within, background=True)
     elif args.check is not None:
         check = shlex.split(args.check)
         if not check:
             parser.error("--check needs a command")
         if args.pidfile is None:
             parser.error("--check needs --pidfile: there is no heartbeat file to record the child beside")
-        alive = Probe(args.check, args.within, ask=lambda _what, t: check_passes(check, t),
-                      cap_s=CHECK_TIMEOUT_S)
+        alive = Probe(args.check, args.within, ask=Check(check), cap_s=CHECK_TIMEOUT_S,
+                      background=True)
     else:
         alive = lambda _port: fresh(args.fresh, args.within)
     pidfile = args.pidfile or pidfile_for(args.fresh)
@@ -209,6 +289,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                    stopping=lambda: stop["asked"], reloading=reloading,
                    on_start=lambda pid: record_child(pidfile, pid))
     finally:
+        if isinstance(alive, Probe):
+            alive.close()
         if beat is not None:
             beat.stop()
 
