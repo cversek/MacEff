@@ -343,7 +343,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R23 | decidable | macf/tests/test_voice_wake.py::test_wake_passes_its_checks_in_order | planned (model, speech and transcription pass in order; the voice lock takes its place between them with the lock's phase) |
 | R24 | decidable | macf/tests/test_voice_wake.py::test_model_stored_with_report | passing |
 | R25 | decidable | macf/tests/test_voice_wake.py::test_test_set_disjoint_from_training | passing |
-| R26 | decidable | macf/tests/test_voice_declaration.py::test_duplicate_phrase_or_key_refused | planned |
+| R26 | decidable | macf/tests/test_voice_declaration.py::test_duplicate_phrase_or_key_refused | passing |
 | R27 | decidable | macf/tests/test_voice_capture.py::test_no_wake_during_own_speech | passing |
 | R28 | decidable | macf/tests/test_voice_speech.py::test_one_worker_serializes_agents | passing |
 | R29 | decidable | macf/tests/test_voice_speech.py::test_no_playback_while_microphone_open | passing |
