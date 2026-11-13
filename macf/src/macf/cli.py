@@ -5471,6 +5471,19 @@ def cmd_task_roles(args: argparse.Namespace) -> int:
     return 0
 
 
+_PARENT_MARKER = re.compile(r"(?:\x1b\[[0-9;]*m)?\[\^#\d+\](?:\x1b\[[0-9;]*m)?\s*")
+
+
+def _without_parent_marker(subject: str) -> str:
+    """A subject without its `[^#N]` parent marker, for the tree.
+
+    The marker exists so Claude Code's flat task list can show a child's
+    parent; in the tree the indentation already says it, so it is noise there.
+    The stored subject keeps it.
+    """
+    return _PARENT_MARKER.sub("", subject or "")
+
+
 def cmd_task_tree(args: argparse.Namespace) -> int:
     """Display task hierarchy tree from a root task."""
     from .task.create import subject_with_live_parent
@@ -5884,7 +5897,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
             # CC-style markers with colors - subject now contains #N prefix
             suffix = format_task_suffix(task)
-            subject = _truncate_subject_title(subject_with_live_parent(task), title_width)
+            subject = _truncate_subject_title(_without_parent_marker(subject_with_live_parent(task)), title_width)
 
             if is_archived(task) and collapse_archived:
                 # One line for the whole archived subtree. Only a still-open
@@ -5978,7 +5991,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
         # Print root specially with CC-style markers - subject now contains #N prefix
         root_suffix = format_task_suffix(root)
-        root_subject = _truncate_subject_title(subject_with_live_parent(root), title_width)
+        root_subject = _truncate_subject_title(_without_parent_marker(subject_with_live_parent(root)), title_width)
         if root.status == "completed":
             status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
             root_text = f"{ANSI_DIM}{ANSI_STRIKE}{root_subject}{ANSI_RESET}"

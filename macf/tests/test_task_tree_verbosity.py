@@ -130,3 +130,14 @@ def test_default_hides_subtask_plans_but_keeps_github_links(env, tid):
     assert "CHILDPLAN" in tree(env, "-v")
     rooted = tree(env, top)          # a subtask is a subtask in a rooted view too
     assert "TOPPLAN" in rooted and "CHILDPLAN" not in rooted
+
+
+def test_tree_lines_carry_no_parent_marker(env, tid):
+    """Operator, 13:25: the [^#N] marker is for Claude Code's flat list; the tree shows the relation."""
+    child = run(env, "task", "create", "phase", "--plan", "p", "--parent", tid, "Kid")
+    child = re.search(r"Created \w+ task #(\d+)", child).group(1)
+    assert "[^#" in run(env, "task", "list"), "fixture: a phase subject carries the marker"
+    for flags in ((), ("-v",), ("-vv",), ("--succinct",), ("--all",)):
+        out = tree(env, *flags)
+        assert "[^#" not in out, flags
+        assert re.search(rf"#{child}(?!\d) .*Kid", out), flags
