@@ -5214,7 +5214,7 @@ def get_display_mtime(tasks_dir) -> float:
     try:
         from .roles.hooks import roles_store_mtime
         latest = max(latest, roles_store_mtime())
-    except (OSError, ImportError, ValueError):
+    except (OSError, ImportError, ValueError):  # noqa: S110 - polled each redraw; store-only detection is the fallback
         pass  # no roles store: store-only detection
     try:
         from .agent_events_log import get_log_path
@@ -5261,7 +5261,8 @@ def _display_events_mtime(log_path) -> float:
     for line in chunk.splitlines():
         try:
             ev = _json.loads(line)
-        except ValueError:
+        except ValueError as e:
+            print(f"⚠️ MACF: display event log line unparseable (skipped, display may miss that event): {e}", file=sys.stderr)
             continue
         name = str(ev.get("event", ""))
         if name.startswith(_DISPLAY_EVENT_PREFIXES):
@@ -10990,7 +10991,7 @@ def _broker_socket_ready(sock: Path, timeout: float = 0.0) -> bool:
                 s.connect(str(sock))
                 s.close()
                 return True
-            except OSError:
+            except OSError:  # noqa: S110 - a refused probe is the normal not-ready state, retried every 0.2 s
                 pass
         if _time.monotonic() >= deadline:
             return False
