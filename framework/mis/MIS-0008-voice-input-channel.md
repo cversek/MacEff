@@ -289,6 +289,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **Voice is opt-in.** An agent without a voice section is unchanged.
 - **A machine that takes voice installs** the optional `voice` extra and, on Linux, a udev rule granting the trigger devices to the capture unit's account.
 - **The macOS backends** come later, from the first macOS port.
+- **The MIS-0007 draft changes with this MIS.** Its R59, R62 and R63 move here. Its R67, which forbids a member from subscribing to anything on its association's broker, is narrowed to let a member read its own voice subtree (R49). The revision motion is on that MIS's pull request.
 
 ## 10 Security and Safety
 
