@@ -339,8 +339,8 @@ class ConsciousnessConfig:
         if retention_days := os.getenv("MACF_SESSION_RETENTION_DAYS"):
             try:
                 settings["consciousness"]["session_retention_days"] = int(retention_days)
-            except ValueError:
-                pass
+            except ValueError as e:
+                print(f"⚠️ MACF: MACF_SESSION_RETENTION_DAYS={retention_days!r} is not an integer (keeping the configured retention): {e}", file=sys.stderr)
 
         return settings
 

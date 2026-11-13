@@ -61,7 +61,7 @@ def live_jobs(transcript: Path, since: Optional[float] = None, now: Optional[flo
             continue
         try:
             entry = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - the live transcript's newest line can be cut mid-write; a line that doesn't parse can't be the one sought, and a warning would fire on most hook calls
             continue
         when = _when(entry)
         if when is not None and when < floor:

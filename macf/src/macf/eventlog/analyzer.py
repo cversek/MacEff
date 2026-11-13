@@ -95,13 +95,14 @@ class EventLogAnalyzer:
                     continue
                 try:
                     event = json.loads(line)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError:  # noqa: S112 - the log is treated as append-only and a torn trailing line is expected while a write is in progress, so a warning would be a false alarm
                     continue
                 if since:
                     ts_str = event.get("ts", "")
                     try:
                         ts = datetime.fromisoformat(ts_str)
-                    except (ValueError, TypeError):
+                    except (ValueError, TypeError) as e:
+                        print(f"⚠️ MACF: event timestamp {ts_str!r} is unreadable (event left out of the time filter): {e}", file=sys.stderr)
                         continue
                     if ts < since:
                         continue

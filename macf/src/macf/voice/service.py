@@ -267,7 +267,7 @@ def start_service(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
     while True:
         try:
             conn, addr = server.accept()
-        except socket.timeout:
+        except socket.timeout:  # noqa: S112 - idle tick: accept() times out each second so the loop stays responsive
             continue
         except OSError:
             break

@@ -88,21 +88,21 @@ def detect_engine():
         try:
             import mlx_whisper
             return "mlx"
-        except ImportError:
+        except ImportError:  # noqa: S110 - not installed is the normal miss; the next engine is probed
             pass
 
     # Linux/other: prefer faster-whisper
     try:
         import faster_whisper
         return "faster-whisper"
-    except ImportError:
+    except ImportError:  # noqa: S110 - not installed is the normal miss; the next engine is probed
         pass
 
     # Universal fallback: openai-whisper
     try:
         import whisper
         return "whisper"
-    except ImportError:
+    except ImportError:  # noqa: S110 - not installed is the normal miss; None is returned if no engine loads
         pass
 
     return None

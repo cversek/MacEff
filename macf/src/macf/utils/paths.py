@@ -320,8 +320,8 @@ def find_agent_home() -> Path:
         try:
             home_path.mkdir(parents=True, exist_ok=True, mode=0o755)
             return home_path
-        except OSError:
-            pass  # Fall through to detection
+        except OSError as e:
+            print(f"⚠️ MACF: could not create MACEFF_AGENT_HOME_DIR={agent_home} (falling back to project detection): {e}", file=sys.stderr)
 
     # 2. Project root detection: walk up from cwd looking for .maceff/agent_events_log.jsonl
     # This enables running macf_tools from within a project without setting env vars

@@ -128,7 +128,8 @@ def parse_table(text: str) -> List[Tuple[str, int]]:
             continue
         try:
             rows.append((fields[0], int(fields[2])))
-        except ValueError:
+        except ValueError as e:
+            print(f"⚠️ MACF: reading the numeric id of {fields[0]!r} failed (skipping that row): {e}", file=sys.stderr)
             continue
     return rows
 

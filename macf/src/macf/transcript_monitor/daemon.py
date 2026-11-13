@@ -604,7 +604,7 @@ def _monitors_from_proc(proc: Path) -> List[MonitorProcess]:
             if MONITOR_MODULE not in argv:
                 continue
             started = _stat_started((entry / "stat").read_text())
-        except (OSError, ValueError, IndexError):
+        except (OSError, ValueError, IndexError):  # noqa: S112 - a process that ends during the scan, or is not ours to read, is normal on a shared host; a warning for each would flood
             continue  # it ended while we looked, or is not ours to read
         monitor = _monitor_from_argv(int(entry.name), started, argv)
         if monitor is not None:
@@ -629,7 +629,8 @@ def _parse_ps(output: str) -> List[MonitorProcess]:
             continue
         try:
             started = _parse_lstart(" ".join(fields[1:6]))
-        except ValueError:
+        except ValueError as e:
+            print(f"⚠️ MACF: reading the start time of monitor {fields[0]} failed (skipping it): {e}", file=sys.stderr)
             continue
         monitor = _monitor_from_argv(int(fields[0]), started,
                                      head.split() + ["--transcript", transcript.rstrip()])
@@ -1193,7 +1194,7 @@ class TranscriptMonitor:
 
                         time.sleep(self.poll_interval)
 
-        except KeyboardInterrupt:
+        except KeyboardInterrupt:  # noqa: S110 - Ctrl-C is the ordinary way this loop ends, and the finally block reports the totals
             # Ordinary shutdown path: the finally block reports the totals.
             pass
         finally:

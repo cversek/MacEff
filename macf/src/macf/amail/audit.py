@@ -115,8 +115,8 @@ class AuditLog:
         if fd is not None:
             try:
                 os.close(fd)
-            except OSError:
-                pass
+            except OSError as e:
+                print(f"⚠️ MACF: closing the spare audit descriptor failed (it is dropped either way): {e}", file=sys.stderr)
 
     def __enter__(self) -> "AuditLog":
         return self
@@ -146,8 +146,8 @@ class AuditLog:
         if fd is not None:
             try:
                 os.close(fd)
-            except OSError:
-                pass
+            except OSError as e:
+                print(f"⚠️ MACF: releasing the reserved audit descriptor failed (continuing the retry without it): {e}", file=sys.stderr)
         try:
             yield fd is not None
         finally:
@@ -187,8 +187,8 @@ class AuditLog:
                     "on it could hang the broker or redirect a write.")
             try:
                 os.fchmod(fd, 0o600)
-            except OSError:
-                pass
+            except OSError as e:
+                print(f"⚠️ MACF: setting mode 0600 on the audit lock file failed (using it with its current mode): {e}", file=sys.stderr)
             f = os.fdopen(fd, "a")
         except BaseException as e:
             # Not swallowed: the descriptor is released and the same
@@ -302,8 +302,8 @@ class AuditLog:
             os.fsync(f.fileno())
         try:
             self.path.chmod(0o600)
-        except OSError:
-            pass
+        except OSError as e:
+            print(f"⚠️ MACF: setting mode 0600 on the audit log failed (mode left as it is): {e}", file=sys.stderr)
 
     def allowed(self, *, sender: str, recipients: List[str], message_id: str,
                 rung: str, trust: Optional[Any] = None,
@@ -410,7 +410,8 @@ class AuditLog:
                         continue
                     try:
                         yield json.loads(line)
-                    except ValueError:
+                    except ValueError as e:
+                        print(f"⚠️ MACF: reading a line of the audit log failed (skipping it): {e}", file=sys.stderr)
                         continue
         return _gen()
 

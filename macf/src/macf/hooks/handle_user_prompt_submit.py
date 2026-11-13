@@ -75,8 +75,8 @@ def get_memory_injection(prompt: str) -> str:
         if result.returncode == 0 and result.stdout.strip():
             output = json.loads(result.stdout)
             return output.get("additionalContext", "")
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
-        pass  # Fail silently - don't block session
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as e:
+        print(f"⚠️ MACF: memory recall script failed (no memories injected for this prompt): {e}", file=sys.stderr)
 
     return ""
 
@@ -110,7 +110,7 @@ def scheduled_prompt(prompt: str, transcript_path: Optional[str]) -> bool:
             continue
         try:
             entry = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - the window's first line is cut mid-object on every read, so a warning would fire on every prompt
             continue  # only the window's first line can be cut short
         message = entry.get("message")
         if entry.get("type") == "user" and isinstance(message, dict) \

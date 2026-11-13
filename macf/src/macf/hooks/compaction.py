@@ -44,7 +44,7 @@ def detect_compaction(transcript_path: Path) -> bool:
                 if (msg.get('type') == 'system' and
                     msg.get('subtype') == 'compact_boundary'):
                     return True
-            except (json.JSONDecodeError, KeyError):
+            except (json.JSONDecodeError, KeyError):  # noqa: S112 - the live transcript's newest line can be cut mid-write; a line that doesn't parse can't be the one sought, and a warning would fire on most hook calls
                 continue
 
         # If not found and not last attempt, wait and retry

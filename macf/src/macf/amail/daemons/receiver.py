@@ -440,7 +440,7 @@ def main() -> int:
     if heartbeat is None:
         try:
             server.serve_forever()
-        except KeyboardInterrupt:
+        except KeyboardInterrupt:  # noqa: S110 - Ctrl-C is the operator stopping this foreground server, a normal exit; the return 0 below is the report
             pass
         return 0
     # As a declared unit, liveness is a request answered, not a process alive: the server runs

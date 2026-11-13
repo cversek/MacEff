@@ -368,7 +368,7 @@ def verify(message: Any, signature: str, public_keys: List[str]) -> bool:
     # one thing this module must not contain.
     try:
         raw = _unb64(signature)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - GUARD: a signature that will not decode is a forged input, an expected argument here, and verifies as False
         return False
     try:
         # INSIDE the try. This function documents that a forged input is an
@@ -383,8 +383,9 @@ def verify(message: Any, signature: str, public_keys: List[str]) -> bool:
         try:
             parse_public_key(declared).verify(raw, payload)
             return True
-        except (InvalidSignature, SigningError):
+        except (InvalidSignature, SigningError):  # noqa: S112 - probing each declared key in turn; a key that does not verify is the normal miss, and the next key is tried
             continue
-        except Exception:  # noqa: BLE001 - a malformed key is not a pass
+        except Exception as e:  # noqa: BLE001 - a malformed key is not a pass
+            print(f"⚠️ MACF: parsing a declared public key failed (it cannot match): {e}", file=sys.stderr)
             continue
     return False

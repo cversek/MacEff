@@ -238,7 +238,8 @@ def _latest_session_id() -> str:
             continue
         try:
             m = jf.stat().st_mtime
-        except OSError:
+        except OSError as e:
+            print(f"⚠️ MACF: stat of {jf.name} failed (skipping that transcript): {e}", file=sys.stderr)
             continue
         if m > latest_mtime:
             latest_mtime, latest = m, jf.stem
@@ -387,7 +388,8 @@ def _iter_live_supervisors():
             continue
         try:
             data = json.loads(entry.read_text())
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"⚠️ MACF: reading registry entry {entry.name} failed (skipping it): {e}", file=sys.stderr)
             continue
         if is_live_supervisor(data):
             yield data
@@ -442,7 +444,7 @@ def _ppid(pid: int) -> int:
     try:
         stat = Path(f"/proc/{pid}/stat").read_text()
         return int(stat.rsplit(")", 1)[1].split()[1])
-    except (OSError, ValueError, IndexError):
+    except (OSError, ValueError, IndexError):  # noqa: S110 - /proc is tried first and ps is the fallback on macOS, so a miss here is expected and the next block answers it
         pass
     try:
         out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)],
@@ -1778,5 +1780,5 @@ if __name__ == "__main__":
         print("[auto-restart] Press Enter to close...")
         try:
             input()
-        except (EOFError, KeyboardInterrupt):
+        except (EOFError, KeyboardInterrupt):  # noqa: S110 - the user closing the window at this prompt; the crash is already printed and logged above
             pass
