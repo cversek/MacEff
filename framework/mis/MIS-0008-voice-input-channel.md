@@ -371,7 +371,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R51 | judgment | the maintainers, at review of the landing pull request | pending |
 | R52 | judgment | the maintainers, at review of the landing pull request | pending |
 | R53 | judgment | the operator, at review of each agent's handling | pending |
-| R54 | decidable | macf/tests/test_channel_names.py::test_refused_old_source_recorded | planned (the event is recorded and tested; the status entry is not built yet) |
+| R54 | decidable | macf/tests/test_channel_names.py::test_refused_old_source_recorded | passing (the status half: test_a_refused_old_source_shows_in_pd_status) |
 
 **Cold-reader trial**: not yet held. The first macOS port is planned as the trial. A maintainer who didn't write this MIS brings voice up on a Mac from the pull request and its documents alone, and reports each place they had to guess.
 

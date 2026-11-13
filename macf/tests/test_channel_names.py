@@ -52,3 +52,15 @@ def test_refused_old_source_recorded(monkeypatch, capsys):
                                                     "expected": "plugin:maceff-notification-channel:maceff"})], \
         "recorded once per process, however many notices arrive"
     assert capsys.readouterr().err.count("refused a notice") == 3, "said every time"
+
+
+def test_a_refused_old_source_shows_in_pd_status(isolated_events_log, capsys):
+    """R54, the status half: a refused old-source notice is said where status is read, with the fix."""
+    from macf.agent_events_log import append_event
+    from macf.pd import cli as pd_cli
+    pd_cli._say_refused_sources()
+    assert capsys.readouterr().out == ""
+    append_event("channel_source_refused", {"source": "plugin:maceff-channel:maceff"})
+    pd_cli._say_refused_sources()
+    out = capsys.readouterr().out
+    assert "notices from the old channel source were refused (recorded 1 time(s)" in out and "agent init --update" in out

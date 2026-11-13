@@ -402,6 +402,9 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         line += f", since {_when(unit.get('since'))}"
         if unit.get("restart_held_until"):
             line += f"; restart held until {unit['restart_held_until']} (quiet window)"
+        if unit.get("microphone"):
+            from macf.voice.cli import Reading, describe
+            line += f"; microphone: {describe(Reading(unit['microphone']))}"
         if "liveness" in unit:
             line += f"; liveness {unit['liveness']}: {unit['detail']}"
         print(line)
@@ -412,8 +415,21 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
     _say_drafts()
     _say_allowlist(home)
     _say_receipts()
+    _say_refused_sources()
     _say_tray(report)
     return 0
+
+
+def _say_refused_sources() -> None:
+    """MIS-0008 R54: notices refused because they came from the old channel source, so a notice
+    lost between a plugin update and the daemon's is found where status is read, not silent."""
+    from macf.agent_events_log import read_events
+    refused = list(read_events(reverse=True, scope="all", only=("channel_source_refused",)))
+    if refused:
+        print(f"  ⚠️ notices from the old channel source were refused (recorded {len(refused)} time(s), once a "
+              f"session; the last at "
+              f"{_when(refused[0].get('timestamp'))}: run macf_tools agent init --update, then restart the "
+              f"session, so the daemon and the channel use the same name")
 
 
 def _say_allowlist(home) -> None:
