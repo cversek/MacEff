@@ -321,7 +321,11 @@ def daemon_accounts(agents_config: AgentsConfig) -> List[tuple]:
     # Every agent that isn't vanilla and doesn't opt out gets the container default, with its own
     # primal_daemon laid over it (persistent_layer 2.1).
     mail = agents_config.runs_mail()
-    accounts = [(a.username, a.effective_primal_daemon(key, mail=mail), HOME_ROOT / a.username, None)
+    # The deployment's container_env reaches each default session too, not only login shells (#895).
+    defaults = getattr(agents_config, "defaults", None)
+    env = defaults.container_env if defaults is not None else None
+    accounts = [(a.username, a.effective_primal_daemon(key, mail=mail, container_env=env),
+                 HOME_ROOT / a.username, None)
                 for key, a in agents_config.agents.items()]
     for name, spec in agents_config.services.items():
         declared = spec.primal_daemon is not None
@@ -2025,10 +2029,13 @@ def render_container_env_script(maceff_tz: Optional[str],
     values /etc/environment carries, for the shells PAM never touches. Plain
     `export` lines only, because every POSIX login shell sources /etc/profile.d.
     """
+    from macf.pd.default_declaration import extra_path_dirs
     exports = {'MACEFF_ROOT_DIR': '/opt/maceff'}
     if maceff_tz:
         exports['MACEFF_TZ'] = maceff_tz
-    exports.update(deployment_env)
+    exports.update({k: v for k, v in deployment_env.items() if k != 'PATH'})
+    # A PATH names directories to add (#895): ahead of the shell's own, never in its place.
+    added = extra_path_dirs(deployment_env.get('PATH') or '')
     lines = [
         '#!/bin/bash',
         '# MacEff container env: framework keys + agents.yaml defaults.container_env.',
@@ -2038,6 +2045,8 @@ def render_container_env_script(maceff_tz: Optional[str],
     ]
     for key in sorted(exports):
         lines.append(f'export {key}={shlex.quote(exports[key])}')
+    if added:
+        lines.append(f'export PATH={shlex.quote(":".join(added))}:"$PATH"')
     return '\n'.join(lines) + '\n'
 
 
@@ -2077,9 +2086,11 @@ def propagate_container_env(agents_config: Optional[AgentsConfig] = None) -> Non
     # Filter out entries we'll rewrite — both the framework's static keys
     # and any deployment-declared keys (so agents.yaml edits propagate
     # correctly across container restarts).
+    # PATH never: a container_env PATH names directories to add (#895), and /etc/environment
+    # can't append, so the profile script adds them; filtering PATH= would drop the system's own.
     filter_prefixes = (
         'MACEFF_TZ=', 'MACEFF_ROOT_DIR=', 'BASH_ENV=',
-        *(f'{k}=' for k in deployment_env),
+        *(f'{k}=' for k in deployment_env if k != 'PATH'),
     )
     lines = [line for line in lines if not any(line.startswith(p) for p in filter_prefixes)]
 
@@ -2093,6 +2104,8 @@ def propagate_container_env(agents_config: Optional[AgentsConfig] = None) -> Non
 
     # Deployment-declared env vars from agents.yaml.defaults.container_env
     for key in sorted(deployment_env):
+        if key == 'PATH':
+            continue                     # added by the profile script, never replaced here
         # Quote values containing spaces/special chars; bare otherwise (PAM-safe)
         value = deployment_env[key]
         lines.append(f'{key}={value}' if all(c.isalnum() or c in '_-/.:' for c in value)
