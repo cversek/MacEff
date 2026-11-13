@@ -546,6 +546,9 @@ def test_channel_first(tmp_path, isolated_events_log, monkeypatch, capsys):
         def capture(self):
             return "\n".join(["─" * 60, "❯ ", "─" * 60, "  ? for shortcuts"])
 
+        def width(self):
+            return None
+
         def type(self, text):
             typed.append(text)
             return True

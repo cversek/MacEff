@@ -1,87 +1,35 @@
-# Hierarchical Command Namespaces
+# Framework Skills and Commands
 
-MacEff v0.3.2 introduces colon-separated command namespaces for better organization and discoverability.
+The framework's invocable workflows are skills. Each is a folder under `framework/skills/`, named `maceff-<name>`, holding a `SKILL.md`, and `macf_tools framework install` links each folder into `.claude/skills/`. Type `/maceff-` to list them, or let the model invoke one when its description fits the situation.
 
-## Namespace Structure
+Until #975 most of these were slash commands under one `maceff` namespace, nested by folder (`/maceff:task:start`). Remote Control doesn't list commands reached through a symlink, and the install linked the whole commands folder, so none of them appeared there. Skills installed as linked folders do appear, so the commands moved.
 
-Commands follow the pattern: `/namespace:category:action`
+## The skills that were commands
 
-**Example:**
-```
-/maceff:task:start <task_id>  # Start work on a tracked task
-/maceff:roadmap:draft         # Draft a new roadmap
-/maceff:ccp                   # Create consciousness checkpoint
-```
+| Skill | Was | Purpose |
+|-------|-----|---------|
+| `/maceff-task-start <task>` | `/maceff:task:start` | Start work on a task, restoring its context |
+| `/maceff-task-archive` | `/maceff:task:archive` | Hide completed tasks from the task scanner |
+| `/maceff-task-create-mission` | `/maceff:task:create_mission` | Create a MISSION task and its roadmap folder |
+| `/maceff-task-create-experiment` | `/maceff:task:create_experiment` | Create an EXPERIMENT task and its protocol folder |
+| `/maceff-task-create-phase` | `/maceff:task:create_phase` | Create a phase under a MISSION or DETOUR |
+| `/maceff-task-create-detour` | `/maceff:task:create_detour` | Create a DETOUR task and its roadmap folder |
+| `/maceff-roadmap-draft` | `/maceff:roadmap:draft` | Draft a roadmap after the pre-draft ceremony |
+| `/maceff-roadmap-convert-from-experiment` | `/maceff:roadmap:convert_from_experiment` | Turn a validated experiment into a MISSION roadmap |
+| `/maceff-experiment-draft` | `/maceff:experiment:draft` | Draft an experiment protocol |
+| `/maceff-ccp` | `/maceff:ccp` | Write a consciousness checkpoint |
+| `/maceff-jotewr` | `/maceff:jotewr` | Write the cycle-closing reflection |
+| `/maceff-learnings-curate` | `/maceff:learnings:curate` | Curate learnings into the knowledge web |
+| `/maceff-scholar-annotate` | `/maceff:scholar_annotate` | Bring an artifact's citations up to the scholarship policy |
+| `/maceff-distill-wisdom` | `/maceff:distill_wisdom` | Distill artifacts into an agent definition |
+| `/maceff-agent-bootstrap` | `/maceff:agent_bootstrap` | Bootstrap a new agent through policy engagement |
 
-## Available Namespaces
+The old command files stay for one release as pointers: each still runs in the terminal and names the skill to use instead. They go in the next release.
 
-| Namespace | Owner | Purpose |
-|-----------|-------|---------|
-| `maceff:*` | Framework | Core MacEff functionality |
-| `ctb:*` | ClaudeTheBuilder | Agent-specific commands |
+## An agent's own commands
 
-## Command Categories
+`.claude/commands/` remains the place for an agent's own commands, as real files. Keep them out of symlinks if they should appear in Remote Control.
 
-### maceff:task:*
-Task management commands:
-- `/maceff:task:start <task_id>` - Start work on a tracked task
-- `/maceff:task:archive` - Archive completed task
-- `/maceff:task:create_mission` - Create a MISSION task
-- `/maceff:task:create_experiment` - Create an EXPERIMENT task
-- `/maceff:task:create_phase` - Create a PHASE task
-- `/maceff:task:create_detour` - Create a DETOUR task
+## Older names
 
-### maceff:roadmap:*
-Roadmap commands:
-- `/maceff:roadmap:draft` - Draft a new roadmap
-
-### maceff:* (top-level)
-Core consciousness commands:
-- `/maceff:ccp` - Create consciousness checkpoint
-- `/maceff:jotewr` - Create JOTEWR reflection
-- `/maceff:agent_bootstrap` - Bootstrap agent consciousness
-- `/maceff:scholar_annotate` - Annotate with citations
-
-## Filesystem Mapping
-
-Commands map to nested directories:
-
-```
-.claude/commands/
-├── maceff/
-│   ├── ccp.md
-│   ├── jotewr.md
-│   ├── task/
-│   │   ├── start.md
-│   │   ├── archive.md
-│   │   ├── create_mission.md
-│   │   ├── create_experiment.md
-│   │   ├── create_phase.md
-│   │   └── create_detour.md
-│   └── roadmap/
-│       └── draft.md
-└── ctb/
-    ├── ccp.md
-    └── gist.md
-```
-
-## Discovery
-
-List available commands:
-```bash
-ls ~/.claude/commands/
-```
-
-Or use Claude Code's `/` autocomplete to explore available namespaces.
-
-## Migration from Flat Commands
-
-| Old (v0.3.1) | Current |
-|--------------|---------|
-| `/maceff_todos_start` | `/maceff:task:start <task_id>` |
-| `/maceff_roadmap_draft` | `/maceff:roadmap:draft` |
-| `/maceff_ccp` | `/maceff:ccp` |
-
-**Note**: The `:todos:` namespace from v0.3.2 was renamed to `:task:` when the underlying TodoWrite-based workflow was supplanted by the persistent task system (see `framework/policies/base/development/task_management.md`). If you used `/maceff:todos:start` in older sessions, switch to `/maceff:task:start <task_id>`.
-
-The colon separator provides clearer hierarchy and enables namespace-based organization.
+The flat names of v0.3.1 (`/maceff_ccp`, `/maceff_todos_start`) and the `:todos:` namespace of v0.3.2 map to the skills above: `/maceff-ccp`, and `/maceff-task-start <task_id>`.
