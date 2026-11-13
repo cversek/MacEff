@@ -12,6 +12,14 @@ from pydantic import ValidationError
 from macf.amail import deploy_config as dc
 
 
+def _own_account():
+    # The account the code resolves, by uid. getpass.getuser() reads LOGNAME first, which a
+    # session can set to another name (root, on one host) while running as this uid.
+    import os
+    import pwd
+    return pwd.getpwuid(os.getuid()).pw_name
+
+
 class TestAStalePackageSaysSoInsteadOfRejectingKeys:
     """The failure being replaced is a MISDIAGNOSIS, not a missing check.
 
@@ -114,25 +122,23 @@ class TestAnAgentWithNoAccountRefusesTheStartup:
     def test_an_existing_account_is_accepted(self):
         """THE PAIRED ACCEPTANCE. A refusal with no matching acceptance proves
         only that the path can raise, not that it discriminates."""
-        import getpass, os
-        a = dc.AgentAddressing.model_validate({"account": getpass.getuser()})
+        import os
+        a = dc.AgentAddressing.model_validate({"account": _own_account()})
         assert a.uid == os.getuid()
         assert a.home == Path(os.path.expanduser("~"))
 
     def test_a_declared_uid_that_disagrees_with_the_account_refuses(self):
         """Neither value is trusted over the other: the mismatch itself is the
         fault, because the declared value would become an auth table entry."""
-        import getpass
         with pytest.raises(ValidationError) as e:
             dc.AgentAddressing.model_validate(
-                {"account": getpass.getuser(), "uid": 999999})
+                {"account": _own_account(), "uid": 999999})
         assert "refused rather than resolved" in str(e.value)
 
     def test_a_declared_home_that_disagrees_refuses(self):
-        import getpass
         with pytest.raises(ValidationError) as e:
             dc.AgentAddressing.model_validate(
-                {"account": getpass.getuser(), "home": "/nowhere/at/all"})
+                {"account": _own_account(), "home": "/nowhere/at/all"})
         assert "has home" in str(e.value)
 
     def test_neither_account_nor_uid_refuses(self):
