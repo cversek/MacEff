@@ -411,6 +411,7 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         print(f"  runs: {report.runs}")
     _say_drafts()
     _say_allowlist(home)
+    _say_receipts()
     _say_tray(report)
     return 0
 
@@ -432,6 +433,31 @@ def _say_allowlist(home) -> None:
         return
     for line in lines:
         print(f"  ⚠️ {line}")
+
+
+def _say_receipts(window_s: float = 86400.0) -> None:
+    # A notice written to the channel and dropped by the client reads as delivered; only the
+    # session's receipt tells the two apart, whatever the cause (cversek/MacEff#904).
+    from macf.agent_events_log import read_events
+    from macf.pd import receipts
+    floor = time.time() - window_s
+    try:
+        recent = []
+        for event in read_events(reverse=True, scope="all", only=receipts.EVENTS):
+            if (event.get("timestamp") or 0) < floor:
+                break
+            recent.append(event)
+    except OSError as e:
+        print(f"  ⚠️ the channel notices' receipts couldn't be read: {e}")
+        return
+    missing = receipts.unreceived(reversed(recent))
+    if missing:
+        print(f"  ⚠️ {len(missing)} notice(s) written to the channel in the last day were never "
+              f"received by the session, though it took turns after them, the oldest at "
+              f"{_when(missing[0].sent_at)}. Something between the channel and the session drops "
+              f"them; a client that won't admit the channel does. "
+              f"Each is in the event log: macf_tools events query --event pd_notice_delivered "
+              f"--event notice_received --after 1d -v")
 
 
 def _say_drafts() -> None:
