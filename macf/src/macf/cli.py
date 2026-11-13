@@ -5509,15 +5509,22 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         from .task.scope import get_scope_state
         scope_state = get_scope_state()
 
-        # Archive filtering (default: hide archived)
-        def is_archived(task):
-            return task.mtmd and getattr(task.mtmd, 'archived', False)
-
+        # Archived work (status `archived`, or the legacy MTMD flag). Default:
+        # each archived subtree is ONE 📦 line; --succinct: not drawn at all;
+        # --all: drawn expanded; --archived: only archived tasks, with the
+        # ancestors that give them a path to the root.
+        from .task.archive import is_archived
+        collapse_archived = not (show_all or show_archived_only)
         if show_archived_only:
-            all_tasks = [t for t in all_tasks if is_archived(t)]
-        elif not show_all:
-            all_tasks = [t for t in all_tasks if not is_archived(t)]
-        # else show_all: no filtering
+            _by_id = {t.id: t for t in all_tasks}
+            _keep = {root_id}
+            for t in all_tasks:
+                if is_archived(t):
+                    node, hops = t, 0
+                    while node is not None and node.id not in _keep and hops < 1000:
+                        _keep.add(node.id)
+                        node, hops = _by_id.get(str(node.parent_id)) if node.parent_id else None, hops + 1
+            all_tasks = [t for t in all_tasks if t.id in _keep]
 
         task_map = {t.id: t for t in all_tasks}
 
@@ -5539,6 +5546,28 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         def get_children(parent_id):
             target = str(parent_id) if parent_id is not None else None
             return list(children_of.get(target, ()))
+
+        _live_cache = {}
+
+        def has_live(task, _seen=None):
+            """True when this task or any descendant is NOT archived (cycle-safe)."""
+            if task.id in _live_cache:
+                return _live_cache[task.id]
+            _seen = set() if _seen is None else _seen
+            if task.id in _seen:
+                return False
+            _seen.add(task.id)
+            live = (not is_archived(task)) or any(has_live(c, _seen) for c in get_children(task.id))
+            _live_cache[task.id] = live
+            return live
+
+        def count_archived_below(task_id, _seen=None):
+            _seen = set() if _seen is None else _seen
+            if task_id in _seen:
+                return 0
+            _seen.add(task_id)
+            return sum(int(is_archived(c)) + count_archived_below(c.id, _seen)
+                       for c in get_children(task_id))
 
         def has_active_sibling(task, siblings):
             """Check if any sibling is active (in_progress or pending)."""
@@ -5562,7 +5591,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             could clear by exiting and re-entering, and no amount of exiting
             would have cleared it.
             """
-            if not is_terminal_status(task.status):
+            if not (is_terminal_status(task.status) or is_archived(task)):
                 return False
             # Same cycle guard as count_descendants: a self-parenting task is
             # malformed but reachable, and must not take the render down.
@@ -5581,6 +5610,12 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             renders an in-progress parent as a bare line with nothing under it,
             which reads as "nothing was done here" — the opposite of the truth.
             """
+            # Archived work: in --succinct it is not drawn unless it is the
+            # only path to something still open; otherwise it is drawn (as one
+            # collapsed line by default). Checked before the recency marker so
+            # archiving a task does not pull it back into view.
+            if collapse_archived and is_archived(task):
+                return has_live(task) if succinct else True
             if not succinct:
                 return True
             # Always show root sentinel (depth 0)
@@ -5812,7 +5847,27 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             # CC-style markers with colors - subject now contains #N prefix
             suffix = format_task_suffix(task)
             subject = _truncate_subject_title(subject_with_live_parent(task), title_width)
-            if task.status == "completed":
+
+            if is_archived(task) and collapse_archived:
+                # One line for the whole archived subtree. Only a still-open
+                # descendant (left by --no-cascade) is drawn beneath it.
+                below = count_archived_below(task.id)
+                text = f"{ANSI_DIM}{_strip_ansi(subject)}{ANSI_RESET}"
+                if below:
+                    text += f" {ANSI_DIM}({below} archived){ANSI_RESET}"
+                if suffix:
+                    text = f"{text} {suffix}"
+                print(f"{prefix}{connector}📦 {text}")
+                live_children = [c for c in get_children(task.id) if has_live(c)]
+                for i, child in enumerate(live_children):
+                    print_tree(child, prefix + extension, i == len(live_children) - 1,
+                               depth + 1, live_children)
+                return
+
+            if is_archived(task):
+                status_icon = "📦"
+                text = f"{ANSI_DIM}{_strip_ansi(subject)}{ANSI_RESET}"
+            elif task.status == "completed":
                 status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
                 text = f"{ANSI_DIM}{ANSI_STRIKE}{subject}{ANSI_RESET}"
             elif task.status == "in_progress":
