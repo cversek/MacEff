@@ -145,7 +145,7 @@ def maybe_restore_user_remote(prompt: str, recorded: bool) -> bool:
 def maybe_enter_user_remote(prompt: str, recorded: bool) -> bool:
     """Enter USER_REMOTE when the operator writes from their own channel while away from the
     CLI: a prompt that counted as activity (so from a channel the declaration lists as the
-    operator's, never the MacEff channel, a wake or framework-typed keys), with no message typed
+    operator's, never the MacEff Notification Channel, a wake or framework-typed keys), with no message typed
     at the CLI inside the idle window. The operator is present but the CLI is unattended, which
     is what USER_REMOTE means, so it is entered as ``mode set USER_REMOTE`` would: the event,
     then the Ask-list flipped to Deny. Their next message at the CLI clears it, as before.
@@ -221,7 +221,7 @@ def record_user_activity_from_payload(prompt: str, transcript_path: Optional[str
 
     channel_source = opening_channel_source(prompt)
     # A channel counts as the operator only by a name the agent declares as theirs,
-    # and the MacEff channel, the persistent layer's, never does (R107). The
+    # and the MacEff Notification Channel, the persistent layer's, never does (R107). The
     # transcript monitor asks the same of the same name.
     if channel_source is not None and not operator_channel(channel_source):
         return False
@@ -244,7 +244,7 @@ def record_user_activity_from_payload(prompt: str, transcript_path: Optional[str
 
 
 def record_channel_receipt(prompt: str) -> bool:
-    """Record that this session took a MacEff channel notice, and when.
+    """Record that this session took a MacEff Notification Channel notice, and when.
 
     Claude Code acknowledges nothing to a channel, so the received time of a notice
     (the third time of MIS-0002-R39 (notice_MUST_carry_three_times)) has to come from

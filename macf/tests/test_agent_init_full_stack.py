@@ -136,15 +136,15 @@ def test_fresh_home_gets_a_valid_declaration_and_the_whole_stack(stack):
     assert units["monitor"]["command"][1:] == ["-m", "macf.transcript_monitor", "--follow"]
     assert units["search"]["command"][1:] == ["-m", "macf.search_service.daemon", "--unit"]
     assert declaration["agent"] == CARD
-    assert {"plugin": "maceff-channel", "marketplace": "maceff"} in declaration["allowlisted_channels"]
+    assert {"plugin": "maceff-notification-channel", "marketplace": "maceff"} in declaration["allowlisted_channels"]
     # No Telegram here and no mail: neither is declared.
     assert declaration["operator_channels"] == [] and declaration["notice_routes"] == {}
     # The channel comes from the packaged marketplace; the harness was given it.
     from macf.channels.marketplace import packaged_marketplace
     assert ["/fake/bin/claude", "plugin", "marketplace", "add", str(packaged_marketplace())] in stack.claude
-    assert ["/fake/bin/claude", "plugin", "install", "maceff-channel@maceff"] in stack.claude
+    assert ["/fake/bin/claude", "plugin", "install", "maceff-notification-channel@maceff"] in stack.claude
     harness = json.loads((stack.home / ".maceff" / "harness_Tester_abc123.json").read_text())
-    assert "plugin:maceff-channel@maceff" in harness["channels"]
+    assert "plugin:maceff-notification-channel@maceff" in harness["channels"]
     assert len(stack.installs) == 1
 
 
@@ -177,7 +177,7 @@ def test_an_existing_declaration_is_never_overwritten_and_its_gaps_are_reported(
     # It runs a command of its own, but the login is the account's, not the program's
     # (cversek/MacEff#848).
     assert "the session unit's environment lacks USER, LOGNAME" in result.detail
-    assert "maceff-channel@maceff" in result.detail
+    assert "maceff-notification-channel@maceff" in result.detail
 
 
 @pytest.mark.parametrize("step,flag", [(s, f"--{f.replace('_', '-')}") for s, _w, f in STEPS])
@@ -371,10 +371,10 @@ def test_the_packaged_marketplace_and_the_root_one_agree():
         assert (REPO / r["source"]).resolve() == (packaged / p["source"]).resolve()
         assert ((packaged / p["source"]) / ".claude-plugin" / "plugin.json").is_file()
         assert ((packaged / p["source"]) / ".mcp.json").is_file()
-    assert not (REPO / "plugins" / "maceff-channel").exists()
+    assert not (REPO / "plugins" / "maceff-notification-channel").exists()
 
 
-def test_start_py_installs_the_maceff_channel_from_the_packaged_marketplace(tmp_path):
+def test_start_py_installs_the_notification_channel_from_the_packaged_marketplace(tmp_path):
     from macf.channels.marketplace import packaged_marketplace
     spec = importlib.util.spec_from_file_location("maceff_start_stack", REPO / "docker" / "scripts" / "start.py")
     start = importlib.util.module_from_spec(spec)
@@ -384,10 +384,10 @@ def test_start_py_installs_the_maceff_channel_from_the_packaged_marketplace(tmp_
     calls = []
     with patch.object(start, "HOME_ROOT", tmp_path), \
             patch.object(start, "run_command", side_effect=lambda cmd, **kw: calls.append((cmd, kw))):
-        start.ensure_channel_plugins("pa_test", ["plugin:maceff-channel@maceff"])
+        start.ensure_channel_plugins("pa_test", ["plugin:maceff-notification-channel@maceff"])
     payloads = [c[-1] for c, _kw in calls]
     assert payloads == [f"timeout 90 claude plugin marketplace add {packaged_marketplace()}",
-                        "timeout 90 claude plugin install maceff-channel@maceff"]
+                        "timeout 90 claude plugin install maceff-notification-channel@maceff"]
     assert all(kw.get("check") is False for _c, kw in calls)
 
 

@@ -1,4 +1,4 @@
-"""The MacEff channel's name, and the one safe way to read a channel event's source.
+"""The MacEff Notification Channel's name, and the one safe way to read a channel event's source.
 
 Kept apart from the channel server so the prompt hook, which runs on every prompt,
 can read a tag without importing the server.
@@ -17,16 +17,16 @@ import re
 from typing import Dict, Optional
 
 from macf.utils.input_origin import (
-    MACEFF_CHANNEL_SOURCE,
-    from_maceff_channel,
+    NOTIFICATION_CHANNEL_SOURCE,
+    from_notification_channel,
     opening_channel_source,
 )
 
 SERVER_NAME = "maceff"
-PLUGIN_NAME = "maceff-channel"
+PLUGIN_NAME = "maceff-notification-channel"
 #: How Claude Code names a plugin's channel: ``plugin:<plugin>:<server>``. Kept in
 #: ``input_origin`` so the transcript monitor can test it without this package.
-CHANNEL_SOURCE = MACEFF_CHANNEL_SOURCE
+CHANNEL_SOURCE = NOTIFICATION_CHANNEL_SOURCE
 
 _OPENING = re.compile(r'<channel ([^>\n]*)>')
 _ATTR = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)="([^"]*)"')
@@ -46,5 +46,5 @@ def opening_tag(prompt: str) -> Optional[Dict[str, str]]:
 
 
 def is_maceff_notice(prompt: str) -> bool:
-    """True when the prompt is an event of the MacEff channel, by its opening tag."""
-    return from_maceff_channel(opening_channel_source(prompt))
+    """True when the prompt is an event of the MacEff Notification Channel, by its opening tag."""
+    return from_notification_channel(opening_channel_source(prompt))

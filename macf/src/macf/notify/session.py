@@ -165,7 +165,7 @@ def proc_start(pid: int) -> Optional[str]:
     macOS: ``asctime`` of the start instant in UTC (see ``_proc_start_darwin``).
     None when the pid is not running or the platform has no known source --
     which every caller treats as "not live", so an unknown platform fails closed.
-    The wake, the readout, the MacEff channel's peer check and the transcript monitor
+    The wake, the readout, the MacEff Notification Channel's peer check and the transcript monitor
     all ask through here, so a pid that is not running is an answer, not a warning.
     """
     if sys.platform.startswith("linux"):

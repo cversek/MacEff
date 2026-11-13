@@ -12676,7 +12676,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     agent_init_parser = agent_sub.add_parser(
         "init", help="initialize the agent: its PA preamble and its persistent-layer stack (task store, "
-                     "primal daemon declaration, harness, MacEff channel, permissions, pd install)")
+                     "primal daemon declaration, harness, MacEff Notification Channel, permissions, pd install)")
     agent_init_parser.add_argument("-y", "--yes", action="store_true",
                                    help="accept the preamble unattended: skip its confirmation prompt "
                                         "(without it, a run with no terminal skips the preamble step)")

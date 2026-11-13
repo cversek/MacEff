@@ -303,7 +303,7 @@ class Daemon:
         listener.listen(8)
         listener.setblocking(False)
         self._listener = listener
-        if self.agent:                  # the MacEff channel is an agent's session's
+        if self.agent:                  # the MacEff Notification Channel is an agent's session's
             self.channel_path.unlink(missing_ok=True)   # the slot is ours, so a socket left here is a dead daemon's
             channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             channel.bind(str(self.channel_path))
@@ -636,7 +636,7 @@ class Daemon:
     # ------------------------------------------------------------------ the channel
 
     def _accept_channel(self) -> None:
-        """Attach a MacEff channel to the notifier, but only one whose process descends
+        """Attach a MacEff Notification Channel to the notifier, but only one whose process descends
         from the session unit's live process. Every command the agent runs has the same
         uid, so the uid alone can't tell the session's channel from anything else
         (MIS-0002-R122 (pd_MUST_check_channel_peer_lineage)). A channel that connects

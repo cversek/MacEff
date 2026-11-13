@@ -1585,7 +1585,7 @@ def test_an_optional_unit_that_hangs_at_start_delays_no_other(tmp_path, script, 
 def test_a_unit_past_its_memory_limit_is_recorded_once_per_crossing(tmp_path, script, make_core, monkeypatch):
     """MIS-0002-R60: a running unit read above its declared limit is recorded once, with a
     notice owed, and recorded once more when it is read back below; readings that don't
-    cross record nothing. The notice arrives through the MacEff channel's own record (#734).
+    cross record nothing. The notice arrives through the MacEff Notification Channel's own record (#734).
     The limit is not enforced: the unit keeps running."""
     from channel_receiver import ChannelReceiver
     import macf.pd.core as core_module

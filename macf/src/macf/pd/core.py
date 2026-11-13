@@ -83,7 +83,7 @@ STABLE_INTERVALS = 10
 DRAIN_TIMEOUT_S = 300.0
 #: How often a running unit's memory is read against its declared limit (MIS-0002-R60).
 MEMORY_CHECK_S = 30.0
-#: The notice source for a unit past its memory limit, as the MacEff channel knows it.
+#: The notice source for a unit past its memory limit, as the MacEff Notification Channel knows it.
 LIMIT_NOTICE_SOURCE = "pd_limit_exceeded"
 #: The notice source for a unit that failed: exited with a failing code, missed its liveness, or
 #: couldn't be started. Its id is ``<unit>:<failures in a row>:<epoch>`` (``_unit_failed_id``).

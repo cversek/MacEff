@@ -262,7 +262,7 @@ def _channel_pair():
 
 def _sources_sent(conn):
     import socket
-    from macf.channels.maceff_channel import parse_record
+    from macf.channels.notification_channel import parse_record
     data = b""
     try:
         while True:
@@ -278,7 +278,7 @@ def _sources_sent(conn):
 def test_notice_level_triggered(home, box, monkeypatch):
     """R26: while unread mail exists the notice stays asserted, so each channel that attaches
     is told; once the cursor passes the mail, an owed notice is withdrawn, not delivered."""
-    from macf.channels.maceff_channel import TAKES
+    from macf.channels.notification_channel import TAKES
     from macf.pd import notifier as nt
     monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
     m = _msg()
@@ -320,7 +320,7 @@ def test_unsilenced_mail_reaches_a_channel_that_stayed_attached(home, box, monke
     """Silenced, the notice is settled without telling the session. Unsilenced, the same
     attached channel is told on the next pass, not only at an attach that may never come;
     once told, it isn't told again every pass (the container-management maintainer, #874)."""
-    from macf.channels.maceff_channel import TAKES
+    from macf.channels.notification_channel import TAKES
     from macf.pd import notifier as nt
     monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
     silenced = [True]

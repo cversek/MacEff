@@ -31,7 +31,7 @@ def declare(home, kind, units=()):
 def test_each_agent_component_is_built_only_where_its_declaration_adds_it(tmp_path, base,
                                                                          isolated_events_log):
     """MIS-0002-R183 (component_MUST_be_added_by_declaration): an agent's declaration adds the
-    notice path, duties and the login check, and its daemon binds the MacEff channel's socket;
+    notice path, duties and the login check, and its daemon binds the MacEff Notification Channel's socket;
     the same home declared as a system daemon builds none of them and binds no channel socket."""
     agent = Daemon(make_home(tmp_path / "a", []), base=base)
     assert agent.agent
@@ -65,7 +65,7 @@ def test_a_system_or_fleet_declaration_builds_no_agent_component(kind, tmp_path,
     has bound its control socket and never the channel's, and holds no agent component."""
     daemon = run_daemon(declare(make_home(tmp_path, []), kind), base)
     assert daemon.control_path.exists()
-    assert not daemon.channel_path.exists(), "a system or fleet daemon bound the MacEff channel's socket"
+    assert not daemon.channel_path.exists(), "a system or fleet daemon bound the MacEff Notification Channel's socket"
     assert daemon._channel_listener is None
     assert all(getattr(daemon, p) is None for p in AGENT_PARTS)
 

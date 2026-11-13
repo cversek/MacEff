@@ -110,7 +110,7 @@ Two Unix sockets, so that each carries one shape and has one peer rule; never a 
   - `{"op": "compact", "asked_by", "reason"}` is accepted only from the operator or the declared wind-down [MIS-0002-R108 (compaction_MUST_be_asked_by_operator_or_wind-down)].
   - `{"op": "pace", "refractory_s", "asked_by", "reason"}` sets how long the keystroke wake rests, or with `refractory_s` null goes back to the declared window. It's asked by the `agent` or the `operator`, acts on no unit, and is refused under `wake_refractory_floor_s`, over `wake_refractory_ceiling_s`, or when it isn't a finite number. A status or a pace answers with `wake_refractory_s` and `wake_window_from` wherever a session unit has a keystroke wake.
   - Any unknown operation or field refuses the whole request, with `{"ok": false, "error": ...}`.
-- **Channel**, a stream. The daemon writes closed notice records in the shape the MacEff channel defines (#545), and reads nothing. The peer must descend from the agent's live session [MIS-0002-R122 (pd_MUST_check_channel_peer_lineage)].
+- **Channel**, a stream. The daemon writes closed notice records in the shape the MacEff Notification Channel defines (#545), and reads nothing. The peer must descend from the agent's live session [MIS-0002-R122 (pd_MUST_check_channel_peer_lineage)].
 - **The daemon record** holds `pid`, `proc_start` and `version`. It is written atomically after both sockets are bound, and every client checks its peer against it [MIS-0002-R123 (channel_MUST_check_its_peer_is_its_pd)].
 
 ## Decided on #555

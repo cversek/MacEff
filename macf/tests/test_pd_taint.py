@@ -37,7 +37,7 @@ def test_each_kind_of_untrusted_input_taints_the_context(event, says):
     tool("Bash", "pytest macf/tests/test_pd_taint.py -q"),
     tool("Bash", "git -C repo log --oneline -3"),
     tool("mcp__plugin_telegram_telegram__reply"),
-    prompt('<channel source="plugin:maceff-channel:maceff" notice_id="n">fixed words</channel>'),
+    prompt('<channel source="plugin:maceff-notification-channel:maceff" notice_id="n">fixed words</channel>'),
     prompt("continue with the build"),
 ])
 def test_what_reads_nothing_from_outside_leaves_it_clean(event):

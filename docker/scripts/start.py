@@ -975,7 +975,7 @@ fi
 # at -- provisioning must not invent a source for third-party code.
 def _packaged_maceff_marketplace() -> Optional[str]:
     """The ``maceff`` marketplace shipped inside the installed macf package, as a local
-    directory source, or None when this macf has none. Local, so the MacEff channel
+    directory source, or None when this macf has none. Local, so the MacEff Notification Channel
     installs offline and from whatever macf the container runs."""
     try:
         from macf.channels.marketplace import packaged_marketplace

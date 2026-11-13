@@ -1,4 +1,4 @@
-"""The MacEff channel: notices from an agent's primal daemon, delivered into its live
+"""The MacEff Notification Channel: notices from an agent's primal daemon, delivered into its live
 Claude Code session as channel events instead of typed keystrokes.
 
 MIS-0002 section 6.2.3. A channel event that reaches an idle session starts a turn, and
@@ -32,7 +32,7 @@ this server rebuilds the notice through that source's own factory in
 daemon is handed can reach the session as an instruction (MIS-0002-R77
 (wake_MUST_carry_fixed_words_only)). An unknown source or an extra field is refused.
 
-Run:  python -m macf.channels.maceff_channel
+Run:  python -m macf.channels.notification_channel
 """
 import json
 import os

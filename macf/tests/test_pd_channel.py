@@ -1,4 +1,4 @@
-"""The MacEff channel (MIS-0002 section 6.2.3).
+"""The MacEff Notification Channel (MIS-0002 section 6.2.3).
 
 Test names follow MIS-0002's Conformance table, so each requirement's row names a
 test that exists. The primal daemon is not built yet (step 1 of the landing), so a
@@ -16,7 +16,7 @@ import threading
 import pytest
 
 from macf.channels import channel_tag
-from macf.channels.maceff_channel import (
+from macf.channels.notification_channel import (
     DAEMON_POINTERS, SOURCES, Channel, DaemonRecord, NoticeRecord, build_event, parse_record, verify_peer,
 )
 from macf.pd import interface
@@ -228,7 +228,7 @@ def test_a_maceff_notice_is_not_the_operators_activity(monkeypatch, operator_cha
 def test_the_transcript_monitor_does_not_count_a_maceff_notice_either(operator_channels):
     operator_channels("plugin:telegram:telegram")
     # The other producer of the operator's activity, delivered and queued. Both ask
-    # input_origin.from_maceff_channel, so the two cannot disagree about a notice.
+    # input_origin.from_notification_channel, so the two cannot disagree about a notice.
     from macf.transcript_monitor.daemon import detect_mid_turn_enqueue, detect_user_activity
 
     def delivered(source):
@@ -377,7 +377,7 @@ def test_the_channel_names_its_daemon_by_the_homes_card_not_the_environment(tmp_
     """The daemon names its socket by the home's card (pd.names.agent_card). A channel that
     took MACEFF_AGENT_NAME instead ("seat2" against the card "Seat2") looked for a record
     and a socket the daemon never made, and retried for good (MIS-0002-R02)."""
-    from macf.channels.maceff_channel import channel_card
+    from macf.channels.notification_channel import channel_card
     (tmp_path / ".maceff").mkdir()
     (tmp_path / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": "Seat2"}}))
     (tmp_path / ".maceff_primary_agent.id").write_text("f0a1b200-0000-0000-0000-000000000000\n")
@@ -388,7 +388,7 @@ def test_the_channel_names_its_daemon_by_the_homes_card_not_the_environment(tmp_
 def test_main_starts_the_channel_with_the_homes_card(tmp_path, monkeypatch):
     """The line that picks the card the channel looks for is main(): the seat that never got
     a notice failed exactly there, so main() itself is pinned, not only channel_card."""
-    from macf.channels import maceff_channel
+    from macf.channels import notification_channel
     (tmp_path / ".maceff").mkdir()
     (tmp_path / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": "Seat2"}}))
     (tmp_path / ".maceff_primary_agent.id").write_text("f0a1b200-0000-0000-0000-000000000000\n")
@@ -407,6 +407,6 @@ def test_main_starts_the_channel_with_the_homes_card(tmp_path, monkeypatch):
 
         def serve(self):
             pass
-    monkeypatch.setattr(maceff_channel, "Channel", _Recorded)
-    assert maceff_channel.main() == 0
+    monkeypatch.setattr(notification_channel, "Channel", _Recorded)
+    assert notification_channel.main() == 0
     assert started == ["Seat2_f0a1b2"]

@@ -475,7 +475,7 @@ class Declaration(_Closed):
     operator_channels: Optional[List[str]] = None
     allowlisted_channels: Optional[List[ChannelPlugin]] = None
     notice_routes: Dict[str, NoticeRoute] = Field(default_factory=dict)
-    #: How long a new session incarnation may run before its MacEff channel attaches; past it,
+    #: How long a new session incarnation may run before its MacEff Notification Channel attaches; past it,
     #: the channel is dark (MIS-0002-R115). None: no channel is expected, and none is watched.
     channel_connect_s: Optional[float] = Field(default=None, gt=0)
     #: How long mail may sit in the agent's pickup box, while its session runs, before the
@@ -646,10 +646,10 @@ EVENT_CONTROL = "pd_control"
 #: A running unit crossed above its declared memory limit, and back below it (MIS-0002-R60).
 EVENT_OVER_LIMIT = "pd_unit_over_limit"
 EVENT_UNDER_LIMIT = "pd_unit_back_under_limit"
-#: The session's MacEff channel went dark, and came back (MIS-0002-R115).
+#: The session's MacEff Notification Channel went dark, and came back (MIS-0002-R115).
 EVENT_CHANNEL_DARK = "pd_channel_dark"
 EVENT_CHANNEL_BACK = "pd_channel_back"
-#: An attached MacEff channel said which notice sources it takes (MIS-0002-R149). ``takes``
+#: An attached MacEff Notification Channel said which notice sources it takes (MIS-0002-R149). ``takes``
 #: lists them; a channel that sent no hello declares nothing and has no such event.
 EVENT_CHANNEL_DECLARED = "pd_channel_declared"
 #: Mail sat in the agent's pickup box past its declared threshold, and the box was then
@@ -839,7 +839,7 @@ class DaemonStart(_Closed):
 #            else a channel writes breaks the protocol, and the daemon drops it.
 #            The peer must descend from the agent's live session
 #            (MIS-0002-R122 (pd_MUST_check_channel_peer_lineage)). The record shape is the
-#            channel's own (``macf.channels.maceff_channel.NoticeRecord``, #545).
+#            channel's own (``macf.channels.notification_channel.NoticeRecord``, #545).
 #
 # The daemon writes its record (pid and start time) after binding both, and a client
 # checks the peer against it (MIS-0002-R123 (channel_MUST_check_its_peer_is_its_pd)).
@@ -865,7 +865,7 @@ class HelloBody(_Closed):
 
 
 class ChannelHello(_Closed):
-    """The one line a MacEff channel writes, ``{"hello": {"takes": [...]}}``, right after it
+    """The one line a MacEff Notification Channel writes, ``{"hello": {"takes": [...]}}``, right after it
     attaches and has checked its peer (MIS-0002-R149). A channel that sends none declares
     nothing, so the daemon sends it nothing and holds every notice for one that declares."""
 

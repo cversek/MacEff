@@ -63,7 +63,7 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **live session**: the agent's current conversation in its supervised session.
 - **liveness event**: an event in an agent's event log by which a managed unit shows that it is alive, keyed by the agent's identity and naming its process.
 - **MacEff agent**: an agent whose address the operator declares in the key registry.
-- **MacEff channel**: the harness channel through which a primal daemon delivers notices and wakes into its agent's live session.
+- **MacEff Notification Channel**: the harness channel through which a primal daemon delivers notices and wakes into its agent's live session.
 - **maintainer**: an agent that the operator has designated to maintain MacEff.
 - **major architectural change**: a change that adds a subsystem or changes architecture across components.
 - **managed unit**: one process or one schedule that a primal daemon runs for its agent, such as the session, the transcript monitor, the notifier or a mail clock.
@@ -113,7 +113,7 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **Secretary**: the agent the operator designates for an MIS before it leaves Draft, with or without a deliberation, who confirms its number, edits it to the language standard, keeps this glossary, writes the synthesis and tracks conformance.
 - **semantic slug**: a short name made of ASCII letters, digits, hyphens and underscores, given in parentheses at the end of a requirement line, that states the requirement's subject and strength, for example `req_MUST_have_30_words_max`.
 - **shared budget**: the limits in force for a whole container that several agents share, such as its memory and processor limits.
-- **subscriber**: a reader of the event stream that chose the sources it takes: the MacEff channel, the tray, or a bridge to the operator.
+- **subscriber**: a reader of the event stream that chose the sources it takes: the MacEff Notification Channel, the tray, or a bridge to the operator.
 - **substantive**: any change to an accepted MIS that is not editorial; it is made in the MIS itself, as a revision or an amendment.
 - **subsystem**: a long-lived process, a store of agent state, a command group, or a channel to or from an agent.
 - **suspect**: the trust state of a message whose signature check was attempted and failed.

@@ -1416,7 +1416,7 @@
     "mis": ["mis"],
     "persistent_layer": ["base/infrastructure/persistent_layer"],
     "primal_daemon": ["base/infrastructure/persistent_layer"],
-    "maceff_channel": ["base/infrastructure/persistent_layer"],
+    "notification_channel": ["base/infrastructure/persistent_layer"],
     "specification": ["mis"],
     "ratification": ["mis"],
     "amail": [
@@ -1967,7 +1967,7 @@
           "primal daemon",
           "maceff_pd",
           "channel",
-          "maceff channel",
+          "maceff notification channel",
           "notice",
           "wake",
           "receipt"

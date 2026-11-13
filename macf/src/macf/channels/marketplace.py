@@ -1,6 +1,6 @@
 """Where the ``maceff`` plugin marketplace is, for the installed package.
 
-The MacEff channel plugin (``maceff-channel@maceff``) ships inside the ``macf`` package, as
+The MacEff Notification Channel plugin (``maceff-notification-channel@maceff``) ships inside the ``macf`` package, as
 package data under ``maceff_marketplace/``, so any installed macf, a container's included, can
 add the marketplace and install the channel from a local directory, with no network and no
 repository checkout. That directory holds the one copy of the plugin's manifests. The
@@ -13,8 +13,8 @@ from pathlib import Path
 #: The marketplace's name, as ``plugin@marketplace`` and the organization allowlist spell it.
 MARKETPLACE = "maceff"
 #: The channel plugin it carries.
-CHANNEL_PLUGIN = "maceff-channel"
-#: ``maceff-channel@maceff``, the id ``claude plugin install`` takes.
+CHANNEL_PLUGIN = "maceff-notification-channel"
+#: ``maceff-notification-channel@maceff``, the id ``claude plugin install`` takes.
 CHANNEL_PLUGIN_ID = f"{CHANNEL_PLUGIN}@{MARKETPLACE}"
 #: The channel as the harness's ``--channels`` takes it.
 CHANNEL_FLAG = f"plugin:{CHANNEL_PLUGIN_ID}"

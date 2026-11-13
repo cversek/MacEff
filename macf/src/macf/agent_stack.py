@@ -13,8 +13,8 @@ The steps, each skippable by its flag:
 3. ``declaration`` - a default primal daemon declaration where none exists. An existing one is
    never overwritten; what it lacks compared with the default is reported instead;
 4. ``harness`` - the session's child script and settings (``harness install``), with the
-   channels the declaration allows, the MacEff channel included;
-5. ``channel`` - the MacEff channel plugin from the marketplace packaged with macf;
+   channels the declaration allows, the MacEff Notification Channel included;
+5. ``channel`` - the MacEff Notification Channel plugin from the marketplace packaged with macf;
 6. ``permissions`` - the mode-safety permission entries;
 7. ``daemon`` - the daemon under the platform's service manager (``pd install``).
 
@@ -55,7 +55,7 @@ STEPS: List[Tuple[str, str, str]] = [
                      "exists; report what an existing one lacks"), "no_declaration"),
     ("harness", "install the session's child script with the declared channels (harness install)",
      "no_harness"),
-    ("channel", "add the packaged maceff marketplace and install maceff-channel@maceff", "no_channel"),
+    ("channel", "add the packaged maceff marketplace and install maceff-notification-channel@maceff", "no_channel"),
     ("permissions", "add the mode-safety permission entries to the project's settings.local.json",
      "no_permissions"),
     ("daemon", "put the primal daemon under the service manager (pd install)", "no_daemon"),
@@ -96,7 +96,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--update", action="store_true",
                         help="bring the persistent-layer stack current and nothing else: reinstall the "
                              "daemon's unit as rendered now, restart the daemon onto this macf (its units, "
-                             "the session among them, carry across), and refresh the MacEff channel plugin; "
+                             "the session among them, carry across), and refresh the MacEff Notification Channel plugin; "
                              "never rewrites a declaration or restarts the session")
     parser.add_argument("--repoint", action="store_true",
                         help="with --update: let the daemon's unit move to the interpreter running this "

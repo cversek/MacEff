@@ -520,7 +520,7 @@ def test_a_client_not_on_the_declared_path_is_named_and_nothing_is_touched(tmp_p
 
 
 def test_channel_first(tmp_path, isolated_events_log, monkeypatch, capsys):
-    """MIS-0002-R104: with the MacEff channel attached, mail that arrives (a wake) and the
+    """MIS-0002-R104: with the MacEff Notification Channel attached, mail that arrives (a wake) and the
     daemon's own notice both go out on the channel as records naming their sources, each
     delivery is recorded as by channel, and the keystroke fallback types nothing into an
     idle, empty box, however long past its grace both have been owed. A notice the channel's
@@ -528,7 +528,7 @@ def test_channel_first(tmp_path, isolated_events_log, monkeypatch, capsys):
     import socket
 
     from macf.agent_events_log import read_events
-    from macf.channels.maceff_channel import TAKES, parse_record
+    from macf.channels.notification_channel import TAKES, parse_record
     from macf.pd import notifier as nt
     from macf.pd import wake as wk
 

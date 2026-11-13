@@ -15,7 +15,7 @@ framework records them as it sends them, and that record is read instead.
 
 A channel counts as the operator only by its exact name, among those the agent
 declares as the operator's. One is never the operator, whoever reads it: the
-MacEff channel, through which the persistent layer delivers notices. Both
+MacEff Notification Channel, through which the persistent layer delivers notices. Both
 producers ask ``operator_channel`` of the source they found.
 """
 
@@ -27,10 +27,10 @@ from typing import FrozenSet, Optional
 
 CHANNEL_TAG_OPENING = "<channel "
 
-# The MacEff channel's name as the client writes it, both in the source of the
+# The MacEff Notification Channel's name as the client writes it, both in the source of the
 # tag that opens a channel event and in a delivered entry's origin record:
 # plugin:<plugin>:<server>.
-MACEFF_CHANNEL_SOURCE = "plugin:maceff-channel:maceff"
+NOTIFICATION_CHANNEL_SOURCE = "plugin:maceff-notification-channel:maceff"
 
 # Origin kinds on a user entry that are not the operator acting: a background
 # task's completion notice, and a message from another session.
@@ -221,15 +221,46 @@ def framework_typed_box_text(box: str, now: Optional[float] = None) -> Optional[
     return None
 
 
-def from_maceff_channel(source: Optional[str]) -> bool:
-    """True when a channel source, from an origin record or an opening tag, is the MacEff channel.
+def from_notification_channel(source: Optional[str]) -> bool:
+    """True when a channel source, from an origin record or an opening tag, is the MacEff Notification Channel.
 
     Its notices are the persistent layer speaking, never the operator, so they
     MUST NOT count as the operator's activity (MIS-0002-R106
     (wake_MUST-NOT_count_as_operator_activity)). The name is the one the
     transport sets (MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)).
     """
-    return source == MACEFF_CHANNEL_SOURCE
+    if source == OLD_NOTIFICATION_CHANNEL_SOURCE:
+        refuse_old_channel_source()
+    return source == NOTIFICATION_CHANNEL_SOURCE
+
+
+#: The channel's source before MIS-0008 renamed it. A clean break: it is refused, by name (R03).
+OLD_NOTIFICATION_CHANNEL_SOURCE = "plugin:maceff-channel:maceff"
+
+
+def refuse_old_channel_source() -> None:
+    """Say, and record once per process, that a notice came from the channel's old source.
+
+    MIS-0008-R03 (old_channel_source_MUST_be_refused_by_name) and R54
+    (old_source_refusal_MUST_be_recorded): a session that took one side of the rename
+    without the other would otherwise lose every notice without a trace. The fix is to
+    update the daemon and the plugin together (`macf_tools agent init --update`).
+    """
+    print(f"⚠️ MACF: refused a notice from {OLD_NOTIFICATION_CHANNEL_SOURCE}, the MacEff channel's old name; "
+          f"it is now {NOTIFICATION_CHANNEL_SOURCE}. Update the daemon and the channel plugin together "
+          f"with `macf_tools agent init --update`, then restart the session.", file=sys.stderr)
+    if _OLD_SOURCE_RECORDED:
+        return
+    _OLD_SOURCE_RECORDED.append(True)
+    try:
+        from macf.agent_events_log import append_event
+        append_event("channel_source_refused", {"source": OLD_NOTIFICATION_CHANNEL_SOURCE,
+                                                "expected": NOTIFICATION_CHANNEL_SOURCE})
+    except (OSError, ImportError) as e:
+        print(f"⚠️ MACF: the refusal could not be recorded in the event log: {e}", file=sys.stderr)
+
+
+_OLD_SOURCE_RECORDED: list = []
 
 
 #: Each declaration read, by path: its modification time and the names it lists. The
@@ -272,12 +303,12 @@ def operator_channel(source: Optional[str], agent_home: Optional[Path] = None) -
     """True when a channel's events count as the operator's activity
     (MIS-0002-R107 (hooks_MUST_tell_channels_apart_by_name)).
 
-    The MacEff channel never does. Otherwise the exact name must be one the agent's
+    The MacEff Notification Channel never does. Otherwise the exact name must be one the agent's
     declaration lists in ``operator_channels``. An agent that lists none, or has no
     declaration, has no operator channel: a wrong "absent" makes it more careful than it had
     to be, and a wrong "present" lets it act as if someone were there.
     """
-    if from_maceff_channel(source):
+    if from_notification_channel(source):
         return False
     declared = declared_operator_channels(agent_home)
     return bool(source) and declared is not None and source in declared
