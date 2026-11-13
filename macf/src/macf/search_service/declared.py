@@ -11,6 +11,7 @@ field it does not need would answer "none" for a unit that runs.
 No heavy imports: the CLI asks here before it imports the model's dependencies.
 """
 import json
+import sys
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,7 +45,7 @@ def _declarations(own_home: Optional[Path], rendered_root: Optional[Path]) -> It
     root = Path(rendered_root) if rendered_root is not None else RENDERED_DECLARATIONS
     try:
         seen.extend(sorted(p / "declaration.json" for p in root.iterdir()))
-    except OSError:
+    except OSError:  # noqa: S110 - a host renders no declarations here, so an absent root is normal
         pass            # no deployment renders declarations here (a host), or none readable
     out = []
     for p in seen:
@@ -67,7 +68,10 @@ def find_declared_search_unit(own_home: Optional[Path] = None,
     for path in _declarations(own_home, rendered_root):
         try:
             body = json.loads(path.read_text())
-        except (OSError, ValueError):
+        except (OSError, ValueError) as e:
+            # An absent declaration is normal; an unreadable or malformed one hides a search unit, so it is said.
+            if not isinstance(e, FileNotFoundError):
+                print(f"⚠️ MACF: reading {path} failed (looking at the next declaration): {e}", file=sys.stderr)
             continue
         if not isinstance(body, dict):
             continue

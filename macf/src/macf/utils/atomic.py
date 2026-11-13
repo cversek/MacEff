@@ -34,7 +34,7 @@ def write_text_atomic(path: Union[str, Path], text: str, encoding: str = "utf-8"
     mode = None
     try:
         mode = path.stat().st_mode & 0o7777
-    except FileNotFoundError:
+    except FileNotFoundError:  # noqa: S110 - a new file has no mode to keep; absence is normal
         pass
     if mode is None:
         # A new file gets what open() would have given it, not mkstemp's 0600.
@@ -58,7 +58,7 @@ def write_text_atomic(path: Union[str, Path], text: str, encoding: str = "utf-8"
     except BaseException:
         try:
             os.unlink(tmp)
-        except FileNotFoundError:
+        except FileNotFoundError:  # noqa: S110 - best-effort cleanup; the temp file may already be gone
             pass
         raise
 
