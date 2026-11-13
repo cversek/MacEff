@@ -5826,10 +5826,11 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                     if update.breadcrumb:
                         print(f"{detail_prefix}{fmt('   🔖 ' + update.breadcrumb)}")
 
-            # Always show completion reports (every level)
+            # Completion reports from -v up; the default view leaves them out
+            # entirely (the ✔ and strikethrough already say the task is done).
             # Last completion report = green, previous = strikethrough
             completion_reports = []
-            if task.mtmd:
+            if task.mtmd and level >= 1:
                 # Get completion reports from updates with type='completion'
                 for u in (task.mtmd.updates or []):
                     if getattr(u, 'type', None) == 'completion' and u.description:
@@ -13325,10 +13326,10 @@ def _build_parser() -> argparse.ArgumentParser:
     task_tree_parser.add_argument("--succinct", "-s", action="store_true",
                                   help="hide notes/plans, show only active/pending tasks")
     task_tree_parser.add_argument("-v", dest="verbose", action="count", default=0,
-                                  help="-v lists notes, plans and reports (truncated); -vv shows "
-                                       "every note, plan, report, breadcrumb and update in full, "
-                                       "wrapped to 80%% of the terminal. Default: notes counted on "
-                                       "each task's line")
+                                  help="-v lists notes, plans and completion reports (truncated); "
+                                       "-vv shows every note, plan, report, breadcrumb and update in "
+                                       "full, wrapped to 80%% of the terminal. Default: notes counted "
+                                       "on each task's line, completion reports not shown")
     task_tree_parser.add_argument("--verbose", dest="verbose_level", nargs="?", const="1",
                                   metavar="LEVEL",
                                   help="same as -v (LEVEL 1, the default) or -vv (LEVEL 2); "

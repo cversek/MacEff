@@ -95,3 +95,13 @@ def test_verbose_level_out_of_range_is_refused(env, tid):
     r = subprocess.run([sys.executable, "-m", "macf.cli", "task", "tree", tid, "--verbose", "3"],
                        capture_output=True, text=True, env=env)
     assert r.returncode != 0 and "1 or 2" in (r.stdout + r.stderr)
+
+
+def test_default_hides_completion_reports_and_v_shows_them(env, tid):
+    """Operator, 13:12: no ✅ report lines in the default tree, and no annotation in their place."""
+    r = subprocess.run([sys.executable, "-m", "macf.cli", "task", "complete", tid, "--report", "DONEMARK report",
+                        "--no-closeout"], capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    out = tree(env)
+    assert "DONEMARK" not in out and "✅" not in out
+    assert "DONEMARK" in tree(env, "-v")
