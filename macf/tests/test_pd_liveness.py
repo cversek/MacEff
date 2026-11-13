@@ -146,9 +146,9 @@ def test_in_flight_is_reported_when_the_unit_gives_it():
     events, append = recorder()
     hb = lv.Heartbeat("C_1a2b3c", "u", 10.0, in_flight=lambda: 3, append=append).start()
     hb.tick()
-    time.sleep(0.05)
+    wait_for(lambda: events, timeout=2)   # a deadline, not a fixed wait: a loaded runner is slow (#993)
     hb.stop()
-    assert events[0][1]["in_flight"] == 3
+    assert events and events[0][1]["in_flight"] == 3
 
 
 def test_outside_a_daemon_nothing_is_written(tmp_path):
@@ -163,7 +163,7 @@ def test_a_unit_named_with_its_interval_starts_a_heartbeat_with_the_home_card(tm
         assert hb is not None and hb.unit == "amail-broker" and hb.interval_s == 30.0
         assert hb.card.startswith("Resident_")
         hb.tick()
-        time.sleep(0.05)
+        wait_for(lambda: events, timeout=2)   # a deadline, not a fixed wait: a loaded runner is slow (#993)
         assert events and events[0][1]["agent"] == hb.card
     finally:
         hb.stop()
