@@ -1,0 +1,3 @@
+### Fixed
+
+- **`inject exit` refuses while the session has scheduled jobs** (`supervisor.py`, `utils/scheduled_jobs.py`, #854). A job scheduled with CronCreate makes the client answer `/exit` with "Background work is running", and an unattended restart sat on that dialog until a person answered it, while `inject` reported the keystrokes as sent. The jobs live only in the client, so they're read from the session's transcript: each one created and not cancelled since the client started, a recurring one not past its seven days, a one-shot one not yet fired. `inject exit` names them and says they end with the client, rather than picking a menu entry nobody has seen.
