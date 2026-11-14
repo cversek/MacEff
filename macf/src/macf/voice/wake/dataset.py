@@ -18,6 +18,7 @@ Layout, under the agent's home:
 from __future__ import annotations
 
 import json
+import sys
 import re
 import time
 import wave
@@ -71,6 +72,18 @@ class Clip:
     path: Path
     recorded_at: float
     conditions: str
+
+
+def defined_phrases(home: Path) -> List[str]:
+    """Every wake phrase defined in ``home``, as ``define`` recorded it, in name order. A folder whose
+    phrase file can't be read is skipped and said on stderr, never guessed at."""
+    found = []
+    for path in sorted((voice_dir(home) / "wake").glob("*/phrase.json")):
+        try:
+            found.append(str(json.loads(path.read_text())["phrase"]))
+        except (OSError, ValueError, KeyError) as e:
+            print(f"⚠️ MACF: voice: {path} can't be read, so its phrase is not offered: {e}", file=sys.stderr)
+    return found
 
 
 class WakeSet:

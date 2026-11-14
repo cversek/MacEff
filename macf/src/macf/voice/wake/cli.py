@@ -65,6 +65,16 @@ def _wake_set(phrase: Optional[str]) -> "WakeSet":
         voice = load_declaration(home, agent_card(home)).voice
         phrase = voice.wake_phrase if voice else None
     if not phrase:
+        # Before a voice section is declared, the phrase just defined is the one meant: the step
+        # ``define`` prints must work for exactly the agent that ran it.
+        from macf.voice.wake.dataset import defined_phrases
+        defined = defined_phrases(home)
+        if len(defined) == 1:
+            phrase = defined[0]
+        elif defined:
+            raise PhraseRefused(f"no phrase given, the voice section names none, and several are defined "
+                                f"({', '.join(repr(p) for p in defined)}); pass --phrase")
+    if not phrase:
         raise PhraseRefused("no phrase given and the voice section names none; pass --phrase, or define one first")
     return WakeSet(home, phrase)
 

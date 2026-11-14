@@ -56,3 +56,37 @@ def test_the_wake_commands_are_on_the_cli():
                         (["train"], wake_cli.cmd_train), (["test"], wake_cli.cmd_test),
                         (["status"], wake_cli.cmd_status)):
         assert parser.parse_args(["voice", "wake", *words]).func is func
+
+
+def _no_voice_section(monkeypatch, home):
+    """An agent whose declaration has no voice section yet, as before Phase 8 declares one."""
+    from macf.pd import core, interface
+    monkeypatch.setattr(wake_cli, "_home", lambda: home)
+    monkeypatch.setattr(interface, "agent_card", lambda h: "Tester_abc123")
+    monkeypatch.setattr(core, "load_declaration", lambda h, card: SimpleNamespace(voice=None))
+
+
+def test_the_step_define_prints_works_with_no_voice_section(tmp_path, monkeypatch, capsys):
+    """Before a voice section names the phrase, the one phrase defined in the home is the one meant, so
+    the next step define prints ("voice wake record phrase", no --phrase) works for the agent that ran it."""
+    from macf.voice.wake.dataset import WakeSet
+    _no_voice_section(monkeypatch, tmp_path)
+    WakeSet(tmp_path, "yo tom").define()
+    assert wake_cli._wake_set(None).phrase == "yo tom"
+
+
+def test_with_several_phrases_defined_the_command_asks_which(tmp_path, monkeypatch):
+    import pytest
+    from macf.voice.wake.dataset import WakeSet
+    _no_voice_section(monkeypatch, tmp_path)
+    WakeSet(tmp_path, "yo tom").define()
+    WakeSet(tmp_path, "hey bravo").define()
+    with pytest.raises(wake_cli.PhraseRefused, match="several are defined"):
+        wake_cli._wake_set(None)
+
+
+def test_with_nothing_defined_the_command_still_refuses(tmp_path, monkeypatch):
+    import pytest
+    _no_voice_section(monkeypatch, tmp_path)
+    with pytest.raises(wake_cli.PhraseRefused, match="define one first"):
+        wake_cli._wake_set(None)
