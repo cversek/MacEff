@@ -726,6 +726,23 @@ def test_the_send_key_does_nothing_with_no_recording():
     assert rig.unit.recording is None and rig.delivered == []
 
 
+def test_live_text_shows_a_tentative_guess_while_speaking_and_commits_it_at_a_pause():
+    """The operator: a live line "until it's settled", committed by sentence at a pause. Guesses arrive while speech
+    goes on, each over more audio than the last; at the pause the stretch is committed and the guess clears."""
+    def heard(audio, prompt):
+        return f"yo tom {audio.size // 1280}"
+    audio = FakeAudio().then((SILENCE, 3), (WAKE, secs(0.5)), (SPEECH, secs(5)), (SILENCE, secs(1)),
+                             (SPEECH, secs(2)), (SILENCE, secs(6)))
+    rig = make_unit(audio, heard, end_hold_s=2.0, end_silence_s=5.0, live_text=True, stream_after_s=3.0)
+    rig.run(3 + secs(0.5) + secs(5))
+    guesses = [t for t in rig.indicator.tentatives if t]
+    assert 2 <= len(guesses) <= 5, f"{len(guesses)} tentative guesses in 5 s of speech; one about every 1.5 s"
+    sizes = [int(g.split()[-1]) for g in guesses]
+    assert sizes == sorted(sizes) and sizes[0] < sizes[-1], "each guess must cover more of the speech"
+    rig.run(secs(1))
+    assert rig.indicator.texts[-1] and rig.indicator.tentatives[-1] == "", "the pause didn't commit the stretch"
+
+
 def test_send_as_whisper_heard_it_still_sends():
     """The second live trial: Whisper wrote the operator's last-word "send" as "Sand". That spelling counts as
     send, and is cut from the text like the word itself."""

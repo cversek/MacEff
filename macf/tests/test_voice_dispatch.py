@@ -522,7 +522,8 @@ def test_the_system_capture_unit_is_built_from_the_system_declaration(tmp_path):
                         backends=dict(audio=audio, lock=FakeLock(), indicator=RecordingIndicator(),
                                       triggers=PushedKeys(), gate=LoudGate(), executor=InlineExecutor(),
                                       transcribe=PromptedTranscriber(["hey alpha", "hey alpha deploy"]),
-                                      clock=lambda: audio.reads * FRAME_S))
+                                      clock=lambda: audio.reads * FRAME_S),
+                        live_text=False)             # scripted transcripts: no tentative passes to consume them
     run(unit, len(audio.script))
     [(topic, payload)] = sent
     member_view = Verifier(ALPHA, SYSTEM, lambda c: [public_key_line(system_key)] if c == SYSTEM else [])

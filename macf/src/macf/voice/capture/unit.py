@@ -47,6 +47,9 @@ COOLDOWN_S = 3.0
 #: Long speech is transcribed ahead: at a pause, once this much audio waits untranscribed, it is sent to the
 #: worker and kept as text, so the end of a long utterance waits only for its last stretch.
 STREAM_AFTER_S = 8.0
+#: While speech goes on, the uncommitted audio is transcribed again this often, as a tentative line the indicator
+#: shows until the stretch is committed at a pause (the operator, 2026-11-14: "a live one ... until it's settled").
+TENTATIVE_EVERY_S = 1.5
 #: How far behind real time the unit may fall before it says so: audio it hasn't read yet, or lost.
 BEHIND_WARN_S = 0.5
 #: Audio kept from just before a key press, so the first word isn't clipped.
@@ -95,6 +98,11 @@ class CaptureConfig:
     end_silence_s: float = 5.0
     #: R56: listen for the stop words at each short pause. Off only where transcription is scripted.
     stop_words: bool = True
+    #: Tentative transcription while speech goes on, for an indicator that shows it; the builders turn it on.
+    live_text: bool = False
+    #: Commit a stretch at a pause once this much audio waits untranscribed; the builders lower it with live text,
+    #: so committed text follows the speaker sentence by sentence.
+    stream_after_s: float = STREAM_AFTER_S
     continual_close_s: float = 30.0
     #: None: never cut off for length (the operator, 2026-11-14: "it should never cut you off").
     max_utterance_s: Optional[float] = None
@@ -182,6 +190,9 @@ class _Recording:
     #: abort drops. ``streamed_at`` is the last speech the latest cut followed, so each pause cuts once.
     streamed: List[object] = field(default_factory=list)
     streamed_at: Optional[float] = None
+    #: The tentative transcription in flight, when the last one started, and how many frames it covered.
+    tentative: object = None
+    tentative_at: float = 0.0
     voice_lock: str = "not_declared"     # "matched" once the voice lock passed it
     #: R60: a locked recording isn't ended by a pause or by hearing no speech; a stop word, the send key or the
     #: session key ends it.
@@ -534,6 +545,28 @@ class CaptureUnit:
                          ended="send" if said == SEND_WORD else "end window")
             return
         self._stream_ahead(rec, silent_for)
+        self._guess_ahead(rec, now, silent_for)
+
+    def _guess_ahead(self, rec: "_Recording", now: float, silent_for: float) -> None:
+        """While speech goes on, transcribe the uncommitted audio again and show it as tentative, one pass at a time.
+        A pass that finishes after its stretch was committed is dropped, never shown."""
+        if (not self.config.live_text or not self._streams(rec) or silent_for >= STOP_PAUSE_S or now - rec.tentative_at < TENTATIVE_EVERY_S
+                or (rec.tentative is not None and not rec.tentative.done()) or len(rec.frames) * FRAME / RATE < 0.5):
+            return
+        rec.tentative_at = now
+        prompt = rec.agent.b.wake_phrase if rec.mode == "wake_phrase" and not rec.streamed else None
+        streamed, generation = rec.streamed, len(rec.streamed)
+        future = self.executor.submit(self._transcribe, np.concatenate(rec.frames), prompt)
+        rec.tentative = future
+
+        def shown(f):
+            if f.cancelled() or len(streamed) != generation:
+                return                       # its stretch has since been committed: stale, never shown
+            if f.exception() is not None:
+                self.log(f"a tentative transcription failed ({f.exception()}); the committed text is unaffected")
+                return
+            self._show_text(streamed, (f.result() or "").strip())
+        future.add_done_callback(shown)
 
     def _streams(self, rec: "_Recording") -> bool:
         # A key's recording under the voice lock is judged whole at its end, and an unmatched voice must never be
@@ -545,7 +578,7 @@ class CaptureUnit:
         The pause is the cut, so no word is split; the first stretch of a wake keeps the phrase, which the
         delivery strips."""
         if (silent_for < STOP_PAUSE_S or rec.streamed_at == rec.last_speech or not self._streams(rec)
-                or len(rec.frames) * FRAME / RATE < STREAM_AFTER_S):
+                or len(rec.frames) * FRAME / RATE < self.config.stream_after_s):
             return
         prompt = rec.agent.b.wake_phrase if rec.mode == "wake_phrase" and not rec.streamed else None
         future = self.executor.submit(self._transcribe, np.concatenate(rec.frames), prompt)
@@ -554,15 +587,16 @@ class CaptureUnit:
         streamed = rec.streamed
         future.add_done_callback(lambda _f: self._show_text(streamed))
 
-    def _show_text(self, streamed: list) -> None:
-        """Tell the indicator the words so far: every stretch back, in order, up to the first still being transcribed."""
+    def _show_text(self, streamed: list, tentative: str = "") -> None:
+        """Tell the indicator the words so far: every stretch back, in order, up to the first still being transcribed,
+        and the tentative guess at what follows."""
         parts = []
         for f in list(streamed):
             if not f.done() or f.cancelled() or f.exception() is not None:
                 break
             parts.append((f.result() or "").strip())
         try:
-            self.indicator.text(" ".join(p for p in parts if p))
+            self.indicator.text(" ".join(p for p in parts if p), tentative)
         except Exception as e:  # noqa: BLE001 - a view that fails mustn't stop a transcription; said, not dropped
             self.log(f"the indicator couldn't show the text so far ({e})")
 

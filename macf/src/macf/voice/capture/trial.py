@@ -140,7 +140,7 @@ def build(home: Path, phrases: List[str], models: List[str], vocabulary: Optiona
         members.append(AgentBinding(agent=agent, wake_phrase=phrase, detector_bar=detector.threshold,
                                     detector=PeakReporting(detector, phrase, detector.threshold, log)))
 
-    unit = CaptureUnit(CaptureConfig(agent=card), members=members, audio=PipeWireAudio(), lock=LinuxLockState(),
+    unit = CaptureUnit(CaptureConfig(agent=card, live_text=True, stream_after_s=3.0), members=members, audio=PipeWireAudio(), lock=LinuxLockState(),
                        indicator=OverlayIndicator(), triggers=NoKeys(), gate=SileroGate(),
                        **transcription(vocabulary),
                        deliver=printer(tally, out), log=log, show_words=True)

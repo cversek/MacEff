@@ -24,7 +24,7 @@ from typing import List, Optional
 from macf.voice import state
 from macf.voice.transcribe import release_models
 from macf.voice.capture.backends import AudioEnded, KeyEvent, TriggerSource
-from macf.voice.capture.unit import CaptureConfig, CaptureUnit, Utterance
+from macf.voice.capture.unit import STREAM_AFTER_S, CaptureConfig, CaptureUnit, Utterance
 
 #: How long a pass sleeps while the microphone is closed, so an idle unit doesn't spin.
 IDLE_S = 0.05
@@ -164,7 +164,7 @@ def build(home: Path):
                            detector_bar=voice.detector_bar if voice.detector_bar is not None else (
                                detector.threshold if detector is not None else 0.85),
                            end_hold_s=voice.end_hold_s, end_silence_s=voice.end_silence_s,
-                           continual_close_s=voice.continual_close_s)
+                           continual_close_s=voice.continual_close_s, live_text=True, stream_after_s=3.0)
     return card, CaptureUnit(
         config, audio=PipeWireAudio(), lock=LinuxLockState(), indicator=OverlayIndicator(),
         triggers=EvdevTriggers(voice.trigger_devices) if voice.trigger_devices else NoKeys(),
@@ -194,7 +194,8 @@ def broker_publisher(card: str, home: Path, declaration):
     return publish
 
 
-def build_system(home: Path, card: str, declaration, *, backends=None, publish=None, detector_for=None):
+def build_system(home: Path, card: str, declaration, *, backends=None, publish=None, detector_for=None,
+                 live_text: bool = True):
     """A system daemon's one capture unit for its members (MIS-0008 R46): a binding per member from
     the system declaration, each utterance and voice-lock event signed for the member it is for and
     sent down its own voice topic (R47, R48). ``backends``, ``publish`` and ``detector_for`` are for
@@ -228,7 +229,8 @@ def build_system(home: Path, card: str, declaration, *, backends=None, publish=N
                                     on_voice_event=lambda kind, data, m=member: sender.voice_event(m, kind, data)))
     b = backends or _platform_backends(vd.trigger_devices, vd.transcription_prompt)
     config = CaptureConfig(agent=card, end_hold_s=vd.end_hold_s, end_silence_s=vd.end_silence_s,
-                           continual_close_s=vd.continual_close_s)
+                           continual_close_s=vd.continual_close_s, live_text=live_text,
+                           stream_after_s=3.0 if live_text else STREAM_AFTER_S)
     return CaptureUnit(config, members=members, deliver=sender, listening_on=lambda: state.listening_on(home),
                        speaking=lambda: state.speaking(home), log=lambda s: print(f"🎙️ MACF: voice: {s}", file=sys.stderr),
                        **b)

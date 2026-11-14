@@ -261,8 +261,8 @@ class OverlayIndicator(Indicator):
     def window(self, left) -> None:
         self._send({"window": round(float(left), 3)})
 
-    def text(self, so_far) -> None:
-        self._send({"text": str(so_far)})
+    def text(self, so_far, tentative="") -> None:
+        self._send({"text": str(so_far), "tentative": str(tentative)})
 
     def close(self) -> None:
         if self._proc.poll() is None:

@@ -157,14 +157,18 @@ class Overlay:
         if "window" in message:
             self.window = max(0.0, min(1.0, float(message["window"])))
         elif "text" in message:
-            self.text.set_label(str(message["text"]))
+            # Committed words in the label's own color; the tentative tail in green until it settles (the operator:
+            # "maybe like a darkish green, not super dark").
+            done = GLib.markup_escape_text(str(message["text"]))
+            guess = GLib.markup_escape_text(str(message.get("tentative", "")))
+            self.text.set_markup(done + (f' <span foreground="#5fbf7f">{guess}</span>' if guess else ""))
             adj = self.scroll.get_vadjustment()
             GLib.idle_add(lambda: adj.set_value(adj.get_upper()) or False)   # the newest words in view
         elif "show" in message:
             self.agent, self.mode = message["show"]["agent"], message["show"]["mode"]
             self.wave, self.levels, self.spectra, self.window = [], [], [], 1.0
             self.started = time.monotonic()
-            self.text.set_label("")
+            self.text.set_markup("")
             self.win.present()
         elif "hide" in message:
             self.win.set_visible(False)
