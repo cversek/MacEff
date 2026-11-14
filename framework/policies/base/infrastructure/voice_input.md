@@ -202,6 +202,8 @@ Live: missed 2 of 20 calls from across the room; 3 false wakes in 8 hours (1 spe
 
 The defaults are the operator's own choice from the first live trial.
 
+**The key session** (MIS-0008 R60). A declared `session_key` opens a recording already locked: no pause and no quiet ends it, and the indicator's end window stays full. The `send_key` sends it, a spoken "send" or "abort" still works, and the session key pressed again discards it. At the keyboard the operator reads what he said before he sends it, so the hands-free end window would cut him off. The operator's own layout: F9 to open and abort, F10 to send. Like every key, both are read only from a declared trigger device (R17), and one key has one role.
+
 **No length cut-off.** An utterance is never ended for its length unless the voice section declares `max_utterance_s`; the operator, after a two-minute cap cut him off mid-thought: "it should never cut you off." Long speech is transcribed ahead: at a pause, once about 8 seconds wait untranscribed, they are transcribed in the background and their audio dropped, so the end waits only for the last stretch. "send" delivers the whole buffer in order; "abort" drops it. A key's recording under the voice lock is the exception: it is judged whole at its end, so nothing of it is transcribed ahead (`voice_lock` policy).
 
 **The stop words** (MIS-0008 R57). Said as the **last** word:

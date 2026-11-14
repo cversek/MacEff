@@ -39,7 +39,8 @@ def _unix_input(fd):
         return Gio.UnixInputStream.new(fd, False)
 
 
-MODES = {"wake_phrase": "wake phrase", "hold_key": "hold key", "continual_voice": "continual voice"}
+MODES = {"wake_phrase": "wake phrase", "hold_key": "hold key", "continual_voice": "continual voice",
+         "key_session": "key session · locked"}
 TRACE_POINTS = 140
 #: How opaque the dark tint behind the indicator is, between the 50% and 80% the operator suggested.
 TINT = 0.65

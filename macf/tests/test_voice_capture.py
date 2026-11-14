@@ -686,6 +686,46 @@ def test_the_spectrum_puts_a_tone_in_its_band_and_silence_nowhere():
     assert max(spectrum(np.zeros(1280, np.int16))) == 0.0
 
 
+def session_rig(audio, transcriber):
+    return make_unit(audio, transcriber, session_key="KEY_F11", send_key="KEY_F12", end_hold_s=2.0,
+                     end_silence_s=5.0, stop_words=False)
+
+
+def test_the_session_key_opens_a_locked_recording_that_only_the_send_key_ends():
+    """R60, the operator: "F9, this view pops up and it's already in the locked mode so that it's not going to decay
+    away"; "maybe it's F10 to send". Neither long quiet nor a long pause ends it."""
+    audio = FakeAudio().then((SILENCE, secs(8)), (SPEECH, secs(2)), (SILENCE, secs(12)), (SPEECH, secs(1)), (SILENCE, 5))
+    rig = session_rig(audio, ScriptedTranscriber("as long as I like"))
+    rig.keys.press("KEY_F11")
+    rig.run(secs(8) + secs(2) + secs(12) + secs(1))
+    assert rig.unit.recording is not None and rig.unit.recording.mode == "key_session", "a pause ended the session"
+    assert rig.indicator.calls[0] == ("show", "Tester_abc123", "key_session")
+    assert set(rig.indicator.windows) <= {1.0}, "the end window drained in a locked recording"
+    rig.keys.press("KEY_F12")
+    rig.run(2)
+    assert [(u.trigger, u.text, u.ended) for u in rig.delivered] == [("key_session", "as long as I like", "send key")]
+
+
+def test_the_session_key_pressed_again_aborts_and_sends_nothing():
+    """The operator: "Hitting F9 again will abort it ... it closes it without sending"."""
+    audio = FakeAudio().then((SPEECH, secs(9)), (SILENCE, secs(1)), (SPEECH, secs(2)), (SILENCE, 5))
+    transcriber = ScriptedTranscriber("first stretch", "never mind")
+    rig = session_rig(audio, transcriber)
+    rig.keys.press("KEY_F11")
+    rig.run(secs(12))
+    rig.keys.press("KEY_F11")
+    rig.run(3)
+    assert rig.delivered == [] and rig.unit.recording is None
+    assert any(line.startswith("session key: the utterance is discarded") for line in rig.logged)
+
+
+def test_the_send_key_does_nothing_with_no_recording():
+    rig = session_rig(FakeAudio().then((SPEECH, 10)), ScriptedTranscriber("x"))
+    rig.keys.press("KEY_F12")
+    rig.run(10)
+    assert rig.unit.recording is None and rig.delivered == []
+
+
 def test_send_as_whisper_heard_it_still_sends():
     """The second live trial: Whisper wrote the operator's last-word "send" as "Sand". That spelling counts as
     send, and is cut from the text like the word itself."""

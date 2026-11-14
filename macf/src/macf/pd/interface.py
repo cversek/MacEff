@@ -498,6 +498,10 @@ class VoiceSection(_Closed):
     #: Key names as the trigger devices report them, such as ``KEY_F9`` (R19, R20).
     hold_key: Optional[str] = Field(default=None, pattern=r"^KEY_[A-Z0-9_]{1,24}$")
     toggle_key: Optional[str] = Field(default=None, pattern=r"^KEY_[A-Z0-9_]{1,24}$")
+    #: The operator's keyboard session (R60): the session key opens a recording already locked, so pauses never
+    #: end it, and pressed again aborts it; the send key sends it.
+    session_key: Optional[str] = Field(default=None, pattern=r"^KEY_[A-Z0-9_]{1,24}$")
+    send_key: Optional[str] = Field(default=None, pattern=r"^KEY_[A-Z0-9_]{1,24}$")
     #: The input devices the capture unit reads its keys from, and nothing else opens its
     #: microphone (R17). On Linux, ``/dev/input/by-id/...`` paths.
     trigger_devices: List[str] = Field(default_factory=list, max_length=8)
@@ -533,7 +537,7 @@ class VoiceSection(_Closed):
                 calling_card.read_declared(self.dispatched_by)
             except calling_card.CardError as e:
                 raise ValueError(f"voice.dispatched_by names a system daemon by its card: {e}") from e
-            own = [n for n in ("wake_phrase", "wake_model", "hold_key", "toggle_key") if getattr(self, n)]
+            own = [n for n in ("wake_phrase", "wake_model") + KEY_ROLES if getattr(self, n)]
             if own or self.trigger_devices:
                 raise ValueError(f"a dispatched agent declares no {', '.join(own) or 'trigger_devices'} of its own: "
                                  f"its system declaration binds its phrase and keys, which no agent can write "
@@ -542,16 +546,35 @@ class VoiceSection(_Closed):
 
     @model_validator(mode="after")
     def _keys_need_devices_and_differ(self) -> "VoiceSection":
-        keys = [k for k in (self.hold_key, self.toggle_key) if k]
+        keys = declared_keys(self)
         if keys and not self.trigger_devices:
             raise ValueError(f"voice declares {', '.join(keys)} but no trigger_devices to read them from; "
                              f"the capture unit reads keys only from declared devices (MIS-0008 R17)")
-        if self.hold_key and self.hold_key == self.toggle_key:
-            raise ValueError(f"voice uses {self.hold_key} as both the hold key and the toggle key")
+        _keys_differ(self, "voice")
         if bool(self.wake_phrase) != bool(self.wake_model):
             raise ValueError("voice declares a wake phrase without a wake model, or a model without its phrase; "
                              "a wake needs both (MIS-0008 R23)")
         return self
+
+
+#: The keys a voice section or a member's binding may declare, each a role of its own (R19, R20, R60).
+KEY_ROLES = ("hold_key", "toggle_key", "session_key", "send_key")
+
+
+def declared_keys(section) -> List[str]:
+    return [getattr(section, role) for role in KEY_ROLES if getattr(section, role)]
+
+
+def _keys_differ(section, what: str) -> None:
+    """One key, one role: a key bound to two roles would do both at once."""
+    seen: Dict[str, str] = {}
+    for role in KEY_ROLES:
+        key = getattr(section, role)
+        if key and key in seen:
+            raise ValueError(f"{what} uses {key} as both its {seen[key].replace('_', ' ')} and its "
+                             f"{role.replace('_', ' ')}")
+        if key:
+            seen[key] = role
 
 
 class MemberVoiceBinding(_Closed):
@@ -562,6 +585,8 @@ class MemberVoiceBinding(_Closed):
     wake_model: Optional[str] = Field(default=None, min_length=1)
     hold_key: Optional[str] = Field(default=None, pattern=r"^KEY_[A-Z0-9_]{1,24}$")
     toggle_key: Optional[str] = Field(default=None, pattern=r"^KEY_[A-Z0-9_]{1,24}$")
+    session_key: Optional[str] = Field(default=None, pattern=r"^KEY_[A-Z0-9_]{1,24}$")
+    send_key: Optional[str] = Field(default=None, pattern=r"^KEY_[A-Z0-9_]{1,24}$")
     detector_bar: Optional[float] = Field(default=None, gt=0, le=1)
 
     @model_validator(mode="after")
@@ -569,11 +594,10 @@ class MemberVoiceBinding(_Closed):
         if bool(self.wake_phrase) != bool(self.wake_model):
             raise ValueError("a member's binding declares a wake phrase without its model, or a model without "
                              "its phrase; a wake needs both (MIS-0008 R23)")
-        if not (self.wake_phrase or self.hold_key or self.toggle_key):
-            raise ValueError("a member's binding names a wake phrase or a key; with neither, nothing could "
-                             "open the microphone for it")
-        if self.hold_key and self.hold_key == self.toggle_key:
-            raise ValueError(f"a member's binding uses {self.hold_key} as both the hold key and the toggle key")
+        if not (self.wake_phrase or self.hold_key or self.toggle_key or self.session_key):
+            raise ValueError("a member's binding names a wake phrase or a key that opens a recording; with neither, "
+                             "nothing could open the microphone for it")
+        _keys_differ(self, "a member's binding")
         return self
 
 
@@ -615,7 +639,7 @@ class VoiceDispatchSection(_Closed):
                                  f"bind each member once")
             seen[key] = card
         check_members(self.members)          # R26: a phrase or key two members share is refused
-        keyed = [c for c, m in self.members.items() if m.hold_key or m.toggle_key]
+        keyed = [c for c, m in self.members.items() if declared_keys(m)]
         if keyed and not self.trigger_devices:
             raise ValueError(f"voice_dispatch binds keys for {', '.join(sorted(keyed))} but names no trigger_devices "
                              f"to read them from (MIS-0008 R17)")
@@ -949,7 +973,7 @@ class MicrophoneState(_Closed):
     listening_since: Optional[float] = None
     recording_since: Optional[float] = None
     recording_for: Optional[str] = Field(default=None, max_length=128)
-    mode: Optional[Literal["wake_phrase", "hold_key", "continual_voice"]] = None
+    mode: Optional[Literal["wake_phrase", "hold_key", "continual_voice", "key_session"]] = None
 
 
 Liveness.model_rebuild()
@@ -1139,7 +1163,7 @@ class ChannelHello(_Closed):
 #: How long one utterance may be. A dictated message longer than this is not a message.
 MAX_UTTERANCE_TEXT = 8000
 
-_TRIGGER = Literal["wake_phrase", "hold_key", "continual_voice"]
+_TRIGGER = Literal["wake_phrase", "hold_key", "continual_voice", "key_session"]
 _SCREEN = Literal["unlocked", "locked", "unknown"]
 _VOICE_LOCK = Literal["matched", "not_declared"]
 #: The closed values an utterance's metadata takes, for the signed form a system dispatches (6.8).

@@ -22,10 +22,19 @@ def test_trigger_devices_declared():
 
 
 @pytest.mark.parametrize("keys, why", [
-    ({"hold_key": "KEY_F9", "toggle_key": "KEY_F9"}, "both the hold key and the toggle key"),
+    ({"hold_key": "KEY_F9", "toggle_key": "KEY_F9"}, "both its hold key and its toggle key"),
+    ({"session_key": "KEY_F9", "send_key": "KEY_F9"}, "both its session key and its send key"),
+    ({"toggle_key": "KEY_F10", "send_key": "KEY_F10"}, "both its toggle key and its send key"),
+    ({"session_key": "KEY_F9"}, None),
     ({"hold_key": "F9"}, "should match pattern"),
 ])
 def test_a_key_that_cannot_work_is_refused(keys, why):
+    """One key, one role (R60 adds the session and send keys); a session key alone is a working declaration."""
+    if why is None:
+        assert VoiceSection(capture_unit="capture", trigger_devices=["/dev/input/event3"], **keys)
+        with pytest.raises(ValueError, match="no trigger_devices"):
+            VoiceSection(capture_unit="capture", **keys)
+        return
     with pytest.raises(ValueError, match=why):
         VoiceSection(capture_unit="capture", trigger_devices=["/dev/input/event3"], **keys)
 

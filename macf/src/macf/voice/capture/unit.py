@@ -87,6 +87,8 @@ class CaptureConfig:
     wake_phrase: Optional[str] = None
     hold_key: Optional[str] = None
     toggle_key: Optional[str] = None
+    session_key: Optional[str] = None
+    send_key: Optional[str] = None
     detector_bar: float = 0.85
     #: R56's end window: full for ``end_hold_s`` of quiet, empty at ``end_silence_s``, when the utterance ends.
     end_hold_s: float = 2.0
@@ -115,6 +117,8 @@ class AgentBinding:
     wake_phrase: Optional[str] = None
     hold_key: Optional[str] = None
     toggle_key: Optional[str] = None
+    session_key: Optional[str] = None
+    send_key: Optional[str] = None
     detector: Optional[WakeDetector] = None
     detector_bar: float = 0.85
     #: True when the audio's speaker matches this agent's enrolled voice. None: no voice lock.
@@ -179,6 +183,9 @@ class _Recording:
     streamed: List[object] = field(default_factory=list)
     streamed_at: Optional[float] = None
     voice_lock: str = "not_declared"     # "matched" once the voice lock passed it
+    #: R60: a locked recording isn't ended by a pause or by hearing no speech; a stop word, the send key or the
+    #: session key ends it.
+    locked: bool = False
 
 
 def _phrase_pattern(phrase: str) -> re.Pattern:
@@ -238,7 +245,8 @@ class CaptureUnit:
         self.wake_executor = executor or ThreadPoolExecutor(max_workers=1, thread_name_prefix="voice-wake-check")
         if members is None:
             members = [AgentBinding(agent=config.agent, wake_phrase=config.wake_phrase, hold_key=config.hold_key,
-                                    toggle_key=config.toggle_key, detector=detector,
+                                    toggle_key=config.toggle_key, session_key=config.session_key,
+                                    send_key=config.send_key, detector=detector,
                                     detector_bar=config.detector_bar, speaker=speaker,
                                     on_voice_event=on_voice_event, guard_lowered=guard_lowered,
                                     lockout_attempts=config.lockout_attempts,
@@ -366,6 +374,17 @@ class CaptureUnit:
                     self._start("hold_key", agent)
                 elif not down and rec is not None and rec.mode == "hold_key" and rec.agent is agent:
                     self._finish(self.clock(), ended="key released")
+                return
+            if key == agent.b.session_key and down:
+                if rec is None:
+                    self._start("key_session", agent)
+                    self.recording.locked = True
+                elif rec.agent is agent:
+                    self._abort(self.clock(), "session key")
+                return
+            if key == agent.b.send_key and down:
+                if rec is not None and rec.agent is agent:
+                    self._finish(self.clock(), closing=True, ended="send key")
                 return
             if key == agent.b.toggle_key and down:
                 if rec is not None and rec.mode == "continual_voice" and rec.agent is agent:
@@ -499,6 +518,8 @@ class CaptureUnit:
             return                           # the release ends it
         silent_for = now - rec.last_speech
         if not rec.heard_speech:
+            if rec.locked:
+                return                       # R60: a locked recording waits for the operator, however quiet
             limit = self.config.continual_close_s if rec.mode == "continual_voice" else NO_SPEECH_CANCEL_S
             if now - rec.utterance_started >= limit:
                 self._finish(now, closing=True, ended="no speech")
@@ -506,11 +527,9 @@ class CaptureUnit:
         self._show_window(rec, silent_for)
         said = self._stop_word_heard(rec, silent_for)
         if said == ABORT_WORD:
-            self.log(f"\"{ABORT_WORD}\": the utterance is discarded, nothing sent")
-            rec.frames, rec.heard_speech, rec.aborted, rec.streamed = [], False, True, []
-            self._finish(now, closing=rec.mode != "continual_voice", ended="abort")
+            self._abort(now, f"\"{ABORT_WORD}\"")
             return
-        if said == SEND_WORD or silent_for >= self.config.end_silence_s:
+        if said == SEND_WORD or (not rec.locked and silent_for >= self.config.end_silence_s):
             self._finish(now, closing=rec.mode != "continual_voice",
                          ended="send" if said == SEND_WORD else "end window")
             return
@@ -547,11 +566,18 @@ class CaptureUnit:
         except Exception as e:  # noqa: BLE001 - a view that fails mustn't stop a transcription; said, not dropped
             self.log(f"the indicator couldn't show the text so far ({e})")
 
+    def _abort(self, now: float, by: str) -> None:
+        """Discard the recording and everything transcribed ahead of it, and send nothing (R57, R60)."""
+        rec = self.recording
+        self.log(f"{by}: the utterance is discarded, nothing sent")
+        rec.frames, rec.heard_speech, rec.aborted, rec.streamed = [], False, True, []
+        self._finish(now, closing=rec.mode != "continual_voice", ended="abort")
+
     def _show_window(self, rec: "_Recording", silent_for: float) -> None:
         """R56: how much of the end window is left, for the indicator. Full until ``end_hold_s`` of quiet,
         then draining to empty at ``end_silence_s``; speech fills it again."""
         hold, close = self.config.end_hold_s, self.config.end_silence_s
-        left = 1.0 if silent_for <= hold else max(0.0, 1.0 - (silent_for - hold) / max(close - hold, 1e-6))
+        left = 1.0 if rec.locked or silent_for <= hold else max(0.0, 1.0 - (silent_for - hold) / max(close - hold, 1e-6))
         if left != rec.window_shown:
             rec.window_shown = left
             self.indicator.window(left)

@@ -20,7 +20,7 @@ RATE = 16000
 FRAME = 1280
 
 Screen = Literal["unlocked", "locked", "unknown"]
-Mode = Literal["wake_phrase", "hold_key", "continual_voice"]
+Mode = Literal["wake_phrase", "hold_key", "continual_voice", "key_session"]
 
 
 class AudioEnded(RuntimeError):

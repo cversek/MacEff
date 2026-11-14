@@ -160,7 +160,7 @@ def build(home: Path):
 
 
     config = CaptureConfig(agent=card, wake_phrase=voice.wake_phrase, hold_key=voice.hold_key,
-                           toggle_key=voice.toggle_key,
+                           toggle_key=voice.toggle_key, session_key=voice.session_key, send_key=voice.send_key,
                            detector_bar=voice.detector_bar if voice.detector_bar is not None else (
                                detector.threshold if detector is not None else 0.85),
                            end_hold_s=voice.end_hold_s, end_silence_s=voice.end_silence_s,
@@ -223,7 +223,8 @@ def build_system(home: Path, card: str, declaration, *, backends=None, publish=N
         detector = detector_for(binding.wake_model) if binding.wake_model else None
         bar = binding.detector_bar if binding.detector_bar is not None else getattr(detector, "threshold", 0.85)
         members.append(AgentBinding(agent=member, wake_phrase=binding.wake_phrase, hold_key=binding.hold_key,
-                                    toggle_key=binding.toggle_key, detector=detector, detector_bar=bar,
+                                    toggle_key=binding.toggle_key, session_key=binding.session_key,
+                                    send_key=binding.send_key, detector=detector, detector_bar=bar,
                                     on_voice_event=lambda kind, data, m=member: sender.voice_event(m, kind, data)))
     b = backends or _platform_backends(vd.trigger_devices, vd.transcription_prompt)
     config = CaptureConfig(agent=card, end_hold_s=vd.end_hold_s, end_silence_s=vd.end_silence_s,

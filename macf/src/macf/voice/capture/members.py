@@ -36,7 +36,7 @@ def check_members(sections: Dict[str, object]) -> None:
                 clashes.append(f"{card} and {phrases[phrase]} both declare the wake phrase {phrase!r}")
             else:
                 phrases[phrase] = card
-        for key in (section.hold_key, section.toggle_key):
+        for key in (getattr(section, role, None) for role in ("hold_key", "toggle_key", "session_key", "send_key")):
             if not key:
                 continue
             if key in keys and keys[key] != card:
