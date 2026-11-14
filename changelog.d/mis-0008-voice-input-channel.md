@@ -1,6 +1,7 @@
 ### Added
 
 - **MIS-0008, Draft: voice for MacEff agents** (`framework/mis/MIS-0008-voice-input-channel.md`). It specifies the MacEff Voice Input Channel (wake phrase, hold and toggle hotkeys, a recording indicator, one capture unit per machine dispatching to each agent), voice generation with an agent-led voice selection, and a voice lock with a lockout and a raised guard. It also renames the MacEff channel to the MacEff Notification Channel. A working prototype follows in the same pull request.
+- **`macf_tools voice capture trial`**: try a wake model live with the operator. It prints each wake, how close each near miss came to the bar, and each utterance with why it ended, and delivers nothing. The agent's own listening is off while it runs and comes back as it was.
 
 - **The MacEff Voice Input Channel, its plugin side** (`macf.channels.voice_input_channel`, plugin `maceff-voice-input-channel`, MIS-0008 R04 to R08): utterances from the agent's own primal daemon arrive as labeled channel events. The label (trigger, time spoken, voice lock, screen state) comes before the words, a locked or unknown screen marks an utterance information only, and spoken markup is neutralized. It reuses the Notification Channel's server, which now lets a subclass choose its socket, record, event and hello.
 

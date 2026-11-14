@@ -142,6 +142,11 @@ If you cannot explain a perfect score, treat the model as unmeasured.
 
 **A rejected fire still counts.** The wake passes in order: the model scores at or above the bar, and after a short wait for the phrase to finish the audio must hold speech, and then a transcription of it must contain the phrase (MIS-0008 R23). A fire that is rejected by the later checks never reaches the agent, but it still occupied the listener, and the capture unit is deaf for a moment after each rejection. A real call during that moment is lost. Count rejected fires, which the capture unit's log names without the words, as well as accepted ones. The later checks are not a reason to accept a noisy model.
 
+**The tool for a sitting.** `macf_tools voice capture trial` runs the capture unit on the real microphone with the model you name (`--phrase` and `--model`, repeated for several, or the voice section's own), prints each wake, each utterance and why it ended, and delivers nothing. Each time a model's score climbs toward the bar and falls back, it prints the peak, so a missed call shows how close it came: a peak of 0.9 against a bar of 0.95 is a threshold question, and no line at all means the model never heard the phrase. This agent's own listening is off while it runs, so its capture unit doesn't take the same words, and comes back as it was. Three things the first live trials taught:
+- **Count the calls, not only the wakes.** The trial counts what woke; only the person speaking knows how many tries it took. Agree a number of tries before starting.
+- **Keep the machine quiet.** Training or another heavy job on the same machine during a trial can starve the listener of audio and turn calls into misses that say nothing about the model.
+- **Try the sounds the agent itself makes.** A tone the system plays when the microphone opens or closes can fire a model trained only on speech and room noise. Score the tones before trusting the model, and don't let a short deaf period after a recording hide them.
+
 Where a voice lock is declared, it checks the speaker after the speech check and before the transcription, so a voice that does not match is never transcribed (`voice_lock` policy). Without one the order is the model, the speech check, and the transcription.
 
 ### 1.4 Reporting Results

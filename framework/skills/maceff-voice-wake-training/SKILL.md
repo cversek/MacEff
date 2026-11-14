@@ -38,7 +38,7 @@ Read the sections on building a wake model, measuring it, and what a wake author
 1. Ask the operator, in a dialog, for the phrase they want and who else may be heard while recording; apply the answers to questions 1 and 2. Run `macf_tools voice wake define "<phrase>"` and show its result.
 2. Plan the sittings with the operator from the answers to question 3: which kinds, which conditions each sitting varies. Run `macf_tools voice wake record <kind> ...` only while the operator is present and has agreed, one kind at a time, interleaved.
 3. Run `macf_tools voice wake train`, read the report aloud and on screen, and act on it by the answers to questions 5 and 6. Record more and retrain only for a reason the policy names.
-4. Agree a live test with the operator from the answer to question 7, and record what it showed, file results and live results kept apart.
+4. Agree a live test with the operator from the answer to question 7, run it with `macf_tools voice capture trial`, and record what it showed, file results and live results kept apart.
 5. Declare the model as the answer to question 8 says, and tell the operator when it takes effect. Leave a task note with the report's numbers and the live result.
 
 ---

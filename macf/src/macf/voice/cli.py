@@ -1,5 +1,6 @@
-"""``macf_tools voice listen`` and ``voice capture status``: the operator's switch for listening, and
-what the capture unit's microphone is doing (MIS-0008 R15, R16).
+"""``macf_tools voice listen``, ``voice capture status`` and ``voice capture trial``: the operator's switch for listening,
+what the capture unit's microphone is doing (MIS-0008 R15, R16), and a live try of a wake model that
+prints what it heard and delivers nothing.
 
 Neither can trigger a recording. Listening off closes the microphone between recordings; only a
 declared trigger device or the wake phrase opens one (R17, R18).
@@ -25,6 +26,13 @@ def add_parsers(voice_sub) -> None:
     capture_sub = capture.add_subparsers(dest="voice_capture_cmd")
     capture_sub.add_parser("status", help="what the capture unit's microphone is doing now").set_defaults(
         func=cmd_voice_capture_status)
+    trial = capture_sub.add_parser(
+        "trial", help="try a wake model live: print each wake, near miss and utterance here, deliver nothing")
+    trial.add_argument("--phrase", action="append", default=[], help="a wake phrase to listen for; repeat for several")
+    trial.add_argument("--model", action="append", default=[],
+                       help="the wake model for each --phrase, in order (a path, or relative to the agent home)")
+    trial.add_argument("--vocabulary", help="names and terms to prime transcription with (default: the voice section's)")
+    trial.set_defaults(func=cmd_voice_capture_trial)
 
 
 def _home() -> Path:
@@ -112,3 +120,19 @@ def cmd_voice_capture_status(args) -> int:
     reading = microphone(_home())
     print(describe(reading))
     return 0 if reading.mic is not None else 1
+
+
+def cmd_voice_capture_trial(args) -> int:
+    from macf.voice.capture import trial
+    home = _home()
+    try:
+        made = trial.build(home, args.phrase, args.model, args.vocabulary)
+    except (ValueError, RuntimeError, OSError) as e:
+        print(f"refused: {e}")
+        return 1
+    print(f"Listening for {made.listening}. Say one, then your words. Ctrl-C to stop.", flush=True)
+    try:
+        trial.run(made.unit, home, out=lambda s: print(s, flush=True))
+    finally:
+        print(f"Stopped. Wakes taken: {made.tally.wakes}; utterances printed: {made.tally.utterances}.", flush=True)
+    return 0
