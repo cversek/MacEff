@@ -186,6 +186,8 @@ Live: missed 2 of 20 calls from across the room; 3 false wakes in 8 hours (1 spe
 
 **While the capture unit is recording for an agent, the indicator must show the agent's name, the mode that started the recording (wake phrase, hold key or continual voice), a waveform, and a volume trace** (MIS-0008 R21, R22). A recording the operator can't see is a breach of trust even when nothing goes wrong.
 
+**What else it may show.** Beyond what R21 and R22 require, the Linux indicator shows how long the recording has run, and two views the operator opens or closes: the words transcribed so far (long speech is transcribed ahead, so they arrive while the operator talks) and a spectrogram. Each view opens as the operator last left it. Their state is the only thing the indicator writes, one small file under `XDG_STATE_HOME`, and nothing flows back from it to the capture unit. The words shown are on the operator's own screen, as the recording is; they're written nowhere.
+
 **When it shows.** From the moment a recording starts until it ends. **Listening shows no indicator,** because listening keeps nothing past the short window the wake check needs. `macf_tools voice capture status` reports listening (MIS-0008 R16).
 
 **When a recording starts and ends.**

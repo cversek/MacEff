@@ -79,6 +79,10 @@ class Indicator(ABC):
         speech refills it, so the operator sees how long they have to go on. A backend that can't draw
         it may leave this as it is: doing nothing is allowed."""
 
+    def text(self, so_far: str) -> None:
+        """The words of this recording transcribed so far, while it goes on, for a backend that shows them. Called
+        from the transcription worker, not the capture loop. Doing nothing is allowed."""
+
 
 @dataclass(frozen=True)
 class KeyEvent:

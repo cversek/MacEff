@@ -529,8 +529,23 @@ class CaptureUnit:
                 or len(rec.frames) * FRAME / RATE < STREAM_AFTER_S):
             return
         prompt = rec.agent.b.wake_phrase if rec.mode == "wake_phrase" and not rec.streamed else None
-        rec.streamed.append(self.executor.submit(self._transcribe, np.concatenate(rec.frames), prompt))
+        future = self.executor.submit(self._transcribe, np.concatenate(rec.frames), prompt)
+        rec.streamed.append(future)
         rec.frames, rec.streamed_at = [], rec.last_speech
+        streamed = rec.streamed
+        future.add_done_callback(lambda _f: self._show_text(streamed))
+
+    def _show_text(self, streamed: list) -> None:
+        """Tell the indicator the words so far: every stretch back, in order, up to the first still being transcribed."""
+        parts = []
+        for f in list(streamed):
+            if not f.done() or f.cancelled() or f.exception() is not None:
+                break
+            parts.append((f.result() or "").strip())
+        try:
+            self.indicator.text(" ".join(p for p in parts if p))
+        except Exception as e:  # noqa: BLE001 - a view that fails mustn't stop a transcription; said, not dropped
+            self.log(f"the indicator couldn't show the text so far ({e})")
 
     def _show_window(self, rec: "_Recording", silent_for: float) -> None:
         """R56: how much of the end window is left, for the indicator. Full until ``end_hold_s`` of quiet,

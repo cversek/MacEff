@@ -667,6 +667,25 @@ def test_nothing_is_transcribed_ahead_of_the_voice_lock_on_a_key():
     assert transcriber.calls == [], "audio was transcribed before the voice lock judged it"
 
 
+def test_the_indicator_is_told_the_words_so_far_as_each_stretch_comes_back():
+    """The operator's view: "a window underneath that shows the text that's been transcribed so far"."""
+    transcriber = ScriptedTranscriber("yo tom", "Yo Tom, first thought.", "second thought.", "and last, send.")
+    rig = make_unit(long_talk(), transcriber, end_hold_s=2.0, end_silence_s=5.0)
+    rig.run(len(rig.audio.script))
+    assert rig.indicator.texts == ["Yo Tom, first thought.", "Yo Tom, first thought. second thought."]
+
+
+def test_the_spectrum_puts_a_tone_in_its_band_and_silence_nowhere():
+    from macf.voice.capture.linux import SPEC_BANDS, spectrum
+    t = np.arange(1280) / 16000
+    tone = (np.sin(2 * np.pi * 1000 * t) * 16000).astype(np.int16)
+    bands = spectrum(tone)
+    edges = np.geomspace(80.0, 8000.0, SPEC_BANDS + 1)
+    loudest = int(np.argmax(bands))
+    assert len(bands) == SPEC_BANDS and edges[loudest] <= 1000 < edges[loudest + 1] * 1.2
+    assert max(spectrum(np.zeros(1280, np.int16))) == 0.0
+
+
 def test_send_as_whisper_heard_it_still_sends():
     """The second live trial: Whisper wrote the operator's last-word "send" as "Sand". That spelling counts as
     send, and is cut from the text like the word itself."""

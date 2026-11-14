@@ -55,6 +55,7 @@ def check_indicator(backend: Indicator) -> None:
         backend.show("Tester_abc123", mode)
         for _ in range(3):
             backend.feed(frame)
+        backend.text("words so far")
         backend.hide()
     backend.hide()
 

@@ -14,6 +14,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -187,6 +188,23 @@ SYSTEM_PYTHON = "/usr/bin/python3"
 LAYER_SHELL_LIB = "/usr/lib/libgtk4-layer-shell.so"
 #: Points of the waveform sent per frame: enough to draw, little enough to send 12 times a second.
 WAVE_POINTS = 48
+#: The spectrogram view's bands: log-spaced from SPEC_LOW_HZ to SPEC_HIGH_HZ, each 0 to 1 over SPEC_RANGE_DB.
+SPEC_BANDS, SPEC_LOW_HZ, SPEC_HIGH_HZ, SPEC_RANGE_DB = 48, 80.0, 8000.0, 70.0
+
+
+def spectrum(frame: np.ndarray, rate: int = RATE) -> List[float]:
+    """One frame's loudness in SPEC_BANDS log-spaced bands, 0 (silence) to 1 (full scale), for the spectrogram."""
+    x = frame.astype(np.float64) / 32768.0
+    mag = np.abs(np.fft.rfft(x * np.hanning(x.size))) / (x.size / 4)
+    freqs = np.fft.rfftfreq(x.size, 1.0 / rate)
+    edges = np.geomspace(SPEC_LOW_HZ, SPEC_HIGH_HZ, SPEC_BANDS + 1)
+    out = []
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        band = mag[(freqs >= lo) & (freqs < hi)]
+        power = float(band.max()) if band.size else 0.0
+        db = 20 * np.log10(max(power, 1e-9))
+        out.append(round(min(1.0, max(0.0, (db + SPEC_RANGE_DB) / SPEC_RANGE_DB)), 2))
+    return out
 
 
 class OverlayIndicator(Indicator):
@@ -208,6 +226,7 @@ class OverlayIndicator(Indicator):
         self._proc = subprocess.Popen([python, str(overlay)], stdin=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
                                       start_new_session=True)
         self._shown = False
+        self._lock = threading.Lock()
         try:
             code = self._proc.wait(timeout=settle_s)
         except subprocess.TimeoutExpired:
@@ -222,8 +241,9 @@ class OverlayIndicator(Indicator):
             err = self._proc.stderr.read().decode(errors="replace").strip().splitlines()
             raise RuntimeError(f"the indicator overlay exited ({self._proc.returncode}): "
                                f"{err[-1] if err else 'no message'}")
-        self._proc.stdin.write(json.dumps(message).encode() + b"\n")
-        self._proc.stdin.flush()
+        with self._lock:                      # the text so far comes from the transcription worker
+            self._proc.stdin.write(json.dumps(message).encode() + b"\n")
+            self._proc.stdin.flush()
 
     def show(self, agent, mode) -> None:
         self._send({"show": {"agent": agent, "mode": mode}})
@@ -232,7 +252,7 @@ class OverlayIndicator(Indicator):
     def feed(self, frame) -> None:
         step = max(1, frame.size // WAVE_POINTS)
         wave = (frame[::step][:WAVE_POINTS].astype(np.float64) / 32768.0).round(3).tolist()
-        self._send({"level": round(level(frame), 4), "wave": wave})
+        self._send({"level": round(level(frame), 4), "wave": wave, "spectrum": spectrum(frame)})
 
     def hide(self) -> None:
         self._send({"hide": True})
@@ -240,6 +260,9 @@ class OverlayIndicator(Indicator):
 
     def window(self, left) -> None:
         self._send({"window": round(float(left), 3)})
+
+    def text(self, so_far) -> None:
+        self._send({"text": str(so_far)})
 
     def close(self) -> None:
         if self._proc.poll() is None:

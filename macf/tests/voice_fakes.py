@@ -87,6 +87,7 @@ class RecordingIndicator(Indicator):
     def __init__(self):
         self.calls: List[tuple] = []
         self.windows: List[float] = []
+        self.texts: List[str] = []
         self.shown: Optional[tuple] = None
 
     def show(self, agent, mode):
@@ -102,6 +103,9 @@ class RecordingIndicator(Indicator):
 
     def window(self, left):
         self.windows.append(left)
+
+    def text(self, so_far):
+        self.texts.append(so_far)
 
 
 class PushedKeys(TriggerSource):
