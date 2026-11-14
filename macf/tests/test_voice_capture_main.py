@@ -53,3 +53,19 @@ def test_an_unreachable_daemon_drops_the_utterance_and_says_so(tmp_path, monkeyp
     entry.deliver(CARD, Utterance(trigger="wake_phrase", spoken_at=1.0, screen="unknown", text="hello there"))
     err = capsys.readouterr().err
     assert "could not reach the daemon, so it was dropped" in err and "hello there" not in err
+
+
+def test_whisper_is_primed_with_the_declared_vocabulary_then_the_phrase():
+    """The operator's curated names and terms come first, the wake phrase stays whole at the end, and a
+    vocabulary too long for Whisper's budget is cut, never the phrase."""
+    from macf.voice.capture.__main__ import PROMPT_CHARS, whisper_prompt
+    assert whisper_prompt("yo tom", "Ada works on Widgets with Bob.") == "Ada works on Widgets with Bob. Yo tom,"
+    assert whisper_prompt("yo tom", None) == "Yo tom, " and whisper_prompt(None, None) is None
+    assert whisper_prompt(None, "  Cy, Dee.  ") == "Cy, Dee."
+    long = whisper_prompt("yo tom", "x" * 5000)
+    assert len(long) <= PROMPT_CHARS and long.endswith("Yo tom,")
+
+
+def test_the_voice_section_carries_a_transcription_prompt():
+    from macf.pd.interface import VoiceSection
+    assert VoiceSection(capture_unit="voice-capture", transcription_prompt="Ada, Bob, Cy.").transcription_prompt == "Ada, Bob, Cy."

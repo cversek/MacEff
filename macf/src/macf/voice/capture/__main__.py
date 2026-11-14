@@ -19,7 +19,7 @@ import socket
 import sys
 import time
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from macf.voice import state
 from macf.voice.capture.backends import AudioEnded, KeyEvent, TriggerSource
@@ -39,6 +39,22 @@ class NoKeys(TriggerSource):
 
     def close(self) -> None:
         """Nothing to release."""
+
+
+#: Whisper's prompt budget, in characters: about 223 tokens at roughly four characters each.
+PROMPT_CHARS = 880
+
+
+def whisper_prompt(phrase: Optional[str], vocabulary: Optional[str]) -> Optional[str]:
+    """What Whisper is primed with: the declared vocabulary (names and terms it would otherwise spell as
+    sound-alikes), then the wake phrase where there is one. The vocabulary is cut to the budget, keeping
+    the phrase whole, since the phrase is what the wake check looks for."""
+    head = f"{phrase.capitalize()}, " if phrase else ""
+    vocab = (vocabulary or "").strip()
+    if vocab:
+        vocab = vocab[:max(0, PROMPT_CHARS - len(head) - 1)].rstrip()
+    joined = f"{vocab} {head}".strip() if vocab else head
+    return joined or None
 
 
 def guard_lowered(card: str) -> bool:
@@ -124,7 +140,7 @@ def build(home: Path):
         detector = TrainedWakeDetector(model if model.is_absolute() else home / model)
 
     def transcribe(audio, phrase):
-        return transcribe_array(audio, initial_prompt=f"{phrase.capitalize()}, " if phrase else None).text
+        return transcribe_array(audio, initial_prompt=whisper_prompt(phrase, voice.transcription_prompt)).text
 
     config = CaptureConfig(agent=card, wake_phrase=voice.wake_phrase, hold_key=voice.hold_key,
                            toggle_key=voice.toggle_key,
@@ -192,7 +208,7 @@ def build_system(home: Path, card: str, declaration, *, backends=None, publish=N
         members.append(AgentBinding(agent=member, wake_phrase=binding.wake_phrase, hold_key=binding.hold_key,
                                     toggle_key=binding.toggle_key, detector=detector, detector_bar=bar,
                                     on_voice_event=lambda kind, data, m=member: sender.voice_event(m, kind, data)))
-    b = backends or _platform_backends(vd.trigger_devices)
+    b = backends or _platform_backends(vd.trigger_devices, vd.transcription_prompt)
     config = CaptureConfig(agent=card, end_hold_s=vd.end_hold_s, end_silence_s=vd.end_silence_s,
                            continual_close_s=vd.continual_close_s)
     return CaptureUnit(config, members=members, deliver=sender, listening_on=lambda: state.listening_on(home),
@@ -200,7 +216,7 @@ def build_system(home: Path, card: str, declaration, *, backends=None, publish=N
                        **b)
 
 
-def _platform_backends(trigger_devices) -> dict:
+def _platform_backends(trigger_devices, vocabulary: Optional[str] = None) -> dict:
     if not sys.platform.startswith("linux"):
         raise RuntimeError("this platform has no capture backends yet; MIS-0008's porting guide says what to write (R14)")
     from macf.voice.capture.linux import EvdevTriggers, LinuxLockState, OverlayIndicator, PipeWireAudio
@@ -208,7 +224,7 @@ def _platform_backends(trigger_devices) -> dict:
     from macf.voice.transcribe import transcribe_array
 
     def transcribe(audio, phrase):
-        return transcribe_array(audio, initial_prompt=f"{phrase.capitalize()}, " if phrase else None).text
+        return transcribe_array(audio, initial_prompt=whisper_prompt(phrase, vocabulary)).text
     return dict(audio=PipeWireAudio(), lock=LinuxLockState(), indicator=OverlayIndicator(),
                 triggers=EvdevTriggers(trigger_devices) if trigger_devices else NoKeys(), gate=SileroGate(),
                 transcribe=transcribe)

@@ -506,6 +506,9 @@ class VoiceSection(_Closed):
     end_hold_s: float = Field(default=2.0, ge=0, le=30, allow_inf_nan=False)
     end_silence_s: float = Field(default=5.0, gt=0, le=30, allow_inf_nan=False)
     continual_close_s: float = Field(default=30.0, gt=0, le=3600, allow_inf_nan=False)
+    #: Names and terms Whisper is primed with, so it spells them as written rather than as sound-alikes:
+    #: the operator's own curated sentence, like a dictation tool's initial prompt. None: the wake phrase only.
+    transcription_prompt: Optional[str] = Field(default=None, max_length=880)
     #: The level at which the wake model's score counts as a fire, before the speech and
     #: transcription checks (R23).
     #: Overrides the threshold stored with the wake model, which its test report measured (R24).
@@ -589,6 +592,9 @@ class VoiceDispatchSection(_Closed):
     end_hold_s: float = Field(default=2.0, ge=0, le=30, allow_inf_nan=False)
     end_silence_s: float = Field(default=5.0, gt=0, le=30, allow_inf_nan=False)
     continual_close_s: float = Field(default=30.0, gt=0, le=3600, allow_inf_nan=False)
+    #: Names and terms Whisper is primed with, so it spells them as written rather than as sound-alikes:
+    #: the operator's own curated sentence, like a dictation tool's initial prompt. None: the wake phrase only.
+    transcription_prompt: Optional[str] = Field(default=None, max_length=880)
     members: Dict[str, MemberVoiceBinding] = Field(min_length=1)
 
     @model_validator(mode="after")
