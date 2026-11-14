@@ -485,15 +485,15 @@ def full_autonomy_denial(modes, play_time_active: bool, permission_mode: Optiona
     """Why an open dialog should be denied at once, or None (autonomous_operation 5.5).
 
     AUTO_MODE alone says nothing: operators stay in it while attending, and a dialog is fine then.
-    It takes a sign that nobody will answer. In the default permission mode nearly every write
-    prompts, so denying there would block the agent's own work; a mode the client did not report
-    could be that one, so unknown leaves the dialog up too."""
+    It takes a sign that nobody will answer: the operator remote, or idle past the presence
+    timeout. A sprint or play time running is no such sign, so a present operator answers its
+    dialogs (#963); ``play_time_active`` is kept for callers and no longer decides. In the default
+    permission mode nearly every write prompts, so denying there would block the agent's own work;
+    a mode the client did not report could be that one, so unknown leaves the dialog up too."""
     if "AUTO_MODE" not in modes or permission_mode in (None, "default"):
         return None
     if "USER_REMOTE" in modes or "USER_IDLE" in modes:
         who = "the operator is away"
-    elif "SPRINT" in modes or play_time_active:
-        who = "a sprint or play time is running"
     else:
         return None
     if tool == "AskUserQuestion":
