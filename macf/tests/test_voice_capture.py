@@ -557,6 +557,27 @@ def test_a_unit_behind_real_time_says_so_once_and_says_when_it_caught_up():
                       "capture has caught up with real time"]
 
 
+def test_listening_off_releases_the_transcription_model_and_listening_on_keeps_it():
+    """R58, the operator, 2026-11-14: "I would like your model to remove itself from GPU when listening is turned
+    off." Released when listening goes off, and again after a key's recording made while it was off; never
+    while listening is on."""
+    listening, released = [True], []
+    rig = make_unit(FakeAudio().then((SILENCE, 10), (SPEECH, 10), (SILENCE, 10)), ScriptedTranscriber("held"),
+                    listening_on=lambda: listening[0])
+    rig.unit._release = lambda: released.append(1) or 1
+    rig.run(5)
+    assert released == [] and rig.audio.is_open, "the model was released while listening was on"
+    listening[0] = False
+    rig.run(1)
+    assert released == [1] and not rig.audio.is_open
+    assert "listening is off: the transcription model is released" in rig.logged
+    rig.keys.press("KEY_F9")
+    rig.run(10)
+    rig.keys.release("KEY_F9")
+    rig.run(2)
+    assert [u.text for u in rig.delivered] == ["held"] and released == [1, 1]
+
+
 def test_send_as_whisper_heard_it_still_sends():
     """The second live trial: Whisper wrote the operator's last-word "send" as "Sand". That spelling counts as
     send, and is cut from the text like the word itself."""

@@ -207,13 +207,16 @@ class CaptureUnit:
                  on_voice_event: Callable[[str, dict], None] = lambda kind, data: None,
                  guard_lowered: Callable[[], bool] = lambda: False,
                  members: Optional[List[AgentBinding]] = None,
-                 check: Optional[Callable[[np.ndarray, Optional[str]], str]] = None):
+                 check: Optional[Callable[[np.ndarray, Optional[str]], str]] = None,
+                 release: Callable[[], int] = lambda: 0):
         self.config = config
         self.audio, self.lock, self.indicator, self.triggers = audio, lock, indicator, triggers
         self.gate, self._transcribe, self._deliver = gate, transcribe, deliver
         #: The short checks, the wake phrase and the stop words: a transcriber capped to a few words, so a
         #: decode that loops costs a moment. The full transcriber when none is given.
         self._check = check or transcribe
+        #: Gives back the transcription model's memory while listening is off (R58); 0 when nothing was held.
+        self._release = release
         self._listening_on, self._speaking = listening_on, speaking
         self.clock, self.wall, self.log = clock, wall, log
         self.executor = executor or ThreadPoolExecutor(max_workers=1, thread_name_prefix="voice-transcribe")
@@ -326,6 +329,14 @@ class CaptureUnit:
         self._checking = None
         self.listening_since = None
         self.log("microphone closed")
+        if not self._listening_on():
+            # R58: with listening off, the model isn't held for a wake that can't come. A key still opens a
+            # recording, whose transcription loads it again.
+            try:
+                if self._release():
+                    self.log("listening is off: the transcription model is released")
+            except Exception as e:  # noqa: BLE001 - a failed release keeps the model loaded, said, and never stops the unit
+                self.log(f"the transcription model could not be released ({e}); it stays loaded")
 
     # ------------------------------------------------------------------ keys
 

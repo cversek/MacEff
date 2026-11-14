@@ -184,6 +184,17 @@ def transcribe_whisper(wav_path: str, model: str = "turbo",
 #: loading a model costs seconds each time.
 _LOADED: dict = {}
 
+
+def release_models() -> int:
+    """Drop every loaded transcription model, so the memory it held (the GPU's, where it ran there) is given
+    back; the next transcription loads it again. Returns how many were dropped. A transcription still running
+    keeps its own reference and finishes first (MIS-0008 R58)."""
+    import gc
+    dropped = len(_LOADED)
+    _LOADED.clear()
+    gc.collect()
+    return dropped
+
 #: The model each engine uses when none is named.
 DEFAULT_MODELS = {"mlx": "mlx-community/whisper-large-v3-turbo", "faster-whisper": "large-v3-turbo",
                   "whisper": "turbo"}

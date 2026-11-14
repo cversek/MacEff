@@ -69,3 +69,17 @@ def test_whisper_is_primed_with_the_declared_vocabulary_then_the_phrase():
 def test_the_voice_section_carries_a_transcription_prompt():
     from macf.pd.interface import VoiceSection
     assert VoiceSection(capture_unit="voice-capture", transcription_prompt="Ada, Bob, Cy.").transcription_prompt == "Ada, Bob, Cy."
+
+
+def test_every_capture_unit_gets_a_capped_check_and_a_release(monkeypatch):
+    """The builders take their transcription from one place, so none can leave out the capped check (a loop there
+    once cost 38 s) or the release that gives the model back while listening is off (R58)."""
+    from types import SimpleNamespace
+    from macf.voice import transcribe as tr
+    seen = []
+    monkeypatch.setattr(tr, "transcribe_array", lambda audio, **kw: seen.append(kw) or SimpleNamespace(text=""))
+    parts = entry.transcription("Ada, Bob")
+    assert set(parts) == {"transcribe", "check", "release"} and parts["release"] is tr.release_models
+    parts["check"](None, "yo tom")
+    parts["transcribe"](None, "yo tom")
+    assert seen[0]["max_tokens"] == entry.CHECK_TOKENS and "max_tokens" not in seen[1]

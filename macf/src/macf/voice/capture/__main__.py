@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from macf.voice import state
+from macf.voice.transcribe import release_models
 from macf.voice.capture.backends import AudioEnded, KeyEvent, TriggerSource
 from macf.voice.capture.unit import CaptureConfig, CaptureUnit, Utterance
 
@@ -49,8 +50,10 @@ PROMPT_CHARS = 880
 CHECK_TOKENS = 24
 
 
-def transcribers(vocabulary: Optional[str]):
-    """The unit's two transcribers: the full one for an utterance, and the capped one for its short checks."""
+def transcription(vocabulary: Optional[str]) -> dict:
+    """What a capture unit transcribes with, as its keyword arguments: ``transcribe`` for an utterance,
+    ``check`` capped for the short checks, and ``release`` to give the model back while listening is off
+    (R58). One place, so no builder can leave one out."""
     from macf.voice.transcribe import transcribe_array
 
     def transcribe(audio, phrase):
@@ -58,7 +61,7 @@ def transcribers(vocabulary: Optional[str]):
 
     def check(audio, phrase):
         return transcribe_array(audio, initial_prompt=whisper_prompt(phrase, vocabulary), max_tokens=CHECK_TOKENS).text
-    return transcribe, check
+    return {"transcribe": transcribe, "check": check, "release": release_models}
 
 
 def whisper_prompt(phrase: Optional[str], vocabulary: Optional[str]) -> Optional[str]:
@@ -155,7 +158,6 @@ def build(home: Path):
         model = Path(voice.wake_model)
         detector = TrainedWakeDetector(model if model.is_absolute() else home / model)
 
-    transcribe, check = transcribers(voice.transcription_prompt)
 
     config = CaptureConfig(agent=card, wake_phrase=voice.wake_phrase, hold_key=voice.hold_key,
                            toggle_key=voice.toggle_key,
@@ -166,7 +168,7 @@ def build(home: Path):
     return card, CaptureUnit(
         config, audio=PipeWireAudio(), lock=LinuxLockState(), indicator=OverlayIndicator(),
         triggers=EvdevTriggers(voice.trigger_devices) if voice.trigger_devices else NoKeys(),
-        gate=SileroGate(), detector=detector, transcribe=transcribe, check=check,
+        gate=SileroGate(), detector=detector, **transcription(voice.transcription_prompt),
         deliver=lambda u: deliver(card, u), on_voice_event=lambda kind, data: voice_event(card, kind, data),
         guard_lowered=lambda: guard_lowered(card),
         listening_on=lambda: state.listening_on(home),
@@ -237,10 +239,9 @@ def _platform_backends(trigger_devices, vocabulary: Optional[str] = None) -> dic
     from macf.voice.capture.linux import EvdevTriggers, LinuxLockState, OverlayIndicator, PipeWireAudio
     from macf.voice.capture.models import SileroGate
 
-    transcribe, check = transcribers(vocabulary)
     return dict(audio=PipeWireAudio(), lock=LinuxLockState(), indicator=OverlayIndicator(),
                 triggers=EvdevTriggers(trigger_devices) if trigger_devices else NoKeys(), gate=SileroGate(),
-                transcribe=transcribe, check=check)
+                **transcription(vocabulary))
 
 
 def main(argv=None) -> int:

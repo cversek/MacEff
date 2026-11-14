@@ -71,3 +71,10 @@ def test_decoding_is_bounded_and_a_short_check_is_capped(fake_faster_whisper):
     assert full == {"temperature": 0.0, "condition_on_previous_text": False}
     assert check == {"temperature": 0.0, "condition_on_previous_text": False, "without_timestamps": True,
                      "max_new_tokens": 24}
+
+
+def test_release_drops_every_loaded_model(monkeypatch):
+    """R58: what a release gives back is the cache's hold on each model; the next transcription loads it again."""
+    monkeypatch.setattr(tr, "_LOADED", {("faster-whisper", "small.en"): object(), ("faster-whisper", "x"): object()})
+    assert tr.release_models() == 2 and tr._LOADED == {}
+    assert tr.release_models() == 0
