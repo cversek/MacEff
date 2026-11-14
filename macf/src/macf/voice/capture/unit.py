@@ -51,6 +51,9 @@ NO_SPEECH_CANCEL_S = 4.5
 #: R56's stop words: said as the last word, ``send`` ends the utterance and sends it without the word;
 #: ``abort`` ends it and sends nothing.
 SEND_WORD, ABORT_WORD = "send", "abort"
+#: What recognition actually writes for a stop word, each counted as that word. "sand" is how Whisper heard
+#: the operator's "send" in the second live trial (2026-11-13); add one only from a real mishearing.
+STOP_WORD_HEARD_AS = {"send": SEND_WORD, "sand": SEND_WORD, "abort": ABORT_WORD}
 #: The pause after speech at which the last words are checked for a stop word, and how much is checked.
 STOP_PAUSE_S = 0.6
 STOP_TAIL_S = 2.5
@@ -59,7 +62,7 @@ STOP_TAIL_S = 2.5
 def last_stop_word(text: str) -> Optional[str]:
     """``send`` or ``abort`` when the text's last word is one of them, ignoring case and punctuation."""
     words = re.findall(r"[a-z']+", (text or "").lower())
-    return words[-1] if words and words[-1] in (SEND_WORD, ABORT_WORD) else None
+    return STOP_WORD_HEARD_AS.get(words[-1]) if words else None
 
 
 def strip_stop_word(text: str) -> tuple:
@@ -67,7 +70,7 @@ def strip_stop_word(text: str) -> tuple:
     word = last_stop_word(text)
     if word is None:
         return text, None
-    cut = re.search(rf"\b{word}\W*$", text, re.I)
+    cut = re.search(r"\b[\w']+\W*$", text)        # the last word as heard, whichever spelling matched
     return (text[:cut.start()] if cut else text).rstrip(" ,.!?;:-"), word
 
 
@@ -159,6 +162,7 @@ class _Recording:
     window_shown: float = 1.0          # the end window's fill last sent to the indicator (R56)
     stop_check: object = None          # a stop-word check in flight (R56)
     stop_checked_at: Optional[float] = None   # the last speech the check covered, so each pause is checked once
+    aborted: bool = False              # ended by "abort" (R57): nothing is sent, and that was already said
     voice_lock: str = "not_declared"     # "matched" once the voice lock passed it
 
 
@@ -398,7 +402,7 @@ class CaptureUnit:
         said = self._stop_word_heard(rec, silent_for)
         if said == ABORT_WORD:
             self.log(f"\"{ABORT_WORD}\": the utterance is discarded, nothing sent")
-            rec.frames, rec.heard_speech = [], False
+            rec.frames, rec.heard_speech, rec.aborted = [], False, True
             self._finish(now, closing=rec.mode != "continual_voice")
             return
         if said == SEND_WORD or silent_for >= self.config.end_silence_s:
@@ -447,10 +451,12 @@ class CaptureUnit:
                 self.executor.submit(self._transcribe_and_deliver, audio, rec.mode, rec.spoken_at, rec.voice_lock,
                                      rec.agent)
         else:
-            self.log(f"{rec.mode} recording heard no speech: nothing sent")
+            if not rec.aborted:                  # an abort already said why nothing was sent
+                self.log(f"{rec.mode} recording heard no speech: nothing sent")
         rec.frames = []                      # the audio is now the worker's alone, and is dropped after
         if rec.mode == "continual_voice" and not closing:
             rec.heard_speech, rec.utterance_started, rec.spoken_at = False, now, self.wall()
+            rec.aborted = False
             return
         self.recording = None
         self.recording_since = None

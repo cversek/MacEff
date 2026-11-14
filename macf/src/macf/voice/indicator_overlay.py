@@ -32,6 +32,8 @@ def _unix_input(fd):
 
 MODES = {"wake_phrase": "wake phrase", "hold_key": "hold key", "continual_voice": "continual voice"}
 TRACE_POINTS = 140
+#: How opaque the dark tint behind the indicator is, between the 50% and 80% the operator suggested.
+TINT = 0.65
 WIDTH, HEIGHT = 620, 72
 
 
@@ -94,6 +96,17 @@ class Overlay:
         cr.set_operator(0)                        # CLEAR: nothing behind the band is painted over
         cr.paint()
         cr.set_operator(2)                        # OVER
+        # A dark tint behind it all, partly see-through, so the band reads against any wallpaper. The operator
+        # asked for "a little bit of a darker tint... maybe do like 80% alpha or something or a 50% alpha".
+        r = 10
+        cr.new_sub_path()
+        cr.arc(width - r, r, r, -1.5708, 0)
+        cr.arc(width - r, height - r, r, 0, 1.5708)
+        cr.arc(r, height - r, r, 1.5708, 3.1416)
+        cr.arc(r, r, r, 3.1416, 4.7124)
+        cr.close_path()
+        cr.set_source_rgba(0.06, 0.07, 0.09, TINT)
+        cr.fill()
         meter_w = 14
         band_w = width - meter_w - 10
         mid = height / 2

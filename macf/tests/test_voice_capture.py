@@ -466,3 +466,10 @@ def test_the_end_window_defaults_are_the_operators():
     config = CaptureConfig(agent="Tester_abc123")
     assert (voice.end_hold_s, voice.end_silence_s) == (2.0, 5.0)
     assert (config.end_hold_s, config.end_silence_s, config.stop_words) == (2.0, 5.0, True)
+
+
+def test_send_as_whisper_heard_it_still_sends():
+    """The second live trial: Whisper wrote the operator's last-word "send" as "Sand". That spelling counts as
+    send, and is cut from the text like the word itself."""
+    assert strip_stop_word("Yep, I can keep it open. Stop. Sand.") == ("Yep, I can keep it open. Stop", "send")
+    assert last_stop_word("a pile of sand on the beach") is None
