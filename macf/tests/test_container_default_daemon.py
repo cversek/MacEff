@@ -44,7 +44,7 @@ def _session(body):
 
 def test_an_agent_that_declares_nothing_gets_the_default_session():
     """No block, no opt-out: the session runs as a unit of the agent's own daemon, on its own
-    account, in its home, under its declared tmux name, with its channels and the MacEff channel,
+    account, in its home, under its declared tmux name, with its channels and the MacEff Notification Channel,
     and the result is a declaration the daemon accepts."""
     body = _body(harness_session="res")
     assert [u["name"] for u in body["units"]] == ["session"]
@@ -55,8 +55,8 @@ def test_an_agent_that_declares_nothing_gets_the_default_session():
     assert command[command.index("--agent") + 1] == "res" and "--no-proxy" in command
     env = session["environment"]
     assert env["MACEFF_HARNESS_SESSION"] == "res" and env["USER"] == env["LOGNAME"] == "pa_res"
-    assert env["MACEFF_CHANNELS"] == f"{TELEGRAM} plugin:maceff-channel@maceff"
-    assert {"plugin": "maceff-channel", "marketplace": "maceff"} in body["allowlisted_channels"]
+    assert env["MACEFF_CHANNELS"] == f"{TELEGRAM} plugin:maceff-notification-channel@maceff"
+    assert {"plugin": "maceff-notification-channel", "marketplace": "maceff"} in body["allowlisted_channels"]
     assert body["operator_channels"] == ["plugin:telegram:telegram"]
     Declaration(version=1, agent="Resident_1a2b3c", **body)
     # The tmux name falls back to the agent's key, as provisioning's does.

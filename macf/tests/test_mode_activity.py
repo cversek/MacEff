@@ -31,7 +31,7 @@ from macf.utils.input_origin import (
 
 WAKE = f"{WAKE_OPENING} amail: new message 2026-10-10T07:12:03Z-ab12"
 TELEGRAM = '<channel source="plugin:telegram:telegram" chat_id="1">on my way</channel>'
-MACEFF_NOTICE = '<channel source="plugin:maceff-channel:maceff" kind="amail">new mail</channel>'
+MACEFF_NOTICE = '<channel source="plugin:maceff-notification-channel:maceff" kind="amail">new mail</channel>'
 TASK_NOTICE = "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>"
 PEER = '<cross-session-message from="bridge:session_x" from-name="a session">hi</cross-session-message>'
 HAND_BACK = '<agent-message from="a6f1">\n[Subagent hand-back] The final report.\n</agent-message>'
@@ -175,7 +175,7 @@ DOORS = [
                  [_queued(TELEGRAM),
                   _user(TELEGRAM, {"kind": "channel", "server": "plugin:telegram:telegram"}, isMeta=True)],
                  ["channel"], ["channel"], id="channel"),
-    pytest.param("MacEff channel notice", MACEFF_NOTICE, [_queued(MACEFF_NOTICE)], [], [],
+    pytest.param("MacEff Notification Channel notice", MACEFF_NOTICE, [_queued(MACEFF_NOTICE)], [], [],
                  id="maceff-notice"),
     pytest.param("task notification", TASK_NOTICE,
                  [_queued(TASK_NOTICE), _user(TASK_NOTICE, {"kind": "task-notification"})],
@@ -264,7 +264,7 @@ def test_a_queued_channel_message_takes_its_server_from_the_delivery(monkeypatch
 
 def test_a_delivered_queued_copy_counts_only_by_its_declared_server(monkeypatch, tmp_path):
     """MIS-0002-R107 and R106 on the queued path: when the delivery's record names the channel,
-    that name is what counts, so an undeclared server and the MacEff channel are not the
+    that name is what counts, so an undeclared server and the MacEff Notification Channel are not the
     operator, even when the queued copy itself named a declared one (found in review)."""
     _declare(_declared(["plugin:telegram:telegram"]))
 
@@ -273,7 +273,7 @@ def test_a_delivered_queued_copy_counts_only_by_its_declared_server(monkeypatch,
         run = _Monitor(monkeypatch, tmp_path).feed(_queued(TELEGRAM), delivered)
         return [(d["source"], d["channel_server"]) for _, d in run.emitted]
     assert emitted("plugin:discord:discord") == []
-    assert emitted("plugin:maceff-channel:maceff") == []
+    assert emitted("plugin:maceff-notification-channel:maceff") == []
     assert emitted("plugin:telegram:telegram") == [("channel", "plugin:telegram:telegram")]
 
 ACTIVITY_DETECTORS = {"detect_user_activity", "detect_permission_denial",

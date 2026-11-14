@@ -483,18 +483,33 @@ class Publisher:
 
 def render_access_rules(card: str, *, members: Sequence[str] = (), association: bool = False,
                readers: Optional[Dict[str, Iterable[str]]] = None,
-               known_sources: Iterable[str] = (), silenced_readers: Iterable[str] = ()) -> str:
+               known_sources: Iterable[str] = (), silenced_readers: Iterable[str] = (),
+               voice_members: Sequence[str] = ()) -> str:
     """The broker's access rules: one ``user`` block per certificate the declaration names. A
     reader the operator silenced (``@<card>``, MIS-0002-R152) keeps its named block with no
-    topics, so it reads nothing, live or replayed, until the rule is lifted."""
+    topics, so it reads nothing, live or replayed, until the rule is lifted.
+
+    ``voice_members`` are the members the system's capture unit serves (MIS-0008 R46). The
+    association alone writes their voice topics, and each of them reads its own and no other
+    (R49): the one thing an association sends down, the operator's signed input."""
     if members and not association:
         raise BrokerRefused("only an association admits members")
+    member_keys = {topic_name(m) for m in members}
+    strangers = sorted(m for m in voice_members if topic_name(m) not in member_keys)
+    if strangers:
+        raise BrokerRefused(f"voice goes down only to declared members, not {', '.join(strangers)}")
+    voiced = {topic_name(m) for m in voice_members}
     silent = {topic_name(r) for r in silenced_readers}
     blocks: List[str] = [f"user {cert_name(card)}\ntopic readwrite {topic_name(card)}/#"]
     if association:
         blocks[0] += "\ntopic read members/#"
+        if voiced:
+            blocks[0] += "\ntopic write voice/#"
     for member in members:
-        blocks.append(f"user {cert_name(member)}\ntopic write members/{topic_name(member)}/#")
+        block = f"user {cert_name(member)}\ntopic write members/{topic_name(member)}/#"
+        if topic_name(member) in voiced:
+            block += f"\ntopic read voice/{topic_name(member)}/in"
+        blocks.append(block)
     for reader, sources in sorted((readers or {}).items()):
         lines = [f"user {cert_name(reader)}"]
         if topic_name(reader) in silent:

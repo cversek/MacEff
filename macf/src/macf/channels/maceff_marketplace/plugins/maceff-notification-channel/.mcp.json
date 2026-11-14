@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "maceff": {
-      "command": "maceff-channel",
+      "command": "maceff-notification-channel",
       "args": []
     }
   }

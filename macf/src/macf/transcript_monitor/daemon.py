@@ -163,7 +163,7 @@ def detect_user_activity(entry: dict) -> Optional[Detection]:
         source = "channel"
         channel_server = origin.get("server", "")
         if not operator_channel(channel_server):
-            return None  # counted only by a declared name (R107); never the MacEff channel
+            return None  # counted only by a declared name (R107); never the MacEff Notification Channel
 
     return Detection("user_activity_detected", {
         "source": source,
@@ -277,7 +277,7 @@ def detect_mid_turn_enqueue(entry: dict) -> Optional[Detection]:
     }
     channel_server = opening_channel_source(content) if isinstance(content, str) else None
     if channel_server is not None and not operator_channel(channel_server):
-        return None  # counted only by a declared name (R107); never the MacEff channel
+        return None  # counted only by a declared name (R107); never the MacEff Notification Channel
     if channel_server is not None:
         data["source"] = "channel"
         data["channel_server"] = channel_server

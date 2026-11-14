@@ -185,7 +185,7 @@ def _iso(when: datetime) -> str:
 
 
 def _notice_id(name: str, when: datetime) -> str:
-    """A notice's id: the schedule's name and an epoch second. It fits the MacEff channel's id
+    """A notice's id: the schedule's name and an epoch second. It fits the MacEff Notification Channel's id
     pattern, ``[A-Za-z0-9._:-]``, as the daemon's other notice ids do. An ISO time carries its
     offset's ``+``, and the channel refuses a record holding one (#734)."""
     return f"{name}:{int(when.timestamp())}"

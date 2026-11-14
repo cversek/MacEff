@@ -292,14 +292,14 @@ def container_body(*, account: str, harness_session: str, project_dir: Optional[
     Only the session is declared. The host default's monitor and search are per-agent copies,
     and search holds over a gigabyte each, which a container shared by several seats doesn't
     multiply by default. The session states what the legacy launch set from the login shell:
-    its tmux session name, its project directory, its channels (the MacEff channel always
+    its tmux session name, its project directory, its channels (the MacEff Notification Channel always
     among them), a shell, a locale and the deployment's time zone, and it
     never attaches the host's API proxy, which no container can reach. *project_dir* None is
     the agent's home. *timezone* None leaves ``TZ`` unset, so the session runs on the
     container's clock, UTC in the framework's image."""
     home = CONTAINER_HOME_ROOT / account
     project = Path(project_dir) if project_dir else home
-    # The daemon's notices reach the session through the MacEff channel, so the session loads
+    # The daemon's notices reach the session through the MacEff Notification Channel, so the session loads
     # it whether or not the agent's own channels name it.
     own = channel_flag(CHANNEL_PLUGIN, MARKETPLACE)
     channels = list(channels) + ([own] if own not in channels else [])

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "maceff": {
+      "command": "maceff-voice-input-channel",
+      "args": []
+    }
+  }
+}

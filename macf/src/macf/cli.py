@@ -12676,7 +12676,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     agent_init_parser = agent_sub.add_parser(
         "init", help="initialize the agent: its PA preamble and its persistent-layer stack (task store, "
-                     "primal daemon declaration, harness, MacEff channel, permissions, pd install)")
+                     "primal daemon declaration, harness, MacEff Notification Channel, permissions, pd install)")
     agent_init_parser.add_argument("-y", "--yes", action="store_true",
                                    help="accept the preamble unattended: skip its confirmation prompt "
                                         "(without it, a run with no terminal skips the preamble step)")
@@ -14188,6 +14188,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
     voice_svc_sub.add_parser("stop", help="stop voice service daemon").set_defaults(func=cmd_voice_service_stop)
     voice_svc_sub.add_parser("status", help="show voice service status").set_defaults(func=cmd_voice_service_status)
+
+    # listen on|off and capture status: the capture unit (MIS-0008)
+    from .voice.cli import add_parsers as add_voice_capture_parsers
+    from .voice.wake.cli import add_parsers as add_voice_wake_parsers
+    add_voice_capture_parsers(voice_sub)
+    add_voice_wake_parsers(voice_sub)
+    from .voice.speech.cli import add_parsers as add_voice_speech_parsers
+    add_voice_speech_parsers(voice_sub)
 
     # ── idea ─────────────────────────────────────────────────────────────
     from .roles.cli import add_role_parser

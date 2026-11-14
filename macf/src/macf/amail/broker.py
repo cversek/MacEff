@@ -176,7 +176,7 @@ def strip_inbound_headers(message: Message) -> List[str]:
 
 
 # The kernel peer credentials and the sun_path limit live in one shared module, so
-# the broker and the MacEff channel can never disagree about who is calling.
+# the broker and the MacEff Notification Channel can never disagree about who is calling.
 # Re-exported here because callers and tests import them from the broker.
 from macf.utils.peercred import SUN_PATH_MAX, peer_uid
 

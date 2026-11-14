@@ -19,7 +19,7 @@ UPDATE_HINT = ("to run this command's build, `macf_tools agent init --update` do
                "By hand, `macf_tools pd install --force` points the daemon's unit at "
                "this command's macf; a daemon pinned to its own checkout advances that checkout instead. Then "
                "restart the daemon's unit. A restart carries its running units, so the session keeps running; "
-               "only what loads with the session, such as the MacEff channel, needs a session restart")
+               "only what loads with the session, such as the MacEff Notification Channel, needs a session restart")
 
 
 def build_id(package_dir: Optional[Path] = None) -> str:

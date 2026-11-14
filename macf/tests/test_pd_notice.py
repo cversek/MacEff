@@ -1,5 +1,5 @@
 """The notifier in the primal daemon: notices held while they can't be delivered, and
-written to the MacEff channel as closed records (MIS-0002 step 2, notices)."""
+written to the MacEff Notification Channel as closed records (MIS-0002 step 2, notices)."""
 import json
 import os
 import socket
@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import pytest
 
 from macf.agent_events_log import read_events
-from macf.channels.maceff_channel import TAKES, build_event, parse_record
+from macf.channels.notification_channel import TAKES, build_event, parse_record
 from macf.notify.session import proc_start
 from macf.pd import notifier as nt
 from channel_receiver import ChannelReceiver
@@ -378,7 +378,7 @@ def test_the_maceff_channel_declares_every_source_its_record_takes(tmp_path, bas
     record accepts, so an entry's notice reaches it."""
     import typing
 
-    from macf.channels.maceff_channel import Channel, NoticeRecord
+    from macf.channels.notification_channel import Channel, NoticeRecord
     home = make_home(tmp_path, [])
     _owe_an_entry(home)
     daemon = run_daemon(home, base)
@@ -1013,13 +1013,13 @@ def _unit_failed_owed(notifier):
 
 def test_a_failed_unit_raises_a_notice_through_the_channel(make_core, script, tmp_path, capsys):
     """A unit that misses its liveness is failed and restarted as before, and the agent is owed
-    the pd_unit_failed notice, which arrives through the MacEff channel's own record. Its id
+    the pd_unit_failed notice, which arrives through the MacEff Notification Channel's own record. Its id
     names the unit and its failures in a row. A unit that stops as it asked to, or exits with its
     success code, has not failed and raises none. The pointer's command shows the failure."""
     import re
     import shlex
 
-    from macf.channels.maceff_channel import DAEMON_POINTERS
+    from macf.channels.notification_channel import DAEMON_POINTERS
     from macf.cli import _build_parser
     channel = ChannelReceiver(tmp_path)
     core = make_core([

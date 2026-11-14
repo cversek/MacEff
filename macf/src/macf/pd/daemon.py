@@ -46,6 +46,9 @@ from macf.pd.interface import (
     BuildRequest,
     StreamRule,
     StreamRuleRequest,
+    UtteranceRequest,
+    VoiceEventRequest,
+    VoiceGuardRequest,
     WakePaced,
     agent_card,
     channel_socket,
@@ -55,7 +58,9 @@ from macf.pd.interface import (
     ensure_runtime_dir,
     record_path,
     runtime_dir,
+    voice_socket,
 )
+from macf.pd.voice_carriage import VoiceCarriage, refuse_without_voice
 from macf.pd.channel_watch import DarkChannel
 from macf.pd.unread_mail import UnreadMail, pickup_box
 from macf.pd.notifier import Notifier
@@ -103,6 +108,11 @@ MAX_HELLO_BYTES = 8 * 1024
 class AlreadyRunning(RuntimeError):
     """Another primal daemon of this agent is alive (MIS-0002-R01
     (agent_MUST_have_one_primal_daemon))."""
+
+
+def voice_members(decl) -> List[str]:
+    """The members a system's capture unit serves, whose voice topics its broker opens (MIS-0008 R49)."""
+    return sorted(decl.voice_dispatch.members) if decl.voice_dispatch is not None else []
 
 
 def card_for_home(agent_home: Path) -> str:
@@ -179,15 +189,23 @@ class Daemon:
         self._rendered_silenced: List[str] = []
         #: Whether the broker must be asked to reread rules rendered while it ran (R152).
         self._reload_owed = False
-        render_files(self.card, decl.broker, self.base, placeholders, members=decl.members)
+        render_files(self.card, decl.broker, self.base, placeholders, members=decl.members,
+                     voice_members=voice_members(decl))
         self.broker_link = BrokerLink(self.card, get_log_path(), decl.broker, placeholders,
                                       members=decl.members, on_findings=self._member_findings,
-                                      rules=lambda: self.rules)
+                                      rules=lambda: self.rules,
+                                      on_voice_receipt=(lambda r: append_event("pd_voice_dispatch_receipt", r))
+                                      if decl.voice_dispatch is not None else None)
         if decl.association is not None:
             from macf.pd.broker_link import ExportLink
+            dispatched = decl.kind == "agent" and decl.voice is not None and decl.voice.dispatched_by is not None
             self.export_link = ExportLink(self.card, get_log_path(), decl.association, placeholders,
                                           on_unreachable=self._export_unreachable,
-                                          snapshot=lambda: [(s.unit, s.state) for s in self.core.statuses()])
+                                          snapshot=lambda: [(s.unit, s.state) for s in self.core.statuses()],
+                                          on_voice=self._voice_dispatched if dispatched else None,
+                                          on_voice_refused=lambda why: append_event(
+                                              "pd_voice_subscribe_refused", {"agent": self.card, "reason": why}))
+        self._voice_verifier = None
         self._listener: Optional[socket.socket] = None
         self._channel_listener: Optional[socket.socket] = None
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound
@@ -207,6 +225,17 @@ class Daemon:
         self._wake_from = "the declaration"
         if self.agent:
             self._build_agent_components()
+        #: The Voice Input Channel's carriage, only where the declaration has a voice section
+        #: (MIS-0008): an agent without one serves no voice socket and takes no utterance.
+        self.voice: Optional[VoiceCarriage] = None
+        if self.agent and decl.voice is not None:
+            voice_path = voice_socket(self.card, self.base)
+            check_socket_path(voice_path)
+            from macf.voice.speech import cut as speech_cut
+            self.voice = VoiceCarriage(self.card, voice_path, decl.voice, self._outside_session,
+                                       self.core.incarnation, speech_cut=lambda: speech_cut.take_untold(self.home))
+            if decl.voice.dispatched_by is not None:
+                self.voice_verifier()      # the nonce record is rebuilt now, at start (MIS-0007 R56)
         #: The build this daemon started from, said in every status (MacEff #816). Read once:
         #: the code it runs can't change under it, only the checkout beside it.
         from macf.pd.build import build_id
@@ -303,7 +332,7 @@ class Daemon:
         listener.listen(8)
         listener.setblocking(False)
         self._listener = listener
-        if self.agent:                  # the MacEff channel is an agent's session's
+        if self.agent:                  # the MacEff Notification Channel is an agent's session's
             self.channel_path.unlink(missing_ok=True)   # the slot is ours, so a socket left here is a dead daemon's
             channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             channel.bind(str(self.channel_path))
@@ -313,6 +342,8 @@ class Daemon:
             channel.listen(4)
             channel.setblocking(False)
             self._channel_listener = channel
+        if self.voice is not None:
+            self.voice.bind()
         self._fold_rules()
         record = self._record = self._write_record()
         self.core.record_start(record.pid, record.proc_start)
@@ -350,7 +381,7 @@ class Daemon:
             return
         decl = self.core.declaration
         render_files(self.card, decl.broker, self.base, self._broker_placeholders, members=decl.members,
-                     silenced_readers=silenced)
+                     silenced_readers=silenced, voice_members=voice_members(decl))
         self._rendered_silenced = silenced
         self._reload_owed = reload
 
@@ -453,6 +484,9 @@ class Daemon:
         sel.register(self._listener, selectors.EVENT_READ, "control")
         if self._channel_listener is not None:
             sel.register(self._channel_listener, selectors.EVENT_READ, "channel")
+        if self.voice is not None:
+            self.voice.selector = sel
+            sel.register(self.voice.listener, selectors.EVENT_READ, "voice")
         sel.register(self._wake_r, selectors.EVENT_READ, "wake")
         for link in (self.broker_link, self.export_link):
             if link is not None:
@@ -466,11 +500,17 @@ class Daemon:
                         self._accept_channel()
                     elif key.data == "attached":
                         self._channel_readable(key.fileobj)
+                    elif key.data == "voice":
+                        self.voice.accept()
+                    elif key.data == "voice_attached":
+                        self.voice.readable(key.fileobj)
                     else:
                         os.read(self._wake_r, 512)
                 self.core.tick()
                 self.scheduler.tick()
                 self._hellos_due()
+                if self.voice is not None:
+                    self.voice.hellos_due()
                 if self.receiver is not None:
                     self.receiver.tick(time.monotonic())
                 if self.notifier is not None:
@@ -498,6 +538,8 @@ class Daemon:
                 if link is not None:
                     link.stop()
             self.scheduler.shutdown()
+            if self.voice is not None:
+                self.voice.selector = None
             sel.close()
             self._sel = None
             if self._stop_units:
@@ -530,6 +572,31 @@ class Daemon:
         link = self.core.declaration.association
         append_event("pd_export_unreachable", {"agent": self.card, "host": link.host, "port": link.port,
                                                "reason": reason})
+
+    def voice_verifier(self):
+        """The check this agent's dispatched utterances pass (MIS-0008 R48, R50), built once: the
+        dispatcher its voice section names, that card's keys from the operator's registry read at
+        each check, and the accepted nonces rebuilt from the log, so a restart forgets none still
+        in force (MIS-0007 R56)."""
+        if self._voice_verifier is None:
+            from macf.amail.registry import Registry, registry_path
+            from macf.pd.interface import EVENT_VOICE_DISPATCH
+            from macf.voice.dispatch import NonceRecord, Verifier
+            voice = self.core.declaration.voice
+            registry = Registry(registry_path())
+            nonces = NonceRecord.from_events(read_events(scope="all", only=(EVENT_VOICE_DISPATCH,)), self.card,
+                                             voice.clock_allowance_s)
+            # A dispatched message is fresh, so only a key that may still sign verifies it: a key the
+            # operator retired stops verifying at once, not when its window lapses.
+            self._voice_verifier = Verifier(self.card, voice.dispatched_by, registry.signing_keys, nonces=nonces,
+                                            allowance_s=voice.clock_allowance_s,
+                                            max_lifetime_s=voice.max_lifetime_s)
+        return self._voice_verifier
+
+    def _voice_dispatched(self, payload: bytes, retained: bool) -> dict:
+        """One message on this agent's voice topic, from the export link on the daemon's thread."""
+        notice = self.notifier.raise_notice if self.notifier is not None else (lambda source, notice_id: False)
+        return self.voice.dispatched(payload, retained=retained, verifier=self.voice_verifier(), raise_notice=notice)
 
     def stop(self, units: bool = False) -> None:
         """Ask ``serve`` to finish, and with ``units`` to stop every unit first; a plain stop,
@@ -605,6 +672,8 @@ class Daemon:
             self._listener.close()
         if self._channel_listener is not None:
             self._channel_listener.close()
+        if self.voice is not None:
+            self.voice.release()
         from macf.agent_events_log import remove_append_listener
         remove_append_listener(self.broker_link.stream.note_own_append)
         for path, still_mine in ((self.control_path, self._socket_is_mine),
@@ -636,7 +705,7 @@ class Daemon:
     # ------------------------------------------------------------------ the channel
 
     def _accept_channel(self) -> None:
-        """Attach a MacEff channel to the notifier, but only one whose process descends
+        """Attach a MacEff Notification Channel to the notifier, but only one whose process descends
         from the session unit's live process. Every command the agent runs has the same
         uid, so the uid alone can't tell the session's channel from anything else
         (MIS-0002-R122 (pd_MUST_check_channel_peer_lineage)). A channel that connects
@@ -799,8 +868,20 @@ class Daemon:
         if isinstance(request, (EntryAddRequest, EntryListRequest, EntryRemoveRequest, EntryEditRequest,
                                 EntryPauseRequest)):
             return self._entry_request(request, creds)
+        if isinstance(request, UtteranceRequest):
+            if self.voice is None:
+                return refuse_without_voice(self.card, request, creds)
+            return self.voice.utterance(request, creds)
+        if isinstance(request, (VoiceEventRequest, VoiceGuardRequest)):
+            if self.voice is None:
+                return Response(ok=False, error="this agent's declaration has no voice section (MIS-0008)")
+            if isinstance(request, VoiceGuardRequest):
+                return self.voice.lower_guard(request)
+            notice = self.notifier.raise_notice if self.notifier is not None else (lambda source, notice_id: False)
+            return self.voice.voice_event(request, creds, notice)
         if isinstance(request, StatusRequest):
-            return Response(ok=True, units=self.core.statuses(), **self._wake_window())
+            guard = self.voice.guard_until() if self.voice is not None else None
+            return Response(ok=True, units=self.core.statuses(), voice_guard_until=guard, **self._wake_window())
         if isinstance(request, BuildRequest):
             return Response(ok=True, build=self._build)
         if isinstance(request, PaceRequest):

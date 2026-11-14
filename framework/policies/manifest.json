@@ -1416,7 +1416,14 @@
     "mis": ["mis"],
     "persistent_layer": ["base/infrastructure/persistent_layer"],
     "primal_daemon": ["base/infrastructure/persistent_layer"],
-    "maceff_channel": ["base/infrastructure/persistent_layer"],
+    "notification_channel": ["base/infrastructure/persistent_layer"],
+    "voice_input": ["base/infrastructure/voice_input"],
+    "wake_model": ["base/infrastructure/voice_input"],
+    "voice_generation": ["base/infrastructure/voice_generation"],
+    "voice_selection": ["base/infrastructure/voice_generation"],
+    "speech_worker": ["base/infrastructure/voice_generation"],
+    "voice_lock": ["base/infrastructure/voice_lock"],
+    "raised_guard": ["base/infrastructure/voice_lock"],
     "specification": ["mis"],
     "ratification": ["mis"],
     "amail": [
@@ -1967,10 +1974,81 @@
           "primal daemon",
           "maceff_pd",
           "channel",
-          "maceff channel",
+          "maceff notification channel",
           "notice",
           "wake",
           "receipt"
+        ]
+      },
+      {
+        "name": "voice_input",
+        "short_name": "VOICE",
+        "path": "base/infrastructure/voice_input.md",
+        "CEP_triggers": [
+          "How is a wake model recorded, trained and measured, and what does a measurement not show?",
+          "What may a wake phrase or any spoken utterance authorize?",
+          "What must the recording indicator show, and when?",
+          "What happens to raw audio, and which training clips are kept on purpose?",
+          "What does listening off do, and why does a declared hotkey still record?"
+        ],
+        "keywords": [
+          "voice",
+          "wake word",
+          "wake model",
+          "wake phrase",
+          "listening",
+          "microphone",
+          "capture unit",
+          "hotkey",
+          "indicator",
+          "dictation"
+        ]
+      },
+      {
+        "name": "voice_generation",
+        "short_name": "SPEECH",
+        "path": "base/infrastructure/voice_generation.md",
+        "CEP_triggers": [
+          "What may I say aloud, what never, and what do I do while the screen is locked?",
+          "How do I stop my speech, and how does it give way to a recording?",
+          "How is my voice chosen with the operator, and what must the dialog show before any sample?",
+          "May a voice be made to sound like a real person?",
+          "How do I respell a name the speech engine says wrong?"
+        ],
+        "keywords": [
+          "voice",
+          "speech",
+          "speak",
+          "spoken output",
+          "speech worker",
+          "voice selection",
+          "voice samples",
+          "pronunciation",
+          "text to speech",
+          "locked screen"
+        ]
+      },
+      {
+        "name": "voice_lock",
+        "short_name": "VLOCK",
+        "path": "base/infrastructure/voice_lock.md",
+        "CEP_triggers": [
+          "What does a voice lock prove, and what may I do on a match?",
+          "What do I do on an unmatched-voice notice, and what must I never do?",
+          "What does a lockout and a raised guard require of me, and who may lower the guard?",
+          "How can the lockout be used against the operator?",
+          "How is a voice lock enrolled and measured, and how do I trust a speaker embedding?"
+        ],
+        "keywords": [
+          "voice lock",
+          "speaker check",
+          "speaker verification",
+          "lockout",
+          "raised guard",
+          "voice guard",
+          "unmatched voice",
+          "speaker embedding",
+          "enrollment"
         ]
       }
     ]

@@ -20,7 +20,7 @@ from macf.pd.recurrence import Recurrence
 from macf.pd.schedule import CronExpr, _utc
 from macf import calling_card
 
-#: An entry's id: ``e-`` and 12 hex digits. Opaque, and within the MacEff channel's id
+#: An entry's id: ``e-`` and 12 hex digits. Opaque, and within the MacEff Notification Channel's id
 #: pattern, which a calling card's ``@`` is not (#734's class).
 ENTRY_ID = re.compile(r"^e-[0-9a-f]{12}$")
 

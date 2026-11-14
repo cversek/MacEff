@@ -61,7 +61,7 @@ def test_a_maceff_notice_never_enters_user_remote(isolated_events_log, monkeypat
     """The persistent layer's own channel is never the operator (R107), so its notice records no
     activity and can't switch the operator's presence."""
     denies = _denies(monkeypatch)
-    notice = '<channel source="plugin:maceff-channel:maceff" notice_id="e-0123456789ab">x</channel>'
+    notice = '<channel source="plugin:maceff-notification-channel:maceff" notice_id="e-0123456789ab">x</channel>'
     assert hook.maybe_enter_user_remote(notice, hook.record_user_activity_from_payload(notice)) is False
     assert denies == []
 

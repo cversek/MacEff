@@ -132,7 +132,7 @@ def test_read_credential_yields_None_rather_than_a_partial_credential(tmp_path):
 
 
 def test_a_pid_not_running_is_an_answer_not_a_warning(capsys):
-    """The start-time check is shared by the wake, the readout, the MacEff channel's peer
+    """The start-time check is shared by the wake, the readout, the MacEff Notification Channel's peer
     check and the transcript monitor. For all of them a pid that is not running is an
     ordinary answer, so it returns None and puts nothing on stderr."""
     import subprocess

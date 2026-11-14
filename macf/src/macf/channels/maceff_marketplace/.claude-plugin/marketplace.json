@@ -7,10 +7,16 @@
   },
   "plugins": [
     {
-      "name": "maceff-channel",
+      "name": "maceff-notification-channel",
       "description": "Notices from the agent's primal daemon, delivered as channel events instead of typed keystrokes (MIS-0002 section 6.14).",
       "category": "productivity",
-      "source": "./plugins/maceff-channel"
+      "source": "./plugins/maceff-notification-channel"
+    },
+    {
+      "name": "maceff-voice-input-channel",
+      "description": "The operator's dictated speech, delivered as labeled channel events from the agent's primal daemon (MIS-0008).",
+      "category": "productivity",
+      "source": "./plugins/maceff-voice-input-channel"
     }
   ]
 }

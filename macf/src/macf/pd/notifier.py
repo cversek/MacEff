@@ -1,5 +1,5 @@
 """The notifier: notices from an agent's sources, delivered into its live session through
-the MacEff channel, and held while they can't be.
+the MacEff Notification Channel, and held while they can't be.
 
 MIS-0002 step 2. The daemon hosts it because the daemon runs while the session is down.
 A notifier inside the session (the transcript monitor's sources) is down exactly when a
@@ -76,7 +76,7 @@ SETTLED = (EVENT_DELIVERED, EVENT_SILENCED, EVENT_WITHDRAWN)
 #: (MIS-0002-R42).
 INTERNAL_SOURCES = frozenset({"pd_limit_exceeded", "pd_unread_mail", "pd_carried", "pd_run_failed",
                               "pd_run_missed", "pd_schedule_changed", "pd_grant_denied", "pd_entry_due", "pd_duty_due",
-                              "pd_unit_failed"})
+                              "pd_unit_failed", "pd_voice_unmatched", "pd_voice_lockout"})
 #: What each boot still owes, after reading back: the checkpoint the next boot reads back to
 #: (MIS-0002-R41). Its data lists each owed notice's source, arrival id, count and read time.
 EVENT_NOTICES_OWED = "pd_notices_owed"
@@ -133,12 +133,12 @@ class Owed:
 
 
 def channel_takes(source: str, arrival_id: str) -> bool:
-    """Whether the MacEff channel's record can carry this notice. The channel drops a record it
+    """Whether the MacEff Notification Channel's record can carry this notice. The channel drops a record it
     refuses after this end has written it, so a notice owed here would read delivered and never
     arrive (#734). The record's shape is the channel's own (``pd.interface``, section 4)."""
     from pydantic import ValidationError
 
-    from macf.channels.maceff_channel import NoticeRecord
+    from macf.channels.notification_channel import NoticeRecord
     try:
         NoticeRecord(source=source, arrival_id=arrival_id, read_at=0.0, sent_at=0.0)
     except ValidationError:
@@ -346,7 +346,7 @@ class Notifier:
         if self._routes.get(source, DEFAULT_INTERNAL_ROUTE) not in AGENT_ROUTES:
             return False
         if not channel_takes(source, notice_id):
-            print(f"⚠️ MACF: pd: a {source} notice is not owed: the MacEff channel would refuse its "
+            print(f"⚠️ MACF: pd: a {source} notice is not owed: the MacEff Notification Channel would refuse its "
                   f"record (id {notice_id!r}); the event log keeps the facts", file=sys.stderr)
             return False
         self._detect(source, notice_id, None, None)

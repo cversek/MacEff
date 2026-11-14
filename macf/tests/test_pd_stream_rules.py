@@ -371,7 +371,7 @@ def test_the_wrapper_passes_a_reload_on_to_the_broker_and_keeps_it_running(tmp_p
 
 # ---------------------------------------------------------------------------- R152, the session
 # The agent's session is a named subscriber in the same rules, @channel: a notice the rules keep
-# from it is never written to the MacEff channel, and is settled as pd_notice_silenced, not owed.
+# from it is never written to the MacEff Notification Channel, and is settled as pd_notice_silenced, not owed.
 
 @pytest.fixture
 def mail_home(tmp_path, monkeypatch):
@@ -388,8 +388,8 @@ def _mail(home, name):
 
 
 def _channel(daemon, monkeypatch):
-    """A MacEff channel attached to the running daemon, this test standing in for the session."""
-    from macf.channels.maceff_channel import TAKES
+    """A MacEff Notification Channel attached to the running daemon, this test standing in for the session."""
+    from macf.channels.notification_channel import TAKES
     from macf.notify.session import proc_start
     me = (os.getpid(), proc_start(os.getpid()))
     monkeypatch.setattr(daemon.core, "session_incarnation", lambda: me)
@@ -419,7 +419,7 @@ def _received(conn, timeout):
 
 
 def _records_in(data):
-    from macf.channels.maceff_channel import parse_record
+    from macf.channels.notification_channel import parse_record
     return [parse_record(line) for line in data.decode().splitlines()]
 
 

@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from macf.channels.maceff_channel import NoticeRecord
+from macf.channels.notification_channel import NoticeRecord
 from macf.pd.entries import ENTRY_ID, new_entry_id, parse_when
 from test_primal_daemon import base, run_daemon  # noqa: F401 - fixtures
 
@@ -653,7 +653,7 @@ def test_an_entry_whose_missed_run_policy_is_not_listed_is_refused_at_the_socket
 def test_an_entry_that_fired_late_says_how_late_where_its_notice_points(
         tmp_path, base, run_daemon, isolated_events_log, monkeypatch, capsys):
     """MIS-0002-R34 (late_run_MUST_state_lateness), the entry half: an entry the daemon fires
-    three hours late raises pd_entry_due, received through the MacEff channel's own record, and
+    three hours late raises pd_entry_due, received through the MacEff Notification Channel's own record, and
     the command its pointer names, run with the notice's id, states the firing's instant and how
     late it fired. The lateness is read from the pd_entry_fired event, the log's only record."""
     import re
@@ -661,7 +661,7 @@ def test_an_entry_that_fired_late_says_how_late_where_its_notice_points(
     from datetime import timedelta
 
     from macf.agent_events_log import append_event
-    from macf.channels.maceff_channel import DAEMON_POINTERS, TAKES
+    from macf.channels.notification_channel import DAEMON_POINTERS, TAKES
     from macf.cli import _build_parser
     from macf.pd import cli, client
     from macf.pd import scheduler as sc

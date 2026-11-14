@@ -1,4 +1,4 @@
-"""The keystroke wake, the notifier's fallback for a session with no MacEff channel
+"""The keystroke wake, the notifier's fallback for a session with no MacEff Notification Channel
 (MIS-0002-R45, R77, R105, R43, R106), kept to the rules of the mail clock it replaces."""
 import json
 import socket
@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from macf.agent_events_log import read_events
-from macf.channels.maceff_channel import TAKES
+from macf.channels.notification_channel import TAKES
 from macf.pd import notifier as nt
 from macf.pd import wake as wk
 from macf.utils.input_origin import WAKE_OPENING, opens_with_wake

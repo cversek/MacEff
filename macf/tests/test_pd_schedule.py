@@ -381,7 +381,7 @@ def test_wall_clock_cap(tmp_path):
 
 def test_every_failed_run_owes_a_notice(tmp_path):
     """A run that fails by its exit code, is killed past its limit, or can't start owes the
-    agent the pd_run_failed notice, which arrives through the MacEff channel (#739). Without it
+    agent the pd_run_failed notice, which arrives through the MacEff Notification Channel (#739). Without it
     a check that keeps failing looks like one with nothing to say. A run with nothing to say,
     and one whose condition holds, owe none."""
     log, now = Log(), [at("2026-10-14 12:00")]
@@ -822,7 +822,7 @@ def test_prompt_fails_run(tmp_path):
     """MIS-0002-R32 (run_MUST_fail_on_prompt): a prompt run the client denied anything met a
     permission prompt. It fails, naming the tools but never the result's text, and the agent
     is owed the pd_run_failed notice, once per run. The notice reaches the agent: it goes
-    through a notifier to the MacEff channel's own record (#734). A run denied nothing raises
+    through a notifier to the MacEff Notification Channel's own record (#734). A run denied nothing raises
     no notice."""
     log, now = Log(), [at("2026-10-14 12:00")]
     channel = ChannelReceiver(tmp_path / "agent")
