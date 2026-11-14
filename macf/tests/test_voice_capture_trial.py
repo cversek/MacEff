@@ -30,16 +30,16 @@ def test_a_near_fire_prints_its_peak_and_whether_it_crossed_the_bar():
     said = []
     d = trial.PeakReporting(Scripted(0.1, 0.5, 0.88, 0.4, 0.0, 0.2, 0.97, 0.99, 0.1, 0.25), "yo tom", 0.95, said.append)
     assert scored(d, 10) == [0.1, 0.5, 0.88, 0.4, 0.0, 0.2, 0.97, 0.99, 0.1, 0.25]
-    assert said == ["yo tom peaked 0.880 (bar 0.95): under the bar", "yo tom peaked 0.990 (bar 0.95): fired"]
+    assert said == ["yo tom 0.88 → under the bar 0.95"], "a fire is the unit's line, not the reporter's"
 
 
 def test_a_reset_mid_peak_reports_it_and_resets_the_model():
-    """A wake resets the detectors while the score is still high; that peak is still printed."""
-    said, inner = [], Scripted(0.6, 0.99)
+    """Another agent's wake resets every detector while this one's near miss is still high; it is still printed."""
+    said, inner = [], Scripted(0.6, 0.8)
     d = trial.PeakReporting(inner, "hey ada", 0.95, said.append)
     scored(d, 2)
     d.reset()
-    assert said == ["hey ada peaked 0.990 (bar 0.95): fired"] and inner.resets == 1
+    assert said == ["hey ada 0.80 → under the bar 0.95"] and inner.resets == 1
 
 
 class StopsAfter:
@@ -87,7 +87,7 @@ def test_each_utterance_is_printed_with_why_it_ended_and_counted():
     deliver(Utterance(trigger="wake_phrase", spoken_at=1794600000.0, screen="unlocked", text="check the queue",
                       agent="Tester_abc123", ended="send"))
     log = trial.logger(tally, said.append)
-    log("wake for Tester_abc123")
+    log("yo tom 0.99 → speech ✓ → heard ✓ → wake for Tester_abc123")
     assert (tally.utterances, tally.wakes) == (1, 1)
     assert "ended: send" in said[0] and "check the queue" in said[0] and "Tester_abc123" in said[0]
 

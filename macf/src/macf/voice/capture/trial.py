@@ -25,8 +25,8 @@ NEAR = 0.3
 
 
 class PeakReporting(WakeDetector):
-    """Any wake detector, printing each near-fire: when its score climbs past ``NEAR`` and falls back,
-    the peak and the bar, so a live miss shows whether the model came close."""
+    """Any wake detector, printing each near miss: when its score climbs past ``NEAR`` and falls back under the
+    bar, the peak against the bar, so a live miss shows whether the model came close. A fire is the unit's to say."""
 
     def __init__(self, inner: WakeDetector, label: str, bar: float, say: Callable[[str], None]):
         self.inner, self.label, self.bar, self.say = inner, label, bar, say
@@ -47,8 +47,10 @@ class PeakReporting(WakeDetector):
         self.inner.reset()
 
     def _report(self) -> None:
-        mark = "fired" if self.peak >= self.bar else "under the bar"
-        self.say(f"{self.label} peaked {self.peak:.3f} (bar {self.bar:.2f}): {mark}")
+        # A peak that reached the bar is a fire, which the capture unit itself says, with what came of it, on
+        # one line; only a near miss is said here.
+        if self.peak < self.bar:
+            self.say(f"{self.label} {self.peak:.2f} → under the bar {self.bar:.2f}")
         self.peak = 0.0
 
 
@@ -79,7 +81,7 @@ def printer(tally: Tally, out=print) -> Callable:
 
 def logger(tally: Tally, out=print) -> Callable[[str], None]:
     def log(line: str) -> None:
-        if line.startswith("wake for"):
+        if "→ wake for" in line:
             tally.wakes += 1
         out(f"   {time.strftime('%H:%M:%S')} {line}")
     return log
@@ -141,6 +143,6 @@ def build(home: Path, phrases: List[str], models: List[str], vocabulary: Optiona
     unit = CaptureUnit(CaptureConfig(agent=card), members=members, audio=PipeWireAudio(), lock=LinuxLockState(),
                        indicator=OverlayIndicator(), triggers=NoKeys(), gate=SileroGate(),
                        **transcription(vocabulary),
-                       deliver=printer(tally, out), log=log)
+                       deliver=printer(tally, out), log=log, show_words=True)
     listening = ", ".join(f'"{m.wake_phrase}" (bar {m.detector_bar:.2f})' for m in members)
     return Trial(unit=unit, tally=tally, listening=listening)

@@ -132,6 +132,8 @@ class _Agent:
         self.failures: List[float] = []
         self.locked_out_until: Optional[float] = None
         self.locked_out_attempts = 0
+        #: Whether this agent's model is above its bar now, so a run of firing frames is one fire.
+        self.firing = False
 
     @property
     def wakeable(self) -> bool:
@@ -208,7 +210,7 @@ class CaptureUnit:
                  guard_lowered: Callable[[], bool] = lambda: False,
                  members: Optional[List[AgentBinding]] = None,
                  check: Optional[Callable[[np.ndarray, Optional[str]], str]] = None,
-                 release: Callable[[], int] = lambda: 0):
+                 release: Callable[[], int] = lambda: 0, show_words: bool = False):
         self.config = config
         self.audio, self.lock, self.indicator, self.triggers = audio, lock, indicator, triggers
         self.gate, self._transcribe, self._deliver = gate, transcribe, deliver
@@ -217,6 +219,9 @@ class CaptureUnit:
         self._check = check or transcribe
         #: Gives back the transcription model's memory while listening is off (R58); 0 when nothing was held.
         self._release = release
+        #: Whether a wake's line may quote what the words check heard. Off for a running unit, whose log is
+        #: the journal and carries no words (R10); on for ``voice capture trial``, printing to a terminal.
+        self.show_words = show_words
         self._listening_on, self._speaking = listening_on, speaking
         self.clock, self.wall, self.log = clock, wall, log
         self.executor = executor or ThreadPoolExecutor(max_workers=1, thread_name_prefix="voice-transcribe")
@@ -241,6 +246,8 @@ class CaptureUnit:
         #: A wake check in flight: (agent, future, the window it judges, the frames read since).
         self._checking: Optional[tuple] = None
         self._quiet_until = 0.0
+        #: Why fires are ignored until ``_quiet_until``, said on the fire's own line.
+        self._quiet_why = ""
         #: When the microphone opened and how many frames were read since: how far behind real time the
         #: unit is, and whether it said so already.
         self._opened_at: Optional[float] = None
@@ -379,38 +386,53 @@ class CaptureUnit:
             return
         # Every wake model hears every frame, so each keeps its own state; the first to fire
         # decides whose phrase is checked (R47).
-        fired = None
+        fired, fired_score = None, 0.0
         for agent in self.agents:
             if agent.wakeable:
                 score = agent.b.detector.score(frame)
-                if fired is None and score >= agent.b.detector_bar:
-                    fired = agent
+                above = score >= agent.b.detector_bar
+                if above and not agent.firing and now < self._quiet_until:
+                    # Said once per fire, so a fire that changes nothing still reads as decided, not dropped.
+                    self.log(f"{agent.b.wake_phrase} {score:.2f} → ignored: {self._quiet_why}")
+                agent.firing = above
+                if fired is None and above:
+                    fired, fired_score = agent, score
         if now < self._quiet_until:
             return
         if self._pending is None:
             if fired is not None:
-                self._pending = (fired, now)
+                self._pending = (fired, now, fired_score)
             return
-        agent, since = self._pending
+        agent, since, score = self._pending
+        if fired is agent:
+            score = max(score, fired_score)
+            self._pending = (agent, since, score)
         if now - since < SETTLE_AFTER_FIRE_S:
             return
         self._pending = None
+        chain = f"{agent.b.wake_phrase} {score:.2f}"
         window = np.concatenate(self.ring)
         if not self._window_has_speech(window):
-            self.log("wake fired with no speech in the window: rejected")
-            self._quiet_until = now + REJECT_COOLDOWN_S
+            self._reject(f"{chain} → no speech in the window: rejected", now)
             return
+        chain += " → speech ✓"
         if not self._voice_lock_passes(agent, window, now):
-            self._quiet_until = now + REJECT_COOLDOWN_S
+            self._reject(f"{chain} → voice not matched: rejected", now)
             return
+        if agent.b.speaker is not None:
+            chain += " → voice ✓"
         self._checking = (agent, self.wake_executor.submit(self._check, window, agent.b.wake_phrase),
-                          list(self.ring), [])
+                          list(self.ring), [], chain)
         self._judge_wake(now)
+
+    def _reject(self, line: str, now: float) -> None:
+        self.log(line)
+        self._quiet_until, self._quiet_why = now + REJECT_COOLDOWN_S, "just after a rejected wake"
 
     def _judge_wake(self, now: float) -> None:
         """Act on the wake check once its transcription is back. Until then the loop goes on reading the
         microphone, and the frames read meanwhile are kept, so nothing said after the phrase is lost."""
-        agent, future, window_frames, since = self._checking
+        agent, future, window_frames, since, chain = self._checking
         if not future.done():
             return
         self._checking = None
@@ -418,15 +440,14 @@ class CaptureUnit:
         try:
             heard = future.result() or ""
         except Exception as e:  # noqa: BLE001 - a failed check is a rejected wake, said, never a crash of the loop
-            self.log(f"the wake check failed ({e}): rejected")
-            self._quiet_until = now + REJECT_COOLDOWN_S
+            self._reject(f"{chain} → the words check failed ({e}): rejected", now)
             return
         found = agent.phrase.search(heard)
+        said = f" {heard.strip()!r}" if self.show_words else ""
         if not found:
-            self.log("wake fired but the phrase wasn't heard: rejected")
-            self._quiet_until = now + REJECT_COOLDOWN_S
+            self._reject(f"{chain} → heard{said} ✗ not the phrase: rejected", now)
             return
-        self.log(f"wake for {agent.b.agent}")
+        self.log(f"{chain} → heard{said} ✓ → wake for {agent.b.agent}")
         self._start("wake_phrase", agent, preroll=window_frames + since)
         if agent.b.speaker is not None:
             self.recording.voice_lock = "matched"
@@ -541,7 +562,7 @@ class CaptureUnit:
         self.recording = None
         self.recording_since = None
         self.indicator.hide()
-        self._quiet_until = now + COOLDOWN_S
+        self._quiet_until, self._quiet_why = now + COOLDOWN_S, "just after a recording"
         if not (self._listening_on() and self._wakeable()):
             self._close()
         else:

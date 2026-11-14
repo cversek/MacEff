@@ -578,6 +578,46 @@ def test_listening_off_releases_the_transcription_model_and_listening_on_keeps_i
     assert [u.text for u in rig.delivered] == ["held"] and released == [1, 1]
 
 
+def chains(rig) -> list:
+    return [line for line in rig.logged if line.startswith("yo tom ")]
+
+
+def test_each_wake_is_one_line_from_its_score_to_its_decision():
+    """The operator, in the fourth live trial: "I want to see that decision chain per line, not just a bunch of events
+    per line." A taken wake, a fire with no speech, a phrase not heard, and a fire just after a recording each read as
+    one line, gates in order. The unit's own log quotes no words (R10)."""
+    from voice_fakes import QUIET_WAKE
+    taken = make_unit(wake_script(), ScriptedTranscriber("yo tom", "Yo Tom, check the queue."))
+    taken.run(len(taken.audio.script) + 2)
+    quiet = make_unit(FakeAudio().then((SILENCE, 5), (QUIET_WAKE, 4), (SILENCE, 20)), ScriptedTranscriber())
+    quiet.run(29)
+    misheard = make_unit(wake_script(), ScriptedTranscriber("bo tom"))
+    misheard.run(len(misheard.audio.script))
+    assert chains(taken)[0] == "yo tom 1.00 → speech ✓ → heard ✓ → wake for Tester_abc123"
+    assert chains(quiet) == ["yo tom 1.00 → no speech in the window: rejected"]
+    assert chains(misheard) == ["yo tom 1.00 → speech ✓ → heard ✗ not the phrase: rejected"]
+    assert all("check the queue" not in line and "bo tom" not in line
+               for rig in (taken, misheard) for line in rig.logged), "the unit's log quoted words"
+
+
+def test_a_fire_just_after_a_recording_is_said_once_as_ignored():
+    """The many FIRED lines after an utterance: each fire inside the quiet after a recording is one line saying so."""
+    audio = wake_script().then((WAKE, 6), (SILENCE, 3), (WAKE, 6), (SILENCE, secs(4)))
+    rig = make_unit(audio, ScriptedTranscriber("yo tom", "Yo Tom, check the queue."))
+    rig.run(len(rig.audio.script))
+    ignored = [line for line in chains(rig) if "ignored" in line]
+    assert ignored == ["yo tom 1.00 → ignored: just after a recording"] * 2
+
+
+def test_the_trial_quotes_what_the_words_check_heard():
+    """In the trial, printing to a terminal, the line says what Whisper heard: the operator's "Bo Tom" woke the unit
+    once, and the line is where that shows."""
+    rig = make_unit(wake_script(), ScriptedTranscriber("bo tom"))
+    rig.unit.show_words = True
+    rig.run(len(rig.audio.script))
+    assert chains(rig) == ["yo tom 1.00 → speech ✓ → heard 'bo tom' ✗ not the phrase: rejected"]
+
+
 def test_send_as_whisper_heard_it_still_sends():
     """The second live trial: Whisper wrote the operator's last-word "send" as "Sand". That spelling counts as
     send, and is cut from the text like the word itself."""
