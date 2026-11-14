@@ -1,0 +1,3 @@
+### Added
+
+- **The tray's agent entries have an Attach item that opens a terminal window on that agent's session** (`macf/tray/attach.py`, `Controller.attach`, #726): a restart of the session unit ends the tmux server an operator was attached to, and getting back in took typing `harness attach` by hand. The item writes a `.command` file running `harness attach --card <card>` into the user's private runtime directory and hands it to `open`, which needs no Automation grant. iTerm2, when installed, gets a control-mode window; Terminal gets a plain one, since control mode there prints the raw protocol. The tray asks no daemon anything to attach, and it still never types into a session (MIS-0002-R71).
