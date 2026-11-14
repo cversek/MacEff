@@ -202,13 +202,23 @@ def _segments_result(segments, text: str, language: str, engine: str, model: str
                             duration_audio=segments[-1].end if segments else 0.0, duration_transcribe=elapsed)
 
 
+#: Decoding that can't run away. Whisper's defaults retry at rising temperatures and condition each window on
+#: the last, and on a short clip primed with a prompt that can loop: a live trial's "yo tom" came back as the
+#: phrase repeated to the token limit, after 38 s on the CPU. Greedy, unconditioned decoding took at most 1.2 s
+#: on the same clips.
+BOUNDED_DECODE = {"temperature": 0.0, "condition_on_previous_text": False}
+
+
 def transcribe_faster_whisper(audio, model: str = "large-v3-turbo", language: str = "en",
-                              initial_prompt: Optional[str] = None) -> TranscriptResult:
+                              initial_prompt: Optional[str] = None, max_tokens: Optional[int] = None) -> TranscriptResult:
     """Transcribe with faster-whisper, the Linux engine. ``audio`` is a WAV path, or float32
-    samples at 16 kHz held in memory, which is how a capture unit calls it (MIS-0008 R13)."""
+    samples at 16 kHz held in memory, which is how a capture unit calls it (MIS-0008 R13). ``max_tokens``
+    caps a short check (a wake phrase, a stop word), so a loop costs a moment rather than the token limit."""
     whisper_model = _faster_whisper_model(model)
     t0 = time.time()
-    found, info = whisper_model.transcribe(audio, language=language, initial_prompt=initial_prompt)
+    capped = {"without_timestamps": True, "max_new_tokens": max_tokens} if max_tokens else {}
+    found, info = whisper_model.transcribe(audio, language=language, initial_prompt=initial_prompt,
+                                           **BOUNDED_DECODE, **capped)
     segments = [TranscriptSegment(text=s.text.strip(), start=s.start, end=s.end, confidence=1.0 - s.no_speech_prob)
                 for s in found]       # the generator does the work, so the time is taken after it
     return _segments_result(segments, " ".join(s.text for s in segments), info.language or language,
@@ -216,9 +226,10 @@ def transcribe_faster_whisper(audio, model: str = "large-v3-turbo", language: st
 
 
 def transcribe_array(audio, engine: Optional[str] = None, model: Optional[str] = None, language: str = "en",
-                     initial_prompt: Optional[str] = None) -> TranscriptResult:
+                     initial_prompt: Optional[str] = None, max_tokens: Optional[int] = None) -> TranscriptResult:
     """Transcribe samples held in memory: float32 or int16, mono, 16 kHz. Nothing is written to
-    disk, so raw audio stays in the caller's memory (MIS-0008 R13). Every engine takes an array."""
+    disk, so raw audio stays in the caller's memory (MIS-0008 R13). Every engine takes an array.
+    ``max_tokens`` caps a short check; only faster-whisper honors it so far, and the others say so."""
     import numpy as np
     samples = np.asarray(audio)
     if samples.dtype == np.int16:
@@ -230,7 +241,12 @@ def transcribe_array(audio, engine: Optional[str] = None, model: Optional[str] =
                            "mlx-whisper (Mac), faster-whisper (Linux), openai-whisper (universal)")
     model = model or DEFAULT_MODELS.get(engine, "")
     if engine == "faster-whisper":
-        return transcribe_faster_whisper(samples, model=model, language=language, initial_prompt=initial_prompt)
+        return transcribe_faster_whisper(samples, model=model, language=language, initial_prompt=initial_prompt,
+                                         max_tokens=max_tokens)
+    if max_tokens:
+        import warnings
+        warnings.warn(f"{engine} doesn't cap tokens yet: a short check can run as long as a full transcription",
+                      RuntimeWarning, stacklevel=2)
     if engine == "mlx":
         return transcribe_mlx(samples, model=model, language=language, initial_prompt=initial_prompt)
     if engine == "whisper":

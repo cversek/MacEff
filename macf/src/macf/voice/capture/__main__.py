@@ -45,6 +45,22 @@ class NoKeys(TriggerSource):
 PROMPT_CHARS = 880
 
 
+#: The token cap on the short checks, the wake phrase and the stop words: room for a few words, and no more.
+CHECK_TOKENS = 24
+
+
+def transcribers(vocabulary: Optional[str]):
+    """The unit's two transcribers: the full one for an utterance, and the capped one for its short checks."""
+    from macf.voice.transcribe import transcribe_array
+
+    def transcribe(audio, phrase):
+        return transcribe_array(audio, initial_prompt=whisper_prompt(phrase, vocabulary)).text
+
+    def check(audio, phrase):
+        return transcribe_array(audio, initial_prompt=whisper_prompt(phrase, vocabulary), max_tokens=CHECK_TOKENS).text
+    return transcribe, check
+
+
 def whisper_prompt(phrase: Optional[str], vocabulary: Optional[str]) -> Optional[str]:
     """What Whisper is primed with: the declared vocabulary (names and terms it would otherwise spell as
     sound-alikes), then the wake phrase where there is one. The vocabulary is cut to the budget, keeping
@@ -117,7 +133,6 @@ def build(home: Path):
     from macf.pd.core import load_declaration
     from macf.pd.interface import agent_card
     from macf.voice.capture.models import SileroGate, TrainedWakeDetector
-    from macf.voice.transcribe import transcribe_array
     card = agent_card(home)
     declaration = load_declaration(home, card)
     if declaration.voice_dispatch is not None:
@@ -140,8 +155,7 @@ def build(home: Path):
         model = Path(voice.wake_model)
         detector = TrainedWakeDetector(model if model.is_absolute() else home / model)
 
-    def transcribe(audio, phrase):
-        return transcribe_array(audio, initial_prompt=whisper_prompt(phrase, voice.transcription_prompt)).text
+    transcribe, check = transcribers(voice.transcription_prompt)
 
     config = CaptureConfig(agent=card, wake_phrase=voice.wake_phrase, hold_key=voice.hold_key,
                            toggle_key=voice.toggle_key,
@@ -152,7 +166,7 @@ def build(home: Path):
     return card, CaptureUnit(
         config, audio=PipeWireAudio(), lock=LinuxLockState(), indicator=OverlayIndicator(),
         triggers=EvdevTriggers(voice.trigger_devices) if voice.trigger_devices else NoKeys(),
-        gate=SileroGate(), detector=detector, transcribe=transcribe,
+        gate=SileroGate(), detector=detector, transcribe=transcribe, check=check,
         deliver=lambda u: deliver(card, u), on_voice_event=lambda kind, data: voice_event(card, kind, data),
         guard_lowered=lambda: guard_lowered(card),
         listening_on=lambda: state.listening_on(home),
@@ -222,13 +236,11 @@ def _platform_backends(trigger_devices, vocabulary: Optional[str] = None) -> dic
         raise RuntimeError("this platform has no capture backends yet; docs/VOICE_PORTING.md says what to write (MIS-0008 R14)")
     from macf.voice.capture.linux import EvdevTriggers, LinuxLockState, OverlayIndicator, PipeWireAudio
     from macf.voice.capture.models import SileroGate
-    from macf.voice.transcribe import transcribe_array
 
-    def transcribe(audio, phrase):
-        return transcribe_array(audio, initial_prompt=whisper_prompt(phrase, vocabulary)).text
+    transcribe, check = transcribers(vocabulary)
     return dict(audio=PipeWireAudio(), lock=LinuxLockState(), indicator=OverlayIndicator(),
                 triggers=EvdevTriggers(trigger_devices) if trigger_devices else NoKeys(), gate=SileroGate(),
-                transcribe=transcribe)
+                transcribe=transcribe, check=check)
 
 
 def main(argv=None) -> int:

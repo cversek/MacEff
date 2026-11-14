@@ -206,10 +206,14 @@ class CaptureUnit:
                  speaker: Optional[Callable[[np.ndarray], bool]] = None,
                  on_voice_event: Callable[[str, dict], None] = lambda kind, data: None,
                  guard_lowered: Callable[[], bool] = lambda: False,
-                 members: Optional[List[AgentBinding]] = None):
+                 members: Optional[List[AgentBinding]] = None,
+                 check: Optional[Callable[[np.ndarray, Optional[str]], str]] = None):
         self.config = config
         self.audio, self.lock, self.indicator, self.triggers = audio, lock, indicator, triggers
         self.gate, self._transcribe, self._deliver = gate, transcribe, deliver
+        #: The short checks, the wake phrase and the stop words: a transcriber capped to a few words, so a
+        #: decode that loops costs a moment. The full transcriber when none is given.
+        self._check = check or transcribe
         self._listening_on, self._speaking = listening_on, speaking
         self.clock, self.wall, self.log = clock, wall, log
         self.executor = executor or ThreadPoolExecutor(max_workers=1, thread_name_prefix="voice-transcribe")
@@ -388,7 +392,7 @@ class CaptureUnit:
         if not self._voice_lock_passes(agent, window, now):
             self._quiet_until = now + REJECT_COOLDOWN_S
             return
-        self._checking = (agent, self.wake_executor.submit(self._transcribe, window, agent.b.wake_phrase),
+        self._checking = (agent, self.wake_executor.submit(self._check, window, agent.b.wake_phrase),
                           list(self.ring), [])
         self._judge_wake(now)
 
@@ -489,7 +493,7 @@ class CaptureUnit:
         if rec.stop_check is None and rec.stop_checked_at != rec.last_speech:
             tail = np.concatenate(rec.frames[-int(STOP_TAIL_S * RATE / FRAME):])
             rec.stop_checked_at = rec.last_speech
-            rec.stop_check = self.executor.submit(self._transcribe, tail, None)
+            rec.stop_check = self.executor.submit(self._check, tail, None)
         if rec.stop_check is not None and rec.stop_check.done():
             future, rec.stop_check = rec.stop_check, None
             try:
@@ -594,9 +598,12 @@ class CaptureUnit:
                 "mode": rec.mode if rec is not None else None}
 
     def shutdown(self) -> None:
-        self.executor.shutdown(wait=True)
-        if self.wake_executor is not self.executor:
-            self.wake_executor.shutdown(wait=True)
-        self.indicator.hide()
+        # The microphone closes first: nothing reads it from here on, and a recorder left writing into a full
+        # pipe is slow to stop. Then a wake check in flight is dropped, since it decides nothing now, and the
+        # last utterance's transcription is waited for, so what was said is still delivered.
         self.audio.close()
+        self.indicator.hide()
+        if self.wake_executor is not self.executor:
+            self.wake_executor.shutdown(wait=False, cancel_futures=True)
+        self.executor.shutdown(wait=True)
         self.triggers.close()

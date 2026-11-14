@@ -10,12 +10,19 @@ from macf.voice import transcribe as tr
 
 @pytest.fixture
 def fake_faster_whisper(monkeypatch):
-    """faster-whisper's model, standing in: it records what it was handed and says one segment."""
-    handed = []
+    """faster-whisper's model, standing in: it records what it was handed, and in ``.decoded`` the decoding
+    options of each call, and says one segment."""
+
+    class Handed(list):
+        decoded: list
+
+    handed = Handed()
+    handed.decoded = []
 
     class Model:
-        def transcribe(self, audio, language=None, initial_prompt=None):
+        def transcribe(self, audio, language=None, initial_prompt=None, **options):
             handed.append((audio, language, initial_prompt))
+            handed.decoded.append(options)
             seg = SimpleNamespace(text=" check the queue", start=0.0, end=1.2, no_speech_prob=0.1)
             return iter([seg]), SimpleNamespace(language="en")
 
@@ -53,3 +60,14 @@ def test_samples_in_memory_are_transcribed_without_a_file(monkeypatch, fake_fast
 def test_an_engine_nobody_knows_is_refused_by_name():
     with pytest.raises(ValueError, match="Unknown engine: vinyl"):
         tr.transcribe_array(np.zeros(160, dtype=np.float32), engine="vinyl")
+
+
+def test_decoding_is_bounded_and_a_short_check_is_capped(fake_faster_whisper):
+    """A live trial: Whisper's default decoding wrote "yo tom" over and over to the token limit, 38 s on the CPU.
+    Every call is greedy and unconditioned; a short check is capped to a few tokens."""
+    tr.transcribe_array(np.zeros(16000, np.float32), engine="faster-whisper")
+    tr.transcribe_array(np.zeros(16000, np.float32), engine="faster-whisper", max_tokens=24)
+    full, check = fake_faster_whisper.decoded
+    assert full == {"temperature": 0.0, "condition_on_previous_text": False}
+    assert check == {"temperature": 0.0, "condition_on_previous_text": False, "without_timestamps": True,
+                     "max_new_tokens": 24}

@@ -110,8 +110,7 @@ def build(home: Path, phrases: List[str], models: List[str], vocabulary: Optiona
     from macf.pd.interface import agent_card
     from macf.voice.capture.models import SileroGate, TrainedWakeDetector
     from macf.voice.capture.unit import AgentBinding, CaptureConfig, CaptureUnit
-    from macf.voice.capture.__main__ import NoKeys, whisper_prompt
-    from macf.voice.transcribe import transcribe_array
+    from macf.voice.capture.__main__ import NoKeys, transcribers
     card = agent_card(home)
     voice = None
     try:
@@ -139,10 +138,9 @@ def build(home: Path, phrases: List[str], models: List[str], vocabulary: Optiona
         members.append(AgentBinding(agent=agent, wake_phrase=phrase, detector_bar=detector.threshold,
                                     detector=PeakReporting(detector, phrase, detector.threshold, log)))
 
-    def transcribe(audio, phrase):
-        return transcribe_array(audio, initial_prompt=whisper_prompt(phrase, vocabulary)).text
+    transcribe, check = transcribers(vocabulary)
     unit = CaptureUnit(CaptureConfig(agent=card), members=members, audio=PipeWireAudio(), lock=LinuxLockState(),
-                       indicator=OverlayIndicator(), triggers=NoKeys(), gate=SileroGate(), transcribe=transcribe,
+                       indicator=OverlayIndicator(), triggers=NoKeys(), gate=SileroGate(), transcribe=transcribe, check=check,
                        deliver=printer(tally, out), log=log)
     listening = ", ".join(f'"{m.wake_phrase}" (bar {m.detector_bar:.2f})' for m in members)
     return Trial(unit=unit, tally=tally, listening=listening)
