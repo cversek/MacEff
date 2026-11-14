@@ -231,6 +231,15 @@ class Overlay:
             cr.set_source_rgba(0.45, 0.8, 0.95, 0.85 if self.window < 1.0 else 0.4)
         cr.rectangle(0, height - 3, band_w * self.window, 3)
         cr.fill()
+        if self.mode == "key_session":
+            # The operator: "a little lock icon for the bar that just shows you that it's in that mode" (R60).
+            x, y = band_w - 14, height - 17
+            cr.set_source_rgba(0.45, 0.8, 0.95, 0.95)
+            cr.set_line_width(1.6)
+            cr.arc(x + 5, y + 5, 3.2, 3.1416, 0)      # the shackle
+            cr.stroke()
+            cr.rectangle(x + 1, y + 5, 8, 7)            # the body
+            cr.fill()
 
     def draw_spectrogram(self, _area, cr, width, height):
         """Frequency up, time across, newest at the right: each column one frame's bands, colored by loudness."""
