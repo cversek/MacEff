@@ -53,6 +53,7 @@ Text on a screen reaches whoever looks at it. Speech reaches whoever is in earsh
 **2.2 Giving Way to a Recording**
 - When does speech wait, and when does it stop mid-sentence?
 - What is dropped, and what can I do about it?
+- I was cut off mid-sentence. How do I learn what the operator actually heard?
 
 **2.3 One Worker, One Voice at a Time**
 - What does one speech worker per system mean for my messages?
@@ -175,6 +176,12 @@ The speech worker never plays while the capture unit is recording (MIS-0008 R29)
 - **During a sentence**, a recording that opens stops that sentence at once, and the rest of that message is dropped. Nothing plays until the recording ends.
 
 **What this means for you.** A message may be cut short, and the dropped part is not queued again. If the content matters, it is on screen (1); speak it again only if the operator asks. An operator who presses a key while you talk is heard, not talked over.
+
+**You are told where you were cut off** (MIS-0008 R55). When a recording cuts your speech, you learn once which of your words the operator heard and which they didn't:
+- **Where it appears:** on the voice message that recording produced, after its label ("This recording cut off your speech"). If the operator pressed the key and said nothing, it appears on your next prompt instead (✂️).
+- **How it was known:** sentences played to the end are exact. For the sentence cut, the words heard come from the engine's word timings where it gives them ("measured"), and otherwise are estimated from how long the sentence had played ("estimated"). A word still playing at the cut counts as not heard. The Kokoro engine gives no word timings, so its cuts are estimated.
+- **What to do with it:** answer the interruption knowing what the operator actually heard. Don't assume the cut-off part landed. If something they didn't hear still matters to the answer, say it on screen, or aloud if they ask. Treat an estimate as approximate: the boundary may be off by a word.
+- **What it holds:** your own words, read by your daemon from your home, never the operator's or a sender's. A stop (2.1) is not a cut, and tells you nothing. A cut more than ten minutes old is not told.
 
 ### 2.3 One Worker, One Voice at a Time
 

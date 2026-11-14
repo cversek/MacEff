@@ -450,6 +450,17 @@ Breadcrumb: {breadcrumb}"""
         except (OSError, ValueError, ImportError) as e:
             emit_warning(Warning(source="user_prompt_submit", kind="voice_guard_line_failed",
                                  detail=f"voice guard line skipped: {e}"))
+        # MIS-0008 R55: a cut of the agent's speech that no utterance carried is told here, once.
+        try:
+            from macf.utils.paths import find_agent_home
+            from macf.voice.speech.cut import prompt_line as cut_prompt_line
+            home = find_agent_home()
+            cut_line = cut_prompt_line(home) if home else ""
+            if cut_line:
+                guard_line = f"{guard_line}\n{cut_line}" if guard_line else cut_line
+        except (OSError, ValueError, ImportError) as e:
+            emit_warning(Warning(source="user_prompt_submit", kind="speech_cut_line_failed",
+                                 detail=f"speech cut line skipped: {e}"))
 
         # Format footer
         footer = format_macf_footer()

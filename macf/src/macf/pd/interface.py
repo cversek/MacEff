@@ -1156,6 +1156,21 @@ class UtteranceRecord(_Closed):
     #: from the agent's own capture unit, checked by the kernel's peer pid, or dispatched by its
     #: system's capture unit with the signature verified (MIS-0008 R48).
     route: Literal["own_capture_unit", "system_signed"] = "own_capture_unit"
+    #: When this recording cut the agent's own speech: what the operator heard of it, and what they
+    #: didn't (MIS-0008 R55). The agent's words, read by its daemon from its own home, never the sender's.
+    speech_cut: Optional["SpeechCutNote"] = None
+
+
+class SpeechCutNote(_Closed):
+    """The agent's speech, as a key cut it: heard and not heard, and whether the split was measured
+    from the engine's word times or estimated from how long the sentence had played."""
+
+    heard: str = Field(max_length=700)
+    unheard: str = Field(max_length=700)
+    how: Literal["measured", "estimated"]
+
+
+UtteranceRecord.model_rebuild()
 
 
 class StatusRequest(_Closed):

@@ -231,8 +231,9 @@ class Daemon:
         if self.agent and decl.voice is not None:
             voice_path = voice_socket(self.card, self.base)
             check_socket_path(voice_path)
+            from macf.voice.speech import cut as speech_cut
             self.voice = VoiceCarriage(self.card, voice_path, decl.voice, self._outside_session,
-                                       self.core.incarnation)
+                                       self.core.incarnation, speech_cut=lambda: speech_cut.take_untold(self.home))
             if decl.voice.dispatched_by is not None:
                 self.voice_verifier()      # the nonce record is rebuilt now, at start (MIS-0007 R56)
         #: The build this daemon started from, said in every status (MacEff #816). Read once:

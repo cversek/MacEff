@@ -36,7 +36,7 @@ from macf.notify.session import descends_from
 from macf.pd.interface import (EVENT_VOICE_CHANNEL_DECLARED, EVENT_VOICE_DISPATCH, EVENT_VOICE_GUARD,
                                EVENT_VOICE_UNMATCHED,
                                EVENT_VOICE_UTTERANCE, ChannelHello, Response, VoiceEventRequest, VoiceGuardRequest,
-                               UtteranceRecord, UtteranceRequest, VoiceSection)
+                               SpeechCutNote, UtteranceRecord, UtteranceRequest, VoiceSection)
 from macf.utils.peercred import peer_credentials
 
 #: How long a newly attached voice channel has to send its hello.
@@ -76,8 +76,11 @@ class VoiceCarriage:
 
     def __init__(self, card: str, path: Path, voice: VoiceSection,
                  outside_session: Callable[[object], str],
-                 incarnation: Callable[[str], Optional[tuple]]):
+                 incarnation: Callable[[str], Optional[tuple]],
+                 speech_cut: Callable[[], Optional[dict]] = lambda: None):
         self.card = card
+        #: Takes the agent's latest untold speech cut from its home, marking it told (R55).
+        self._speech_cut = speech_cut
         self.path = Path(path)
         self.voice = voice
         self._outside_session = outside_session
@@ -232,7 +235,13 @@ class VoiceCarriage:
         return self._receipt(request, utterance_id, unit, "delivered", None)
 
     def _send(self, record: UtteranceRecord) -> int:
-        """Hand one utterance to every voice channel that said it takes them; how many took it."""
+        """Hand one utterance to every voice channel that said it takes them; how many took it. A cut
+        of the agent's own speech not yet told rides along with it (R55)."""
+        if self.voice_channels_ready():
+            note = self._speech_cut()
+            if note is not None:
+                record = record.model_copy(update={"speech_cut": SpeechCutNote(
+                    heard=note.get("heard", ""), unheard=note.get("unheard", ""), how=note.get("how", "estimated"))})
         line = record.model_dump_json().encode() + b"\n"
         sent = 0
         for conn, attached in list(self.channels.items()):
@@ -244,6 +253,11 @@ class VoiceCarriage:
             except OSError as e:
                 self._drop(conn, f"sending an utterance failed: {e}")
         return sent
+
+    def voice_channels_ready(self) -> bool:
+        """Whether any attached voice channel said it takes utterances: only then is a cut taken to
+        be told, so it isn't marked told for a message that goes nowhere."""
+        return any(a.ready for a in self.channels.values())
 
     def dispatched(self, payload: bytes, *, retained: bool, verifier, now: Optional[float] = None,
                    raise_notice: Callable[[str, str], bool] = lambda source, notice_id: False) -> dict:

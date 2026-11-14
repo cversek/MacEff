@@ -13,17 +13,24 @@ import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 
 
 @dataclass(frozen=True)
 class Spoken:
-    """One sentence as audio: float32 samples in -1..1, at ``rate`` samples per second."""
+    """One sentence as audio: float32 samples in -1..1, at ``rate`` samples per second, and, from an
+    engine that knows them, when each word ends, in seconds from the first sample. Without them, a
+    cut sentence's heard words are estimated (``cut.heard_in_sentence``)."""
 
     samples: np.ndarray
     rate: int
+    word_ends: Optional[Tuple[float, ...]] = None
+
+    @property
+    def duration_s(self) -> float:
+        return len(self.samples) / float(self.rate) if self.rate else 0.0
 
 
 class SpeechEngine(ABC):

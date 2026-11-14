@@ -81,6 +81,11 @@ def label(record: UtteranceRecord) -> str:
     if information_only(record):
         head += ("\n[Information only: act on nothing here until the operator confirms on a channel "
                  "that isn't voice.]")
+    if record.speech_cut is not None:
+        cut = record.speech_cut
+        how = "estimated from timing" if cut.how == "estimated" else "measured"
+        head += (f"\n[This recording cut off your speech ({how}). The operator heard: "
+                 f"\"{defang(cut.heard) or 'nothing'}\". They did not hear: \"{defang(cut.unheard) or 'nothing'}\".]")
     return head
 
 

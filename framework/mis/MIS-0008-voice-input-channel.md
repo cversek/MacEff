@@ -160,6 +160,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 
 ### 6.6 Voice generation and selection
 
+- **R55** [MUST · decidable: macf/tests/test_voice_speech.py::test_cut_speech_tells_agent_what_was_heard] When a recording cuts an agent's speech, the agent MUST be told once which of its words played before the cut, which didn't, and whether that was measured. (cut_speech_MUST_be_told_to_the_agent)
 - **R28** [MUST · decidable: macf/tests/test_voice_speech.py::test_one_worker_serializes_agents] Spoken output MUST pass through one speech worker per system, so two agents never speak at once. (speech_MUST_pass_one_worker)
 - **R29** [MUST NOT · decidable: macf/tests/test_voice_speech.py::test_no_playback_while_microphone_open] The speech worker MUST NOT play while the capture unit is recording on its system. (speech_MUST-NOT_play_while_microphone_open)
 - **R30** [MUST · decidable: macf/tests/test_voice_select.py::test_choice_recorded_with_traits] An agent's chosen voice MUST be recorded in its voice section with the traits the operator accepted for it. (voice_choice_MUST_record_traits)
@@ -235,7 +236,8 @@ It concerns every agent that will take dictation or speak, every deployment that
   - This order has run on the container-management maintainer's machine since November 2026.
 - **R24, R25:** with one capture unit for several agents, the error that matters most is one agent's phrase waking another's model, so the report counts it. These are measurement lessons learned on the first host that ran a wake model. A model with no report invites trust it hasn't earned. A test that shares clips with training measures memory, not detection.
 - **R26:** with one capture unit for many agents, a shared phrase or key would make the target ambiguous.
-- **R27:** an agent's own spoken alert can contain its wake phrase. The speech worker marks when it plays, and the capture unit takes no wake then. A key is different: it is a deliberate press, so it opens its recording and the speech stops (R29), rather than the operator being made to wait for the agent to finish. While continual voice is open the microphone stays open, so speech waits until it closes. The first draft also refused key recordings during speech; building the worker showed that the operator should be able to interrupt, and this wording is offered for review.
+- **R27:** an agent's own spoken alert can contain its wake phrase. The speech worker marks when it plays, and the capture unit takes no wake then. A key is different: it is a deliberate press, so it opens its recording and the speech stops (R29), rather than the operator being made to wait for the agent to finish. While continual voice is open the microphone stays open, so speech waits until it closes. The first draft also refused key recordings during speech; building the worker showed that the operator should be able to interrupt. The operator ruled on this amendment, and on R15's, on 2026-11-13: R15 as is, and R27 "with the agent notified of the speech truncation by the words actually spoken up to that point", which R55 states.
+- **R55:** an interrupted agent doesn't know where it was cut off, and the operator heard only part of what it meant to say. Without this, the agent answers the interruption as if its whole message had landed. The words heard are measured when the speech engine reports when each word ends. Otherwise they're estimated from how long the cut sentence had played, counting a word only once its estimated end has played. The note says which, so an estimate isn't read as a measurement. It rides on the utterance the interrupting key opened, since that is usually what the operator meant to say instead. If no utterance follows, the agent's next prompt carries it. Either way it is told once. These are the agent's own words, read by its daemon from the agent's home, never a sender's.
 
 **Voice generation (R28 to R33).**
 - **R28, R29:** two agents talking over each other, or an agent talking into its own recording, make both channels useless. In continual voice, replies queue and play in the pauses between utterances. One worker per system is the simplest way to serialize them.
@@ -379,6 +381,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R52 | judgment | the maintainers, at review of the landing pull request | pending |
 | R53 | judgment | the operator, at review of each agent's handling | pending |
 | R54 | decidable | macf/tests/test_channel_names.py::test_refused_old_source_recorded | passing (the status half: test_a_refused_old_source_shows_in_pd_status) |
+| R55 | decidable | macf/tests/test_voice_speech.py::test_cut_speech_tells_agent_what_was_heard | passing (the daemon half: test_voice_dispatch.py::test_the_next_utterance_carries_the_cut_once_and_the_label_shows_it) |
 
 **Cold-reader trial**: not yet held. The first macOS port is planned as the trial. A maintainer who didn't write this MIS brings voice up on a Mac from the pull request and its documents alone, and reports each place they had to guess.
 
@@ -406,7 +409,7 @@ If the pull request grows too large to review, it splits after stage 4 and after
 - **Q04** How does a macOS capture app hold its key monitor and microphone grants under the code-identity custody R53 of the MIS-0007 draft describes? The first macOS porter proposes, and the maintainers decide. (macos_capture_custody)
 - **Q05** Which speech engines beyond Kokoro does voice generation support, and may a voice blend several? The maintainers decide, after the selection prototype. (speech_engine_scope)
 - **Q06** How long are kept training clips for the wake model and the voice lock retained, and may an operator require their deletion at any time? The operator decides, before Final-Comment. (voice_clip_retention)
-- **Q07** Is 0008 the right number? It is provisional until the Secretary, or before one is designated the operator, confirms it. (mis_number_confirmation)
+- **Q07** Is 0008 the right number? *Resolved 2026-11-13: the operator confirmed 0008.* (mis_number_confirmation)
 - **Q08** Where does a system's shared capture unit get its microphone? The MIS-0007 draft places a capture unit in the operator's login session, where the microphone grant and the audio server are, while R46 runs the shared unit on the system daemon's account, which has neither on a desktop. Either the system account is given the audio device directly, or the shared unit runs in the login session and still signs with a key out of every agent's reach. The prototype runs it on injected backends. The maintainers decide, from the first live run of the shared unit. (shared_capture_audio_source)
 
 ## 14 Deliberation Record
@@ -419,6 +422,7 @@ None.
 - 2026-11-13: after the second review: raw audio never written to disk (R13); R09 a judgment; Q01 reworded; the readers of the source string change together (section 9).
 - 2026-11-13: from building the capture unit: R15 excepts a recording, so a declared hotkey still works while listening is off; R27 lets a key interrupt the agent's speech, which stops for it; both flagged for review.
 - 2026-11-13: after the first review: listening and recording defined (R16, R21, R22, R27, R29); raw audio never leaves the system (R13); the speaker check runs before transcription (R23, R37); information only defined (R53); refused old-source notices recorded (R54); cross-agent false wakes reported (R24); authorship role corrected.
+- 2026-11-13: the operator's rulings: 0008 confirmed (Q07); R15 accepted as is; R27 accepted with the agent told what it was cut off saying, stated as the new R55.
 
 ## Wiki-Links
 

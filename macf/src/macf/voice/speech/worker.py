@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from macf.voice.speech.backends import AudioOut, SpeechEngine
+from macf.voice.speech import cut
 from macf.voice.speech.text import clean, sentences
 
 #: The longest the worker holds a sentence for a recording, before it says so and drops the message.
@@ -114,17 +115,20 @@ class SpeechWorker:
             self.sleep(0.2)
         return True
 
-    def _play_unless_recording(self, spoken, item: Path) -> bool:
+    def _play_unless_recording(self, spoken, item: Path) -> Optional[tuple]:
         """Play one sentence, stopping it the moment a recording opens, or the moment ``voice speak
         --stop`` empties the queue: an operator who presses a key while the agent talks is heard, not
-        talked over (R29), and a stop is immediate. Returns whether it was cut."""
+        talked over (R29), and a stop is immediate. Returns None when it played to the end, else why it
+        was cut (``recording`` or ``stop``) and how many seconds had played."""
         done = threading.Event()
-        cut = threading.Event()
+        cut: list = []
+        started = self.clock()
 
         def watch():
             while not done.is_set():
-                if self._recording() or not item.exists():
-                    cut.set()
+                recording = self._recording()
+                if recording or not item.exists():
+                    cut.append(("recording" if recording else "stop", self.clock() - started))
                     self.out.stop()
                     return
                 done.wait(0.05)
@@ -136,7 +140,7 @@ class SpeechWorker:
         finally:
             done.set()
             watcher.join()
-        return cut.is_set()
+        return cut[0] if cut else None
 
     def take(self) -> bool:
         """Speak the oldest queued message, if any. Returns whether there was one."""
@@ -156,7 +160,8 @@ class SpeechWorker:
             item.unlink(missing_ok=True)
             return True
         voice, speed = job.get("voice", conf.voice), float(job.get("speed", conf.speed))
-        for sentence in sentences(clean(job.get("text", ""), pronunciations(self.home))):
+        said = list(sentences(clean(job.get("text", ""), pronunciations(self.home))))
+        for index, sentence in enumerate(said):
             self._mark()
             if not item.exists():
                 break                        # stopped: the queue was emptied
@@ -167,8 +172,14 @@ class SpeechWorker:
             if not item.exists():
                 break
             self._mark()
-            if self._play_unless_recording(spoken, item):
-                self.log("a recording opened, or a stop came, while speaking: the sentence stopped, the rest dropped")
+            stopped = self._play_unless_recording(spoken, item)
+            if stopped is not None:
+                why, played_s = stopped
+                self.log(f"a {why} cut the speech: the sentence stopped, the rest dropped")
+                if why == "recording":
+                    # R55: the agent learns which of its words the operator heard before the key cut it.
+                    cut.record(self.home, said[:index], sentence, played_s, spoken.duration_s, said[index + 1:],
+                               word_ends=spoken.word_ends, why=why)
                 break
             self.played += 1
             self._mark()
