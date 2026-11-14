@@ -127,7 +127,7 @@ def build(home: Path, phrases: List[str], models: List[str], vocabulary: Optiona
     if vocabulary is None and voice is not None:
         vocabulary = voice.transcription_prompt
     if not sys.platform.startswith("linux"):
-        raise RuntimeError("this platform has no capture backends yet; MIS-0008's porting guide says what to write (R14)")
+        raise RuntimeError("this platform has no capture backends yet; docs/VOICE_PORTING.md says what to write (MIS-0008 R14)")
     from macf.voice.capture.linux import LinuxLockState, OverlayIndicator, PipeWireAudio
     tally = Tally()
     log = logger(tally, out)

@@ -132,8 +132,8 @@ def build(home: Path):
         raise RuntimeError(f"this unit is {unit_name!r}, but the voice section names "
                          f"{voice.capture_unit!r} as its capture unit")
     if not sys.platform.startswith("linux"):
-        raise RuntimeError("this platform has no capture backends yet; MIS-0008's porting "
-                         "guide says what to write (R14)")
+        raise RuntimeError("this platform has no capture backends yet; docs/VOICE_PORTING.md says "
+                         "what to write (MIS-0008 R14)")
     from macf.voice.capture.linux import EvdevTriggers, LinuxLockState, OverlayIndicator, PipeWireAudio
     detector = None
     if voice.wake_model:
@@ -219,7 +219,7 @@ def build_system(home: Path, card: str, declaration, *, backends=None, publish=N
 
 def _platform_backends(trigger_devices, vocabulary: Optional[str] = None) -> dict:
     if not sys.platform.startswith("linux"):
-        raise RuntimeError("this platform has no capture backends yet; MIS-0008's porting guide says what to write (R14)")
+        raise RuntimeError("this platform has no capture backends yet; docs/VOICE_PORTING.md says what to write (MIS-0008 R14)")
     from macf.voice.capture.linux import EvdevTriggers, LinuxLockState, OverlayIndicator, PipeWireAudio
     from macf.voice.capture.models import SileroGate
     from macf.voice.transcribe import transcribe_array
