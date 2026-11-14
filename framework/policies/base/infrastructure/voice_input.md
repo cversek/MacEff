@@ -200,6 +200,8 @@ Live: missed 2 of 20 calls from across the room; 3 false wakes in 8 hours (1 spe
 
 The defaults are the operator's own choice from the first live trial.
 
+**No length cut-off.** An utterance is never ended for its length unless the voice section declares `max_utterance_s`; the operator, after a two-minute cap cut him off mid-thought: "it should never cut you off." Long speech is transcribed ahead: at a pause, once about 8 seconds wait untranscribed, they are transcribed in the background and their audio dropped, so the end waits only for the last stretch. "send" delivers the whole buffer in order; "abort" drops it. A key's recording under the voice lock is the exception: it is judged whole at its end, so nothing of it is transcribed ahead (`voice_lock` policy).
+
 **The stop words** (MIS-0008 R57). Said as the **last** word:
 - **"send"** ends the utterance at once, without waiting for the window, and the word itself isn't delivered.
 - **"abort"** ends it and discards it; nothing reaches the session, and the unit's log says so.

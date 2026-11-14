@@ -16,7 +16,7 @@ How each recording ends:
   hold key         the key's release.
   continual voice  each pause of ``end_silence_s`` ends one utterance and the microphone stays
                    open; the toggle key, or ``continual_close_s`` without speech, closes it.
-Any recording ends at ``max_utterance_s``, and one that heard no speech at all sends nothing.
+No recording is cut off for its length unless a ``max_utterance_s`` is declared; long speech is transcribed ahead, at pauses, so its end waits only for the last stretch. One that heard no speech at all sends nothing.
 
 The audio of a recording lives in this process's memory and is dropped once transcribed; it is
 never written anywhere (R13). Only the text, with closed metadata, leaves, through ``deliver``.
@@ -44,6 +44,9 @@ SETTLE_AFTER_FIRE_S = 0.8
 REJECT_COOLDOWN_S = 0.75
 #: After a recording, before another wake may open one.
 COOLDOWN_S = 3.0
+#: Long speech is transcribed ahead: at a pause, once this much audio waits untranscribed, it is sent to the
+#: worker and kept as text, so the end of a long utterance waits only for its last stretch.
+STREAM_AFTER_S = 8.0
 #: How far behind real time the unit may fall before it says so: audio it hasn't read yet, or lost.
 BEHIND_WARN_S = 0.5
 #: Audio kept from just before a key press, so the first word isn't clipped.
@@ -91,7 +94,8 @@ class CaptureConfig:
     #: R56: listen for the stop words at each short pause. Off only where transcription is scripted.
     stop_words: bool = True
     continual_close_s: float = 30.0
-    max_utterance_s: float = 120.0
+    #: None: never cut off for length (the operator, 2026-11-14: "it should never cut you off").
+    max_utterance_s: Optional[float] = None
     #: The voice lock's lockout (MIS-0008 R39, R40), and whether it also covers key recordings
     #: (open question Q02: by default it covers the wake phrase only).
     lockout_attempts: int = 3
@@ -170,6 +174,10 @@ class _Recording:
     stop_check: object = None          # a stop-word check in flight (R56)
     stop_checked_at: Optional[float] = None   # the last speech the check covered, so each pause is checked once
     aborted: bool = False              # ended by "abort" (R57): nothing is sent, and that was already said
+    #: Stretches of this utterance already sent to be transcribed, in order: the buffer a send delivers and an
+    #: abort drops. ``streamed_at`` is the last speech the latest cut followed, so each pause cuts once.
+    streamed: List[object] = field(default_factory=list)
+    streamed_at: Optional[float] = None
     voice_lock: str = "not_declared"     # "matched" once the voice lock passed it
 
 
@@ -484,7 +492,7 @@ class CaptureUnit:
         self.indicator.feed(frame)
         if self.gate.is_speech(frame):
             rec.heard_speech, rec.last_speech = True, now
-        if now - rec.started >= self.config.max_utterance_s:
+        if self.config.max_utterance_s is not None and now - rec.started >= self.config.max_utterance_s:
             self._finish(now, closing=True, ended="longest length")
             return
         if rec.mode == "hold_key":
@@ -499,12 +507,30 @@ class CaptureUnit:
         said = self._stop_word_heard(rec, silent_for)
         if said == ABORT_WORD:
             self.log(f"\"{ABORT_WORD}\": the utterance is discarded, nothing sent")
-            rec.frames, rec.heard_speech, rec.aborted = [], False, True
+            rec.frames, rec.heard_speech, rec.aborted, rec.streamed = [], False, True, []
             self._finish(now, closing=rec.mode != "continual_voice", ended="abort")
             return
         if said == SEND_WORD or silent_for >= self.config.end_silence_s:
             self._finish(now, closing=rec.mode != "continual_voice",
                          ended="send" if said == SEND_WORD else "end window")
+            return
+        self._stream_ahead(rec, silent_for)
+
+    def _streams(self, rec: "_Recording") -> bool:
+        # A key's recording under the voice lock is judged whole at its end, and an unmatched voice must never be
+        # transcribed (R37), so nothing of it is transcribed ahead.
+        return not (rec.mode != "wake_phrase" and rec.agent.b.lock_keys and rec.agent.b.speaker is not None)
+
+    def _stream_ahead(self, rec: "_Recording", silent_for: float) -> None:
+        """At a pause, once STREAM_AFTER_S of audio waits, send it to be transcribed and keep only its text to come.
+        The pause is the cut, so no word is split; the first stretch of a wake keeps the phrase, which the
+        delivery strips."""
+        if (silent_for < STOP_PAUSE_S or rec.streamed_at == rec.last_speech or not self._streams(rec)
+                or len(rec.frames) * FRAME / RATE < STREAM_AFTER_S):
+            return
+        prompt = rec.agent.b.wake_phrase if rec.mode == "wake_phrase" and not rec.streamed else None
+        rec.streamed.append(self.executor.submit(self._transcribe, np.concatenate(rec.frames), prompt))
+        rec.frames, rec.streamed_at = [], rec.last_speech
 
     def _show_window(self, rec: "_Recording", silent_for: float) -> None:
         """R56: how much of the end window is left, for the indicator. Full until ``end_hold_s`` of quiet,
@@ -542,7 +568,7 @@ class CaptureUnit:
         if ended and rec.heard_speech:
             self.log(f"{rec.mode} utterance ended: {ended}")
         if rec.heard_speech:
-            audio = np.concatenate(rec.frames)
+            audio = np.concatenate(rec.frames) if rec.frames else np.zeros(0, dtype=np.int16)
             if rec.mode != "wake_phrase" and rec.agent.b.lock_keys and rec.agent.b.speaker is not None:
                 if self._voice_lock_passes(rec.agent, audio, now):
                     rec.voice_lock = "matched"
@@ -550,11 +576,11 @@ class CaptureUnit:
                     audio = None             # discarded untranscribed (R37)
             if audio is not None:
                 self.executor.submit(self._transcribe_and_deliver, audio, rec.mode, rec.spoken_at, rec.voice_lock,
-                                     rec.agent, ended)
+                                     rec.agent, ended, list(rec.streamed))
         else:
             if not rec.aborted:                  # an abort already said why nothing was sent
                 self.log(f"{rec.mode} recording heard no speech: nothing sent")
-        rec.frames = []                      # the audio is now the worker's alone, and is dropped after
+        rec.frames, rec.streamed, rec.streamed_at = [], [], None   # the worker's alone now, dropped after
         if rec.mode == "continual_voice" and not closing:
             rec.heard_speech, rec.utterance_started, rec.spoken_at = False, now, self.wall()
             rec.aborted = False
@@ -600,9 +626,15 @@ class CaptureUnit:
 
     def _transcribe_and_deliver(self, audio: np.ndarray, mode: Mode, spoken_at: float,
                                 voice_lock: str = "not_declared", agent: Optional[_Agent] = None,
-                                ended: str = "") -> None:
+                                ended: str = "", streamed: Optional[list] = None) -> None:
         agent = agent or self.agents[0]
-        text = (self._transcribe(audio, agent.b.wake_phrase if mode == "wake_phrase" else None) or "").strip()
+        streamed = streamed or []
+        # The stretches transcribed ahead come first, in order, then the last; only the first carries the phrase.
+        parts = [(f.result() or "").strip() for f in streamed]
+        if audio.size:
+            prompt = agent.b.wake_phrase if mode == "wake_phrase" and not streamed else None
+            parts.append((self._transcribe(audio, prompt) or "").strip())
+        text = " ".join(p for p in parts if p)
         if mode == "wake_phrase" and agent.phrase is not None:
             found = agent.phrase.search(text)
             if found:

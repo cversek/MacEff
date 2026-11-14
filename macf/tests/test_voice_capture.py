@@ -618,6 +618,55 @@ def test_the_trial_quotes_what_the_words_check_heard():
     assert chains(rig) == ["yo tom 1.00 → speech ✓ → heard 'bo tom' ✗ not the phrase: rejected"]
 
 
+def long_talk():
+    """A wake, then 9 s of speech, a short pause, 9 s more, a pause, and quiet until the end window closes."""
+    return FakeAudio().then((SILENCE, 3), (WAKE, secs(0.5)), (SPEECH, secs(9)), (SILENCE, secs(1)),
+                            (SPEECH, secs(9)), (SILENCE, secs(1)), (SPEECH, secs(2)), (SILENCE, secs(6)))
+
+
+def test_long_speech_is_transcribed_ahead_at_pauses_and_delivered_whole_in_order():
+    """The operator: "while i'm talking it's quietly transcribing clips ... keep it in a buffer." At each pause past
+    STREAM_AFTER_S the audio so far is transcribed and dropped; the end waits only for the last stretch."""
+    transcriber = ScriptedTranscriber("yo tom", "Yo Tom, first thought.", "second thought.", "and last, send.")
+    rig = make_unit(long_talk(), transcriber, end_hold_s=2.0, end_silence_s=5.0)
+    rig.run(3 + secs(0.5) + secs(9) + secs(1))
+    assert len(transcriber.calls) == 2, "the first stretch wasn't transcribed at its pause"
+    assert len(rig.unit.recording.frames) < secs(2), "the transcribed audio was kept"
+    rig.run(len(rig.audio.script))
+    assert [u.text for u in rig.delivered] == ["first thought. second thought. and last"]
+    assert rig.delivered[0].ended == "end window"
+    prompts = [prompt for _, prompt in transcriber.calls]
+    assert prompts == ["yo tom", "yo tom", None, None], "only the stretch holding the phrase is primed with it"
+
+
+def test_an_abort_drops_what_was_transcribed_ahead():
+    transcriber = ScriptedTranscriber("yo tom", "Yo Tom, first thought.", "second thought.", "never mind, abort")
+    rig = make_unit(long_talk(), transcriber, end_hold_s=2.0, end_silence_s=5.0)
+    rig.run(len(rig.audio.script))
+    assert rig.delivered == []
+
+
+def test_a_long_utterance_is_never_cut_off_for_its_length():
+    """The operator, of the 120 s cap: "it should never cut you off." Unless a cap is declared, none applies."""
+    rig = make_unit(FakeAudio().then((SPEECH, secs(150)), (SILENCE, 3)), ScriptedTranscriber(*["words"] * 40))
+    rig.keys.press("KEY_F9")
+    rig.run(secs(150))
+    assert rig.unit.recording is not None, "a 150 s recording was cut off"
+    rig.keys.release("KEY_F9")
+    rig.run(2)
+    assert len(rig.delivered) == 1 and rig.delivered[0].ended == "key released"
+
+
+def test_nothing_is_transcribed_ahead_of_the_voice_lock_on_a_key():
+    """R37: a key's recording under the voice lock is judged whole at its end, so none of it is transcribed before."""
+    audio = FakeAudio().then((SPEECH, secs(9)), (SILENCE, secs(1)), (SPEECH, secs(9)), (SILENCE, 3))
+    transcriber = ScriptedTranscriber("all of it")
+    rig = make_unit(audio, transcriber, speaker=lambda a: True, lock_keys=True)
+    rig.keys.press("KEY_F10")
+    rig.run(secs(19))
+    assert transcriber.calls == [], "audio was transcribed before the voice lock judged it"
+
+
 def test_send_as_whisper_heard_it_still_sends():
     """The second live trial: Whisper wrote the operator's last-word "send" as "Sand". That spelling counts as
     send, and is cut from the text like the word itself."""
