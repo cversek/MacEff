@@ -158,7 +158,7 @@ def make_unit(audio: FakeAudio, transcriber: ScriptedTranscriber, *, phrase="yo 
     # These tests script their silences and transcripts: the short end window and no stop-word checks,
     # unless a test asks for them (R56 has tests of its own).
     config = {"end_silence_s": 1.2, "end_hold_s": 0.5, "stop_words": False, **config}
-    delivered = []
+    delivered, logged = [], []
     keys = PushedKeys()
     indicator = RecordingIndicator()
     unit = CaptureUnit(CaptureConfig(agent="Tester_abc123", wake_phrase=phrase, hold_key=hold, toggle_key=toggle,
@@ -169,8 +169,8 @@ def make_unit(audio: FakeAudio, transcriber: ScriptedTranscriber, *, phrase="yo 
                        clock=lambda: audio.reads * FRAME_S, wall=lambda: 1794600000.0 + audio.reads * FRAME_S,
                        executor=InlineExecutor(), speaker=speaker,
                        on_voice_event=on_voice_event or (lambda kind, data: None),
-                       guard_lowered=guard_lowered or (lambda: False))
-    return Rig(unit=unit, keys=keys, indicator=indicator, delivered=delivered, audio=audio)
+                       guard_lowered=guard_lowered or (lambda: False), log=logged.append)
+    return Rig(unit=unit, keys=keys, indicator=indicator, delivered=delivered, audio=audio, logged=logged)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -182,6 +182,7 @@ class Rig:
     indicator: RecordingIndicator
     delivered: list
     audio: FakeAudio
+    logged: list    # the unit's own log lines
 
     def run(self, frames: int) -> None:
         run(self.unit, frames)

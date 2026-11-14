@@ -107,7 +107,8 @@ def deliver(card: str, utterance: Utterance) -> None:
         return
     receipt = reply.get("receipt", "none")
     note = "" if receipt == "delivered" else f": {(reply.get('error') or '').splitlines()[0]}"
-    print(f"🎙️ MACF: voice: {utterance.trigger} utterance {reply.get('utterance_id', '?')} {receipt}{note}",
+    ended = f" (ended: {utterance.ended})" if utterance.ended else ""
+    print(f"🎙️ MACF: voice: {utterance.trigger} utterance {reply.get('utterance_id', '?')}{ended} {receipt}{note}",
           file=sys.stderr)
 
 

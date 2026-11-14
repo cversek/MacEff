@@ -468,6 +468,35 @@ def test_the_end_window_defaults_are_the_operators():
     assert (config.end_hold_s, config.end_silence_s, config.stop_words) == (2.0, 5.0, True)
 
 
+def test_each_utterance_says_why_it_ended():
+    """Idea 602, from the second live trial: the operator couldn't tell whether an utterance ended at "send"
+    or at the end window. Each way of ending is named on the utterance and in the unit's log."""
+    window = make_unit(FakeAudio().then((SILENCE, 3), (WAKE, secs(0.5)), (SPEECH, secs(1)), (SILENCE, secs(6))),
+                       ByPrompt("yo tom", "yo tom check the queue"), end_hold_s=2.0, end_silence_s=5.0)
+    window.run(len(window.audio.script))
+    sent = make_unit(FakeAudio().then((SILENCE, 3), (WAKE, secs(0.5)), (SPEECH, secs(1)), (SILENCE, secs(6))),
+                     ByPrompt("yo tom", "yo tom deploy it, send.", tail="deploy it, send."),
+                     end_hold_s=2.0, end_silence_s=5.0, stop_words=True)
+    sent.run(3 + secs(0.5) + secs(1) + secs(1.2))
+    held = make_unit(FakeAudio().then((SPEECH, 10)), ScriptedTranscriber("hold this"))
+    held.keys.press("KEY_F9")
+    held.run(10)
+    held.keys.release("KEY_F9")
+    held.run(3)
+    toggled = make_unit(FakeAudio().then((SPEECH, 10), (SILENCE, secs(5.5)), (SPEECH, 10)),
+                        ScriptedTranscriber("first", "second"), end_hold_s=2.0, end_silence_s=5.0)
+    toggled.keys.press("KEY_F10")
+    toggled.run(len(toggled.audio.script))
+    toggled.keys.press("KEY_F10")
+    toggled.run(2)
+    longest = make_unit(FakeAudio().then((SPEECH, secs(4))), ScriptedTranscriber("on and on"), max_utterance_s=2.0)
+    longest.keys.press("KEY_F9")
+    longest.run(secs(3))
+    ends = [[u.ended for u in r.delivered] for r in (window, sent, held, toggled, longest)]
+    assert ends == [["end window"], ["send"], ["key released"], ["end window", "toggle key"], ["longest length"]]
+    assert any(line == "wake_phrase utterance ended: send" for line in sent.logged)
+
+
 def test_send_as_whisper_heard_it_still_sends():
     """The second live trial: Whisper wrote the operator's last-word "send" as "Sand". That spelling counts as
     send, and is cut from the text like the word itself."""

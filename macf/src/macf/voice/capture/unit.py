@@ -147,6 +147,9 @@ class Utterance:
     text: str
     voice_lock: str = "not_declared"
     agent: str = ""
+    #: Why the recording ended (idea 602): "end window", "send", "key released", "toggle key",
+    #: "longest length". Metadata for the unit's own log; never sent to the daemon.
+    ended: str = ""
 
 
 @dataclass
@@ -296,11 +299,11 @@ class CaptureUnit:
                 if down and rec is None:
                     self._start("hold_key", agent)
                 elif not down and rec is not None and rec.mode == "hold_key" and rec.agent is agent:
-                    self._finish(self.clock())
+                    self._finish(self.clock(), ended="key released")
                 return
             if key == agent.b.toggle_key and down:
                 if rec is not None and rec.mode == "continual_voice" and rec.agent is agent:
-                    self._finish(self.clock(), closing=True)
+                    self._finish(self.clock(), closing=True, ended="toggle key")
                 elif rec is None:
                     self._start("continual_voice", agent)
                 return
@@ -388,7 +391,7 @@ class CaptureUnit:
         if self.gate.is_speech(frame):
             rec.heard_speech, rec.last_speech = True, now
         if now - rec.started >= self.config.max_utterance_s:
-            self._finish(now, closing=True)
+            self._finish(now, closing=True, ended="longest length")
             return
         if rec.mode == "hold_key":
             return                           # the release ends it
@@ -396,17 +399,18 @@ class CaptureUnit:
         if not rec.heard_speech:
             limit = self.config.continual_close_s if rec.mode == "continual_voice" else NO_SPEECH_CANCEL_S
             if now - rec.utterance_started >= limit:
-                self._finish(now, closing=True)
+                self._finish(now, closing=True, ended="no speech")
             return
         self._show_window(rec, silent_for)
         said = self._stop_word_heard(rec, silent_for)
         if said == ABORT_WORD:
             self.log(f"\"{ABORT_WORD}\": the utterance is discarded, nothing sent")
             rec.frames, rec.heard_speech, rec.aborted = [], False, True
-            self._finish(now, closing=rec.mode != "continual_voice")
+            self._finish(now, closing=rec.mode != "continual_voice", ended="abort")
             return
         if said == SEND_WORD or silent_for >= self.config.end_silence_s:
-            self._finish(now, closing=rec.mode != "continual_voice")
+            self._finish(now, closing=rec.mode != "continual_voice",
+                         ended="send" if said == SEND_WORD else "end window")
 
     def _show_window(self, rec: "_Recording", silent_for: float) -> None:
         """R56: how much of the end window is left, for the indicator. Full until ``end_hold_s`` of quiet,
@@ -436,10 +440,13 @@ class CaptureUnit:
                 self.log(f"the stop-word check failed ({e}); the end window ends the utterance")
         return None
 
-    def _finish(self, now: float, closing: bool = True) -> None:
+    def _finish(self, now: float, closing: bool = True, ended: str = "") -> None:
         """End the current utterance: transcribe it on the worker and deliver it. In continual voice
-        a pause ends the utterance and keeps the microphone open, unless ``closing``."""
+        a pause ends the utterance and keeps the microphone open, unless ``closing``. ``ended`` says
+        why, in the log and on the utterance, so a cut that surprises the speaker can be read (idea 602)."""
         rec = self.recording
+        if ended and rec.heard_speech:
+            self.log(f"{rec.mode} utterance ended: {ended}")
         if rec.heard_speech:
             audio = np.concatenate(rec.frames)
             if rec.mode != "wake_phrase" and rec.agent.b.lock_keys and rec.agent.b.speaker is not None:
@@ -449,7 +456,7 @@ class CaptureUnit:
                     audio = None             # discarded untranscribed (R37)
             if audio is not None:
                 self.executor.submit(self._transcribe_and_deliver, audio, rec.mode, rec.spoken_at, rec.voice_lock,
-                                     rec.agent)
+                                     rec.agent, ended)
         else:
             if not rec.aborted:                  # an abort already said why nothing was sent
                 self.log(f"{rec.mode} recording heard no speech: nothing sent")
@@ -498,7 +505,8 @@ class CaptureUnit:
         return False
 
     def _transcribe_and_deliver(self, audio: np.ndarray, mode: Mode, spoken_at: float,
-                                voice_lock: str = "not_declared", agent: Optional[_Agent] = None) -> None:
+                                voice_lock: str = "not_declared", agent: Optional[_Agent] = None,
+                                ended: str = "") -> None:
         agent = agent or self.agents[0]
         text = (self._transcribe(audio, agent.b.wake_phrase if mode == "wake_phrase" else None) or "").strip()
         if mode == "wake_phrase" and agent.phrase is not None:
@@ -514,7 +522,7 @@ class CaptureUnit:
             self.log(f"{mode} utterance transcribed to nothing: nothing sent")
             return
         self._deliver(Utterance(trigger=mode, spoken_at=spoken_at, screen=self.lock.state(), text=text,
-                                voice_lock=voice_lock, agent=agent.b.agent))
+                                voice_lock=voice_lock, agent=agent.b.agent, ended=ended))
 
     # ------------------------------------------------------------------ status
 
