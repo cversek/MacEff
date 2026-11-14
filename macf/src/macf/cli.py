@@ -11401,7 +11401,7 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
     if reachable:
         from macf.amail.client import status as _status, BrokerUnavailable
         try:
-            _resp = _status(sock)
+            _resp = _status(sock, sender=cfg["agent"] or None)
             if _resp.get("ok"):
                 counts = {k: _resp.get(k) for k in
                           ("quarantined", "pending_pickup", "oldest_pending_s", "budget")}
