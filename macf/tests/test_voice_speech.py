@@ -178,7 +178,11 @@ def test_cut_speech_tells_agent_what_was_heard(tmp_path):
             threading.Timer(0.05, lambda: rec.__setitem__(0, True)).start()
 
     out = FakeOut(seconds=0.0, during=during)
-    w, _ = make_worker(tmp_path, out=out, recording=lambda: rec[0])
+    w, engine = make_worker(tmp_path, out=out, recording=lambda: rec[0])
+    # Each sentence lasts two seconds, as real speech would. With the fake engine's hundredth of a
+    # second, any cut past the lead-in counted the whole sentence heard: a slower macOS runner cut
+    # later than that, and failed, which a cut delayed to 0.2 s reproduced here.
+    engine.say = lambda sentence, voice, speed, lang: Spoken(np.zeros(32000, np.float32), 16000)
     out.seconds = 0.0
 
     def play(spoken, _orig=out.play):
