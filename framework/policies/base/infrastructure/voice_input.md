@@ -184,9 +184,22 @@ Live: missed 2 of 20 calls from across the room; 3 false wakes in 8 hours (1 spe
 **When it shows.** From the moment a recording starts until it ends. **Listening shows no indicator,** because listening keeps nothing past the short window the wake check needs. `macf_tools voice capture status` reports listening (MIS-0008 R16).
 
 **When a recording starts and ends.**
-- A wake starts one after it passes its checks. The recording includes the short window of audio just before the wake, which is how the first words are not clipped. It ends after a pause of `end_silence_s` following speech (1.2 s by default).
+- A wake starts one after it passes its checks. The recording includes the short window of audio just before the wake, which is how the first words are not clipped. It ends when its end window empties (below).
 - A held key starts one on press, with a little audio from just before it, and ends on release.
-- The toggle key starts continual voice. Each pause ends one utterance and the microphone stays open, until the toggle key is pressed again or `continual_close_s` (30 s by default) passes without speech.
+- The toggle key starts continual voice. Each pause that empties the end window ends one utterance and the microphone stays open, until the toggle key is pressed again or `continual_close_s` (30 s by default) passes without speech.
+
+**The end window** (MIS-0008 R56). A pause doesn't end an utterance at once, so the operator can stop to think. The indicator shows a bar along its bottom:
+- **While speaking:** the bar stays full.
+- **During a pause:** it stays full for `end_hold_s` (2 s by default), then drains, and the utterance ends when it empties at `end_silence_s` (5 s by default).
+- **When speech resumes:** it fills again.
+
+The defaults are the operator's own choice from the first live trial.
+
+**The stop words** (MIS-0008 R57). Said as the **last** word:
+- **"send"** ends the utterance at once, without waiting for the window, and the word itself isn't delivered.
+- **"abort"** ends it and discards it; nothing reaches the session, and the unit's log says so.
+
+Mid-sentence, as in "send the report" or "don't abort the build", neither word ends anything. Both are checked at each short pause and again on the final transcript, so a held key's recording obeys them too. Recognition can mishear: if an operator says the utterance was cut short or wrongly discarded, believe them and ask them to say it again.
 - Any recording ends at a fixed maximum length. A wake or hold recording that heard no speech sends nothing, and a wake recording that hears none is cancelled after a few seconds.
 - A recording is delivered as text with closed metadata; empty text is dropped and said in the unit's log.
 

@@ -86,6 +86,7 @@ class RecordingIndicator(Indicator):
 
     def __init__(self):
         self.calls: List[tuple] = []
+        self.windows: List[float] = []
         self.shown: Optional[tuple] = None
 
     def show(self, agent, mode):
@@ -98,6 +99,9 @@ class RecordingIndicator(Indicator):
     def hide(self):
         self.calls.append(("hide",))
         self.shown = None
+
+    def window(self, left):
+        self.windows.append(left)
 
 
 class PushedKeys(TriggerSource):
@@ -151,6 +155,9 @@ def make_unit(audio: FakeAudio, transcriber: ScriptedTranscriber, *, phrase="yo 
               toggle="KEY_F10", listening_on: Callable[[], bool] = lambda: True,
               speaking: Callable[[], bool] = lambda: False, screen="unlocked", speaker=None,
               on_voice_event=None, guard_lowered=None, **config) -> "Rig":
+    # These tests script their silences and transcripts: the short end window and no stop-word checks,
+    # unless a test asks for them (R56 has tests of its own).
+    config = {"end_silence_s": 1.2, "end_hold_s": 0.5, "stop_words": False, **config}
     delivered = []
     keys = PushedKeys()
     indicator = RecordingIndicator()

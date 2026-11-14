@@ -385,3 +385,84 @@ def test_the_heartbeat_carries_the_microphone_and_beats_early_when_it_changes():
     hb.stop()
     assert beats[0]["microphone"] == {"listening_since": 1794600000.0}
     assert beats[1]["microphone"]["mode"] == "hold_key"
+
+
+# ---------------------------------------------------------------- R56: the end window and the stop words
+
+from macf.voice.capture.unit import last_stop_word, strip_stop_word  # noqa: E402
+
+
+class ByPrompt:
+    """Answers the wake check and the final transcription (both prompted with the phrase) in order,
+    and a stop-word check (no prompt) with ``tail``."""
+
+    def __init__(self, *prompted, tail=""):
+        self.prompted, self.tail = list(prompted), tail
+
+    def __call__(self, audio, prompt):
+        if prompt:
+            return self.prompted.pop(0) if self.prompted else ""
+        return self.tail
+
+
+def test_the_end_window_holds_through_a_pause_then_drains_and_speech_refills_it():
+    """R56: a 3 s pause no longer ends the utterance; the window stays full for the hold, drains after
+    it, fills again when speech returns, and empties as the utterance ends."""
+    audio = FakeAudio().then((SILENCE, 3), (WAKE, secs(0.5)), (SPEECH, secs(1)), (SILENCE, secs(3)),
+                             (SPEECH, secs(1)), (SILENCE, secs(6)))
+    rig = make_unit(audio, ByPrompt("yo tom", "yo tom one thought then another"), end_hold_s=2.0,
+                    end_silence_s=5.0)
+    rig.run(len(rig.audio.script))
+    assert [u.text for u in rig.delivered] == ["one thought then another"], "the pause ended the utterance"
+    w = rig.indicator.windows
+    drained = next(i for i, v in enumerate(w) if v < 1.0)
+    assert 1.0 in w[drained:], "speech didn't fill the window again"
+    assert w[-1] == 0.0 and all(0.0 <= v <= 1.0 for v in w)
+
+
+def test_send_said_last_ends_the_utterance_at_once_without_the_word():
+    """R56: "send" as the last word ends the utterance at the next short pause, not at the window's end,
+    and isn't in the words delivered."""
+    audio = FakeAudio().then((SILENCE, 3), (WAKE, secs(0.5)), (SPEECH, secs(1)), (SILENCE, secs(6)))
+    rig = make_unit(audio, ByPrompt("yo tom", "yo tom deploy it, send.", tail="deploy it, send."),
+                    end_hold_s=2.0, end_silence_s=5.0, stop_words=True)
+    rig.run(3 + secs(0.5) + secs(1) + secs(1.2))
+    assert rig.unit.recording is None, "send didn't end the utterance before the window ran out"
+    assert [u.text for u in rig.delivered] == ["deploy it"]
+
+
+def test_abort_said_last_discards_the_utterance():
+    audio = FakeAudio().then((SILENCE, 3), (WAKE, secs(0.5)), (SPEECH, secs(1)), (SILENCE, secs(6)))
+    rig = make_unit(audio, ByPrompt("yo tom", "yo tom scrap that abort", tail="scrap that abort"),
+                    end_hold_s=2.0, end_silence_s=5.0, stop_words=True)
+    rig.run(3 + secs(0.5) + secs(1) + secs(1.2))
+    assert rig.unit.recording is None and rig.delivered == []
+
+
+def test_abort_at_the_end_of_a_held_key_recording_discards_it():
+    """R56 on every trigger: a held key's transcript ending in "abort" is discarded too."""
+    audio = FakeAudio().then((SPEECH, secs(2)), (SILENCE, secs(1)))
+    rig = make_unit(audio, ScriptedTranscriber("never mind, abort"))
+    rig.keys.press("KEY_F9")
+    rig.run(secs(2))
+    rig.keys.release("KEY_F9")
+    rig.run(secs(1))
+    assert rig.delivered == []
+
+
+def test_a_stop_word_counts_only_as_the_last_word():
+    assert strip_stop_word("deploy it, send.") == ("deploy it", "send")
+    assert strip_stop_word("Scrap that. Abort!") == ("Scrap that", "abort")
+    assert last_stop_word("don't stop the server") is None
+    assert last_stop_word("send the report to Ira") is None
+    assert strip_stop_word("check the build") == ("check the build", None)
+
+
+def test_the_end_window_defaults_are_the_operators():
+    """R56 as ruled on 2026-11-13: full for 2 s of quiet, empty at 5 s, with the stop words on."""
+    from macf.pd.interface import VoiceSection
+    from macf.voice.capture.unit import CaptureConfig
+    voice = VoiceSection(capture_unit="voice-capture")
+    config = CaptureConfig(agent="Tester_abc123")
+    assert (voice.end_hold_s, voice.end_silence_s) == (2.0, 5.0)
+    assert (config.end_hold_s, config.end_silence_s, config.stop_words) == (2.0, 5.0, True)

@@ -149,6 +149,8 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **R20** [MAY · judgment: the operator, in each declaration] An agent's voice section MAY declare a toggle key, which opens continual voice until it is pressed again or a declared silence passes. (toggle_key_MAY_be_declared)
 - **R21** [MUST · decidable: macf/tests/test_voice_indicator.py::test_indicator_shown_while_microphone_open] While the capture unit is recording for an agent, the indicator MUST show the agent's name, a waveform and a volume trace. (indicator_MUST_show_open_microphone)
 - **R22** [MUST · decidable: macf/tests/test_voice_indicator.py::test_indicator_shows_mode] The indicator MUST show which mode started the recording: wake phrase, hold key or continual voice. (indicator_MUST_show_mode)
+- **R56** [MUST · decidable: macf/tests/test_voice_capture.py::test_the_end_window_holds_through_a_pause_then_drains_and_speech_refills_it] A pause MUST end an utterance only once its declared end window, shown draining on the indicator, has emptied. (pause_MUST_end_utterance_only_when_window_drains)
+- **R57** [MUST · decidable: macf/tests/test_voice_capture.py::test_send_said_last_ends_the_utterance_at_once_without_the_word] An utterance whose last word is "send" or "abort" MUST end there, delivered without "send" or, after "abort", discarded. (stop_words_MUST_send_or_discard)
 
 ### 6.5 Wake phrases
 
@@ -237,6 +239,8 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **R24, R25:** with one capture unit for several agents, the error that matters most is one agent's phrase waking another's model, so the report counts it. These are measurement lessons learned on the first host that ran a wake model. A model with no report invites trust it hasn't earned. A test that shares clips with training measures memory, not detection.
 - **R26:** with one capture unit for many agents, a shared phrase or key would make the target ambiguous.
 - **R27:** an agent's own spoken alert can contain its wake phrase. The speech worker marks when it plays, and the capture unit takes no wake then. A key is different: it is a deliberate press, so it opens its recording and the speech stops (R29), rather than the operator being made to wait for the agent to finish. While continual voice is open the microphone stays open, so speech waits until it closes. The first draft also refused key recordings during speech; building the worker showed that the operator should be able to interrupt. The operator ruled on this amendment, and on R15's, on 2026-11-13: R15 as is, and R27 "with the agent notified of the speech truncation by the words actually spoken up to that point", which R55 states.
+- **R56:** the first live trial on the operator's own voice ended utterances after 1.2 s of quiet, and the operator said, of a pause to think: "it cuts off and that can be a little distressing". He asked for a window that "decays down and when it reaches zero that's when... it's going to terminate", kept up by speaking, with "a two-second delay before it starts dropping" and an end "by the end of five seconds". So a pause drains a window that the indicator shows, speech refills it, and only an empty window ends the utterance. The timings are declared, defaulting to the operator's 2 s and 5 s.
+- **R57:** a long end window makes a deliberate end slow, so the operator asked for words that end one at once: "send" to deliver it and "abort" to cancel it. They count only as the last word, so "send the report" or "don't abort the build" said mid-sentence ends nothing. They are checked at each short pause, on the last seconds of audio, and again on the final transcript, so a held key's recording obeys them too. The word itself is never delivered.
 - **R55:** an interrupted agent doesn't know where it was cut off, and the operator heard only part of what it meant to say. Without this, the agent answers the interruption as if its whole message had landed. The words heard are measured when the speech engine reports when each word ends. Otherwise they're estimated from how long the cut sentence had played, counting a word only once its estimated end has played. The note says which, so an estimate isn't read as a measurement. It rides on the utterance the interrupting key opened, since that is usually what the operator meant to say instead. If no utterance follows, the agent's next prompt carries it. Either way it is told once. These are the agent's own words, read by its daemon from the agent's home, never a sender's.
 
 **Voice generation (R28 to R33).**
@@ -349,6 +353,8 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R20 | judgment | the operator, in each declaration | pending |
 | R21 | decidable | macf/tests/test_voice_indicator.py::test_indicator_shown_while_microphone_open | passing |
 | R22 | decidable | macf/tests/test_voice_indicator.py::test_indicator_shows_mode | passing |
+| R56 | decidable | macf/tests/test_voice_capture.py::test_the_end_window_holds_through_a_pause_then_drains_and_speech_refills_it | passing |
+| R57 | decidable | macf/tests/test_voice_capture.py::test_send_said_last_ends_the_utterance_at_once_without_the_word | passing (abort: test_abort_said_last_discards_the_utterance, and on a held key test_abort_at_the_end_of_a_held_key_recording_discards_it) |
 | R23 | decidable | macf/tests/test_voice_wake.py::test_wake_passes_its_checks_in_order | planned (model, speech and transcription pass in order; the voice lock takes its place between them with the lock's phase) |
 | R24 | decidable | macf/tests/test_voice_wake.py::test_model_stored_with_report | passing |
 | R25 | decidable | macf/tests/test_voice_wake.py::test_test_set_disjoint_from_training | passing |
@@ -423,6 +429,7 @@ None.
 - 2026-11-13: from building the capture unit: R15 excepts a recording, so a declared hotkey still works while listening is off; R27 lets a key interrupt the agent's speech, which stops for it; both flagged for review.
 - 2026-11-13: after the first review: listening and recording defined (R16, R21, R22, R27, R29); raw audio never leaves the system (R13); the speaker check runs before transcription (R23, R37); information only defined (R53); refused old-source notices recorded (R54); cross-agent false wakes reported (R24); authorship role corrected.
 - 2026-11-13: the operator's rulings: 0008 confirmed (Q07); R15 accepted as is; R27 accepted with the agent told what it was cut off saying, stated as the new R55.
+- 2026-11-13: from the first live trial on the operator's own voice: R56, the end window, and R57, the stop words, both as the operator asked and ruled; flagged for the maintainers' review.
 
 ## Wiki-Links
 

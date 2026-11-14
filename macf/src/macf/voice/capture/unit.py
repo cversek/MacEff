@@ -48,6 +48,27 @@ COOLDOWN_S = 3.0
 KEY_PREROLL_S = 0.3
 #: A recording that has heard no speech this long is cancelled, and sends nothing.
 NO_SPEECH_CANCEL_S = 4.5
+#: R56's stop words: said as the last word, ``send`` ends the utterance and sends it without the word;
+#: ``abort`` ends it and sends nothing.
+SEND_WORD, ABORT_WORD = "send", "abort"
+#: The pause after speech at which the last words are checked for a stop word, and how much is checked.
+STOP_PAUSE_S = 0.6
+STOP_TAIL_S = 2.5
+
+
+def last_stop_word(text: str) -> Optional[str]:
+    """``send`` or ``abort`` when the text's last word is one of them, ignoring case and punctuation."""
+    words = re.findall(r"[a-z']+", (text or "").lower())
+    return words[-1] if words and words[-1] in (SEND_WORD, ABORT_WORD) else None
+
+
+def strip_stop_word(text: str) -> tuple:
+    """(text without a trailing stop word, the word or None)."""
+    word = last_stop_word(text)
+    if word is None:
+        return text, None
+    cut = re.search(rf"\b{word}\W*$", text, re.I)
+    return (text[:cut.start()] if cut else text).rstrip(" ,.!?;:-"), word
 
 
 @dataclass
@@ -59,7 +80,11 @@ class CaptureConfig:
     hold_key: Optional[str] = None
     toggle_key: Optional[str] = None
     detector_bar: float = 0.85
-    end_silence_s: float = 1.2
+    #: R56's end window: full for ``end_hold_s`` of quiet, empty at ``end_silence_s``, when the utterance ends.
+    end_hold_s: float = 2.0
+    end_silence_s: float = 5.0
+    #: R56: listen for the stop words at each short pause. Off only where transcription is scripted.
+    stop_words: bool = True
     continual_close_s: float = 30.0
     max_utterance_s: float = 120.0
     #: The voice lock's lockout (MIS-0008 R39, R40), and whether it also covers key recordings
@@ -131,6 +156,9 @@ class _Recording:
     heard_speech: bool = False
     last_speech: float = 0.0
     utterance_started: float = 0.0     # continual voice: when the current utterance began
+    window_shown: float = 1.0          # the end window's fill last sent to the indicator (R56)
+    stop_check: object = None          # a stop-word check in flight (R56)
+    stop_checked_at: Optional[float] = None   # the last speech the check covered, so each pause is checked once
     voice_lock: str = "not_declared"     # "matched" once the voice lock passed it
 
 
@@ -366,8 +394,43 @@ class CaptureUnit:
             if now - rec.utterance_started >= limit:
                 self._finish(now, closing=True)
             return
-        if silent_for >= self.config.end_silence_s:
+        self._show_window(rec, silent_for)
+        said = self._stop_word_heard(rec, silent_for)
+        if said == ABORT_WORD:
+            self.log(f"\"{ABORT_WORD}\": the utterance is discarded, nothing sent")
+            rec.frames, rec.heard_speech = [], False
             self._finish(now, closing=rec.mode != "continual_voice")
+            return
+        if said == SEND_WORD or silent_for >= self.config.end_silence_s:
+            self._finish(now, closing=rec.mode != "continual_voice")
+
+    def _show_window(self, rec: "_Recording", silent_for: float) -> None:
+        """R56: how much of the end window is left, for the indicator. Full until ``end_hold_s`` of quiet,
+        then draining to empty at ``end_silence_s``; speech fills it again."""
+        hold, close = self.config.end_hold_s, self.config.end_silence_s
+        left = 1.0 if silent_for <= hold else max(0.0, 1.0 - (silent_for - hold) / max(close - hold, 1e-6))
+        if left != rec.window_shown:
+            rec.window_shown = left
+            self.indicator.window(left)
+
+    def _stop_word_heard(self, rec: "_Recording", silent_for: float) -> Optional[str]:
+        """R56: at a short pause after speech, transcribe the last few seconds once, in the background; a
+        stop word said last ends the utterance at once (``send``) or discards it (``abort``). Speech that
+        resumes before the answer makes the answer stale, so it is dropped."""
+        if not self.config.stop_words or silent_for < STOP_PAUSE_S:
+            rec.stop_check, rec.stop_checked_at = None, None
+            return None
+        if rec.stop_check is None and rec.stop_checked_at != rec.last_speech:
+            tail = np.concatenate(rec.frames[-int(STOP_TAIL_S * RATE / FRAME):])
+            rec.stop_checked_at = rec.last_speech
+            rec.stop_check = self.executor.submit(self._transcribe, tail, None)
+        if rec.stop_check is not None and rec.stop_check.done():
+            future, rec.stop_check = rec.stop_check, None
+            try:
+                return last_stop_word(future.result() or "")
+            except Exception as e:  # noqa: BLE001 - a failed check only means no early end; the window still ends it
+                self.log(f"the stop-word check failed ({e}); the end window ends the utterance")
+        return None
 
     def _finish(self, now: float, closing: bool = True) -> None:
         """End the current utterance: transcribe it on the worker and deliver it. In continual voice
@@ -437,6 +500,10 @@ class CaptureUnit:
             if found:
                 text = text[found.end():]
         text = text.strip(" ,.!?;:-")
+        text, word = strip_stop_word(text)       # R56: whatever ended it, a trailing stop word is obeyed
+        if word == ABORT_WORD:
+            self.log(f"{mode} utterance ended in \"{ABORT_WORD}\": discarded, nothing sent")
+            return
         if not text:
             self.log(f"{mode} utterance transcribed to nothing: nothing sent")
             return

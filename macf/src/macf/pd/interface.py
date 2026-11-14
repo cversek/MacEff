@@ -502,7 +502,9 @@ class VoiceSection(_Closed):
     #: microphone (R17). On Linux, ``/dev/input/by-id/...`` paths.
     trigger_devices: List[str] = Field(default_factory=list, max_length=8)
     #: The pause that ends an utterance, and the silence that closes continual voice (R20).
-    end_silence_s: float = Field(default=1.2, gt=0, le=30, allow_inf_nan=False)
+    #: R56: the end window, full for end_hold_s of quiet and empty, ending the utterance, at end_silence_s.
+    end_hold_s: float = Field(default=2.0, ge=0, le=30, allow_inf_nan=False)
+    end_silence_s: float = Field(default=5.0, gt=0, le=30, allow_inf_nan=False)
     continual_close_s: float = Field(default=30.0, gt=0, le=3600, allow_inf_nan=False)
     #: The level at which the wake model's score counts as a fire, before the speech and
     #: transcription checks (R23).
@@ -583,7 +585,9 @@ class VoiceDispatchSection(_Closed):
     signing_key_file: str = Field(min_length=1)
     lifetime_s: float = Field(default=30.0, gt=0, le=600, allow_inf_nan=False)
     trigger_devices: List[str] = Field(default_factory=list, max_length=8)
-    end_silence_s: float = Field(default=1.2, gt=0, le=30, allow_inf_nan=False)
+    #: R56: the end window, full for end_hold_s of quiet and empty, ending the utterance, at end_silence_s.
+    end_hold_s: float = Field(default=2.0, ge=0, le=30, allow_inf_nan=False)
+    end_silence_s: float = Field(default=5.0, gt=0, le=30, allow_inf_nan=False)
     continual_close_s: float = Field(default=30.0, gt=0, le=3600, allow_inf_nan=False)
     members: Dict[str, MemberVoiceBinding] = Field(min_length=1)
 

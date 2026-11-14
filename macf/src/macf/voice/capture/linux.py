@@ -43,7 +43,8 @@ class PipeWireAudio(AudioIn):
             return
         if shutil.which(self.command[0]) is None:
             raise AudioEnded(f"{self.command[0]} is not on PATH, so the microphone can't be read")
-        self._proc = subprocess.Popen(self.command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self._proc = subprocess.Popen(self.command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                      start_new_session=True)   # a terminal Ctrl-C reaches the unit, which closes this
 
     def read(self) -> np.ndarray:
         if self._proc is None:
@@ -204,7 +205,8 @@ class OverlayIndicator(Indicator):
         # arrange by preloading it; without that the compositor's layer shell is never found.
         if preload and Path(preload).exists():
             env["LD_PRELOAD"] = " ".join(p for p in (env.get("LD_PRELOAD", ""), preload) if p)
-        self._proc = subprocess.Popen([python, str(overlay)], stdin=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        self._proc = subprocess.Popen([python, str(overlay)], stdin=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+                                      start_new_session=True)
         self._shown = False
         try:
             code = self._proc.wait(timeout=settle_s)
@@ -235,6 +237,9 @@ class OverlayIndicator(Indicator):
     def hide(self) -> None:
         self._send({"hide": True})
         self._shown = False
+
+    def window(self, left) -> None:
+        self._send({"window": round(float(left), 3)})
 
     def close(self) -> None:
         if self._proc.poll() is None:

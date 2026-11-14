@@ -74,6 +74,11 @@ class Indicator(ABC):
     def hide(self) -> None:
         """Hide it. Safe when hidden."""
 
+    def window(self, left: float) -> None:
+        """How much of the end window is left, 1.0 full to 0.0 empty (R56): a pause drains it and
+        speech refills it, so the operator sees how long they have to go on. A backend that can't draw
+        it may leave this as it is: doing nothing is allowed."""
+
 
 @dataclass(frozen=True)
 class KeyEvent:

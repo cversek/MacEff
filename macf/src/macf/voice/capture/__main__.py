@@ -130,7 +130,8 @@ def build(home: Path):
                            toggle_key=voice.toggle_key,
                            detector_bar=voice.detector_bar if voice.detector_bar is not None else (
                                detector.threshold if detector is not None else 0.85),
-                           end_silence_s=voice.end_silence_s, continual_close_s=voice.continual_close_s)
+                           end_hold_s=voice.end_hold_s, end_silence_s=voice.end_silence_s,
+                           continual_close_s=voice.continual_close_s)
     return card, CaptureUnit(
         config, audio=PipeWireAudio(), lock=LinuxLockState(), indicator=OverlayIndicator(),
         triggers=EvdevTriggers(voice.trigger_devices) if voice.trigger_devices else NoKeys(),
@@ -192,7 +193,8 @@ def build_system(home: Path, card: str, declaration, *, backends=None, publish=N
                                     toggle_key=binding.toggle_key, detector=detector, detector_bar=bar,
                                     on_voice_event=lambda kind, data, m=member: sender.voice_event(m, kind, data)))
     b = backends or _platform_backends(vd.trigger_devices)
-    config = CaptureConfig(agent=card, end_silence_s=vd.end_silence_s, continual_close_s=vd.continual_close_s)
+    config = CaptureConfig(agent=card, end_hold_s=vd.end_hold_s, end_silence_s=vd.end_silence_s,
+                           continual_close_s=vd.continual_close_s)
     return CaptureUnit(config, members=members, deliver=sender, listening_on=lambda: state.listening_on(home),
                        speaking=lambda: state.speaking(home), log=lambda s: print(f"🎙️ MACF: voice: {s}", file=sys.stderr),
                        **b)

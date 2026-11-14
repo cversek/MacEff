@@ -69,7 +69,7 @@ def shared_unit(audio, transcriber, delivered, indicator=None):
                AgentBinding(agent=BRAVO, wake_phrase="hey bravo", hold_key="KEY_F11", toggle_key="KEY_F12",
                             detector=PhraseDetector(int(BRAVO_WAKE[0])))]
     keys = PushedKeys()
-    unit = CaptureUnit(CaptureConfig(agent=SYSTEM), audio=audio, lock=FakeLock(), indicator=indicator or
+    unit = CaptureUnit(CaptureConfig(agent=SYSTEM, end_silence_s=1.2, end_hold_s=0.5, stop_words=False), audio=audio, lock=FakeLock(), indicator=indicator or
                        RecordingIndicator(), triggers=keys, gate=LoudGate(), transcribe=transcriber,
                        deliver=delivered.append, clock=lambda: audio.reads * FRAME_S,
                        wall=lambda: NOW + audio.reads * FRAME_S, executor=InlineExecutor(), members=members)
@@ -127,7 +127,7 @@ def test_one_members_lockout_never_silences_another():
                             speaker=lambda a: True, on_voice_event=lambda k, d: events.append((ALPHA, k))),
                AgentBinding(agent=BRAVO, wake_phrase="hey bravo", detector=PhraseDetector(int(BRAVO_WAKE[0])),
                             speaker=lambda a: False, on_voice_event=lambda k, d: events.append((BRAVO, k)))]
-    unit = CaptureUnit(CaptureConfig(agent=SYSTEM), audio=audio, lock=FakeLock(), indicator=RecordingIndicator(),
+    unit = CaptureUnit(CaptureConfig(agent=SYSTEM, end_silence_s=1.2, end_hold_s=0.5, stop_words=False), audio=audio, lock=FakeLock(), indicator=RecordingIndicator(),
                        triggers=PushedKeys(), gate=LoudGate(),
                        transcribe=ScriptedTranscriber("hey alpha", "hey alpha status"), deliver=delivered.append,
                        clock=lambda: audio.reads * FRAME_S, wall=lambda: NOW + audio.reads * FRAME_S,
@@ -151,7 +151,7 @@ def test_when_two_wake_models_fire_at_once_the_first_declared_is_checked():
     delivered = []
     members = [AgentBinding(agent=ALPHA, wake_phrase="hey alpha", detector=Both()),
                AgentBinding(agent=BRAVO, wake_phrase="hey bravo", detector=Both())]
-    unit = CaptureUnit(CaptureConfig(agent=SYSTEM), audio=audio, lock=FakeLock(), indicator=RecordingIndicator(),
+    unit = CaptureUnit(CaptureConfig(agent=SYSTEM, end_silence_s=1.2, end_hold_s=0.5, stop_words=False), audio=audio, lock=FakeLock(), indicator=RecordingIndicator(),
                        triggers=PushedKeys(), gate=LoudGate(),
                        transcribe=ScriptedTranscriber("hey alpha", "hey alpha go"), deliver=delivered.append,
                        clock=lambda: audio.reads * FRAME_S, wall=lambda: NOW + audio.reads * FRAME_S,
@@ -493,6 +493,16 @@ def test_a_system_binds_only_its_declared_members_and_tells_them_apart():
                                                                ALPHA.upper(): {"toggle_key": "KEY_F10"}}))
 
 
+class PromptedTranscriber:
+    """Answers a stop-word check (no prompt) with nothing, and the phrase-prompted calls in order."""
+
+    def __init__(self, texts):
+        self.texts = list(texts)
+
+    def __call__(self, audio, prompt):
+        return (self.texts.pop(0) if self.texts else "") if prompt else ""
+
+
 def test_the_system_capture_unit_is_built_from_the_system_declaration(tmp_path):
     """R46 to R48 end to end on fakes: the unit the system declaration describes signs with the key
     file it names, sends a member's wake down that member's topic only, and a member's failed voice
@@ -504,14 +514,14 @@ def test_the_system_capture_unit_is_built_from_the_system_declaration(tmp_path):
     system_key = load_private_key(key_dir / "voice.key")
     decl = Declaration.model_validate(system_declaration(
         signing_key_file="{agent_home}/keys/voice.key",
-        members={ALPHA: {"wake_phrase": "hey alpha", "wake_model": "alpha.npz"}, BRAVO: {"hold_key": "KEY_F11"}}))
+        members={ALPHA: {"wake_phrase": "hey alpha", "wake_model": "alpha.npz"}, BRAVO: {"hold_key": "KEY_F11"}}, end_silence_s=1.2, end_hold_s=0.5))
     audio = FakeAudio().then((SILENCE, 3), (ALPHA_WAKE, secs(0.5)), (SPEECH, secs(1)), (SILENCE, secs(5)))
     sent = []
     unit = build_system(tmp_path, SYSTEM, decl, publish=lambda t, p: sent.append((t, p)) or True,
                         detector_for=lambda path: PhraseDetector(int(ALPHA_WAKE[0])),
                         backends=dict(audio=audio, lock=FakeLock(), indicator=RecordingIndicator(),
                                       triggers=PushedKeys(), gate=LoudGate(), executor=InlineExecutor(),
-                                      transcribe=ScriptedTranscriber("hey alpha", "hey alpha deploy"),
+                                      transcribe=PromptedTranscriber(["hey alpha", "hey alpha deploy"]),
                                       clock=lambda: audio.reads * FRAME_S))
     run(unit, len(audio.script))
     [(topic, payload)] = sent
