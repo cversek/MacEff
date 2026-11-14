@@ -741,3 +741,28 @@ class TestStopTargetsTheSupervisor:
         (stop,) = [l for l in render_unit(SYNTH).splitlines() if l.startswith("ExecStop=")]
         assert "auto-restart disable" in stop
         assert "kill" not in stop
+
+
+def test_every_date_call_in_a_generated_script_runs_on_this_host():
+    """`date -Is` is GNU-only: BSD date on macOS refuses it ("invalid argument 's' for -I"),
+    and the attach step printed that error on every start. Each date command a generated
+    script holds is run through this host's own date, and must succeed."""
+    import re
+    from macf.utils import harness
+    texts = [fn(SYNTH) for name, fn in vars(harness).items()
+             if name.startswith("render_") and callable(fn)
+             and fn.__code__.co_varnames[:1] == ("p",)]
+    flat = [x for t in texts for x in (t if isinstance(t, tuple) else (t,)) if isinstance(x, str)]
+    calls = {m for t in flat for m in re.findall(r"\$\((date[^)]*)\)", t)}
+    assert calls, "no date call found: the check would pass vacuously"
+    for call in calls:
+        done = subprocess.run(["/bin/sh", "-c", call], capture_output=True, text=True)
+        assert done.returncode == 0 and not done.stderr, (call, done.stderr)
+
+
+def test_the_tmux_baseline_passes_modified_keys_to_the_client():
+    """Shift-Tab cycles Claude Code's modes; without extended keys tmux never delivers it."""
+    from macf.utils.harness import render_tmux_conf
+    conf = render_tmux_conf(SYNTH)
+    assert "set -s extended-keys on" in conf
+    assert "extkeys" in conf
