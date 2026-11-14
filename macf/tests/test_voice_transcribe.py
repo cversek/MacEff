@@ -68,9 +68,26 @@ def test_decoding_is_bounded_and_a_short_check_is_capped(fake_faster_whisper):
     tr.transcribe_array(np.zeros(16000, np.float32), engine="faster-whisper")
     tr.transcribe_array(np.zeros(16000, np.float32), engine="faster-whisper", max_tokens=24)
     full, check = fake_faster_whisper.decoded
-    assert full == {"temperature": 0.0, "condition_on_previous_text": False}
+    assert full == {"temperature": 0.0, "condition_on_previous_text": False, "vad_filter": True}
     assert check == {"temperature": 0.0, "condition_on_previous_text": False, "without_timestamps": True,
                      "max_new_tokens": 24}
+
+
+def test_a_silent_last_stretch_transcribes_to_nothing(monkeypatch):
+    """A live utterance ended in "So, let's get started." a dozen times: its last stretch was the quiet before
+    the end window, and Whisper primed with a vocabulary writes speech into silence. This stand-in does the
+    same unless silence is cut out first, as faster-whisper's filter does."""
+
+    class Model:
+        def transcribe(self, audio, language=None, initial_prompt=None, vad_filter=False, **options):
+            if vad_filter and not np.abs(audio).max() > 0.01:
+                return iter([]), SimpleNamespace(language="en")
+            seg = SimpleNamespace(text=" So, let's get started.", start=0.0, end=5.0, no_speech_prob=0.6)
+            return iter([seg] * 12), SimpleNamespace(language="en")
+
+    monkeypatch.setattr(tr, "_faster_whisper_model", lambda model: Model())
+    quiet = (np.random.default_rng(1).standard_normal(5 * 16000) * 0.002).astype(np.float32)
+    assert tr.transcribe_array(quiet, engine="faster-whisper", initial_prompt="MacEff, Harbor Master").text == ""
 
 
 def test_release_drops_every_loaded_model(monkeypatch):

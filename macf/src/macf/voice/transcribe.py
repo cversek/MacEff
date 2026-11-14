@@ -219,6 +219,14 @@ def _segments_result(segments, text: str, language: str, engine: str, model: str
 #: on the same clips.
 BOUNDED_DECODE = {"temperature": 0.0, "condition_on_previous_text": False}
 
+#: A full transcription has silence cut out before Whisper sees it. A capture unit's last stretch is often only
+#: the quiet before its end window, and Whisper primed with a vocabulary writes speech into silence: a live
+#: utterance ended in "So, let's get started." a dozen times (2026-11-14). On the kept clips, 5 s of that quiet
+#: came back as "So, let's take a look at the top of the screen."; with this filter every silent tail came back
+#: empty, and the speech in all 13 clips was kept, at the same speed. Short checks are left without it: the
+#: speech gate has already judged their window, and a filter could clip a phrase that short.
+FULL_DECODE = {"vad_filter": True}
+
 
 def transcribe_faster_whisper(audio, model: str = "large-v3-turbo", language: str = "en",
                               initial_prompt: Optional[str] = None, max_tokens: Optional[int] = None) -> TranscriptResult:
@@ -227,7 +235,7 @@ def transcribe_faster_whisper(audio, model: str = "large-v3-turbo", language: st
     caps a short check (a wake phrase, a stop word), so a loop costs a moment rather than the token limit."""
     whisper_model = _faster_whisper_model(model)
     t0 = time.time()
-    capped = {"without_timestamps": True, "max_new_tokens": max_tokens} if max_tokens else {}
+    capped = {"without_timestamps": True, "max_new_tokens": max_tokens} if max_tokens else FULL_DECODE
     found, info = whisper_model.transcribe(audio, language=language, initial_prompt=initial_prompt,
                                            **BOUNDED_DECODE, **capped)
     segments = [TranscriptSegment(text=s.text.strip(), start=s.start, end=s.end, confidence=1.0 - s.no_speech_prob)
