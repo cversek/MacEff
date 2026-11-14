@@ -44,6 +44,8 @@ SETTLE_AFTER_FIRE_S = 0.8
 REJECT_COOLDOWN_S = 0.75
 #: After a recording, before another wake may open one.
 COOLDOWN_S = 3.0
+#: How far behind real time the unit may fall before it says so: audio it hasn't read yet, or lost.
+BEHIND_WARN_S = 0.5
 #: Audio kept from just before a key press, so the first word isn't clipped.
 KEY_PREROLL_S = 0.3
 #: A recording that has heard no speech this long is cancelled, and sends nothing.
@@ -211,6 +213,9 @@ class CaptureUnit:
         self._listening_on, self._speaking = listening_on, speaking
         self.clock, self.wall, self.log = clock, wall, log
         self.executor = executor or ThreadPoolExecutor(max_workers=1, thread_name_prefix="voice-transcribe")
+        #: The wake check runs here, off the capture loop, so the microphone keeps being read while Whisper
+        #: confirms the phrase; its own worker, so a long utterance being transcribed never delays a wake.
+        self.wake_executor = executor or ThreadPoolExecutor(max_workers=1, thread_name_prefix="voice-wake-check")
         if members is None:
             members = [AgentBinding(agent=config.agent, wake_phrase=config.wake_phrase, hold_key=config.hold_key,
                                     toggle_key=config.toggle_key, detector=detector,
@@ -226,7 +231,14 @@ class CaptureUnit:
         self.recording: Optional[_Recording] = None
         #: The agent whose wake model fired, and when, while the phrase settles.
         self._pending: Optional[tuple] = None
+        #: A wake check in flight: (agent, future, the window it judges, the frames read since).
+        self._checking: Optional[tuple] = None
         self._quiet_until = 0.0
+        #: When the microphone opened and how many frames were read since: how far behind real time the
+        #: unit is, and whether it said so already.
+        self._opened_at: Optional[float] = None
+        self._frames_since_open = 0
+        self._behind_said = False
         #: When listening and the current recording began, for the status entries (R16).
         self.listening_since: Optional[float] = None
         self.recording_since: Optional[float] = None
@@ -265,7 +277,9 @@ class CaptureUnit:
                 return                       # R15: listening off reads nothing
         frame = self.audio.read()
         self.frames_read += 1
+        self._frames_since_open += 1
         now = self.clock()
+        self._check_behind()
         self.ring.append(frame)
         if self.recording is not None:
             self._record(frame, now)
@@ -274,6 +288,7 @@ class CaptureUnit:
 
     def _open(self, why: str) -> None:
         self.audio.open()
+        self._opened_at, self._frames_since_open, self._behind_said = self.clock(), 0, False
         self.ring.clear()
         self._reset_detectors()
         self.gate.reset()
@@ -282,8 +297,29 @@ class CaptureUnit:
             self.listening_since = self.wall()
         self.log(f"microphone open ({why})")
 
+    @property
+    def behind_s(self) -> float:
+        """How far behind real time the unit is: the time since the microphone opened, less the audio read
+        in it. Audio the platform still holds, or dropped, while the loop was busy; 0 while closed."""
+        if self._opened_at is None:
+            return 0.0
+        return max(0.0, (self.clock() - self._opened_at) - self._frames_since_open * FRAME / RATE)
+
+    def _check_behind(self) -> None:
+        """Say once when the unit falls more than BEHIND_WARN_S behind, and once when it has caught up: a
+        wake or an utterance heard late, or lost, is then explained by the log, not left to guess."""
+        behind = self.behind_s
+        if behind > BEHIND_WARN_S and not self._behind_said:
+            self._behind_said = True
+            self.log(f"capture is {behind:.1f} s behind real time: audio is waiting or was lost")
+        elif behind < BEHIND_WARN_S / 2 and self._behind_said:
+            self._behind_said = False
+            self.log("capture has caught up with real time")
+
     def _close(self) -> None:
         self.audio.close()
+        self._opened_at = None
+        self._checking = None
         self.listening_since = None
         self.log("microphone closed")
 
@@ -318,6 +354,10 @@ class CaptureUnit:
     def _listen(self, frame: np.ndarray, now: float) -> None:
         if not self._wakeable():
             return
+        if self._checking is not None:
+            self._checking[3].append(frame)
+            self._judge_wake(now)
+            return
         if self._speaking():                 # R27: never wake on an agent's own voice
             self._pending = None
             self._reset_detectors()
@@ -348,19 +388,36 @@ class CaptureUnit:
         if not self._voice_lock_passes(agent, window, now):
             self._quiet_until = now + REJECT_COOLDOWN_S
             return
-        heard = self._transcribe(window, agent.b.wake_phrase)
-        found = agent.phrase.search(heard or "")
+        self._checking = (agent, self.wake_executor.submit(self._transcribe, window, agent.b.wake_phrase),
+                          list(self.ring), [])
+        self._judge_wake(now)
+
+    def _judge_wake(self, now: float) -> None:
+        """Act on the wake check once its transcription is back. Until then the loop goes on reading the
+        microphone, and the frames read meanwhile are kept, so nothing said after the phrase is lost."""
+        agent, future, window_frames, since = self._checking
+        if not future.done():
+            return
+        self._checking = None
+        self._reset_detectors()              # they heard none of the frames read while the check ran
+        try:
+            heard = future.result() or ""
+        except Exception as e:  # noqa: BLE001 - a failed check is a rejected wake, said, never a crash of the loop
+            self.log(f"the wake check failed ({e}): rejected")
+            self._quiet_until = now + REJECT_COOLDOWN_S
+            return
+        found = agent.phrase.search(heard)
         if not found:
             self.log("wake fired but the phrase wasn't heard: rejected")
             self._quiet_until = now + REJECT_COOLDOWN_S
             return
         self.log(f"wake for {agent.b.agent}")
-        self._start("wake_phrase", agent, preroll=list(self.ring))
+        self._start("wake_phrase", agent, preroll=window_frames + since)
         if agent.b.speaker is not None:
             self.recording.voice_lock = "matched"
-        if heard[found.end():].strip(" ,.!?;:-"):
-            # Words run on in the same breath as the phrase are already in the window: the
-            # recording has heard speech, so its pause ends it rather than a no-speech cancel.
+        if heard[found.end():].strip(" ,.!?;:-") or (since and self._window_has_speech(np.concatenate(since))):
+            # Words run on in the same breath as the phrase, or said while the check ran, are already
+            # recorded: the recording has heard speech, so its pause ends it rather than a no-speech cancel.
             self.recording.heard_speech = True
 
     def _window_has_speech(self, window: np.ndarray) -> bool:
@@ -378,6 +435,7 @@ class CaptureUnit:
         if preroll is None:
             keep = int(KEY_PREROLL_S * RATE / FRAME)
             preroll = list(self.ring)[-keep:] if keep else []
+        self._checking = None                # a key press overrides a wake still being checked
         self.recording = _Recording(mode=mode, started=now, spoken_at=self.wall(), agent=agent,
                                     frames=list(preroll), last_speech=now, utterance_started=now)
         self.recording_since = self.wall()
@@ -537,6 +595,8 @@ class CaptureUnit:
 
     def shutdown(self) -> None:
         self.executor.shutdown(wait=True)
+        if self.wake_executor is not self.executor:
+            self.wake_executor.shutdown(wait=True)
         self.indicator.hide()
         self.audio.close()
         self.triggers.close()

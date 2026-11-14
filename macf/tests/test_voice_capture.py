@@ -497,6 +497,66 @@ def test_each_utterance_says_why_it_ended():
     assert any(line == "wake_phrase utterance ended: send" for line in sent.logged)
 
 
+class HeldExecutor:
+    """Takes jobs and runs them only when the test says: a wake check that is still transcribing."""
+
+    def __init__(self):
+        self.jobs = []
+
+    def submit(self, fn, *args, **kwargs):
+        from concurrent.futures import Future
+        future = Future()
+        self.jobs.append((future, fn, args, kwargs))
+        return future
+
+    def finish(self):
+        for future, fn, args, kwargs in self.jobs:
+            future.set_result(fn(*args, **kwargs))
+        self.jobs = []
+
+    def shutdown(self, wait=True):
+        pass
+
+
+def test_the_microphone_is_read_while_the_wake_check_runs_and_nothing_said_meanwhile_is_lost():
+    """The third live trial: a wake confirmed 16 s after its fire, with misses around it. The check's transcription
+    runs off the loop; the loop keeps reading, and words said while it runs are in the utterance."""
+    audio = FakeAudio().then((SILENCE, 3), (WAKE, secs(0.5)), (SPEECH, secs(1)), (SILENCE, secs(3)), (SPEECH, secs(1)),
+                             (SILENCE, secs(6)))
+    transcriber = ByPrompt("yo tom", "yo tom one thought then another")
+    rig = make_unit(audio, transcriber, end_hold_s=2.0, end_silence_s=5.0)
+    held = HeldExecutor()
+    rig.unit.wake_executor = held
+    rig.run(3 + secs(0.5) + secs(1.2))
+    assert len(held.jobs) == 1 and rig.unit.recording is None, "the wake was decided before its check came back"
+    read = rig.audio.reads
+    rig.run(secs(3))
+    assert rig.audio.reads == read + secs(3), "the microphone wasn't read while the check ran"
+    held.finish()
+    rig.run(1)
+    assert rig.unit.recording is not None, "the wake wasn't taken once the check came back"
+    frames_kept = len(rig.unit.recording.frames)
+    assert frames_kept >= secs(3), "the frames read while the check ran weren't kept"
+    rig.run(len(rig.audio.script))
+    assert [u.text for u in rig.delivered] == ["one thought then another"]
+
+
+def test_a_unit_behind_real_time_says_so_once_and_says_when_it_caught_up():
+    """The lag is measured, not felt: time since the microphone opened against the audio read in it."""
+    extra = [0.0]
+    audio = FakeAudio().then((SILENCE, 40))
+    rig = make_unit(audio, ScriptedTranscriber())
+    rig.unit.clock = lambda: audio.reads * 0.08 + extra[0]
+    rig.run(5)
+    extra[0] = 1.2
+    rig.run(5)
+    extra[0] = 0.0
+    rig.run(5)
+    behind = [line for line in rig.logged if "behind real time" in line or "caught up" in line]
+    assert behind == ["capture is 1.2 s behind real time: audio is waiting or was lost",
+                      "capture has caught up with real time"]
+
+
 def test_send_as_whisper_heard_it_still_sends():
     """The second live trial: Whisper wrote the operator's last-word "send" as "Sand". That spelling counts as
     send, and is cut from the text like the word itself."""
