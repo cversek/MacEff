@@ -97,6 +97,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **continual voice**: a capture mode, opened by the toggle key, in which each pause ends one utterance and the microphone stays open.
 - **hold key**: a declared key that records an utterance only while it is held.
 - **indicator**: the on-screen sign that the capture unit is recording, showing the agent's name, the mode, a waveform and a volume trace.
+- **kept audio**: raw audio of recordings that a declaration lets a capture unit write to disk; off unless declared.
 - **listening**: the capture unit reading audio only to detect a wake, keeping none of it and showing no indicator.
 - **lockout**: a declared period during which voice contact with an agent delivers nothing, started by repeated failures of its voice lock.
 - **member**: a primal daemon associated with a system daemon, which exports to it.
@@ -136,7 +137,8 @@ It concerns every agent that will take dictation or speak, every deployment that
 ### 6.3 The capture unit
 
 - **R12** [MUST · decidable: macf/tests/test_voice_capture.py::test_undeclared_capture_unit_refused] A primal daemon MUST accept utterances only from a capture unit that a declaration names. (capture_unit_MUST_be_declared)
-- **R13** [MUST · decidable: macf/tests/test_voice_capture.py::test_raw_audio_never_written] Raw audio MUST stay in the capture unit's memory, never written to disk and never leaving its system. (raw_audio_MUST_stay_in_capture_memory)
+- **R13** [MUST · decidable: macf/tests/test_voice_capture.py::test_raw_audio_never_written] Raw audio MUST stay on the capture unit's system, and in its memory alone unless its declaration turns on kept audio. (raw_audio_MUST_stay_on_its_system)
+  - *Amended 2026-11-14 at the operator's ruling. Before: "Raw audio MUST stay in the capture unit's memory, never written to disk and never leaving its system." (raw_audio_MUST_stay_in_capture_memory). R61 to R64 bound what the amendment opens.*
 - **R14** [MUST · decidable: macf/tests/test_voice_backends.py::test_every_backend_passes_its_contract] A capture unit MUST reach audio, lock state, the indicator and trigger devices only through backend interfaces with contract tests. (capture_MUST_use_backend_interfaces)
 - **R15** [MUST NOT · decidable: macf/tests/test_voice_capture.py::test_no_audio_read_while_listening_off] While its listening is off and it is not recording, a capture unit MUST NOT read any audio from its microphone. (capture_MUST-NOT_read_audio_while_off)
 - **R16** [MUST · decidable: macf/tests/test_voice_capture.py::test_live_microphone_is_status_entry] A capture unit MUST report listening and recording as status entries, each with its age, and recording with its agent. (live_microphone_MUST_be_a_status_entry)
@@ -155,6 +157,11 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **R58** [MUST · decidable: macf/tests/test_voice_capture.py::test_listening_off_releases_the_transcription_model_and_listening_on_keeps_it] When listening is turned off, a capture unit MUST release its transcription model from memory, and load it again only for the next transcription. (transcription_model_MUST_be_released_while_listening_is_off)
 
 - **R60** [MUST · decidable: macf/tests/test_voice_capture.py::test_the_session_key_opens_a_locked_recording_that_only_the_send_key_ends] A session key MUST open a recording no pause ends, which the send key or a stop word ends and the session key pressed again discards. (session_key_MUST_open_a_locked_recording)
+
+- **R61** [MUST · decidable: macf/tests/test_voice_kept.py::test_kept_audio_goes_only_under_the_declared_folder_for_its_account_alone] Where kept audio is on, a capture unit MUST write each recording only under its declared local folder, readable by its own account alone. (kept_audio_MUST_stay_in_its_declared_folder)
+- **R62** [MUST · decidable: macf/tests/test_voice_kept.py::test_a_kept_recording_is_an_event_without_content] When a capture unit keeps a recording, it MUST record an event holding the recording's hash, trigger and time, and none of its content. (kept_recording_MUST_be_an_event)
+- **R63** [MUST · decidable: macf/tests/test_voice_kept.py::test_deleting_a_kept_recording_deletes_what_was_derived_from_it] When a kept recording is deleted, the system MUST delete every item derived from that recording. (deleting_kept_audio_MUST_delete_derived_items)
+- **R64** [MUST NOT · judgment: the operator, when a training set is made] A training set MUST NOT include a kept recording of a person whose consent the operator has not recorded. (training_MUST-NOT_use_unconsented_voices)
 
 ### 6.5 Wake phrases
 
@@ -247,6 +254,13 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **R57:** a long end window makes a deliberate end slow, so the operator asked for words that end one at once: "send" to deliver it and "abort" to cancel it. They count only as the last word, so "send the report" or "don't abort the build" said mid-sentence ends nothing. They are checked at each short pause, on the last seconds of audio, and again on the final transcript, so a held key's recording obeys them too. The word itself is never delivered.
 - **R58:** the operator, 2026-11-14: "I would like your model to remove itself from GPU when listening is turned off." A transcription model holds gigabytes of a GPU that other work shares, and with listening off no wake can come. So the model is released when the microphone closes with listening off, and loaded again by the next transcription. A key's recording made while listening is off pays that load once.
 - **R60:** the operator, 2026-11-14: "F9, this view pops up and it's already in the locked mode so that it's not going to decay away. Hitting F9 again will abort it", and "maybe it's F10 to send". At the keyboard he reads what he said before he sends it, so the end window that suits hands-free speech would cut him off; a locked recording ends only when he says so. Each key has one role: a key declared for two would do both at once, so it is refused.
+- **R13, as amended, and R61 to R64:** the operator, 2026-11-14: "just go ahead and add the audio and, um, Spectrum Capture. I really want you to start looking at this", and later that day he asked for a database of every kept recording, on "local disks only". Kept audio is what a voice lock trains on, what a regression bench replays, and what lets an agent look at a sound and not only its transcript. It is also a person's voice, and the voices of whoever else was in the room. So the default is unchanged: a capture unit writes no audio. A declaration turns kept audio on, and then these hold:
+  - the audio never leaves the system, as before, which rules out a backup to an outside service as much as a transcription service (R13);
+  - it goes to one declared folder that only the unit's account reads (R61);
+  - each keep is an event, so the record of what was kept is the event log's, and it carries no content (R62);
+  - a deletion takes the derived items with it, since a spectrogram or an embedding of a voice is still that voice (R63);
+  - nobody's voice trains a model without their recorded consent (R64).
+  The first deployment keeps its audio in a private store outside the framework; the framework's own tests for R61 to R63 are planned, and land when that store is promoted.
 - **R55:** an interrupted agent doesn't know where it was cut off, and the operator heard only part of what it meant to say. Without this, the agent answers the interruption as if its whole message had landed. The words heard are measured when the speech engine reports when each word ends. Otherwise they're estimated from how long the cut sentence had played, counting a word only once its estimated end has played. The note says which, so an estimate isn't read as a measurement. It rides on the utterance the interrupting key opened, since that is usually what the operator meant to say instead. If no utterance follows, the agent's next prompt carries it. Either way it is told once. These are the agent's own words, read by its daemon from the agent's home, never a sender's.
 
 **Voice generation (R28 to R33).**
@@ -328,7 +342,8 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **Denial of service:** anyone can spend the lockout attempts. The hold and toggle keys, which need a keyboard, and every other channel stay open during a lockout. Whether the voice lock covers hotkey input is the operator's choice (Q02). R43 has the agent tell the operator.
 - **Replay and forgery** between the system daemon and a member are refused by signature, expiry and nonce (R48, R50). Members can't read each other's utterances (R49).
 - **Privacy:**
-  - raw audio stays in memory (R13);
+  - raw audio stays in memory unless a declaration turns on kept audio, and on its system either way (R13);
+  - kept audio stays in one declared folder, is recorded as an event without content, and is deleted with everything derived from it (R61 to R63);
   - utterance text stays out of the event log (R10);
   - kept clips for training are the operator's, under the agent's home, and the voice_lock policy says how long they are kept.
 - **A changed capability boundary:** a new downward route from an association to a member (R48 to R50), and a second act a notice may license (R38). Both are argued in section 7.
@@ -363,6 +378,10 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R57 | decidable | macf/tests/test_voice_capture.py::test_send_said_last_ends_the_utterance_at_once_without_the_word | passing (abort: test_abort_said_last_discards_the_utterance, and on a held key test_abort_at_the_end_of_a_held_key_recording_discards_it) |
 | R58 | decidable | macf/tests/test_voice_capture.py::test_listening_off_releases_the_transcription_model_and_listening_on_keeps_it | passing (the release itself: test_voice_transcribe.py::test_release_drops_every_loaded_model) |
 | R60 | decidable | macf/tests/test_voice_capture.py::test_the_session_key_opens_a_locked_recording_that_only_the_send_key_ends | passing (abort: test_the_session_key_pressed_again_aborts_and_sends_nothing) |
+| R61 | decidable | macf/tests/test_voice_kept.py::test_kept_audio_goes_only_under_the_declared_folder_for_its_account_alone | planned (kept audio runs only in the first deployment's private trial so far) |
+| R62 | decidable | macf/tests/test_voice_kept.py::test_a_kept_recording_is_an_event_without_content | planned |
+| R63 | decidable | macf/tests/test_voice_kept.py::test_deleting_a_kept_recording_deletes_what_was_derived_from_it | planned |
+| R64 | judgment | the operator, when a training set is made | pending |
 | R23 | decidable | macf/tests/test_voice_wake.py::test_wake_passes_its_checks_in_order | planned (model, speech and transcription pass in order; the voice lock takes its place between them with the lock's phase) |
 | R24 | decidable | macf/tests/test_voice_wake.py::test_model_stored_with_report | passing |
 | R25 | decidable | macf/tests/test_voice_wake.py::test_test_set_disjoint_from_training | passing |
@@ -422,7 +441,7 @@ If the pull request grows too large to review, it splits after stage 4 and after
 - **Q03** May speech-to-text run off the machine, through a declared transcription service, when the machine can't run it locally? The maintainers decide, before Final-Comment. (remote_transcription_question)
 - **Q04** How does a macOS capture app hold its key monitor and microphone grants under the code-identity custody R53 of the MIS-0007 draft describes? The first macOS porter proposes, and the maintainers decide. (macos_capture_custody)
 - **Q05** Which speech engines beyond Kokoro does voice generation support, and may a voice blend several? The maintainers decide, after the selection prototype. (speech_engine_scope)
-- **Q06** How long are kept training clips for the wake model and the voice lock retained, and may an operator require their deletion at any time? The operator decides, before Final-Comment. (voice_clip_retention)
+- **Q06** How long are kept training clips and kept audio retained? R63 settles that a deletion takes derived items with it; the retention period is still open. The operator decides, before Final-Comment. (voice_clip_retention)
 - **Q07** Is 0008 the right number? *Resolved 2026-11-13: the operator confirmed 0008.* (mis_number_confirmation)
 - **Q08** Where does a system's shared capture unit get its microphone? The MIS-0007 draft places a capture unit in the operator's login session, where the microphone grant and the audio server are, while R46 runs the shared unit on the system daemon's account, which has neither on a desktop. Either the system account is given the audio device directly, or the shared unit runs in the login session and still signs with a key out of every agent's reach. The prototype runs it on injected backends. The maintainers decide, from the first live run of the shared unit. (shared_capture_audio_source)
 
@@ -438,6 +457,7 @@ None.
 - 2026-11-13: after the first review: listening and recording defined (R16, R21, R22, R27, R29); raw audio never leaves the system (R13); the speaker check runs before transcription (R23, R37); information only defined (R53); refused old-source notices recorded (R54); cross-agent false wakes reported (R24); authorship role corrected.
 - 2026-11-13: the operator's rulings: 0008 confirmed (Q07); R15 accepted as is; R27 accepted with the agent told what it was cut off saying, stated as the new R55.
 - 2026-11-13: from the first live trial on the operator's own voice: R56, the end window, and R57, the stop words, both as the operator asked and ruled; flagged for the maintainers' review.
+- 2026-11-14: the operator's ruling on kept audio: R13 amended so a declaration may turn it on, with the old sentence kept under it; R61 to R64 bound it (one folder, an event without content, deletion of derived items, consent before training).
 
 ## Wiki-Links
 
