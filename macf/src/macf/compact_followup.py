@@ -166,7 +166,7 @@ def follow(target: str, since: float, text: str = DEFAULT_TEXT, *,
             offered = switch_dialog_model(screen) if screen is not None and after == TURN_END_EVENT else None
             if offered is not None:
                 if confirm_model is None:
-                    return f"gave up: a 'Switch model?' dialog for {offered} waits for a person (no --confirm-switch was given)"
+                    return f"gave up: a 'Switch model?' dialog for {offered} waits for a person (switched with --no-confirm)"
                 if not same_model(confirm_model, offered):
                     return (f"gave up: a 'Switch model?' dialog offers {offered}, and {confirm_model} was asked; "
                             f"left for a person")

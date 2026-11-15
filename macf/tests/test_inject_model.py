@@ -68,12 +68,14 @@ def test_no_then_arms_no_stop_passage(isolated_events_log, pane):
     assert not [e for e in read_events() if e.get("event") == "stop_gate_suspend_once"]
 
 
-def test_answering_the_switch_dialog_is_opt_in(isolated_events_log, pane):
+def test_by_default_the_switch_dialog_is_answered_so_a_remote_session_is_not_stranded(isolated_events_log, pane):
+    """The operator, 2026-11-15 18:26, after the dialog froze a Remote Control session: "Just make the default the one
+    that doesn't strand your session." The dialog is drawn only in the terminal."""
     _, followers = pane
     supervisor.switch_own_model("opus", "a reason")
-    assert followers[-1][1].get("confirm_model") is None, "by default the cost dialog is left for a person"
-    supervisor.switch_own_model("opus", "a reason", confirm=True)
-    assert followers[-1][1].get("confirm_model") == "opus"
+    assert followers[-1][1].get("confirm_model") == "opus", "by default the follower answers it"
+    supervisor.switch_own_model("opus", "a reason", confirm=False)
+    assert followers[-1][1].get("confirm_model") is None, "--no-confirm leaves it for a person"
 
 
 def test_the_follower_waits_for_the_turn_to_end_not_for_a_compaction():
