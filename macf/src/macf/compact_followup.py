@@ -51,14 +51,20 @@ TIMEOUT_SECONDS = 1800.0
 POLL_SECONDS = 2.0
 PROMPT_EVENT = "dev_drv_started"
 COMPACTION_EVENT = "compaction_detected"
+#: The turn that queued a command ended: a queued /model has then run, since the client takes
+#: a queued command as the turn yields. ``inject model`` waits for this, not for a compaction.
+TURN_END_EVENT = "dev_drv_ended"
+MODEL_TEXT = ("🏗️ MACF | Your model is now {model}, switched with inject model ({reason}). "
+              "Carry on with the work you were doing.")
 
 
 def decide(events: Iterable[dict], since: float, now: float,
-           settle: float = SETTLE_SECONDS) -> str:
-    """'wait', 'send' or 'skip', from the events at or after *since* (any order)."""
+           settle: float = SETTLE_SECONDS, after: str = COMPACTION_EVENT) -> str:
+    """'wait', 'send' or 'skip', from the events at or after *since* (any order). *after* is the
+    event that must come first: a compaction for ``inject compact``, a turn's end for a model switch."""
     rows = sorted((e for e in events if (e.get("timestamp") or 0) >= since),
                   key=lambda e: e.get("timestamp") or 0)
-    compaction = next((e for e in rows if e.get("event") == COMPACTION_EVENT), None)
+    compaction = next((e for e in rows if e.get("event") == after), None)
     if compaction is None:
         return "wait"
     at = compaction["timestamp"]
@@ -114,8 +120,9 @@ def follow(target: str, since: float, text: str = DEFAULT_TEXT, *,
            enter: Optional[Callable[[], int]] = None,
            width: Optional[Callable[[], Optional[int]]] = None,
            clock: Callable[[], float] = time.time,
-           sleep: Callable[[float], None] = time.sleep) -> str:
-    """Wait for the compaction, then send, skip, or give up. Returns which, for the log."""
+           sleep: Callable[[float], None] = time.sleep,
+           after: str = COMPACTION_EVENT) -> str:
+    """Wait for the compaction (or *after*), then send, skip, or give up. Returns which, for the log."""
     if send is None or capture is None or enter is None or width is None:
         from .supervisor import capture_pane, pane_width, press_enter, send_keys
         send = send or (lambda t, keys: send_keys(t, keys, enter=False, kind="compact-followup"))  # noqa: E731
@@ -126,7 +133,7 @@ def follow(target: str, since: float, text: str = DEFAULT_TEXT, *,
     deadline = clock() + timeout
     box_seen, columns = None, None
     while clock() < deadline:
-        verdict = decide(read(since), since, clock())
+        verdict = decide(read(since), since, clock(), after=after)
         if verdict == "send":
             screen, columns = capture(), width()
             box_seen = classify(screen, columns) if screen is not None else "unreadable"
@@ -139,14 +146,14 @@ def follow(target: str, since: float, text: str = DEFAULT_TEXT, *,
             return submit(text, typed_at, capture=capture, enter=enter, read=read,
                           clock=clock, sleep=sleep)
         if verdict == "skip":
-            return "skipped: a prompt started after the compaction"
+            return f"skipped: a prompt started after the {'compaction' if after == COMPACTION_EVENT else 'turn ended'}"
         sleep(poll)
     if box_seen == TOO_NARROW:
         return (f"gave up: the session's pane is {columns} columns wide, too narrow to read "
                 f"its input box; widen it")
     if box_seen is not None:
         return f"gave up: the input box was never idle and empty (last seen: {box_seen})"
-    return "gave up: no compaction within the timeout"
+    return f"gave up: no {'compaction' if after == COMPACTION_EVENT else 'turn end'} within the timeout"
 
 
 def _take_lock(path: Optional[Path] = None):
@@ -176,14 +183,19 @@ def main(argv: Optional[list] = None) -> int:
     p.add_argument("target", help="supervisor name or pid whose pane receives the prompt")
     p.add_argument("since", type=float, help="epoch seconds of the injection")
     p.add_argument("--text", default=DEFAULT_TEXT)
+    p.add_argument("--after", default=COMPACTION_EVENT, choices=(COMPACTION_EVENT, TURN_END_EVENT),
+                   help="the event to wait for before typing (default: a compaction)")
     a = p.parse_args(argv)
     lock = _take_lock()
-    outcome = follow(a.target, a.since, a.text) if lock is not None else \
+    outcome = follow(a.target, a.since, a.text, after=a.after) if lock is not None else \
         "skipped: another follower is already waiting"
     from .agent_events_log import append_event
     # append_event catches its own I/O errors and returns False; a wrapper here could only
     # hide a defect, so a failed record is said, not swallowed.
-    if not append_event("compact_followup", {"target": a.target, "outcome": outcome}):
+    record = {"target": a.target, "outcome": outcome}
+    if a.after != COMPACTION_EVENT:
+        record["after"] = a.after                      # a compaction's record keeps its shape
+    if not append_event("compact_followup", record):
         print("[inject] compact follow-up: the outcome could not be recorded in the event log",
               file=sys.stderr)
     print(f"[inject] compact follow-up: {outcome}")

@@ -825,8 +825,46 @@ def start_compaction_resume(since: float) -> bool:
     return _start_compact_followup(target, RESUME_TEXT, since=since, quiet=True)
 
 
+#: What ``inject model`` may type after ``/model``: an alias the client knows, or a model id, each with an
+#: optional [1m] context suffix. Anything else is refused, so the command can't carry other text into the pane,
+#: and a bare ``/model``, which opens a picker that nobody is there to answer, is impossible.
+MODEL_NAME = re.compile(r"(?:opus|sonnet|haiku|fable|default|opusplan|claude-[a-z0-9][a-z0-9.-]{2,60})(?:\[1m\])?")
+
+
+def switch_own_model(model: str, reason: str, then: Optional[str] = None) -> int:
+    """Queue ``/model <model>`` into this agent's own pane, record why, and type a prompt once it has run.
+
+    A model switch, like a compaction, opens no turn: the queued ``/model`` runs as the turn that queued it ends,
+    and the agent then sits idle on its new model until something wakes it. So, as for ``inject compact``, a
+    detached follower waits for that turn's end and types one prompt, the framework's or ``then``, into an idle,
+    empty box. The switch changes what each turn costs, so the reason is required and is recorded with it."""
+    import time as _time
+    model, reason = model.strip(), " ".join(reason.split())
+    if not MODEL_NAME.fullmatch(model):
+        print(f"[inject] {model!r} is not a model name this command types. Give an alias (opus, sonnet, haiku, "
+              f"fable, default) or a model id such as claude-opus-5-5, optionally with [1m].", file=sys.stderr)
+        return 1
+    if not reason:
+        print("[inject] A model switch changes what every turn costs, so it needs --reason: whose word or "
+              "which standing rule it follows. It is recorded with the switch.", file=sys.stderr)
+        return 1
+    own = own_pane_target()
+    asked_at = _time.time()
+    rc = send_slash_to_self(f"model {model}")
+    if rc != 0:
+        return rc
+    from .agent_events_log import append_event
+    if not append_event("model_change_asked", {"model": model, "reason": reason, "via": "macf_tools inject"}):
+        print("⚠️ MACF: the model switch was sent but could not be recorded in the event log", file=sys.stderr)
+    if then != "" and own:
+        from .compact_followup import MODEL_TEXT, TURN_END_EVENT
+        _start_compact_followup(own, then or MODEL_TEXT.format(model=model, reason=reason), since=asked_at,
+                                after=TURN_END_EVENT)
+    return 0
+
+
 def _start_compact_followup(target: str, text: str, since: Optional[float] = None,
-                            quiet: bool = False) -> bool:
+                            quiet: bool = False, after: Optional[str] = None) -> bool:
     """Start the detached follower that types *text* once the compaction has finished.
 
     Self-resolved path only, like the Stop passage above: the follower reads THIS agent's
@@ -835,7 +873,7 @@ def _start_compact_followup(target: str, text: str, since: Optional[float] = Non
     """
     import time as _time
     argv = [sys.executable, "-m", "macf.compact_followup", target,
-            repr(_time.time() if since is None else since), "--text", text]
+            repr(_time.time() if since is None else since), "--text", text] + (["--after", after] if after else [])
     # Its stderr goes to the transcript monitor's log in the user's runtime directory, so a
     # follower that dies before recording its outcome still leaves a traceback somewhere.
     log = subprocess.DEVNULL

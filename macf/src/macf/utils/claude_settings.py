@@ -280,10 +280,14 @@ _DEFAULT_ASK = [
 # `inject` takes any slash command. inject compact refuses while the input box
 # holds text, so clearing the box is allowed too; clear-input presses only
 # Ctrl-U, in the caller's own pane, and only when the box starts with --expect.
+# inject model switches the agent's own model (the operator, 2026-11-14: "Give yourself allow perms for the
+# command"). Its arguments can't carry anything else: it types /model only with a name it checked against
+# the known aliases and model ids, and refuses without a --reason, which it records.
 _PERMANENT_ALLOW = [
     "Bash(macf_tools mode set MANUAL_MODE:*)",
     "Bash(macf_tools inject compact)",
     "Bash(macf_tools inject clear-input:*)",
+    "Bash(macf_tools inject model:*)",
 ]
 
 # Operations that are NEVER legitimate in normal development (permanent deny)
