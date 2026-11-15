@@ -832,7 +832,7 @@ def start_compaction_resume(since: float) -> bool:
 MODEL_NAME = re.compile(r"(?:opus|sonnet|haiku|fable|default|opusplan|claude-[a-z0-9][a-z0-9.-]{2,60})(?:\[1m\])?")
 
 
-def switch_own_model(model: str, reason: str, then: Optional[str] = None, confirm: bool = False) -> int:
+def switch_own_model(model: str, reason: str, then: Optional[str] = None, confirm: bool = True) -> int:
     """Queue ``/model <model>`` into this agent's own pane, record why, and type a prompt once it has run.
 
     A model switch, like a compaction, opens no turn: the queued ``/model`` runs as the turn that queued it ends,
@@ -909,8 +909,8 @@ def _followup_notice(after: Optional[str], confirm_model: Optional[str]) -> str:
     if after != TURN_END_EVENT:
         return ("[inject] After the compaction, a recovery prompt will be typed into this pane "
                 "(skipped if something else wakes the session first).")
-    dialog = (f"answers the client's 'Switch model?' dialog if it offers {confirm_model} (--confirm-switch), then "
-              if confirm_model else "leaves any 'Switch model?' dialog for a person, then ")
+    dialog = (f"answers the client's 'Switch model?' dialog if it offers {confirm_model}, then "
+              if confirm_model else "leaves any 'Switch model?' dialog for a person (--no-confirm), then ")
     return (f"[inject] When this turn ends the model switches. The follower {dialog}types a prompt into this "
             f"pane (skipped if something else wakes the session first).")
 
