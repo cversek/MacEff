@@ -11956,7 +11956,8 @@ def _cmd_inject(args):
                   "that nobody is there to answer.", file=sys.stderr)
             return 1
         then = "" if getattr(args, "no_then", False) else getattr(args, "then", None)
-        return switch_own_model(args.value, getattr(args, "reason", "") or "", then=then)
+        return switch_own_model(args.value, getattr(args, "reason", "") or "", then=then,
+                                confirm=not getattr(args, "no_confirm", False))
     if getattr(args, "value", None):
         print(f"[inject] {args.command} takes no argument here; only model does.", file=sys.stderr)
         return 1
@@ -14069,6 +14070,9 @@ def _build_parser() -> argparse.ArgumentParser:
                                     "(default: the framework's short prompt)")
     inject_parser.add_argument("--no-then", action="store_true",
                                help="for compact or model: type nothing afterwards")
+    inject_parser.add_argument("--no-confirm", action="store_true",
+                               help="for model: leave the client's 'Switch model?' dialog for a person "
+                                    "(by default the follower answers it when it offers the model asked)")
     inject_parser.set_defaults(func=lambda args: _cmd_inject(args))
 
     # channel: settings for the channels the operator reads (GH #477)

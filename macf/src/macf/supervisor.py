@@ -831,7 +831,7 @@ def start_compaction_resume(since: float) -> bool:
 MODEL_NAME = re.compile(r"(?:opus|sonnet|haiku|fable|default|opusplan|claude-[a-z0-9][a-z0-9.-]{2,60})(?:\[1m\])?")
 
 
-def switch_own_model(model: str, reason: str, then: Optional[str] = None) -> int:
+def switch_own_model(model: str, reason: str, then: Optional[str] = None, confirm: bool = True) -> int:
     """Queue ``/model <model>`` into this agent's own pane, record why, and type a prompt once it has run.
 
     A model switch, like a compaction, opens no turn: the queued ``/model`` runs as the turn that queued it ends,
@@ -859,12 +859,13 @@ def switch_own_model(model: str, reason: str, then: Optional[str] = None) -> int
     if then != "" and own:
         from .compact_followup import MODEL_TEXT, TURN_END_EVENT
         _start_compact_followup(own, then or MODEL_TEXT.format(model=model, reason=reason), since=asked_at,
-                                after=TURN_END_EVENT)
+                                after=TURN_END_EVENT, confirm_model=model if confirm else None)
     return 0
 
 
 def _start_compact_followup(target: str, text: str, since: Optional[float] = None,
-                            quiet: bool = False, after: Optional[str] = None) -> bool:
+                            quiet: bool = False, after: Optional[str] = None,
+                            confirm_model: Optional[str] = None) -> bool:
     """Start the detached follower that types *text* once the compaction has finished.
 
     Self-resolved path only, like the Stop passage above: the follower reads THIS agent's
@@ -873,7 +874,8 @@ def _start_compact_followup(target: str, text: str, since: Optional[float] = Non
     """
     import time as _time
     argv = [sys.executable, "-m", "macf.compact_followup", target,
-            repr(_time.time() if since is None else since), "--text", text] + (["--after", after] if after else [])
+            repr(_time.time() if since is None else since), "--text", text] + (["--after", after] if after else []) \
+        + (["--confirm-switch", confirm_model] if confirm_model else [])
     # Its stderr goes to the transcript monitor's log in the user's runtime directory, so a
     # follower that dies before recording its outcome still leaves a traceback somewhere.
     log = subprocess.DEVNULL
@@ -894,9 +896,20 @@ def _start_compact_followup(target: str, text: str, since: Optional[float] = Non
         if log is not subprocess.DEVNULL:
             os.close(log)
     if not quiet:                       # a hook's stdout is its reply, so a hook passes quiet
-        print("[inject] After the compaction, a recovery prompt will be typed into this pane "
-              "(skipped if something else wakes the session first).")
+        print(_followup_notice(after, confirm_model))
     return True
+
+
+def _followup_notice(after: Optional[str], confirm_model: Optional[str]) -> str:
+    """What the agent is told its follower will do: after a compaction, or after a model switch."""
+    from .compact_followup import TURN_END_EVENT
+    if after != TURN_END_EVENT:
+        return ("[inject] After the compaction, a recovery prompt will be typed into this pane "
+                "(skipped if something else wakes the session first).")
+    dialog = (f"answers the client's 'Switch model?' dialog if it offers {confirm_model}, then " if confirm_model
+              else "leaves any 'Switch model?' dialog for a person (--no-confirm), then ")
+    return (f"[inject] When this turn ends the model switches. The follower {dialog}types a prompt into this "
+            f"pane (skipped if something else wakes the session first).")
 
 
 def record_keys_sent(text: str, kind: str, tmux_session: str) -> None:

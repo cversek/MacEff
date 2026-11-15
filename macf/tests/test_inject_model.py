@@ -84,3 +84,79 @@ def test_the_command_line_refuses_a_bare_switch_and_another_pane(capsys):
 def test_the_switch_is_always_allowed():
     from macf.utils.claude_settings import _PERMANENT_ALLOW
     assert "Bash(macf_tools inject model:*)" in _PERMANENT_ALLOW
+
+
+# The client asks "Switch model?" above the input box when the conversation is cached for the old model
+# (2.1.322). On 2026-11-15 the follower read the box below as empty, since it held only a faint suggestion,
+# typed its prompt into the dialog, and the session waited on the dialog until the operator answered it.
+RULE = chr(0x2500) * 80
+
+
+def switch_screen(offered="Fable 5.2"):
+    return "\n".join([
+        "● earlier output", RULE, "  Switch model?", "  Your next response will be slower and use more tokens", "",
+        "  This conversation is cached for the current model.", "",
+        f"  {chr(0x276F)} 1. Yes, switch to {offered}", "    2. No, go back", "",
+        chr(0x2500) * 60 + " THM_ee5cs8 " + chr(0x2500),
+        chr(0x276F) + " \x1b[2mPress up to edit queued messages\x1b[0m", chr(0x2500) * 40])
+
+
+IDLE = "\n".join(["● done", RULE, chr(0x276F) + " ", RULE])
+
+
+def test_a_dialog_drawn_above_the_box_is_a_dialog_not_an_empty_box():
+    from macf.pd import wake
+    assert wake.classify(switch_screen()) == wake.DIALOG, "nothing may be typed into it"
+    assert wake.switch_dialog_model(switch_screen()) == "Fable 5.2"
+    assert wake.switch_dialog_model(IDLE) is None and wake.classify(IDLE) == wake.IDLE_EMPTY
+
+
+@pytest.mark.parametrize("asked,shown,same", [
+    ("fable", "Fable 5.2", True), ("opus", "Opus 5.5", True), ("claude-opus-5-5", "Opus 5.5", True),
+    ("opus[1m]", "Opus 5.5", True), ("opus", "Fable 5.2", False), ("default", "Opus 5.5", False)])
+def test_the_dialog_is_matched_to_the_model_asked(asked, shown, same):
+    assert compact_followup.same_model(asked, shown) is same
+
+
+def _follow(screens, confirm_model):
+    """Run the follower over a turn that has ended, with *screens* captured in turn; the keys it pressed."""
+    pressed, typed, now = [], [], [1000.0]
+    shown = iter(screens)
+    last = [None]
+
+    def capture():
+        last[0] = next(shown, last[0])
+        return last[0]
+
+    def read(since):
+        events = [{"event": "dev_drv_ended", "timestamp": 900.0}]
+        return events + ([{"event": "dev_drv_started", "timestamp": now[0]}] if typed else [])
+
+    def sleep(s):
+        now[0] += s
+    outcome = compact_followup.follow(
+        "sup:1", 899.0, "wake text", read=read, send=lambda t, keys: typed.append(keys) or 0, capture=capture,
+        enter=lambda: pressed.append("Enter") or 0, width=lambda: 120, clock=lambda: now[0], sleep=sleep,
+        timeout=60.0, after=compact_followup.TURN_END_EVENT, confirm_model=confirm_model)
+    return {"outcome": outcome, "pressed": pressed, "typed": typed}
+
+
+def test_the_follower_answers_the_switch_dialog_for_the_model_asked_then_wakes_the_agent():
+    run = _follow([switch_screen(), IDLE], "fable")
+    assert run["pressed"][:1] == ["Enter"] and run["typed"] == [["wake text"]] and run["outcome"] == "sent"
+
+
+def test_a_dialog_for_another_model_is_left_for_a_person():
+    run = _follow([switch_screen("Opus 5.5")], "fable")
+    assert run["pressed"] == [] and run["typed"] == [] and "left for a person" in run["outcome"]
+
+
+def test_with_no_confirm_the_dialog_is_left_for_a_person():
+    run = _follow([switch_screen()], None)
+    assert run["pressed"] == [] and run["typed"] == [] and "waits for a person" in run["outcome"]
+
+
+def test_the_follower_says_what_it_will_do_after_a_switch_not_after_a_compaction():
+    notice = supervisor._followup_notice(compact_followup.TURN_END_EVENT, "fable")
+    assert "compaction" not in notice and "Switch model?" in notice and "fable" in notice
+    assert "compaction" in supervisor._followup_notice(None, None), "inject compact keeps its notice"

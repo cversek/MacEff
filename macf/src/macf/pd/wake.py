@@ -105,6 +105,15 @@ _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 #: tool call; read without that phrase, those seconds looked idle and a wake was typed mid-turn.
 _SPINNER = re.compile(r"…\s*\((?:[^()]*?·\s*)?(\d+h )?(\d+m )?\d+s")
 _DIALOG_MARKERS = ("esc to cancel", "enter to select", "do you want to")
+#: A selection dialog drawn ABOVE the input box: its highlighted first option, then a second. The client draws
+#: some dialogs there, such as "Switch model?" (2.1.322), and leaves the box below with only a faint
+#: suggestion, which reads as empty. On 2026-11-15 a follower typed its prompt into that dialog.
+_OPTION_FIRST = re.compile(r"^\s*❯\s*1\.\s")
+_OPTION_NEXT = re.compile(r"^\s*2\.\s")
+#: How many lines above the box's top border a dialog drawn there is looked for.
+DIALOG_ABOVE_LOOKBACK = 14
+_SWITCH_TITLE = "Switch model?"
+_SWITCH_YES = re.compile(r"^\s*❯\s*1\.\s*Yes, switch to (.+?)\s*$")
 _RUNNING_MARKER = "esc to interrupt"
 
 
@@ -209,6 +218,8 @@ def _box(screen: str):
     below = [line for line in plain[bottom + 1:] if line.strip()]
     if len(below) > 8 or any(m in line.lower() for line in below for m in _DIALOG_MARKERS):
         return DIALOG, None
+    if _dialog_above(plain, top):
+        return DIALOG, None
     # The spinner can sit well above the box, with the turn's output between them; the
     # clock looks fifteen lines up, and 2.1.288 prints only the spinner.
     near = plain[max(0, top - RUNNING_LOOKBACK):]
@@ -217,6 +228,31 @@ def _box(screen: str):
     if any(_RUNNING_MARKER in line.lower() or _SPINNER.search(line) for line in near):
         return RUNNING, text
     return None, text
+
+
+def _above(plain: list, top: int) -> list:
+    """The lines just above the input box's top border, where the client draws some dialogs."""
+    return plain[max(0, top - DIALOG_ABOVE_LOOKBACK):top]
+
+
+def _dialog_above(plain: list, top: int) -> bool:
+    """A numbered selection (a highlighted option 1, then an option 2) just above the box."""
+    above = _above(plain, top)
+    first = next((i for i, line in enumerate(above) if _OPTION_FIRST.match(line)), None)
+    return first is not None and any(_OPTION_NEXT.match(line) for line in above[first + 1:])
+
+
+def switch_dialog_model(screen: str) -> Optional[str]:
+    """The model a "Switch model?" dialog above the input box offers to switch to, as it names it
+    ("Fable 5.2"), or None when no such dialog is on screen."""
+    plain = [_ANSI.sub("", line) for line in screen.splitlines()]
+    rules = [i for i, line in enumerate(plain) if _RULE.match(line) and line.count("─") >= _RULE_MIN]
+    if len(rules) < 2:
+        return None
+    above = _above(plain, rules[-2])
+    if not any(line.strip() == _SWITCH_TITLE for line in above):
+        return None
+    return next((m.group(1) for m in map(_SWITCH_YES.match, above) if m), None)
 
 
 def classify(screen: str, width: Optional[int] = None) -> str:

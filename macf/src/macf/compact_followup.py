@@ -56,6 +56,17 @@ COMPACTION_EVENT = "compaction_detected"
 TURN_END_EVENT = "dev_drv_ended"
 MODEL_TEXT = ("🏗️ MACF | Your model is now {model}, switched with inject model ({reason}). "
               "Carry on with the work you were doing.")
+#: Model families as the client's "Switch model?" dialog names them ("Fable 5.2"), by the aliases inject types.
+MODEL_FAMILIES = ("opus", "sonnet", "haiku", "fable")
+
+
+def same_model(asked: str, shown: str) -> bool:
+    """Whether the model a "Switch model?" dialog names is the one inject model was asked for. Only a family
+    alias or a ``claude-<family>-...`` id can be matched; ``default`` names no family, so it never matches."""
+    asked = asked.lower().replace("[1m]", "").strip()
+    family = asked.split("-")[1] if asked.startswith("claude-") and asked.count("-") >= 2 else asked
+    words = shown.lower().split()
+    return family in MODEL_FAMILIES and bool(words) and words[0] == family
 
 
 def decide(events: Iterable[dict], since: float, now: float,
@@ -121,21 +132,36 @@ def follow(target: str, since: float, text: str = DEFAULT_TEXT, *,
            width: Optional[Callable[[], Optional[int]]] = None,
            clock: Callable[[], float] = time.time,
            sleep: Callable[[float], None] = time.sleep,
-           after: str = COMPACTION_EVENT) -> str:
-    """Wait for the compaction (or *after*), then send, skip, or give up. Returns which, for the log."""
+           after: str = COMPACTION_EVENT, confirm_model: Optional[str] = None) -> str:
+    """Wait for the compaction (or *after*), then send, skip, or give up. Returns which, for the log.
+
+    After a model switch the client may ask "Switch model?" in a dialog above the input box. With
+    *confirm_model*, the model inject was asked for, the follower answers it once, and only when the dialog
+    offers that same model; any other dialog is left for a person, and the outcome says so."""
     if send is None or capture is None or enter is None or width is None:
         from .supervisor import capture_pane, pane_width, press_enter, send_keys
         send = send or (lambda t, keys: send_keys(t, keys, enter=False, kind="compact-followup"))  # noqa: E731
         capture = capture or (lambda: capture_pane(target))  # noqa: E731
         enter = enter or (lambda: press_enter(target))  # noqa: E731
         width = width or (lambda: pane_width(target))  # noqa: E731
-    from .pd.wake import IDLE_EMPTY, TOO_NARROW, classify
+    from .pd.wake import IDLE_EMPTY, TOO_NARROW, classify, switch_dialog_model
     deadline = clock() + timeout
-    box_seen, columns = None, None
+    box_seen, columns, answered = None, None, False
     while clock() < deadline:
         verdict = decide(read(since), since, clock(), after=after)
         if verdict == "send":
             screen, columns = capture(), width()
+            offered = switch_dialog_model(screen) if screen is not None and after == TURN_END_EVENT else None
+            if offered is not None:
+                if confirm_model is None:
+                    return f"gave up: a 'Switch model?' dialog for {offered} waits for a person (switched with --no-confirm)"
+                if not same_model(confirm_model, offered) or answered:
+                    return (f"gave up: a 'Switch model?' dialog offers {offered}, and {confirm_model} was asked"
+                            f"{' and already confirmed once' if answered else ''}; left for a person")
+                enter()                        # option 1, highlighted: "Yes, switch to" the model asked
+                answered = True
+                sleep(poll)
+                continue
             box_seen = classify(screen, columns) if screen is not None else "unreadable"
             if box_seen != IDLE_EMPTY:
                 sleep(poll)                    # typed after a draft, both would go as one
@@ -185,10 +211,12 @@ def main(argv: Optional[list] = None) -> int:
     p.add_argument("--text", default=DEFAULT_TEXT)
     p.add_argument("--after", default=COMPACTION_EVENT, choices=(COMPACTION_EVENT, TURN_END_EVENT),
                    help="the event to wait for before typing (default: a compaction)")
+    p.add_argument("--confirm-switch", metavar="MODEL", default=None,
+                   help="after a model switch, answer the client's 'Switch model?' dialog if it offers MODEL")
     a = p.parse_args(argv)
     lock = _take_lock()
-    outcome = follow(a.target, a.since, a.text, after=a.after) if lock is not None else \
-        "skipped: another follower is already waiting"
+    outcome = follow(a.target, a.since, a.text, after=a.after, confirm_model=a.confirm_switch) \
+        if lock is not None else "skipped: another follower is already waiting"
     from .agent_events_log import append_event
     # append_event catches its own I/O errors and returns False; a wrapper here could only
     # hide a defect, so a failed record is said, not swallowed.
