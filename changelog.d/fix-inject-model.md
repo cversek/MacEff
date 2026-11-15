@@ -6,8 +6,9 @@
   - **Recorded:** `--reason` is required and goes into a `model_change_asked` event with the model.
   - **Takes effect like `/compact`:** the queued `/model` passes the Stop gates once, and the follower that wakes an agent after a compaction now also waits for a turn's end, so the agent gets one prompt on its new model. `--then` and `--no-then` work as for compact.
   - **Always allowed:** `Bash(macf_tools inject model:*)` joins the permanent allow list, never a bare `inject` wildcard.
-  - **The client's "Switch model?" dialog:** when the conversation is cached for the old model, the client asks before switching, in a dialog above the input box. The follower answers it once, only when it offers the model asked; any other dialog is left for a person, and `--no-confirm` leaves even that one. Found by dogfooding: the first real switch typed its wake prompt into the dialog and hung until the operator answered.
+  - **The client's "Switch model?" dialog:** when the conversation is cached for the old model, the client asks before switching, in a dialog above the input box. It is a cost confirmation, so it is left for a person by default. With `--confirm-switch` the follower answers it once, only when it offers the model asked (the version too, for a model id), with a grace period and never a second Enter. Found by dogfooding: the first real switch typed its wake prompt into the dialog and hung until the operator answered.
+  - **`--no-then` arms no Stop passage**, since nothing would wake the agent after the switch.
 
 ### Fixed
 
-- **A selection dialog above the input box is a dialog** (`pd/wake.py`). The screen reader looked for dialogs only below the box, so a dialog drawn above it, with a faint suggestion in the box, read as an idle empty box, and a wake or follow-up could be typed into it.
+- **A selection dialog under a question, above the input box, is a dialog** (`pd/wake.py`). The screen reader looked for dialogs only below the box, so a dialog drawn above it, with a faint suggestion in the box, read as an idle empty box, and a wake or follow-up could be typed into it.

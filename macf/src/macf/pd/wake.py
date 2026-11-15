@@ -236,10 +236,14 @@ def _above(plain: list, top: int) -> list:
 
 
 def _dialog_above(plain: list, top: int) -> bool:
-    """A numbered selection (a highlighted option 1, then an option 2) just above the box."""
+    """A numbered selection just above the box: the dialog's question (a line ending in '?'), then a highlighted
+    option 1, then an option 2. The question is required, so a numbered list echoed in the conversation above an
+    empty box is not mistaken for a dialog and does not silence a wake."""
     above = _above(plain, top)
     first = next((i for i, line in enumerate(above) if _OPTION_FIRST.match(line)), None)
-    return first is not None and any(_OPTION_NEXT.match(line) for line in above[first + 1:])
+    if first is None or not any(_OPTION_NEXT.match(line) for line in above[first + 1:]):
+        return False
+    return any(line.strip().endswith("?") for line in above[:first])
 
 
 def switch_dialog_model(screen: str) -> Optional[str]:

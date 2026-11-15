@@ -58,15 +58,27 @@ MODEL_TEXT = ("🏗️ MACF | Your model is now {model}, switched with inject mo
               "Carry on with the work you were doing.")
 #: Model families as the client's "Switch model?" dialog names them ("Fable 5.2"), by the aliases inject types.
 MODEL_FAMILIES = ("opus", "sonnet", "haiku", "fable")
+#: How long an answered "Switch model?" dialog may stay drawn before the follower leaves it for a person.
+DIALOG_GRACE_SECONDS = 10.0
 
 
 def same_model(asked: str, shown: str) -> bool:
-    """Whether the model a "Switch model?" dialog names is the one inject model was asked for. Only a family
-    alias or a ``claude-<family>-...`` id can be matched; ``default`` names no family, so it never matches."""
+    """Whether the model a "Switch model?" dialog names is the one inject model was asked for.
+
+    An alias (``opus``) matches its family ("Opus 5.5"). A model id (``claude-opus-5-5``) must match the family
+    and, when the dialog shows one, the version ("5.5"), so an older id is never confirmed as the newer model.
+    ``default`` names no family, so it never matches."""
     asked = asked.lower().replace("[1m]", "").strip()
-    family = asked.split("-")[1] if asked.startswith("claude-") and asked.count("-") >= 2 else asked
+    parts = asked.split("-")
+    is_id = asked.startswith("claude-") and len(parts) >= 3
+    family = parts[1] if is_id else asked
     words = shown.lower().split()
-    return family in MODEL_FAMILIES and bool(words) and words[0] == family
+    if family not in MODEL_FAMILIES or not words or words[0] != family:
+        return False
+    if is_id and len(words) > 1:
+        version = ".".join(p for p in parts[2:] if p.isdigit())
+        return version == words[1]
+    return True
 
 
 def decide(events: Iterable[dict], since: float, now: float,
@@ -154,12 +166,20 @@ def follow(target: str, since: float, text: str = DEFAULT_TEXT, *,
             offered = switch_dialog_model(screen) if screen is not None and after == TURN_END_EVENT else None
             if offered is not None:
                 if confirm_model is None:
-                    return f"gave up: a 'Switch model?' dialog for {offered} waits for a person (switched with --no-confirm)"
-                if not same_model(confirm_model, offered) or answered:
-                    return (f"gave up: a 'Switch model?' dialog offers {offered}, and {confirm_model} was asked"
-                            f"{' and already confirmed once' if answered else ''}; left for a person")
+                    return f"gave up: a 'Switch model?' dialog for {offered} waits for a person (no --confirm-switch was given)"
+                if not same_model(confirm_model, offered):
+                    return (f"gave up: a 'Switch model?' dialog offers {offered}, and {confirm_model} was asked; "
+                            f"left for a person")
+                if answered is not False:
+                    # Answered already: the client may take a moment to close the dialog. Wait out a grace
+                    # period, never pressing Enter a second time, then leave it for a person.
+                    if clock() - answered > DIALOG_GRACE_SECONDS:
+                        return (f"gave up: the 'Switch model?' dialog was answered once and is still drawn after "
+                                f"{DIALOG_GRACE_SECONDS:g} s; left for a person")
+                    sleep(poll)
+                    continue
                 enter()                        # option 1, highlighted: "Yes, switch to" the model asked
-                answered = True
+                answered = clock()
                 sleep(poll)
                 continue
             box_seen = classify(screen, columns) if screen is not None else "unreadable"

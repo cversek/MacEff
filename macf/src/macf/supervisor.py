@@ -527,7 +527,7 @@ def _record_keys_sent(text: str, kind: str, tmux_session: str) -> None:
               f"will read as the operator's typing: {e}", file=sys.stderr)
 
 
-def send_slash_to_self(command: str, target: str = "", then: Optional[str] = None) -> int:
+def send_slash_to_self(command: str, target: str = "", then: Optional[str] = None, arm_stop: bool = True) -> int:
     """Queue a slash command (e.g. ``/compact``) into this agent's own live CC
     pane via the tmux side channel.
 
@@ -616,7 +616,8 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
         # only on the self-resolved path: with --target the pane may belong to
         # another session, and this log's gates are this session's.
         from .stop_bypass import arm
-        arm(command)
+        if arm_stop:
+            arm(command)
         if cmd == "/compact":
             # The ask is recorded so that a compaction without one can be found
             # (MIS-0002-R127 (harness_compaction_MUST_be_recorded)).
@@ -831,7 +832,7 @@ def start_compaction_resume(since: float) -> bool:
 MODEL_NAME = re.compile(r"(?:opus|sonnet|haiku|fable|default|opusplan|claude-[a-z0-9][a-z0-9.-]{2,60})(?:\[1m\])?")
 
 
-def switch_own_model(model: str, reason: str, then: Optional[str] = None, confirm: bool = True) -> int:
+def switch_own_model(model: str, reason: str, then: Optional[str] = None, confirm: bool = False) -> int:
     """Queue ``/model <model>`` into this agent's own pane, record why, and type a prompt once it has run.
 
     A model switch, like a compaction, opens no turn: the queued ``/model`` runs as the turn that queued it ends,
@@ -850,7 +851,9 @@ def switch_own_model(model: str, reason: str, then: Optional[str] = None, confir
         return 1
     own = own_pane_target()
     asked_at = _time.time()
-    rc = send_slash_to_self(f"model {model}")
+    # The Stop passage lets the turn end through a sprint's scope gate so the queued /model runs; with no
+    # follower to wake the agent afterwards (--no-then), that would end the turn with nothing to resume it.
+    rc = send_slash_to_self(f"model {model}", arm_stop=then != "")
     if rc != 0:
         return rc
     from .agent_events_log import append_event
@@ -906,8 +909,8 @@ def _followup_notice(after: Optional[str], confirm_model: Optional[str]) -> str:
     if after != TURN_END_EVENT:
         return ("[inject] After the compaction, a recovery prompt will be typed into this pane "
                 "(skipped if something else wakes the session first).")
-    dialog = (f"answers the client's 'Switch model?' dialog if it offers {confirm_model}, then " if confirm_model
-              else "leaves any 'Switch model?' dialog for a person (--no-confirm), then ")
+    dialog = (f"answers the client's 'Switch model?' dialog if it offers {confirm_model} (--confirm-switch), then "
+              if confirm_model else "leaves any 'Switch model?' dialog for a person, then ")
     return (f"[inject] When this turn ends the model switches. The follower {dialog}types a prompt into this "
             f"pane (skipped if something else wakes the session first).")
 

@@ -61,6 +61,21 @@ def test_no_then_starts_no_follower(isolated_events_log, pane):
     assert supervisor.switch_own_model("opus", "a reason", then="") == 0 and followers == []
 
 
+def test_no_then_arms_no_stop_passage(isolated_events_log, pane):
+    """With nothing to wake the agent afterwards, the turn must not end through a sprint's scope gate."""
+    assert supervisor.switch_own_model("opus", "a reason", then="") == 0
+    assert stop_bypass.consume() is None
+    assert not [e for e in read_events() if e.get("event") == "stop_gate_suspend_once"]
+
+
+def test_answering_the_switch_dialog_is_opt_in(isolated_events_log, pane):
+    _, followers = pane
+    supervisor.switch_own_model("opus", "a reason")
+    assert followers[-1][1].get("confirm_model") is None, "by default the cost dialog is left for a person"
+    supervisor.switch_own_model("opus", "a reason", confirm=True)
+    assert followers[-1][1].get("confirm_model") == "opus"
+
+
 def test_the_follower_waits_for_the_turn_to_end_not_for_a_compaction():
     since = 100.0
     ended = [{"event": "dev_drv_ended", "timestamp": 110.0}]
@@ -113,7 +128,8 @@ def test_a_dialog_drawn_above_the_box_is_a_dialog_not_an_empty_box():
 
 @pytest.mark.parametrize("asked,shown,same", [
     ("fable", "Fable 5.2", True), ("opus", "Opus 5.5", True), ("claude-opus-5-5", "Opus 5.5", True),
-    ("opus[1m]", "Opus 5.5", True), ("opus", "Fable 5.2", False), ("default", "Opus 5.5", False)])
+    ("opus[1m]", "Opus 5.5", True), ("opus", "Fable 5.2", False), ("default", "Opus 5.5", False),
+    ("claude-opus-4-1", "Opus 5.5", False)])
 def test_the_dialog_is_matched_to_the_model_asked(asked, shown, same):
     assert compact_followup.same_model(asked, shown) is same
 
@@ -160,3 +176,21 @@ def test_the_follower_says_what_it_will_do_after_a_switch_not_after_a_compaction
     notice = supervisor._followup_notice(compact_followup.TURN_END_EVENT, "fable")
     assert "compaction" not in notice and "Switch model?" in notice and "fable" in notice
     assert "compaction" in supervisor._followup_notice(None, None), "inject compact keeps its notice"
+
+
+def test_a_dialog_still_drawn_just_after_the_answer_gets_a_grace_period_not_a_second_enter():
+    run = _follow([switch_screen(), switch_screen(), IDLE], "fable")
+    assert run["pressed"].count("Enter") >= 1 and run["typed"] == [["wake text"]] and run["outcome"] == "sent"
+    assert run["pressed"][:2] != ["Enter", "Enter"] or run["typed"], "the dialog is never answered twice"
+
+
+def test_a_dialog_that_never_closes_is_left_for_a_person_after_one_answer():
+    run = _follow([switch_screen()] * 40, "fable")
+    assert run["pressed"] == ["Enter"] and run["typed"] == [] and "still drawn" in run["outcome"]
+
+
+def test_a_numbered_list_echoed_above_an_empty_box_is_not_a_dialog():
+    from macf.pd import wake
+    echo = "\n".join(["● Here are the options I see:", f"  {chr(0x276F)} 1. keep the branch", "    2. merge it",
+                      RULE, chr(0x276F) + " ", RULE])
+    assert wake.classify(echo) == wake.IDLE_EMPTY, "no question line above the list, so a wake may still be typed"
