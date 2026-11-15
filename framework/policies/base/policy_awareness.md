@@ -1,12 +1,14 @@
 # POLICY_AWARENESS
 
+**Type**: Framework Foundation
+**Scope**: All agents (PA and SA)
+**Status**: ACTIVE
+
 ## Meta-Policy: Policy Classification
 - **Tier**: MANDATORY
-- **Category**: Framework Foundation
 - **Version**: 1.1.0
 - **Dependencies**: None (Bootstrap Policy)
 - **Authority**: MacEff Framework
-- **Status**: ACTIVE
 
 ## Core Truth
 You don't need to read everything. You need to recognize WHEN you need something.

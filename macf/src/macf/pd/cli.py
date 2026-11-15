@@ -5,7 +5,7 @@ manager and take it out. Starting, stopping and restarting a unit over the contr
 must name who asks (MIS-0002-R52 (control_act_MUST_name_who_asked)), and which asker a
 command line typed in a session claims is still an open question, so no unit act is here.
 ``wake`` paces the keystroke wake, which acts on no unit: it is asked by the agent, or by the
-operator with ``--asked-by operator`` (persistent_layer 1.9).
+operator with ``--asked-by operator`` (persistent_layer 6.9).
 """
 import argparse
 import json
@@ -108,7 +108,7 @@ def add_pd_parser(sub) -> None:
         "agenda", help="what is scheduled: the declared schedules' next runs and your own entries")
     agenda.set_defaults(func=cmd_pd_agenda)
     wake = pd_sub.add_parser(
-        "wake", help="the keystroke wake's window: show it, or pace it (persistent_layer 1.9)")
+        "wake", help="the keystroke wake's window: show it, or pace it (persistent_layer 6.9)")
     wake.add_argument("--refractory", default=None, metavar="DURATION",
                       help="rest this long after each wake: seconds, or 90s, 5m, 1h; never under "
                            "the declared floor")
@@ -118,7 +118,7 @@ def add_pd_parser(sub) -> None:
                       help="who paces: the agent itself (default), or the operator")
     wake.set_defaults(func=cmd_pd_wake)
     stream = pd_sub.add_parser(
-        "stream", help="the layer's event stream: subscribe to it, or silence and reroute it (persistent_layer 11.4)")
+        "stream", help="the layer's event stream: subscribe to it, or silence and reroute it (persistent_layer 3.4)")
     stream_sub = stream.add_subparsers(dest="stream_cmd")
     sub_p = stream_sub.add_parser("subscribe", help="print the stream's records, one JSON line each, until Ctrl+C")
     sub_p.add_argument("--source", action="append", default=None, metavar="EVENT",
@@ -380,6 +380,7 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         return 0
     if report.source == "none":
         print(f"{card}: {report.why}")
+        _say_drafts()
         _say_tray(report)
         return 0
     print(f"{card}: from the {report.source} ({report.why})")
@@ -408,8 +409,67 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         print(f"  schedule {s['schedule']}: {s['verdict']}: {s['detail']}")
     if report.runs:
         print(f"  runs: {report.runs}")
+    _say_drafts()
+    _say_allowlist(home)
+    _say_receipts()
     _say_tray(report)
     return 0
+
+
+def _say_allowlist(home) -> None:
+    # A declared channel the client won't admit loads, connects and is silent, and its notices
+    # read as delivered, so say so where status is read (cversek/MacEff#904).
+    from macf.pd import allowlist
+    from macf.pd.interface import Declaration, declaration_path
+    path = declaration_path(home)
+    if not path.is_file():
+        return
+    try:
+        # Only its channels are read, so a declaration the card check would refuse is read too.
+        declaration = Declaration.model_validate_json(path.read_text())
+        lines = allowlist.unadmitted_without_allowlist(declaration, allowlist.managed_allowlist())
+    except (OSError, ValueError, LookupError) as e:
+        print(f"  ⚠️ the channel allowlist couldn't be checked: {e}")
+        return
+    for line in lines:
+        print(f"  ⚠️ {line}")
+
+
+def _say_receipts(window_s: float = 86400.0) -> None:
+    # A notice written to the channel and dropped by the client reads as delivered; only the
+    # session's receipt tells the two apart, whatever the cause (cversek/MacEff#904).
+    from macf.agent_events_log import read_events
+    from macf.pd import receipts
+    floor = time.time() - window_s
+    try:
+        recent = []
+        for event in read_events(reverse=True, scope="all", only=receipts.EVENTS):
+            if (event.get("timestamp") or 0) < floor:
+                break
+            recent.append(event)
+    except OSError as e:
+        print(f"  ⚠️ the channel notices' receipts couldn't be read: {e}")
+        return
+    missing = receipts.unreceived(reversed(recent))
+    if missing:
+        print(f"  ⚠️ {len(missing)} notice(s) written to the channel in the last day were never "
+              f"received by the session, though it took turns after them, the oldest at "
+              f"{_when(missing[0].sent_at)}. Something between the channel and the session drops "
+              f"them; a client that won't admit the channel does. "
+              f"Each is in the event log: macf_tools events query --event pd_notice_delivered "
+              f"--event notice_received --after 1d -v")
+
+
+def _say_drafts() -> None:
+    # Unsent feedback drafts block the session's restart through `inject exit`, so say so
+    # while there's time to deal with them, not first when they block (cversek/MacEff#903).
+    # They're read only: sending or discarding one is the operator's decision.
+    from macf.utils.feedback_drafts import age, unsent_drafts
+    drafts = unsent_drafts()
+    if drafts:
+        print(f"  ⚠️ the client holds {len(drafts)} unsent feedback draft(s), the oldest "
+              f"{age(drafts[0])}; a session restart through `inject exit` waits until the "
+              f"operator sends or discards them (/feedback)")
 
 
 def _say_tray(report) -> None:
@@ -656,7 +716,12 @@ def cmd_pd_install(args: argparse.Namespace) -> int:
         print(f"maceff_pd: nothing installed: {e}\n{POLICY_POINTER}", file=sys.stderr)
         return 1
     try:
-        mismatch = allowlist.findings(declaration, allowlist.managed_allowlist())
+        managed = allowlist.managed_allowlist()
+        mismatch = allowlist.findings(declaration, managed)
+        # Said, not refused: the install has nothing to compare, and the channel may be admitted
+        # some way this can't read (a configuration profile, an admin console) (#904).
+        for line in allowlist.unadmitted_without_allowlist(declaration, managed):
+            print(f"⚠️ maceff_pd: {line}", file=sys.stderr)
     except (OSError, ValueError) as e:
         mismatch = [f"the managed settings can't be read, so the organization allowlist can't be "
                     f"compared with the declaration: {e}"]

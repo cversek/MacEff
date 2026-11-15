@@ -1,12 +1,14 @@
 # CONTEXT_MANAGEMENT
 
+**Type**: Framework Foundation
+**Scope**: All agents (PA and SA)
+**Status**: ACTIVE
+
 ## Meta-Policy: Policy Classification
 - **Tier**: MANDATORY
-- **Category**: Framework Foundation
 - **Version**: 1.1.0
 - **Dependencies**: policy_awareness, core_principles
 - **Authority**: MacEff Framework
-- **Status**: ACTIVE
 
 ## Policy Statement
 Agents must maintain awareness of time and token constraints, prepare for compaction trauma, and use checkpoint protocols to preserve continuity across context resets.
@@ -356,6 +358,8 @@ YYYY-MM-DD_HHMMSS_Description_ccp.md
 - Detects fake "previous conversation" message
 - Injects strong consciousness activation via `additionalContext`
 - Provides artifact list and recovery instructions
+
+**An agent's own banner**: the banner that opens the recovery message is the framework's unless the agent's home holds `.maceff/recovery_header.md`, whose text then replaces it. The recovery essentials (the mode and the artifacts to open) still come first, and the mode's own section still follows, whichever banner is used. An empty file is ignored; one that can't be read is reported and the framework's banner is used. This exists so that a banner's wording can be tried in one agent's sessions without changing every other agent's (#995).
 
 **Output Format**:
 ```json

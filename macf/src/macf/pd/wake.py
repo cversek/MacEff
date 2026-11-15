@@ -71,19 +71,26 @@ EVENT_HELD = "pd_wake_held"
 EVENT_RELEASED = "pd_wake_released"
 EVENT_TURN = "pd_wake_turn"
 EVENT_CAP = "pd_wake_cap_reached"
-#: The agent, or the operator, paced the wake over the control socket (persistent_layer 1.9):
+#: The agent, or the operator, paced the wake over the control socket (persistent_layer 6.9):
 #: the window asked for, the one it replaced, and who asked, why and from which process. The
 #: next daemon reads the newest back at its start.
 EVENT_PACED = "pd_wake_paced"
 
 # The screen states, from the most to the least cautious.
 DIALOG, RUNNING, DRAFT, WAKE_IN_BOX, IDLE_EMPTY = "dialog", "running", "draft", "wake_in_box", "idle_empty"
+#: No input box found on a pane narrower than the client draws its screen readably (#800). It
+#: holds like a dialog, but says the cause, which widening the pane removes.
+TOO_NARROW = "too_narrow"
+#: The narrowest pane the screen is read at with confidence. 45 columns was seen to wrap and
+#: interleave the box's lines past reading (#800); widths between have not been measured, so
+#: below this a missing box is reported as the pane's width rather than as a dialog.
+MIN_READABLE_WIDTH = 80
 #: The hold reason while the refractory window runs: the agent's pace, not its screen.
 REFRACTORY = "refractory"
 
 #: The holds whose screen is kept: the two a person may be behind, and the two the
 #: Oct 17 demo could not explain afterwards.
-SCREEN_KEPT_FOR = (DIALOG, DRAFT)
+SCREEN_KEPT_FOR = (DIALOG, DRAFT, TOO_NARROW)
 #: Saved screens kept per agent, the newest; older ones are removed as new ones are written.
 SCREENS_KEPT = 20
 
@@ -98,6 +105,15 @@ _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 #: tool call; read without that phrase, those seconds looked idle and a wake was typed mid-turn.
 _SPINNER = re.compile(r"…\s*\((?:[^()]*?·\s*)?(\d+h )?(\d+m )?\d+s")
 _DIALOG_MARKERS = ("esc to cancel", "enter to select", "do you want to")
+#: A selection dialog drawn ABOVE the input box: its highlighted first option, then a second. The client draws
+#: some dialogs there, such as "Switch model?" (2.1.322), and leaves the box below with only a faint
+#: suggestion, which reads as empty. On 2026-11-15 a follower typed its prompt into that dialog.
+_OPTION_FIRST = re.compile(r"^\s*❯\s*1\.\s")
+_OPTION_NEXT = re.compile(r"^\s*2\.\s")
+#: How many lines above the box's top border a dialog drawn there is looked for.
+DIALOG_ABOVE_LOOKBACK = 14
+_SWITCH_TITLE = "Switch model?"
+_SWITCH_YES = re.compile(r"^\s*❯\s*1\.\s*Yes, switch to (.+?)\s*$")
 _RUNNING_MARKER = "esc to interrupt"
 
 
@@ -180,21 +196,29 @@ def _visible(line: str) -> str:
     return "".join(out)
 
 
+#: _box's state for a screen with no input box found at all, which classify reports as a dialog,
+#: or by the pane's width when that is too narrow to read.
+_NO_BOX = "no_box"
+
+
 def _box(screen: str):
     """``(state, text)``: None and the box's text (empty for an empty box) for an idle
-    session; RUNNING and the box's text while a turn runs; DIALOG and None with no box."""
+    session; RUNNING and the box's text while a turn runs; DIALOG and None for a box with a
+    dialog below it; _NO_BOX and None when no box is found."""
     raw = screen.splitlines()
     plain = [_ANSI.sub("", line) for line in raw]
     rules = [i for i, line in enumerate(plain)
              if _RULE.match(line) and line.count("─") >= _RULE_MIN]
     if len(rules) < 2:
-        return DIALOG, None                                # no input box on screen
+        return _NO_BOX, None                               # no input box on screen
     top, bottom = rules[-2], rules[-1]
     box = [i for i in range(top + 1, bottom) if plain[i].strip()]
     if not box or not plain[box[0]].lstrip().startswith(("❯", ">")):
-        return DIALOG, None
+        return _NO_BOX, None
     below = [line for line in plain[bottom + 1:] if line.strip()]
     if len(below) > 8 or any(m in line.lower() for line in below for m in _DIALOG_MARKERS):
+        return DIALOG, None
+    if _dialog_above(plain, top):
         return DIALOG, None
     # The spinner can sit well above the box, with the turn's output between them; the
     # clock looks fifteen lines up, and 2.1.288 prints only the spinner.
@@ -206,10 +230,42 @@ def _box(screen: str):
     return None, text
 
 
-def classify(screen: str) -> str:
+def _above(plain: list, top: int) -> list:
+    """The lines just above the input box's top border, where the client draws some dialogs."""
+    return plain[max(0, top - DIALOG_ABOVE_LOOKBACK):top]
+
+
+def _dialog_above(plain: list, top: int) -> bool:
+    """A numbered selection just above the box: the dialog's question (a line ending in '?'), then a highlighted
+    option 1, then an option 2. The question is required, so a numbered list echoed in the conversation above an
+    empty box is not mistaken for a dialog and does not silence a wake."""
+    above = _above(plain, top)
+    first = next((i for i, line in enumerate(above) if _OPTION_FIRST.match(line)), None)
+    if first is None or not any(_OPTION_NEXT.match(line) for line in above[first + 1:]):
+        return False
+    return any(line.strip().endswith("?") for line in above[:first])
+
+
+def switch_dialog_model(screen: str) -> Optional[str]:
+    """The model a "Switch model?" dialog above the input box offers to switch to, as it names it
+    ("Fable 5.2"), or None when no such dialog is on screen."""
+    plain = [_ANSI.sub("", line) for line in screen.splitlines()]
+    rules = [i for i, line in enumerate(plain) if _RULE.match(line) and line.count("─") >= _RULE_MIN]
+    if len(rules) < 2:
+        return None
+    above = _above(plain, rules[-2])
+    if not any(line.strip() == _SWITCH_TITLE for line in above):
+        return None
+    return next((m.group(1) for m in map(_SWITCH_YES.match, above) if m), None)
+
+
+def classify(screen: str, width: Optional[int] = None) -> str:
     """What a captured screen shows, failing closed: anything not recognized as an idle
-    session with an empty input box is one of the busy states."""
+    session with an empty input box is one of the busy states. *width* is the pane's, when
+    known: a screen with no box on a pane under MIN_READABLE_WIDTH is TOO_NARROW, not DIALOG."""
     state, text = _box(screen)
+    if state == _NO_BOX:
+        return TOO_NARROW if width is not None and width < MIN_READABLE_WIDTH else DIALOG
     if state is not None:
         return state
     if not text:
@@ -340,6 +396,7 @@ def latest_transcript(project_dir: Optional[Path], claude_home: Optional[Path] =
 
 class Pane(Protocol):
     def capture(self) -> Optional[str]: ...
+    def width(self) -> Optional[int]: ...
     def type(self, text: str) -> bool: ...
     def enter(self) -> bool: ...
 
@@ -411,12 +468,14 @@ class Waker:
             if ended is not True:
                 return self._hold("the transcript's last turn has not ended" if ended is False
                                   else "the transcript can't be read", fresh)
-        screen = self.pane.capture()
-        state = classify(screen) if screen is not None else DIALOG
+        screen, width = self.pane.capture(), self.pane.width()
+        state = classify(screen, width) if screen is not None else DIALOG
         if state != IDLE_EMPTY:
             if self.held != state:                         # once per busy stretch
                 self.held = state
-                self._say(EVENT_HELD, {"reason": state, "waiting": len(fresh), **self._evidence(screen, state)})
+                seen = {"width": width} if state == TOO_NARROW else {}
+                self._say(EVENT_HELD, {"reason": state, "waiting": len(fresh), **seen,
+                                       **self._evidence(screen, state)})
             return None
         self.held = None
         text = wake_text(waiting_ids)
@@ -477,7 +536,7 @@ class Waker:
         """Press Enter only while the wake is still in the box, at most three times; then
         look for the turn's start until the deadline, and say whether it came."""
         screen = self.pane.capture()
-        state = classify(screen) if screen is not None else DIALOG
+        state = classify(screen, self.pane.width()) if screen is not None else DIALOG
         if state == RUNNING:
             self.verify_by = None
             self._say(EVENT_TURN, {"started": True})
@@ -537,6 +596,12 @@ class TmuxPane:
     def capture(self) -> Optional[str]:
         out = self._run("capture-pane", "-p", "-e", "-t", self._target())
         return out.stdout if out is not None and out.returncode == 0 else None
+
+    def width(self) -> Optional[int]:
+        """The pane's width in columns, or None when it can't be read."""
+        out = self._run("display-message", "-p", "-t", self._target(), "#{pane_width}")
+        text = out.stdout.strip() if out is not None and out.returncode == 0 else ""
+        return int(text) if text.isdigit() else None
 
     def type(self, text: str) -> bool:
         out = self._run("send-keys", "-t", self._target(), "-l", text)

@@ -346,3 +346,15 @@ class TestGetPoliciesForTaskType:
         result = get_policies_for_task_type("MISSION")
         assert "task_management" in result
         assert "roadmaps_following" in result
+
+
+def test_every_github_task_type_loads_its_policies():
+    """A GH_PR task started with no mapping injected no guide at all (#781). Both GitHub task
+    types surface the same policies: git discipline, and task management, which keeps a
+    private report off the public item."""
+    import json
+    from pathlib import Path
+    from macf.utils.manifest import get_policies_for_task_type
+    manifest = json.loads((Path(__file__).resolve().parents[2] / "framework" / "policies" / "manifest.json").read_text())
+    issue = get_policies_for_task_type("GH_ISSUE", manifest)
+    assert issue and get_policies_for_task_type("GH_PR", manifest) == issue

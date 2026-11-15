@@ -33,11 +33,11 @@ def test_a_peer_lists_all_four_seats_with_cards_accounts_and_display_names(tmp_p
 
 
 def test_a_peers_state_is_unknown_with_the_shared_container_reason(tmp_path):
-    """persistent_layer 8: a peer's state lives with the peer's daemon; it isn't guessed."""
+    """persistent_layer 14: a peer's state lives with the peer's daemon; it isn't guessed."""
     r = peer_roster(tmp_path)
     for e in r.entries:
         assert e.state == "unknown"
-        assert "persistent_layer 8" in e.reasons["state"]
+        assert "persistent_layer 14" in e.reasons["state"]
 
 
 def test_an_unreadable_home_is_listed_with_its_reason(tmp_path, monkeypatch):
@@ -372,3 +372,15 @@ def test_nothing_a_seat_can_put_in_the_identity_slot_breaks_the_listing(tmp_path
     seat = next(e for e in got[0].entries if e.account == "pa_lumen3")
     assert seat.card is None and "agents.yaml declares 'Lumen3MacEff'" in seat.reasons["card"]
     assert sum(1 for e in got[0].entries if e.card) == len(SEATS) - 1
+
+
+def test_verbose_listing_gives_each_carded_row_its_attach_command():
+    """harness list --verbose names the exact command for each row it can attach to (a seat whose login
+    had expired was hard to reach because its session name had to be reconstructed by hand)."""
+    known = RosterEntry(card="Lumen2MacEff_3f9a1c", moniker="Lumen2MacEff", uuid="3f9a1c", account="pa_lumen2",
+                        display_name="Lumen 2", session_kind="daemon", state="running", home="/home/pa_lumen2")
+    nameless = RosterEntry(reasons={f: "home unreadable" for f in roster._EXPLAINED} | {"state": "home unreadable"})
+    verbose = roster.render_table([known, nameless], verbose=True)
+    assert "    attach: macf_tools harness attach Lumen2MacEff_3f9a1c" in verbose.splitlines()
+    assert verbose.count("attach: macf_tools harness attach") == 1   # none for the row with no card
+    assert "attach:" not in roster.render_table([known], verbose=False)

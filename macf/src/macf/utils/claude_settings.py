@@ -6,6 +6,7 @@ to user's Claude Code settings (autocompact, etc.).
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -266,7 +267,7 @@ _DEFAULT_ASK = [
     # An edit or a resume makes an entry fire as nothing consented to before, so it asks as add does.
     "Bash(macf_tools pd entry edit:*)",
     "Bash(macf_tools pd entry resume:*)",
-    # The event stream's rules: approving the prompt is the operator's act (persistent_layer 11.4).
+    # The event stream's rules: approving the prompt is the operator's act (persistent_layer 3.4).
     "Bash(macf_tools pd stream silence:*)",
     "Bash(macf_tools pd stream unsilence:*)",
     "Bash(macf_tools pd stream route:*)",
@@ -279,10 +280,14 @@ _DEFAULT_ASK = [
 # `inject` takes any slash command. inject compact refuses while the input box
 # holds text, so clearing the box is allowed too; clear-input presses only
 # Ctrl-U, in the caller's own pane, and only when the box starts with --expect.
+# inject model switches the agent's own model (the operator, 2026-11-14: "Give yourself allow perms for the
+# command"). Its arguments can't carry anything else: it types /model only with a name it checked against
+# the known aliases and model ids, and refuses without a --reason, which it records.
 _PERMANENT_ALLOW = [
     "Bash(macf_tools mode set MANUAL_MODE:*)",
     "Bash(macf_tools inject compact)",
     "Bash(macf_tools inject clear-input:*)",
+    "Bash(macf_tools inject model:*)",
 ]
 
 # Operations that are NEVER legitimate in normal development (permanent deny)
@@ -355,10 +360,14 @@ def ensure_mode_safety_permissions(project_root: Optional[Path] = None) -> dict:
             if entry not in allow_list:
                 allow_list.append(entry)
                 result['allow_added'].append(entry)
+        # An operator who allowed a command, here or in the user's or the project's settings, by
+        # this entry or one broader, keeps that choice: an ask added over it would win (#759).
+        allowed = list(allow_list) + _other_allow_entries(project_root)
         for entry in _DEFAULT_ASK:
-            if entry not in ask_list and entry not in allow_list:
-                ask_list.append(entry)
-                result['ask_added'].append(entry)
+            if entry in ask_list or entry in allowed or _find_shadowing_allow_entries(entry, allowed):
+                continue
+            ask_list.append(entry)
+            result['ask_added'].append(entry)
 
         if any(result.values()):
             _write_settings(settings, settings_path)
@@ -366,6 +375,27 @@ def ensure_mode_safety_permissions(project_root: Optional[Path] = None) -> dict:
     except (OSError, json.JSONDecodeError, TypeError, KeyError) as e:
         print(f"⚠️ MACF: Settings write failed (ensure_mode_safety): {e}", file=sys.stderr)
         return None
+
+
+def _other_allow_entries(project_root: Optional[Path] = None) -> list:
+    """The allow entries in the settings files beside settings.local.json that the client also
+    reads: the user's (in ``CLAUDE_CONFIG_DIR``, else ``~/.claude``) and the project's shared one.
+    A file that is missing or unreadable adds nothing."""
+    if project_root is None:
+        from .paths import find_project_root
+        project_root = find_project_root()
+    user_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    entries: list = []
+    for path in (user_dir / "settings.json", Path(project_root) / ".claude" / "settings.json"):
+        try:
+            allow = (json.loads(path.read_text()).get("permissions") or {}).get("allow") or []
+        except FileNotFoundError:  # noqa: S112 - a settings file that does not exist is the normal case; only unreadable ones are reported below
+            continue
+        except (OSError, ValueError, AttributeError) as e:
+            print(f"⚠️ MACF: {path} unreadable, its allow rules not consulted: {e}", file=sys.stderr)
+            continue
+        entries.extend(a for a in allow if isinstance(a, str))
+    return entries
 
 
 def _bash_pattern_command(entry: str) -> Optional[str]:

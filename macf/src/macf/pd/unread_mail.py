@@ -61,7 +61,7 @@ def unread_arrivals(box: Path) -> Optional[Dict[str, float]]:
             continue
         try:
             times[entry.name] = entry.stat().st_mtime
-        except FileNotFoundError:
+        except FileNotFoundError:  # noqa: S112 - ingested between the listing and the stat, a fine race
             continue        # ingested between the listing and the stat
     return times
 
