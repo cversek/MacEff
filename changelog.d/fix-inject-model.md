@@ -11,4 +11,4 @@
 
 ### Fixed
 
-- **A selection dialog under a question, above the input box, is a dialog** (`pd/wake.py`). The screen reader looked for dialogs only below the box, so a dialog drawn above it, with a faint suggestion in the box, read as an idle empty box, and a wake or follow-up could be typed into it.
+- **A selection dialog under a question, above the input box, is a dialog** (`pd/wake.py`). The screen reader looked for dialogs only below the box, so a dialog drawn above it, with a faint suggestion in the box, read as an idle empty box, and a wake or follow-up could be typed into it. **Known limit:** the reader recognizes such a dialog by its question, a line ending in "?" above the options. A future dialog with no question line would read as an empty box again; its selection footer would be the second signal to add.
