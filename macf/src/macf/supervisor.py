@@ -527,7 +527,7 @@ def _record_keys_sent(text: str, kind: str, tmux_session: str) -> None:
               f"will read as the operator's typing: {e}", file=sys.stderr)
 
 
-def send_slash_to_self(command: str, target: str = "", then: Optional[str] = None) -> int:
+def send_slash_to_self(command: str, target: str = "", then: Optional[str] = None, arm_stop: bool = True) -> int:
     """Queue a slash command (e.g. ``/compact``) into this agent's own live CC
     pane via the tmux side channel.
 
@@ -616,7 +616,8 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
         # only on the self-resolved path: with --target the pane may belong to
         # another session, and this log's gates are this session's.
         from .stop_bypass import arm
-        arm(command)
+        if arm_stop:
+            arm(command)
         if cmd == "/compact":
             # The ask is recorded so that a compaction without one can be found
             # (MIS-0002-R127 (harness_compaction_MUST_be_recorded)).
@@ -825,8 +826,49 @@ def start_compaction_resume(since: float) -> bool:
     return _start_compact_followup(target, RESUME_TEXT, since=since, quiet=True)
 
 
+#: What ``inject model`` may type after ``/model``: an alias the client knows, or a model id, each with an
+#: optional [1m] context suffix. Anything else is refused, so the command can't carry other text into the pane,
+#: and a bare ``/model``, which opens a picker that nobody is there to answer, is impossible.
+MODEL_NAME = re.compile(r"(?:opus|sonnet|haiku|fable|default|opusplan|claude-[a-z0-9][a-z0-9.-]{2,60})(?:\[1m\])?")
+
+
+def switch_own_model(model: str, reason: str, then: Optional[str] = None, confirm: bool = False) -> int:
+    """Queue ``/model <model>`` into this agent's own pane, record why, and type a prompt once it has run.
+
+    A model switch, like a compaction, opens no turn: the queued ``/model`` runs as the turn that queued it ends,
+    and the agent then sits idle on its new model until something wakes it. So, as for ``inject compact``, a
+    detached follower waits for that turn's end and types one prompt, the framework's or ``then``, into an idle,
+    empty box. The switch changes what each turn costs, so the reason is required and is recorded with it."""
+    import time as _time
+    model, reason = model.strip(), " ".join(reason.split())
+    if not MODEL_NAME.fullmatch(model):
+        print(f"[inject] {model!r} is not a model name this command types. Give an alias (opus, sonnet, haiku, "
+              f"fable, default) or a model id such as claude-opus-5-5, optionally with [1m].", file=sys.stderr)
+        return 1
+    if not reason:
+        print("[inject] A model switch changes what every turn costs, so it needs --reason: whose word or "
+              "which standing rule it follows. It is recorded with the switch.", file=sys.stderr)
+        return 1
+    own = own_pane_target()
+    asked_at = _time.time()
+    # The Stop passage lets the turn end through a sprint's scope gate so the queued /model runs; with no
+    # follower to wake the agent afterwards (--no-then), that would end the turn with nothing to resume it.
+    rc = send_slash_to_self(f"model {model}", arm_stop=then != "")
+    if rc != 0:
+        return rc
+    from .agent_events_log import append_event
+    if not append_event("model_change_asked", {"model": model, "reason": reason, "via": "macf_tools inject"}):
+        print("⚠️ MACF: the model switch was sent but could not be recorded in the event log", file=sys.stderr)
+    if then != "" and own:
+        from .compact_followup import MODEL_TEXT, TURN_END_EVENT
+        _start_compact_followup(own, then or MODEL_TEXT.format(model=model, reason=reason), since=asked_at,
+                                after=TURN_END_EVENT, confirm_model=model if confirm else None)
+    return 0
+
+
 def _start_compact_followup(target: str, text: str, since: Optional[float] = None,
-                            quiet: bool = False) -> bool:
+                            quiet: bool = False, after: Optional[str] = None,
+                            confirm_model: Optional[str] = None) -> bool:
     """Start the detached follower that types *text* once the compaction has finished.
 
     Self-resolved path only, like the Stop passage above: the follower reads THIS agent's
@@ -835,7 +877,8 @@ def _start_compact_followup(target: str, text: str, since: Optional[float] = Non
     """
     import time as _time
     argv = [sys.executable, "-m", "macf.compact_followup", target,
-            repr(_time.time() if since is None else since), "--text", text]
+            repr(_time.time() if since is None else since), "--text", text] + (["--after", after] if after else []) \
+        + (["--confirm-switch", confirm_model] if confirm_model else [])
     # Its stderr goes to the transcript monitor's log in the user's runtime directory, so a
     # follower that dies before recording its outcome still leaves a traceback somewhere.
     log = subprocess.DEVNULL
@@ -856,9 +899,20 @@ def _start_compact_followup(target: str, text: str, since: Optional[float] = Non
         if log is not subprocess.DEVNULL:
             os.close(log)
     if not quiet:                       # a hook's stdout is its reply, so a hook passes quiet
-        print("[inject] After the compaction, a recovery prompt will be typed into this pane "
-              "(skipped if something else wakes the session first).")
+        print(_followup_notice(after, confirm_model))
     return True
+
+
+def _followup_notice(after: Optional[str], confirm_model: Optional[str]) -> str:
+    """What the agent is told its follower will do: after a compaction, or after a model switch."""
+    from .compact_followup import TURN_END_EVENT
+    if after != TURN_END_EVENT:
+        return ("[inject] After the compaction, a recovery prompt will be typed into this pane "
+                "(skipped if something else wakes the session first).")
+    dialog = (f"answers the client's 'Switch model?' dialog if it offers {confirm_model} (--confirm-switch), then "
+              if confirm_model else "leaves any 'Switch model?' dialog for a person, then ")
+    return (f"[inject] When this turn ends the model switches. The follower {dialog}types a prompt into this "
+            f"pane (skipped if something else wakes the session first).")
 
 
 def record_keys_sent(text: str, kind: str, tmux_session: str) -> None:
