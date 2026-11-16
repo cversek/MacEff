@@ -51,14 +51,43 @@ TIMEOUT_SECONDS = 1800.0
 POLL_SECONDS = 2.0
 PROMPT_EVENT = "dev_drv_started"
 COMPACTION_EVENT = "compaction_detected"
+#: The turn that queued a command ended: a queued /model has then run, since the client takes
+#: a queued command as the turn yields. ``inject model`` waits for this, not for a compaction.
+TURN_END_EVENT = "dev_drv_ended"
+MODEL_TEXT = ("🏗️ MACF | Your model is now {model}, switched with inject model ({reason}). "
+              "Carry on with the work you were doing.")
+#: Model families as the client's "Switch model?" dialog names them ("Fable 5.2"), by the aliases inject types.
+MODEL_FAMILIES = ("opus", "sonnet", "haiku", "fable")
+#: How long an answered "Switch model?" dialog may stay drawn before the follower leaves it for a person.
+DIALOG_GRACE_SECONDS = 10.0
+
+
+def same_model(asked: str, shown: str) -> bool:
+    """Whether the model a "Switch model?" dialog names is the one inject model was asked for.
+
+    An alias (``opus``) matches its family ("Opus 5.5"). A model id (``claude-opus-5-5``) must match the family
+    and, when the dialog shows one, the version ("5.5"), so an older id is never confirmed as the newer model.
+    ``default`` names no family, so it never matches."""
+    asked = asked.lower().replace("[1m]", "").strip()
+    parts = asked.split("-")
+    is_id = asked.startswith("claude-") and len(parts) >= 3
+    family = parts[1] if is_id else asked
+    words = shown.lower().split()
+    if family not in MODEL_FAMILIES or not words or words[0] != family:
+        return False
+    if is_id and len(words) > 1:
+        version = ".".join(p for p in parts[2:] if p.isdigit())
+        return version == words[1]
+    return True
 
 
 def decide(events: Iterable[dict], since: float, now: float,
-           settle: float = SETTLE_SECONDS) -> str:
-    """'wait', 'send' or 'skip', from the events at or after *since* (any order)."""
+           settle: float = SETTLE_SECONDS, after: str = COMPACTION_EVENT) -> str:
+    """'wait', 'send' or 'skip', from the events at or after *since* (any order). *after* is the
+    event that must come first: a compaction for ``inject compact``, a turn's end for a model switch."""
     rows = sorted((e for e in events if (e.get("timestamp") or 0) >= since),
                   key=lambda e: e.get("timestamp") or 0)
-    compaction = next((e for e in rows if e.get("event") == COMPACTION_EVENT), None)
+    compaction = next((e for e in rows if e.get("event") == after), None)
     if compaction is None:
         return "wait"
     at = compaction["timestamp"]
@@ -114,25 +143,46 @@ def follow(target: str, since: float, text: str = DEFAULT_TEXT, *,
            enter: Optional[Callable[[], int]] = None,
            width: Optional[Callable[[], Optional[int]]] = None,
            clock: Callable[[], float] = time.time,
-           sleep: Callable[[float], None] = time.sleep) -> str:
-    """Wait for the compaction, then send, skip, or give up. Returns which, for the log."""
-    capture_is_default = capture is None
-    if send is None or capture is None or enter is None:
-        from .supervisor import capture_pane, press_enter, send_keys
+           sleep: Callable[[float], None] = time.sleep,
+           after: str = COMPACTION_EVENT, confirm_model: Optional[str] = None) -> str:
+    """Wait for the compaction (or *after*), then send, skip, or give up. Returns which, for the log.
+
+    After a model switch the client may ask "Switch model?" in a dialog above the input box. With
+    *confirm_model*, the model inject was asked for, the follower answers it once, and only when the dialog
+    offers that same model; any other dialog is left for a person, and the outcome says so."""
+    if send is None or capture is None or enter is None or width is None:
+        from .supervisor import capture_pane, pane_width, press_enter, send_keys
         send = send or (lambda t, keys: send_keys(t, keys, enter=False, kind="compact-followup"))  # noqa: E731
         capture = capture or (lambda: capture_pane(target))  # noqa: E731
         enter = enter or (lambda: press_enter(target))  # noqa: E731
-    from .pd.wake import DIALOG, IDLE_EMPTY, classify
-    if width is None and capture_is_default:
-        from .supervisor import pane_width
-        width = lambda: pane_width(target)  # noqa: E731
+        width = width or (lambda: pane_width(target))  # noqa: E731
+    from .pd.wake import IDLE_EMPTY, TOO_NARROW, classify, switch_dialog_model
     deadline = clock() + timeout
-    box_seen = None
+    box_seen, columns, answered = None, None, False
     while clock() < deadline:
-        verdict = decide(read(since), since, clock())
+        verdict = decide(read(since), since, clock(), after=after)
         if verdict == "send":
-            screen = capture()
-            box_seen = classify(screen) if screen is not None else "unreadable"
+            screen, columns = capture(), width()
+            offered = switch_dialog_model(screen) if screen is not None and after == TURN_END_EVENT else None
+            if offered is not None:
+                if confirm_model is None:
+                    return f"gave up: a 'Switch model?' dialog for {offered} waits for a person (switched with --no-confirm)"
+                if not same_model(confirm_model, offered):
+                    return (f"gave up: a 'Switch model?' dialog offers {offered}, and {confirm_model} was asked; "
+                            f"left for a person")
+                if answered is not False:
+                    # Answered already: the client may take a moment to close the dialog. Wait out a grace
+                    # period, never pressing Enter a second time, then leave it for a person.
+                    if clock() - answered > DIALOG_GRACE_SECONDS:
+                        return (f"gave up: the 'Switch model?' dialog was answered once and is still drawn after "
+                                f"{DIALOG_GRACE_SECONDS:g} s; left for a person")
+                    sleep(poll)
+                    continue
+                enter()                        # option 1, highlighted: "Yes, switch to" the model asked
+                answered = clock()
+                sleep(poll)
+                continue
+            box_seen = classify(screen, columns) if screen is not None else "unreadable"
             if box_seen != IDLE_EMPTY:
                 sleep(poll)                    # typed after a draft, both would go as one
                 continue
@@ -142,22 +192,14 @@ def follow(target: str, since: float, text: str = DEFAULT_TEXT, *,
             return submit(text, typed_at, capture=capture, enter=enter, read=read,
                           clock=clock, sleep=sleep)
         if verdict == "skip":
-            return "skipped: a prompt started after the compaction"
+            return f"skipped: a prompt started after the {'compaction' if after == COMPACTION_EVENT else 'turn ended'}"
         sleep(poll)
-    if box_seen is not None:
-        return gave_up_reason(box_seen, width() if box_seen == DIALOG and width else None)
-    return "gave up: no compaction within the timeout"
-
-
-def gave_up_reason(box_seen: str, pane_width: Optional[int]) -> str:
-    """Why the follower stopped waiting for the input box. A pane too narrow to read is said as
-    that, with its width, since 'dialog' sent the agent looking for a dialog that wasn't up (#800)."""
-    from .pd.wake import TOO_NARROW, readable_state
-    if pane_width is not None:
-        box_seen = readable_state(box_seen, pane_width)
     if box_seen == TOO_NARROW:
-        return f"gave up: the session's pane is {pane_width} columns wide, too narrow to read; widen it"
-    return f"gave up: the input box was never idle and empty (last seen: {box_seen})"
+        return (f"gave up: the session's pane is {columns} columns wide, too narrow to read "
+                f"its input box; widen it")
+    if box_seen is not None:
+        return f"gave up: the input box was never idle and empty (last seen: {box_seen})"
+    return f"gave up: no {'compaction' if after == COMPACTION_EVENT else 'turn end'} within the timeout"
 
 
 def _take_lock(path: Optional[Path] = None):
@@ -187,14 +229,21 @@ def main(argv: Optional[list] = None) -> int:
     p.add_argument("target", help="supervisor name or pid whose pane receives the prompt")
     p.add_argument("since", type=float, help="epoch seconds of the injection")
     p.add_argument("--text", default=DEFAULT_TEXT)
+    p.add_argument("--after", default=COMPACTION_EVENT, choices=(COMPACTION_EVENT, TURN_END_EVENT),
+                   help="the event to wait for before typing (default: a compaction)")
+    p.add_argument("--confirm-switch", metavar="MODEL", default=None,
+                   help="after a model switch, answer the client's 'Switch model?' dialog if it offers MODEL")
     a = p.parse_args(argv)
     lock = _take_lock()
-    outcome = follow(a.target, a.since, a.text) if lock is not None else \
-        "skipped: another follower is already waiting"
+    outcome = follow(a.target, a.since, a.text, after=a.after, confirm_model=a.confirm_switch) \
+        if lock is not None else "skipped: another follower is already waiting"
     from .agent_events_log import append_event
     # append_event catches its own I/O errors and returns False; a wrapper here could only
     # hide a defect, so a failed record is said, not swallowed.
-    if not append_event("compact_followup", {"target": a.target, "outcome": outcome}):
+    record = {"target": a.target, "outcome": outcome}
+    if a.after != COMPACTION_EVENT:
+        record["after"] = a.after                      # a compaction's record keeps its shape
+    if not append_event("compact_followup", record):
         print("[inject] compact follow-up: the outcome could not be recorded in the event log",
               file=sys.stderr)
     print(f"[inject] compact follow-up: {outcome}")

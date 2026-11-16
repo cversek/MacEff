@@ -586,8 +586,8 @@ def _get_last_user_activity_timestamp(session_id: str, sources: Optional[Set[str
                 else:
                     continue
                 return epoch
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as e:
+                print(f"⚠️ MACF: user activity timestamp {ts!r} is unreadable (trying older events): {e}", file=sys.stderr)
     return None
 
 

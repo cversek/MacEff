@@ -49,6 +49,27 @@ def test_a_dialog_menu_or_question_is_never_typed_into():
     assert wk.classify(screen(below=("Enter to select · Esc to cancel",))) == wk.DIALOG
 
 
+def test_no_box_on_a_narrow_pane_is_reported_by_its_width_not_as_a_dialog():
+    """#800: a 45-column pane wraps the client's lines past reading, and was reported as a
+    dialog, which sent the agent looking for one. It still holds; it now says why."""
+    assert wk.classify("plain output, no input box", 45) == wk.TOO_NARROW
+    assert wk.classify("plain output, no input box", wk.MIN_READABLE_WIDTH) == wk.DIALOG
+    assert wk.classify("plain output, no input box") == wk.DIALOG, "width unknown"
+    # A box that does read at that width is read; a dialog drawn below it is still a dialog.
+    assert wk.classify(screen(), 45) == wk.IDLE_EMPTY
+    assert wk.classify(screen(below=("Do you want to proceed?",)), 45) == wk.DIALOG
+
+
+def test_a_narrow_pane_hold_names_the_width_and_keeps_the_screen(tmp_path):
+    events, pane = [], FakePane(["wrapped past reading"], columns=45)
+    h = _waker(pane, events, screens_dir=tmp_path / "wake_screens", wall=lambda: 1792292400.0)
+    h.waker.tick([ID1])
+    (event, held), = events
+    assert event == wk.EVENT_HELD and held["reason"] == wk.TOO_NARROW and held["width"] == 45
+    assert Path(held["screen"]).read_text() == "wrapped past reading"
+    assert pane.typed == [] and h.recorded == []
+
+
 def test_a_running_turn_is_seen_by_its_phrase_or_by_the_spinner_alone():
     assert wk.classify(screen(above=("✻ Working… (esc to interrupt)",))) == wk.RUNNING
     # Since 2.1.288 the client prints only the spinner.
@@ -90,11 +111,15 @@ def test_past_eight_ids_the_rest_are_counted_not_named():
 class FakePane:
     """A pane whose screen a test scripts, recording what was typed and pressed."""
 
-    def __init__(self, screens):
+    def __init__(self, screens, columns=None):
         self.screens, self.typed, self.enters, self.log = list(screens), [], 0, []
+        self.columns = columns
 
     def capture(self):
         return self.screens.pop(0) if len(self.screens) > 1 else self.screens[0]
+
+    def width(self):
+        return self.columns
 
     def type(self, text):
         self.typed.append(text)
@@ -591,7 +616,7 @@ def test_the_daemon_keeps_held_screens_beside_the_event_log(tmp_path):
         shutil.rmtree(runtime, ignore_errors=True)
 
 
-# --- the agent paces its wake (persistent_layer 1.9) ---------------------------------------
+# --- the agent paces its wake (persistent_layer 6.9) ---------------------------------------
 
 def test_the_declared_window_and_the_wakes_default_are_one_value():
     from macf.pd.interface import DEFAULT_WAKE_REFRACTORY_S, Declaration
@@ -657,32 +682,3 @@ def test_a_window_paced_shorter_lets_the_next_tick_wake(tmp_path):
     notifier.pace(30.0)
     assert h.waker.refractory_s == 30.0
     assert h.waker.tick([ID1, ID2]) == "sent"
-
-
-# --- a pane too narrow to read (#800) ----------------------------------------------
-
-def test_a_pane_too_narrow_to_read_is_said_so_not_called_a_dialog():
-    """Failing closed stays right, but the reason was wrong: a 45-column pane wraps the footer
-    and the box away, and the hold read 'dialog' when no dialog was up."""
-    assert wk.readable_state(wk.DIALOG, 45) == wk.TOO_NARROW
-    assert wk.readable_state(wk.DIALOG, 120) == wk.DIALOG          # wide, and still no box: a dialog
-    assert wk.readable_state(wk.DIALOG, None) == wk.DIALOG         # width unknown: as before
-    assert wk.readable_state(wk.IDLE_EMPTY, 45) == wk.IDLE_EMPTY   # a narrow pane that reads is fine
-
-
-def test_a_held_wake_on_a_narrow_pane_names_the_width():
-    class Narrow(FakePane):
-        def width(self):
-            return 45
-    pane, events = Narrow(["garbled ─ wrapped │ footer"]), []
-    w = _waker(pane, events).waker
-    assert w.tick([ID1]) is None and not pane.typed
-    held = [d for e, d in events if e == wk.EVENT_HELD][-1]
-    assert held["reason"] == wk.TOO_NARROW and held["pane_width"] == 45
-
-
-def test_the_follower_gives_up_saying_the_pane_is_too_narrow():
-    from macf import compact_followup as cf
-    assert cf.gave_up_reason(wk.TOO_NARROW, 45) == ("gave up: the session's pane is 45 columns wide, "
-                                                    "too narrow to read; widen it")
-    assert cf.gave_up_reason("draft", None) == "gave up: the input box was never idle and empty (last seen: draft)"

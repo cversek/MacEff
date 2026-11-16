@@ -421,7 +421,8 @@ class TestAnAgentCanAlwaysCompactItself:
 
         allow = json.loads((tmp_path / ".claude" / "settings.local.json").read_text())["permissions"]["allow"]
         assert sorted(e for e in allow if e.startswith("Bash(macf_tools inject")) == [
-            "Bash(macf_tools inject clear-input:*)", "Bash(macf_tools inject compact)"]
+            "Bash(macf_tools inject clear-input:*)", "Bash(macf_tools inject compact)",
+            "Bash(macf_tools inject model:*)"], "never a bare inject wildcard: it would type any slash command"
 
     def test_clearing_the_box_is_allowed_since_compact_refuses_a_full_one(self, tmp_path):
         from macf.utils.claude_settings import ensure_mode_safety_permissions

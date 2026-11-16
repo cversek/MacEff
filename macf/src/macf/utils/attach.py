@@ -172,7 +172,7 @@ def plan_attach_for_home(home, *, read_only: bool = False, control: bool = False
     declaration (the one unit of kind ``session``); the daemon's status says which process
     that unit is (R100). None means the agent declares no session unit, so any session it
     has is the legacy harness's; a declared one that can't be resolved is a plan of kind
-    ``none`` with the reason, never a guess by name (persistent_layer 4.1).
+    ``none`` with the reason, never a guess by name (persistent_layer 9.1).
     """
     from ..pd.client import DaemonUnavailable
     from ..pd.core import DeclarationRefused

@@ -22,7 +22,7 @@ def _agent(username, primal_daemon=None, calling_card=None):
         primal_daemon_opt_out=None if primal_daemon is not None else "a stand-in that declares none",
         has_daemon=lambda: primal_daemon is not None,
         effective_calling_card=lambda key: calling_card,
-        effective_primal_daemon=lambda key, mail: primal_daemon)
+        effective_primal_daemon=lambda key, mail, container_env=None: primal_daemon)
 
 
 def _cfg(agents, services=None):
@@ -294,7 +294,7 @@ def test_main_starts_the_access_path_before_the_daemons_and_both_before_any_opti
     assert order.index("sshd") < order.index("primal daemons") < optional, order
 
 
-# ---- an agent's calling card, declared in agents.yaml and written to its home (persistent_layer 10.1) ----
+# ---- an agent's calling card, declared in agents.yaml and written to its home (persistent_layer 2.1) ----
 
 def _carded(tmp_path, monkeypatch, cards, configs=None):
     """Homes for agents declaring *cards* (username -> card or None), each with an identity file

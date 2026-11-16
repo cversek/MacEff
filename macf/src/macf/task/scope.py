@@ -270,7 +270,7 @@ def replay_scope_events(events) -> Dict[str, str]:
         if event_type == "scope_cleared":
             state.clear()
         elif event_type == "scope_activated":
-            # Additive: scope set's clear is a separate event. A task already
+            # Additive: what scope set replaces leaves by scope_removed. A task already
             # PAUSED stays paused: a pause carries a justification (it waits on
             # something outside the agent), and re-listing the task to add others
             # beside it is not an answer to that wait. Before this, every

@@ -211,7 +211,7 @@ def test_an_artifact_check_that_could_not_run_says_so(monkeypatch):
     assert "ARTIFACTS:  not checked -- OSError: harness home unreadable" in text
 
 
-# --- the primal daemon's session unit (persistent_layer 6.2) -----------------------
+# --- the primal daemon's session unit (persistent_layer 5.1) -----------------------
 
 class _Report:
     def __init__(self, source="daemon", units=(), why="its record and its socket agree"):

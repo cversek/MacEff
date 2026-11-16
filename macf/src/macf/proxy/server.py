@@ -115,7 +115,8 @@ def _read_pid(port: Optional[int] = None) -> Optional[int]:
             continue
         try:
             return int(path.read_text().strip())
-        except (ValueError, OSError):
+        except (ValueError, OSError) as e:
+            print(f"⚠️ MACF: could not read proxy pid file {path.name} (trying the next candidate): {e}", file=sys.stderr)
             continue
     return None
 
@@ -128,8 +129,8 @@ def _remove_pid(port: Optional[int] = None) -> None:
     """
     try:
         _get_pid_file(port if port is not None else DEFAULT_PORT).unlink(missing_ok=True)
-    except OSError:
-        pass
+    except OSError as e:
+        print(f"⚠️ MACF: could not remove proxy pid file (a stale pid file may be left behind): {e}", file=sys.stderr)
 
 
 # --------------- JSONL logging ---------------
@@ -168,8 +169,9 @@ def _log_error_event(request, status: int, kind: str, detail: str) -> None:
         if request.get("_macf_error_logged"):
             return
         request["_macf_error_logged"] = True
-    except (AttributeError, TypeError):
-        pass  # not a mutable request mapping — log anyway
+    except (AttributeError, TypeError) as e:
+        # not a mutable request mapping: log anyway
+        print(f"⚠️ MACF: could not mark request as logged (it may be recorded twice): {e}", file=sys.stderr)
 
     _log_event({
         "type": "api_error",
@@ -402,8 +404,8 @@ def _parse_sse_chunk(chunk: bytes, meta: dict) -> None:
                 delta = data.get("delta", {})
                 meta.update(delta)
 
-        except json.JSONDecodeError:
-            pass  # Partial JSON across chunk boundary — acceptable loss
+        except json.JSONDecodeError:  # noqa: S110 - an event split across a chunk boundary is expected on most streamed replies, and the complete events still carry the usage; a warning would fire on nearly every response
+            pass
 
 
 # --------------- Bounded, guarded capture ---------------
@@ -446,7 +448,8 @@ def _capture_evict(cap: Path) -> None:
         for f in cap.glob("*.json"):
             try:
                 files.append((f.stat().st_mtime, f.stat().st_size, f))
-            except OSError:
+            except OSError as e:
+                print(f"⚠️ MACF: could not stat capture {f.name} (left out of the eviction count): {e}", file=sys.stderr)
                 continue
         total = sum(s for _, s, _ in files)
         if total <= limit:
@@ -458,7 +461,8 @@ def _capture_evict(cap: Path) -> None:
                 break
             try:
                 f.unlink()
-            except OSError:
+            except OSError as e:
+                print(f"⚠️ MACF: could not delete capture {f.name} (eviction skips it, so the cap may stay exceeded): {e}", file=sys.stderr)
                 continue
             freed += size
             removed += 1
@@ -647,8 +651,8 @@ def _capture_response(data, resp_meta: dict, model: str, streaming: bool = True)
                     current_block_type = None
                     current_block_parts = []
 
-            except json.JSONDecodeError:
-                pass
+            except json.JSONDecodeError as e:
+                print(f"⚠️ MACF: dropped a streaming event that is not valid JSON (its content is missing from the capture): {e}", file=sys.stderr)
 
         # Merge ALL fields from resp_meta (usage, stop_reason, model, etc.)
         # plus reassembled content
@@ -1168,7 +1172,8 @@ def get_proxy_stats() -> dict:
         for line in f:
             try:
                 event = json.loads(line.strip())
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
+                print(f"⚠️ MACF: skipping a malformed line in the proxy log (event left out of the stats): {e}", file=sys.stderr)
                 continue
 
             if event.get("type") == "api_request":
@@ -1214,7 +1219,8 @@ def get_recent_log(limit: int = 10) -> list:
         for line in f:
             try:
                 events.append(json.loads(line.strip()))
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
+                print(f"⚠️ MACF: skipping a malformed line in the proxy log (event left out of recent events): {e}", file=sys.stderr)
                 continue
 
     return events[-limit:]

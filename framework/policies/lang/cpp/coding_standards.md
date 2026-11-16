@@ -1,9 +1,10 @@
 # C++ Coding Standards (with JNI and the Android NDK)
 
+**Type**: C++
+**Scope**: Any C++ source an agent writes or edits
+**Status**: ACTIVE
 **Version**: 1.0
 **Tier**: LANG
-**Category**: C++
-**Status**: ACTIVE
 **Updated**: 2026-10-31
 **Parent**: base/development/coding_standards.md
 
