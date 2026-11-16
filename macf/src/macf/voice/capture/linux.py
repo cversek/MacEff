@@ -131,14 +131,26 @@ class EvdevTriggers(TriggerSource):
 
     Reading ``/dev/input`` needs access the platform grants, on Linux a udev rule for the declared
     device; an unreadable device is refused at construction, naming it.
+
+    A declared device that isn't there (a keyboard unplugged) is skipped with a warning, not refused: the
+    keys are a convenience beside the wake phrase, and refusing took the whole capture unit down with them,
+    restarting and failing every few minutes. Its absence and a missing grant are different problems with
+    different fixes, so each is said as itself.
     """
 
     def __init__(self, devices: Sequence[str]):
         self._fds: List[int] = []
         self._partial: Dict[int, bytes] = {}
+        self.missing: List[str] = []
         for device in devices:
             try:
                 fd = os.open(device, os.O_RDONLY | os.O_NONBLOCK)
+            except FileNotFoundError:
+                self.missing.append(device)
+                print(f"⚠️ MACF: voice: the trigger device {device} is not there (unplugged?); its keys are off "
+                      f"until it is plugged in and the capture restarts, and the wake phrase still works",
+                      file=sys.stderr)
+                continue
             except OSError as e:
                 self.close()
                 raise PermissionError(f"the trigger device {device} can't be read ({e.strerror}); grant this "

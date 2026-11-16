@@ -85,11 +85,33 @@ def test_keys_are_read_from_a_declared_device_as_presses_and_releases():
         device.close()
 
 
-@pytest.mark.skipif(not LINUX, reason="Linux input events")
+@pytest.mark.skipif(not LINUX or os.geteuid() == 0, reason="Linux input events; root reads any file")
 def test_an_unreadable_trigger_device_is_refused_by_name(tmp_path):
     from macf.voice.capture.linux import EvdevTriggers
-    with pytest.raises(PermissionError, match="no-such-keyboard"):
-        EvdevTriggers([str(tmp_path / "no-such-keyboard")])
+    locked = tmp_path / "locked-keyboard"
+    locked.write_bytes(b"")
+    locked.chmod(0)
+    with pytest.raises(PermissionError, match="locked-keyboard.*udev rule"):
+        EvdevTriggers([str(locked)])
+
+
+@pytest.mark.skipif(not LINUX, reason="Linux input events")
+def test_a_trigger_device_that_is_not_there_is_skipped_and_said(tmp_path, capsys):
+    """An unplugged keyboard turned off its keys, never the unit: refusing it crash-looped a capture unit
+    every five minutes for half a day, taking the wake phrase down too. And it is said as missing, not as
+    a grant to add."""
+    from macf.voice.capture.linux import EvdevTriggers
+    present = _pipe_device()
+    keys = EvdevTriggers([str(tmp_path / "no-such-keyboard"), present.path])
+    try:
+        err = capsys.readouterr().err
+        assert "no-such-keyboard is not there" in err and "udev" not in err
+        assert keys.missing == [str(tmp_path / "no-such-keyboard")]
+        os.write(present.write_fd, __import__("macf.voice.capture.linux", fromlist=["pack_key"]).pack_key("KEY_F9", True))
+        assert keys.poll() == [KeyEvent("KEY_F9", True)]     # the device that is there still works
+    finally:
+        keys.close()
+        present.close()
 
 
 def test_a_missing_recorder_is_said_not_read_as_silence():
