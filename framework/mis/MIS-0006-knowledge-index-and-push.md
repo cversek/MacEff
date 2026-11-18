@@ -5,7 +5,7 @@
 **Status**: Draft
 **Authors**: the host-side maintainer, from two experiments run on its own record, with directions the operator gave while planning them
 **Secretary**: the macOS maintainer, designated by the repo owner on 2026-10-20 (#751)
-**Deliberation**: pending: the repo owner holds it until MIS-0004 is decided (#751)
+**Deliberation**: pending: the repo owner held it until MIS-0004 was decided (#751); MIS-0004 was accepted on 2026-10-31 (#520), so convening is the repo owner's to say
 **Created**: 2026-10-20
 **Updates**: none
 **Supersedes**: none
@@ -15,8 +15,8 @@
 <!--
 A FIRST DRAFT. Every requirement below is a proposal for the deliberation to keep, change or drop.
 Nothing here is settled until the operator ratifies it (mis section 6). Where the evidence behind a
-proposal is thin, it is an open question, not a requirement. The replications in section 2.4 are
-pending, and the draft is revised when they arrive.
+proposal is thin, it is an open question, not a requirement. Section 2.4 now carries the two
+replications, and marks each finding confirmed, contradicted or not reached.
 -->
 
 ---
@@ -59,7 +59,7 @@ The same experiment found what ranks better still:
 
 ### 2.4 When a push would help, measured
 
-**Measured, sealed split, one agent's record; replication by the other maintainers is pending** (Experiment 014). Labels were behavioral: what the agent itself consulted in the 20 tool calls after each moment, among what was outside its context then. A query built from a decaying trace of recent work (the task tree, the knowledge web the agent touched, the conversation) was compared with the prompt alone:
+**Measured, sealed split, one agent's record, then replicated on two more** (Experiment 014; the replications are below the table). Labels were behavioral: what the agent itself consulted in the 20 tool calls after each moment, among what was outside its context then. A query built from a decaying trace of recent work (the task tree, the knowledge web the agent touched, the conversation) was compared with the prompt alone:
 
 | Moment | Trace minus prompt, MRR [95% interval] |
 |---|---|
@@ -75,7 +75,22 @@ A trace from a shuffled stream did much worse (+0.099 for the real trace over it
 
 **Exploratory, judged, with the operator's grades as the anchor:** no score threshold separated useful items from noise. Precision of pushed items stayed at 26 to 29% whether the bar sat at the 50th or the 95th percentile. By moment, the trace's top item was useful 9 times in 10 before an artifact write, 5 in 8 on a shallow prompt, and 2 in 10 or fewer mid-work, at a task start and after a compaction.
 
-The other maintainers are invited to run the same steps on their own records (a replication kit on the branch `replication/exp014-kit`). Each proposal below that rests on this section says so, and the draft is revised when their figures arrive.
+**Replicated on two more records, with the kit unchanged** (`replication/exp014-kit` at e5fb18aa; the head maintainer's record and the host-side maintainer's, posted on #552 on 2026-10-21, comments 6322709823 and 6326258313). Sealed splits, the mixture minus the prompt:
+
+| Finding | Original | Head maintainer | Host-side maintainer | Verdict |
+|---|---|---|---|---|
+| The trace beats the prompt overall | +0.114 | +0.033 [0.013, 0.055] | +0.070 [0.034, 0.110] | **Confirmed** on both, at a third and at 60% of the size |
+| Shallow prompts gain more than deep ones | +0.079 / +0.029 | +0.025 / +0.065, the deep interval includes zero | +0.063 / +0.011 | **Confirmed** on one; **not reached** on the other, though the task tree alone shows it there |
+| Every 20th call mid-work | +0.103 | +0.077 [0.036, 0.125] | +0.106 [0.022, 0.206] | **Confirmed** on both |
+| Before an artifact write, the highest | +0.265 | −0.027 [−0.076, 0.006] | +0.167 [0.000, 0.500], n=6 | **Contradicted** on one; **not reached** on the other |
+| A task start, low | +0.028 | +0.003 | +0.219 [0.031, 0.469], n=8 | Mixed, and thin |
+| After a compaction, low | +0.024 | +0.116 [0.000, 0.292], n=12 | +0.042, n=8 | Mixed, and thin |
+| The task tree alone carries it | level with the trace | +0.043, above the trace | +0.087, above the trace | **Confirmed** on both sealed splits; the host-side maintainer's development split favors the knowledge web alone |
+| Share of prompts from machines | 44% | 10% | 16.5% | **Confirmed** on one, against the kit's 10% test; at that test's edge on the other |
+| Consults enriched just before a write | 2.59× | 0.82× | 2.33× | **Confirmed** on one; **contradicted** on the other |
+| Consults depleted after 20 calls | 0.53× | 0.20× | 0.86× | **Confirmed** on both |
+
+What this changes: the case for a push mid-work and on shallow prompts holds on three records. The case for a push at an artifact write, which section 2.4 measured as the strongest, does not: one record contradicts it and the other is too small to say. The head maintainer's development and sealed splits also differed tenfold (+0.298 before its cutoff, +0.033 after), as that seat's habits changed, so no figure here is pooled across records. Each proposal below that rests on this section says which finding it rests on.
 
 ## 3 Goals and Non-Goals
 
@@ -269,8 +284,8 @@ Each landing pull request carries its normative text with its capability, and ea
 ## 13 Open Questions
 
 - **Q01** How should policy_awareness section 2.5 read once a push exists: "pull, with a gated push at measured moments", or unchanged until the trial's verdict? The operator decides after the host trial. (pull_rule_after_a_push)
-- **Q02** Which push moments start on when the operator turns the push on? The operator's direction (Oct 17, 20:25) was "1 + auto_mode mid work draws from task tree with greater weight": shallow operator prompts and artifact writes, and every 20th tool call in AUTO_MODE. The replications may move this. The operator decides. (default_push_moments)
-- **Q03** Do the other maintainers' records replicate section 2.4's findings? The deliberation weighs their figures, side by side with these. (do_the_findings_replicate)
+- **Q02** Which push moments start on when the operator turns the push on? The operator's direction (Oct 17, 20:25) was "1 + auto_mode mid work draws from task tree with greater weight": shallow operator prompts and artifact writes, and every 20th tool call in AUTO_MODE. The replications confirm the shallow prompts and the 20th call, and don't confirm the artifact write (section 2.4). The operator decides. (default_push_moments)
+- **Q03** Do the other maintainers' records replicate section 2.4's findings? *Answered 2026-11-18 by the two replications in section 2.4: mostly yes, except at an artifact write. The deliberation weighs the figures side by side.* (do_the_findings_replicate)
 - **Q04** Should the work mode choose which classes a push draws from: policy sections by default, ideas in creative modes, learnings and observations in investigating ones? The operator proposed it (Oct 17, 19:14 to 19:16), and Experiment 014's curated-domain result points that way, on few moments. The operator decides whether it belongs here or in a later MIS. (work_mode_SHOULD_choose_classes)
 - **Q05** What time budget should the push have on the prompt hook? The host trial measures it. (push_time_budget)
 - **Q06** Should breadcrumb lineage become the knowledge graph's first typed edge in this MIS, or in one of its own? It helped "same subject" (+0.145) and didn't reach significance elsewhere. (lineage_as_typed_edge)
@@ -286,6 +301,7 @@ None yet.
 - 2026-10-20: the landing plan names the search service as the index's home, after the repo owner asked how hybrid search runs.
 - 2026-10-20: R26 and the term search unit: the index and its model are served by one warm unit of each agent's primal daemon, at the repo owner's direction; the existing search-service daemon folds into it.
 - 2026-10-20: the repo owner designated the macOS maintainer as Secretary, and holds the deliberation until MIS-0004 is decided (#751).
+- 2026-11-18: the two replications of Experiment 014 entered in section 2.4, each finding marked confirmed, contradicted or not reached; Q02 and Q03 updated; the deliberation line notes MIS-0004's acceptance on 2026-10-31.
 
 ## Wiki-Links
 
