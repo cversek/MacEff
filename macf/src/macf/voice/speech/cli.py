@@ -60,7 +60,7 @@ def cmd_speak(args) -> int:
         print(f"stopped; {speech.stop(home)} queued message(s) dropped")
         return 0
     if args.say_as or args.unsay:
-        path = speech.accent_path(home) if args.accent else speech.pronounce_path(home)
+        path = speech.accent_path(home) if getattr(args, "accent", False) else speech.pronounce_path(home)
         table = speech._table(path)
         for pair in args.say_as or []:
             word, sep, spelling = pair.partition("=")
