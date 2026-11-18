@@ -55,11 +55,36 @@ def test_deleting_a_kept_recording_deletes_what_was_derived_from_it(tmp_path):
 def test_a_training_set_takes_only_speakers_whose_consent_is_recorded(tmp_path):
     """R64's record: the builder reads it, and an operator's word elsewhere doesn't reach it."""
     store = kept.KeptStore(tmp_path / "kept")
-    store.keep(tone(), trigger="hold_key", spoken_at=1.0, text="x", speaker="craig")
-    store.keep(tone(0.7), trigger="hold_key", spoken_at=2.0, text="y", speaker="visitor")  # different audio, different hash
+    store.keep(tone(), trigger="hold_key", spoken_at=1.0, text="x", speaker="operator", voice_lock="matched")
+    store.keep(tone(0.7), trigger="hold_key", spoken_at=2.0, text="y", speaker="visitor", voice_lock="matched")
     assert store.for_training() == []
-    store.record_consent("craig", by="operator, typed and spoken 2026-11-18")
-    assert [r.speaker for r in store.for_training()] == ["craig"]
+    store.record_consent("operator", by="the operator, typed")
+    assert [r.speaker for r in store.for_training()] == ["operator"]
+
+
+def test_a_recording_no_voice_lock_vouched_for_is_unverified_and_never_trained_on_unconfirmed(tmp_path):
+    """R64 is a person's consent: without a voice-lock match, the declared speaker is not assumed."""
+    store = kept.KeptStore(tmp_path / "kept", speaker="operator")
+    record = store.keep(tone(), trigger="wake_phrase", spoken_at=1.0, text="x")   # voice lock not declared
+    store.record_consent("operator", by="the operator, typed")
+    assert record.speaker == kept.UNVERIFIED and store.for_training() == []
+    store.confirm_speaker(record.sha256, "operator")
+    assert [r.sha256 for r in store.for_training()] == [record.sha256]
+
+
+def test_derive_writes_inside_the_folder_and_a_derived_directory_goes_with_its_recording(tmp_path):
+    """R63 made unavoidable: derive registers as it writes, and deletion handles a directory too."""
+    store = kept.KeptStore(tmp_path / "kept")
+    record = store.keep(tone(), trigger="hold_key", spoken_at=1.0, text="x")
+    item = store.derive(record.sha256, "embedding.npy", b"\x00\x01")
+    assert stat.S_IMODE(os.stat(item).st_mode) == 0o600 and item.parent.parent == tmp_path / "kept"
+    folder = tmp_path / "kept" / "derived" / f"{record.sha256}.spectrograms"
+    folder.mkdir()
+    (folder / "0.png").write_bytes(b"x")
+    store.register_derived(record.sha256, folder)
+    removed = store.delete(record.sha256)
+    assert not item.exists() and not folder.exists() and not record.path.exists()
+    assert len(removed) == 4
 
 
 def test_a_delivered_utterance_is_kept_whole_and_nothing_is_kept_when_off():

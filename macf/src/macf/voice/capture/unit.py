@@ -735,9 +735,10 @@ class CaptureUnit:
                                 voice_lock=voice_lock, agent=agent.b.agent, ended=ended))
         if self.keep is not None and whole is not None and whole.size:
             try:
-                self.keep(whole, trigger=mode, spoken_at=spoken_at, text=text)
-            except OSError as e:
-                self.log(f"the recording couldn't be kept ({e}); it was delivered, and its audio is gone")
+                self.keep(whole, trigger=mode, spoken_at=spoken_at, text=text, voice_lock=voice_lock)
+            except Exception as e:  # noqa: BLE001 - on the executor nobody reads the future: say it, or it's silent
+                self.log(f"the recording couldn't be kept ({type(e).__name__}: {e}); it was delivered, "
+                         f"and its audio is gone")
 
     # ------------------------------------------------------------------ status
 
