@@ -60,7 +60,7 @@ _PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 #: macOS privacy grants a unit may declare (MIS-0002-R63 (unit_MUST_declare_privacy_grants)).
 #: Closed, so a misspelling fails when the declaration is read, not as a missing grant later.
-PRIVACY_GRANTS = ("local_network", "accessibility", "full_disk_access", "keychain")
+PRIVACY_GRANTS = ("local_network", "accessibility", "full_disk_access", "keychain", "microphone", "input_monitoring")
 _AUTOMATION_GRANT = re.compile(r"^automation:[A-Za-z0-9][A-Za-z0-9.-]*$")
 
 
