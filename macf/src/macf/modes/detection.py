@@ -30,6 +30,7 @@ OPERATIONAL_MODES = {
     "AUTO_MODE":   {"emoji": "🤖", "order": 1},
     "USER_IDLE":   {"emoji": "😴", "order": 2},
     "USER_REMOTE": {"emoji": "📡", "order": 2},
+    "HANDS_FREE":  {"emoji": "🗣️", "order": 2},
     "QUIET_MODE":  {"emoji": "🔕", "order": 3},
     "LOW_CONTEXT": {"emoji": "🪫", "order": 4},
 }
@@ -130,7 +131,12 @@ def detect_active_modes(session_id: str, token_info: dict) -> Set[str]:
         # last thing happened. See _had_user_activity_since for why the second
         # question is the one that broke.
         cutoff = time.time() - idle_timeout * 60
-        if not _had_user_activity_since(cutoff):
+        # HANDS_FREE (MIS-0008 Q01, the operator's ruling of 2026-11-18): when the operator's latest
+        # activity is voice the wake phrase started, with no keyboard input since, they are present
+        # hands-free: not idle, and not able to read or type. It replaces USER_IDLE.
+        if _latest_activity_is_hands_free():
+            modes.add("HANDS_FREE")
+        elif not _had_user_activity_since(cutoff):
             modes.add("USER_IDLE")
     except (OSError, ValueError) as e:
         print(f"⚠️ MACF: USER_IDLE detection failed: {e}", file=sys.stderr)
@@ -589,6 +595,19 @@ def _get_last_user_activity_timestamp(session_id: str, sources: Optional[Set[str
             except (ValueError, TypeError) as e:
                 print(f"⚠️ MACF: user activity timestamp {ts!r} is unreadable (trying older events): {e}", file=sys.stderr)
     return None
+
+
+#: The triggers that start an utterance without touching a key.
+HANDS_FREE_TRIGGERS = frozenset({"wake_phrase", "continual_voice"})
+
+
+def _latest_activity_is_hands_free() -> bool:
+    """True when the newest user_activity_detected event is voice a wake phrase (or continual voice) started."""
+    for event in read_events(limit=None, reverse=True):
+        if event.get("event") == "user_activity_detected":
+            data = event.get("data", {})
+            return data.get("source") == "voice" and data.get("trigger") in HANDS_FREE_TRIGGERS
+    return False
 
 
 def _had_user_activity_since(cutoff_epoch: float, sources=None) -> bool:

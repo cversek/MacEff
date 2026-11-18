@@ -77,8 +77,10 @@ class VoiceCarriage:
     def __init__(self, card: str, path: Path, voice: VoiceSection,
                  outside_session: Callable[[object], str],
                  incarnation: Callable[[str], Optional[tuple]],
-                 speech_cut: Callable[[], Optional[dict]] = lambda: None):
+                 speech_cut: Callable[[], Optional[dict]] = lambda: None, operator: bool = False):
         self.card = card
+        #: Whether the declaration lists the Voice Input Channel among its operator channels (Q01).
+        self.operator = operator
         #: Takes the agent's latest untold speech cut from its home, marking it told (R55).
         self._speech_cut = speech_cut
         self.path = Path(path)
@@ -305,7 +307,7 @@ class VoiceCarriage:
 
     def _receipt(self, request: UtteranceRequest, utterance_id: str, unit: Optional[str], receipt: str,
                  reason: Optional[str], **extra) -> Response:
-        return receipt_for(self.card, request, utterance_id, unit, receipt, reason, **extra)
+        return receipt_for(self.card, request, utterance_id, unit, receipt, reason, operator=self.operator, **extra)
 
 
     # ------------------------------------------------------------------ the voice lock's notices and the guard
@@ -360,7 +362,7 @@ class VoiceCarriage:
 
 
 def receipt_for(card: str, request: UtteranceRequest, utterance_id: str, unit: Optional[str], receipt: str,
-                reason: Optional[str], **extra) -> Response:
+                reason: Optional[str], operator: bool = False, **extra) -> Response:
     """Record how one utterance ended, by its metadata and never its words (R10), and answer the
     capture unit with that receipt (R11)."""
     data = {"agent": card, "utterance_id": utterance_id, "trigger": request.trigger,
@@ -370,6 +372,11 @@ def receipt_for(card: str, request: UtteranceRequest, utterance_id: str, unit: O
         data["reason"] = reason
     append_event(EVENT_VOICE_UTTERANCE, data)
     if receipt == "delivered":
+        if operator:
+            # MIS-0008 Q01 (the operator's ruling, 2026-11-18): voice on a channel the declaration lists as
+            # the operator's is presence, as typing is; its trigger says whether it came hands-free
+            append_event("user_activity_detected", {"source": "voice", "trigger": request.trigger,
+                                                    "detector": "voice_carriage"})
         return Response(ok=True, receipt=receipt, utterance_id=utterance_id)
     return Response(ok=False, error=reason, receipt=receipt, utterance_id=utterance_id)
 
