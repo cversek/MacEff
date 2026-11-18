@@ -24,6 +24,32 @@ def _open_stream():
     return stream
 
 
+#: AVAuthorizationStatus values: not yet asked, restricted, denied, authorized.
+NOT_DETERMINED, RESTRICTED, DENIED, AUTHORIZED = 0, 1, 2, 3
+
+
+def _microphone_access(wait_s: float = 120.0) -> int:
+    """This process's microphone authorization, asking macOS for it if it was never asked.
+
+    PortAudio opens a microphone this process may not use without complaint and reads zeros, so the
+    capture unit would record silence and call it quiet. Asking through AVFoundation is what makes
+    macOS show its prompt for the process (Python, under a daemon), and tells denied from granted."""
+    import AVFoundation
+    status = int(AVFoundation.AVCaptureDevice.authorizationStatusForMediaType_(AVFoundation.AVMediaTypeAudio))
+    if status != NOT_DETERMINED:
+        return status
+    answered = threading.Event()
+    result = []
+
+    def done(granted):
+        result.append(AUTHORIZED if granted else DENIED)
+        answered.set()
+
+    AVFoundation.AVCaptureDevice.requestAccessForMediaType_completionHandler_(AVFoundation.AVMediaTypeAudio, done)
+    answered.wait(wait_s)
+    return result[0] if result else NOT_DETERMINED
+
+
 class MacAudioIn(AudioIn):
     """The default microphone through PortAudio (``sounddevice``), read in memory only (R13).
 
@@ -39,6 +65,11 @@ class MacAudioIn(AudioIn):
     def open(self) -> None:
         if self._stream is not None:
             return
+        access = _microphone_access()
+        if access != AUTHORIZED:
+            why = {DENIED: "was denied", RESTRICTED: "is restricted", NOT_DETERMINED: "was not answered"}[access]
+            raise AudioEnded(f"microphone access {why} for {sys.executable}; allow it in System Settings, "
+                             f"Privacy & Security, Microphone, then restart the capture unit")
         try:
             self._stream = _open_stream()
         except (OSError, ImportError) as e:   # sounddevice raises PortAudioError, an OSError subclass

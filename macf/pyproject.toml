@@ -49,6 +49,7 @@ voice = [
     "sounddevice>=0.4; sys_platform == 'darwin'",  # microphone and speaker through PortAudio
     "pyobjc-framework-Quartz>=10; sys_platform == 'darwin'",  # the screen's lock state
     "pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'",  # the indicator panel
+    "pyobjc-framework-AVFoundation>=10; sys_platform == 'darwin'",  # asking for microphone access
     "scipy>=1.10; sys_platform == 'darwin'",  # speech resampled to the output device's rate
     "mlx-audio>=0.2; sys_platform == 'darwin' and platform_machine == 'arm64'",  # Kokoro on the GPU
     "misaki[en]>=0.7; sys_platform == 'darwin' and platform_machine == 'arm64'",  # its text front end

@@ -87,6 +87,18 @@ def test_mac_keys_carry_the_linux_names_and_only_declared_keyboards_count():
     assert not declared("zz:01", "x", 0, 1)
 
 
+@pytest.mark.skipif(not MACOS, reason="macOS microphone access")
+def test_a_microphone_this_process_may_not_use_is_refused_naming_the_grant(monkeypatch):
+    """Without access macOS hands PortAudio zeros; the unit must say so, not record silence as quiet."""
+    from macf.voice.capture import macos
+    opened = []
+    monkeypatch.setattr(macos, "_open_stream", lambda: opened.append(1))
+    monkeypatch.setattr(macos, "_microphone_access", lambda: macos.DENIED)
+    with pytest.raises(AudioEnded, match="Privacy & Security, Microphone"):
+        macos.MacAudioIn().open()
+    assert not opened
+
+
 @pytest.mark.skipif(not MACOS, reason="macOS audio out")
 def test_the_macos_audio_out_passes_its_contract():
     """Plays only silence, so it runs without asking: stop works idle, mid-sentence and from another thread,
@@ -133,6 +145,7 @@ def test_a_microphone_that_cannot_open_is_said_not_read_as_silence(monkeypatch):
     def refuse(*args, **kwargs):
         raise OSError("no default input device")
     monkeypatch.setattr(macos, "_open_stream", refuse)
+    monkeypatch.setattr(macos, "_microphone_access", lambda: macos.AUTHORIZED)
     mic = macos.MacAudioIn()
     with pytest.raises(AudioEnded, match="no default input device"):
         mic.open()
