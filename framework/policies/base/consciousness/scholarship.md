@@ -84,6 +84,10 @@ Scholarship policy establishes enhanced citation practices for consciousness art
 - What must each CA-type policy answer about its own participation?
 - Which directories under the agent tree are not artifact-producing locations, and what may that list never be used for?
 
+**3.5.5 Opting a Folder Out**
+- How do I keep a folder of material that is not an artifact, such as an archive or a scratch dump, out of the web?
+- How does an exclusion stay visible, and why is the marker not a way to hide orphans?
+
 **4 Citation Examples by CA Type**
 - What does a citation look like for each CA type?
 
@@ -656,7 +660,15 @@ Four rules follow:
 1. **Policy defines, code executes.** Unit-of-node and node class are defined in each CA-type policy's knowledge-web participation section; the scanner carries only derivation rules that apply those definitions, each citing the policy that owns it. A distinction whose definition lives only in code is a registry wearing different clothes.
 2. **One walk.** The web builder and any doctor examine the same files through the same traversal. A checker with its own copy of the walk will drift from the thing it checks, and the drift will be silent.
 3. **Linkless is visible, not excluded.** A location whose artifacts carry no links participates and shows as orphaned. That census is honest noise, curable by annotation — never by de-registering the location, which is the old failure restated.
-4. **A tool's directory is not an artifact-producing location.** A dependency tree or a cache (`node_modules`, `__pycache__`, `.git`, `.venv`) holds files the agent did not write, so the walk does not descend into one; an experiment that vendors a bundle can otherwise make the walk many times slower while adding no node anyone could annotate. This list is the definition the scanner executes. A name belongs on it only if no agent could author an artifact there, and it is never a way to quiet a linkless location, which rule 3 forbids.
+4. **A tool's directory is not an artifact-producing location.** A dependency tree or a cache (`node_modules`, `__pycache__`, `.git`, `.venv`, and the test and lint caches `.pytest_cache`, `.mypy_cache` and `.ruff_cache`) holds files the agent did not write, so the walk does not descend into one; an experiment that vendors a bundle can otherwise make the walk many times slower while adding no node anyone could annotate. This list is the definition the scanner executes. A name belongs on it only if no agent could author an artifact there, and it is never a way to quiet a linkless location, which rule 3 forbids.
+
+#### 3.5.5 Opting a Folder Out
+
+Some folders under `agent/private` or `agent/public` hold material that is not an artifact: an archive of old scratch work, a dump of raw notes kept for reference, files copied in from elsewhere. Such a folder can leave the web by holding an empty file named `.not-in-knowledge-web` at its top level, when the folder is a type folder: a direct child of `agent/private` or `agent/public` (or of a subagent's), or the task store wherever its configuration puts it. The walk then skips the whole folder, for the agent's own trees and each subagent's alike, so none of its files becomes a node or an orphan. A marker deeper down, in a subfolder of a type folder, has no effect: that subfolder's files are still walked. To take such material out, move it into a type folder of its own and mark that.
+
+**The exclusion is never silent.** `macf_tools knowledge doctor` names every folder the marker removes, as a note such as `private/scratchpad_archive: out of the web by its marker`, and `macf_tools knowledge status --json` lists the same folders under `opted_out`. A reader of the web's health always sees what the web does not hold.
+
+**Use it for material that is not an artifact, and only for that.** The marker is not a way to hide orphans: a folder of artifacts that carry no links stays in the web and shows as orphaned until someone links them, as rule 3 above requires. If a marked folder turns out to hold artifacts, delete the marker and link them.
 
 ---
 

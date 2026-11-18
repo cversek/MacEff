@@ -1,7 +1,8 @@
 # Reports: Project Completion Narratives
 
-**Policy Type**: Consciousness Artifact (Public)
+**Type**: Consciousness Artifact (Public)
 **Scope**: Primary Agents (PA) and Subagents (SA)
+**Status**: ACTIVE
 **Precedence**: Framework Policy (overridden by Project > Personal)
 
 ---
@@ -773,7 +774,7 @@ A single-version report may drop the `_v1.0` suffix; the moment a second version
 type: report
 title: Does X swamp Y in Z features?
 date: YYYY-MM-DD
-author: AgentName@abc123 (working with Collaborator Name)
+author: AgentName_abc123 (working with Collaborator Name)
 audience: colleagues outside the project
 classification: organization-internal; rows from cohort C are restricted pending re-consent
 deliverables: [report.html]

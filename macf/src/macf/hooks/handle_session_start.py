@@ -9,7 +9,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 
 from macf.utils import (
     format_macf_brand,
@@ -126,7 +126,7 @@ def _identity_block() -> str:
     before anything else, together with the rule that it outranks prose and
     the command that re-derives it.
 
-    An ID that cannot be resolved is said out loud. Printing "name@unknown"
+    An ID that cannot be resolved is said out loud. Printing "name_unknown"
     would read as an identity, and an agent handed a gap fills it from the
     next file it reads -- the failure this block exists to prevent. A failure
     here must never break session start.
@@ -159,7 +159,7 @@ def _identity_block() -> str:
 
 def _supervision_block(environ=None, ask=None) -> str:
     """A line when this agent has a primal daemon but this session isn't confirmed as its
-    session unit (persistent_layer 6.2): such a session isn't restarted by the daemon if it
+    session unit (persistent_layer 5.1): such a session isn't restarted by the daemon if it
     crashes, and nothing told the agent so until it asked ``macf_tools env``. Silent where
     the daemon confirms the session, and for an agent that declares no daemon at all. It
     is also the check for moving sessions onto their daemons: after the move, no session
@@ -172,7 +172,8 @@ def _supervision_block(environ=None, ask=None) -> str:
         home = Path(env["MACEFF_AGENT_HOME_DIR"]) if env.get("MACEFF_AGENT_HOME_DIR") else find_agent_home()
         if not declaration_path(home).is_file():
             return ""
-        unit = primal_daemon_unit(get_agent_identity(), environ=env, ask=ask)
+        from ..pd.names import agent_card
+        unit = primal_daemon_unit(agent_card(home), environ=env, ask=ask)
     except Exception as e:  # noqa: BLE001 - GUARD: a readout must not break session start
         emit_warning(Warning(source="session_start", kind="supervision_unread",
                              detail=f"could not tell whether the daemon supervises this session: {e}"))
@@ -186,8 +187,97 @@ def _supervision_block(environ=None, ask=None) -> str:
     else:
         text = ("🧭 You have a primal daemon, but this session isn't running as its session unit, "
                 "so the daemon won't restart it if it crashes. `macf_tools env` shows what supervises "
-                "it. Moving a session onto its daemon is the operator's step (persistent_layer 6.2).")
+                "it. Moving a session onto its daemon is the operator's step (persistent_layer 5.1).")
     return f"<system-reminder>\n{text}\n</system-reminder>\n"
+
+
+#: Observed, not documented: Claude Code shows a hook's additionalContext inline up to about
+#: 10,000 characters. A longer one is kept in a file, and the model sees a preview of about
+#: 2,000 characters (#802). The smallest payload seen moved to a file was 10,254 bytes.
+OBSERVED_INLINE_LIMIT_CHARS = 10_000
+
+
+def _measured(context: str, path: str, session_id: str = "") -> str:
+    """Record this session start's context size in the hook's own log, and say so loudly when it
+    is past the inline limit, so the model reads only a preview (#802). Returns ``context``
+    unchanged. A failure here must never break session start."""
+    try:
+        # Three counts, since they differ by more than a tenth on a context with emoji: the limit
+        # was observed in bytes, Python counts code points, and the client (JavaScript) UTF-16 units.
+        size = len(context)
+        log_hook_event({"hook_name": "session_start", "event_type": "CONTEXT_SIZE",
+                        "session_id": session_id or "unknown", "path": path, "chars": size,
+                        "utf8_bytes": len(context.encode("utf-8")),
+                        "utf16_units": len(context.encode("utf-16-le")) // 2,
+                        "over_inline_limit": size > OBSERVED_INLINE_LIMIT_CHARS})
+        if size > OBSERVED_INLINE_LIMIT_CHARS:
+            emit_warning(Warning(
+                source="session_start", kind="context_over_inline_limit",
+                detail=(f"the {path} session-start context is {size:,} characters, past the "
+                        f"~{OBSERVED_INLINE_LIMIT_CHARS:,} Claude Code shows inline, so the model reads "
+                        f"only a preview; what it needs first must come first")))
+    except Exception as e:  # noqa: BLE001 - GUARD: a measurement must not break session start
+        print(f"⚠️ MACF: session start could not measure its context: {e}", file=sys.stderr)
+    return context
+
+
+def _recovery_context(recovery_msg: str) -> str:
+    """The compaction-recovery context. The recovery message comes right after the identity, and
+    the other blocks after it: Claude Code shows the model only a preview of a context this long,
+    and what to read, and in what order, has to be in it (#802). Each block in front pushed the
+    message's essentials further out."""
+    return (_identity_block()
+            + f"<system-reminder>\n{recovery_msg}\n</system-reminder>\n"
+            + _supervision_block() + _feedback_drafts_block() + _ask_rules_block()
+            + _focused_charter_block())
+
+
+def _feedback_drafts_block() -> str:
+    """A line when the client holds unsent feedback drafts (cversek/MacEff#903). A draft makes a
+    restart through ``inject exit`` refuse, and until it did nothing said a draft was waiting, so the
+    operator first heard of one when it blocked something. Said once per session, so the agent can
+    raise it at a calm moment. The drafts are read, never changed: sending or discarding one is the
+    operator's. A failure here must never break session start."""
+    try:
+        from ..utils.feedback_drafts import age, unsent_drafts
+        drafts = unsent_drafts()
+    except Exception as e:  # noqa: BLE001 - GUARD: a readout must not break session start
+        emit_warning(Warning(source="session_start", kind="feedback_drafts_unread",
+                             detail=f"could not read the client's feedback drafts: {e}"))
+        return ""
+    if not drafts:
+        return ""
+    oldest = drafts[0]
+    named = f' ("{oldest.title}")' if oldest.title else ""
+    text = (f"📝 The client holds {len(drafts)} unsent feedback draft(s), the oldest {age(oldest)}{named}. "
+            "A session restart through `inject exit` waits until the operator sends or discards them "
+            "(/feedback). Mention it to the operator at a calm moment; never send or discard one yourself.")
+    return f"<system-reminder>\n{text}\n</system-reminder>\n"
+
+
+def _ask_rules_block(project_dir: Optional[str] = None, home: Optional[Path] = None, environ=None) -> str:
+    """The Ask rules in force, at every session start (autonomous_operation 5.5). A command one of
+    them matches stops at a dialog, and in AUTO_MODE with nobody at the keyboard it waits until
+    someone answers: seven hours for a seat on 2026-10-24, on a cleanup chained after the real
+    work. Read here, the agent knows the rules before it writes a command, not after it hangs.
+    Silent when there are none; a failure never breaks session start."""
+    env = os.environ if environ is None else environ
+    try:
+        from ..permission_watch import rules_in_force
+        rules = [r for k, r, _ in rules_in_force(project_dir or env.get("CLAUDE_PROJECT_DIR") or os.getcwd(),
+                                                   home or Path.home(), env) if k == "ask"]
+    except Exception as e:  # noqa: BLE001 - GUARD: a readout must not break session start
+        emit_warning(Warning(source="session_start", kind="ask_rules_unread", detail=str(e)))
+        return ""
+    if not rules:
+        return ""
+    shown = ", ".join(rules[:30]) + (f", and {len(rules) - 30} more" if len(rules) > 30 else "")
+    return ("<system-reminder>\n"
+            f"🛂 {len(rules)} Ask rule(s) are in force; a command that matches one, in any part of a chain, "
+            f"stops at a permission dialog: {shown}. Unattended, keep those out of your calls (delete "
+            "inside a script, not with a chained rm -r). `macf_tools permissions check '<command>'` says "
+            "whether a command would ask; `macf_tools permissions list` shows every rule and its file.\n"
+            "</system-reminder>\n")
 
 
 def _focused_charter_block() -> str:
@@ -257,11 +347,18 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # here covers every fresh start and every resume. start_daemon()
         # daemonizes (non-blocking) and is idempotent; failure is logged, never
         # fatal to the hook.
+        # Where the agent's primal daemon runs the monitor as a declared unit, nothing is
+        # started here: the hook only announces this session (its transcript, its Claude Code
+        # process, its session unit), which the unit's follow-mode monitor moves to.
         try:
+            from macf.pd.monitor_unit import declared_monitor_unit
             from macf.transcript_monitor.daemon import (
+                announce_session as _tm_announce,
                 is_running as _tm_running, start_daemon as _tm_start,
             )
-            if not _tm_running():
+            if declared_monitor_unit() is not None:
+                _tm_announce(data)
+            elif not _tm_running():
                 _tm_start()
         except (ImportError, OSError, RuntimeError) as e:
             emit_warning(Warning(
@@ -391,8 +488,10 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                     "continue": True,
                     "hookSpecificOutput": {
                         "hookEventName": "SessionStart",
-                        "additionalContext": _identity_block() + _supervision_block()
-                                             + f"<system-reminder>\n{migration_msg}\n</system-reminder>"
+                        "additionalContext": _measured(
+                            _identity_block() + _supervision_block() + _feedback_drafts_block() + _ask_rules_block()
+                            + f"<system-reminder>\n{migration_msg}\n</system-reminder>",
+                            "migration", session_id)
                     }
                 }
 
@@ -604,9 +703,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
                 "systemMessage": recovery_msg,  # TOP LEVEL - user sees this
                 "hookSpecificOutput": {
                     "hookEventName": "SessionStart",
-                    "additionalContext": _identity_block() + _supervision_block()
-                                         + f"<system-reminder>\n{recovery_msg}\n</system-reminder>"
-                                         + _focused_charter_block()
+                    "additionalContext": _measured(_recovery_context(recovery_msg), "compaction", session_id)
                 }
             }
 
@@ -714,7 +811,7 @@ Session Context:
             emit_warning(Warning(source="session_start", kind="telegram_send_failed", detail=f"session-start telegram notification failed: {e}"))
 
         # Pattern C: top-level systemMessage for user + hookSpecificOutput for agent
-        additional_context = (_identity_block() + _supervision_block()
+        additional_context = (_identity_block() + _supervision_block() + _feedback_drafts_block() + _ask_rules_block()
                               + f"<system-reminder>\n{message}\n</system-reminder>"
                               + _focused_charter_block())
 
@@ -737,7 +834,7 @@ Session Context:
             "systemMessage": message,  # TOP LEVEL - user sees this
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
-                "additionalContext": additional_context
+                "additionalContext": _measured(additional_context, source or "startup", session_id)
             }
         }
 

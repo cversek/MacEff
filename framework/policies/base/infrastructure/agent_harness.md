@@ -60,6 +60,8 @@ check can resolve its own subject, and whether "is it running" has an answer.
 **6 Scope**
 - One session per identity — why, and what is deferred?
 
+=== CEP_NAV_BOUNDARY ===
+
 ---
 
 ## 1 What the Harness Is
@@ -92,7 +94,8 @@ one **session identifier**, and it is a pure function of the agent's Calling
 Card:
 
 ```
-TheHarborMaster@ee5cd8   ->   TheHarborMaster_ee5cd8
+ExampleAgent_0a1b2c   ->   ExampleAgent_0a1b2c
+ExampleAgent@0a1b2c   ->   ExampleAgent_0a1b2c     (the old spelling, from history)
 ```
 
 `macf.utils.identity.session_identifier()` computes it;
@@ -110,19 +113,22 @@ surface that falls back to a default must say that it did.
 
 ### 2.2 Which characters are substituted, and why each
 
-Measured, not assumed (tmux 3.6 / systemd 257, 2026-08-07):
+Measured, not assumed (tmux 3.6 / systemd 257, 2026-08-07; tmux 3.8, 2026-10-26):
 
 | char | tmux | systemd | verdict |
 |---|---|---|---|
-| `.` | **silently rewritten to `_`** at session creation | fine | **constraint** |
-| `:` | **silently rewritten to `_`** | rejected: "Couldn't process aliases" | **constraint** |
+| `.` | 3.6: **silently rewritten to `_`** at session creation; 3.8: **stored verbatim, then unaddressable** (`-t` reads it as the window/pane separator) | fine | **constraint** |
+| `:` | 3.6: **silently rewritten to `_`**; 3.8: **stored verbatim, then unaddressable** (`-t` reads it as the session/window separator) | rejected: "Couldn't process aliases" | **constraint** |
 | `/`, space, tab | unsafe | unsafe | **constraint** |
 | `@` | kept verbatim, addresses correctly | enables, symlinks, starts, reports active | **convention** |
 | `-`, `_` | fine | fine | kept |
 
 The `.` and `:` cases are the reason substitution exists at all, and they show the
 harness's signature failure shape: `tmux new-session` **succeeds**, reports no
-error, and stores a different name — so every later `-t` lookup silently misses.
+error, and every later `-t` lookup silently misses. The mechanism changed between
+versions (3.6 stores a different name; 3.8 stores the name asked for and cannot parse
+it back as a target); the consequence did not, and the consequence is what the rule
+rests on, so the negative-control test asserts only that.
 
 `@` is different and the difference is recorded deliberately. It is **not** a
 constraint: a concrete unit named `cc-harness-Name@abc123.service` enables,

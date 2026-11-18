@@ -1,6 +1,7 @@
 """A session that isn't its primal daemon's session unit says so at its start
-(persistent_layer 6.2). It is also the check for moving sessions onto their daemons:
+(persistent_layer 5.1). It is also the check for moving sessions onto their daemons:
 after the move, no session says it."""
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -10,16 +11,22 @@ from macf.pd.interface import Declaration, declaration_path
 from macf.pd.liveness import ENV_SESSION_PID, ENV_SESSION_UNIT
 
 
+def _write_identity(home, name="Resident"):
+    (home / ".maceff").mkdir(parents=True, exist_ok=True)
+    (home / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": name}}))
+    (home / ".maceff_primary_agent.id").write_text("1a2b3c4d-0000-0000-0000-000000000000\n")
+
+
 @pytest.fixture
 def home(tmp_path, monkeypatch):
-    monkeypatch.setattr(hss, "get_agent_identity", lambda: "Resident@1a2b3c")
+    _write_identity(tmp_path)
     return tmp_path
 
 
 def _declare(home):
     path = declaration_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(Declaration(version=1, agent="Resident@1a2b3c").model_dump_json())
+    path.write_text(Declaration(version=1, agent="Resident_1a2b3c").model_dump_json())
 
 
 def _daemon_says(unit="session", pid="4242", state="running"):
@@ -62,7 +69,18 @@ def test_without_the_variable_the_home_is_found_as_the_other_hooks_find_it(home,
 def test_a_failure_never_breaks_session_start(home, monkeypatch):
     _declare(home)
 
-    def broken():
-        raise OSError("identity file unreadable")
-    monkeypatch.setattr(hss, "get_agent_identity", broken)
+    (home / ".maceff_primary_agent.id").unlink()  # the home names no agent: agent_card raises
     assert hss._supervision_block(environ={"MACEFF_AGENT_HOME_DIR": str(home)}) == ""
+
+
+def test_the_daemon_is_named_by_the_homes_card_not_the_environment(home, monkeypatch):
+    """A seat whose MACEFF_AGENT_NAME spells its name differently from its card ("seat2"
+    against "Seat2") named a socket its daemon never made (MIS-0002-R02)."""
+    _write_identity(home, name="Seat2")
+    _declare(home)
+    asked = []
+    monkeypatch.setattr("macf.utils.supervision.primal_daemon_unit",
+                        lambda card, environ=None, ask=None: asked.append(card) or None)
+    monkeypatch.setenv("MACEFF_AGENT_NAME", "seat2")
+    hss._supervision_block(environ={"MACEFF_AGENT_HOME_DIR": str(home), "MACEFF_AGENT_NAME": "seat2"})
+    assert asked == ["Seat2_1a2b3c"]

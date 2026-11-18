@@ -1,0 +1,3 @@
+### Fixed
+
+- **`inject exit` no longer hangs on the feedback-draft dialog** (`macf/src/macf/supervisor.py`). Under a session unit, an agent restarts its session by injecting `/exit`, and the daemon starts the unit again. While the client holds an unsent feedback draft, it answers `/exit` with a review-or-discard dialog instead of exiting, and one such restart sat there for six minutes until the operator pressed a key. `inject exit` (and `inject quit`) now refuses while a draft waits, names each draft file, and asks for the operator, since the draft is theirs to send or discard. Other commands aren't affected. Explained in `capability_boundaries` §5.1. Planting the defect (the check turned off) fails `test_exit_refuses_and_names_the_draft`.

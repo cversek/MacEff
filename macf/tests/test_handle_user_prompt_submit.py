@@ -186,7 +186,8 @@ class TestUserActivityFromPayload:
         assert events[0]["data"]["detector"] == "user_prompt_submit_hook"
         assert events[0]["data"]["source"] == "direct"
 
-    def test_channel_prompt_is_tagged_as_channel(self, mock_dependencies, isolated_events_log):
+    def test_channel_prompt_is_tagged_as_channel(self, mock_dependencies, isolated_events_log, operator_channels):
+        operator_channels("plugin:x:x")
         import json
         from macf.hooks.handle_user_prompt_submit import run
 
@@ -283,3 +284,16 @@ class TestPolicyInjectionRemoved:
         assert "📚 Policy Recommendations" not in context
         # The rest of the DEV_DRV context is unaffected.
         assert "🏗️ MACF" in context
+
+
+def test_the_hook_asks_whether_a_channel_message_enters_user_remote(mock_dependencies, monkeypatch):
+    """The prompt hook's run is the entry point that must call maybe_enter_user_remote, with
+    the prompt and whether it counted as the operator's activity (2026-10-24)."""
+    import json
+    from macf.hooks import handle_user_prompt_submit as hook
+    asked = []
+    monkeypatch.setattr(hook, "maybe_enter_user_remote", lambda prompt, recorded: asked.append((prompt, recorded)))
+    monkeypatch.setattr(hook, "record_user_activity_from_payload", lambda prompt, path=None: True)
+    channel = '<channel source="plugin:telegram:telegram" chat_id="1">on my way</channel>'
+    hook.run(json.dumps({"session_id": "s1", "prompt": channel}))
+    assert asked == [(channel, True)]

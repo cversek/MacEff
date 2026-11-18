@@ -1,0 +1,3 @@
+### Fixed
+
+- **`harness cutover` and the harness parameters default to the agent home, as `macf_tools env` finds it** (`cli.py`, `utils/harness.py`, policy `persistent_layer` 6.3). Without `--home`, the cutover planned for the login's `~`, and the harness defaults used `MACEFF_AGENT_HOME_DIR` or `~`. On a host whose agent home is a project directory, the plan then found no staged declaration and no hand-started client, so it would have installed the daemon without stopping the session first. Both now use `find_agent_home()`: `MACEFF_AGENT_HOME_DIR`, else the project root that holds the event log, else `~`. `--home` still wins.

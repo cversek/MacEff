@@ -63,34 +63,34 @@ def _run(stdin=None):
 @pytest.mark.parametrize('stdin', [None, {'source': 'startup'}, {'source': 'resume'}],
                          ids=['fresh-no-input', 'startup', 'resume'])
 def test_fresh_and_resume_open_with_identity(quiet_hook, stdin):
-    with patch(f'{HOOK}.get_agent_identity', return_value='Seat4@7efebd'):
+    with patch(f'{HOOK}.get_agent_identity', return_value='Seat4_7efebd'):
         ctx = _context(_run(stdin))
     first_block = ctx.split('</system-reminder>')[0]
     assert ctx.startswith('<system-reminder>\n')
-    assert 'Seat4@7efebd' in first_block
+    assert 'Seat4_7efebd' in first_block
     assert 'pa_seat4' in first_block
     assert 'macf_tools env' in first_block
     # The identity comes before the session banner, not after it.
-    assert ctx.index('Seat4@7efebd') < ctx.index('Session Start')
+    assert ctx.index('Seat4_7efebd') < ctx.index('Session Start')
 
 
 def test_compaction_recovery_opens_with_identity(quiet_hook):
-    with patch(f'{HOOK}.get_agent_identity', return_value='Seat4@7efebd'):
+    with patch(f'{HOOK}.get_agent_identity', return_value='Seat4_7efebd'):
         ctx = _context(_run({'source': 'compact', 'session_id': 'sess-identity'}))
     assert ctx.startswith('<system-reminder>\n')
-    assert ctx.index('Seat4@7efebd') < ctx.index('RECOVERY BODY')
+    assert ctx.index('Seat4_7efebd') < ctx.index('RECOVERY BODY')
 
 
 def test_migration_opens_with_identity(quiet_hook):
     quiet_hook['migration'].return_value = (True, '', 'prev-session')
-    with patch(f'{HOOK}.get_agent_identity', return_value='Seat4@7efebd'):
+    with patch(f'{HOOK}.get_agent_identity', return_value='Seat4_7efebd'):
         ctx = _context(_run({'source': 'startup', 'session_id': 'sess-identity'}))
     assert ctx.startswith('<system-reminder>\n')
-    assert ctx.index('Seat4@7efebd') < ctx.index('MIGRATION BODY')
+    assert ctx.index('Seat4_7efebd') < ctx.index('MIGRATION BODY')
 
 
 def test_identity_block_says_it_outranks_prose(quiet_hook):
-    with patch(f'{HOOK}.get_agent_identity', return_value='Seat4@7efebd'):
+    with patch(f'{HOOK}.get_agent_identity', return_value='Seat4_7efebd'):
         first_block = _context(_run()).split('</system-reminder>')[0]
     assert 'CLAUDE.md' in first_block
     assert 'authoritative' in first_block

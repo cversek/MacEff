@@ -284,6 +284,31 @@ def test_processes_still_running_as_a_moved_number_are_found(tmp_path):
                      (14, "gid 1007", "editor")]
 
 
+def test_a_zombie_on_a_moved_number_is_not_a_running_process(tmp_path):
+    """A process that has exited but that its parent hasn't reaped runs nothing and holds no
+    files, so it can't write as its old number. The first live renumber met one: the amail broker,
+    stopped, and left unreaped by a start process that waits only on sshd. Only killing that parent
+    would clear it, and that stops the container --apply has to run in."""
+    proc = tmp_path / "proc"
+    for pid, state, comm in ((20, "Z (zombie)", "python"), (21, "S (sleeping)", "broker")):
+        (proc / str(pid)).mkdir(parents=True)
+        (proc / str(pid) / "status").write_text(
+            f"Name:\t{comm}\nState:\t{state}\nUid:\t998\t998\t998\t998\nGid:\t998\t998\t998\t998\n")
+        (proc / str(pid) / "comm").write_text(comm + "\n")
+    assert rn.processes_on({998}, proc=proc) == [(21, "uid 998", "broker")]
+
+
+def test_a_process_whose_main_thread_exited_still_runs(tmp_path):
+    """On Linux, a process whose main thread called pthread_exit while another thread runs reads
+    State Z with Threads 2. It still runs and writes as its number, so --apply must still see it."""
+    proc = tmp_path / "proc"
+    (proc / "30").mkdir(parents=True)
+    (proc / "30" / "status").write_text(
+        "Name:\tworker\nState:\tZ (zombie)\nUid:\t998\t998\t998\t998\nGid:\t998\t998\t998\t998\nThreads:\t2\n")
+    (proc / "30" / "comm").write_text("worker\n")
+    assert rn.processes_on({998}, proc=proc) == [(30, "uid 998", "worker")]
+
+
 def test_apply_refuses_while_a_process_runs_as_a_moved_number(tmp_path, capsys, monkeypatch):
     """--apply looks for processes on the numbers it moves before it re-owns anything, and refuses,
     naming each, so nothing writes as its old number mid-move (container_operations 6.2, step 3)."""

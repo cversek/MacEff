@@ -35,6 +35,7 @@ the watch cannot tell what to check. Unknown is never healthy.
 """
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -43,13 +44,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Literal, Optional, Sequence, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from macf.notify.session import verify_incarnation
-from macf.pd import interface
-from macf.pd.health import read_liveness
+from macf.notify.session import proc_start_key, verify_incarnation
+from macf.pd import interface, receipts
+from macf.pd.health import SCHEDULE_EVENTS, broker_health, read_liveness, schedule_health
 from macf.platform import container_limits
 from macf.utils.streaming import iter_lines_reverse
+from macf import calling_card
 
 #: How far back a unit's last stamp is looked for. Older than this reads ABSENT: the
 #: verdict names the window, so it never claims more than was read.
@@ -58,7 +60,7 @@ LOOKBACK_S = 7 * 86400
 SEND_TIMEOUT_S = 30
 
 Verdict = Literal["ALIVE", "STALE", "GONE", "ABSENT", "UNREADABLE", "UNREACHABLE", "CHECK-FAILED", "DARK", "HELD", "UNREAD",
-                  "DRIFTED"]
+                  "UNRECEIVED", "DRIFTED", "SWEEP-FAILED", "FAILED", "AUTH-FAILED", "LOGIN-EXPIRED", "LOGIN-EXPIRING"]
 
 #: Exit codes, worst wins (``service_supervision`` section 4.2): each state its own code.
 EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_UNREACHABLE, EXIT_CHECK_FAILED = 0, 1, 2, 3
@@ -66,7 +68,10 @@ EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_UNREACHABLE, EXIT_CHECK_FAILED = 0, 1, 2, 3
 #: alert was sent, on every pass while a channel was dark or a wake held.
 _EXIT_FOR = {"ALIVE": EXIT_HEALTHY, "STALE": EXIT_UNHEALTHY, "GONE": EXIT_UNHEALTHY,
              "ABSENT": EXIT_UNHEALTHY, "DARK": EXIT_UNHEALTHY, "HELD": EXIT_UNHEALTHY, "UNREAD": EXIT_UNHEALTHY,
-             "DRIFTED": EXIT_UNHEALTHY,
+             "UNRECEIVED": EXIT_UNHEALTHY,
+             "DRIFTED": EXIT_UNHEALTHY, "SWEEP-FAILED": EXIT_UNHEALTHY,
+             "FAILED": EXIT_UNHEALTHY, "AUTH-FAILED": EXIT_UNHEALTHY,
+             "LOGIN-EXPIRED": EXIT_UNHEALTHY, "LOGIN-EXPIRING": EXIT_UNHEALTHY,
              "UNREACHABLE": EXIT_UNREACHABLE,
              "UNREADABLE": EXIT_CHECK_FAILED, "CHECK-FAILED": EXIT_CHECK_FAILED}
 
@@ -139,7 +144,7 @@ def last_liveness(log_path: Path, card: str, units: Sequence[str], now: float,
             break
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -149,13 +154,83 @@ def last_liveness(log_path: Path, card: str, units: Sequence[str], now: float,
         if event.get("event") != interface.EVENT_LIVENESS:
             continue
         data = event.get("data")
-        if not isinstance(data, dict) or data.get("agent") != card:
+        if not isinstance(data, dict) or not calling_card.is_agent(data.get("agent"), card):
             continue
         unit = data.get("unit")
         if isinstance(unit, str) and unit in wanted:   # a list or a dict would raise in the set
             found[unit] = event
             wanted.discard(unit)
     return found
+
+
+def last_unit_state(log_path: Path, card: str, units: Sequence[str], now: float,
+                    lookback_s: float = LOOKBACK_S) -> Dict[str, Optional[dict]]:
+    """The newest ``pd_unit_state`` record of each named unit of agent *card*, or None if
+    there is none within the lookback. Read the same way as ``last_liveness``: newest first,
+    this agent's events only, stopping at the lookback or once every unit is found."""
+    wanted = set(units)
+    found: Dict[str, Optional[dict]] = dict.fromkeys(units)
+    cutoff = now - lookback_s
+    for line in iter_lines_reverse(log_path):
+        if not wanted:
+            break
+        try:
+            event = json.loads(line)
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
+            continue
+        if not isinstance(event, dict):
+            continue
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        if event.get("event") != interface.EVENT_STATE:
+            continue
+        data = event.get("data")
+        if not isinstance(data, dict) or not calling_card.is_agent(data.get("agent"), card):
+            continue
+        unit = data.get("unit")
+        if isinstance(unit, str) and unit in wanted:
+            found[unit] = event
+            wanted.discard(unit)
+    return found
+
+
+def _beats_from_another_process(state: dict, data: dict, beat: Optional[dict]) -> bool:
+    """Whether *beat* came after the failed record, from a process other than the one recorded
+    failed: a unit the core marked failed and someone then started outside it. The same process
+    still beating is the auth case, where the failure stands however fresh the beat is."""
+    beat_data = beat.get("data") if isinstance(beat, dict) else None
+    if not isinstance(beat_data, dict):
+        return False
+    stamps = (state.get("timestamp"), beat.get("timestamp"))
+    if not all(isinstance(s, (int, float)) for s in stamps) or stamps[1] <= stamps[0]:
+        return False
+    if data.get("pid") is None:
+        return True  # the failure recorded no process, and something has beaten since
+    return (beat_data.get("pid") != data.get("pid")
+            or proc_start_key(beat_data.get("proc_start")) != proc_start_key(data.get("proc_start")))
+
+
+def check_unit_state(card: str, unit: interface.Unit, event: Optional[dict],
+                     beat: Optional[dict] = None) -> Optional[Finding]:
+    """A failed unit is unhealthy even while its liveness is fresh. A session that can't
+    authenticate keeps running, so it keeps beating, and a watch reading liveness alone
+    called it ALIVE while it could do no work (MIS-0002-R19 (auth_failure_MUST_read_failed)).
+    None when the unit's newest state isn't ``failed``, or when *beat* shows another process
+    has taken over since: liveness then decides alone."""
+    data = event.get("data") if isinstance(event, dict) else None
+    if not isinstance(data, dict) or data.get("state") != "failed":
+        return None
+    if _beats_from_another_process(event, data, beat):
+        return None
+    reason = data.get("reason") if isinstance(data.get("reason"), str) else "no reason recorded"
+    if reason.startswith(interface.AUTH_FAILED_REASON):
+        # The session runs on its daemon's own tmux socket, so a plain ``tmux ls`` can't find
+        # it: the alert names the command that can (#884).
+        return Finding(card, unit.name, "AUTH-FAILED",
+                       f"needs /login in its session, reached by "
+                       f"macf_tools harness attach --card {card}: {reason}")
+    return Finding(card, unit.name, "FAILED", reason)
 
 
 def last_channel_event(log_path: Path, card: str, now: float,
@@ -166,7 +241,7 @@ def last_channel_event(log_path: Path, card: str, now: float,
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -176,9 +251,60 @@ def last_channel_event(log_path: Path, card: str, now: float,
         if event.get("event") not in (interface.EVENT_CHANNEL_DARK, interface.EVENT_CHANNEL_BACK):
             continue
         data = event.get("data")
-        if isinstance(data, dict) and data.get("agent") == card:
+        if isinstance(data, dict) and calling_card.is_agent(data.get("agent"), card):
             return event
     return None
+
+
+def last_login_event(log_path: Path, card: str, now: float,
+                     lookback_s: float = LOOKBACK_S) -> Optional[dict]:
+    """The newest ``pd_login_state`` of agent *card* within the lookback, or None."""
+    from macf.pd.login import EVENT
+    cutoff = now - lookback_s
+    for line in iter_lines_reverse(log_path):
+        try:
+            event = json.loads(line)
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
+            continue
+        if not isinstance(event, dict):
+            continue
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        if event.get("event") != EVENT:
+            continue
+        data = event.get("data")
+        if isinstance(data, dict) and calling_card.is_agent(data.get("agent"), card):
+            return event
+    return None
+
+
+def check_login(card: str, event: Optional[dict], now: float) -> Optional[Finding]:
+    """The agent's login, from the daemon's own reading of its stored credential (#884), so an
+    expired login is heard of before the session needs to work, not at its first failed turn.
+    The verdict is re-judged against now from the recorded end date, so a login that ran out
+    since the daemon last recorded reads expired. None when no daemon here records logins."""
+    from macf.pd.login import EXPIRING_S
+    if event is None:
+        return None
+    data = event.get("data") or {}
+    if data.get("state") == "unknown":
+        # No date to judge: an API key, a credential without the field, or one of several on a
+        # shared macOS login. Not a fault, and paging for it at every pass would be forever.
+        # An expired login there still arrives as AUTH-FAILED at the session's next turn.
+        return None
+    ends = data.get("refresh_expires_at")
+    reach = f" (macf_tools harness attach --card {card})"
+    if not isinstance(ends, (int, float)) or isinstance(ends, bool):
+        return Finding(card, "login", "CHECK-FAILED", f"the login can't be judged: {data.get('detail', 'no end date')}")
+    left = ends - now
+    if left <= 0:
+        return Finding(card, "login", "LOGIN-EXPIRED",
+                       f"its refresh grant ended {_age(-left)} ago: run /login in its session{reach}")
+    if left <= EXPIRING_S:
+        return Finding(card, "login", "LOGIN-EXPIRING",
+                       f"its refresh grant ends in {_age(left)}: run /login in its session before then{reach}")
+    return Finding(card, "login", "ALIVE", f"its refresh grant ends in {_age(left)}")
 
 
 def check_channel(card: str, event: Optional[dict], now: float) -> Finding:
@@ -193,6 +319,40 @@ def check_channel(card: str, event: Optional[dict], now: float) -> Finding:
     return Finding(card, "channel", "DARK", f"{data.get('reason', 'dark')}{age}")
 
 
+def receipt_events(log_path: Path, now: float, lookback_s: float = LOOKBACK_S) -> List[dict]:
+    """The deliveries, receipts and turn starts in an agent's log within the lookback, oldest
+    first. None carries the agent: the log is the one agent's."""
+    cutoff, found = now - lookback_s, []
+    for line in iter_lines_reverse(log_path):
+        try:
+            event = json.loads(line)
+        except ValueError as e:
+            print(f"⚠️ MACF: parsing a line of {log_path.name} failed (skipping it): {e}", file=sys.stderr)
+            continue
+        if not isinstance(event, dict):
+            continue
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        if event.get("event") in receipts.EVENTS:
+            found.append(event)
+    return found[::-1]
+
+
+def check_receipts(card: str, events: Sequence[dict], now: float) -> Finding:
+    """Channel notices the session never took (cversek/MacEff#904). The daemon counts a notice
+    delivered when it writes it, so a client that won't admit the channel drops every notice
+    while the daemon reads healthy; only the session's receipts tell. Counted after the newest
+    receipt, so the stretch ends when one arrives."""
+    missing = receipts.after_last_receipt(events)
+    if not missing:
+        return Finding(card, "receipts", "ALIVE", "no channel notice went unreceived")
+    return Finding(card, "receipts", "UNRECEIVED",
+                   f"{len(missing)} channel notice(s) written and never received by the session, "
+                   f"the oldest {_age(now - missing[0].sent_at)} ago, though it took turns since: "
+                   f"is the channel admitted by Claude Code's allowlist?")
+
+
 def last_unread_mail_event(log_path: Path, card: str, now: float,
                            lookback_s: Optional[float] = None) -> Optional[dict]:
     """The newest ``pd_unread_mail`` or ``pd_unread_mail_cleared`` of agent *card*, or None.
@@ -203,7 +363,7 @@ def last_unread_mail_event(log_path: Path, card: str, now: float,
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -213,7 +373,7 @@ def last_unread_mail_event(log_path: Path, card: str, now: float,
         if event.get("event") not in (interface.EVENT_UNREAD_MAIL, interface.EVENT_UNREAD_MAIL_CLEARED):
             continue
         data = event.get("data")
-        if isinstance(data, dict) and data.get("agent") == card:
+        if isinstance(data, dict) and calling_card.is_agent(data.get("agent"), card):
             return event
     return None
 
@@ -230,11 +390,59 @@ def check_unread_mail(card: str, event: Optional[dict], now: float) -> Finding:
     return Finding(card, "mail", "UNREAD", f"{data.get('reason', 'mail unread past its threshold')}{age}")
 
 
+def mail_sweep_events(log_path: Path, card: str, schedule: str, now: float,
+                      lookback_s: float = LOOKBACK_S) -> List[dict]:
+    """The scheduler's events for agent *card*'s sweep schedule within the lookback, with the
+    daemon's starts, oldest first, as ``schedule_health`` reads them. A sweep whose last run
+    is older than the lookback has no run here, which reads as a missing sweep: unhealthy."""
+    cutoff = now - lookback_s
+    found: List[dict] = []
+    for line in iter_lines_reverse(log_path):
+        try:
+            event = json.loads(line)
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
+            continue
+        if not isinstance(event, dict):
+            continue
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        if event.get("event") not in SCHEDULE_EVENTS:
+            continue
+        data = event.get("data")
+        if not isinstance(data, dict) or not calling_card.is_agent(data.get("agent"), card):
+            continue
+        if event.get("event") == interface.EVENT_DAEMON_START or data.get("schedule") == schedule:
+            found.append(event)
+    found.reverse()
+    return found
+
+
+def check_mail_broker(card: str, declaration: interface.Declaration, events: Sequence[dict],
+                      now: float) -> Finding:
+    """The mail broker this home runs, judged by its last sweep (MIS-0004-R31, R32): a broker
+    that stopped sweeping, or whose sweep keeps finding mail stuck past its declared age,
+    reaches a person through the watch, by a path that is neither the broker nor a session."""
+    name = declaration.mail_sweep_schedule
+    sweep = next((h for h in schedule_health(declaration, events, now) if h.schedule == name), None)
+    verdict = broker_health(sweep)
+    return Finding(card, "mail-broker", "ALIVE" if verdict.healthy else "SWEEP-FAILED", verdict.detail)
+
+
 #: How long a typed wake may be held, by a dialog or a draft in the session's pane, before
 #: the operator is told: rule 14 of the mail clock's list (on #552). A dialog waits on a
 #: person, and nothing in the session can say so.
 WAKE_HELD_ALERT_S = 1800.0
 _WAKE_EVENTS = ("pd_wake_held", "pd_wake_sent", "pd_wake_released")
+#: Hold reasons that are the agent's own pace, not something in its pane: the refractory
+#: window between wakes (``pd.wake.REFRACTORY``). Nobody needs telling about them.
+_PACING_REASONS = ("refractory",)
+
+
+def _obstacle(event: dict) -> bool:
+    """A hold by something in the pane, which a person may have to clear."""
+    return (event.get("event") == "pd_wake_held"
+            and (event.get("data") or {}).get("reason") not in _PACING_REASONS)
 
 
 def last_wake_event(log_path: Path, card: str, now: float,
@@ -243,14 +451,15 @@ def last_wake_event(log_path: Path, card: str, now: float,
 
     A hold carries ``held_since``, the time of the first hold of its stretch: a hold whose
     reason changes, a dialog then a draft, writes a new event, and the allowance must not
-    start again with it."""
+    start again with it. A refractory hold is pacing, so it never starts the allowance: a
+    dialog after the window counts from the dialog."""
     newest = None
     for event in _wake_events(log_path, card, now - lookback_s):
         if newest is None:
-            if event.get("event") != "pd_wake_held":
+            if not _obstacle(event):
                 return event
             newest = dict(event)
-        elif event.get("event") != "pd_wake_held":
+        elif not _obstacle(event):
             break
         newest["held_since"] = event.get("timestamp")
     return newest
@@ -261,7 +470,7 @@ def _wake_events(log_path: Path, card: str, cutoff: float):
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -271,16 +480,18 @@ def _wake_events(log_path: Path, card: str, cutoff: float):
         if event.get("event") not in _WAKE_EVENTS:
             continue
         data = event.get("data")
-        if isinstance(data, dict) and data.get("agent") == card:
+        if isinstance(data, dict) and calling_card.is_agent(data.get("agent"), card):
             yield event
 
 
 def check_wake(card: str, event: Optional[dict], now: float,
                held_alert_s: float = WAKE_HELD_ALERT_S) -> Finding:
     """A typed wake held too long: the newest wake event is a hold whose stretch began more
-    than ``held_alert_s`` ago. A sent wake, or a stretch released because nothing waits, clears it."""
+    than ``held_alert_s`` ago. A sent wake, or a stretch released because nothing waits, clears it,
+    and a refractory hold is never one: the window is the agent's pace, and a daily cap reached
+    after it leaves it the newest event all day."""
     stamp = (event or {}).get("held_since", (event or {}).get("timestamp"))
-    if (event is None or event.get("event") != "pd_wake_held"
+    if (event is None or not _obstacle(event)
             or not isinstance(stamp, (int, float)) or now - stamp < held_alert_s):
         return Finding(card, "wake", "ALIVE", "no wake held past its allowance")
     reason = (event.get("data") or {}).get("reason", "held")
@@ -336,12 +547,34 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
         events = {u.name: None for u in declaration.units}
     except OSError as e:
         return findings + [Finding(card, "home", "CHECK-FAILED", f"the event log cannot be read: {e.strerror}")]
-    findings += [check_unit(card, u, events[u.name], now, probe) for u in declaration.units]
+    try:
+        states = last_unit_state(log_path, card, [u.name for u in declaration.units], now)
+    except FileNotFoundError:
+        states = {u.name: None for u in declaration.units}
+    except OSError as e:
+        # Unknown is never healthy: without the states, liveness alone could say ALIVE.
+        return findings + [Finding(card, "home", "CHECK-FAILED", f"the event log cannot be read: {e.strerror}")]
+    # A unit's recorded failure outranks its fresh liveness; otherwise liveness decides.
+    findings += [check_unit_state(card, u, states[u.name], events[u.name])
+                 or check_unit(card, u, events[u.name], now, probe)
+                 for u in declaration.units]
     if any(u.kind == "session" for u in declaration.units):   # a session the fallback types into
         try:
             findings.append(check_wake(card, last_wake_event(log_path, card, now), now))
         except FileNotFoundError:
             findings.append(check_wake(card, None, now))
+        # Not only where a channel is declared expected: a seat whose daemon writes to a
+        # channel without channel_connect_s set drops notices just the same (#904).
+        try:
+            findings.append(check_receipts(card, receipt_events(log_path, now), now))
+        except FileNotFoundError:
+            findings.append(check_receipts(card, [], now))
+        try:
+            login = check_login(card, last_login_event(log_path, card, now), now)
+        except FileNotFoundError:
+            login = None
+        if login is not None:
+            findings.append(login)
     if declaration.channel_connect_s is not None:      # a channel is expected, so watch it
         try:
             findings.append(check_channel(card, last_channel_event(log_path, card, now), now))
@@ -353,6 +586,65 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
             findings.append(check_unread_mail(card, last_unread_mail_event(log_path, card, now), now))
         except FileNotFoundError:
             findings.append(check_unread_mail(card, None, now))
+    if declaration.mail_sweep_schedule is not None:   # a broker runs here, so watch its sweep
+        try:
+            sweeps = mail_sweep_events(log_path, card, declaration.mail_sweep_schedule, now)
+        except FileNotFoundError:
+            sweeps = []
+        except OSError as e:
+            sweeps = None
+            findings.append(Finding(card, "mail-broker", "CHECK-FAILED",
+                                    f"the event log cannot be read: {e.strerror}"))
+        if sweeps is not None:
+            findings.append(check_mail_broker(card, declaration, sweeps, now))
+    return findings
+
+
+def home_check_argv(container: str, user: str, path: str, python: str, probe: bool) -> List[str]:
+    """The one command the watch runs in a container: the home check, which only reads."""
+    argv = ["docker", "exec", "-u", user, container, python, "-m", "macf.pd.watch", "--home-findings", path]
+    return argv if probe else argv + ["--no-probe"]
+
+
+def check_container_home(container: str, user: str, path: str, python: str = "/opt/maceff-venv/bin/python",
+                         probe: bool = True,
+                         run: container_limits.Runner = container_limits._run) -> List[Finding]:
+    """Every finding for a home inside *container*, made there by the same check, as *user*
+    (#979). The host's user can't read a container's volumes, so the check goes to the home
+    rather than the home's files to the host. A container that isn't running is UNREACHABLE,
+    and an answer the watch can't read is CHECK-FAILED: unknown is never healthy."""
+    where = f"{container}:{path}"
+    try:
+        out = run(home_check_argv(container, user, path, python, probe))
+    except subprocess.CalledProcessError as e:
+        said = (e.stderr or "").strip()
+        if "is not running" in said or "No such container" in said:
+            return [Finding(where, "home", "UNREACHABLE", f"container {container} is not running; nothing was measured")]
+        # An older MacEff's argparse refuses the unknown option, or, since --config was required
+        # there, asks for it first: "the following arguments are required: --config".
+        if ("unrecognized arguments" in said or "--home-findings" in said
+                or "required: --config" in said):
+            return [Finding(where, "home", "CHECK-FAILED",
+                            f"the MacEff in {container} has no home check yet (#979): rebuild it on a MacEff that does")]
+        last = said.splitlines()[-1] if said else f"exit {e.returncode}"
+        return [Finding(where, "home", "CHECK-FAILED", f"the check in {container} failed: {last}")]
+    except (OSError, subprocess.SubprocessError) as e:     # no docker here, or the check hung
+        return [Finding(where, "home", "CHECK-FAILED", f"docker exec into {container} did not run: {type(e).__name__}")]
+    try:
+        rows = json.loads(out)
+        if not isinstance(rows, list) or not all(
+                isinstance(row, dict) and set(row) == {"agent", "subject", "verdict", "detail"}
+                and all(isinstance(v, str) for v in row.values()) for row in rows):
+            raise TypeError("not a list of findings with four string fields")
+        findings = [Finding(**row) for row in rows]
+    except (ValueError, TypeError) as e:
+        # Anything a seat could answer, a list for a verdict included, ends here: one seat's
+        # answer must never raise out of the pass that checks every other seat.
+        return [Finding(where, "home", "CHECK-FAILED", f"the check in {container} did not answer in JSON: {type(e).__name__}")]
+    unknown = sorted({f.verdict for f in findings} - set(_EXIT_FOR))
+    if unknown:
+        return [Finding(where, "home", "CHECK-FAILED",
+                        f"the check in {container} answered verdict(s) this watch doesn't know: {', '.join(unknown)}")]
     return findings
 
 
@@ -487,10 +779,43 @@ def _write_kept(path: Path, kept: Dict[str, dict]) -> None:
 # The config the outer tier renders, and the alert path
 # ============================================================================
 
+#: Docker's own rule for a container name; it can't begin with '-', so it can't read as an option.
+_CONTAINER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+#: A seat's account name: a name, never a numeric uid (``0`` is root by number).
+_SEAT_USER = re.compile(r"[a-z_][a-z0-9_-]*")
+
+
 class WatchedHome(BaseModel):
+    """One agent home. With ``container`` set, the home is inside that container, where the
+    host's user can't read it: the watch runs the check there, as ``user``, through
+    ``docker exec`` (#979), and reads back its findings. ``path`` is then the home's path
+    inside the container, and ``python`` the interpreter there that has MacEff."""
+
     model_config = ConfigDict(extra="forbid")
     path: str = Field(min_length=1)
     probe: bool = True
+    container: Optional[str] = None
+    user: Optional[str] = None
+    python: str = "/opt/maceff-venv/bin/python"
+
+    @model_validator(mode="after")
+    def _container_names_its_user(self) -> "WatchedHome":
+        """``docker exec`` is root-equivalent on the host, so an entry may name only what a home
+        check needs: a container name that can't read as an option, a seat that isn't root, and
+        an interpreter and home given as absolute paths."""
+        if self.container is None:
+            return self
+        if not self.user:
+            raise ValueError("a home in a container names the user to check it as")
+        if not _CONTAINER_NAME.fullmatch(self.container):
+            raise ValueError(f"container {self.container!r} is not a container name "
+                             "(letters, digits, '_', '.', '-', not starting with '-')")
+        if not _SEAT_USER.fullmatch(self.user) or self.user == "root":
+            raise ValueError(f"user {self.user!r}: a home check runs as the seat, never root or a uid")
+        for field, value in (("python", self.python), ("path", self.path)):
+            if not value.startswith("/") or "\n" in value:
+                raise ValueError(f"{field} {value!r} must be an absolute path")
+        return self
 
 
 class WatchConfig(BaseModel):
@@ -595,11 +920,11 @@ def open_stretches(durable_log: Path) -> Dict[str, dict]:
         for line in iter_lines_reverse(durable_log):
             try:
                 record = json.loads(line)
-            except ValueError:
+            except ValueError:  # noqa: S112 - a torn or partial line in the durable alert log is skipped
                 continue
             if isinstance(record, dict) and record.get("delivered") and "open_after" in record:
                 return dict(record["open_after"])
-    except FileNotFoundError:
+    except FileNotFoundError:  # noqa: S110 - no alert log exists before the first alert is sent
         pass
     return {}
 
@@ -612,7 +937,11 @@ def run_pass(config: WatchConfig, now: Optional[float] = None,
     durable_log = Path(config.state_dir) / "alerts.jsonl"
     findings: List[Finding] = []
     for home in config.homes:
-        findings += check_home(Path(home.path), now, base, probe if home.probe else None)
+        if home.container is not None:
+            findings += check_container_home(home.container, home.user, home.path, home.python,
+                                             home.probe, run)
+        else:
+            findings += check_home(Path(home.path), now, base, probe if home.probe else None)
     if config.containers:
         kept_path = Path(config.state_dir) / LIMITS_STATE
         kept, now_kept = _read_kept(kept_path), {}
@@ -632,8 +961,20 @@ def run_pass(config: WatchConfig, now: Optional[float] = None,
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m macf.pd.watch",
                                      description="One pass of the outside watch over the primal daemons.")
-    parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--home-findings", type=Path, metavar="HOME",
+                        help="check one home and print its findings as JSON, sending nothing: "
+                             "what a watch outside a container runs inside it (#979)")
+    parser.add_argument("--no-probe", action="store_true",
+                        help="with --home-findings: skip the process probes")
     args = parser.parse_args(argv)
+    if args.home_findings is not None:
+        found = check_home(args.home_findings, time.time(), None,
+                           None if args.no_probe else verify_incarnation)
+        print(json.dumps([dataclasses.asdict(f) for f in found]))
+        return EXIT_HEALTHY      # the findings are the answer; the watch outside judges them
+    if args.config is None:
+        parser.error("--config is required, unless --home-findings is given")
     try:
         config = WatchConfig.model_validate_json(args.config.read_text())
     except (OSError, ValidationError, ValueError) as e:

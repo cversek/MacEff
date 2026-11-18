@@ -10,7 +10,7 @@
       "name": "maceff-channel",
       "description": "Notices from the agent's primal daemon, delivered as channel events instead of typed keystrokes (MIS-0002 section 6.14).",
       "category": "productivity",
-      "source": "./plugins/maceff-channel"
+      "source": "./macf/src/macf/channels/maceff_marketplace/plugins/maceff-channel"
     }
   ]
 }

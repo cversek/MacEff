@@ -339,8 +339,8 @@ class ConsciousnessConfig:
         if retention_days := os.getenv("MACF_SESSION_RETENTION_DAYS"):
             try:
                 settings["consciousness"]["session_retention_days"] = int(retention_days)
-            except ValueError:
-                pass
+            except ValueError as e:
+                print(f"⚠️ MACF: MACF_SESSION_RETENTION_DAYS={retention_days!r} is not an integer (keeping the configured retention): {e}", file=sys.stderr)
 
         return settings
 
@@ -603,6 +603,14 @@ RESOLVED_SETTINGS: List[Dict[str, Any]] = [
         "default": 10,
         "coerce": int,
         "description": "Minutes of no user input before USER_IDLE engages",
+    },
+    {
+        "name": "permissions.deny_under_full_autonomy",
+        "env_var": "MACF_DENY_UNDER_FULL_AUTONOMY",
+        "config_path": "permissions.deny_under_full_autonomy",
+        "default": False,
+        "coerce": None,
+        "description": "Deny at once a permission dialog nobody can answer (AUTO_MODE with the operator away, or a sprint or play time)",
     },
     {
         "name": "hooks.output",

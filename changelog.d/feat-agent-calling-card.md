@@ -1,0 +1,3 @@
+### Added
+
+- **An agent declares its calling card in agents.yaml, and container start writes it into its home** (`models/agent_spec.py`, `docker/scripts/start.py`, policy `persistent_layer` §10.1): until now no container agent's primal daemon could render, because nothing put the card the daemon reads into the agent's home. `calling_card` sits beside `primal_daemon` and is required with it when `agents.yaml` loads. At every start it is written as `agent_identity.calling_card` into `.maceff/config.json`, keeping every other key, the owner and the mode, or creating the file as the agent's at 0600. A different card or moniker already in the home is refused, not overwritten, and costs only that agent its daemon. Six tests; fourteen planted defects each turn one red.

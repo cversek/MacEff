@@ -1,0 +1,3 @@
+### Fixed
+
+- **A schedule's `report_only` missed-run policy now reports** (MIS-0002-R25, `persistent_layer` 1.2, 1.8, 10.4). It behaved exactly as `skip`: both ran none of a downtime's missed firings and raised no notice. Now `report_only` raises the new daemon notice `pd_run_missed`, once per spell of missed firings, with the `pd_run_missed` record and under its guard, so not again on a later pass or a restart before the next run. Its id is the schedule's name and the last missed firing, only the newest per schedule is owed, and unrouted it goes to the agent. Its pointer names `macf_tools events query --event pd_run_missed` and `macf_tools pd status`. `skip` still raises nothing. The maintainers ruled on #552 that it be served.

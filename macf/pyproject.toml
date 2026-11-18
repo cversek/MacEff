@@ -12,6 +12,11 @@ authors = [{ name = "Craig Versek" }]
 dependencies = [
     "PyYAML>=6.0.0",  # Required for task system YAML parsing
     "pydantic>=2.0.0",  # Core: task/agent/project model validation, imported at CLI startup
+    # Every daemon's event stream is its own MQTT broker (persistent_layer 3.4): the client, and
+    # the library each daemon makes its own certificate authority and certificate with.
+    # mosquitto, the broker itself, is a host package.
+    "paho-mqtt>=2.0",
+    "cryptography>=40.0.0",
 ]
 
 [project.optional-dependencies]
@@ -87,3 +92,11 @@ maceff-channel = "macf.channels.maceff_channel:main"
 # they are named here (an editable install reads them from the tree either way).
 [tool.setuptools.package-data]
 "macf.tray" = ["glyphs/*.svg", "glyphs/*.png"]
+# The maceff plugin marketplace, so an installed macf can install the MacEff channel from a
+# local directory (macf.channels.marketplace). Dot-directories are named outright: a wildcard
+# never matches them.
+"macf.channels" = [
+    "maceff_marketplace/.claude-plugin/marketplace.json",
+    "maceff_marketplace/plugins/maceff-channel/.mcp.json",
+    "maceff_marketplace/plugins/maceff-channel/.claude-plugin/plugin.json",
+]

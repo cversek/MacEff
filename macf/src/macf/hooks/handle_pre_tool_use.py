@@ -5,6 +5,7 @@ handle_pre_tool_use - PreToolUse hook runner.
 DELEG_DRV start tracking + tool operation awareness.
 """
 import json
+import os
 import re
 import sys
 import traceback
@@ -255,7 +256,23 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
             emit_warning(Warning(source="pre_tool_use", kind="mode_detection_failed", detail=f"mode detection failed, falling back: {e}"))
             auto_mode_active, _ = detect_auto_mode(session_id)
             mode_indicator = " 🤖" if auto_mode_active else ""
+            active_modes = set()   # unknown presence: the unattended guard below judges nothing
         message_parts = [f"{format_macf_brand(indicators=mode_indicator)} | {timestamp}{crumb}"]
+
+        # Nobody is at the keyboard: a call an Ask rule matches is refused now, not left to hang
+        # on a dialog (autonomous_operation 5.5).
+        try:
+            from pathlib import Path as _Path
+            from macf.permission_watch import unattended_refusal
+            why = unattended_refusal(tool_name, tool_input, active_modes,
+                                     os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd") or os.getcwd(),
+                                     _Path.home())
+        except (OSError, ValueError) as e:
+            emit_warning(Warning(source="pre_tool_use", kind="unattended_guard_failed", detail=str(e)))
+            why = None
+        if why:
+            return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                           "permissionDecisionReason": why}}
 
         # Surface any injection errors to user
         if injection_errors:

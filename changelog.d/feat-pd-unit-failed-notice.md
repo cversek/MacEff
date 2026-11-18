@@ -1,0 +1,3 @@
+### Added
+
+- **A unit that fails owes the agent a notice** (`pd.core`, `pd.notifier`, `channels.maceff_channel`, policy `persistent_layer` §10.2, §1.8): a unit that exited with a failing code, missed its liveness or couldn't start was recorded failed and restarted, and nothing told the agent. Each such failure now raises the `pd_unit_failed` notice, a doorbell whose id is the unit, its failures in a row and an epoch second, pointing at the unit's `pd_unit_state` entries. Only the newest per unit is owed, so a crash loop while the session is down comes back as one notice per unit carrying the count. The session unit's own liveness failure is noticed too, delivered to the restarted session. Restart behaviour is unchanged, and there is still no give-up state.

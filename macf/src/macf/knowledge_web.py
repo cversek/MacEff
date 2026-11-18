@@ -41,6 +41,9 @@ from .concepts import extract_not_linked, extract_wiki_concepts
 #   roles:       the charter is the node; data.json holds the appointment's
 #                facts and changes without the charter being wrong; each
 #                DUTY_*.json is its own node of type "duties" (roles policy).
+#   amail:       each message and each markdown attachment; HTML is walked
+#                only for messages (is_mail_unit), and a message's links live
+#                in its sidecar, never in it (amail policy).
 _UNIT_OF_NODE: Dict[str, set] = {
     "experiments": {"protocol", "analysis"},
     "roadmaps": {"roadmap"},
@@ -68,36 +71,199 @@ _DEFAULT_CLASS = "conceptual_authority"
 # A task record in the home store: N.json, or .N.json when hidden.
 _TASK_FILE = re.compile(r"\.?\d+\.json")
 
+# Mail joins the web through a sidecar per message (amail policy: knowledge web
+# participation). A message is a record of what was sent, so its bytes stay as
+# sent; `.links/<box>/<thread>/001_msg.html.wiki-links` holds its concepts.
+# The sidecars sit under one root no mail folder unpacks into: a bundle is a
+# folder of files its sender named, so a sidecar beside a received message
+# could be the sender's, and the web reads none there.
+SIDECAR_SUFFIX = ".wiki-links"
+SIDECAR_ROOT = ".links"
+_MAIL_BOXES = ("inbox", "outbox")
+
+
+def mail_roots(agent_home: Optional[Path] = None) -> List[Path]:
+    """The amail folders the web walks: ``amail`` directly under the agent's
+    private and public trees, and each subagent's. Nothing else is mail, however
+    its folders are named, so a bundle's own ``amail/`` is just a folder in it."""
+    if agent_home is None:
+        from .utils.paths import find_agent_home
+        agent_home = find_agent_home()
+    if agent_home is None:
+        return []
+    parents = [agent_home / "agent" / base for base in ("private", "public")]
+    subagents = agent_home / "agent" / "subagents"
+    if subagents.is_dir():
+        parents += [role / base for role in sorted(subagents.iterdir()) if role.is_dir()
+                    for base in ("private", "public")]
+    return [(parent / "amail").resolve() for parent in parents if (parent / "amail").is_dir()]
+
+
+def _mail_root(path: Path) -> Optional[Path]:
+    """The walked amail root ``path`` lies under (``mail_roots``), or None."""
+    resolved = path.resolve()
+    for root in mail_roots():
+        if resolved.is_relative_to(root) and resolved != root:
+            return root
+    return None
+
+
+def sidecar_path(path: Path) -> Path:
+    """The sidecar that holds a mail message's links: under the amail root's
+    .links folder, at the message's own path plus .wiki-links."""
+    root = _mail_root(path)
+    if root is None:
+        raise ValueError(f"{path} is not under an amail folder")
+    rel = path.resolve().relative_to(root)
+    return root / SIDECAR_ROOT / rel.parent / (rel.name + SIDECAR_SUFFIX)
+
+
+def stray_sidecars(root: Path) -> List[Path]:
+    """Sidecar-named files under an amail root but not under its own .links
+    folder (a nested .links inside a thread is a stray too).
+    The web never reads them; the doctor names them, since one may have
+    arrived inside a bundle its sender built."""
+    return [f for f in _files_under(root, "*" + SIDECAR_SUFFIX)
+            if f.relative_to(root).parts[0] != SIDECAR_ROOT]
+
+
+def read_sidecar(path: Path) -> Tuple[List[str], List[str]]:
+    """(concepts, not_linked) from the sidecar of ``path``; empty if none.
+
+    One concept per line, bare or as ``[[concept]]``, normalized as every other
+    link is; a ``<!-- not linked: ... -->`` line holds the declined concepts,
+    as it does in a markdown artifact's Wiki-Links section.
+    """
+    side = sidecar_path(path)
+    try:
+        text = side.read_text(errors="replace")
+    except FileNotFoundError:
+        return [], []   # the usual case: a message nobody has linked yet
+    except OSError as e:
+        print(f"⚠️ MACF: mail sidecar {side} unreadable for the web: {e}", file=sys.stderr)
+        return [], []
+    from .concepts import normalize_concepts
+    declined = extract_not_linked(text)
+    raw: List[str] = []
+    for line in re.sub(r"<!--.*?-->", "\n", text, flags=re.DOTALL).splitlines():
+        line = line.strip()
+        if line:
+            raw.extend(re.findall(r"\[\[(.+?)\]\]", line) or [line])
+    return normalize_concepts(raw), declined
+
+
+def is_mail_unit(path: Path) -> bool:
+    """Whether a file under an amail root is a mail node (amail policy).
+
+    Markdown is a node as everywhere else: a markdown message or attachment.
+    HTML is a node only when it is a message, either ``*msg.html`` in a thread
+    folder or a one-file message sitting directly in inbox/ or outbox/; an
+    index.html or an HTML attachment (a tool page sent along) is not. Most
+    early mail is HTML only, which is why HTML messages are walked at all.
+    """
+    if path.name.endswith(SIDECAR_SUFFIX):
+        return False
+    if path.suffix == ".md":
+        return path.name != "INDEX.md"
+    if path.suffix != ".html" or path.name == "index.html":
+        return False
+    return path.stem.endswith("msg") or path.parent.name in _MAIL_BOXES
+
+
+def in_mail_root(path: Path) -> bool:
+    """Whether ``path`` lies under an amail folder the web walks (mail_roots)."""
+    return _mail_root(path) is not None
+
+
+def node_id_for(ca_type: str, type_root: Path, path: Path) -> str:
+    """The builder's id for a walked file: type, plus the parent folder when
+    nested. A markdown file is named by its stem; any other keeps its suffix,
+    so a thread's 003_msg.md and 003_msg.html are two nodes, not one."""
+    name = path.stem if path.suffix == ".md" else path.name
+    if path.parent != type_root:
+        name = f"{path.parent.name}/{name}"
+    return f"{ca_type}:{name}"
+
+
+# A type folder holding this file is out of the web (scholarship policy, the
+# section on opting a folder out): material that is not an artifact, such as an
+# archive or a scratch dump. The exclusion is never silent: the doctor names
+# every folder it removes, through excluded_type_roots below.
+OPT_OUT_MARKER = ".not-in-knowledge-web"
+
+
+def _opted_out(folder: Path) -> bool:
+    """Whether a type folder carries the opt-out marker."""
+    return (folder / OPT_OUT_MARKER).exists()
+
+
+def _subagent_parents(agent_home: Path) -> List[Path]:
+    """Each subagent's private and public trees, in role order."""
+    subagents = agent_home / "agent" / "subagents"
+    if not subagents.exists():
+        return []
+    return [role / base for role in sorted(p for p in subagents.iterdir() if p.is_dir())
+            for base in ("private", "public")]
+
+
+def _type_folders(parents: List[Path]) -> Iterator[Tuple[str, Path, bool]]:
+    """(name, folder, opted_out) for each type folder under the given parents."""
+    for parent in parents:
+        if not parent.exists():
+            continue
+        for d in sorted(p for p in parent.iterdir() if p.is_dir()):
+            yield d.name, d, _opted_out(d)
+
+
+def _agent_parents(agent_home: Path) -> List[Path]:
+    return [agent_home / "agent" / base for base in ("private", "public")]
+
+
+def excluded_type_roots(agent_home: Path) -> List[Tuple[str, Path]]:
+    """The (name, folder) pairs taken out of the web by the opt-out marker.
+
+    Read from the same resolution ``_type_roots`` uses (``_resolve_roots``),
+    including the task store wherever config or the environment moved it, so
+    every folder the walk drops is a folder this lists. The doctor and
+    ``knowledge status`` report these, so an exclusion is always visible to
+    whoever reads the web's health.
+    """
+    return _resolve_roots(agent_home)[1]
+
 
 def _type_roots(agent_home: Path) -> List[Tuple[str, Path]]:
     """Discover (ca_type, root) pairs from the filesystem — nothing is declared.
 
     Every subdirectory of ``agent/private`` and ``agent/public`` is an
-    artifact-producing location; its name is its type. Personal policies and
-    subagent trees are walked the same way. Framework policies are the one
+    artifact-producing location; its name is its type, unless it carries the
+    opt-out marker (``OPT_OUT_MARKER``). Personal policies and subagent trees
+    are walked the same way. Framework policies are the one
     location outside the agent tree; the direction is safe (public policy read
     into a private web) and the reverse is forbidden — a policy must never
     link a concept that resolves only in some agent's private tree.
     """
+    return _resolve_roots(agent_home)[0]
+
+
+def _resolve_roots(agent_home: Path) -> Tuple[List[Tuple[str, Path]], List[Tuple[str, Path]]]:
+    """(walked, excluded): the ONE resolution of where the web looks.
+
+    Both ``_type_roots`` and ``excluded_type_roots`` read from here, so a
+    folder the marker drops from the walk cannot fail to be announced
+    (scholarship policy: the exclusion is announced).
+    """
     roots: List[Tuple[str, Path]] = []
-    for base in ("private", "public"):
-        parent = agent_home / "agent" / base
-        if not parent.exists():
-            continue
-        for d in sorted(p for p in parent.iterdir() if p.is_dir()):
-            roots.append((d.name, d))
+    excluded: List[Tuple[str, Path]] = []
+
+    def sort(folders: Iterator[Tuple[str, Path, bool]]) -> None:
+        for name, d, out in folders:
+            (excluded if out else roots).append((name, d))
+
+    sort(_type_folders(_agent_parents(agent_home)))
     personal = agent_home / "agent" / "policies" / "personal"
     if personal.exists():
         roots.append(("personal_policies", personal))
-    subagents = agent_home / "agent" / "subagents"
-    if subagents.exists():
-        for role in sorted(p for p in subagents.iterdir() if p.is_dir()):
-            for base in ("private", "public"):
-                parent = role / base
-                if not parent.exists():
-                    continue
-                for d in sorted(p for p in parent.iterdir() if p.is_dir()):
-                    roots.append((d.name, d))
+    sort(_type_folders(_subagent_parents(agent_home)))
     try:
         from .utils.manifest import get_framework_policies_path
         pol = get_framework_policies_path()
@@ -108,12 +274,14 @@ def _type_roots(agent_home: Path) -> List[Tuple[str, Path]]:
             mis_dir = pol.parent / "mis"
             if mis_dir.is_dir():
                 roots.append(("mis", mis_dir))
-    except (OSError, ImportError):
-        pass
+    except (OSError, ImportError) as e:
+        print(f"⚠️ MACF: framework policies lookup failed (policy and MIS nodes left out of the web): {e}", file=sys.stderr)
     # The task store participates wherever it is configured to live. It sits
     # under the agent tree by default, but MACF_TASK_STORE_DIR or the
     # task_store config can move it, and a moved store must not silently drop
-    # out of the web while task links are still being written into it.
+    # out of the web while task links are still being written into it. A moved
+    # store carrying the marker is excluded, and listed as excluded, like any
+    # other marked folder.
     try:
         from .task.reader import TaskReader
         store = TaskReader._resolve_home_store()
@@ -121,10 +289,10 @@ def _type_roots(agent_home: Path) -> List[Tuple[str, Path]]:
         print(f"⚠️ MACF: task store not resolved for the web: {e}", file=sys.stderr)
         store = None
     if store is not None and store.is_dir():
-        known = {r.resolve() for _, r in roots}
+        known = {r.resolve() for _, r in roots + excluded}
         if store.resolve() not in known:
-            roots.append(("tasks", store))
-    return roots
+            (excluded if _opted_out(store) else roots).append(("tasks", store))
+    return roots, excluded
 
 
 def iter_web_files(agent_home: Path) -> Iterator[Tuple[str, Path, Path]]:
@@ -143,7 +311,8 @@ def iter_web_files(agent_home: Path) -> Iterator[Tuple[str, Path, Path]]:
 # artifact-producing location). An experiment that vendors a JavaScript bundle
 # brings thousands: on one agent's tree, 7,700 of the 8,300 directories the web
 # walked, twice per `knowledge status`, for no participating file.
-_TOOL_DIRS = frozenset({"node_modules", "__pycache__", ".git", ".venv"})
+_TOOL_DIRS = frozenset({"node_modules", "__pycache__", ".git", ".venv",
+                        ".pytest_cache", ".mypy_cache", ".ruff_cache"})
 
 
 def _files_under(root: Path, pattern: str) -> List[Path]:
@@ -165,6 +334,11 @@ def _walk_type(ca_type: str, root: Path) -> Iterator[Tuple[str, Path, Path]]:
         if unit is not None and f.stem not in unit:
             continue
         yield ca_type, root, f
+    if ca_type == "amail":
+        # HTML messages, whose links live only in their sidecars (is_mail_unit).
+        for f in _files_under(root, "*.html"):
+            if is_mail_unit(f):
+                yield ca_type, root, f
     if ca_type == "roles":
         # Duties are JSON records with a wiki_links field, as ideas are; they
         # participate through the same walk so the doctor sees them too.
@@ -217,7 +391,17 @@ def task_record(content: str, path: Optional[Path] = None) -> Optional[TaskRecor
 
 def concepts_of(ca_type: str, path: Path, content: str) -> List[str]:
     """The concepts a walked file carries: [[links]] in markdown, the
-    wiki_links field in a duty record or in a task's metadata."""
+    wiki_links field in a duty record or in a task's metadata, and for mail
+    the message's own [[links]] (markdown this agent sent only) plus its sidecar's.
+    A received message's text was written by its sender, and inbound mail is
+    untrusted input (amail policy), so another agent's words never add
+    concepts to this agent's web: only the sidecar it writes itself does."""
+    if ca_type == "amail":
+        from .concepts import normalize_concepts
+        root = _mail_root(path)
+        box = path.resolve().relative_to(root).parts[0] if root else "inbox"
+        own = extract_wiki_concepts(content) if path.suffix == ".md" and box != "inbox" else []
+        return normalize_concepts(own + read_sidecar(path)[0])
     if ca_type == "tasks" and path.suffix == ".json":
         rec = task_record(content, path)
         return rec.concepts if rec else []
@@ -261,7 +445,7 @@ def _pointer_node(pointer: str, path_to_node: Dict[str, str], ca_nodes: Dict[str
     try:
         from .utils.paths import find_agent_home
         candidates.append(find_agent_home() / ref)
-    except (OSError, ImportError):
+    except (OSError, ImportError):  # noqa: S110 - if the import fails only the relative candidate is tried, and a ref that matches neither gets no node, as before
         pass
     for c in candidates:
         try:
@@ -301,7 +485,7 @@ def build_knowledge_web(scan_dirs: Optional[List[Path]] = None) -> Dict[str, Any
     if scan_dirs is not None:
         walk = []
         for scan_dir in scan_dirs:
-            if not scan_dir.exists():
+            if not scan_dir.exists() or _opted_out(scan_dir):
                 continue
             walk.extend(_walk_type(scan_dir.name, scan_dir))
     else:
@@ -319,7 +503,8 @@ def build_knowledge_web(scan_dirs: Optional[List[Path]] = None) -> Dict[str, Any
     for ca_type, type_root, md_file in walk:
         try:
             content = md_file.read_text(errors='replace')
-        except OSError:
+        except OSError as e:
+            print(f"⚠️ MACF: could not read {md_file.name} (its links left out of the web): {e}", file=sys.stderr)
             continue
         if ca_type == "duties":
             try:
@@ -344,23 +529,30 @@ def build_knowledge_web(scan_dirs: Optional[List[Path]] = None) -> Dict[str, Any
             for concept in rec.concepts:
                 wiki_index[concept].add(node_id)
             continue
-        concepts = extract_wiki_concepts(content)
+        concepts = concepts_of(ca_type, md_file, content)
         if not concepts:
             continue
         # Node ID relative to the type root. For nested CAs (experiments),
         # include the immediate parent folder for disambiguation.
-        if md_file.parent != type_root:
-            stem_part = f"{md_file.parent.name}/{md_file.stem}"
+        node_id = node_id_for(ca_type, type_root, md_file)
+        # Extract title from first heading (an HTML message: its <title>)
+        if md_file.suffix == ".html":
+            title_match = re_mod.search(r'<title[^>]*>(.*?)</title>', content, re_mod.IGNORECASE | re_mod.DOTALL)
         else:
-            stem_part = md_file.stem
-        node_id = f"{ca_type}:{stem_part}"
-        # Extract title from first heading
-        title_match = re_mod.search(r'^#\s+(.+)', content, re_mod.MULTILINE)
-        title = title_match.group(1)[:50] if title_match else md_file.stem[:50]
+            title_match = re_mod.search(r'^#\s+(.+)', content, re_mod.MULTILINE)
+        title = title_match.group(1).strip() if title_match else md_file.stem
+        if md_file.suffix == ".html":
+            from html import unescape
+            title = unescape(title)
+        title = title[:50]
+        not_linked = extract_not_linked(content) if md_file.suffix == ".md" else []
+        if ca_type == "amail":
+            from .concepts import normalize_concepts
+            not_linked = normalize_concepts(not_linked + read_sidecar(md_file)[1])
         ca_nodes[node_id] = {"type": ca_type, "title": title,
                              "path": str(md_file),
                              "node_class": node_class_for(ca_type),
-                             "not_linked": extract_not_linked(content)}
+                             "not_linked": not_linked}
         path_to_node[str(md_file.resolve())] = node_id
         for concept in concepts:
             wiki_index[concept].add(node_id)
@@ -969,7 +1161,8 @@ def suggest_concepts(kg: Optional[Dict[str, Any]] = None, min_members: int = 3) 
             continue
         try:
             content = path.read_text(errors="replace")
-        except OSError:
+        except OSError as e:
+            print(f"⚠️ MACF: could not read {path.name} (its declared keywords not counted): {e}", file=sys.stderr)
             continue
         for kw in declared_keywords(content):
             if len(kw) > 3 and kw not in covered:

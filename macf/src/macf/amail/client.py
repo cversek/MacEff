@@ -11,13 +11,19 @@ having no authority.
 """
 from __future__ import annotations
 
+import errno
 import json
+import os
 import socket
+import stat
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from .models import Message, _now_iso
+
+if TYPE_CHECKING:
+    from .registry import Registry
 
 
 class BrokerUnavailable(RuntimeError):
@@ -237,8 +243,41 @@ def reconcile_sent(home: Path, dispositions_dir: Optional[Path]) -> Dict[str, An
 # realigned when the unprivileged broker made them impossible to execute.
 
 
+class IngestBusy(Exception):
+    """Another ingest holds this store's lock, and the caller asked not to wait."""
+
+
+#: The lock every ingest into one store takes, inside the store, which only its agent writes.
+INGEST_LOCK = ".ingest.lock"
+
+
+def _ingest_lock(home: Path, wait: bool) -> int:
+    """Take the store's ingest lock and return its descriptor, or raise IngestBusy.
+
+    Two ingesters now share a box: the primal daemon's receiver (MIS-0004 R04) and
+    `amail list`. Unlocked, the second opens a pair the first already removed and reports a
+    race as an unreadable pair, and an internet message read by both before either removes
+    it is stored twice, since nothing drops a repeated `.eml`. The lock file holds nothing
+    and is never read; on a shared login any process of the login can take it, which at
+    worst delays an ingest."""
+    import fcntl
+    from . import store
+    d = store.ensure_maildir(home)
+    fd = os.open(d / INGEST_LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+    except BlockingIOError:
+        os.close(fd)
+        raise IngestBusy(f"another ingest into {d} is running") from None
+    except OSError:
+        os.close(fd)
+        raise
+    return fd
+
+
 def ingest(home: Path, pickup_box: Path, contacts_path: Optional[Path] = None,
-           agent: str = "") -> list:
+           agent: str = "", *, wait: bool = True, domain: str = "",
+           registry: Optional[Registry] = None) -> list:
     """Execute the custody transfer: move handed-off mail from the broker's
     pickup box into the caller's OWN store, as the caller.
 
@@ -251,68 +290,216 @@ def ingest(home: Path, pickup_box: Path, contacts_path: Optional[Path] = None,
     completion-before-deletion rule the broker applies at the spool).
 
     Returns one result dict per pickup entry, including failures — an entry
-    that cannot be ingested stays in the box, visibly, with its reason.
-    """
-    import hashlib
-    from . import store
+    that cannot be ingested stays in the box, visibly, with its reason. An
+    entry another ingest took between the listing and the open is marked
+    ``taken``: it is in the store, not damaged.
 
+    One ingest at a time per store (``_ingest_lock``). With ``wait`` false a
+    held lock raises IngestBusy instead of waiting, for a caller that will
+    simply try again on its next pass.
+
+    An agent message's signature is judged against the operator's registry
+    (MIS-0004 R44), *registry* or the host's own, at the acceptance time the
+    box's broker recorded when *domain* names it. *contacts_path* no longer
+    verifies anything: keys an agent's contacts declare are not the
+    operator's declaration (R42).
+    """
     results = []
     if not pickup_box.is_dir():
         return results
-    for amsg in sorted(pickup_box.glob("*.amsg")):
-        results.append(_ingest_bundle(home, amsg, contacts_path, agent))
-    for eml in sorted(pickup_box.glob("*.eml")):
-        sidecar = eml.with_suffix(".json")
-        entry = {"name": eml.name}
-        try:
-            raw = eml.read_bytes()
-            meta = json.loads(sidecar.read_text())
-        except (OSError, json.JSONDecodeError) as e:
-            entry.update(ingested=False, reason=f"unreadable pair: {e}")
-            results.append(entry)
-            continue
-        actual = hashlib.sha256(raw).hexdigest()
-        if meta.get("raw_sha256") != actual:
-            entry.update(ingested=False,
-                         reason=f"hash mismatch (sidecar {str(meta.get('raw_sha256'))[:12]}, "
-                                f"bytes {actual[:12]}); left in box")
-            results.append(entry)
-            continue
-        delivered = store.deliver_raw(home, raw, json.dumps(meta, indent=1))
-        try:
-            eml.unlink()
-            sidecar.unlink()
-        except OSError as e:
-            # Ingested but not removed: the copy exists and a duplicate
-            # ingest is prevented next round by... nothing yet — so say it
-            # loudly instead of pretending.
-            print(f"⚠️ MACF: pickup entry {eml.name} ingested but not "
-                  f"removable ({e}); it will re-ingest as a duplicate next "
-                  f"round unless removed", file=sys.stderr)
-        entry.update(ingested=True, path=str(delivered), sha256=actual)
-        results.append(entry)
+    if registry is None:
+        from .registry import Registry, registry_path
+        registry = Registry(registry_path())
+    lock = _ingest_lock(home, wait)
+    try:
+        return _ingest_locked(home, pickup_box, contacts_path, agent, domain, registry)
+    finally:
+        os.close(lock)
+
+
+def _ingest_locked(home: Path, pickup_box: Path, contacts_path: Optional[Path],
+                   agent: str, domain: str = "", registry: Optional[Registry] = None) -> list:
+    results = []
+    try:
+        box_fd = os.open(pickup_box, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as e:
+        # A box that is itself a link, or not a directory, is refused with a reason, not raised.
+        print(f"⚠️ MACF: pickup box {pickup_box} refused: {e.strerror}", file=sys.stderr)
+        return [{"name": str(pickup_box), "ingested": False, "refused": True,
+                 "reason": f"the pickup box can't be opened as a directory without following a link "
+                           f"({e.strerror})"}]
+    try:
+        broker_uid = _box_owner(box_fd)
+        bundles = sorted(pickup_box.glob("*.amsg"))
+        held = _held_bundle_ids(home) if bundles else {}
+        for amsg in bundles:
+            results.append(_ingest_bundle(home, amsg, contacts_path, agent, box_fd, broker_uid, held,
+                                          domain=domain, registry=registry))
+        for eml in sorted(pickup_box.glob("*.eml")):
+            results.append(_ingest_eml(home, eml, box_fd, broker_uid))
+    finally:
+        os.close(box_fd)
     return results
 
 
+def _box_owner(box_fd: int) -> int:
+    """The uid whose files the box may hold: its owner, the broker's account (MIS-0004 R13).
+    Never the uid running ingest, which is the recipient's, whose group may plant files."""
+    return os.fstat(box_fd).st_uid
 
-def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str) -> dict:
+
+def _held_bundle_ids(home: Path) -> Dict[str, Path]:
+    """The agent messages this store already holds, by message id, from the sidecar ingest wrote
+    beside each one. Read once per ingest pass, and only when the box has bundles waiting."""
+    from . import store
+    held: Dict[str, Path] = {}
+    for p in store.bundle_sidecars_for(home).glob("*.json"):
+        try:
+            mid = json.loads(p.read_text()).get("message_id")
+        except (OSError, ValueError):  # noqa: S112 - read_bundle_sidecar reports bad sidecars; ids only
+            continue  # noqa: MACEFF003 - an unreadable sidecar names no id; read_bundle_sidecar reports it
+        if mid:
+            held[mid] = p
+    return held
+
+
+def _record_dropped_duplicate(sidecar: Path, name: str) -> None:
+    """Note a dropped copy in the held message's own sidecar: the drop's durable record (R16)."""
+    try:
+        meta = json.loads(sidecar.read_text())
+        meta.setdefault("duplicates_dropped", []).append({"entry": name, "dropped_at": _now_iso()})
+        sidecar.write_text(json.dumps(meta, indent=1))
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: dropped duplicate {name} but could not record it in {sidecar.name}: {e}",
+              file=sys.stderr)
+
+
+class BoxEntryRefused(Exception):
+    """A pickup-box entry the broker didn't write (MIS-0004 R37)."""
+
+
+def _read_box_file(box_fd: int, name: str, broker_uid: int) -> bytes:
+    """Read one pickup-box file only if it is a regular file the broker's account owns, with one
+    link, all checked on the descriptor actually opened (MIS-0004 R37).
+
+    The recipient's group may remove files from its box, so it may create them there too: a name
+    in the box proves nothing about who wrote it. A symlink isn't followed, and a hard link fails
+    the link count; on macOS nothing else stops one.
+    """
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=box_fd)
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise BoxEntryRefused(f"{name} is a symbolic link") from None
+        raise
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise BoxEntryRefused(f"{name} is not a regular file")
+        if st.st_uid != broker_uid:
+            raise BoxEntryRefused(f"{name} is owned by uid {st.st_uid}, not the broker's ({broker_uid})")
+        if st.st_nlink != 1:
+            raise BoxEntryRefused(f"{name} has {st.st_nlink} links")
+        return b"".join(iter(lambda: os.read(fd, 1 << 16), b""))
+    finally:
+        os.close(fd)
+
+
+def _in_box(box_fd: int, name: str) -> bool:
+    """Whether *name* is still in the box, without following a link."""
+    try:
+        os.stat(name, dir_fd=box_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _set_aside(box_fd: int, names, reason: str) -> None:
+    """Rename a refused pair out of the box's globs, so it is reported once and kept as evidence."""
+    for name in names:
+        try:
+            os.rename(name, name + ".refused", src_dir_fd=box_fd, dst_dir_fd=box_fd)
+        except FileNotFoundError:  # noqa: S112 - the entry already gone; the refusal is reported below
+            continue
+    print(f"⚠️ MACF: pickup entry {names[0]} refused and set aside as .refused: {reason}", file=sys.stderr)
+
+
+def _remove_pair(box_fd: int, names) -> Optional[OSError]:
+    """Remove an ingested pair by name relative to the box's descriptor; the error, if any."""
+    try:
+        for name in names:
+            os.unlink(name, dir_fd=box_fd)
+    except OSError as e:
+        return e
+    return None
+
+
+def _ingest_eml(home: Path, eml: Path, box_fd: int, broker_uid: int) -> dict:
+    """Custody transfer for one internet message waiting in the pickup box."""
+    import hashlib
+    from . import store
+
+    sidecar = eml.with_suffix(".json")
+    entry = {"name": eml.name}
+    try:
+        raw = _read_box_file(box_fd, eml.name, broker_uid)
+        meta = json.loads(_read_box_file(box_fd, sidecar.name, broker_uid))
+    except BoxEntryRefused as e:
+        _set_aside(box_fd, [eml.name, sidecar.name], str(e))
+        entry.update(ingested=False, refused=True, reason=str(e))
+        return entry
+    except FileNotFoundError as e:
+        if not _in_box(box_fd, eml.name):
+            # The message itself is gone: another ingest took the pair between the listing
+            # and the open. It is in a store, not damaged, so it isn't reported as damage.
+            entry.update(ingested=False, taken=True, reason="taken by another ingest")
+            return entry
+        # The message is here and its sidecar isn't. The broker writes the sidecar first, so
+        # this is damage or tampering, never another ingest's work: said as such.
+        entry.update(ingested=False, reason=f"message without its sidecar: {e}")
+        return entry
+    except (OSError, json.JSONDecodeError) as e:
+        entry.update(ingested=False, reason=f"unreadable pair: {e}")
+        return entry
+    actual = hashlib.sha256(raw).hexdigest()
+    if meta.get("raw_sha256") != actual:
+        entry.update(ingested=False,
+                     reason=f"hash mismatch (sidecar {str(meta.get('raw_sha256'))[:12]}, "
+                            f"bytes {actual[:12]}); left in box")
+        return entry
+    delivered = store.deliver_raw(home, raw, json.dumps(meta, indent=1))
+    e = _remove_pair(box_fd, [eml.name, sidecar.name])
+    if e is not None:
+        # Ingested but not removed: the copy exists and a duplicate
+        # ingest is prevented next round by... nothing yet — so say it
+        # loudly instead of pretending.
+        print(f"⚠️ MACF: pickup entry {eml.name} ingested but not "
+              f"removable ({e}); it will re-ingest as a duplicate next "
+              f"round unless removed", file=sys.stderr)
+    entry.update(ingested=True, path=str(delivered), sha256=actual)
+    return entry
+
+
+
+def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str, box_fd: int,
+                   broker_uid: int, held: Optional[Dict[str, Path]] = None, *,
+                   domain: str = "", registry: Optional[Registry] = None) -> dict:
     """Custody transfer for an agent message, including the signature verdict.
 
     VERIFICATION HAPPENS HERE, not at read time, for three reasons the battery
     made concrete. Read-time verification lives on the path the suite never
     exercises — the same path that hid a phantom listing and a thread id minted
     from the clock. Ingest is exercised. Second, it must keep working with the
-    broker stopped, so the keys come from the contacts file on disk, read
-    directly, never a broker round-trip: the file is broker-OWNED and
-    agent-readable, so an agent can read the keys it has been given and cannot
-    rewrite them. Third, custody transfers once, so the trust fact is
+    broker stopped, so the keys come from the operator's registry on disk, read
+    directly, never a broker round-trip (MIS-0004 R44): root's file, which no
+    agent can rewrite. Third, custody transfers once, so the trust fact is
     established at the boundary and recorded, rather than recomputed on every
     glance.
 
     The verdict never collapses to a boolean. A declared key can change, so the
     raw message and its signature are preserved and re-verification stays
-    possible; and keys_for()'s three states stay distinct, because "no key
-    declared" is not "declared and failed" is not "verified".
+    possible; and the verdict's three states stay distinct, because "not in the
+    registry" is not "registered and failed" is not "verified".
     """
     import hashlib
     from . import store
@@ -322,8 +509,22 @@ def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str) -> dict:
     sidecar = amsg.with_suffix(".json")
     entry = {"name": amsg.name, "kind": "bundle"}
     try:
-        payload = amsg.read_bytes()
-        meta = json.loads(sidecar.read_text())
+        payload = _read_box_file(box_fd, amsg.name, broker_uid)
+        meta = json.loads(_read_box_file(box_fd, sidecar.name, broker_uid))
+    except BoxEntryRefused as e:
+        _set_aside(box_fd, [amsg.name, sidecar.name], str(e))
+        entry.update(ingested=False, refused=True, reason=str(e))
+        return entry
+    except FileNotFoundError as e:
+        if not _in_box(box_fd, amsg.name):
+            # The message itself is gone: another ingest took the pair between the listing
+            # and the open. It is in a store, not damaged, so it isn't reported as damage.
+            entry.update(ingested=False, taken=True, reason="taken by another ingest")
+            return entry
+        # The message is here and its sidecar isn't. The broker writes the sidecar first, so
+        # this is damage or tampering, never another ingest's work: said as such.
+        entry.update(ingested=False, reason=f"message without its sidecar: {e}")
+        return entry
     except (OSError, json.JSONDecodeError) as e:
         entry.update(ingested=False, reason=f"unreadable pair: {e}")
         return entry
@@ -339,7 +540,20 @@ def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str) -> dict:
         entry.update(ingested=False, reason=f"undeserializable message: {e}")
         return entry
 
-    verdict = _verify_at_ingest(message, contacts_path, agent)
+    # MIS-0004 R16: a message id this store already holds is a repeated hand-off (a broker
+    # restarted between writing the box and clearing its intake). Drop the copy and record it.
+    held = {} if held is None else held
+    if message.message_id in held:
+        _record_dropped_duplicate(held[message.message_id], amsg.name)
+        e = _remove_pair(box_fd, [amsg.name, sidecar.name])
+        reason = f"{message.message_id} is already held; the copy was dropped and recorded"
+        if e is not None:
+            reason += f", but not removable from the box ({e})"
+        print(f"⚠️ MACF: pickup entry {amsg.name}: {reason}", file=sys.stderr)
+        entry.update(ingested=False, duplicate=True, reason=reason)
+        return entry
+
+    verdict = _verify_at_ingest(message, meta, domain, registry)
     message.trust = verdict["trust"]
     meta["ingest_verification"] = verdict
     # Disagreement with the broker's own read is information, not noise: it is
@@ -352,11 +566,9 @@ def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str) -> dict:
         meta["ingest_verification"]["disagrees_with_broker"] = broker_trust
 
     delivered = store.deliver(home, message)
-    store.write_bundle_sidecar(home, delivered.name, json.dumps(meta, indent=1))
-    try:
-        amsg.unlink()
-        sidecar.unlink()
-    except OSError as e:
+    held[message.message_id] = store.write_bundle_sidecar(home, delivered.name, json.dumps(meta, indent=1))
+    e = _remove_pair(box_fd, [amsg.name, sidecar.name])
+    if e is not None:
         print(f"⚠️ MACF: pickup entry {amsg.name} ingested but not removable "
               f"({e}); it will re-ingest as a duplicate next round unless "
               f"removed", file=sys.stderr)
@@ -365,40 +577,33 @@ def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str) -> dict:
     return entry
 
 
-def _verify_at_ingest(message, contacts_path, agent: str) -> dict:
-    """The recipient's own signature verdict. Three states, never flattened."""
+def _verify_at_ingest(message, meta: Dict[str, Any], own_domain: str,
+                      registry: Optional[Registry]) -> dict:
+    """The recipient's own signature verdict, against the operator's registry (MIS-0004 R44).
+    Three states, never flattened.
+
+    A sender the registry declares is held to its keys: unsigned, or signed with no key valid for
+    it, is suspect. A sender it doesn't declare is outside mail and stays unverified, and so does
+    everything while the registry can't be read or trusted, so mail turns suspect only once the
+    operator has declared its sender (landing declares first and enforces second, section 12.4).
+    Nothing falls back to keys an agent's own contacts declare.
+
+    The sender's card and the acceptance time are this box's broker's word: its ``sender_card``,
+    resolved once from the sender's address, and its ``handed_off_at`` (R45), taken from a sidecar
+    the caller has already read through the box's descriptor as the broker's own file and checked
+    against the payload's hash, and only when it names this very message. With no card the
+    sender is unverified; with no acceptance time, only keys that may sign now count."""
+    from .attest import acceptance_time, sender_verdict
     from .trust import TrustClass
-    from .crypto import verify
 
-    if not contacts_path or not agent:
+    if registry is None:
         return {"trust": TrustClass.UNVERIFIED.value, "keys_declared": None,
-                "reason": "no local contact book available to this recipient; "
-                          "no verification attempted"}
-    try:
-        from .contacts import ContactBook
-        keys = ContactBook(Path(contacts_path)).keys_for(agent, message.sender)
-    except (OSError, ValueError) as e:
-        return {"trust": TrustClass.UNVERIFIED.value, "keys_declared": None,
-                "reason": f"contact book unreadable ({e}); no verification attempted"}
-
-    if message.signature and keys:
-        if verify(message, message.signature, keys):
-            return {"trust": TrustClass.ATTESTED.value, "keys_declared": len(keys),
-                    "reason": "signature verified against a declared key"}
-        return {"trust": TrustClass.SUSPECT.value, "keys_declared": len(keys),
-                "reason": "signature present and did NOT verify against any "
-                          "declared key"}
-    if message.signature and not keys:
-        return {"trust": TrustClass.UNVERIFIED.value, "keys_declared": 0,
-                "reason": "signed, but this recipient declares no key for the "
-                          "sender; nothing can be concluded"}
-    if keys and not message.signature:
-        return {"trust": TrustClass.SUSPECT.value, "keys_declared": len(keys),
-                "reason": "sender declares a key and sent no signature; "
-                          "breaking that commitment is the shape of impersonation"}
-    return {"trust": TrustClass.UNVERIFIED.value, "keys_declared": 0,
-            "reason": "unsigned, and no key declared for the sender"}
-
+                "reason": "no operator's registry given; no verification attempted"}
+    if meta.get("message_id") != message.message_id:
+        return sender_verdict(message, None, registry, None)
+    card = meta.get("sender_card") if isinstance(meta.get("sender_card"), str) else None
+    accepted_at = acceptance_time(meta, own_domain) if own_domain else None
+    return sender_verdict(message, card, registry, accepted_at)
 
 
 def read_sent(home: Path) -> list:

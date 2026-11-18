@@ -1,9 +1,10 @@
 # Git Discipline Policy
 
+**Type**: Development
+**Scope**: All agents (PA and SA) performing version control
+**Status**: ACTIVE
 **Version**: 1.0
 **Tier**: CORE
-**Category**: Development
-**Status**: ACTIVE
 **Updated**: 2026-01-15
 
 ---
@@ -96,6 +97,8 @@ still gets the work done; the same boundary unexplained produces the workaround.
 - How do I create good PRs?
 - What about code review?
 - How do I coordinate with others?
+
+=== CEP_NAV_BOUNDARY ===
 
 ---
 
@@ -574,7 +577,7 @@ htmlcov/
 
 Co-Authored-By: <model> <noreply@anthropic.com>
 
-[Moniker@idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
+[Moniker_idfrag: task#N s_XXXXXXXX/c_NN/p_ZZZZZZZ/t_TTTTTTTTTT]
 ```
 
 **The last line is the calling card, and it is the ONLY place agent identity or

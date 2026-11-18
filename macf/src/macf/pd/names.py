@@ -13,9 +13,11 @@ surface from it through ``session_identifier`` (MIS-0002-R06
 import json
 import os
 import stat
+import sys
 from pathlib import Path
 from typing import Optional
 
+from macf import calling_card
 from macf.utils.identity import session_identifier
 
 #: MIS-0002-R06: every process, unit, label and socket name of a primal daemon carries it.
@@ -52,16 +54,20 @@ def agent_card(agent_home: Path) -> str:
     if not name or len(uuid) < 6:
         raise IdentityError(f"{home} names no agent: config.json needs agent_identity.calling_card "
                             f"and .maceff_primary_agent.id a UUID")
-    return f"{name}@{uuid[:6]}"
+    try:
+        return calling_card.build(name, uuid)
+    except calling_card.CardError as e:
+        raise IdentityError(f"{home} names no agent: {e}") from e
 
 
 def pd_id(card: str) -> str:
-    """The per-agent part of every name: ``TheHarborMaster@ee5cd8`` -> ``TheHarborMaster_ee5cd8``.
+    """The per-agent part of every name: the card exactly, ``TheHarborMaster_ee5cd8``.
 
-    Several agents can share one login user, so every name carries the agent; and the
-    card's ``@`` is substituted because systemd spells a template instance that way.
+    Several agents can share one login user, so every name carries the agent. A card's form
+    already suits a systemd template instance, a launchd label, a socket and a path, so the
+    name keeps the card's case (MIS-0002-R160).
     """
-    return session_identifier(card)
+    return calling_card.derived(session_identifier(card))
 
 
 def systemd_unit(card: str) -> str:
@@ -72,6 +78,27 @@ def systemd_unit(card: str) -> str:
 def launchd_label(card: str) -> str:
     """The outer tier's label on macOS (MIS-0002-R05): ``maceff_pd.<id>``."""
     return f"{PD_IDENTIFIER}.{pd_id(card)}"
+
+
+def name_this_process(name: str = PD_IDENTIFIER) -> bool:
+    """Give this process the name ``ps``, ``top`` and ``pgrep`` show, so a daemon reads as
+    ``maceff_pd`` in a process listing rather than as the interpreter (MIS-0002-R06). True when
+    the name was set.
+
+    Linux only, through ``prctl(PR_SET_NAME)``, which takes at most 15 bytes and leaves the
+    command line alone, so ``pgrep -f macf.pd`` still finds it. A unit the daemon starts gets
+    its own name at exec. macOS has no call that renames a running process, so this returns
+    False there; the LaunchAgent names the daemon at exec instead, with ``maceff_pd`` as its
+    ``argv[0]`` (``macf.platform.launchd``).
+    """
+    if not sys.platform.startswith("linux"):
+        return False
+    import ctypes
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        return libc.prctl(15, name.encode()[:15], 0, 0, 0) == 0   # 15: PR_SET_NAME
+    except (OSError, AttributeError):
+        return False
 
 
 def runtime_dir() -> Path:
@@ -110,6 +137,8 @@ def control_socket(card: str, base: Optional[Path] = None) -> Path:
 
 def channel_socket(card: str, base: Optional[Path] = None) -> Path:
     return (base or runtime_dir()) / f"{pd_id(card)}.channel.sock"
+
+
 
 
 def record_path(card: str, base: Optional[Path] = None) -> Path:

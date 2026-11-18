@@ -38,6 +38,7 @@ import math
 import os
 import random
 import re
+import sys
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -79,9 +80,9 @@ def _norm(s: str) -> str:
 # ---- the snapshot ------------------------------------------------------------------------------
 
 def _node_id(ca_type: str, type_root: Path, path: Path) -> str:
-    """The builder's node id scheme (knowledge_web.build_knowledge_web)."""
-    stem = f"{path.parent.name}/{path.stem}" if path.parent != type_root else path.stem
-    return f"{ca_type}:{stem}"
+    """The builder's node id scheme, taken from the builder so the two cannot drift."""
+    from .knowledge_web import node_id_for
+    return node_id_for(ca_type, type_root, path)
 
 
 def build_snapshot(agent_home: Optional[Path] = None, exclude: Sequence[str] = ()) -> dict:
@@ -109,12 +110,14 @@ def build_snapshot(agent_home: Optional[Path] = None, exclude: Sequence[str] = (
             continue
         try:
             raw = path.read_text(errors="replace")
-        except OSError:
+        except OSError as e:
+            print(f"⚠️ MACF: reading {path} failed (skipping it): {e}", file=sys.stderr)
             continue
         if ca_type in ("tasks", "duties"):
             try:
                 rec = json.loads(raw)
-            except ValueError:
+            except ValueError as e:
+                print(f"⚠️ MACF: parsing {path} failed (skipping it): {e}", file=sys.stderr)
                 continue
             if ca_type == "tasks":
                 nid, text = f"tasks:#{rec.get('id')}", f"{rec.get('subject', '')}\n\n{rec.get('description') or ''}"

@@ -11,6 +11,12 @@ OUTPUT rather than its exit status: it exits 0 while printing "Unknown key ...,
 ignoring" for both a missing ExecStart and a misplaced StartLimit directive.
 Gating on the exit code would be the same instrument-reports-success defect these
 invariants exist to catch.
+
+Only complaints about the unit under test count. `verify` also loads the host's
+own units, and a runner whose systemd has dropped an option warns about the
+host's unit files ("/usr/lib/systemd/system/x.service:26: Support for option
+... has been removed"). Those lines name another file, so `_complaints` drops
+exactly them and keeps everything else.
 """
 
 import os
@@ -73,8 +79,26 @@ def _real_start(tmp_path):
     return replace(SYNTH, start_path=script)
 
 
+_OTHER_UNIT_LINE = re.compile(r"^(/\S+?):\d+: ")
+
+
+def _complaints(output, unit_path):
+    """The lines of `systemd-analyze verify` output that concern `unit_path`.
+
+    A line naming another unit file by path is the host's, not ours; every
+    other line is kept, so a complaint without a path still fails the test.
+    """
+    kept = []
+    for line in output.strip().splitlines():
+        m = _OTHER_UNIT_LINE.match(line)
+        if m and Path(m.group(1)) != Path(unit_path):
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
 def _verify(unit_text, tmp_path):
-    """Run systemd's own parser and return its complaints.
+    """Run systemd's own parser and return its complaints about this unit.
 
     Returns the captured output, NOT the exit status — see module docstring.
     """
@@ -82,12 +106,25 @@ def _verify(unit_text, tmp_path):
     p.write_text(unit_text)
     r = subprocess.run(["systemd-analyze", "verify", str(p)],
                        capture_output=True, text=True)
-    return (r.stdout + r.stderr).strip()
+    return _complaints(r.stdout + r.stderr, p)
 
 
 needs_systemd = pytest.mark.skipif(
     shutil.which("systemd-analyze") is None, reason="systemd-analyze not available"
 )
+
+
+class TestComplaintsAreAboutTheUnitUnderTest:
+    def test_a_host_units_warning_is_not_counted_and_ours_is(self, tmp_path):
+        ours = tmp_path / "cc-harness-testbot.service"
+        out = ("/usr/lib/systemd/system/xfs_scrub_all.service:26: Support for option "
+               "CPUAccounting= has been removed and it is ignored\n"
+               f"{ours}:12: Unknown key 'StartLimitBurst' in section [Service], ignoring.\n"
+               "cc-harness-testbot.service: Command /nope is not executable: No such file\n")
+        found = _complaints(out, ours)
+        assert "xfs_scrub_all" not in found
+        assert "Unknown key" in found and "not executable" in found
+        assert _complaints("/usr/lib/systemd/system/a.service:3: warning\n", ours) == ""
 
 
 class TestUnitIsWellFormed:
@@ -693,7 +730,8 @@ class TestWatchdogIsOptInAndSafe:
             p.write_text(text)
             r = subprocess.run(["systemd-analyze", "verify", str(p)],
                                capture_output=True, text=True)
-            assert (r.stdout + r.stderr).strip() == "", f"{name}: {(r.stdout + r.stderr).strip()}"
+            found = _complaints(r.stdout + r.stderr, p)
+            assert found == "", f"{name}: {found}"
 
 
 class TestStopTargetsTheSupervisor:

@@ -43,6 +43,8 @@ intends for them. This policy says where the numbers come from, what may be kept
 - When does the budget show up without being asked, and why so rarely?
 - What is the warning before the five-hour wall, and what does it ask for?
 - When do the hooks sample on their own, and when do they never touch a credential?
+- What happens when a refresh fails, and how long do the hooks wait before asking again?
+- What does the weekly field show when its refresh is failing, or its week has reset since the sample?
 
 **4 Intent: conserve, normal, burn**
 - What does each mode promise?
@@ -130,12 +132,26 @@ against. The rate is shown to two significant figures (`0.35`, `2.4`, `12`). For
 burns about 0.6 percent an hour, so pacing is read in the range where one figure collapsed "on pace" and "half again
 over" into the same `1`. The samples are whole percents, so the second figure is the smoothing's trend over hours of
 those steps, not a measurement to that precision: read a change in it as a direction, and its value against the even
-pace. A sample over an hour old says so: `wk 38% (2.4%/hr, 3h old)`.
+pace. A sample over an hour old says so: `wk 38% (2.4%/hr, 3h old)`. When the refresh has failed since that sample,
+the field says why and what to run: `wk 38% (57h old: endpoint 429; budget sample --manual)`. Once the sample's week
+has reset, its percentage and rate describe a window that is over, so the field shows neither:
+`wk reset since the last sample (3h old)`.
 
 The hooks refresh the sample themselves at most every ten minutes (`MACEFF_BUDGET_AUTOSAMPLE_MIN`) with a short
 timeout, and **only for an agent that has sampled in the last week**: an installation that never asked for its budget
 never has a credential read on its behalf. Anything failing inside the budget code yields no line; it never fails a
 hook.
+
+**A failed refresh is recorded and waited out.** Each failed fetch, from a hook or from `budget sample`, leaves a
+`budget_sample_failed` event with a short reason, the HTTP status and any `Retry-After`, never anything from the reply
+or the credential. The hooks' interval runs from the last attempt, not the last success: each failure in a row since
+the newest sample doubles the wait, up to two hours (`MACEFF_BUDGET_BACKOFF_CAP_MIN`), and a reply that says how long
+to wait is waited out even past that. A success restores the ten-minute interval. Measured from the last success, the
+interval never closed after a failure, so every hook call asked again; on a busy session that was enough to keep the
+endpoint answering 429 for days while the field showed an ever older number (#852). The backoff is per agent: agents
+that share one credential each keep their own, so their combined asking grows with their number but stays bounded.
+A failed refresh never takes the reminders with it either. They are computed from the newest sample, and say how old
+it is when it is over an hour old. `budget status` names the last failure and when the hooks will ask again.
 
 ## 4 Intent: conserve, normal, burn
 

@@ -25,7 +25,7 @@ import signal
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -59,6 +59,7 @@ from macf.pd.interface import (
 from macf.pd.liveness import ENV_HOME, ENV_INTERVAL, ENV_UNIT
 from macf.pd.names import rendered_declaration_problem
 from macf.pd.schedule import CronExpr, check_window
+from macf import calling_card
 
 #: A unit is overdue once its last liveness is older than this many of its intervals.
 #: The interval is the one the unit published, so a unit that changes its cadence
@@ -84,6 +85,9 @@ DRAIN_TIMEOUT_S = 300.0
 MEMORY_CHECK_S = 30.0
 #: The notice source for a unit past its memory limit, as the MacEff channel knows it.
 LIMIT_NOTICE_SOURCE = "pd_limit_exceeded"
+#: The notice source for a unit that failed: exited with a failing code, missed its liveness, or
+#: couldn't be started. Its id is ``<unit>:<failures in a row>:<epoch>`` (``_unit_failed_id``).
+UNIT_FAILED_NOTICE_SOURCE = "pd_unit_failed"
 #: What a restart, a recreate or a compaction carried, changed and lost: the event, and the
 #: notice that points to it (MIS-0002-R47 (pd_MUST_report_carried_changed_lost)).
 EVENT_CARRIED = "pd_carried"
@@ -95,6 +99,13 @@ EVENT_COMPACTION = "compaction_detected"
 COMPACTION_SETTLE_S = 60.0
 #: What a compaction always loses, in a report's words.
 CONTEXT_LOST = "the session's working context (summarized)"
+
+
+def _unit_failed_id(unit: str, failures: int, at: float) -> str:
+    """A unit failure's notice id: the unit, its failures in a row, and an epoch second. A unit's
+    name holds no ``:`` (``interface.Unit``), so the notifier keys it per unit by its first field;
+    the epoch keeps two spells with the same count apart."""
+    return f"{unit}:{failures}:{int(at)}"
 
 
 def _float_or_none(value) -> Optional[float]:
@@ -123,6 +134,52 @@ class DeclarationRefused(ValueError):
     """The declaration cannot be used. Nothing is started: a refusal installs nothing."""
 
 
+#: Where a host declaration written before the card revision is kept when it is rewritten.
+CUTOVER_KEPT_SUFFIX = ".pre-card-underscore"
+
+
+def cutover_declaration(agent_home: Path, card: str) -> Optional[Path]:
+    """Rewrite a host declaration that names this home's own card in the old ``Name@shortid``
+    form, once, in place, before it is read; the path of the kept original, or None when
+    nothing was rewritten.
+
+    A host daemon that restarts onto code refusing the old form (MIS-0002-R165) would exit and
+    stay down, and its restart doesn't wait for a person to edit the file. Only the agent's own
+    file is rewritten, and only when its old card maps to this home's card (R166); a rendered
+    declaration is the deployment's, re-rendered in the new form at start. Every quoted
+    occurrence of the old card changes, schedule targets included. The result must validate, or
+    nothing is written. After it, only the new form is ever read."""
+    path = declaration_path(agent_home)
+    if path != Path(agent_home) / ".maceff" / "pd" / "declaration.json":
+        return None
+    try:
+        text = path.read_text()
+        old = json.loads(text).get("agent")
+    except (OSError, ValueError, AttributeError):
+        return None     # noqa: MACEFF003 - load_declaration refuses it with the reason
+    if not isinstance(old, str) or calling_card.from_history(old) == old:
+        return None     # noqa: MACEFF003 - already the current form, or no card: nothing to cut over
+    if not calling_card.same(calling_card.from_history(old), card):
+        return None     # noqa: MACEFF003 - another agent's card: load_declaration refuses it (R07)
+    rewritten = text.replace(json.dumps(old), json.dumps(card))
+    try:
+        Declaration.model_validate_json(rewritten)
+    except ValidationError:
+        return None     # noqa: MACEFF003 - left as it was: load_declaration refuses it with the reason
+    mode = path.stat().st_mode & 0o7777
+    kept = path.with_name(path.name + CUTOVER_KEPT_SUFFIX)
+    if not kept.exists():
+        kept.write_text(text)
+        kept.chmod(mode)
+    staged = path.with_name(path.name + ".rewriting")
+    staged.write_text(rewritten)
+    staged.chmod(mode)
+    os.replace(staged, path)
+    append_event("pd_declaration_rewritten", {"agent": card, "from": old, "path": str(path),
+                                              "kept": str(kept), "reason": "MIS-0002-R165 cut-over"})
+    return kept
+
+
 def load_declaration(agent_home: Path, card: str) -> Declaration:
     """Read and validate the agent's declaration, or refuse it whole with the reason.
 
@@ -146,7 +203,11 @@ def load_declaration(agent_home: Path, card: str) -> Declaration:
         declaration = Declaration.model_validate_json(text)
     except ValidationError as e:
         raise DeclarationRefused(f"{path} is not a valid declaration: {e}") from e
-    if declaration.agent != card:
+    try:
+        calling_card.read_declared(declaration.agent)
+    except calling_card.CardError as e:
+        raise DeclarationRefused(f"{path} names its agent wrongly: {e} (MIS-0002-R165)") from e
+    if not calling_card.same(declaration.agent, card):
         raise DeclarationRefused(
             f"{path} declares the units of {declaration.agent}, and this home belongs to "
             f"{card}. A declaration copied from another agent's home must not run under "
@@ -165,7 +226,7 @@ def load_declaration(agent_home: Path, card: str) -> Declaration:
             check_window(window)
         except ValueError as e:
             raise DeclarationRefused(f"{path}: quiet window: {e}") from e
-    # The daemon gives each unit this home (persistent_layer 11.2); a declared one may say so,
+    # The daemon gives each unit this home (persistent_layer 3.2); a declared one may say so,
     # but a different home would have the unit write its events where the daemon never reads.
     home = Path(agent_home).resolve()
     for unit in declaration.units:
@@ -302,7 +363,7 @@ def group_members(pgid: int) -> List[tuple]:
                 continue
             try:
                 stat = (entry / "stat").read_text()
-            except OSError:
+            except OSError:  # noqa: S112 - a process that exits between the listing and the read is the normal case here, and the docstring says so; a warning per exited process would flood
                 continue  # ended while the table was read
             fields = stat[stat.rfind(")") + 2:].split()
             if len(fields) > 2 and fields[0] != "Z" and fields[2] == str(pgid):
@@ -343,7 +404,7 @@ def tree_rss_mb(root: int) -> Optional[float]:
                 continue
             try:
                 stat = (entry / "stat").read_text()
-            except OSError:
+            except OSError:  # noqa: S112 - a process that ended while the table was read holds no memory
                 continue  # noqa: MACEFF003 - ended while the table was read; it holds no memory now
             fields = stat[stat.rfind(")") + 2:].split()
             if len(fields) > 21:
@@ -440,6 +501,18 @@ class _Runner:
     start_after_remnant: bool = False   # a start waits for the remnant to end
     stop_pending: Optional[str] = None  # the stopped transition's reason, recorded once the remnant ends
     incarnations: int = 0               # processes this daemon started or adopted for it (R47)
+    own: List[tuple] = field(default_factory=list)  # (pid, proc_start) of each process started or adopted for it
+    held_by: Optional[List[int]] = None  # a session unit not started: the hand-started clients beside it ([] when they couldn't be listed)
+    held_check_at: float = 0.0          # monotonic: when a held session unit looks again
+
+
+@dataclass
+class _ClientScan:
+    """What a look for hand-started clients found: the directory looked in (None: nowhere to
+    look), the foreign pids (None: the listing failed), and why it failed."""
+    where: Optional[Path]
+    pids: Optional[List[int]]
+    error: Optional[str]
 
 
 class _LogTail:
@@ -514,6 +587,20 @@ def _harness_hosted_sessions() -> list:
 #: hung CLI holds a pd status or an operator's stop for at most this long.
 CLIENT_TIMEOUT_S = 10.0
 
+#: How often a session unit a hand-started client holds looks again for that client.
+CLIENT_RECHECK_S = 5.0
+
+
+def _clients_in(directory: Path) -> List[int]:
+    from macf.agent_stack import clients_in
+    return clients_in(directory)
+
+
+def _ancestors(pid: int) -> set:
+    from macf.supervisor import ancestor_pids
+    return ancestor_pids(pid)
+
+
 #: How long a respawn the client accepted may take to show its worker in the readout,
 #: checked on each pass, before the session unit is decided afresh.
 RESPAWN_WAIT_S = 30.0
@@ -552,6 +639,8 @@ class Core:
         hosted: Optional[Callable[[], list]] = None,
         client: Optional[Callable[[List[str]], "subprocess.CompletedProcess"]] = None,
         dialogs: Optional[Callable[[str], Callable[[], Optional[str]]]] = None,
+        clients: Optional[Callable[[Path], List[int]]] = None,
+        ancestors: Optional[Callable[[int], set]] = None,
     ):
         self.declaration = declaration
         self.card = card
@@ -572,6 +661,10 @@ class Core:
         # What an adopted session waits on a person for, read by session id from the event
         # log, since such a session writes no liveness to carry it (MIS-0002-R21). A seam too.
         self._dialogs = dialogs or _session_dialogs
+        # The live Claude Code clients in a directory, and a pid's ancestry: what keeps a
+        # session unit from starting beside a session started by hand. Seams for tests.
+        self._clients = clients or _clients_in
+        self._ancestors = ancestors or _ancestors
         self._dialog_readers: Dict[str, Callable[[], Optional[str]]] = {}
         self._units: Dict[str, _Runner] = {
             u.name: _Runner(spec=u, since=wall()) for u in declaration.units
@@ -673,7 +766,7 @@ class Core:
             if event.get("event") == EVENT_COMPACTION:
                 newest = newest if newest is not None else _float_or_none(event.get("timestamp"))
                 continue
-            if data.get("agent") == self.card and data.get("occasion") == "compaction":
+            if calling_card.is_agent(data.get("agent"), self.card) and data.get("occasion") == "compaction":
                 # Read newest first, so a compaction found before this report came after it,
                 # and one after it in the scan is the one it covers.
                 break
@@ -706,7 +799,7 @@ class Core:
         # that daemon's start, its own start or its adoption, so the scan stops there.
         for event in read_events(reverse=True, scope="all", only=(EVENT_STATE, EVENT_DAEMON_START)):
             data = event.get("data") or {}
-            if data.get("agent") != self.card:
+            if not calling_card.is_agent(data.get("agent"), self.card):
                 continue
             if event.get("event") == EVENT_DAEMON_START:
                 if (data.get("pid"), data.get("proc_start")) != self._own_start:
@@ -739,6 +832,7 @@ class Core:
                 continue
             r = self._units[name]
             r.proc, r.pid, r.proc_start = _Adopted(pid, start, self._probe), pid, start
+            r.own.append((pid, start))
             r.over_limit, r.memory_checked_at = False, self._clock()   # its own memory, first read one check after it starts (R60)
             r.started_at = self._clock()
             # Its first liveness under this daemon is judged from the adoption, as a start is,
@@ -762,6 +856,28 @@ class Core:
         if r.proc is None:
             self._spawn(r)
 
+    def state_of(self, unit: str) -> Optional[str]:
+        """A declared unit's state now; None for a unit not declared."""
+        r = self._units.get(unit)
+        return None if r is None else r.state
+
+    def reload(self, unit: str) -> bool:
+        """Send SIGHUP to a running unit's own process, so it rereads what the daemon rendered for
+        it, as the broker's wrapper passes it to mosquitto when the access rules change
+        (MIS-0002-R152). Only a unit that has reported itself running is signalled: one still
+        starting may not handle SIGHUP yet, and its default action would end it. Only the
+        incarnation the daemon started is signalled; False otherwise."""
+        r = self._units.get(unit)
+        if r is None or r.proc is None or not r.pid or r.state != "running":
+            return False
+        if r.proc_start and not self._probe(r.pid, r.proc_start):
+            return False
+        try:
+            os.kill(r.pid, signal.SIGHUP)
+        except OSError:
+            return False
+        return True
+
     def stop(self, unit: str, asked_by: Asker, reason: str, peer: Optional[Peer] = None) -> None:
         """Stop a unit now. Nothing the unit or its session enforces can hold it
         (MIS-0002-R48 (outside_stop_MUST_override_gates))."""
@@ -772,6 +888,7 @@ class Core:
         r.drain = None
         r.then_start = False
         r.held_restart = None  # a stop also ends a restart a quiet window was holding
+        r.held_by = None       # and a session unit held beside a hand-started client
         if r.proc is not None:
             self._signal_stop(r, f"stopped as asked: {reason}")
         elif r.remnant is not None:
@@ -925,6 +1042,14 @@ class Core:
                     self._begin_restart(
                         r, f"{reason} (work in flight did not drain in {self._drain_timeout:g} s)")
             return
+        if r.held_by is not None:
+            # Held beside a hand-started client: look again every CLIENT_RECHECK_S, and start
+            # once it has gone. A stop asked meanwhile ends the hold.
+            if not r.want_up:
+                r.held_by = None
+            elif now >= r.held_check_at:
+                self._spawn(r)
+            return
         if r.want_up and r.restart_at is not None and now >= r.restart_at:
             if r.spec.kind == "session" and quiet_window_at(self.declaration, self._wall()) is not None:
                 return  # the session's restart waits for the window's end (R50)
@@ -975,7 +1100,7 @@ class Core:
 
     def _on_liveness(self, event: dict, now: float) -> None:
         data = dict(event.get("data") or {})
-        if data.get("agent") != self.card:
+        if not calling_card.is_agent(data.get("agent"), self.card):
             return
         r = self._units.get(data.get("unit"))
         if r is None:
@@ -1014,6 +1139,25 @@ class Core:
         elif r.state == "starting":
             self._transition(r, "running", "first liveness from this incarnation")
 
+    def session_waiting_on(self) -> Optional[str]:
+        """What the session unit waits on a person for, or None (MIS-0002-R21): the keystroke
+        fallback's first evidence that a prompt is idle (MIS-0004 R29)."""
+        for r in self._units.values():
+            if r.spec.kind == "session" and r.state == "waiting_on_a_person":
+                return "a person"
+        return None
+
+    def session_transcript(self, claude_home: Optional[Path] = None) -> Optional[Path]:
+        """The session unit's transcript, for the keystroke gate's turn check (MIS-0004 R29): in
+        the directory :meth:`_session_project_dir` finds, the adopted session's own file by its
+        id, else the newest. None when there is no session unit or nothing to read."""
+        from macf.pd.wake import latest_transcript
+        for r in self._units.values():
+            if r.spec.kind == "session":
+                return latest_transcript(self._session_project_dir(r), claude_home=claude_home,
+                                         session_id=r.client_session)
+        return None
+
     def _apply_waiting(self, r: _Runner, waiting_on: Optional[str]) -> None:
         """Enter or leave waiting on a person (MIS-0002-R21 (pd_MUST_report_waiting_on_person))."""
         if waiting_on:
@@ -1042,7 +1186,7 @@ class Core:
         if stopping is not None and r.kill_at is not None and r.pid is not None:
             # A stop this core sent reaped the leader before its deadline. A member of the
             # unit's group that ignored SIGTERM is still the unit's, and the stop must reach it
-            # (persistent_layer 10.2): keep the deadline for the group, not just the leader.
+            # (persistent_layer 2.2): keep the deadline for the group, not just the leader.
             # A member that forks and exits while the group is read can leave this first
             # listing empty, read before its replacement appeared and after it ended; the
             # second listing starts after the first ends, so it sees the replacement (#639 review).
@@ -1059,7 +1203,7 @@ class Core:
             if members:
                 try:
                     os.killpg(r.pid, signal.SIGTERM)
-                except ProcessLookupError:
+                except ProcessLookupError:  # noqa: S110 - the group emptied between the listing and the signal, the normal end of a unit; the remnant's next pass records it
                     pass  # emptied since the listing; the remnant's first pass sees that
                 except PermissionError as e:
                     print(f"⚠️ MACF: pd: cannot signal what {r.spec.name}'s leader left "
@@ -1083,9 +1227,8 @@ class Core:
             elif code in r.spec.exit_codes.success:
                 self._stopped(r, why)
             else:
-                r.failures += 1
-                self._transition(r, "failed", why if r.remnant is None
-                                 else f"{why}; the rest of its group was sent SIGTERM")
+                self._count_failure(r, why if r.remnant is None
+                                    else f"{why}; the rest of its group was sent SIGTERM")
         elif not r.want_up or r.state != "failed":
             # A stop this core sent. After a liveness failure the unit is already
             # recorded failed, and stays so unless the stop was asked for. While members of
@@ -1132,6 +1275,12 @@ class Core:
         if r.client_session:
             if not self._find_client(r):
                 return True
+            # The respawn starts a client on this conversation as surely as the unit's own
+            # start, so the hand-started guard stands here too, before the verb is issued. The
+            # hosted worker(s) being decided on are a client in that directory and the unit's
+            # own, so they don't count; one resumed by hand meanwhile does (persistent_layer 5.1).
+            if self._held_by_hand_started(r, self._hosted_workers(r.client_session)):
+                return True
             out = self._client(client_command("start", r.client_session, claude=r.client_binary))
             if out.returncode != 0:
                 print(f"⚠️ MACF: pd: the client could not respawn session {r.client_session[:8]} "
@@ -1173,6 +1322,7 @@ class Core:
         if not start:
             return False   # the worker ended between the readout and now: start the unit as usual
         r.proc, r.pid, r.proc_start = _Adopted(decision.pid, start, self._probe), decision.pid, start
+        r.own.append((decision.pid, start))
         r.over_limit, r.memory_checked_at = False, self._clock()   # its own memory, first read one check after it starts (R60)
         r.client_session = decision.session_id
         r.started_at = self._clock()
@@ -1182,6 +1332,95 @@ class Core:
         self._transition(r, "running", f"adopted: {decision.reason} (session {decision.session_id[:8]}, "
                                        f"pid {decision.pid})")
         r.since = start_epoch(start) or r.since
+        return True
+
+    def _session_project_dir(self, r: _Runner) -> Optional[Path]:
+        """Where the session unit's client runs: its rendered ``--project-dir``, else the
+        harness's recorded choice for the agent home, as ``agent init`` reads it, else the
+        home. None when no agent home is known, and then nothing is looked for."""
+        try:
+            command = [render(a, self._placeholders) for a in r.spec.command]
+        except KeyError as e:
+            print(f"⚠️ MACF: pd: the session unit's command names an unknown placeholder ({e}); "
+                  "no project directory to look in for a hand-started client", file=sys.stderr)
+            return None
+        if "--project-dir" in command[:-1]:
+            return Path(command[command.index("--project-dir") + 1])
+        home = self._placeholders.get("agent_home")
+        if not home:
+            return None
+        import argparse
+        from macf import agent_stack
+        ctx = agent_stack.Context(home=Path(home), login_home=Path.home(), in_container=False,
+                                  args=argparse.Namespace(project_dir=None), card=self.card)
+        return agent_stack.project_dir(ctx)
+
+    def _hosted_workers(self, session_id: str) -> List[tuple]:
+        """(pid, proc_start) of the client's live workers for *session_id*, the ones a respawn
+        is being decided on; the start is None where it can't be read. An unreadable readout
+        gives none, so a live worker then counts as a client like any other and holds the unit."""
+        try:
+            hosted = self._hosted()
+        except OSError as e:
+            print(f"⚠️ MACF: pd: what the client hosts is unreadable ({e}); no hosted worker of session "
+                  f"{session_id[:8]} is counted as the unit's own", file=sys.stderr)
+            return []
+        return [(h.pid, proc_start(h.pid)) for h in hosted if h.session_id == session_id]
+
+    def _foreign_clients(self, r: _Runner, also_own: List[tuple] = ()) -> "_ClientScan":
+        """The project directory, and the pids of live Claude Code clients there that no unit of
+        this daemon holds: not below this daemon, not below a process this unit ran or adopted
+        that is still the one recorded, by pid and start time, and not below a process in
+        *also_own* (pid and start time, or the pid alone where its start is None). A client found
+        by the unit's own adoption is its own; one started by hand in a terminal is nobody's.
+        When the clients can't be listed, pids is None and error says why: unknown, never none."""
+        where = self._session_project_dir(r)
+        if where is None:
+            return _ClientScan(where=None, pids=[], error=None)
+        try:
+            pids = self._clients(where)
+        except OSError as e:
+            print(f"⚠️ MACF: pd: the clients in {where} can't be listed ({e}); holding the session "
+                  f"unit until they can be", file=sys.stderr)
+            return _ClientScan(where=where, pids=None, error=str(e) or type(e).__name__)
+        own = ({os.getpid()} | {pid for pid, start in r.own if self._probe(pid, start)}
+               | {pid for pid, start in also_own if not start or self._probe(pid, start)})
+        return _ClientScan(where=where, pids=[pid for pid in pids if not (set(self._ancestors(pid)) & own)],
+                           error=None)
+
+    def _held_by_hand_started(self, r: _Runner, also_own: List[tuple] = ()) -> bool:
+        """Whether a hand-started client keeps the session unit from starting now (persistent_layer
+        5.1): a session unit beside it would be a second client on one conversation. Held, the
+        unit reads failed, saying which pid and pointing at harness cutover, without counting a
+        failure, and the pass looks again until the client has gone. Clients that can't be
+        listed hold it too, failing closed: the unit reads failed naming that the process
+        listing failed, and starts once a listing works and finds none. *also_own*: processes
+        that count as the unit's own at this start (``_foreign_clients``)."""
+        scan = self._foreign_clients(r, also_own)
+        where, foreign, error = scan.where, scan.pids, scan.error
+        if foreign is not None and not foreign:
+            if r.held_by is not None:
+                was_unlisted, r.held_by = r.held_by == [], None
+                self._control("start", r, POLICY,
+                              f"the clients in {where} can be listed again, and none runs by hand"
+                              if was_unlisted else f"the hand-started client in {where} has ended")
+            return False
+        r.proc, r.pid, r.proc_start = None, None, None
+        r.held_check_at = self._clock() + CLIENT_RECHECK_S
+        key = [] if foreign is None else foreign
+        if key != r.held_by:
+            r.held_by = key
+            if foreign is None:
+                why = (f"not started: the process listing failed, so the Claude Code clients in {where} "
+                       f"can't be listed ({error}), and the session unit beside one started by hand "
+                       f"would be a second client on one conversation. The unit starts once the "
+                       f"listing works and finds none")
+            else:
+                why = (f"not started: a Claude Code client started by hand runs in {where} (pid "
+                       f"{', '.join(map(str, foreign))}), held by no unit, and the session unit beside it "
+                       f"would be a second client on one conversation; end that session, or move it with "
+                       f"macf_tools harness cutover. The unit starts once it has gone")
+            self._transition(r, "failed", why)
         return True
 
     def _spawn(self, r: _Runner) -> None:
@@ -1199,12 +1438,14 @@ class Core:
             return
         if self._from_client(r):
             return
+        if r.spec.kind == "session" and self._held_by_hand_started(r):
+            return
         try:
             command = [render(a, self._placeholders) for a in r.spec.command]
             env = {k: render(v, self._placeholders) for k, v in r.spec.environment.items()}
             # Which unit it is and how often it beats come from the unit itself, never typed
             # again in its environment, where a missing or mistyped value silently stopped
-            # its liveness (persistent_layer 11.2; two of three cutover trial runs).
+            # its liveness (persistent_layer 3.2; two of three cutover trial runs).
             env.setdefault(ENV_UNIT, r.spec.name)
             env.setdefault(ENV_INTERVAL, f"{r.spec.liveness_interval_s:g}")
             if "agent_home" in self._placeholders:
@@ -1224,13 +1465,14 @@ class Core:
             )
         except OSError as e:
             r.proc, r.pid, r.proc_start = None, None, None
-            r.failures += 1
-            self._transition(r, "failed", f"could not start: {e}")
+            self._count_failure(r, f"could not start: {e}")
             if r.want_up and r.spec.restart in ("always", "on-failure"):
                 r.restart_at = self._clock() + backoff_s(r.failures, *self._backoff)
             return
         r.proc, r.pid = proc, proc.pid
         r.proc_start = proc_start(proc.pid)
+        if r.proc_start:
+            r.own.append((proc.pid, r.proc_start))
         r.over_limit, r.memory_checked_at = False, self._clock()   # its own memory, first read one check after it starts (R60)
         r.started_at = self._clock()
         r.alive_at, r.alive_interval_s, r.in_flight = None, None, None
@@ -1265,7 +1507,7 @@ class Core:
         if killed_at is None and now >= kill_at:
             try:
                 os.killpg(pgid, signal.SIGKILL)
-            except ProcessLookupError:
+            except ProcessLookupError:  # noqa: S110 - the group emptied between the probe and the signal, the normal end here; the next pass records it
                 pass  # emptied between the probe and the signal
             except PermissionError as e:
                 print(f"⚠️ MACF: pd: cannot signal what is left of {r.spec.name} (group {pgid}): {e}",
@@ -1327,10 +1569,21 @@ class Core:
     def _fail(self, r: _Runner, reason: str) -> None:
         """A unit that is running but not working: record it failed, then stop what is
         left of it so the restart policy can act on the exit."""
-        r.failures += 1
         r.auth_failed = None       # from here it is an ordinary failure, for the restart policy
-        self._transition(r, "failed", reason)
+        self._count_failure(r, reason)
         self._signal_stop(r, reason)
+
+    def _count_failure(self, r: _Runner, reason: str) -> None:
+        """A failure the restart backoff counts: record the unit failed, and owe the agent the
+        ``pd_unit_failed`` notice, whose id carries the failures in a row. The notifier owes only
+        the newest per unit, so a crash loop while the session is down comes back as one notice
+        with the count. Restarting is left to the policy, as before; the notice only says.
+        A session failed for its login is not counted here: it is still running, and a notice
+        would open a turn that can't authenticate (MIS-0002-R19)."""
+        r.failures += 1
+        self._transition(r, "failed", reason)
+        if self.on_notice is not None:
+            self.on_notice(UNIT_FAILED_NOTICE_SOURCE, _unit_failed_id(r.spec.name, r.failures, self._wall()))
 
     def _signal_stop(self, r: _Runner, reason: str) -> None:
         """SIGTERM now, and SIGKILL once the unit's own declared grace has passed, so a
@@ -1392,6 +1645,7 @@ class Core:
             if start:
                 r.awaiting_respawn = None
                 r.proc, r.pid, r.proc_start = _Adopted(listed[0].pid, start, self._probe), listed[0].pid, start
+                r.own.append((listed[0].pid, start))
                 self._signal_stop(r, "stopped as asked while its respawn was in flight")
             elif now >= r.awaiting_respawn:
                 r.awaiting_respawn = None
@@ -1421,7 +1675,7 @@ class Core:
                 os.kill(r.pid, sig)
                 return
             os.killpg(r.pid, sig)
-        except ProcessLookupError:
+        except ProcessLookupError:  # noqa: S110 - already gone is the normal end of a stop; the next pass reaps the exit
             pass  # already gone; the exit is reaped on the next pass
         except PermissionError as e:
             if r.proc is not None and r.proc.poll() is not None:

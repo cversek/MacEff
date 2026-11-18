@@ -10,7 +10,7 @@ import pytest
 from macf.pd import core
 from macf.pd import names
 
-CARD = "Resident@1a2b3c"
+CARD = "Resident_1a2b3c"
 UNIT = {"name": "broker", "command": ["true"], "account": pwd.getpwuid(os.getuid()).pw_name, "restart": "always",
         "liveness_interval_s": 30, "memory_limit_mb": 64}
 
@@ -86,5 +86,26 @@ def test_a_body_the_daemon_would_refuse_is_refused_when_agents_yaml_loads():
         AgentSpec(username="pa_x", uid=21100, personality="p.md", primal_daemon=bad_schedule)
     with pytest.raises(ValueError, match="must not set agent or version"):
         AgentSpec(username="pa_x", uid=21100, personality="p.md",
-                  primal_daemon={"agent": "Other@000000", "units": []})
+                  primal_daemon={"agent": "Other_000000", "units": []})
 
+
+
+def test_an_agent_daemon_needs_a_calling_card_when_agents_yaml_loads():
+    """persistent_layer 2.1: a container agent's daemon runs under the card agents.yaml declares,
+    so primal_daemon without calling_card is refused at load, naming the agent and the field,
+    rather than found at start as a daemon whose card can't be read. A card alone is fine, a card
+    takes a service card's form, and a vanilla account can't carry one."""
+    from macf.models.agent_spec import AgentsConfig, AgentSpec
+
+    def agents_yaml(**fields):
+        return AgentsConfig.model_validate({"ids": {"base": 21000}, "subagents": {}, "agents": {
+            "orchard1": {"username": "pa_orchard", "uid": 21100, "personality": "p.md", **fields}}})
+    with pytest.raises(ValueError, match=r"'pa_orchard' declares primal_daemon without calling_card"):
+        agents_yaml(primal_daemon={"units": []})
+    assert agents_yaml(calling_card="Orchard1").agents["orchard1"].calling_card == "Orchard1"
+    assert agents_yaml(calling_card="Orchard1", primal_daemon={"units": []}).agents["orchard1"].primal_daemon
+    for bad in ("1Sparrow", "Orchard@1", "Orchard One", "M" * 49):
+        with pytest.raises(ValueError, match="calling_card"):
+            agents_yaml(calling_card=bad)
+    with pytest.raises(ValueError, match="vanilla and declares calling_card"):
+        AgentSpec(username="pa_v", uid=21101, flavor="vanilla", calling_card="Vanilla")

@@ -22,11 +22,11 @@ def test_the_agents_amail_settings_name_the_box(tmp_path):
 
 
 def test_without_settings_the_environment_names_it(tmp_path):
-    env = {"MACEFF_AGENT_NAME": "sparrow2"}
-    assert pk.resolve_pickup_box(tmp_path, env) == (pk.Path("/var/lib/amail/handoff/sparrow2"),
+    env = {"MACEFF_AGENT_NAME": "orchard2"}
+    assert pk.resolve_pickup_box(tmp_path, env) == (pk.Path("/var/lib/amail/handoff/orchard2"),
                                                     pk.FROM_ENVIRONMENT)
     env["MACF_AMAIL_HANDOFF"] = str(tmp_path / "h")
-    assert pk.pickup_box(tmp_path, env) == tmp_path / "h" / "sparrow2"
+    assert pk.pickup_box(tmp_path, env) == tmp_path / "h" / "orchard2"
 
 
 def test_each_key_is_resolved_on_its_own(tmp_path):
@@ -66,14 +66,15 @@ def test_nothing_named_is_a_guess_and_says_so(tmp_path):
     assert pk.resolve_pickup_box(tmp_path, {}) == (tmp_path / "amail" / "pickup", pk.GUESSED)
 
 
-def test_the_daemons_mail_source_and_unread_check_watch_the_resolved_box(tmp_path, monkeypatch):
+def test_the_receiver_reads_the_resolved_box_and_the_notice_watches_the_store(tmp_path, monkeypatch):
+    """The receiver ingests from the resolved box; the notice and the unread check watch the
+    store's `new`, since a notice names only mail the reader can already read (MIS-0004 R25)."""
     monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
     _settings(tmp_path, handoff=str(tmp_path / "handoff"), agent="harbormaster")
     from macf.pd.unread_mail import pickup_box
     from macf.transcript_monitor.sources import agent_store_source
-    box = tmp_path / "handoff" / "harbormaster"
-    assert pickup_box(tmp_path) == box
-    assert agent_store_source(tmp_path).store_dir == box
+    assert pickup_box(tmp_path) == tmp_path / "handoff" / "harbormaster"
+    assert agent_store_source(tmp_path).store_dir == tmp_path / "Maildir" / "new"
 
 
 def test_the_notifier_says_which_box_it_watches(tmp_path, monkeypatch, capsys):

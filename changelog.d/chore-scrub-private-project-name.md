@@ -1,0 +1,3 @@
+### Changed
+
+- **A deployment's private project name is gone from the repository.** The architecture docs, the archived roadmaps, the deployment questionnaire template, model docstrings and tests use a neutral example project, `Orchard`, in its place. The voice vocabulary's default priority terms no longer carry the name: terms specific to a deployment come from the agent home's own files, which `extract_vocabulary` already reads. The public pre-commit script no longer lists it either, since a list of private terms in a public file names what it guards; a machine's own copy of the hook and its local OPSEC profile (`macf/opsec.py`) keep the check.

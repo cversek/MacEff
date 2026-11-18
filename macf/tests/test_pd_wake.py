@@ -1,11 +1,15 @@
 """The keystroke wake, the notifier's fallback for a session with no MacEff channel
 (MIS-0002-R45, R77, R105, R43, R106), kept to the rules of the mail clock it replaces."""
+import json
 import socket
+import stat
 from datetime import date
 from types import SimpleNamespace
 
 import pytest
 
+from macf.agent_events_log import read_events
+from macf.channels.maceff_channel import TAKES
 from macf.pd import notifier as nt
 from macf.pd import wake as wk
 from macf.utils.input_origin import WAKE_OPENING, opens_with_wake
@@ -13,8 +17,9 @@ from macf.utils.input_origin import WAKE_OPENING, opens_with_wake
 
 @pytest.fixture(autouse=True)
 def _mail_box_from_the_home(monkeypatch):
-    """These tests put mail in <home>/amail/pickup, the box chosen when nothing names one.
-    Inside a seat MACEFF_AGENT_NAME is set, which would point the daemon elsewhere."""
+    """These tests put unread mail straight into the store's `new`, with the sidecar ingest
+    writes, as the receiver would leave it (MIS-0004 R04, R25). With no amail settings there
+    is no receiver; inside a seat MACEFF_AGENT_NAME is set, which must not change that."""
     monkeypatch.delenv("MACEFF_AGENT_NAME", raising=False)
     monkeypatch.delenv("MACF_AMAIL_HANDOFF", raising=False)
 
@@ -42,6 +47,27 @@ def test_a_dialog_menu_or_question_is_never_typed_into():
     assert wk.classify(screen(below=("Do you want to proceed?", "❯ 1. Yes", "  2. No"))) == wk.DIALOG
     assert wk.classify(screen(below=["line"] * 9)) == wk.DIALOG
     assert wk.classify(screen(below=("Enter to select · Esc to cancel",))) == wk.DIALOG
+
+
+def test_no_box_on_a_narrow_pane_is_reported_by_its_width_not_as_a_dialog():
+    """#800: a 45-column pane wraps the client's lines past reading, and was reported as a
+    dialog, which sent the agent looking for one. It still holds; it now says why."""
+    assert wk.classify("plain output, no input box", 45) == wk.TOO_NARROW
+    assert wk.classify("plain output, no input box", wk.MIN_READABLE_WIDTH) == wk.DIALOG
+    assert wk.classify("plain output, no input box") == wk.DIALOG, "width unknown"
+    # A box that does read at that width is read; a dialog drawn below it is still a dialog.
+    assert wk.classify(screen(), 45) == wk.IDLE_EMPTY
+    assert wk.classify(screen(below=("Do you want to proceed?",)), 45) == wk.DIALOG
+
+
+def test_a_narrow_pane_hold_names_the_width_and_keeps_the_screen(tmp_path):
+    events, pane = [], FakePane(["wrapped past reading"], columns=45)
+    h = _waker(pane, events, screens_dir=tmp_path / "wake_screens", wall=lambda: 1792292400.0)
+    h.waker.tick([ID1])
+    (event, held), = events
+    assert event == wk.EVENT_HELD and held["reason"] == wk.TOO_NARROW and held["width"] == 45
+    assert Path(held["screen"]).read_text() == "wrapped past reading"
+    assert pane.typed == [] and h.recorded == []
 
 
 def test_a_running_turn_is_seen_by_its_phrase_or_by_the_spinner_alone():
@@ -85,11 +111,15 @@ def test_past_eight_ids_the_rest_are_counted_not_named():
 class FakePane:
     """A pane whose screen a test scripts, recording what was typed and pressed."""
 
-    def __init__(self, screens):
+    def __init__(self, screens, columns=None):
         self.screens, self.typed, self.enters, self.log = list(screens), [], 0, []
+        self.columns = columns
 
     def capture(self):
         return self.screens.pop(0) if len(self.screens) > 1 else self.screens[0]
+
+    def width(self):
+        return self.columns
 
     def type(self, text):
         self.typed.append(text)
@@ -201,11 +231,15 @@ def test_the_daily_cap_is_recorded_once():
 # --- the notifier: channel first (R104, R105, R43) --------------------------------
 
 def _home_with_mail(tmp_path, *ids):
-    box = tmp_path / "agent" / "amail" / "pickup"
-    box.mkdir(parents=True)
-    for i in ids:
-        (box / f"1791990000-{i}.amsg").write_text("never read by the notifier")
-    return tmp_path / "agent"
+    home = tmp_path / "agent"
+    new, side = home / "Maildir" / "new", home / "Maildir" / "bundle_sidecars"
+    new.mkdir(parents=True)
+    side.mkdir(parents=True)
+    for n, i in enumerate(ids):
+        name = f"1791990000.{n}_1.host"
+        (new / name).write_text("never read by the notifier")
+        (side / f"{name}.json").write_text(json.dumps({"message_id": i}))
+    return home
 
 
 def test_wake_through_notifier(tmp_path, isolated_events_log):
@@ -218,7 +252,7 @@ def test_wake_through_notifier(tmp_path, isolated_events_log):
     pane = FakePane([screen()])
     n.waker = _waker(pane, []).waker
     ours, theirs = socket.socketpair()
-    n.attach(ours)
+    n.attach(ours, takes=TAKES)
     clock[0] += 3600
     assert not n.wake() and pane.typed == [], "typed a wake while a channel was attached"
     n.detach(ours)
@@ -230,6 +264,53 @@ def test_wake_through_notifier(tmp_path, isolated_events_log):
     assert n.wake() and len(pane.typed) == 1
     assert ID1 in pane.typed[0] and ID2 in pane.typed[0]
     assert not n.owed, "a typed wake left its notices owed, for a channel to deliver again"
+
+
+def test_a_source_no_attached_channel_declared_is_typed(tmp_path, isolated_events_log):
+    """R105 counted per source (MIS-0002-R149): a channel is attached, but its hello left mail
+    out, so for mail there is no channel. After the grace the wake is typed, never held forever,
+    and the channel is sent no mail record."""
+    clock = [1000.0]
+    n = nt.Notifier(_home_with_mail(tmp_path, ID1), {"amail": "agent"}, clock=lambda: clock[0])
+    n.boot()
+    pane = FakePane([screen()])
+    n.waker = _waker(pane, []).waker
+    ours, theirs = socket.socketpair()
+    theirs.settimeout(0.2)
+    n.attach(ours, takes=[s for s in TAKES if s != "amail"])
+    assert n.flush() == 0 and n.owed, "mail went to a channel that didn't declare it"
+    clock[0] += nt.CHANNEL_GRACE_S + 1
+    assert n.wake() and len(pane.typed) == 1 and ID1 in pane.typed[0]
+    assert not n.owed
+    with pytest.raises(socket.timeout):
+        theirs.recv(1)
+    n.detach(ours)
+    theirs.close()
+
+
+@pytest.mark.parametrize("rule", [("silence", "amail", None), ("silence", "@channel", None),
+                                  ("route", "amail", "tray")])
+def test_the_wake_honors_the_operators_rules(tmp_path, isolated_events_log, rule):
+    """MIS-0002-R152 for the keystroke wake: a typed wake is delivery to the session, so mail
+    silenced, the session (@channel) silenced, or mail routed to another subscriber is never
+    typed. The notice is settled as silenced, not owed, and taking the rule away later types
+    nothing for it. The rules are read live: the rule is set after the notifier was made."""
+    from macf.pd.stream import Rules
+    clock, rules = [1000.0], Rules()
+    n = nt.Notifier(_home_with_mail(tmp_path, ID1), {"amail": "agent"}, clock=lambda: clock[0],
+                    rules=lambda: rules)
+    n.boot()
+    pane = FakePane([screen()])
+    n.waker = _waker(pane, []).waker
+    rules.apply(*rule)
+    clock[0] += nt.CHANNEL_GRACE_S + 1
+    assert not n.wake() and pane.typed == [], "a wake was typed for mail the rules keep from the session"
+    assert not n.owed, "a silenced notice stayed owed"
+    assert [e["data"]["source"] for e in read_events(reverse=False, scope="all")
+            if e.get("event") == nt.EVENT_SILENCED] == ["amail"]
+    rules.apply("unroute" if rule[0] == "route" else "unsilence", rule[1])
+    clock[0] += 3600
+    assert not n.wake() and pane.typed == [], "a silenced notice was typed once the rule was gone"
 
 
 # --- the real pane ---------------------------------------------------------------
@@ -272,6 +353,37 @@ def test_the_wake_reaches_a_session_units_own_pane():
         shutil.rmtree(base, ignore_errors=True)
 
 
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="needs tmux")
+def test_the_wake_reaches_the_units_pane_after_a_split_takes_focus():
+    """A watch split beside the agent becomes the active pane, and ={agent}: would type the
+    wake into it. The pane record names the unit's own pane, and the wake goes there."""
+    import json as _json
+    from macf.pd import session_unit as su
+    base = Path(tempfile.mkdtemp(prefix="pw-", dir="/tmp"))
+    agent = "Resident_1a2b3c"
+    env = {k: v for k, v in os.environ.items() if k != "TMUX"}
+    env["TMUX_TMPDIR"] = str(su._private_dir(su.tmux_dir(agent, base)))
+    got, watch = base / "got.txt", base / "watch.txt"
+    try:
+        made = subprocess.run(["tmux", "-f", "/dev/null", "new-session", "-d", "-P", "-F", "#{pane_pid}",
+                               "-s", agent, f"cat > {got}"], env=env, check=True, capture_output=True, text=True)
+        (su.tmux_dir(agent, base) / su.PANE_RECORD).write_text(_json.dumps([[int(made.stdout.strip()), None]]))
+        subprocess.run(["tmux", "split-window", "-t", agent, f"cat > {watch}"], env=env, check=True)
+        subprocess.run(["tmux", "select-pane", "-t", f"{agent}:0.1"], env=env, check=True)
+        pane = wk.TmuxPane(agent, base)
+        text = wk.wake_text([ID1])
+        assert pane.type(text) and pane.enter()
+        deadline = time.monotonic() + 5
+        while not (got.exists() and got.read_text().strip()) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert got.read_text().strip() == text
+        assert (watch.read_text() if watch.exists() else "") == ""
+        assert "[maceff:wake] mail waiting" in (pane.capture() or ""), "the capture reads the unit pane too"
+    finally:
+        subprocess.run(["tmux", "kill-server"], env=env, capture_output=True)
+        shutil.rmtree(base, ignore_errors=True)
+
+
 # --- rule 14: a wake held too long reaches the operator through the outside watch ----------
 
 def test_a_held_stretch_names_the_agent_and_is_released_when_nothing_waits():
@@ -280,7 +392,7 @@ def test_a_held_stretch_names_the_agent_and_is_released_when_nothing_waits():
     open for the watch to alert on."""
     events = []
     dialog = screen(below=("Do you want to proceed?", "❯ 1. Yes", "  2. No"))
-    rig = _waker(FakePane([dialog]), events, card="Tester@abc123")
+    rig = _waker(FakePane([dialog]), events, card="Tester_abc123")
     ids = ["msg-1790000001-aaaaaaaaaaaa"]
     rig.waker.tick(ids)
     rig.waker.tick(ids)
@@ -288,12 +400,12 @@ def test_a_held_stretch_names_the_agent_and_is_released_when_nothing_waits():
     rig.waker.tick([])
     names = [e for e, _ in events]
     assert names == [wk.EVENT_HELD, wk.EVENT_RELEASED]
-    assert all(d.get("agent") == "Tester@abc123" for _, d in events)
+    assert all(d.get("agent") == "Tester_abc123" for _, d in events)
 
 
 def test_the_outside_watch_alerts_only_on_a_hold_past_its_allowance():
     from macf.pd import watch
-    card, now = "Tester@abc123", 10_000.0
+    card, now = "Tester_abc123", 10_000.0
     held = {"timestamp": now - 2000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}}
     assert watch.check_wake(card, held, now).verdict == "HELD"
     young = dict(held, timestamp=now - 60)
@@ -306,11 +418,11 @@ def test_the_outside_watch_alerts_only_on_a_hold_past_its_allowance():
 def test_the_outside_watch_reads_this_agents_newest_wake_event(tmp_path):
     import json
     from macf.pd import watch
-    card, now = "Tester@abc123", 10_000.0
+    card, now = "Tester_abc123", 10_000.0
     log = tmp_path / "log.jsonl"
     log.write_text("".join(json.dumps(r) + "\n" for r in [
         {"timestamp": now - 3000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}},
-        {"timestamp": now - 100, "event": "pd_wake_sent", "data": {"agent": "Other@000000"}},
+        {"timestamp": now - 100, "event": "pd_wake_sent", "data": {"agent": "Other_000000"}},
     ]))
     assert watch.last_wake_event(log, card, now)["event"] == "pd_wake_held"
 
@@ -318,7 +430,7 @@ def test_the_outside_watch_reads_this_agents_newest_wake_event(tmp_path):
 def test_a_hold_followed_by_a_sent_wake_is_not_alerted(tmp_path):
     import json
     from macf.pd import watch
-    card, now = "Tester@abc123", 10_000.0
+    card, now = "Tester_abc123", 10_000.0
     log = tmp_path / "log.jsonl"
     log.write_text("".join(json.dumps(r) + "\n" for r in [
         {"timestamp": now - 3000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}},
@@ -332,13 +444,13 @@ def test_a_hold_whose_reason_changes_is_measured_from_its_first_hold(tmp_path):
     not start again with it. A hold after a sent wake starts a new stretch."""
     import json
     from macf.pd import watch
-    card, now = "Tester@abc123", 10_000.0
+    card, now = "Tester_abc123", 10_000.0
     log = tmp_path / "log.jsonl"
     rows = [
         {"timestamp": now - 5000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}},
         {"timestamp": now - 4000, "event": "pd_wake_sent", "data": {"agent": card}},
         {"timestamp": now - 2000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}},
-        {"timestamp": now - 900, "event": "pd_wake_sent", "data": {"agent": "Other@000000"}},
+        {"timestamp": now - 900, "event": "pd_wake_sent", "data": {"agent": "Other_000000"}},
         {"timestamp": now - 60, "event": "pd_wake_held", "data": {"agent": card, "reason": "draft"}},
     ]
     log.write_text("".join(json.dumps(r) + "\n" for r in rows))
@@ -357,17 +469,216 @@ def test_a_hold_that_a_channel_ends_is_released(tmp_path, isolated_events_log):
     n.boot()
     events = []
     dialog = screen(below=("Do you want to proceed?", "❯ 1. Yes", "  2. No"))
-    n.waker = _waker(FakePane([dialog]), events, card="Tester@abc123").waker
+    n.waker = _waker(FakePane([dialog]), events, card="Tester_abc123").waker
     clock[0] += nt.CHANNEL_GRACE_S + 1
     n.wake()
     assert [e for e, _ in events] == [wk.EVENT_HELD]
     ours, theirs = socket.socketpair()
-    n.attach(ours)
+    n.attach(ours, takes=TAKES)
     n.flush()
     n.wake()
     n.wake()
     assert [e for e, _ in events] == [wk.EVENT_HELD, wk.EVENT_RELEASED]
     newest = {"timestamp": 0.0, "event": events[-1][0], "data": events[-1][1]}
-    assert watch.check_wake("Tester@abc123", newest, 3600.0).verdict == "ALIVE"
+    assert watch.check_wake("Tester_abc123", newest, 3600.0).verdict == "ALIVE"
     n.detach(ours)
     theirs.close()
+
+
+# --- a hold that explains itself: the window said, the screen kept --------------------
+
+def _sent_then_seen(pane_screens, events, **kw):
+    """A waker that has sent a wake for ID1 at t=0 and seen its turn start at t=1."""
+    h = _waker(FakePane(pane_screens), events, refractory_s=600.0, **kw)
+    h.waker.tick([ID1])
+    h.clock[0] += 1.0
+    h.waker.tick([ID1])
+    return h
+
+
+RUNNING = screen(above=("✻ Working… (esc to interrupt)",))
+DIALOG_SCREEN = screen(below=("Do you want to proceed?", "❯ 1. Yes", "  2. No"))
+
+
+def test_a_refractory_hold_is_said_once_with_the_time_left():
+    """On Oct 17 a mail inside the window waited 13 minutes with nothing in the log. The
+    window is now said like any other hold: once per stretch, with the seconds left."""
+    events = []
+    h = _sent_then_seen([screen(), RUNNING, screen()], events)
+    h.clock[0] += 59.0                                        # t=60, inside the window
+    for _ in range(3):
+        assert h.waker.tick([ID1, ID2]) is None
+        h.clock[0] += 100.0
+    held = [d for e, d in events if e == wk.EVENT_HELD]
+    assert held == [{"reason": wk.REFRACTORY, "left_s": 540, "waiting": 1}]
+    h.clock[0] += 300.0                                       # t=660, the window over
+    assert h.waker.tick([ID1, ID2]) == "sent"
+    assert [e for e, _ in events][-2:] == [wk.EVENT_HELD, wk.EVENT_SENT]
+
+
+def test_a_refractory_stretch_ends_like_any_other():
+    """Mail read inside the window releases the stretch; a dialog after the window is said
+    again, because the reason changed."""
+    events = []
+    h = _sent_then_seen([screen(), RUNNING, DIALOG_SCREEN], events)
+    h.clock[0] += 59.0
+    h.waker.tick([ID1, ID2])
+    h.clock[0] += 600.0
+    h.waker.tick([ID1, ID2])
+    held = [d["reason"] for e, d in events if e == wk.EVENT_HELD]
+    assert held == [wk.REFRACTORY, wk.DIALOG]
+
+    events = []
+    h = _sent_then_seen([screen(), RUNNING, screen()], events)
+    h.clock[0] += 59.0
+    h.waker.tick([ID1, ID2])
+    h.waker.tick([ID1])                                       # ID2 read on its own
+    assert [e for e, _ in events][-2:] == [wk.EVENT_HELD, wk.EVENT_RELEASED]
+
+
+def test_a_dialog_or_draft_hold_keeps_the_screen_it_read(tmp_path):
+    """The demo's dialog holds at 01:33, 07:41 and 08:06 left nothing to check. A dialog or
+    draft hold now keeps its screen, private to the agent, which the classifier reads the
+    same way again, escape codes and all. A running turn keeps none, and a pane that could
+    not be read says so."""
+    draft = screen(f"half a thought {FAINT}(a suggestion){RESET}")
+    kept = tmp_path / "wake_screens"
+    events = []
+    h = _waker(FakePane([DIALOG_SCREEN, draft, RUNNING]), events, screens_dir=kept,
+               wall=lambda: 1792292400.0)
+    for _ in range(3):
+        h.clock[0] += 1.0
+        h.waker.tick([ID1])
+    held = [d for e, d in events if e == wk.EVENT_HELD]
+    assert [d["reason"] for d in held] == [wk.DIALOG, wk.DRAFT, wk.RUNNING]
+    for d, shown in zip(held[:2], (DIALOG_SCREEN, draft), strict=True):
+        path = Path(d["screen"])
+        assert path.parent == kept and path.read_text() == shown
+        assert wk.classify(path.read_text()) == d["reason"]
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(kept.stat().st_mode) == 0o700
+    assert "screen" not in held[2] and len(list(kept.iterdir())) == 2
+
+    class Unreadable(FakePane):
+        def capture(self):
+            return None
+    events = []
+    _waker(Unreadable([screen()]), events, screens_dir=kept).waker.tick([ID1])
+    assert events == [(wk.EVENT_HELD, {"reason": wk.DIALOG, "waiting": 1, "captured": False})]
+
+
+def test_only_the_newest_twenty_screens_are_kept(tmp_path):
+    (tmp_path / "notes.txt").write_text("not the waker's")
+    for i in range(wk.SCREENS_KEPT + 5):
+        wk.save_screen(tmp_path, f"screen {i}", wk.DIALOG, 1792292400.0 + i)
+    kept = {p.read_text() for p in tmp_path.glob("wake-*.txt")}
+    assert kept == {f"screen {i}" for i in range(5, wk.SCREENS_KEPT + 5)}
+    assert (tmp_path / "notes.txt").exists(), "a file the waker did not write was removed"
+
+
+def test_the_outside_watch_takes_a_refractory_hold_for_pacing(tmp_path):
+    """The window is the agent's pace, not something a person must clear: a dialog after it
+    is measured from the dialog, and a refractory hold that a reached daily cap leaves
+    newest all day never alerts."""
+    import json
+    from macf.pd import watch
+    card, now = "Tester_abc123", 10_000.0
+    log = tmp_path / "log.jsonl"
+    rows = [
+        {"timestamp": now - 4000, "event": "pd_wake_sent", "data": {"agent": card}},
+        {"timestamp": now - 3990, "event": "pd_wake_held",
+         "data": {"agent": card, "reason": "refractory", "left_s": 590}},
+        {"timestamp": now - 1000, "event": "pd_wake_held", "data": {"agent": card, "reason": "dialog"}},
+    ]
+    log.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    newest = watch.last_wake_event(log, card, now)
+    assert newest["held_since"] == now - 1000
+    assert watch.check_wake(card, newest, now).verdict == "ALIVE"
+    log.write_text("".join(json.dumps(r) + "\n" for r in rows[:2]))
+    assert watch.check_wake(card, watch.last_wake_event(log, card, now), now).verdict == "ALIVE"
+
+
+def test_the_daemon_keeps_held_screens_beside_the_event_log(tmp_path):
+    """The daemon gives its waker the agent's own screens directory, so a hold on a real
+    session keeps its screen and not only a test's waker."""
+    import pwd
+    from macf.pd.daemon import Daemon
+    from macf.pd.interface import Unit
+    from test_primal_daemon import make_home
+    me = pwd.getpwuid(os.getuid()).pw_name
+    home = make_home(tmp_path, [Unit(name="session", kind="session", command=["true"], account=me,
+                                     restart="always", liveness_interval_s=120, memory_limit_mb=64)])
+    runtime = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))
+    try:
+        daemon = Daemon(home, base=runtime)
+        assert daemon.notifier.waker.screens_dir == home / ".maceff" / "wake_screens"
+    finally:
+        shutil.rmtree(runtime, ignore_errors=True)
+
+
+# --- the agent paces its wake (persistent_layer 6.9) ---------------------------------------
+
+def test_the_declared_window_and_the_wakes_default_are_one_value():
+    from macf.pd.interface import DEFAULT_WAKE_REFRACTORY_S, Declaration
+    assert wk.REFRACTORY_S == DEFAULT_WAKE_REFRACTORY_S == Declaration(version=1, agent="A@1").wake_refractory_s
+
+
+def test_a_pace_may_shorten_the_window_to_the_floor_and_never_past_it():
+    """Only the declaration sets the floor: a pace may lengthen the window, or shorten it down to
+    the floor, and None goes back to the declared window."""
+    assert wk.pace_refusal(300, None) is None
+    assert wk.pace_refusal(300, 300) is None
+    assert wk.pace_refusal(1200, 300) is None
+    assert wk.pace_refusal(None, 300) is None
+    refused = wk.pace_refusal(299, 300)
+    assert refused and "300" in refused and "floor" in refused
+
+
+def test_no_pace_goes_over_the_ceiling_and_none_is_infinite():
+    """#761 review: an unbounded pace muted the wake and was never alerted on."""
+    assert wk.pace_refusal(1800, None, 1800) is None
+    refused = wk.pace_refusal(1801, None, 1800)
+    assert refused and "1800" in refused and "ceiling" in refused
+    for bad in (float("inf"), float("nan")):
+        assert "finite" in wk.pace_refusal(bad, None, None)
+
+
+def test_the_default_ceiling_is_the_watchs_allowance_for_a_held_wake():
+    """So a pace can never keep an agent unwoken past the point where a stuck wake alerts."""
+    from macf.pd.interface import DEFAULT_WAKE_REFRACTORY_CEILING_S
+    from macf.pd.watch import WAKE_HELD_ALERT_S
+    assert DEFAULT_WAKE_REFRACTORY_CEILING_S == WAKE_HELD_ALERT_S
+
+
+def test_the_newest_pace_holds_at_boot_and_a_raised_floor_wins_saying_so():
+    paced = {"timestamp": 1_800_000_000, "data": {"refractory_s": 120.0, "reason": "a busy hour",
+                                                   "asked_by": {"kind": "agent"}}}
+    assert wk.window_at_boot(600.0, None, None) == (600.0, "the declaration")
+    window, source = wk.window_at_boot(600.0, None, paced)
+    assert window == 120.0 and "a busy hour" in source and "by the agent" in source
+    window, source = wk.window_at_boot(600.0, 300.0, paced)
+    assert window == 300.0 and "floor" in source and "120" in source
+    back = {"timestamp": 1_800_000_000, "data": {"refractory_s": None, "reason": "done"}}
+    window, source = wk.window_at_boot(900.0, None, back)
+    assert window == 900.0 and "declaration" in source
+
+
+def test_a_saved_pace_over_the_ceiling_or_not_finite_is_held_to_the_ceiling_at_boot():
+    for wanted in (7200.0, float("inf"), float("nan")):
+        paced = {"timestamp": 1_800_000_000, "data": {"refractory_s": wanted, "reason": "quiet",
+                                                       "asked_by": {"kind": "agent"}}}
+        window, source = wk.window_at_boot(600.0, None, paced, 1800.0)
+        assert window == 1800.0 and "ceiling" in source, (wanted, source)
+
+
+def test_a_window_paced_shorter_lets_the_next_tick_wake(tmp_path):
+    """The window is measured at every tick, so a pace that shortens it holds from the next one."""
+    events = []
+    h = _sent_then_seen([screen(), RUNNING, screen()], events)
+    h.clock[0] += 59.0                                        # t=60, inside the 600 s window
+    assert h.waker.tick([ID1, ID2]) is None
+    notifier = nt.Notifier(tmp_path, {}, append=lambda e, d: True, events=lambda: [])
+    notifier.waker = h.waker
+    notifier.pace(30.0)
+    assert h.waker.refractory_s == 30.0
+    assert h.waker.tick([ID1, ID2]) == "sent"

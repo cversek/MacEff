@@ -50,6 +50,7 @@ policy; it does not contain it.
 - What is the only action a notice licenses?
 - What must I never infer from a notice?
 - What should I conclude from silence?
+- Why must I read the store each time, even for an entry or a thread I know well?
 
 **4 Routing: who gets told**
 - How is an alert routed, and by what property?
@@ -76,6 +77,9 @@ policy; it does not contain it.
 - Why does a notifier not decide?
 - Why must it not sit in a synchronous path?
 - What must it publish about itself?
+- Does "delivered" mean the agent received it?
+
+=== CEP_NAV_BOUNDARY ===
 
 ---
 
@@ -165,6 +169,20 @@ including from any wrapper the transport added.
 *no event* are different facts and must be distinguishable. An agent that cannot tell
 them apart MUST treat silence as unknown rather than as quiet — and the correct response
 is to check the notifier, not to assume the world is calm.
+
+**3.4 Read the store every time, even one you know.** A notice for a recurring entry, a
+familiar thread or a standing duty invites acting on what you remember it says. Don't. Run
+the command the notice names (`macf_tools pd entry show <id>`, `macf_tools amail read`,
+`macf_tools events query`) and act on what it returns.
+
+Your memory of the store is not the store. A compaction rewrites what you carry into a
+summary, and a summary keeps the gist and drops clauses, with nothing to show which. After a
+few cycles, a remembered instruction is a shorter, different instruction that still feels
+complete. The failure this prevents was observed: an agent ran a recurring check-in for hours
+from its recollection of the entry, which had lost the clauses requiring each reviewer's
+latest review, CI and merge state, so it checked less than the entry asked and reported
+"nothing changed". Reading an entry costs a few hundred tokens, and nothing else catches the
+drift.
 
 ## 4. Routing: who gets told
 
@@ -264,6 +282,14 @@ delivery, each suppression, each failure. **Note the scope of this virtue**: sel
 is redundant instrumentation for a component that only notifies, and **self-attestation
 for one that also edits what the agent receives.** A component holding both roles cannot
 be its own witness.
+
+**8.5 Written is not received.** A notifier's "delivered" means it wrote the notice to the
+channel. The client can still drop it: a channel plugin it doesn't admit connects, accepts
+every notice and shows none. So a delivery record claims only what the notifier saw, and
+anything that can tell in advance that the far end won't take a notice says so where status
+is read. The primal daemon names a declared channel that no allowlist admits
+(`persistent_layer`, on the allowlist). Comparing what was written with what the session
+received is the check that catches every cause, including ones nobody has foreseen.
 
 ---
 

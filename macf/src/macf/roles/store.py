@@ -291,7 +291,7 @@ class RoleStore:
     ROLE_TIME_FIELDS = ("expires", "review_by", "review_horizon")
     #: What an edit may change. State is never one: the state verbs carry their own
     #: transition check, reason and event, and an edit would bypass all three.
-    DUTY_EDIT_FIELDS = ("title", "body", "importance", "due", "horizon", "cadence", "depends_on")
+    DUTY_EDIT_FIELDS = ("title", "body", "importance", "due", "horizon", "cadence", "depends_on", "wiki_links")
     ROLE_EDIT_FIELDS = ("title", "icon", "expires", "review_by", "review_horizon", "resources")
 
     @staticmethod

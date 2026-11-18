@@ -97,7 +97,7 @@ def test_the_monitor_reads_the_session_unit_and_its_pid(tmp_path):
     home = _home(tmp_path)
     found = lv.session_unit_from_env({lv.ENV_HOME: str(home), lv.ENV_SESSION_UNIT: "session",
                                       lv.ENV_SESSION_INTERVAL: "30", lv.ENV_SESSION_PID: "4321"})
-    assert (found.card, found.unit, found.interval_s, found.pid) == ("Resident@1a2b3c", "session", 30.0, 4321)
+    assert (found.card, found.unit, found.interval_s, found.pid) == ("Resident_1a2b3c", "session", 30.0, 4321)
     assert lv.session_unit_from_env({lv.ENV_HOME: str(home)}) is None
 
 
@@ -112,7 +112,7 @@ def test_a_partial_session_setting_gives_no_liveness(tmp_path, capsys):
 
 def test_a_session_beat_names_the_units_pid_not_the_monitors(tmp_path):
     events = []
-    hb = lv.Heartbeat("Resident@1a2b3c", "session", 0.05,
+    hb = lv.Heartbeat("Resident_1a2b3c", "session", 0.05,
                       append=lambda n, d: events.append((n, d)) or True, pid=os.getppid()).start()
     hb.tick()
     deadline = time.monotonic() + 2
@@ -218,18 +218,23 @@ exit 0
 def test_the_window_is_named_after_the_card_and_the_client_cannot_retitle_it(
         tmp_path, short_base, restore_signals):
     """The client titles its terminal with its version, which named nobody: an
-    operator attached to the session saw "2.1.303 (claude)", not whose it was."""
+    operator attached to the session saw "2.1.303 (claude)", not whose it was. A
+    program's rename escape doesn't rename the window either (allow-rename off)."""
     out = tmp_path / "title.txt"
     child = _child(tmp_path, f"""
-printf '\\033]0;2.1.303 (claude)\\007'; sleep 0.5
+printf '\\033]0;2.1.303 (claude)\\007'; printf '\\033kclaude\\033\\\\'; sleep 0.5
 tmux display -p '#{{window_name}}|#{{pane_title}}|#{{set-titles}}|#{{set-titles-string}}|#{{allow-set-title}}' > {out}
 exit 0
 """)
-    rc = su.run("Resident_1a2b3c", child, environ=_unit_env(tmp_path), base=short_base, ready_timeout=10)
+    # The agent's own tmux config may allow renaming; the unit's options come after it.
+    conf = tmp_path / "tmux.conf"
+    conf.write_text("set -g allow-rename on\n")
+    rc = su.run("Resident_1a2b3c", child, conf=conf, environ=_unit_env(tmp_path), base=short_base,
+                ready_timeout=10)
     assert rc == 0
     window, pane, titles, string, allow = out.read_text().strip().split("|")
-    assert window == "Resident@1a2b3c"
-    assert string == "Resident@1a2b3c" and titles == "1"
+    assert window == "Resident_1a2b3c"
+    assert string == "Resident_1a2b3c" and titles == "1"
     # A tmux without allow-set-title prints nothing for it and can't keep the pane's title;
     # there the window and the terminal title are what name the agent.
     if allow:

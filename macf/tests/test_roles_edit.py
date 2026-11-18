@@ -154,3 +154,43 @@ def test_role_edit(store, lab, capsys):
     assert _run(["role", "edit", role.id, "--drop-resource", "~/notes/ipl"]) == 0
     assert store.find_role(role.id)[0].resources == []
     assert role.state == "active"                           # state is never an edit
+
+
+def test_wiki_links_are_edited_on_the_record_and_normalized(store, lab):
+    """The knowledge doctor and gaps suggest links for a duty, and knowledge link sends a duty to
+    this verb: an edit replaces the list, normalized as the web normalizes, with no hand edit of
+    the JSON. A links change alone needs no --why, so it is a correction, not a service."""
+    d, _ = _dated(store, lab)
+    assert _run(["role", "duty", "edit", d.id, "--wiki-links", "Honeypot, audit", "--wiki-links", "container-deployment"]) == 0
+    d = store.find_duty(d.id)[0]
+    assert d.wiki_links == ["honeypot", "audit", "container_deployment"]
+    assert d.updates[-1].kind == "correction" and "wiki_links" in d.updates[-1].description
+    assert _run(["role", "duty", "edit", d.id, "--wiki-links", "audit"]) == 0
+    assert store.find_duty(d.id)[0].wiki_links == ["audit"]
+
+
+def test_knowledge_link_and_the_doctor_name_the_verb_that_works():
+    from macf.knowledge_doctor import _link_remedy
+    from macf.knowledge_link import LinkError, resolve_target
+    with pytest.raises(LinkError, match="role duty edit"):
+        resolve_target("duties:07b568")
+    assert "role duty edit" in _link_remedy("duties")
+
+
+def test_duty_add_normalizes_links_as_edit_does(store, lab):
+    """A duty added with a concept in another spelling stores it normalized, so a later edit to
+    the same concept records nothing spurious."""
+    role, folder = lab
+    assert _run(["role", "duty", "add", role.id, "board plan", "--wiki-links", "Honeypot, container-deployment"]) == 0
+    d = store.find_duty("board plan")[0]
+    assert d.wiki_links == ["honeypot", "container_deployment"]
+
+
+def test_role_create_normalizes_links_as_edit_does(store):
+    """The third verb that stores links: a role created with a concept in another spelling
+    stores it as the knowledge web normalizes it (review on #766)."""
+    assert _run(["role", "create", "Board Keeper", "--icon", "🎓", "--expires", "2026-12-15",
+                 "--review-by", "2026-12-15", "--review-horizon", "14d",
+                 "--wiki-links", "Honeypot, container-deployment"]) == 0
+    role = store.find_role("Board Keeper")[0]
+    assert role.wiki_links == ["honeypot", "container_deployment"]

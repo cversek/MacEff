@@ -66,8 +66,8 @@ def test_hookmessage_is_frozen():
 
 def test_hookmessage_carries_originating_agent():
     """SubAgent attribution field round-trips."""
-    m = _make_msg(originating_agent="DevOpsEng@abc123")
-    assert m.originating_agent == "DevOpsEng@abc123"
+    m = _make_msg(originating_agent="DevOpsEng_abc123")
+    assert m.originating_agent == "DevOpsEng_abc123"
 
 
 # --- emit_message dual-channel contract -----------------------------------
@@ -112,15 +112,15 @@ def test_emit_prepends_attribution_when_originating_agent_set(
 ):
     """SubAgent attribution renders as a prefix tag on both channels."""
     captured = _stub_send(monkeypatch)
-    m = _make_msg(originating_agent="DevOpsEng@abc123")
+    m = _make_msg(originating_agent="DevOpsEng_abc123")
 
     result = emit_message(m, telegram_prefix="🎯 Tool Use")
 
     # systemMessage starts with the attribution
-    assert result["systemMessage"].startswith("[from DevOpsEng@abc123]")
+    assert result["systemMessage"].startswith("[from DevOpsEng_abc123]")
     # Telegram payload starts with the same attribution
     text, _ = captured[0]
-    assert text.startswith("[from DevOpsEng@abc123]")
+    assert text.startswith("[from DevOpsEng_abc123]")
 
 
 def test_emit_omits_attribution_when_originating_agent_is_none(

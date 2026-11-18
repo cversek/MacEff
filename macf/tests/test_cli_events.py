@@ -191,15 +191,13 @@ def test_events_history_shows_recent_events(cli_env):
     # Verify some events are displayed
     assert "session_started" in output or "tool_call_started" in output
 
-    # Verify chronological ordering (most recent first)
-    # Latest event should appear before earlier events
-    # Match the rendered breadcrumb form, not bare digits. "170" and "172" are
-    # three-character needles searched in a blob that also carries timestamps,
-    # session ids and git hashes, so a bare index() can match a digit run that
-    # has nothing to do with a cycle -- and then reports a REVERSED ORDERING
-    # that never happened. c_NNN appears only where a cycle is named.
-    assert output.index("c_172") < output.index("c_170"), \
-        "events should render most-recent-first"
+    # One line per event, oldest first and newest last, as a log reads: history prints
+    # through `events query`'s formatter (MIS-0002 landing, Phase 10). Each line opens with
+    # its date and time, and all eight events are shown. (The CLI also logs this very
+    # invocation, as today's cli_command_invoked; it's left out of the comparison.)
+    lines = [line for line in output.splitlines() if "  cli_command_invoked  " not in line]
+    stamps = [" ".join(line.split()[:2]) for line in lines]
+    assert len(lines) == 8 and stamps == sorted(stamps), "events should render oldest first, one line each"
 
 
 # ============================================================================
@@ -271,12 +269,15 @@ def test_query_with_multiple_filters_applies_and_logic(cli_env):
 
     output = result.stdout
 
-    # Verify both filters applied
-    assert "tool_call_started" in output
-    assert "172" in output or "c_172" in output
-
-    # Verify count (should be 2 events: both tool_call_started in cycle 172)
-    assert "2" in output
+    # Both filters applied: exactly the two tool_call_started events of cycle 172. The
+    # one-line form names no breadcrumb, so the cycle is read from --json.
+    lines = output.splitlines()
+    assert len(lines) == 2 and all("  tool_call_started  " in line for line in lines)
+    as_json = subprocess.run(
+        ["macf_tools", "events", "query", "--event", "tool_call_started", "--cycle", "172", "--json"],
+        capture_output=True, text=True, env=cli_env)
+    crumbs = [json.loads(line)["breadcrumb"] for line in as_json.stdout.splitlines()]
+    assert len(crumbs) == 2 and all("/c_172/" in c for c in crumbs)
 
 
 def test_query_set_subtraction_works(cli_env):

@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from macf.pd import adapter as adapters
 from macf.pd import interface, shared_view as sv
+from test_primal_daemon import base, run_daemon, script  # noqa: F401 - fixtures
 
 GIB = 2 ** 30
 
@@ -25,7 +26,7 @@ def _unit(name, kind="service", memory=256, env=None):
             "environment": env or {}}
 
 
-def _declaration(agent="Sparrow2@f0a1b2", units=None):
+def _declaration(agent="B_4d5e6f", units=None):
     return interface.Declaration.model_validate(
         {"version": 1, "agent": agent, "units": units if units is not None else [_unit("broker")]})
 
@@ -46,7 +47,7 @@ def test_shared_budget_operator_only(tmp_path):
     """MIS-0002-R103: no declaration can carry the container's budget, and the view only reads it."""
     for field in ("shared_budget", "container_memory_mb", "cpus"):
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            interface.Declaration.model_validate({"version": 1, "agent": "A@1a2b3c", field: 1})
+            interface.Declaration.model_validate({"version": 1, "agent": "A_1a2b3c", field: 1})
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         interface.Unit.model_validate({**_unit("x"), "container_memory_mb": 1})
     # A unit's limit is its own share, never the container's: the budget is read from files the
@@ -71,7 +72,7 @@ def test_an_unlimited_container_reads_no_limit_and_an_unreadable_file_reads_unkn
 
 
 def test_a_summary_carries_no_command_and_no_environment(tmp_path):
-    home = tmp_path / "pa_sparrow2"
+    home = tmp_path / "pa_orchard2"
     decl = _declaration(units=[_unit("broker", env={"API_KEY": "s3cret"}), _unit("session", kind="session")])
     path = sv.publish(home, decl, now=1.0)
     text = path.read_text()
@@ -83,17 +84,32 @@ def test_a_summary_carries_no_command_and_no_environment(tmp_path):
 def test_every_agents_units_are_seen_and_none_controlled(tmp_path):
     """MIS-0002-R62: each agent's units appear in the view; the view offers no act."""
     homes = tmp_path / "home"
-    for user, card in (("pa_sparrow", "Sparrow@e3f4a5"), ("pa_sparrow2", "Sparrow2@f0a1b2")):
+    for user, card in (("pa_orchard", "A_1a2b3c"), ("pa_orchard2", "B_4d5e6f")):
         (homes / user / "agent" / "public").mkdir(parents=True)
         sv.publish(homes / user, _declaration(agent=card, units=[_unit("broker", memory=512)]), now=1.0)
     (homes / "student" / "agent" / "public").mkdir(parents=True)        # a home that published nothing
     views = sv.read_agents(homes)
     assert [v.status for v in views] == ["PUBLISHED", "PUBLISHED", "UNPUBLISHED"]
     text = sv.render(views, sv.read_budget(_cgroup(tmp_path)))
-    assert "Sparrow@e3f4a5 broker (service, 512 MB" in text and "Sparrow2@f0a1b2 broker" in text
+    assert "A_1a2b3c broker (service, 512 MB" in text and "B_4d5e6f broker" in text
     assert "UNPUBLISHED" in text and "held 42.1 GiB (66%)" in text
     assert "Declared unit limits sum to 1024 MB of the container's 65536 MB." in text
     assert not any(hasattr(sv, act) for act in ("stop", "start", "restart", "act", "control"))
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a home whatever its mode")
+def test_a_home_that_cannot_be_looked_into_is_unreadable_and_the_rest_still_listed(tmp_path):
+    """One locked home emptied the whole view: is_dir raised inside the one try."""
+    homes = tmp_path / "home"
+    for user in ("pa_first", "pa_locked", "pa_second"):
+        (homes / user / "agent" / "public").mkdir(parents=True)
+    (homes / "pa_locked").chmod(0)
+    try:
+        views = sv.read_agents(homes)
+    finally:
+        (homes / "pa_locked").chmod(0o755)
+    assert [(Path(v.home).name, v.status) for v in views] == [
+        ("pa_first", "UNPUBLISHED"), ("pa_locked", "UNREADABLE"), ("pa_second", "UNPUBLISHED")]
 
 
 def test_a_summary_that_does_not_parse_is_unreadable_never_empty(tmp_path):
@@ -108,7 +124,7 @@ def test_a_summary_that_does_not_parse_is_unreadable_never_empty(tmp_path):
 def test_a_summary_another_account_owns_is_not_believed(tmp_path, monkeypatch):
     """Only the owner writes its public tree; a reader still checks, so a file planted by
     another account (a misprovisioned tree, a copy) never speaks for this home's agent."""
-    home = tmp_path / "pa_sparrow2"
+    home = tmp_path / "pa_orchard2"
     path = sv.publish(home, _declaration(), now=1.0)
     real_stat = type(path).stat
 
@@ -131,6 +147,91 @@ def test_every_agent_gets_its_publishing_point_at_init():
     calls = [n.func.id for n in ast.walk(ast.parse(src))
              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
     assert "create_pd_view_dir" in calls
+
+
+def _published_home(tmp_path, units):
+    """A daemon's home, as the container makes it: with a public tree for its peers to read."""
+    from test_primal_daemon import make_home
+    home = make_home(tmp_path, units)
+    (home / "agent" / "public").mkdir(parents=True)
+    return home
+
+
+def test_a_started_daemon_publishes_its_units_for_its_peers(tmp_path, script, base, run_daemon):
+    """MIS-0002-R62 through the publisher, not the reader: a real daemon start writes the agent's
+    units.json into its own agent/public/pd/, and the view of the homes sees it. Review on #552
+    found nothing outside a test called publish(), so every home read UNPUBLISHED."""
+    from test_primal_daemon import CARD, make_unit
+    worker = make_unit("worker", script, {})
+    home = _published_home(tmp_path, [worker])
+    assert not sv.published_path(home).exists()
+    run_daemon(home, base)
+    path = sv.published_path(home)
+    assert path.exists(), "the daemon started and published nothing"
+    text = path.read_text()
+    assert str(script) not in text and "MACF_EVENTS_LOG_PATH" not in text   # no command, no environment
+    [view] = sv.read_agents(home.parent)
+    assert view.status == "PUBLISHED" and view.units.agent == CARD
+    assert [u.name for u in view.units.units] == ["worker", "broker"]   # every daemon runs its own broker
+
+
+def test_a_restarted_daemon_publishes_the_declaration_it_reloaded(tmp_path, script, base, run_daemon):
+    """The declaration is read only when the daemon starts, so a changed declaration is
+    reloaded by a restart, and the restart publishes it: the summary names the new unit and is
+    stamped by the second start, not left as the first daemon wrote it."""
+    from macf.pd.interface import Declaration, declaration_path
+    from test_primal_daemon import CARD, make_unit
+    worker = make_unit("worker", script, {})
+    home = _published_home(tmp_path, [worker])
+    first = run_daemon(home, base)
+    stamped = sv.read_agent(home).units.published_at
+    first.stop(units=True)
+    assert _wait(lambda: not first.control_path.exists())
+    declaration_path(home).write_text(Declaration(
+        version=1, agent=CARD, units=[worker, make_unit("helper", script, {})]).model_dump_json())
+    time.sleep(0.01)
+    run_daemon(home, base)
+    view = sv.read_agent(home)
+    assert [u.name for u in view.units.units] == ["worker", "helper", "broker"], "every daemon also runs its own broker"
+    assert view.units.published_at > stamped
+
+
+def test_a_summary_that_cannot_be_published_never_stops_the_daemon(tmp_path, script, base, run_daemon,
+                                                                   monkeypatch, capsys):
+    """Publishing is for the peers: a failure is said on the daemon's error stream and the
+    daemon starts all the same."""
+    from test_primal_daemon import make_unit
+
+    def refuse(*a, **k):
+        raise PermissionError("agent/public/pd is not writable")
+    monkeypatch.setattr(sv, "publish", refuse)
+    daemon = run_daemon(_published_home(tmp_path, [make_unit("worker", script, {})]), base)
+    assert daemon.control_path.exists()
+    assert "could not publish this agent's units" in capsys.readouterr().err
+
+
+def _wait(until, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if until():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_the_view_prints_each_summarys_age(tmp_path):
+    """A summary outlives the daemon that wrote it, so the view says how old each one is: one
+    left by a stopped daemon days ago doesn't read as current."""
+    homes = tmp_path / "home"
+    for user, card, at in (("pa_orchard", "Orchard_e3f4a5", 1000.0), ("pa_orchard2", "Orchard2_f0a1b2", 1000.0 - 3 * 86400)):
+        (homes / user / "agent" / "public").mkdir(parents=True)
+        sv.publish(homes / user, _declaration(agent=card), now=at)
+    text = sv.render(sv.read_agents(homes), sv.read_budget(_cgroup(tmp_path)), now=1045.0)
+    assert "Orchard_e3f4a5: summary published 45s ago" in text
+    assert "Orchard2_f0a1b2: summary published 3d ago" in text
+    # A stamp ahead of the reader's clock is said as such, never shown as a negative age.
+    assert "Orchard_e3f4a5: summary stamped 75s ahead of this clock" in sv.render(
+        sv.read_agents(homes), sv.Budget(), now=925.0)
 
 
 def test_grants_declared():
@@ -185,7 +286,7 @@ def test_renderings_exist():
     assert adapters.missing_renderings() == []
 
 
-CARD_T = "Tester@abc123"
+CARD_T = "Tester_abc123"
 
 
 class _Ran:
@@ -207,7 +308,12 @@ def test_renderings_hold_only_the_agent_home(tmp_path):
     unit = adapters.SystemdAdapter(user_home=tmp_path).render(CARD_T, home)
     for text in (launch, unit):
         assert "macf.pd" in text and str(home) in text
-    assert "EnvironmentVariables" not in launch
+    # The one variable a LaunchAgent may carry is interpreter plumbing, never agent
+    # configuration: a framework-build Python's venv path, as its own launcher passes it.
+    import plistlib
+    import sys
+    env = plistlib.loads(launch.encode()).get("EnvironmentVariables", {})
+    assert env in ({}, {"__PYVENV_LAUNCHER__": sys.executable}), env
     assert not any(line.startswith("Environment=") for line in unit.splitlines())
 
 
@@ -256,8 +362,8 @@ def test_every_unit_declared(tmp_path):
     nobody declared can't become a managed unit by being named on the socket."""
     from macf.pd.core import Core
     from macf.pd.interface import Asker
-    operator = Asker(kind="operator", card="Operator@000000")
-    core = Core(_declaration(units=[_unit("broker"), _unit("watcher")]), "Sparrow2@f0a1b2",
+    operator = Asker(kind="operator", card="Operator_000000")
+    core = Core(_declaration(units=[_unit("broker"), _unit("watcher")]), "B_4d5e6f",
                 placeholders={"agent_home": str(tmp_path)})
     assert {name: core.state(name) for name in ("broker", "watcher")}
     for act in (core.start, core.stop, core.restart):
@@ -283,7 +389,7 @@ def test_schedules_hosted(tmp_path):
     (home / ".maceff_primary_agent.id").write_text("abc123def4567890\n")
     (home / ".maceff" / "config.json").write_text('{"agent_identity": {"moniker": "Tester"}}')
     interface.declaration_path(home).write_text(interface.Declaration(
-        version=1, agent="Tester@abc123", timezone="UTC", schedules=[schedule]).model_dump_json())
+        version=1, agent="Tester_abc123", timezone="UTC", schedules=[schedule]).model_dump_json())
     import shutil
     import tempfile
     base = Path(tempfile.mkdtemp(prefix="pd-", dir="/tmp"))     # a socket path short enough on macOS
@@ -315,6 +421,24 @@ TELEGRAM = {"plugin": "telegram", "marketplace": "claude-plugins-official"}
 MACEFF = {"plugin": "maceff-channel", "marketplace": "maceff"}
 
 
+def test_without_an_allowlist_a_channel_outside_the_default_marketplace_is_named(tmp_path):
+    """cversek/MacEff#904: with no organization allowlist the client admits only its default
+    channels, and a declared channel from another marketplace connects and is silent. That is
+    named; a declaration of official channels only, or one an allowlist covers, says nothing."""
+    from macf.pd import allowlist
+
+    def decl(channels):
+        return interface.Declaration.model_validate(
+            {"version": 1, "agent": "Ira_ee9a78", "allowlisted_channels": channels})
+
+    (named,) = allowlist.unadmitted_without_allowlist(decl([TELEGRAM, MACEFF]), None)
+    assert "maceff-channel@maceff" in named and "telegram" not in named and "allowedChannelPlugins" in named
+    assert allowlist.unadmitted_without_allowlist(decl([TELEGRAM]), None) == []
+    assert allowlist.unadmitted_without_allowlist(decl([]), None) == []
+    admitted = allowlist.managed_allowlist([_managed(tmp_path, [TELEGRAM, "maceff-channel@maceff"])])
+    assert allowlist.unadmitted_without_allowlist(decl([TELEGRAM, MACEFF]), admitted) == []
+
+
 def test_allowlist_lists_every_channel(tmp_path):
     """MIS-0002-R124 (allowlist_declaration_MUST_list_every_channel): where managed settings set
     an allowlist, every channel it admits is in the declaration, and every channel the
@@ -322,7 +446,7 @@ def test_allowlist_lists_every_channel(tmp_path):
     from macf.pd import allowlist
 
     def decl(channels):
-        body = {"version": 1, "agent": "Ira@ee9a78"}
+        body = {"version": 1, "agent": "Ira_ee9a78"}
         if channels is not None:
             body["allowlisted_channels"] = channels
         return interface.Declaration.model_validate(body)
@@ -363,7 +487,7 @@ def test_allowlist_lists_every_channel(tmp_path):
 def test_an_allowlisted_channel_names_plugin_and_marketplace():
     """The client admits a channel only when the plugin and its marketplace both match, so a
     declared entry with either missing would compare as nothing; it is refused at load."""
-    body = {"version": 1, "agent": "Ira@ee9a78"}
+    body = {"version": 1, "agent": "Ira_ee9a78"}
     for bad in ({"plugin": "telegram"}, {"marketplace": "maceff"}, {"plugin": "", "marketplace": "x"},
                 "telegram@claude-plugins-official"):
         with pytest.raises(ValidationError):
@@ -382,8 +506,8 @@ def test_the_daemon_says_at_start_where_the_allowlist_and_declaration_differ(tmp
     written = []
     monkeypatch.setattr(log, "append_event", lambda event, data: written.append((event, data)) or True)
     declaration = interface.Declaration.model_validate(
-        {"version": 1, "agent": "Ira@ee9a78", "allowlisted_channels": [MACEFF]})
-    stub = SimpleNamespace(core=SimpleNamespace(declaration=declaration), card="Ira@ee9a78",
+        {"version": 1, "agent": "Ira_ee9a78", "allowlisted_channels": [MACEFF]})
+    stub = SimpleNamespace(core=SimpleNamespace(declaration=declaration), card="Ira_ee9a78",
                            _managed=[_managed(tmp_path, [TELEGRAM, MACEFF])])
 
     Daemon._compare_allowlist(stub)
@@ -393,7 +517,7 @@ def test_the_daemon_says_at_start_where_the_allowlist_and_declaration_differ(tmp
 
     written.clear()
     stub.core.declaration = interface.Declaration.model_validate(
-        {"version": 1, "agent": "Ira@ee9a78", "allowlisted_channels": [TELEGRAM, MACEFF]})
+        {"version": 1, "agent": "Ira_ee9a78", "allowlisted_channels": [TELEGRAM, MACEFF]})
     Daemon._compare_allowlist(stub)
     assert written == []
 
@@ -409,7 +533,7 @@ def _mail_unit(name, *module_and_verb, account="amail_broker"):
             "restart": "always", "liveness_interval_s": 60, "memory_limit_mb": 256}
 
 
-#: The broker account's daemon, as a deployment declares it (persistent_layer section 8).
+#: The broker account's daemon, as a deployment declares it (persistent_layer section 14).
 BROKER_DAEMON = {
     "units": [_mail_unit("broker", "macf.amail.daemons.broker"),
               _mail_unit("inbound-watcher", "macf.amail.daemons.inbound", "watch")],
@@ -437,9 +561,9 @@ def _agents_yaml(services):
 
 def _amail_step(start, tmp_path, monkeypatch):
     """Run the amail step against temporary paths, recording every process it launches itself
-    and every start of the receiver. Provisioning that needs root fails and is logged, as on a
+    and every check of the inbound units. Provisioning that needs root fails and is logged, as on a
     host; that half is not what these tests are about."""
-    launched = {"popen": [], "receiver": 0}
+    launched = {"popen": [], "inbound_check": 0}
     for name, attr in (("broker_config.yaml", "AMAIL_BROKER_CONFIG"),
                        ("inbound_config.yaml", "AMAIL_INBOUND_CONFIG")):
         (tmp_path / name).write_text("{}")
@@ -447,8 +571,8 @@ def _amail_step(start, tmp_path, monkeypatch):
     monkeypatch.setattr(start, "broker_cfg_handoff_root", lambda config: str(tmp_path / "handoff"))
     monkeypatch.setattr(start, "provision_pickup_boxes", lambda *a: None)
     monkeypatch.setattr(start.shutil, "chown", lambda *a, **k: None)
-    monkeypatch.setattr(start, "_start_inbound_transport",
-                        lambda interp: launched.__setitem__("receiver", launched["receiver"] + 1))
+    monkeypatch.setattr(start, "_check_inbound_units",
+                        lambda cfg: launched.__setitem__("inbound_check", launched["inbound_check"] + 1))
     monkeypatch.setattr(start.subprocess, "Popen", lambda *a, **k: launched["popen"].append(a))
     return launched
 
@@ -472,7 +596,7 @@ def test_mail_units(tmp_path, monkeypatch):
                                             chown=lambda p, u, g: owned.append((Path(p).name, u, g)))
     assert rendered == ["amail_broker"]
     card = pd_names.agent_card(home)
-    assert card == "AmailBroker@" + start.service_agent_id("amail_broker", cfg.ids)[:6]
+    assert card == "AmailBroker_" + start.service_agent_id("amail_broker", cfg.ids)[:6]
     assert start.service_agent_id("amail_broker", cfg.ids) == start.service_agent_id("amail_broker", cfg.ids)
     declaration = json.loads((tmp_path / "etc" / "amail_broker" / "declaration.json").read_text())
     assert declaration["agent"] == card
@@ -492,17 +616,17 @@ def test_mail_units(tmp_path, monkeypatch):
 
     launched = _amail_step(start, tmp_path, monkeypatch)
     start.start_amail_services(cfg)
-    assert launched == {"popen": [], "receiver": 1}
+    assert launched == {"popen": [], "inbound_check": 1}
 
     bare = _agents_yaml({"amail_broker": {}, "amail_ingest": {}})
     launched = _amail_step(start, tmp_path, monkeypatch)
     with pytest.raises(RuntimeError, match="R53"):
         start.start_amail_services(bare)
-    assert launched == {"popen": [], "receiver": 1}
+    assert launched == {"popen": [], "inbound_check": 1}
 
     with pytest.raises(ValidationError, match="only as the service account"):
         _agents_yaml({"amail_broker": {"calling_card": "AmailBroker", "primal_daemon": {
-            "units": [_mail_unit("broker", "macf.amail.daemons.broker", account="pa_sparrow")]}}})
+            "units": [_mail_unit("broker", "macf.amail.daemons.broker", account="pa_orchard")]}}})
     with pytest.raises(ValidationError, match="together"):
         _agents_yaml({"amail_broker": {"calling_card": "AmailBroker"}})
 
@@ -523,7 +647,7 @@ def test_periodic_clock_is_schedule(tmp_path, monkeypatch):
         with pytest.raises(ValidationError, match="R54"):
             _agents_yaml({"amail_broker": {"calling_card": "AmailBroker", "primal_daemon": looping}})
     cfg = _agents_yaml({"amail_broker": {"calling_card": "AmailBroker", "primal_daemon": BROKER_DAEMON}})
-    declaration = interface.Declaration(version=1, agent="AmailBroker@abc123",
+    declaration = interface.Declaration(version=1, agent="AmailBroker_abc123",
                                         **cfg.services["amail_broker"].primal_daemon)
     (sweep,) = [s for s in declaration.schedules if "sweep" in s.run.command]
     assert sweep.missed_run.kind == "skip"
@@ -534,3 +658,80 @@ def test_periodic_clock_is_schedule(tmp_path, monkeypatch):
     start.start_amail_services(cfg)
     assert launched["popen"] == []
 
+
+
+def test_a_declared_daemon_outside_home_is_listed_once_and_seen_when_it_publishes(tmp_path):
+    """MIS-0002-R62, the head maintainer's judgment on #552: the view lists the deployment's
+    declared daemons from root's rendered declarations, so a service account whose home is
+    outside /home counts. One that published nothing reads declared, not absent, and a declared
+    home that is also under /home is listed once."""
+    rendered, homes, broker = tmp_path / "rendered", tmp_path / "home", tmp_path / "var" / "broker"
+    for account in ("svc_broker", "pa_seat"):
+        (rendered / account).mkdir(parents=True)
+        (rendered / account / "declaration.json").write_text("{}")
+    (homes / "pa_seat" / "agent" / "public").mkdir(parents=True)
+    broker.mkdir(parents=True)
+    home_of = {"svc_broker": broker, "pa_seat": homes / "pa_seat"}.get
+    views = sv.read_agents(homes, rendered=rendered, home_of=home_of)
+    assert sorted((Path(v.home).name, v.status) for v in views) == [("broker", "UNPUBLISHED"), ("pa_seat", "UNPUBLISHED")]
+    assert all(v.detail == "declared, no summary published" for v in views)
+    sv.publish(broker, _declaration(agent="Broker_ab12cd", units=[_unit("broker", memory=256)]), now=1.0)
+    seen = {Path(v.home).name: v for v in sv.read_agents(homes, rendered=rendered, home_of=home_of)}
+    assert seen["broker"].status == "PUBLISHED" and seen["broker"].units.agent == "Broker_ab12cd"
+
+
+def test_a_declared_daemon_with_no_public_tree_still_publishes(tmp_path, script, base, run_daemon, monkeypatch):
+    """The mail broker's home has no agent/public tree, so its daemon published nothing and its
+    units were invisible to every seat beside it. A daemon the deployment declares publishes
+    anyway; one it doesn't still makes no tree."""
+    from macf.pd.daemon import Daemon
+    from test_primal_daemon import make_home, make_unit
+    monkeypatch.setattr(Daemon, "_deployment_declares", lambda self: True)
+    declared = make_home(tmp_path / "declared", [make_unit("worker", script, {})])
+    assert not (declared / "agent" / "public").exists()
+    run_daemon(declared, base)
+    assert sv.published_path(declared).exists(), "a declared daemon with no public tree published nothing"
+
+
+def test_an_undeclared_daemon_with_no_public_tree_makes_none(tmp_path, script, base, run_daemon):
+    from test_primal_daemon import make_home, make_unit
+    plain = make_home(tmp_path / "plain", [make_unit("worker", script, {})])
+    run_daemon(plain, base)
+    assert not sv.published_path(plain).exists() and not (plain / "agent" / "public").exists()
+
+
+def test_one_declared_account_the_reader_cannot_look_into_costs_only_itself(tmp_path):
+    """Ira's probe on #819: three rendered accounts, one at mode 0. Asked inside one try, the
+    permission error emptied the declared list and the broker vanished again. Each account is
+    asked on its own: the unreadable one is listed with its reason, and the others still count."""
+    import os
+    if os.geteuid() == 0:
+        pytest.skip("root reads a mode-0 directory")
+    rendered, homes = tmp_path / "rendered", tmp_path / "home"
+    for account in ("svc_broker", "pa_seat", "pa_shut"):
+        (rendered / account).mkdir(parents=True)
+        (rendered / account / "declaration.json").write_text("{}")
+    homes.mkdir()
+    home_of = {a: tmp_path / "homes" / a for a in ("svc_broker", "pa_seat", "pa_shut")}.get
+    (rendered / "pa_shut").chmod(0)
+    try:
+        views = {Path(v.home).name: v for v in sv.read_agents(homes, rendered=rendered, home_of=home_of)}
+    finally:
+        (rendered / "pa_shut").chmod(0o755)
+    assert set(views) == {"svc_broker", "pa_seat", "pa_shut"}
+    assert views["pa_shut"].status == "UNREADABLE" and "pa_shut" in views["pa_shut"].detail
+    assert views["svc_broker"].detail == "declared, no summary published"
+
+
+def test_agents_yaml_accepts_a_schedule_aimed_at_its_own_card_and_refuses_a_literal_one():
+    """agents.yaml validates a body against a placeholder agent, so only {card} can name the
+    seat's own session there; a literal card is refused, since the file can't prove it is this
+    seat's (MIS-0002-R29 (schedule_MUST_declare_target))."""
+    import pytest
+    from macf.models.agent_spec import declaration_body as _validate_primal_daemon
+    schedule = {"name": "sweep", "cron": "47 9 * * *", "missed_run": {"kind": "run_once"},
+                "timeout_s": 900, "run": {"command": ["/usr/bin/true"], "wake_when": "exit_code"}}
+    body = {"timezone": "UTC", "units": [], "schedules": [dict(schedule, target="{card}")]}
+    assert _validate_primal_daemon(body) is body
+    with pytest.raises(ValueError, match="may target only"):
+        _validate_primal_daemon({**body, "schedules": [dict(schedule, target="Someone_abcdef")]})

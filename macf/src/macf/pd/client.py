@@ -34,6 +34,7 @@ from macf.pd.interface import (
 from macf.pd.scheduler import EVENT_DONE, EVENT_NOT_RUN, EVENT_SEEN, EVENT_STARTED
 from macf.platform.tray_host import TrayHost, tray_host
 from macf.utils.peercred import peer_credentials
+from macf import calling_card
 
 #: How long a client waits for the daemon to connect and reply.
 REPLY_TIMEOUT_S = 5.0
@@ -72,9 +73,20 @@ def ask(card: str, request: dict, *, base: Optional[Path] = None,
         except OSError as e:
             raise DaemonUnavailable(f"the daemon did not answer: {e}") from e
     try:
-        return Response.model_validate_json(reply)
+        response = Response.model_validate_json(reply)
     except ValidationError as e:
         raise DaemonUnavailable(f"the daemon's reply could not be read: {e}") from e
+    from macf.pd.build import UPDATE_HINT, known_ops, unknown_verb
+    verb = None if response.ok else unknown_verb(response.error)
+    if verb and verb in known_ops():
+        # The daemon is older than this command, which its parser's message doesn't say (#816).
+        return Response(ok=False, error=f"this daemon is older than this command: it doesn't know "
+                                        f"the request '{verb}'; {UPDATE_HINT}")
+    if verb:
+        # Neither side knows it: the fault is this command's, and updating the daemon won't help.
+        return Response(ok=False, error=f"this command sent a request no daemon knows, '{verb}': "
+                                        f"a defect in this command, not an old daemon")
+    return response
 
 
 def _read_line(conn: socket.socket) -> bytes:
@@ -110,6 +122,10 @@ class StatusReport:
     tray: str = ""
     schedules: List[dict] = field(default_factory=list)
     runs: str = ""
+    #: The build the daemon runs ("" when it doesn't say, being older than build reporting), and
+    #: the build this command runs, so a reader sees when they drift (MacEff #816).
+    daemon_build: str = ""
+    cli_build: str = ""
 
 
 def status(home: Path, card: str, *, base: Optional[Path] = None,
@@ -159,8 +175,20 @@ def _units(home: Path, card: str, *, base: Optional[Path] = None,
                             units=units)
     if not reply.ok:
         return StatusReport(card=card, source="daemon", why=f"the daemon refused: {reply.error}")
+    from macf.pd.build import build_id
     return StatusReport(card=card, source="daemon", why="its record and its socket agree",
-                        units=[u.model_dump() for u in reply.units or []])
+                        units=[u.model_dump() for u in reply.units or []],
+                        daemon_build=_daemon_build(card, base), cli_build=build_id())
+
+
+def _daemon_build(card: str, base) -> str:
+    """The daemon's build, asked separately from its status, or "" when it doesn't know the
+    request, which only a daemon older than this command doesn't (MacEff #816)."""
+    try:
+        reply = ask(card, {"op": "build"}, base=base)
+    except DaemonUnavailable:
+        return ""
+    return (reply.build or "") if reply.ok else ""
 
 
 def _schedule_events(declaration: Declaration, card: str) -> List[dict]:
@@ -174,7 +202,7 @@ def _schedule_events(declaration: Declaration, card: str) -> List[dict]:
     booted: Optional[float] = None
     for event in read_events(reverse=True, scope="all", only=SCHEDULE_EVENTS):
         data = event.get("data") or {}
-        if data.get("agent") != card:
+        if not calling_card.is_agent(data.get("agent"), card):
             continue
         if event.get("event") == EVENT_DAEMON_START:
             if booted is None:                       # newest first: the current daemon's
@@ -209,7 +237,7 @@ def _last_unit_events(declaration: Declaration, card: str) -> List[dict]:
     found: Dict[tuple, dict] = {}
     for event in read_events(reverse=True, scope="all", only=(EVENT_STATE, EVENT_LIVENESS)):
         data = event.get("data") or {}
-        if data.get("agent") != card:
+        if not calling_card.is_agent(data.get("agent"), card):
             continue
         found.setdefault((event.get("event"), data.get("unit")), event)
         if all((kind, unit) in found for unit in wanted

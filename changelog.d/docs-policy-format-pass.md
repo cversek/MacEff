@@ -1,0 +1,3 @@
+### Changed
+
+- **Framework policies brought to `policy_writing`'s format** (#897). `macf_tools policy check` failed 34 framework policies, and now fails 2, both four-line stubs. Most already stated their type and status under older labels (`Category`, `Policy Type`, or a bulleted classification block), and now state them as the header's `Type` and `Status`. `Scope` is taken from each policy's own Scope section where it has one, and is otherwise "All agents (PA and SA)". Eleven policies gain the `=== CEP_NAV_BOUNDARY ===` after their guide, so `policy navigate` shows the guide and not the whole policy. `workspace_discipline` gains a guide, with its sections numbered to match. `reflections` drops a creation breadcrumb from its header.

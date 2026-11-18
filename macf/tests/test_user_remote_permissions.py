@@ -16,6 +16,17 @@ from macf.utils.claude_settings import (
 )
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _own_home(tmp_path_factory, monkeypatch):
+    """Every test here gets an empty home and no CLAUDE_CONFIG_DIR, so the toggle never reads
+    the real user's settings: a maintainer's own Ask rules joined the deny list on review."""
+    monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+
+
 def _seed(tmp_path, settings):
     d = tmp_path / ".claude"
     d.mkdir(parents=True, exist_ok=True)
@@ -103,3 +114,45 @@ def test_incremental_scope_primitives_stay_non_hanging():
     assert "scope clear" in joined, "scope clear must stay Ask-listed/guarded"
     for safe in ("scope remove", "scope pause", "scope add", "scope unpause"):
         assert safe not in joined, f"'{safe}' must not be Ask-listed — it is the non-hanging path"
+
+
+def test_remote_refuses_only_what_would_prompt(tmp_path):
+    """The repo owner, Oct 24: while remote, the agent keeps doing what it may do without a prompt.
+    A push the settings already let run can't hang the CLI, so it is not denied; every entry the
+    Ask list holds is, the deployment's own additions included, and so is AskUserQuestion."""
+    _seed(tmp_path, {"permissions": {"ask": ["Bash(macf_tools pd entry add:*)", "Bash(rm -r:*)"],
+                                     "allow": ["Bash(git push:*)"], "deny": []}})
+    toggle_user_remote_deny_permissions(True, project_root=tmp_path)
+    perms = _load(tmp_path)["permissions"]
+    assert "Bash(git push:*)" in perms["allow"] and "Bash(git push:*)" not in perms["deny"]
+    assert {"Bash(macf_tools pd entry add:*)", "Bash(rm -r:*)", "AskUserQuestion"} <= set(perms["deny"])
+    assert perms["ask"] == []
+    toggle_user_remote_deny_permissions(False, project_root=tmp_path)
+    perms = _load(tmp_path)["permissions"]
+    assert perms["ask"] == ["Bash(macf_tools pd entry add:*)", "Bash(rm -r:*)"] and perms["deny"] == []
+
+
+def test_leaving_remote_never_lifts_a_deny_the_operator_set(tmp_path):
+    _seed(tmp_path, {"permissions": {"ask": ["Bash(rm -r:*)"], "allow": [], "deny": ["AskUserQuestion"]}})
+    toggle_user_remote_deny_permissions(True, project_root=tmp_path)
+    assert set(_load(tmp_path)["permissions"]["deny"]) == {"AskUserQuestion", "Bash(rm -r:*)"}
+    toggle_user_remote_deny_permissions(False, project_root=tmp_path)
+    assert _load(tmp_path)["permissions"]["deny"] == ["AskUserQuestion"]
+
+
+def test_an_ask_rule_in_the_users_own_settings_is_denied_while_remote(tmp_path, monkeypatch):
+    """The head maintainer's review on #821: an Ask rule in any settings file prompts, and the
+    user's own file is where an operator keeps theirs. One read only the local file, so those
+    still hung the CLI while remote. The local deny now holds them, and leaving remote lifts
+    only what it added."""
+    conf = tmp_path / "userconf"
+    conf.mkdir()
+    (conf / "settings.json").write_text(json.dumps({"permissions": {"ask": ["Bash(macf_tools task grant-delete:*)"]}}))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(conf))
+    _seed(tmp_path, {"permissions": {"ask": ["Bash(rm -r:*)"], "allow": [], "deny": []}})
+    toggle_user_remote_deny_permissions(True, project_root=tmp_path)
+    deny = _load(tmp_path)["permissions"]["deny"]
+    assert {"Bash(macf_tools task grant-delete:*)", "Bash(rm -r:*)", "AskUserQuestion"} <= set(deny)
+    toggle_user_remote_deny_permissions(False, project_root=tmp_path)
+    perms = _load(tmp_path)["permissions"]
+    assert perms["deny"] == [] and perms["ask"] == ["Bash(rm -r:*)"]   # the user's own rule stays in their file

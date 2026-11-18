@@ -14,6 +14,7 @@ specific to this corpus.
 
 from __future__ import annotations
 
+import sys
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -21,7 +22,24 @@ from typing import Any, Dict, List, Optional
 from .concepts import extract_wiki_concepts, normalize_concept
 from .diagnostics import Chart, Diagnosis, Finding, Severity
 
-__all__ = ["examine"]
+__all__ = ["examine", "excluded_folders", "OPTED_OUT_CHECK"]
+
+OPTED_OUT_CHECK = "opted out"
+
+
+def excluded_folders(agent_home: Path) -> List[str]:
+    """Each folder the opt-out marker takes out of the web, named by its path
+    under ``agent/`` (``private/scratchpad_archive``), so two subagents'
+    folders of the same name stay distinguishable."""
+    from .knowledge_web import excluded_type_roots
+    base = agent_home / "agent"
+    out = []
+    for _name, d in excluded_type_roots(agent_home):
+        try:
+            out.append(str(d.relative_to(base)))
+        except ValueError:
+            out.append(str(d))
+    return out
 
 # Spellings that normalize to the same concept but are written differently in
 # source. Harmless to the graph now that extraction normalizes, but they are
@@ -34,11 +52,15 @@ def _link_remedy(ca_type: str) -> str:
     """How an orphan of this type joins the web. A duty is a JSON record with a
     wiki_links field, governed by the roles policy; everything else is markdown."""
     if ca_type == "duties":
-        return ("add concepts to the record's wiki_links field (role duty add --wiki-links, or edit "
-                "the JSON); see the roles policy on knowledge web participation for what a duty links")
+        return ("macf_tools role duty edit <id> --wiki-links <concepts>; see the roles policy on "
+                "knowledge web participation for what a duty links")
     if ca_type == "tasks":
         return ("macf_tools knowledge link task:<id> <concept>; see the task_management policy on "
                 "knowledge web participation for what a task links")
+    if ca_type == "amail":
+        return ("macf_tools knowledge link <message path> <concept>, which writes the message's "
+                ".wiki-links sidecar under amail/.links and never edits it; see the amail policy on knowledge web "
+                "participation for what mail links")
     return (f"add a ## Wiki-Links section (or macf_tools knowledge link <path> <concept>); see the "
             f"{ca_type} policy on knowledge web participation "
             f"for what this type should link")
@@ -57,7 +79,7 @@ def artifact_date(path: Path) -> float:
         if m:
             try:
                 return _dt.datetime.strptime(m.group(1), "%Y-%m-%d").timestamp()
-            except ValueError:
+            except ValueError:  # noqa: S112 - the name may or may not carry a date; a name without one falls through to the folder name and then the file's mtime
                 continue
     try:
         return path.stat().st_mtime
@@ -80,7 +102,7 @@ def examine(agent_home: Optional[Path] = None,
     alone, the bulk pass over one type. The chart's orphan count is the whole
     census either way.
     """
-    from .knowledge_web import build_knowledge_web, concepts_of, iter_web_files
+    from .knowledge_web import OPT_OUT_MARKER, build_knowledge_web, concepts_of, iter_web_files
     from .utils.paths import find_agent_home
 
     agent_home = agent_home or find_agent_home()
@@ -102,14 +124,17 @@ def examine(agent_home: Optional[Path] = None,
         examined += 1
         try:
             content = path.read_text(errors="replace")
-        except OSError:
+        except OSError as e:
+            print(f"⚠️ MACF: could not read {path.name} (skipped in the doctor scan): {e}", file=sys.stderr)
             continue
         if concepts_of(ca_type, path, content):
             continue
         orphans_by_type.setdefault(ca_type, []).append(path)
         # Distinguish "never linked" from "wrote links that do not count".
         # The second is a different mistake and deserves a different remedy.
-        if _RAW_LINK.search(content):
+        # An HTML message's links are only ever in its sidecar, so any [[..]]
+        # in its bytes is text, not a link written wrongly.
+        if path.suffix != ".html" and _RAW_LINK.search(content):
             mention_only.append(path)
 
     for ca_type, paths in sorted(orphans_by_type.items()):
@@ -153,12 +178,48 @@ def examine(agent_home: Optional[Path] = None,
                         if is_mention_only else _link_remedy(ca_type)),
             ))
 
+    # ---- sidecars the web does not read ------------------------------------
+    # A mail message's links are read only from amail/.links. A sidecar-named
+    # file anywhere else under amail is ignored, and named here, because one
+    # inside a received thread may have come in a bundle its sender built.
+    from .knowledge_web import SIDECAR_ROOT, _type_roots, stray_sidecars
+    for ca_type, root in _type_roots(agent_home):
+        if ca_type != "amail":
+            continue
+        for f in stray_sidecars(root):
+            findings.append(Finding(
+                check="stray mail sidecars",
+                severity=Severity.NOTE,
+                subject=f"amail: {f.relative_to(root)}",
+                detail=(f"a sidecar outside {SIDECAR_ROOT}, so the web ignores it; "
+                        "if it sits in a received thread, its sender may have written it"),
+                remedy=("read it before trusting any of it; to link the message, use macf_tools "
+                        "knowledge link on the message, which writes under " + SIDECAR_ROOT),
+            ))
+
+    # ---- folders opted out by the marker -----------------------------------
+    # An exclusion is never silent: every folder the marker removes is named
+    # here, so a reader of the web's health sees what the web does not hold.
+    excluded = excluded_folders(agent_home)
+    for label in excluded:
+        findings.append(Finding(
+            check=OPTED_OUT_CHECK,
+            severity=Severity.NOTE,
+            subject=f"{label}: out of the web by its marker",
+            detail=f"the folder holds {OPT_OUT_MARKER}, so none of its files is walked",
+            remedy=(f"none if the folder holds no artifacts; if it does, delete {OPT_OUT_MARKER} "
+                    "and link them instead (see the scholarship policy on opting a folder out)"),
+        ))
+
     # ---- normalization drift in source text --------------------------------
     drift: Dict[str, set] = {}
     for _ca_type, _root, path in iter_web_files(agent_home):
+        if path.suffix == ".html":
+            continue    # an HTML message is never read for links (amail policy)
         try:
             content = path.read_text(errors="replace")
-        except OSError:
+        except OSError as e:
+            print(f"⚠️ MACF: could not read {path.name} (left out of the drift scan): {e}", file=sys.stderr)
             continue
         # Strip mentions before looking for drift, exactly as extraction does.
         # Scanning raw content made this check internally inconsistent with the
@@ -218,6 +279,7 @@ def examine(agent_home: Optional[Path] = None,
             "edges": stats.get("total_edges", 0),
             "concepts": stats.get("wiki_concepts", 0),
             "orphans": sum(len(v) for v in orphans_by_type.values()),
+            "opted_out": len(excluded),
         },
     )
     return Diagnosis(chart=chart, findings=findings)

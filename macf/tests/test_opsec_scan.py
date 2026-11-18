@@ -376,6 +376,11 @@ def test_every_declared_field_reaches_the_broker(tmp_path):
         "rate_limit_window_seconds": "-> rate_limiter (window on each RateLimit)",
         "transport_endpoint": "-> transport (HttpTransport endpoint)",
         "transport_timeout": "-> transport (HttpTransport timeout)",
+        # Built into the pinned TLS context the transport verifies its endpoint with (R34);
+        # covered in test_amail_pinned_tls.py: declared reaches transport.tls_context, a
+        # wrong digest or a half declaration refuses, none is announced at start.
+        "trust_bundle": "-> transport (HttpTransport tls_context, pinned_context)",
+        "trust_bundle_sha256": "-> transport (digest checked by pinned_context)",
         # Read from the RAW config at startup by assert_package_current(),
         # not carried into BrokerConfig, because it gates whether the process
         # may start at all -- a value the config object cannot usefully hold,

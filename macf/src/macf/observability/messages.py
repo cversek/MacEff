@@ -44,7 +44,7 @@ class HookMessage:
             agent (via ``systemMessage``) and the remote observer (via
             Telegram), so write it for both audiences.
         originating_agent: Optional attribution for messages produced
-            while a SubAgent is active — e.g. ``"DevOpsEng@abc123"``
+            while a SubAgent is active — e.g. ``"DevOpsEng_abc123"``
             (display name + 6-char UUID prefix). ``None`` for messages
             produced by the Primary Agent or by hook code that doesn't
             track agent identity. Rendered as a prefix-tag on both

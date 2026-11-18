@@ -204,7 +204,7 @@ def scan_last_tool_error(transcript_path: str) -> Optional[Tuple[str, str]]:
             continue
         try:
             entry = json.loads(line)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError:  # noqa: S112 - the live transcript's newest line can be cut mid-write; a line that doesn't parse can't be the one sought, and a warning would fire on most hook calls
             continue
         msg = entry.get("message") or {}
         if msg.get("role") != "user":

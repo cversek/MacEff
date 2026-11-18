@@ -19,6 +19,7 @@ RUN --mount=type=cache,target=/var/cache/apt \
       acl jq tini \
       tree \
       tmux rsync \
+      mosquitto \
       libgl1 libxrender1 libxext6 libx11-6 libosmesa6 \
  && rm -rf /var/lib/apt/lists/* \
  && git lfs install --system

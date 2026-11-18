@@ -1,0 +1,3 @@
+### Added
+
+- **Zone mail routes by a declared map, and a broker reads only declared peers** (`SharedHandoff.agents`, the hand-off declaration's `agents`, MIS-0004 R08 and R09): under one zone the domain no longer says which broker holds a mailbox, so each declared peer lists its agents by box name and calling card, and a zone address routes to the peer that lists it, or to the relay when none does. The receiving broker accepts zone mail from a peer only for agents that peer is declared to hold. An agent may send From its own zone address, kept byte-identical. The map stands in for the system daemon's declaration until MIS-0007 lands; MIS-0004 section 12.2 records how it is retired.

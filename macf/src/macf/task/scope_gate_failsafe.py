@@ -8,8 +8,8 @@ again — and incoming channel messages get queued behind the loop, leaving
 the agent unreachable through its primary channel until the user manually
 intervenes from the terminal.
 
-Design: simple decrementing counter, persisted as a small session-scoped
-JSON sidecar.
+Design: simple decrementing counter, persisted as a small JSON sidecar in
+this user's private runtime directory.
 
 - Counter starts at COUNT_INIT (default 5).
 - handle_pre_tool_use resets to COUNT_INIT on every fire (any useful work
@@ -28,18 +28,22 @@ import json
 import os
 from pathlib import Path
 
+from macf.observability import Warning, emit_warning
+
 COUNT_INIT = 5
 
 
 def _counter_path() -> Path:
-    """Path to the per-session sidecar JSON tracking the idle-stop count."""
-    base = Path("/tmp") / "macf"
-    base.mkdir(parents=True, exist_ok=True)
-    # One file per process tree — session id derived later if needed.
-    # For now a single global file is sufficient: each session has its own
-    # /tmp/macf state because /tmp is per-user and multiple agents are not
-    # the targeted scenario.
-    return base / "scope_gate_idle_counter.json"
+    """Path to this user's sidecar JSON tracking the idle-stop count.
+
+    It lives in this user's private runtime directory (``utils.paths.user_runtime_dir``),
+    never a bare ``/tmp/macf``. Several agents share one container, each under its own
+    account, and the first to create ``/tmp/macf`` owned it: every other agent's write
+    failed, its counter read COUNT_INIT on every Stop, and the failsafe could never reach
+    zero, so the scope gate re-prompted without limit.
+    """
+    from macf.utils.paths import user_runtime_dir
+    return user_runtime_dir() / "scope_gate_idle_counter.json"
 
 
 def _read() -> int:
@@ -56,12 +60,16 @@ def _read() -> int:
 
 
 def _write(v: int) -> None:
-    """Persist counter value (best-effort)."""
-    p = _counter_path()
+    """Persist counter value. A failure is non-fatal but never silent: a counter that
+    cannot be saved reads COUNT_INIT on every Stop, and the failsafe it exists for
+    never fires."""
     try:
+        p = _counter_path()
         p.write_text(json.dumps({"remaining": int(v)}))
-    except OSError:
-        pass  # Non-fatal: failsafe is best-effort
+    except OSError as e:
+        emit_warning(Warning(source="scope_gate_failsafe", kind="counter_unwritable",
+                             detail=f"the idle-stop counter could not be saved ({e}); "
+                                    f"the failsafe cannot count down until it can"))
 
 
 def reset() -> None:

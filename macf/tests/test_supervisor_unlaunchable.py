@@ -249,8 +249,9 @@ class TestSupervisionStillWorks:
             exit 127
             """)
         rc, out = _run_supervisor(tmp_path, "t", late, delay=1, timeout=16)
-        assert "FATAL" not in out
-        assert out.count("Restart #") >= 1
+        # The whole output in each message, so a failure says why the child exited (#804).
+        assert "FATAL" not in out, f"supervisor gave up on a child that ran:\n{out}"
+        assert out.count("Restart #") >= 1, f"no restart recorded:\n{out}"
 
 
 class TestNeverLaunchedVerdict:

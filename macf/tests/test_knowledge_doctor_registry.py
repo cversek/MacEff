@@ -30,7 +30,8 @@ def test_any_artifact_dir_is_discovered_without_declaration(tmp_path):
 def test_tool_directories_are_not_walked(tmp_path):
     """A vendored dependency tree or a cache holds tools' files, never artifacts."""
     _mk(tmp_path, "public/notes/nested/kept.md")
-    for tool_dir in ("node_modules/pkg", "__pycache__", ".git/info", ".venv/lib"):
+    for tool_dir in ("node_modules/pkg", "__pycache__", ".git/info", ".venv/lib",
+                     ".pytest_cache", ".mypy_cache", ".ruff_cache"):
         _mk(tmp_path, f"public/notes/{tool_dir}/README.md")
     walked = [str(p.relative_to(r)) for t, r, p in iter_web_files(tmp_path) if t == "notes"]
     assert walked == ["nested/kept.md"]

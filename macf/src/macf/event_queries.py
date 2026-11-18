@@ -806,6 +806,12 @@ def _report_carry_gap(event_type: str, key: str) -> None:
         print(f"⚠️ MACF: could not log the carry gap: {e}", file=sys.stderr)
 
 
+#: The operational modes, the one axis this reader answers. USER_REMOTE, USER_IDLE and QUIET_MODE
+#: are written as mode_change events too, and are orthogonal: reading the newest mode_change of
+#: any mode turned an automatic USER_REMOTE into "MANUAL_MODE" while AUTO_MODE stood.
+OPERATIONAL_MODES = ("AUTO_MODE", "MANUAL_MODE")
+
+
 def get_auto_mode_from_events(session_id: str) -> Tuple[bool, str]:
     """
     Get auto_mode setting from most recent mode_change event.
@@ -843,6 +849,8 @@ def get_auto_mode_from_events(session_id: str) -> Tuple[bool, str]:
             data = event.get("data", {})
 
             mode = data.get("mode", "MANUAL_MODE")
+            if mode not in OPERATIONAL_MODES:
+                continue
             enabled = data.get("enabled", False)
             auto_mode = (mode == "AUTO_MODE" and enabled)
 
@@ -870,6 +878,8 @@ def get_auto_mode_from_events(session_id: str) -> Tuple[bool, str]:
         if event.get("event") == "mode_change":
             data = event.get("data", {})
             mode = data.get("mode", "MANUAL_MODE")
+            if mode not in OPERATIONAL_MODES:
+                continue
             enabled = data.get("enabled", False)
             auto_mode = (mode == "AUTO_MODE" and enabled)
             _report_carry_gap("mode_change", mode)

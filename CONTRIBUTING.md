@@ -153,3 +153,11 @@ reconcile the implementation against it afterwards; the reconciliation catches r
 Note that CI runs `ubuntu-latest` only, matrixed over Python versions. macOS-specific breakage
 is green in CI by construction, so if you develop on a Mac your local run is not redundant with
 CI — a disagreement between the two is itself the finding, whichever side is green.
+
+## Where you can comment
+
+Issues and pull requests opened by the repo owner or a maintainer are where the maintainers
+coordinate, and they take comments from collaborators only. An issue of theirs is locked as it
+opens. On a pull request of theirs, a comment from anyone else is hidden as off-topic and the
+repo owner is told (`.github/workflows/lock-trusted-threads.yml`). Open your own issue to raise
+something, and comment freely on any issue opened by someone outside the maintainers.

@@ -15,7 +15,7 @@ from macf.cli import main
 from macf.pd import adapter as adapters
 from macf.pd.interface import Declaration, Unit, declaration_path
 
-CARD = "Tester@abc123"
+CARD = "Tester_abc123"
 ME = pwd.getpwuid(os.getuid()).pw_name
 
 
@@ -102,8 +102,10 @@ def test_the_launch_agent_runs_exactly_the_daemon_on_the_home(tmp_path):
     """MIS-0002-R04 (outer_tier_MUST-NOT_hold_agent_config): the agent home is the daemon's
     only argument."""
     home = tmp_path / "home"
+    from macf.platform.launchd import framework_app
     plist = plistlib.loads(adapters.LaunchdAdapter(user_home=tmp_path).render(CARD, home).encode())
-    assert plist["ProgramArguments"] == [sys.executable, "-m", "macf.pd", str(home)]
+    assert plist["Program"] == (framework_app(sys.executable) or sys.executable)
+    assert plist["ProgramArguments"] == ["maceff_pd", "-m", "macf.pd", str(home)]
 
 
 def test_a_socket_path_too_long_stops_the_launchd_install_before_anything_is_written(tmp_path, monkeypatch):
@@ -241,6 +243,22 @@ def test_an_allowlist_the_declaration_does_not_match_installs_nothing(tmp_path, 
     assert run("install") == 1
     err = capsys.readouterr().err
     assert tier.installed == [] and "telegram@claude-plugins-official" in err and "nothing installed" in err
+
+
+def test_a_channel_no_allowlist_admits_is_named_and_the_install_goes_on(tmp_path, monkeypatch, tier, capsys):
+    """cversek/MacEff#904: with no organization allowlist, a declared channel from outside the
+    client's default marketplace will connect and be silent. The install says so and goes on: it
+    has nothing to compare, and the channel may be admitted some way it can't read."""
+    import json
+    home = make_home(tmp_path)
+    path = declaration_path(home)
+    body = json.loads(path.read_text())
+    body["allowlisted_channels"] = [{"plugin": "maceff-channel", "marketplace": "maceff"}]
+    path.write_text(json.dumps(body))
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(home))
+    assert run("install") == 0
+    err = capsys.readouterr().err
+    assert tier.installed and "maceff-channel@maceff" in err and "no organization allowlist" in err
 
 
 def test_grants_tested_at_install(tmp_path, monkeypatch, tier, capsys):

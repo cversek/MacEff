@@ -11,7 +11,7 @@ import pytest
 from macf.pd import interface as pdi
 from macf.platform import systemd
 
-CARD = "Resident@1a2b3c"
+CARD = "Resident_1a2b3c"
 ARGV = ["/usr/bin/python3", "-m", "macf.pd", "/home/resident"]
 
 

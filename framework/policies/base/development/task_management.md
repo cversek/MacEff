@@ -610,8 +610,8 @@ With MTMD:
 - `creation_breadcrumb`: Current breadcrumb
 
 **Enforcement Points**:
-1. `/maceff:roadmap:draft` - After approval, prompts to pin MISSION with phases
-2. `/maceff:task:start` - If MISSION has no children, offers to expand from roadmap
+1. `/maceff-roadmap-draft` - After approval, prompts to pin MISSION with phases
+2. `/maceff-task-start` - If MISSION has no children, offers to expand from roadmap
 
 **Why Mandatory**: Task hierarchy provides observability. Without phase tasks, user cannot track progress through MISSION phases in task UI.
 
@@ -1411,6 +1411,8 @@ macf_tools task blocked-by #68 #67     # #68 is blocked by #67
 macf_tools task unblocked-by #68 #67   # Remove blocked-by
 ```
 
+`task block #67 #68` and `task blocked-by #68 #67` record the same edge, on the blocked task's `blockedBy`: the one `task start` enforces. `task get` shows it from both ends, the blocking side derived. `task create phase --blocked-by` takes one task per flag, repeated or as a comma list (`--blocked-by 67,69`), so a title after it stays the title.
+
 ### 9.8 Tree Display Modes
 
 ```bash
@@ -1473,7 +1475,7 @@ Task scope defines the boundary of authorized work in AUTO_MODE. Scoped tasks ar
 
 Optional field `scope_status`: `active` | `paused` | `inactive` | `null` (3-state model — extended Cycle 514, BUG #1067)
 
-- Set by `macf_tools task scope set` or `task scope add`
+- Set by `macf_tools task scope set` or `task scope add`. Neither scopes a task that is already completed or archived: it has no work left for the gate to wait on, so each names it and leaves it out
 - Transitions to `paused` via `task scope pause` (with mandatory --justification)
 - Transitions to `inactive` when task is completed while scoped
 - Cleared by `macf_tools task scope clear` (sets all to None) or `task scope remove` (drops specific tasks)

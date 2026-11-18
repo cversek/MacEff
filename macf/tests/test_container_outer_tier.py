@@ -13,6 +13,22 @@ from types import SimpleNamespace
 START_PY = Path(__file__).resolve().parents[2] / "docker" / "scripts" / "start.py"
 
 
+def _agent(username, primal_daemon=None, calling_card=None):
+    """A stand-in agent spec for the rendering mechanics these tests cover. One that declares
+    no ``primal_daemon`` stands for an agent opted out of the container default, which has none;
+    the default itself is covered on the real model in ``test_container_default_daemon``."""
+    return SimpleNamespace(
+        username=username, primal_daemon=primal_daemon, calling_card=calling_card,
+        primal_daemon_opt_out=None if primal_daemon is not None else "a stand-in that declares none",
+        has_daemon=lambda: primal_daemon is not None,
+        effective_calling_card=lambda key: calling_card,
+        effective_primal_daemon=lambda key, mail, container_env=None: primal_daemon)
+
+
+def _cfg(agents, services=None):
+    return SimpleNamespace(services=services or {}, agents=agents, runs_mail=lambda: False)
+
+
 def _start():
     spec = importlib.util.spec_from_file_location("maceff_start_outer_tier", START_PY)
     module = importlib.util.module_from_spec(spec)
@@ -121,7 +137,7 @@ def test_only_agents_with_a_rendered_declaration_get_a_daemon(tmp_path, monkeypa
     home_only.write_text(json.dumps({"units": []}))
     supervised = []
     monkeypatch.setattr(start, "supervise_primal_daemon", lambda user, home: supervised.append(user))
-    cfg = SimpleNamespace(services={}, agents={u: SimpleNamespace(username=u, primal_daemon=None) for u in ("pa_a", "pa_b", "pa_c")})
+    cfg = _cfg(agents={u: _agent(username=u, primal_daemon=None) for u in ("pa_a", "pa_b", "pa_c")})
     # pa_c's schedules would have no daemon (MIS-0002-R11): the step fails, naming it, after
     # pa_b's daemon has started
     import pytest
@@ -135,10 +151,10 @@ def _rendering(tmp_path, monkeypatch, primal_daemon):
     start = _start()
     from macf.pd import names as pd_names
     monkeypatch.setattr(start, "HOME_ROOT", tmp_path / "home")
-    monkeypatch.setattr(pd_names, "agent_card", lambda home: "Resident@1a2b3c")
+    monkeypatch.setattr(pd_names, "agent_card", lambda home: "Resident_1a2b3c")
     (tmp_path / "home" / "pa_a").mkdir(parents=True)
     chowned = []
-    cfg = SimpleNamespace(services={}, agents={"a": SimpleNamespace(username="pa_a", primal_daemon=primal_daemon)})
+    cfg = _cfg(agents={"a": _agent(username="pa_a", primal_daemon=primal_daemon)})
     done = start.render_pd_declarations(cfg, root=tmp_path / "etc",
                                         chown=lambda p, u, g: chowned.append((str(p), u, g)))
     return SimpleNamespace(start=start, done=done, chowned=chowned)
@@ -155,7 +171,7 @@ def test_the_declaration_is_rendered_from_agents_yaml_owned_by_root(tmp_path, mo
     target = tmp_path / "etc" / "pa_a" / "declaration.json"
     assert r.done == ["pa_a"]
     data = json.loads(target.read_text())
-    assert data["agent"] == "Resident@1a2b3c" and data["version"] == 1 and data["units"][0]["name"] == "broker"
+    assert data["agent"] == "Resident_1a2b3c" and data["version"] == 1 and data["units"][0]["name"] == "broker"
     assert oct(target.stat().st_mode)[-3:] == "644" and oct(target.parent.stat().st_mode)[-3:] == "755"
     owned = {Path(p).name: (u, g) for p, u, g in r.chowned}
     assert owned["etc"] == owned["pa_a"] == (0, 0)
@@ -180,14 +196,14 @@ def test_one_agents_broken_identity_costs_only_that_agents_rendering(tmp_path, m
     def card(home):
         if Path(home).name == "pa_bad":
             raise pd_names.IdentityError("no identity file")
-        return "Good@1a2b3c"
+        return "Good_1a2b3c"
     monkeypatch.setattr(pd_names, "agent_card", card)
     for user in ("pa_good", "pa_bad"):
         (tmp_path / "home" / user).mkdir(parents=True)
     stale = tmp_path / "etc" / "pa_bad" / "declaration.json"
     stale.parent.mkdir(parents=True)
     stale.write_text("{}")
-    cfg = SimpleNamespace(services={}, agents={u: SimpleNamespace(username=u, primal_daemon={"units": [UNIT]})
+    cfg = _cfg(agents={u: _agent(username=u, primal_daemon={"units": [UNIT]})
                                   for u in ("pa_good", "pa_bad")})
     done = start.render_pd_declarations(cfg, root=tmp_path / "etc", chown=lambda p, u, g: None)
     assert done == ["pa_good"]
@@ -200,7 +216,7 @@ def test_one_agents_failed_write_costs_only_that_agents_rendering(tmp_path, monk
     start = _start()
     from macf.pd import names as pd_names
     monkeypatch.setattr(start, "HOME_ROOT", tmp_path / "home")
-    monkeypatch.setattr(pd_names, "agent_card", lambda home: "Good@1a2b3c")
+    monkeypatch.setattr(pd_names, "agent_card", lambda home: "Good_1a2b3c")
     for user in ("pa_bad", "pa_good"):
         (tmp_path / "home" / user).mkdir(parents=True)
     stale = tmp_path / "etc" / "pa_bad" / "declaration.json"
@@ -210,7 +226,7 @@ def test_one_agents_failed_write_costs_only_that_agents_rendering(tmp_path, monk
     def chown(path, uid, gid):
         if Path(path).parent.name == "pa_bad" and Path(path).name.endswith(".tmp"):
             raise PermissionError("chown refused")
-    cfg = SimpleNamespace(services={}, agents={u: SimpleNamespace(username=u, primal_daemon={"units": [UNIT]})
+    cfg = _cfg(agents={u: _agent(username=u, primal_daemon={"units": [UNIT]})
                                   for u in ("pa_bad", "pa_good")})
     done = start.render_pd_declarations(cfg, root=tmp_path / "etc", chown=chown)
     assert done == ["pa_good"]
@@ -239,3 +255,186 @@ def test_primal_daemons_start_after_access_and_before_optional_units():
     at = {name: src.index(f'("{name}",') for name in
           ("MACF tools", "agent initialization", "amail", "primal daemons", "policy index", "search service")}
     assert at["agent initialization"] < at["primal daemons"] < at["policy index"] < at["search service"]
+
+
+def test_main_starts_the_access_path_before_the_daemons_and_both_before_any_optional_unit(
+        tmp_path, monkeypatch):
+    """R57, at the place it names: main() itself, run in-process with every step stubbed to
+    record when it runs. sshd (the access path) must start before the primal daemons, and
+    both before the optional units (policy index, search service)."""
+    import subprocess
+    start = _start()
+    order = []
+    agents_yaml = tmp_path / "agents.yaml"
+    agents_yaml.write_text("{}\n")
+    monkeypatch.setattr(start, "AGENTS_CONFIG", agents_yaml)
+    monkeypatch.setattr(start, "PROJECTS_CONFIG", tmp_path / "absent.yaml")
+    cfg = SimpleNamespace(agents={}, subagents={}, defaults=None, homes_volume=None,
+                          ids=SimpleNamespace(slot=lambda name: 0))
+    monkeypatch.setattr(start, "AgentsConfig", lambda **kw: cfg)
+    for quiet in ("run_command", "check_image_ids", "check_service_paths", "ensure_group",
+                  "setup_shared_workspace_permissions", "apply_egress_policy",
+                  "propagate_container_env", "install_ssh_key", "install_macf_tools",
+                  "initialize_agents", "setup_policies", "setup_policy_editors", "place_secrets",
+                  "start_amail_services", "render_pd_declarations"):
+        monkeypatch.setattr(start, quiet, lambda *a, **kw: None)
+    for name, recorded in (("start_primal_daemons", "primal daemons"),
+                           ("start_policy_index", "policy index"),
+                           ("start_search_service_daemon", "search service")):
+        monkeypatch.setattr(start, name, lambda *a, _r=recorded, **kw: order.append(_r))
+
+    def popen(argv, *a, **kw):
+        order.append("sshd" if argv[0].endswith("sshd") else argv[0])
+        return SimpleNamespace(pid=1, wait=lambda: 0)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+
+    start.main()
+    assert {"sshd", "primal daemons", "policy index", "search service"} <= set(order), order
+    optional = min(order.index("policy index"), order.index("search service"))
+    assert order.index("sshd") < order.index("primal daemons") < optional, order
+
+
+# ---- an agent's calling card, declared in agents.yaml and written to its home (persistent_layer 2.1) ----
+
+def _carded(tmp_path, monkeypatch, cards, configs=None):
+    """Homes for agents declaring *cards* (username -> card or None), each with an identity file
+    and, from *configs*, an existing config.json (username -> (dict, mode)). Uses the real
+    ``agent_card``, so a rendering names exactly what the home now holds."""
+    import os
+    start = _start()
+    monkeypatch.setattr(start, "HOME_ROOT", tmp_path / "home")
+    monkeypatch.setattr(start, "account_ids", lambda name: (os.getuid(), os.getgid()))
+    for i, user in enumerate(cards):
+        home = tmp_path / "home" / user
+        (home / ".maceff").mkdir(parents=True)
+        (home / ".maceff_primary_agent.id").write_text(f"{i}a2b3c\n")
+        if user in (configs or {}):
+            data, mode = configs[user]
+            (home / ".maceff" / "config.json").write_text(json.dumps(data))
+            (home / ".maceff" / "config.json").chmod(mode)
+    chowned = []
+    cfg = _cfg(agents={
+        u: _agent(username=u, calling_card=card,
+                           primal_daemon={"units": [{**UNIT, "account": u}]}) for u, card in cards.items()})
+    done = start.render_pd_declarations(cfg, root=tmp_path / "etc",
+                                        chown=lambda p, u, g: chowned.append((Path(p).name, u, g)))
+    return SimpleNamespace(start=start, done=done, chowned=chowned,
+                           config=lambda user: tmp_path / "home" / user / ".maceff" / "config.json",
+                           rendered=lambda user: tmp_path / "etc" / user / "declaration.json")
+
+
+def test_a_declared_card_is_written_into_a_home_without_one_and_the_daemon_renders_under_it(
+        tmp_path, monkeypatch):
+    """Guards the gap that kept every container agent's daemon from rendering: a home with no
+    config.json gets one holding just the declared card, the agent's own, mode 0600, and the
+    declaration names the card the daemon will read from that home."""
+    import os
+    r = _carded(tmp_path, monkeypatch, {"pa_orchard": "Orchard1"})
+    config = r.config("pa_orchard")
+    assert json.loads(config.read_text()) == {"agent_identity": {"calling_card": "Orchard1"}}
+    assert oct(config.stat().st_mode)[-3:] == "600"
+    assert ("config.json.tmp", os.getuid(), os.getgid()) in r.chowned
+    assert r.done == ["pa_orchard"]
+    assert json.loads(r.rendered("pa_orchard").read_text())["agent"] == "Orchard1_0a2b3c"
+
+
+def test_writing_the_card_keeps_every_other_key_and_the_files_owner_and_mode(tmp_path, monkeypatch):
+    """The home's config.json carries the task store and the rest of the agent's identity, which
+    nobody can reconstruct: the card is added beside them, and the file keeps its owner and mode
+    (a mode other than 0600 here, so keeping it can't be mistaken for the default)."""
+    import os
+    existing = {"task_store": {"mode": "home", "path": "agent/public/tasks"},
+                "agent_identity": {"display_name": "Orchard MacEff"}}
+    r = _carded(tmp_path, monkeypatch, {"pa_orchard": "Orchard1"}, {"pa_orchard": (existing, 0o640)})
+    config = r.config("pa_orchard")
+    assert json.loads(config.read_text()) == {
+        "task_store": {"mode": "home", "path": "agent/public/tasks"},
+        "agent_identity": {"display_name": "Orchard MacEff", "calling_card": "Orchard1"}}
+    assert oct(config.stat().st_mode)[-3:] == "640"
+    st = config.stat()
+    assert ("config.json.tmp", st.st_uid, st.st_gid) in r.chowned
+    assert r.done == ["pa_orchard"]
+
+
+def test_a_home_already_holding_the_card_is_left_untouched(tmp_path, monkeypatch):
+    """At every start after the first the card is already there: the file isn't rewritten, so
+    its inode and contents stay exactly as they were, and the daemon still renders."""
+    existing = {"agent_identity": {"calling_card": "Orchard1"}, "z": 1}
+    home_config = tmp_path / "home" / "pa_orchard" / ".maceff" / "config.json"
+    start = _start()
+    monkeypatch.setattr(start, "HOME_ROOT", tmp_path / "home")
+    home_config.parent.mkdir(parents=True)
+    home_config.write_text(json.dumps(existing))
+    before = (home_config.stat().st_ino, home_config.read_text())
+    assert start.write_agent_card("pa_orchard", "Orchard1", tmp_path / "home" / "pa_orchard",
+                                  chown=lambda *a: None) is False
+    assert (home_config.stat().st_ino, home_config.read_text()) == before
+    home_config.unlink()
+    r = _carded(tmp_path / "again", monkeypatch, {"pa_orchard": "Orchard1"}, {"pa_orchard": (existing, 0o600)})
+    assert not any(name == "config.json.tmp" for name, *_ in r.chowned) and r.done == ["pa_orchard"]
+
+
+def test_a_different_card_in_the_home_is_refused_and_costs_only_that_agent(tmp_path, monkeypatch, capsys):
+    """An agent's card keys its daemon's sockets and unit names, so a card in the home that differs
+    from agents.yaml is never overwritten. The conflict is logged by name with both values, and
+    that agent alone gets no rendering (its old one goes), while the next agent still renders.
+    A differing moniker counts the same, since the daemon reads it when no card is set."""
+    for user in ("pa_clash", "pa_moniker"):
+        stale = tmp_path / user / "etc" / user / "declaration.json"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("{}")
+    held = {"pa_clash": {"agent_identity": {"calling_card": "OldName"}},
+            "pa_moniker": {"agent_identity": {"moniker": "OldName"}}}
+    for user, data in held.items():
+        r = _carded(tmp_path / user, monkeypatch, {user: "NewName", "pa_fine": "Fine"}, {user: (data, 0o600)})
+        assert r.done == ["pa_fine"]
+        assert json.loads(r.config(user).read_text()) == data
+        assert not r.rendered(user).exists() and r.rendered("pa_fine").exists()
+        err = capsys.readouterr().err
+        assert user in err and "'OldName'" in err and "'NewName'" in err
+
+
+def test_a_home_whose_moniker_is_the_declared_name_takes_the_card_and_renders(tmp_path, monkeypatch):
+    """A moniker is the card's name without the id fragment, the shape agent init leaves (review
+    of #805). agents.yaml declares the same bare name, so a home holding that moniker agrees with
+    it: the card is written beside it, every other key stays, and the agent renders."""
+    user = "pa_tester"
+    data = {"agent_identity": {"moniker": "Tester", "type": "primary_agent"}}
+    r = _carded(tmp_path / user, monkeypatch, {user: "Tester"}, {user: (data, 0o600)})
+    assert r.done == [user]
+    assert json.loads(r.config(user).read_text()) == {
+        "agent_identity": {"moniker": "Tester", "type": "primary_agent", "calling_card": "Tester"}}
+    assert r.rendered(user).exists()
+
+
+def test_an_agent_without_a_calling_card_gets_nothing_written(tmp_path, monkeypatch):
+    """A card is written only where agents.yaml declares one: an agent without it keeps its home
+    as it was, with no config.json created and an existing one unchanged."""
+    start = _start()
+    monkeypatch.setattr(start, "HOME_ROOT", tmp_path / "home")
+    monkeypatch.setattr(start, "write_agent_card", lambda *a, **k: (_ for _ in ()).throw(AssertionError(a)))
+    bare, kept = tmp_path / "home" / "pa_bare", tmp_path / "home" / "pa_kept"
+    (bare / ".maceff").mkdir(parents=True)
+    (kept / ".maceff").mkdir(parents=True)
+    (kept / ".maceff" / "config.json").write_text('{"agent_identity": {"calling_card": "Kept"}}')
+    cfg = _cfg(agents={
+        "bare": _agent(username="pa_bare", calling_card=None, primal_daemon=None),
+        "kept": _agent(username="pa_kept", primal_daemon=None)})
+    assert start.write_agent_cards(cfg) == {}
+    assert not (bare / ".maceff" / "config.json").exists()
+    assert (kept / ".maceff" / "config.json").read_text() == '{"agent_identity": {"calling_card": "Kept"}}'
+
+
+OWN_SCHEDULE = {"name": "sweep", "cron": "47 9 * * *", "missed_run": {"kind": "run_once"},
+                "target": "{card}", "timeout_s": 900,
+                "run": {"command": ["/usr/bin/true"], "wake_when": "exit_code"}}
+
+
+def test_a_schedule_targeting_its_own_card_is_rendered_with_the_agents_card(tmp_path, monkeypatch):
+    """R29: a seat's schedule wakes its own session. agents.yaml can't know the card's id, so it
+    writes {card}, and the rendering puts the card there, as it does for ``agent``."""
+    r = _rendering(tmp_path, monkeypatch, {"units": [UNIT], "timezone": "UTC",
+                                            "schedules": [OWN_SCHEDULE]})
+    data = json.loads((tmp_path / "etc" / "pa_a" / "declaration.json").read_text())
+    assert r.done == ["pa_a"]
+    assert data["schedules"][0]["target"] == "Resident_1a2b3c"

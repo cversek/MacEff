@@ -271,12 +271,130 @@ def test_hash_mismatch_is_quarantined_as_corruption(deploy):
     assert (deploy.quarantine_dir / eml.name).exists()
 
 
+def _rename_across_volumes(monkeypatch):
+    """Make every rename fail as it does between two filesystems. A test's temp
+    directory is one filesystem, so without this the copy path never runs."""
+    import errno
+    import os
+
+    def cross_device(src, dst, *a, **kw):
+        raise OSError(errno.EXDEV, "Invalid cross-device link", str(src))
+    monkeypatch.setattr(os, "rename", cross_device)
+
+
+def test_quarantine_crosses_volumes_by_copy(deploy, monkeypatch):
+    _rename_across_volumes(monkeypatch)
+    raw = make_raw(sender="stranger@example.org")
+    eml, sidecar = spool(deploy, raw)
+    side_bytes = sidecar.read_bytes()
+    result = inbound.process_entry(deploy, eml, sidecar)
+    assert result["disposition"] == QUARANTINED
+    assert (deploy.quarantine_dir / eml.name).read_bytes() == raw
+    assert (deploy.quarantine_dir / sidecar.name).read_bytes() == side_bytes
+    assert not eml.exists() and not sidecar.exists()
+    assert not list(deploy.quarantine_dir.glob(".*.partial"))
+
+
+def test_a_failed_cross_volume_copy_leaves_the_spool_entry(deploy, monkeypatch):
+    _rename_across_volumes(monkeypatch)
+
+    import os
+
+    # Fail AFTER the partial copy exists, so the test sees whether it is cleaned up.
+    def fails_after_create(*a, **kw):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(os, "fchmod", fails_after_create)
+    eml, sidecar = spool(deploy, make_raw(sender="stranger@example.org"))
+    with pytest.raises(OSError):
+        inbound.process_entry(deploy, eml, sidecar)
+    assert eml.exists() and sidecar.exists()
+    assert not (deploy.quarantine_dir / eml.name).exists()
+    assert not list(deploy.quarantine_dir.glob(".*.partial"))
+
+
+def test_a_cross_volume_copy_does_not_follow_a_symlinked_entry(deploy, monkeypatch, tmp_path):
+    # A compromised receiver plants a link to a file only the broker can read.
+    # A rename would move the link; a copy that followed it would publish the file.
+    _rename_across_volumes(monkeypatch)
+    secret = tmp_path / "broker_only.txt"
+    secret.write_text("not for the spool")
+    eml, sidecar = spool(deploy, make_raw(sender="stranger@example.org"))
+    eml.unlink()
+    eml.symlink_to(secret)
+    with pytest.raises(OSError):
+        inbound.process_entry(deploy, eml, sidecar)
+    assert eml.is_symlink()
+    leaked = [p for p in deploy.quarantine_dir.rglob("*")
+              if p.is_file() and not p.is_symlink() and "not for the spool" in p.read_text()]
+    assert leaked == []
+
+
+def test_a_cross_volume_copy_refuses_a_fifo_without_hanging(deploy, monkeypatch):
+    import os
+    _rename_across_volumes(monkeypatch)
+    eml, sidecar = spool(deploy, make_raw(sender="stranger@example.org"))
+    sidecar.unlink()
+    os.mkfifo(sidecar)
+    deploy.quarantine_dir.mkdir(parents=True)
+    with pytest.raises(OSError, match="not a regular file"):
+        inbound._move_into(sidecar, deploy.quarantine_dir / sidecar.name)
+    assert not (deploy.quarantine_dir / sidecar.name).exists()
+    assert not list(deploy.quarantine_dir.glob(".*.partial"))
+
+
+def test_an_interrupted_quarantine_leaves_the_message_where_the_next_pass_finds_it(
+        deploy, monkeypatch):
+    # The sidecar moves first. If the message's move then fails, the message is
+    # still in the spool, which is scanned for messages, and the next pass sets
+    # it aside visibly. The reverse order would strand a sidecar nothing scans for.
+    real_move = inbound._move_into
+
+    def message_move_fails(src, dest):
+        if src.suffix == ".eml":
+            raise OSError(5, "Input/output error")
+        real_move(src, dest)
+    monkeypatch.setattr(inbound, "_move_into", message_move_fails)
+    eml, sidecar = spool(deploy, make_raw(sender="stranger@example.org"))
+    with pytest.raises(OSError):
+        inbound.process_entry(deploy, eml, sidecar)
+    assert eml.exists() and not sidecar.exists()
+
+    monkeypatch.setattr(inbound, "_move_into", real_move)
+    result = inbound.process_entry(deploy, eml, sidecar)
+    assert result["disposition"] == QUARANTINED
+    assert "sidecar unreadable" in result["reason"]
+    assert (deploy.quarantine_dir / eml.name).exists()
+
+
+def test_a_rename_error_other_than_cross_volume_is_not_copied_around(deploy, monkeypatch):
+    import os
+
+    def denied(*a, **kw):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(os, "rename", denied)
+    eml, sidecar = spool(deploy, make_raw(sender="stranger@example.org"))
+    with pytest.raises(PermissionError):
+        inbound.process_entry(deploy, eml, sidecar)
+    assert eml.exists()
+    assert not (deploy.quarantine_dir / eml.name).exists()
+
+
 def test_mail_for_unknown_recipient_is_quarantined(deploy):
     raw = make_raw()
     result = inbound.process_entry(
         deploy, *spool(deploy, raw, envelope_to="nobody@elsewhere.example"))
     assert result["disposition"] == QUARANTINED
     assert "no local agent" in result["reason"]
+
+
+def test_a_quarantine_reason_never_quotes_a_zone_token(deploy):
+    """MIS-0004 R49: mail to a zone address no agent here holds (a revoked token, or a typo) is
+    quarantined with the card part of the address and the token masked."""
+    token = "".join("0123456789abcdef")     # made-up and assembled, as R49 asks of fixtures
+    result = inbound.process_entry(
+        deploy, *spool(deploy, make_raw(), envelope_to=f"someone_0a1b2c_{token}@zone.example"))
+    assert result["disposition"] == QUARANTINED
+    assert token not in result["reason"] and "someone_0a1b2c_<token>@zone.example" in result["reason"]
 
 
 # ---- push-wake eligibility (the spec's named controls) ---------------------
@@ -613,30 +731,38 @@ def test_ingest_works_with_no_broker_process_at_all(two_agents):
 
 
 def test_ingest_records_three_distinct_key_states(two_agents, tmp_path):
-    """keys_for's three states must not flatten: no key declared is not
-    declared-and-failed is not verified."""
+    """The verdict's three states must not flatten: a sender the registry doesn't
+    declare is not declared-and-failed is not verified (MIS-0004 R44)."""
+    import os
     from macf.amail.client import _verify_at_ingest
     from macf.amail.crypto import generate_keypair, load_private_key, sign
+    from macf.amail.registry import Registry
     from macf.amail.trust import TrustClass
 
-    # (a) unsigned, no key declared -> UNVERIFIED, nothing concluded
-    v = _verify_at_ingest(_bundle(), two_agents["contacts"], "beta")
-    assert v["trust"] == TrustClass.UNVERIFIED.value and v["keys_declared"] == 0
-
-    # (b) key declared, message unsigned -> SUSPECT (a broken commitment)
     key = tmp_path / "alpha.pem"
     pub = generate_keypair(key)
-    two_agents["contacts"].write_text(_addressing({
-        "beta": [{"address": f"alpha@{DOMAIN}", "key": pub}],
-        "alpha": [f"beta@{DOMAIN}"]}))
-    v = _verify_at_ingest(_bundle(), two_agents["contacts"], "beta")
+    d = tmp_path / "etc"
+    d.mkdir(mode=0o755)
+    (d / "registry.yaml").write_text(f"agents:\n  Alpha_0a1b2c:\n    account: alpha\n    keys: ['{pub}']\n")
+    os.chmod(d / "registry.yaml", 0o644)
+    reg = Registry(d / "registry.yaml", root_uid=os.getuid())
+
+    def verdict(m, card="Alpha_0a1b2c"):
+        # The broker's sidecar, naming this message and the card it resolved the sender to.
+        return _verify_at_ingest(m, {"message_id": m.message_id, "sender_card": card}, DOMAIN, reg)
+
+    # (a) a sender the registry doesn't declare -> UNVERIFIED, nothing concluded
+    v = verdict(_bundle(), card="Gamma_6a7b8c")
+    assert v["trust"] == TrustClass.UNVERIFIED.value and v["keys_declared"] == 0
+
+    # (b) declared, message unsigned -> SUSPECT (a broken commitment)
+    v = verdict(_bundle())
     assert v["trust"] == TrustClass.SUSPECT.value and v["keys_declared"] == 1
 
     # (c) signed and verifiable -> ATTESTED
     m = _bundle()
     m.signature = sign(m, load_private_key(key))
-    v = _verify_at_ingest(m, two_agents["contacts"], "beta")
-    assert v["trust"] == TrustClass.ATTESTED.value
+    assert verdict(m)["trust"] == TrustClass.ATTESTED.value
 
     # (d) signed but the signature does not check out -> SUSPECT, and NOT the
     #     same answer as (a): "we looked and it did not add up" is the case
@@ -644,9 +770,9 @@ def test_ingest_records_three_distinct_key_states(two_agents, tmp_path):
     m2 = _bundle()
     m2.signature = sign(m, load_private_key(key))   # signature for a different body
     m2.body = "swapped after signing"
-    v = _verify_at_ingest(m2, two_agents["contacts"], "beta")
+    v = verdict(m2)
     assert v["trust"] == TrustClass.SUSPECT.value
-    assert "did NOT verify" in v["reason"]
+    assert "verifies against no key" in v["reason"]
 
 
 def test_ingest_preserves_the_signature_for_re_verification(two_agents, tmp_path):

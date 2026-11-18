@@ -1,0 +1,3 @@
+### Changed
+
+- **A question to the operator is a dialog, and the policy now says when not to open one** (policy `autonomous_operation` §5.5, beside the unattended refusal): `AskUserQuestion` holds the session until answered, and no Ask rule names it, so the refusal that stops an asking command while the operator is away can't stop it. Never open one while USER_IDLE or USER_REMOTE is on, nor when the operator may be about to step away (late at night, or just after a short reply): ask on their remote channel in a word, or take the conservative default and note it. The operator's ruling of 2026-10-25, after a question held a session for ten minutes.

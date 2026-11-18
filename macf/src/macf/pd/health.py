@@ -33,6 +33,7 @@ from macf.notify.session import verify_incarnation
 from macf.pd.core import LIVENESS_TOLERANCE
 from macf.pd.interface import EVENT_DAEMON_START, EVENT_LIVENESS, EVENT_STATE, Declaration, Liveness, Schedule
 from macf.pd.schedule import CronExpr
+from macf import calling_card
 from macf.pd.scheduler import (
     EVENT_DEFERRED,
     EVENT_DONE,
@@ -123,7 +124,7 @@ def health(declaration: Declaration, events: Iterable[dict], now: float,
         unit = data.get("unit")
         # A unit that isn't a string can't be a declared name, and a list or a dict would
         # raise in the membership test and cost every unit its verdict.
-        if data.get("agent") != declaration.agent or not isinstance(unit, str) or unit not in declared:
+        if not calling_card.is_agent(data.get("agent"), declaration.agent) or not isinstance(unit, str) or unit not in declared:
             continue
         (states if kind == EVENT_STATE else lives)[data["unit"]] = event
     return [_unit_health(u.name, states.get(u.name), lives.get(u.name), now, probe)
@@ -226,7 +227,7 @@ def schedule_health(declaration: Declaration, events: Iterable[dict], now: float
         if kind not in SCHEDULE_EVENTS:
             continue
         data = event.get("data") or {}
-        if not isinstance(data, dict) or data.get("agent") != declaration.agent:
+        if not isinstance(data, dict) or not calling_card.is_agent(data.get("agent"), declaration.agent):
             continue
         if kind == EVENT_DAEMON_START:
             stamp = _float_or_none(event.get("timestamp")) or 0.0
@@ -312,3 +313,53 @@ def _schedule_health(s: Schedule, tz, newest: Dict[tuple, dict], seen: Optional[
     if outcome.startswith("ok"):
         return ScheduleHealth(**known, verdict="OK", detail=f"the last run: {outcome}")
     return ScheduleHealth(**known, verdict="FAILED", detail=f"the last run: {outcome}")
+
+
+# ============================================================================
+# The mail broker's sweep
+# ============================================================================
+
+# The mail broker's health is its last sweep (MIS-0004-R31 (broker_health_MUST_be_its_sweep)).
+#
+# A broker that is quiet because nothing arrived and one that is quiet because mail is stuck
+# look the same from its socket. What tells them apart is the sweep: the scheduled run that
+# ages the spool and the pickup boxes and exits non-zero on anything stuck past its declared
+# bound. So the broker is judged by that run, read from the scheduler's own events as
+# ``schedule_health`` above reads them, and by nothing it says about itself:
+#
+# - the last sweep that ended ended ``ok``: healthy, an empty one included;
+# - it ended any other way (failed, stopped at its limit, abandoned, never started): unhealthy;
+# - no sweep has ended, or none is declared: unhealthy, because a missing sweep is no verdict;
+# - a sweep is overdue, or the daemon does not run it: unhealthy, whatever the last one said.
+#
+# A sweep in flight, or one due and not yet late, leaves the last ended one's verdict standing.
+# The outside watch reads this for every home that declares a sweep (R32), so a person hears
+# of a broker that stopped sweeping, or whose sweep keeps finding stuck mail.
+
+#: Verdicts that make the broker unhealthy whatever its last ended run said.
+_UNHEALTHY_NOW = ("OVERDUE", "NOT_RUN", "FAILED")
+
+
+class BrokerHealth(BaseModel):
+    """The broker's health, and the sweep it was read from."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    healthy: bool
+    schedule: Optional[str] = None
+    detail: str
+
+
+def broker_health(sweep: Optional[ScheduleHealth]) -> BrokerHealth:
+    """The broker's health from its sweep schedule's health; ``sweep`` None: none is declared."""
+    if sweep is None:
+        return BrokerHealth(healthy=False, detail="no sweep is declared, so the broker has no verdict")
+    name = sweep.schedule
+    if sweep.verdict in _UNHEALTHY_NOW:
+        return BrokerHealth(healthy=False, schedule=name, detail=f"the sweep is {sweep.verdict}: {sweep.detail}")
+    if not sweep.outcome:
+        return BrokerHealth(healthy=False, schedule=name,
+                            detail=f"no sweep has ended yet ({sweep.verdict}: {sweep.detail})")
+    if sweep.outcome.startswith("ok"):
+        return BrokerHealth(healthy=True, schedule=name, detail=f"the last sweep: {sweep.outcome}")
+    return BrokerHealth(healthy=False, schedule=name, detail=f"the last sweep: {sweep.outcome}")

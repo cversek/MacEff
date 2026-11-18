@@ -35,6 +35,7 @@ its domain, which is the one thing that should change.
 from __future__ import annotations
 
 import contextlib
+import datetime
 import hashlib
 import json
 import os
@@ -55,13 +56,12 @@ from dataclasses import dataclass, field
 
 from macf.agent_events_log import append_event
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .audit import AuditLog
 from .contacts import ContactBook, ContactListError
 from .models import Message, new_id, _now_iso
 from .trust import TrustClass, LOCAL_SUBMISSION
-from .crypto import verify
 from .store import deliver, ensure_maildir
 from . import store
 
@@ -226,6 +226,12 @@ class SharedHandoff:
     uid: Optional[int] = None
     gid: Optional[int] = None
     note: str = ""
+    #: The peer's agents under the shared zone: box name -> calling card (MIS-0004 R08).
+    #: Under one zone the domain no longer says which broker holds a mailbox, so the
+    #: declared map does. A stand-in for the system daemon's declaration (MIS-0007), and
+    #: like the rest of this record it lives in the broker's own configuration.
+    #: A value is the card alone, or ``(card, zone_token)`` once the peer's agents carry tokens.
+    agents: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -281,6 +287,21 @@ class BrokerConfig:
 
     domain: str
     agent_homes: Dict[str, Path] = field(default_factory=dict)
+
+    #: The shared mail zone this broker also answers for (MIS-0004 R06), from deployment
+    #: configuration. An address under it names an agent by the card in its home
+    #: (amail.zone), so the zone needs no table of its own. None: this broker answers
+    #: only for domain.
+    zone: Optional[str] = None
+    #: Agent name -> calling card, as declared in the addressing file (R06). Used before the
+    #: home, which the broker's account normally cannot read.
+    agent_cards: Dict[str, str] = field(default_factory=dict)
+    #: Agent name -> zone token, the random part of its zone address after the card, declared at
+    #: provisioning and never derived from its identity, so the public card alone is not an address.
+    agent_zone_tokens: Dict[str, str] = field(default_factory=dict)
+    #: Zone tokens that have been exposed. An address carrying one is refused at once, ours or a
+    #: peer's: rotation is a hard cut, with no window in which the old address still works.
+    revoked_zone_tokens: Set[str] = field(default_factory=set)
     contacts_path: Optional[Path] = None
     audit_path: Optional[Path] = None
     socket_path: Path = Path(DEFAULT_SOCKET)
@@ -397,6 +418,29 @@ class BrokerConfig:
     def address_for(self, agent: str) -> str:
         return f"{agent}@{self.domain}"
 
+    def zone_address_for(self, agent: str) -> Optional[str]:
+        """*agent*'s address under the zone (R06), from its declared card or else its home;
+        None without a zone or a usable card."""
+        if not self.zone:
+            return None
+        local = self._own_local(agent)
+        return f"{local}@{self.zone.strip().lower()}" if local else None
+
+    def _own_local(self, agent: str) -> Optional[str]:
+        """*agent*'s zone local part: its declared card, or else its home's, then its token when it
+        has one. None when no card is usable or the token is revoked; a zone deployment refuses to
+        start in either case (_require_zone_cards), so this is only ever a hand-built config."""
+        from .zone import local_part_from_card
+        from ..pd.names import IdentityError, agent_card
+        token = self.agent_zone_tokens.get(agent)
+        if token is not None and token in self.revoked_zone_tokens:
+            return None
+        try:
+            card = self.agent_cards.get(agent) or agent_card(Path(self.agent_homes[agent]))
+            return local_part_from_card(card, token)
+        except (IdentityError, ValueError, KeyError):
+            return None  # noqa: MACEFF003 - None is the stated answer "no zone address"; a zone deployment refuses to start without one
+
     def may_create_pickup_box(self, agent: str) -> bool:
         """Whether this broker may create ``agent``'s missing pickup box itself (amail.md
         §2.3): only when it runs as a uid bound to that agent in its own authentication
@@ -412,6 +456,8 @@ class BrokerConfig:
         """Local agent owning this address, or None if it is not ours."""
         addr = address.strip().lower()
         local, _, dom = addr.partition("@")  # noqa: MACEFF005 - str.partition's (before, sep, after) contract is fixed by the stdlib; there is no callee whose order can change
+        if self.zone and dom == self.zone.strip().lower():
+            return self._zone_agent(local)
         if dom != self.domain.lower():
             return None
         # The local part is case-insensitive; the declared key keeps the case
@@ -427,6 +473,31 @@ class BrokerConfig:
                 return name
         return None
 
+    def _zone_agent(self, local: str) -> Optional[str]:
+        """The local agent whose home's card gives *local* under the zone (R06). A home that
+        names no agent and declares no card matches nothing."""
+        for name in self.agent_homes:
+            if self._own_local(name) == local:
+                return name
+        return None
+
+    def _zone_peer(self, local: str) -> Optional[SharedRoute]:
+        """The declared peer that lists the agent *local* names under the zone (R08); the
+        route carries the peer's box name for it. A card no peer lists has no route here:
+        the zone decides nothing, and an unparseable declared card matches nothing."""
+        from .zone import local_part_from_card
+        for dom, decl in sorted(self.shared_handoffs.items()):
+            for box, held in decl.agents.items():
+                card, token = held if isinstance(held, tuple) else (held, None)
+                if token is not None and token in self.revoked_zone_tokens:
+                    continue
+                try:
+                    if local_part_from_card(card, token) == local:
+                        return SharedRoute(domain=dom, local=box, decl=decl)
+                except ValueError:
+                    continue
+        return None
+
     def shared_for(self, address: str) -> Optional[SharedRoute]:
         """The route when *address* is under a peer deployment reachable
         through a declared shared hand-off; else None.
@@ -439,6 +510,8 @@ class BrokerConfig:
         local, _, dom = addr.partition("@")  # noqa: MACEFF005 - str.partition's (before, sep, after) contract is fixed by the stdlib; there is no callee whose order can change
         if not local or not dom or dom == self.domain.lower():
             return None
+        if self.zone and dom == self.zone.strip().lower():
+            return self._zone_peer(local)
         decl = self.shared_handoffs.get(dom)
         if decl is None:
             return None
@@ -465,10 +538,19 @@ class DeliveryOutcome:
     detail: str    #: human-readable reason; "" on success
 
 
+def _accepted_now() -> datetime.datetime:
+    """This broker's acceptance time, timezone-aware and to the second, as the sidecar records it."""
+    return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+
+
 class Broker:
     def __init__(self, config: BrokerConfig):
         self.config = config
         self.contacts = ContactBook(config.contacts_path) if config.contacts_path else None
+        # The operator's registry, which every signature is judged against (MIS-0004 R42, R44):
+        # the host's one root-owned file, wherever registry_path() says it is.
+        from .registry import Registry, registry_path
+        self.registry = Registry(registry_path())
         self.audit = (AuditLog(config.audit_path, tier=config.tier)
                       if config.audit_path else None)
         self._warned_peers: set = set()
@@ -913,7 +995,8 @@ class Broker:
                 continue
         return False
 
-    def hand_off(self, agent: str, message: Message, trust: str) -> Path:
+    def hand_off(self, agent: str, message: Message, trust: str,
+                 via: str = "", accepted_at: Optional[str] = None) -> Path:
         """Hand a delivered message into the recipient's pickup box.
 
         UNIFIED DELIVERY. This replaced a direct write into the recipient's
@@ -952,7 +1035,10 @@ class Broker:
         stem = f"{int(time.time())}-{message.message_id}"
         sidecar = {
             "kind": "bundle",
-            "handed_off_at": _now_iso(),
+            # The time the trust was judged at, so the recipient judges at the same one (R45).
+            "handed_off_at": accepted_at or _now_iso(),
+            # The sender's card as this broker resolved it, which the recipient judges by (R44).
+            "sender_card": self.sender_card(message),
             "message_id": message.message_id,
             "sender": message.sender,
             "recipient": self.config.address_for(agent),
@@ -976,7 +1062,7 @@ class Broker:
         # The one place every delivery to a local box passes (rung 1, the
         # internet path's accept_inbound, the peer-intake sweep), so it is
         # where "this agent has this message" is written down.
-        self.record_seen(agent, message, "received")
+        self.record_seen(agent, message, "received", via=via)
         return written
 
     @staticmethod
@@ -1176,9 +1262,10 @@ class Broker:
             # Classified against THIS recipient's contact book, immediately
             # before the handoff. Two recipients may declare different keys for
             # the same sender, so the answer is per mailbox, not per message.
-            trust = self.classify_inbound(message, agent).value
+            at = _accepted_now()
+            trust = self.classify_inbound(message, agent, accepted_at=at).value
             message.trust = trust
-            self.hand_off(agent, message, trust)
+            self.hand_off(agent, message, trust, accepted_at=at.isoformat(timespec="seconds"))
             # Local handoff IS delivery: the message is in the recipient's
             # pickup box and only the recipient can move it from there.
             return DeliveryOutcome(rung="local", trust=trust,
@@ -1275,7 +1362,9 @@ class Broker:
 
         # CHECKED
         expected = self.config.address_for(sender)
-        if message.sender and message.sender.strip() != expected:
+        # The agent's zone address is also its own (R06), byte-identical as well.
+        zoned = self.config.zone_address_for(sender)
+        if message.sender and message.sender.strip() not in (expected, zoned):
             # BYTE-IDENTICAL, not case-insensitively equal.
             #
             # This used to accept a case variant and then REWRITE the field to
@@ -1296,7 +1385,8 @@ class Broker:
                            f"authenticated sender '{expected}' exactly. The From "
                            "field is covered by the signature, so the broker "
                            "cannot correct it without invalidating authorship.")
-        message.sender = expected
+        # A From the agent wrote as its zone address stays as written (it is signature-covered).
+        message.sender = message.sender.strip() if zoned and message.sender and message.sender.strip() == zoned else expected
 
         # MINTED — a submitter-chosen message_id can shadow another message in
         # store.find(), splice threads, and collide audit records.
@@ -1579,8 +1669,17 @@ class Broker:
         message.to = to
         return edited
 
+    def sender_card(self, message: Message) -> Optional[str]:
+        """The sender's calling card, resolved once here and written into the hand-off sidecar, so
+        the recipient judges the signature by the same card (MIS-0004 R44)."""
+        from .zone import card_for_address
+        return card_for_address(message.sender, domain=self.config.domain, zone=self.config.zone,
+                                agent_cards=self.config.agent_cards,
+                                peers={d: h.agents for d, h in self.config.shared_handoffs.items()})
+
     def classify_inbound(self, message: Message, agent: str,
-                         domain_authenticated: bool = False) -> TrustClass:
+                         domain_authenticated: bool = False,
+                         accepted_at: Optional[datetime.datetime] = None) -> TrustClass:
         """What has actually been established about where this came from.
 
         `domain_authenticated` is supplied by the receiving MTA boundary — OUR
@@ -1596,33 +1695,27 @@ class Broker:
         only the DOMAIN — and the message that reads as a trusted human over an
         attacker-controlled address passes DMARC cleanly, because the attacker's
         domain genuinely is the attacker's domain.
+
+        THE SIGNATURE IS JUDGED AGAINST THE OPERATOR'S REGISTRY (MIS-0004 R44), by the same
+        :func:`attest.sender_verdict` the recipient applies at ingest, so the two never disagree on
+        the same bytes. *accepted_at* is this broker's acceptance, which it writes into the
+        sidecar as ``handed_off_at``; when omitted it is now, never "no record", since the broker
+        is accepting it now. A sender the registry declares is held to its keys; any other sender,
+        and every sender while the registry is missing or untrusted, is unverified, and nothing
+        falls back to the keys a contact book declares (R42). *agent* no longer changes the
+        answer: the registry is one declaration for every recipient.
         """
-        keys = self.contacts.keys_for(agent, message.sender) if self.contacts else []
-        if message.signature and keys:
-            if verify(message, message.signature, keys):
-                return TrustClass.ATTESTED
-            # A signature that fails is not the same as no signature. Someone
-            # went to the trouble of attaching one and it did not check out.
-            # Collapsing this into UNVERIFIED discards the only evidence that
-            # separates "we could not tell" from "we looked, and it did not add
-            # up" — and the second is the one worth waking someone for.
-            return TrustClass.SUSPECT
-        if message.signature and not keys:
-            # Signed by a correspondent who has declared no key. Nothing can be
-            # concluded, so nothing is: this is not SUSPECT (no check failed)
-            # and it is certainly not ATTESTED.
-            return TrustClass.DOMAIN_AUTH if domain_authenticated else TrustClass.UNVERIFIED
-        if keys and not message.signature:
-            # A correspondent who publishes a key and then sends unsigned mail
-            # is the shape of an impersonation: the attacker has the address but
-            # not the key, so the cheapest move is to simply omit the signature
-            # and hope nobody checks. Declaring a key is a commitment to using
-            # one, and mail that breaks the commitment is worth flagging.
-            return TrustClass.SUSPECT
-        return TrustClass.DOMAIN_AUTH if domain_authenticated else TrustClass.UNVERIFIED
+        from .attest import sender_verdict
+        verdict = sender_verdict(message, self.sender_card(message), self.registry,
+                                 accepted_at or _accepted_now())
+        trust = TrustClass(verdict["trust"])
+        if trust is TrustClass.UNVERIFIED and domain_authenticated:
+            return TrustClass.DOMAIN_AUTH
+        return trust
 
     def accept_inbound(self, message: Message, recipient: str,
-                       via: str = "", *, rung: str = "shared") -> Dict[str, Any]:
+                       via: str = "", *, rung: str = "shared",
+                       keep_peer_id: bool = False) -> Dict[str, Any]:
         # `rung` goes into the audit record (amail.md §3.3). Its one production
         # caller is the shared-rung intake, hence the default; a new inbound path
         # must pass its own.
@@ -1666,7 +1759,51 @@ class Broker:
         strip_inbound_headers(message)
 
         remote_sender = message.sender
-        message.message_id = new_id("msg")
+        # ONE ID FROM ACCEPTANCE TO READ (MIS-0004 R15). On the shared rung the
+        # id was minted by the peer BROKER that accepted the message from its
+        # sender, and that sender's custody copy records it. Re-minting here
+        # gave one message two ids, so the sender's receipt could not be
+        # joined to the recipient's copy, and a pair accepted twice (an
+        # intake unlink that failed) arrived as two messages the receiver's
+        # duplicate drop (R16) could not recognise. So a well-formed peer id
+        # is kept. Anything else is minted fresh, as internet mail always is:
+        # an id from outside MacEff is a sender's claim, and a claimed id can
+        # shadow a real message in find(). Only the peer-intake sweep asks to
+        # keep it (`keep_peer_id`), after checking that the pair came through
+        # a declared peer's intake and that its sender is under that domain.
+        peer_id = message.message_id if keep_peer_id else ""
+        held_via = f"shared:{via}" if keep_peer_id else ""
+        if peer_id and _ID_RE.match(peer_id):
+            held = self.seen(agent, peer_id)
+            if held is not None and not (held.get("direction") == "received"
+                                         and held.get("via") == held_via
+                                         and held.get("sender") == remote_sender):
+                # SAME ID, NOT THE SAME MESSAGE. The held record came by another
+                # route or from another sender. A peer that learned another
+                # domain's id (a message copied to it) could otherwise claim the
+                # id first and have the genuine copy dropped as a duplicate. So
+                # an id is a duplicate only for the route and sender that first
+                # brought it; anything else is a collision, minted fresh.
+                if self.audit:
+                    self.audit.error(context="peer-intake",
+                                     detail=(f"id-collision: {peer_id} for '{agent}' is held "
+                                             f"from {held.get('via') or held.get('direction')} "
+                                             f"by {held.get('sender')}; minted fresh for "
+                                             f"{remote_sender} via {via}"))
+                message.message_id = new_id("msg")
+                peer_id = ""
+            elif held is not None:
+                # Already handed to this recipient: the same message again,
+                # never a second one. Dropped, and recorded so it is visible.
+                if self.audit:
+                    self.audit.inbound(sender=remote_sender, recipient=recipient,
+                                       message_id=peer_id, decision="duplicate-dropped",
+                                       rung=rung, reason=(f"id already held for '{agent}'"
+                                                          + (f"; via {via}" if via else "")))
+                return {"ok": True, "decision": "duplicate-dropped",
+                        "reason": f"id {peer_id} already held for '{agent}'"}
+        else:
+            message.message_id = new_id("msg")
         message.date = _now_iso()
 
         # BOUND EVERY SIGNATURE-COVERED FIELD *BEFORE* THE LABEL IS MINTED.
@@ -1693,7 +1830,8 @@ class Broker:
         # The invariant this establishes, which is what the tests assert:
         #     verify(deserialize(stored_bytes)) == (stored.trust == ATTESTED)
         truncated = self._bound_fields(message)
-        message.trust = self.classify_inbound(message, agent).value
+        at = _accepted_now()
+        message.trust = self.classify_inbound(message, agent, accepted_at=at).value
         # AUTHORIZE FIRST, THEN DO THE EXPENSIVE WORK.
         #
         # The visibility checks below each scan and deserialise the recipient's
@@ -1711,6 +1849,11 @@ class Broker:
             # hostile by assumption, and a reader inspecting it should not find
             # it threaded against a real conversation.
             message.parent, message.thread_id = None, new_id("thr")
+            # The id too, even a peer's well-formed one: quarantine names its
+            # files by id and second, so a kept id sent twice would overwrite
+            # the first copy of the evidence. The peer's id goes in the reason.
+            if peer_id and message.message_id == peer_id:
+                message.message_id = new_id("msg")
             # ASKED OF THE CONTACT BOOK rather than composed here. A refusal
             # message built at the call site cannot know WHY the address was
             # refused, so a REVOKED sender — the case worth alerting on —
@@ -1729,7 +1872,9 @@ class Broker:
                 self.audit.inbound(sender=message.sender, recipient=recipient,
                                    message_id=message.message_id,
                                    decision="quarantined", rung=rung,
-                                   reason=(f"{reason}; via {via}" if via else reason),
+                                   reason="; ".join(x for x in (
+                                       reason, f"via {via}" if via else "",
+                                       f"peer id {peer_id}" if peer_id else "") if x),
                                    trust=message.trust)
             return {"ok": True, "decision": "quarantined", "reason": reason}
 
@@ -1770,7 +1915,8 @@ class Broker:
 
         # Same unified path: inbound peer mail is handed off, not written
         # across the boundary.
-        self.hand_off(agent, message, message.trust or "")
+        self.hand_off(agent, message, message.trust or "", via=held_via,
+                      accepted_at=at.isoformat(timespec="seconds"))
         if self.audit:
             self.audit.inbound(sender=message.sender, recipient=recipient,
                                message_id=message.message_id, decision="delivered",
@@ -1880,13 +2026,21 @@ class Broker:
         if not self.config.agent_for(recipient):
             return reject(f"recipient '{recipient}' is not a mailbox of this deployment")
         sender_dom = message.sender.rpartition("@")[2].lower()  # noqa: MACEFF005 - str.rpartition's (before, sep, after) contract is fixed by the stdlib
-        if sender_dom != dom:
+        if self.config.zone and sender_dom == self.config.zone.strip().lower():
+            # Under the zone the domain names no broker, so the declared map does (R08): the
+            # peer whose intake carried this may speak only for agents it is declared to hold.
+            route = self.config._zone_peer(message.sender.rpartition("@")[0].lower())  # noqa: MACEFF005 - stdlib contract
+            if route is None or route.domain != dom:
+                return reject(f"sender '{message.sender}' is not an agent '{dom}' is declared "
+                              f"to hold; a peer may only speak for its own agents")
+        elif sender_dom != dom:
             return reject(f"sender '{message.sender}' is not under '{dom}', the "
                           f"domain whose intake carried it; a peer may only "
                           f"speak for its own domain")
         try:
             outcome = self.accept_inbound(message, recipient,
-                                         via=f"shared hand-off from {dom}", rung="shared")
+                                         via=f"shared hand-off from {dom}", rung="shared",
+                                         keep_peer_id=True)
         except Exception as e:  # noqa: BLE001 - the pair must not vanish on an unexpected error
             return reject(f"{type(e).__name__}: {e}")
         try:
@@ -1959,10 +2113,22 @@ class Broker:
                 to = str(meta.get("observed", {}).get("envelope_to", "")).lower()
                 if to == own_addr:
                     quarantined += 1
-        pending_pickup = 0
+        # Every message waiting in the box: agent bundles (*.amsg) as well as internet mail
+        # (*.eml). Counting only *.eml once read two waiting bundles as zero (MIS-0004 R32,
+        # the container prototype). The oldest one's age is what an alert on stuck mail reads.
+        pending_pickup, oldest_pending_s = 0, None
         hdir = self.config.inbound_handoff
         if hdir is not None and (hdir / agent).is_dir():
-            pending_pickup = len(list((hdir / agent).glob("*.eml")))
+            now = time.time()
+            for entry in (hdir / agent).iterdir():
+                if entry.suffix not in (".amsg", ".eml"):
+                    continue
+                try:
+                    age = now - entry.lstat().st_mtime
+                except FileNotFoundError:  # noqa: S112 - the entry was ingested between the listing and the stat, a normal race in which it correctly does not count as pending
+                    continue  # ingested between the listing and the stat
+                pending_pickup += 1
+                oldest_pending_s = max(oldest_pending_s or 0.0, age)
         counts = {
             "quarantined": quarantined,
             "pending_pickup": pending_pickup,
@@ -1996,7 +2162,9 @@ class Broker:
             # auditable fact, the breakdown is in the response.
             self.audit.read(agent=agent, operation="status",
                             count=sum(counts.values()))
-        return {"ok": True, **counts, "budget": budget}
+        # The age stays out of `counts` for the budget's reason: it is summed for the audit total.
+        return {"ok": True, **counts, "budget": budget,
+                "oldest_pending_s": None if oldest_pending_s is None else round(oldest_pending_s)}
 
     def identify(self, conn: socket.socket) -> "Identity":
         """Authenticate the connecting process from kernel-supplied credentials.
@@ -2516,7 +2684,7 @@ class _Server(socketserver.ThreadingUnixStreamServer):
                               f"per agent ({MAX_CONCURRENT_CONNECTIONS} total). "
                               "The message was NOT sent. Retry."),
                 }) + "\n").encode("utf-8"))
-            except OSError:
+            except OSError:  # noqa: S110 - the refused client has usually gone already, and under a connection flood a warning per refusal would bury the broker's log; the refusal itself is what protects the broker
                 pass
             self.shutdown_request(request)
             return
