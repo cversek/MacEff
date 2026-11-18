@@ -74,6 +74,17 @@ def test_the_live_macos_backends_pass_their_contract():
     contract.check_audio_in(MacAudioIn)
 
 
+@pytest.mark.skipif(not MACOS, reason="macOS audio out")
+def test_the_macos_audio_out_passes_its_contract():
+    """Plays only silence, so it runs without asking: stop works idle, mid-sentence and from another thread."""
+    import time
+    from macf.voice.speech.backends import check_audio_out
+    from macf.voice.speech.macos import MacAudioOut
+    started = time.monotonic()
+    check_audio_out(MacAudioOut)
+    assert time.monotonic() - started < 2.0, "a stop 50 ms into a 5 s sentence must end it, not let it run"
+
+
 @pytest.mark.skipif(not MACOS, reason="macOS session dictionary")
 def test_a_session_dictionary_that_cannot_be_read_is_unknown():
     """R07: no dictionary, or one without the lock key's companion fields, is unknown, never unlocked."""

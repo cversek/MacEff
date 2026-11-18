@@ -104,3 +104,14 @@ class MacLockState(LockState):
         if on_console is None:
             return "unknown"
         return "unlocked" if on_console else "locked"
+
+
+def MacIndicator(settle_s: float = 1.0):
+    """The indicator as its own AppKit process (``indicator_overlay_macos.py``) under this Python, which
+    carries PyObjC; fed the same JSON lines as the Linux overlay, so the Linux driver class serves both."""
+    import importlib.util
+    from pathlib import Path
+
+    from macf.voice.capture.linux import OverlayIndicator
+    overlay = Path(importlib.util.find_spec("macf.voice.indicator_overlay_macos").origin)
+    return OverlayIndicator(python=sys.executable, overlay=overlay, settle_s=settle_s, preload=None)

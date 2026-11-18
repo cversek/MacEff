@@ -149,10 +149,8 @@ def build(home: Path):
     if unit_name and unit_name != voice.capture_unit:
         raise RuntimeError(f"this unit is {unit_name!r}, but the voice section names "
                          f"{voice.capture_unit!r} as its capture unit")
-    if not sys.platform.startswith("linux"):
-        raise RuntimeError("this platform has no capture backends yet; docs/VOICE_PORTING.md says "
-                         "what to write (MIS-0008 R14)")
-    from macf.voice.capture.linux import EvdevTriggers, LinuxLockState, OverlayIndicator, PipeWireAudio
+    from macf.voice.capture import platform
+    here = platform.backends(voice.trigger_devices)
     detector = None
     if voice.wake_model:
         model = Path(voice.wake_model)
@@ -166,8 +164,8 @@ def build(home: Path):
                            end_hold_s=voice.end_hold_s, end_silence_s=voice.end_silence_s,
                            continual_close_s=voice.continual_close_s, live_text=True, stream_after_s=3.0)
     return card, CaptureUnit(
-        config, audio=PipeWireAudio(), lock=LinuxLockState(), indicator=OverlayIndicator(),
-        triggers=EvdevTriggers(voice.trigger_devices) if voice.trigger_devices else NoKeys(),
+        config, audio=here["audio"], lock=here["lock"], indicator=here["indicator"],
+        triggers=here["triggers"] or NoKeys(),
         gate=SileroGate(), detector=detector, **transcription(voice.transcription_prompt),
         deliver=lambda u: deliver(card, u), on_voice_event=lambda kind, data: voice_event(card, kind, data),
         guard_lowered=lambda: guard_lowered(card),
@@ -237,14 +235,12 @@ def build_system(home: Path, card: str, declaration, *, backends=None, publish=N
 
 
 def _platform_backends(trigger_devices, vocabulary: Optional[str] = None) -> dict:
-    if not sys.platform.startswith("linux"):
-        raise RuntimeError("this platform has no capture backends yet; docs/VOICE_PORTING.md says what to write (MIS-0008 R14)")
-    from macf.voice.capture.linux import EvdevTriggers, LinuxLockState, OverlayIndicator, PipeWireAudio
+    from macf.voice.capture import platform
     from macf.voice.capture.models import SileroGate
 
-    return dict(audio=PipeWireAudio(), lock=LinuxLockState(), indicator=OverlayIndicator(),
-                triggers=EvdevTriggers(trigger_devices) if trigger_devices else NoKeys(), gate=SileroGate(),
-                **transcription(vocabulary))
+    here = platform.backends(trigger_devices)
+    here["triggers"] = here["triggers"] or NoKeys()
+    return dict(here, gate=SileroGate(), **transcription(vocabulary))
 
 
 def main(argv=None) -> int:

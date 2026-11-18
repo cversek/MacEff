@@ -96,7 +96,7 @@ def cmd_define(args) -> int:
 
 def cmd_record(args) -> int:
     from macf.voice.capture.backends import FRAME, RATE
-    from macf.voice.capture.linux import PipeWireAudio
+    from macf.voice.capture import platform
     import numpy as np
     try:
         wake = _wake_set(args.phrase)
@@ -104,7 +104,7 @@ def cmd_record(args) -> int:
         print(f"refused: {e}")
         return 1
     seconds = SECONDS[args.kind]
-    mic = PipeWireAudio()
+    mic = platform.microphone()
     print(f"Recording {args.count} {args.kind} clip(s) of {seconds:g} s for {wake.phrase!r}: {PROMPTS[args.kind]}.")
     for n in range(1, args.count + 1):
         for left in (3, 2, 1):
