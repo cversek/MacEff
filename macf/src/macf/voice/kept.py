@@ -21,8 +21,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-import numpy as np
-
 #: The event a keep records (R62).
 EVENT_AUDIO_KEPT = "voice_audio_kept"
 #: The event a deletion records, with the hash and how many items went with it (R63).
@@ -70,9 +68,10 @@ class KeptStore:
 
     # ------------------------------------------------------------------ keeping
 
-    def keep(self, audio: np.ndarray, trigger: str, spoken_at: float, text: str = "",
+    def keep(self, audio, trigger: str, spoken_at: float, text: str = "",
              speaker: Optional[str] = None) -> KeptRecording:
         """Write one recording as 16 kHz mono 16-bit WAV, named by its hash, and record the keep (R61, R62)."""
+        import numpy as np   # here, not at import: building the voice CLI must load no voice models
         samples = np.asarray(audio, dtype=np.int16)
         sha = hashlib.sha256(samples.tobytes()).hexdigest()
         path = self.folder / f"{sha}.wav"
