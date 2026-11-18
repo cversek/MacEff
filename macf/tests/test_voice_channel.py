@@ -107,16 +107,3 @@ def test_every_utterance_ends_in_receipt(tmp_path, base, run_daemon, isolated_ev
     answers = {r["utterance_id"]: r["receipt"] for r in (outside, inside)}
     assert set(answers.values()) == {"refused"} and len(answers) == 2
     assert {e["utterance_id"]: e["receipt"] for e in utterance_events()} == answers
-
-
-def test_a_delivered_utterance_counts_as_the_operator_present_and_a_refused_one_does_not():
-    """The operator who speaks is at the machine: a delivered utterance resets USER_IDLE as typing
-    does, recorded as user activity from voice; a refused one proves nothing about who is there."""
-    from macf.agent_events_log import read_events
-    from macf.pd.interface import UtteranceRequest
-    from macf.pd.voice_carriage import receipt_for
-    request = UtteranceRequest(**utterance_request())
-    receipt_for("Tester_abc123", request, "utt-1", "capture", "refused", "no channel")
-    receipt_for("Tester_abc123", request, "utt-2", "capture", "delivered", None)
-    activity = [e for e in read_events(limit=None) if e.get("event") == "user_activity_detected"]
-    assert [e["data"]["source"] for e in activity] == ["voice"]

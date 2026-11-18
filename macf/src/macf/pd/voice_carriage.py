@@ -370,8 +370,6 @@ def receipt_for(card: str, request: UtteranceRequest, utterance_id: str, unit: O
         data["reason"] = reason
     append_event(EVENT_VOICE_UTTERANCE, data)
     if receipt == "delivered":
-        # the operator who just spoke is at the machine: this resets USER_IDLE as typing does
-        append_event("user_activity_detected", {"source": "voice", "detector": "voice_carriage"})
         return Response(ok=True, receipt=receipt, utterance_id=utterance_id)
     return Response(ok=False, error=reason, receipt=receipt, utterance_id=utterance_id)
 
