@@ -244,9 +244,10 @@ def _platform_backends(trigger_devices, vocabulary: Optional[str] = None) -> dic
 
 
 def main(argv=None) -> int:
+    from_command_line = argv is None
     argv = sys.argv[1:] if argv is None else argv
     from macf.voice.capture import disclaim
-    if argv is not None and disclaim.needed():
+    if from_command_line and disclaim.needed():
         # macOS: the microphone is granted to the responsible process; make this unit its own (see disclaim.py)
         return disclaim.run_disclaimed([disclaim.own_executable(), "-m", "macf.voice.capture", *argv])
     home = Path(argv[0] if argv else os.environ.get("MACEFF_AGENT_HOME_DIR", "")).expanduser()
@@ -264,8 +265,9 @@ def main(argv=None) -> int:
     if interval:
         def microphone():
             return {k: v for k, v in unit.status().items() if v is not None} or None
+        from macf.voice.capture import disclaim
         heartbeat = Heartbeat(card, os.environ.get("MACF_PD_UNIT", "capture"), interval,
-                              microphone=microphone).start()
+                              microphone=microphone, pid=disclaim.unit_pid()).start()
     stopping = []
     signal.signal(signal.SIGTERM, lambda *_: stopping.append(True))
     try:

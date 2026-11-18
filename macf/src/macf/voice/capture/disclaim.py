@@ -17,6 +17,8 @@ from typing import List
 
 #: Set in the child, so it runs the unit instead of spawning again.
 DISCLAIMED = "MACF_VOICE_DISCLAIMED"
+#: The pid the daemon started, which the child's liveness speaks for: the daemon knows only that one.
+UNIT_PID = "MACF_VOICE_UNIT_PID"
 
 
 def _spawn_disclaimed(argv: List[str], env: dict) -> int:
@@ -41,7 +43,7 @@ def _spawn_disclaimed(argv: List[str], env: dict) -> int:
 
 def run_disclaimed(argv: List[str]) -> int:
     """Spawn ``argv`` as its own responsible process, pass SIGTERM and SIGINT on, and return its exit code."""
-    env = dict(os.environ, **{DISCLAIMED: "1"})
+    env = dict(os.environ, **{DISCLAIMED: "1", UNIT_PID: str(os.getpid())})
     if sys.prefix != sys.base_prefix:
         # Python drops __PYVENV_LAUNCHER__ from the environment once it has read it; the child needs it
         # to start inside the same venv rather than the bare interpreter the bundle wraps
@@ -74,3 +76,9 @@ def own_executable() -> str:
     except (ImportError, OSError) as e:
         print(f"⚠️ MACF: voice: can't read this process's own binary ({e}); spawning sys.executable", file=sys.stderr)
         return sys.executable
+
+
+def unit_pid():
+    """The daemon's pid for this unit when this is the disclaimed child, else None (this process)."""
+    raw = os.environ.get(UNIT_PID)
+    return int(raw) if raw and raw.isdigit() else None
