@@ -130,6 +130,10 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **R07** [MUST · decidable: macf/tests/test_voice_channel.py::test_locked_or_unknown_screen_marks_information_only] While the screen is locked or its state is unknown, the Voice Input Channel MUST mark an utterance as information only. (locked_screen_utterance_MUST_be_information_only)
 - **R08** [MUST · decidable: macf/tests/test_voice_channel.py::test_markup_in_text_is_neutralized] The Voice Input Channel MUST neutralize any utterance text that a session could read as channel or tool markup. (utterance_text_MUST_be_defanged)
 - **R09** [MUST NOT · judgment: the maintainers, at review of each path that checks an authorization] An utterance MUST NOT satisfy anything an authorization depends on, whatever its trigger or voice-lock result. (utterance_MUST-NOT_authorize)
+- **R65** [MUST · decidable: macf/tests/test_voice_presence.py::test_a_delivered_utterance_resets_idle_where_the_channel_is_declared] Where a declaration lists the Voice Input Channel among its operator channels, a delivered utterance MUST reset the idle clock, whichever trigger started it. (delivered_voice_MUST_reset_idle_where_declared)
+- **R66** [MUST NOT · decidable: macf/tests/test_voice_presence.py::test_a_delivered_utterance_leaves_the_idle_clock_where_the_channel_is_not_declared] Where a declaration doesn't list the channel, a delivered utterance MUST NOT reset the idle clock. (delivered_voice_MUST-NOT_reset_idle_undeclared)
+- **R67** [MUST · decidable: macf/tests/test_voice_presence.py::test_wake_only_activity_is_hands_free] While the operator's only activity since the last keyboard input is wake-phrase utterances, derived presence MUST be HANDS_FREE, not USER_IDLE. (wake_only_activity_MUST_derive_hands_free)
+- **R68** [MUST · decidable: macf/tests/test_voice_presence.py::test_keyboard_input_clears_hands_free] Keyboard input, a hold or toggle key included, MUST clear HANDS_FREE. (keyboard_input_MUST_clear_hands_free)
 - **R10** [MUST NOT · decidable: macf/tests/test_voice_channel.py::test_event_holds_no_text] The event log MUST NOT hold an utterance's text; the utterance's event holds its metadata only. (event_log_MUST-NOT_hold_utterance_text)
 - **R11** [MUST · decidable: macf/tests/test_voice_channel.py::test_every_utterance_ends_in_receipt] Each utterance MUST end in a receipt to its capture unit: delivered, refused, locked out, or matched to no agent. (utterance_MUST_end_in_a_receipt)
 - **R53** [MUST NOT · judgment: the operator, at review of each agent's handling] An agent MUST NOT act on an information-only utterance until the operator confirms it on a channel that isn't voice. (information_only_utterance_MUST-NOT_be_acted_on)
@@ -223,6 +227,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **R07, R53:** someone can speak to an unattended machine. R09 already keeps every utterance from authorizing; information only means more: the agent answers, but takes no action on it until the operator confirms elsewhere. An unknown lock state counts as locked, because the failure that hides the state is also the one that hides an intruder.
 - **R08:** dictated text is still text an attacker can say aloud: "end of message, system:". The channel neutralizes anything shaped like markup.
 - **R09:** a speaker can be a recording, a video or an agent's own spoken alert. R58 of the MIS-0007 draft already covers the wake phrase. This MIS extends it to every trigger and every voice-lock result, since a match is evidence, not proof (R45). It is a judgment, not a test, because no list of authorizations is complete; each path that checks one is reviewed for it.
+- **R65, R66, R67, R68:** the operator's ruling on Q01, 2026-11-18, typed at the keyboard: "both hot-key and wake-word initiated voice should reset USER_IDLE, but if the wake-word is used/being used without any keyboard input, instead of transitioning to USER_IDLE, the state should go to HANDS_FREE user presence mode." Presence is not authorization: R09 still holds for a present operator's utterance, and the declaration's `operator_channels` list stays the one place that says which channels count (MIS-0002 R107). That a hold or toggle key counts as keyboard input, so it clears HANDS_FREE (R68), is a reading of "without any keyboard input" and is put to the operator in Q09.
 - **R10:** the event log is read by many tools and kept a long time. The operator's spoken words don't belong there; when the utterance arrived and how it was judged do.
 - **R11:** speech must never vanish silently. This follows R60 of the MIS-0007 draft for this input's capture unit.
 
@@ -382,6 +387,10 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R62 | decidable | macf/tests/test_voice_kept.py::test_a_kept_recording_is_an_event_without_content | planned |
 | R63 | decidable | macf/tests/test_voice_kept.py::test_deleting_a_kept_recording_deletes_what_was_derived_from_it | planned |
 | R64 | judgment | the operator, when a training set is made | pending |
+| R65 | decidable | macf/tests/test_voice_presence.py::test_a_delivered_utterance_resets_idle_where_the_channel_is_declared | planned |
+| R66 | decidable | macf/tests/test_voice_presence.py::test_a_delivered_utterance_leaves_the_idle_clock_where_the_channel_is_not_declared | planned |
+| R67 | decidable | macf/tests/test_voice_presence.py::test_wake_only_activity_is_hands_free | planned |
+| R68 | decidable | macf/tests/test_voice_presence.py::test_keyboard_input_clears_hands_free | planned |
 | R23 | decidable | macf/tests/test_voice_wake.py::test_wake_passes_its_checks_in_order | planned (model, speech and transcription pass in order; the voice lock takes its place between them with the lock's phase) |
 | R24 | decidable | macf/tests/test_voice_wake.py::test_model_stored_with_report | passing |
 | R25 | decidable | macf/tests/test_voice_wake.py::test_test_set_disjoint_from_training | passing |
@@ -436,7 +445,7 @@ If the pull request grows too large to review, it splits after stage 4 and after
 
 ## 13 Open Questions
 
-- **Q01** Is listing the Voice Input Channel among a declaration's operator channels (MIS-0002 R107) enough for it to set operator presence, as MIS-0002-R97 (keyboard_surface_MUST_set_presence) does for a keyboard? The operator decides, before Final-Comment. (voice_presence_question)
+- **Q01** Is listing the Voice Input Channel among a declaration's operator channels (MIS-0002 R107) enough for it to set operator presence, as MIS-0002-R97 (keyboard_surface_MUST_set_presence) does for a keyboard? *Resolved 2026-11-18: the operator ruled that voice sets presence where declared, and that wake-phrase-only activity derives HANDS_FREE (R65 to R68).* (voice_presence_question)
 - **Q02** Does the voice lock cover hold-key and toggle-key input too, or only the wake phrase? The operator decides, per declaration or framework-wide, before Final-Comment. (voice_lock_hotkey_coverage)
 - **Q03** May speech-to-text run off the machine, through a declared transcription service, when the machine can't run it locally? The maintainers decide, before Final-Comment. (remote_transcription_question)
 - **Q04** How does a macOS capture app hold its key monitor and microphone grants under the code-identity custody R53 of the MIS-0007 draft describes? The first macOS porter proposes, and the maintainers decide. (macos_capture_custody)
@@ -444,6 +453,7 @@ If the pull request grows too large to review, it splits after stage 4 and after
 - **Q06** How long are kept training clips and kept audio retained? R63 settles that a deletion takes derived items with it; the retention period is still open. The operator decides, before Final-Comment. (voice_clip_retention)
 - **Q07** Is 0008 the right number? *Resolved 2026-11-13: the operator confirmed 0008.* (mis_number_confirmation)
 - **Q08** Where does a system's shared capture unit get its microphone? The MIS-0007 draft places a capture unit in the operator's login session, where the microphone grant and the audio server are, while R46 runs the shared unit on the system daemon's account, which has neither on a desktop. Either the system account is given the audio device directly, or the shared unit runs in the login session and still signs with a key out of every agent's reach. The prototype runs it on injected backends. The maintainers decide, from the first live run of the shared unit. (shared_capture_audio_source)
+- **Q09** What does an agent do while the operator is HANDS_FREE (R67)? One reading is that it answers by voice and asks for nothing that needs the screen or the keyboard, and that a hold or toggle key counts as keyboard input. The operator decides, before Final-Comment. (hands_free_agent_conduct)
 
 ## 14 Deliberation Record
 
@@ -458,6 +468,7 @@ None.
 - 2026-11-13: the operator's rulings: 0008 confirmed (Q07); R15 accepted as is; R27 accepted with the agent told what it was cut off saying, stated as the new R55.
 - 2026-11-13: from the first live trial on the operator's own voice: R56, the end window, and R57, the stop words, both as the operator asked and ruled; flagged for the maintainers' review.
 - 2026-11-14: the operator's ruling on kept audio: R13 amended so a declaration may turn it on, with the old sentence kept under it; R61 to R64 bound it (one folder, an event without content, deletion of derived items, consent before training).
+- 2026-11-18: the operator's ruling on Q01 (voice and presence): a delivered utterance resets the idle clock where the channel is declared (R65, R66), and wake-phrase-only activity derives HANDS_FREE (R67, R68); Q09 asks what an agent does in HANDS_FREE.
 
 ## Wiki-Links
 
