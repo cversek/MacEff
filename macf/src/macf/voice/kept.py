@@ -117,6 +117,8 @@ class KeptStore:
     def derive(self, sha256: str, name: str, data: bytes) -> Path:
         """Write an item made from recording ``sha256`` inside the folder and register it in the same step,
         so a deletion can't miss it (R63). The trainer and any analyzer write only through this."""
+        if "/" in name or "\\" in name or name in ("", ".", ".."):
+            raise ValueError(f"derived item name {name!r} must be a plain name; derived voice stays inside the folder")
         folder = self.folder / "derived"
         _private_dir(folder)
         item = folder / f"{sha256}.{name}"
@@ -263,7 +265,18 @@ def cmd_delete(args) -> int:
     return 0
 
 
+def _operator_only(what: str) -> bool:
+    """Refuse ``what`` inside an agent session: consent and who spoke are the operator's judgment (R64)."""
+    from macf.attribution import in_agent_session
+    if in_agent_session():
+        print(f"🛑 voice kept {what} is the operator's to run, from their own terminal; it refuses inside an agent session (R64)")
+        return True
+    return False
+
+
 def cmd_consent(args) -> int:
+    if _operator_only("consent"):
+        return 2
     store = _store_for_home()
     if store is None:
         print("no kept audio is declared")
@@ -274,6 +287,8 @@ def cmd_consent(args) -> int:
 
 
 def cmd_confirm(args) -> int:
+    if _operator_only("confirm"):
+        return 2
     store = _store_for_home()
     if store is None:
         print("no kept audio is declared")

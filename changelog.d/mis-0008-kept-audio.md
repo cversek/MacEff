@@ -1,3 +1,4 @@
 ### Added
 
 - **Kept audio** (MIS-0008 R13 as amended, R61 to R64; `macf.voice.kept`, `macf_tools voice kept list|delete|consent`). Off unless the voice section names a `kept_audio` folder. Each delivered recording, including the stretches transcribed ahead, is kept whole as a 16 kHz WAV named by its SHA-256, in a folder readable by the unit's account alone, with its words beside it. Each keep is a `voice_audio_kept` event holding the hash, trigger and time, and no content. Items made from a recording are registered against it, inside the folder, and deleting the recording deletes them. A training set takes only recordings whose speaker's consent is recorded in the folder's `consent.json`.
+- The capture unit refuses to keep on a folder it can't confirm is a local disk, and says so in its log. `voice kept consent` and `voice kept confirm` refuse inside an agent session: both are the operator's judgment. `derive` refuses a name with a path in it before writing.

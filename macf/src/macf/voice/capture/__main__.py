@@ -241,9 +241,14 @@ def _kept_store(home: Path, voice):
     """The store's keep for a voice section that declares kept audio (R61), else None: nothing is kept."""
     if not voice.kept_audio:
         return None
-    from macf.voice.kept import KeptStore
+    from macf.voice.kept import KeptStore, not_local
     folder = Path(voice.kept_audio)
-    return KeptStore(folder if folder.is_absolute() else home / folder, speaker=voice.kept_speaker or "operator").keep
+    folder = folder if folder.is_absolute() else home / folder
+    reason = not_local(folder)
+    if reason:
+        print(f"⚠️ MACF: voice: keeping nothing: {reason}", file=sys.stderr)
+        return None
+    return KeptStore(folder, speaker=voice.kept_speaker or "operator").keep
 
 
 def _platform_backends(trigger_devices, vocabulary: Optional[str] = None) -> dict:

@@ -104,3 +104,36 @@ def test_a_delivered_utterance_is_kept_whole_and_nothing_is_kept_when_off():
     assert size > 0 and meta["trigger"] == "hold_key" and meta["text"] == "held words"
     off = make_unit(FakeAudio().then((SPEECH, 10)), ScriptedTranscriber("held words"))
     assert off.unit.keep is None
+
+
+def test_derive_refuses_a_name_that_leaves_the_folder_before_writing_anything(tmp_path):
+    """R63: a name with a path in it is refused before the write, not after."""
+    store = kept.KeptStore(tmp_path / "kept")
+    record = store.keep(tone(), trigger="hold_key", spoken_at=1.0, text="x")
+    with pytest.raises(ValueError, match="plain name"):
+        store.derive(record.sha256, "../../escaped.npy", b"\x00")
+    assert not list(tmp_path.rglob("escaped.npy"))
+
+
+def test_consent_and_confirm_refuse_inside_an_agent_session(monkeypatch, capsys):
+    """R64: consent and who spoke are the operator's judgment; an agent's shell can't record either."""
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setattr(kept, "_store_for_home", lambda: pytest.fail("refusal must come before the store"))
+
+    class Args:
+        speaker, by, sha256 = "craig", "test", "abc"
+    assert kept.cmd_consent(Args) == 2 and kept.cmd_confirm(Args) == 2
+    assert "operator's to run" in capsys.readouterr().out
+
+
+def test_the_unit_keeps_nothing_on_a_folder_that_is_not_local(tmp_path, monkeypatch, capsys):
+    """R13's rationale: a unit declared onto a synced folder refuses to keep and says so in its log."""
+    from types import SimpleNamespace
+
+    from macf.voice.capture import __main__ as unit_main
+    monkeypatch.setattr(kept, "not_local", lambda folder: "the folder is inside a synced folder")
+    voice = SimpleNamespace(kept_audio=str(tmp_path / "kept"), kept_speaker="craig")
+    assert unit_main._kept_store(tmp_path, voice) is None
+    assert "keeping nothing" in capsys.readouterr().err
+    monkeypatch.setattr(kept, "not_local", lambda folder: None)
+    assert unit_main._kept_store(tmp_path, voice) is not None
