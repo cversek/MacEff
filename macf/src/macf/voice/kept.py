@@ -128,6 +128,21 @@ class KeptStore:
         self.register_derived(sha256, item)
         return item
 
+    def derive_shared(self, sha256s: List[str], name: str, data: bytes) -> Path:
+        """Write an item made from several recordings at once, such as a trained voice lock, inside the
+        folder, and register it against every one of them: deleting any one deletes it (R63, strictly)."""
+        if not sha256s:
+            raise ValueError("a shared derived item is made from at least one recording")
+        if "/" in name or "\\" in name or name in ("", ".", ".."):
+            raise ValueError(f"derived item name {name!r} must be a plain name; derived voice stays inside the folder")
+        folder = self.folder / "derived"
+        _private_dir(folder)
+        item = folder / name
+        _write_private(item, data)
+        for sha in sha256s:
+            self.register_derived(sha, item)
+        return item
+
     def register_derived(self, sha256: str, item: Path) -> None:
         """Record that ``item`` was made from the recording ``sha256``, so deleting it takes ``item`` too (R63).
         Derived items live inside the folder, under the same protection as the voice they came from."""
