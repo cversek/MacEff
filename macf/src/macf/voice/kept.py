@@ -24,6 +24,8 @@ from typing import Callable, Dict, List, Optional
 #: The event a keep records (R62).
 EVENT_AUDIO_KEPT = "voice_audio_kept"
 #: The event a deletion records, with the hash and how many items went with it (R63).
+EVENT_CONSENT_RECORDED = "voice_consent_recorded"
+EVENT_SPEAKER_CONFIRMED = "voice_speaker_confirmed"
 EVENT_AUDIO_DELETED = "voice_audio_deleted"
 RATE = 16000
 #: A recording whose speaker no voice-lock match vouched for; it never enters a training set unconfirmed.
@@ -172,6 +174,7 @@ class KeptStore:
         table = self._consent()
         table[speaker] = {"recorded_at": time.time(), "by": by}
         _write_private(self.folder / "consent.json", json.dumps(table, indent=1).encode())
+        self._record(EVENT_CONSENT_RECORDED, {"speaker": speaker, "by": by})
 
     def confirm_speaker(self, sha256: str, speaker: str) -> None:
         """The operator says who spoke an unverified recording, which lets its consent be checked (R64)."""
@@ -179,6 +182,7 @@ class KeptStore:
         meta = json.loads(meta_path.read_text())
         meta.update(speaker=speaker, confirmed_by_operator=time.time())
         _write_private(meta_path, json.dumps(meta, indent=1).encode())
+        self._record(EVENT_SPEAKER_CONFIRMED, {"sha256": sha256, "speaker": speaker})
 
     def for_training(self) -> List[KeptRecording]:
         """The recordings a training set may use: a known speaker whose consent is recorded (R64)."""

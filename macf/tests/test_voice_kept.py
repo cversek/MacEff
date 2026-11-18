@@ -121,7 +121,7 @@ def test_consent_and_confirm_refuse_inside_an_agent_session(monkeypatch, capsys)
     monkeypatch.setattr(kept, "_store_for_home", lambda: pytest.fail("refusal must come before the store"))
 
     class Args:
-        speaker, by, sha256 = "craig", "test", "abc"
+        speaker, by, sha256 = "operator", "test", "abc"
     assert kept.cmd_consent(Args) == 2 and kept.cmd_confirm(Args) == 2
     assert "operator's to run" in capsys.readouterr().out
 
@@ -132,8 +132,19 @@ def test_the_unit_keeps_nothing_on_a_folder_that_is_not_local(tmp_path, monkeypa
 
     from macf.voice.capture import __main__ as unit_main
     monkeypatch.setattr(kept, "not_local", lambda folder: "the folder is inside a synced folder")
-    voice = SimpleNamespace(kept_audio=str(tmp_path / "kept"), kept_speaker="craig")
+    voice = SimpleNamespace(kept_audio=str(tmp_path / "kept"), kept_speaker="operator")
     assert unit_main._kept_store(tmp_path, voice) is None
     assert "keeping nothing" in capsys.readouterr().err
     monkeypatch.setattr(kept, "not_local", lambda folder: None)
     assert unit_main._kept_store(tmp_path, voice) is not None
+
+
+def test_consent_and_confirmation_each_leave_an_event_without_content(tmp_path):
+    """R64 as evidence: who may be trained on changes only with a trace in the event log."""
+    events = []
+    store = kept.KeptStore(tmp_path / "kept", record=lambda name, data: events.append((name, data)))
+    record = store.keep(tone(), trigger="wake_phrase", spoken_at=1.0, text="x")
+    store.record_consent("operator", by="typed at the terminal")
+    store.confirm_speaker(record.sha256, "operator")
+    assert events[1:] == [("voice_consent_recorded", {"speaker": "operator", "by": "typed at the terminal"}),
+                          ("voice_speaker_confirmed", {"sha256": record.sha256, "speaker": "operator"})]
