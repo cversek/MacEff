@@ -89,13 +89,29 @@ def test_mac_keys_carry_the_linux_names_and_only_declared_keyboards_count():
 
 @pytest.mark.skipif(not MACOS, reason="macOS audio out")
 def test_the_macos_audio_out_passes_its_contract():
-    """Plays only silence, so it runs without asking: stop works idle, mid-sentence and from another thread."""
+    """Plays only silence, so it runs without asking: stop works idle, mid-sentence and from another thread,
+    and a stop cuts a long sentence short (R29), within the stream's own latency."""
+    import threading
     import time
-    from macf.voice.speech.backends import check_audio_out
+    import numpy as np
+    from macf.voice.speech.backends import Spoken, check_audio_out
     from macf.voice.speech.macos import MacAudioOut
-    started = time.monotonic()
     check_audio_out(MacAudioOut)
-    assert time.monotonic() - started < 2.0, "a stop 50 ms into a 5 s sentence must end it, not let it run"
+    out = MacAudioOut()
+    threading.Timer(0.2, out.stop).start()
+    started = time.monotonic()
+    out.play(Spoken(np.zeros(16000 * 5, np.float32), 16000))
+    assert time.monotonic() - started < 1.5, "a stop 0.2 s into a 5 s sentence must end it, not let it run"
+
+
+def test_speech_is_kept_under_full_scale_and_resampled_to_the_device():
+    """A full-scale peak clips and crackles; the device's rate is met here, not left to Core Audio."""
+    import numpy as np
+    from macf.voice.speech.macos import PEAK, prepared
+    loud = np.sin(np.linspace(0, 200 * np.pi, 24000)).astype(np.float32)
+    out = prepared(loud, 24000, 48000)
+    assert out.size == 48000 and out.dtype == np.float32
+    assert abs(float(np.abs(out).max()) - PEAK) < 0.02
 
 
 @pytest.mark.skipif(not MACOS, reason="macOS session dictionary")
