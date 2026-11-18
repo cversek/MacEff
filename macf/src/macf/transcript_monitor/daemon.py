@@ -1110,7 +1110,8 @@ class TranscriptMonitor:
         return self._fwd_cached
 
     def _detect_rewind(self, current_size: int) -> None:
-        """Check if JSONL was truncated (context rewind)."""
+        """Check if the JSONL got smaller. A Claude Code rewind does not do this: it appends
+        a prompt that branches from an earlier entry, which RewindWatch reports (#1003)."""
         if self.last_file_size > 0 and current_size < self.last_file_size:
             self._emit("context_rewind_detected", {
                 "previous_size": self.last_file_size,
@@ -1370,12 +1371,22 @@ def _session_monitor(transcript: Path, poll_interval: float, owner: int, session
     It also says when the session waits on a permission dialog (MIS-0002-R21), read from
     the event log for this transcript's session, since the client can't say so while it waits.
     And when it can't authenticate, read from the transcript as it arrives (MIS-0002-R19).
+    And when the session was rewound (#1003): the monitor reads from the end of the file,
+    so the rewind watch first remembers the transcript's tail, or a resume onto an earlier
+    point could not be told.
     *extra_pass* runs on every pass too: a follow-mode monitor's own unit beat and its check
     for a newly announced session.
     """
     from ..pd.liveness import session_heartbeat_from_env
     from ..permission_watch import SessionDialogs
+    from .rewind import RewindWatch
     auth = AuthWatch()
+    rewinds = RewindWatch()
+    try:
+        rewinds.prime(transcript)
+    except OSError as e:
+        print(f"⚠️ MACF: could not read the transcript's tail, so a rewind to before this "
+              f"monitor started will go unreported: {e}", file=sys.stderr)
     heartbeat = session_heartbeat_from_env(environ=session_env,
                                            waiting_on=SessionDialogs(transcript.stem),
                                            auth_failed=auth.state)
@@ -1387,7 +1398,7 @@ def _session_monitor(transcript: Path, poll_interval: float, owner: int, session
 
     monitor = TranscriptMonitor(transcript, poll_interval=poll_interval, owner=owner,
                                 on_pass=on_pass if passes else None,
-                                detectors=list(DEFAULT_DETECTORS) + [auth])
+                                detectors=list(DEFAULT_DETECTORS) + [auth, rewinds])
     return monitor, heartbeat
 
 
