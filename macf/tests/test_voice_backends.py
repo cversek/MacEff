@@ -15,6 +15,7 @@ from macf.voice.capture.backends import AudioEnded, KeyEvent
 from voice_fakes import FakeAudio, FakeLock, PushedKeys, RecordingIndicator
 
 LINUX = sys.platform.startswith("linux")
+MACOS = sys.platform == "darwin"
 LIVE = os.environ.get("MACF_VOICE_LIVE_TESTS") == "1"
 
 
@@ -51,6 +52,9 @@ def test_every_backend_passes_its_contract():
             contract.check_trigger_source(EvdevTriggers([device.path]))
         finally:
             device.close()
+    if MACOS:
+        from macf.voice.capture.macos import MacLockState
+        contract.check_lock_state(MacLockState())
 
 
 @pytest.mark.skipif(not (LINUX and LIVE), reason="opens the real microphone and screen: MACF_VOICE_LIVE_TESTS=1")
@@ -62,6 +66,37 @@ def test_the_live_linux_backends_pass_their_contract():
         contract.check_indicator(indicator)
     finally:
         indicator.close()
+
+
+@pytest.mark.skipif(not (MACOS and LIVE), reason="opens the real microphone: MACF_VOICE_LIVE_TESTS=1")
+def test_the_live_macos_backends_pass_their_contract():
+    from macf.voice.capture.macos import MacAudioIn
+    contract.check_audio_in(MacAudioIn)
+
+
+@pytest.mark.skipif(not MACOS, reason="macOS session dictionary")
+def test_a_session_dictionary_that_cannot_be_read_is_unknown():
+    """R07: no dictionary, or one without the lock key's companion fields, is unknown, never unlocked."""
+    from macf.voice.capture.macos import MacLockState
+    assert MacLockState(read=lambda: None).state() == "unknown"
+    assert MacLockState(read=lambda: {"CGSSessionScreenIsLocked": 1}).state() == "locked"
+    assert MacLockState(read=lambda: {"kCGSSessionOnConsoleKey": 1}).state() == "unlocked"
+    assert MacLockState(read=lambda: {"kCGSSessionOnConsoleKey": 0}).state() == "locked"  # switched away
+    def broken():
+        raise RuntimeError("Quartz went away")
+    assert MacLockState(read=broken).state() == "unknown"
+
+
+@pytest.mark.skipif(not MACOS, reason="macOS audio")
+def test_a_microphone_that_cannot_open_is_said_not_read_as_silence(monkeypatch):
+    from macf.voice.capture import macos
+    def refuse(*args, **kwargs):
+        raise OSError("no default input device")
+    monkeypatch.setattr(macos, "_open_stream", refuse)
+    mic = macos.MacAudioIn()
+    with pytest.raises(AudioEnded, match="no default input device"):
+        mic.open()
+    assert not mic.is_open
 
 
 @pytest.mark.skipif(not LINUX, reason="Linux input events")
