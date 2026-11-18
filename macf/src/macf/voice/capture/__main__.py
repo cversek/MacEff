@@ -245,6 +245,10 @@ def _platform_backends(trigger_devices, vocabulary: Optional[str] = None) -> dic
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    from macf.voice.capture import disclaim
+    if argv is not None and disclaim.needed():
+        # macOS: the microphone is granted to the responsible process; make this unit its own (see disclaim.py)
+        return disclaim.run_disclaimed([disclaim.own_executable(), "-m", "macf.voice.capture", *argv])
     home = Path(argv[0] if argv else os.environ.get("MACEFF_AGENT_HOME_DIR", "")).expanduser()
     if not str(home) or not home.is_dir():
         print("usage: python -m macf.voice.capture <agent home>", file=sys.stderr)
