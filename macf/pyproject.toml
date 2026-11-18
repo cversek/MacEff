@@ -50,6 +50,8 @@ voice = [
     "pyobjc-framework-Quartz>=10; sys_platform == 'darwin'",  # the screen's lock state
     "pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'",  # the indicator panel
     "scipy>=1.10; sys_platform == 'darwin'",  # speech resampled to the output device's rate
+    "mlx-audio>=0.2; sys_platform == 'darwin' and platform_machine == 'arm64'",  # Kokoro on the GPU
+    "misaki[en]>=0.7; sys_platform == 'darwin' and platform_machine == 'arm64'",  # its text front end
 ]
 viz = [
     "markdown>=3.0",  # Markdown-to-HTML for CA presentation

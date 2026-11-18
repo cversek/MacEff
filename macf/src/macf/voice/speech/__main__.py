@@ -43,8 +43,17 @@ def main(argv=None) -> int:
         from macf.voice.speech.macos import MacAudioOut as Out
     else:
         from macf.voice.speech.backends import PipeWireOut as Out
+    engine = None
+    if sys.platform == "darwin":
+        from macf.voice.speech.macos import MlxKokoroEngine
+        try:
+            engine = MlxKokoroEngine()
+        except RuntimeError as e:
+            print(f"⚠️ MACF: voice: Kokoro on the GPU is unavailable ({e}); falling back to the CPU model",
+                  file=sys.stderr)
     try:
-        engine = KokoroEngine(models_dir(home) / "kokoro-v1.0.onnx", models_dir(home) / "voices-v1.0.bin")
+        if engine is None:
+            engine = KokoroEngine(models_dir(home) / "kokoro-v1.0.onnx", models_dir(home) / "voices-v1.0.bin")
     except RuntimeError as e:
         print(f"⚠️ MACF: voice: the speech worker can't start: {e}", file=sys.stderr)
         return EX_CONFIG
