@@ -510,6 +510,11 @@ class VoiceSection(_Closed):
     end_hold_s: float = Field(default=2.0, ge=0, le=30, allow_inf_nan=False)
     end_silence_s: float = Field(default=5.0, gt=0, le=30, allow_inf_nan=False)
     continual_close_s: float = Field(default=30.0, gt=0, le=3600, allow_inf_nan=False)
+    #: Kept audio (MIS-0008 R13 as amended, R61 to R64): a folder, relative to the agent home, where each
+    #: delivered recording is kept for the voice lock's training set. None, the default, keeps nothing.
+    kept_audio: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    #: Whose voice a kept recording is, for the training set's consent check (R64).
+    kept_speaker: Optional[str] = Field(default=None, min_length=1, max_length=60)
     #: Names and terms Whisper is primed with, so it spells them as written rather than as sound-alikes:
     #: the operator's own curated sentence, like a dictation tool's initial prompt. None: the wake phrase only.
     transcription_prompt: Optional[str] = Field(default=None, max_length=880)

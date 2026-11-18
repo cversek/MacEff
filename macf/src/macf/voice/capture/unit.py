@@ -179,6 +179,8 @@ class _Recording:
     spoken_at: float
     agent: "_Agent"
     frames: List[np.ndarray] = field(default_factory=list)
+    #: Every frame of the recording, for kept audio only (R61): streaming ahead drops ``frames`` as it goes.
+    kept: List[np.ndarray] = field(default_factory=list)
     heard_speech: bool = False
     last_speech: float = 0.0
     utterance_started: float = 0.0     # continual voice: when the current utterance began
@@ -236,7 +238,10 @@ class CaptureUnit:
                  guard_lowered: Callable[[], bool] = lambda: False,
                  members: Optional[List[AgentBinding]] = None,
                  check: Optional[Callable[[np.ndarray, Optional[str]], str]] = None,
-                 release: Callable[[], int] = lambda: 0, show_words: bool = False):
+                 release: Callable[[], int] = lambda: 0, show_words: bool = False,
+                 keep: Optional[Callable[..., object]] = None):
+        #: Kept audio (MIS-0008 R13 as amended, R61): given only where the voice section declares a folder.
+        self.keep = keep
         self.config = config
         self.audio, self.lock, self.indicator, self.triggers = audio, lock, indicator, triggers
         self.gate, self._transcribe, self._deliver = gate, transcribe, deliver
@@ -583,6 +588,8 @@ class CaptureUnit:
         prompt = rec.agent.b.wake_phrase if rec.mode == "wake_phrase" and not rec.streamed else None
         future = self.executor.submit(self._transcribe, np.concatenate(rec.frames), prompt)
         rec.streamed.append(future)
+        if self.keep is not None:
+            rec.kept.extend(rec.frames)
         rec.frames, rec.streamed_at = [], rec.last_speech
         streamed = rec.streamed
         future.add_done_callback(lambda _f: self._show_text(streamed))
@@ -650,12 +657,13 @@ class CaptureUnit:
                 else:
                     audio = None             # discarded untranscribed (R37)
             if audio is not None:
+                whole = np.concatenate(rec.kept + [audio]) if self.keep is not None else None
                 self.executor.submit(self._transcribe_and_deliver, audio, rec.mode, rec.spoken_at, rec.voice_lock,
-                                     rec.agent, ended, list(rec.streamed))
+                                     rec.agent, ended, list(rec.streamed), whole)
         else:
             if not rec.aborted:                  # an abort already said why nothing was sent
                 self.log(f"{rec.mode} recording heard no speech: nothing sent")
-        rec.frames, rec.streamed, rec.streamed_at = [], [], None   # the worker's alone now, dropped after
+        rec.frames, rec.streamed, rec.streamed_at, rec.kept = [], [], None, []   # the worker's alone now, dropped after
         if rec.mode == "continual_voice" and not closing:
             rec.heard_speech, rec.utterance_started, rec.spoken_at = False, now, self.wall()
             rec.aborted = False
@@ -701,7 +709,8 @@ class CaptureUnit:
 
     def _transcribe_and_deliver(self, audio: np.ndarray, mode: Mode, spoken_at: float,
                                 voice_lock: str = "not_declared", agent: Optional[_Agent] = None,
-                                ended: str = "", streamed: Optional[list] = None) -> None:
+                                ended: str = "", streamed: Optional[list] = None,
+                                whole: Optional[np.ndarray] = None) -> None:
         agent = agent or self.agents[0]
         streamed = streamed or []
         # The stretches transcribed ahead come first, in order, then the last; only the first carries the phrase.
@@ -724,6 +733,11 @@ class CaptureUnit:
             return
         self._deliver(Utterance(trigger=mode, spoken_at=spoken_at, screen=self.lock.state(), text=text,
                                 voice_lock=voice_lock, agent=agent.b.agent, ended=ended))
+        if self.keep is not None and whole is not None and whole.size:
+            try:
+                self.keep(whole, trigger=mode, spoken_at=spoken_at, text=text)
+            except OSError as e:
+                self.log(f"the recording couldn't be kept ({e}); it was delivered, and its audio is gone")
 
     # ------------------------------------------------------------------ status
 
