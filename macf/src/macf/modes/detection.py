@@ -134,7 +134,7 @@ def detect_active_modes(session_id: str, token_info: dict) -> Set[str]:
         # HANDS_FREE (MIS-0008 Q01, the operator's ruling of 2026-11-18): when the operator's latest
         # activity is voice the wake phrase started, with no keyboard input since, they are present
         # hands-free: not idle, and not able to read or type. It replaces USER_IDLE.
-        if _latest_activity_is_hands_free():
+        if _latest_activity_is_hands_free(cutoff):
             modes.add("HANDS_FREE")
         elif not _had_user_activity_since(cutoff):
             modes.add("USER_IDLE")
@@ -601,13 +601,26 @@ def _get_last_user_activity_timestamp(session_id: str, sources: Optional[Set[str
 HANDS_FREE_TRIGGERS = frozenset({"wake_phrase", "continual_voice"})
 
 
-def _latest_activity_is_hands_free() -> bool:
-    """True when the newest user_activity_detected event is voice a wake phrase (or continual voice) started."""
-    for event in read_events(limit=None, reverse=True):
-        if event.get("event") == "user_activity_detected":
-            data = event.get("data", {})
-            return data.get("source") == "voice" and data.get("trigger") in HANDS_FREE_TRIGGERS
+def _latest_activity_is_hands_free(cutoff_epoch: float) -> bool:
+    """True when the newest user_activity_detected event is voice a wake phrase (or continual voice) started,
+    inside the idle window: after it, the operator may have left, and USER_IDLE applies as for any input."""
+    for event in read_events(limit=200, reverse=True, only=["user_activity_detected"]):
+        data = event.get("data", {})
+        if not (data.get("source") == "voice" and data.get("trigger") in HANDS_FREE_TRIGGERS):
+            return False
+        return _event_epoch(event.get("timestamp")) >= cutoff_epoch
     return False
+
+
+def _event_epoch(ts) -> float:
+    from datetime import datetime
+    try:
+        if isinstance(ts, (int, float)):
+            return float(ts)
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError) as e:
+        print(f"⚠️ MACF: an activity timestamp {ts!r} is unreadable ({e}); not counted as recent", file=sys.stderr)
+        return 0.0
 
 
 def _had_user_activity_since(cutoff_epoch: float, sources=None) -> bool:

@@ -66,7 +66,6 @@ A wake model is a small classifier that scores a stream of audio for one phrase.
 **5.1 Presence by Voice and HANDS_FREE**
 - Does an operator talking by voice count as present?
 - What is HANDS_FREE, and when does it replace USER_IDLE?
-- How should I behave while the operator is hands-free?
 
 **6 Building a Wake Model**
 - What order do I follow, from phrase to declared model?
@@ -251,9 +250,9 @@ Mid-sentence, as in "send the report" or "don't abort the build", neither word e
 
 **An utterance delivered on a channel the declaration lists among its `operator_channels` is the operator's activity** (MIS-0008 Q01, ruled by the operator on 2026-11-18). It resets USER_IDLE as typing does, whether a key or the wake phrase started it. Where the Voice Input Channel is not listed, a delivered utterance proves nothing about presence and changes nothing.
 
-**HANDS_FREE 🗣️ replaces USER_IDLE while the operator's latest activity is voice the wake phrase started** (or continual voice), with no keyboard input since. The operator is present but can't be assumed to read the screen or type. A key-started utterance is never hands-free, since a key was pressed, and the next typed input ends it.
+**HANDS_FREE 🗣️ replaces USER_IDLE while the operator's latest activity is voice the wake phrase started** (or continual voice), with no keyboard input since, and only inside the idle window: after it, USER_IDLE applies as for any input. A key-started utterance is never hands-free, and a hold or toggle ends it (Q09, ruled), as does the next typed input.
 
-**While HANDS_FREE:** answer by voice (`macf_tools voice speak`), short and in plain speech; ask a question by reading its options aloud and take the spoken choice, not with a picker on the screen; never hand over a command to copy or a path to open; run long work in the background and say when it ends. Anything that needs the screen waits until the operator is at the keyboard again, and saying so is better than asking anyway.
+**How an agent is told to behave while the operator is hands-free is left open** (MIS-0008 Q09): the state and its mark are derived and shown, and nothing here prescribes a posture.
 
 **The command waits for the unit to agree.** After switching, `voice listen` waits a few seconds for the capture unit's status to match and says so if it doesn't. A mismatch means the unit may not have read the switch yet, or isn't running. Read the printed status; do not assume the switch took.
 
