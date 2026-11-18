@@ -53,6 +53,18 @@ def test_wake_voice_older_than_the_idle_window_is_idle_not_hands_free(isolated_e
     assert "USER_IDLE" in modes and "HANDS_FREE" not in modes
 
 
+def test_wake_voice_a_minute_old_inside_a_ten_minute_window_is_hands_free(isolated_events_log, monkeypatch):
+    """The other side of the window: a real timeout, an event well inside it, and HANDS_FREE is derived."""
+    import time
+    from macf.modes import detection
+    append_event("user_activity_detected", {"source": "voice", "trigger": "wake_phrase", "detector": "test"})
+    monkeypatch.setenv("MACF_USER_IDLE_TIMEOUT_MINS", "10")
+    later = time.time() + 60
+    monkeypatch.setattr(detection.time, "time", lambda: later)
+    modes = detect_active_modes("s", {})
+    assert "HANDS_FREE" in modes and "USER_IDLE" not in modes
+
+
 def test_the_voice_channel_is_recognized_in_the_form_a_declaration_lists_it():
     from types import SimpleNamespace
     from macf.pd.daemon import voice_is_operator_channel
