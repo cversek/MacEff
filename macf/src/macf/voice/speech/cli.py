@@ -22,7 +22,12 @@ def add_parsers(voice_sub) -> None:
     speak.add_argument("--speed", type=float, help="a speed for this message only")
     speak.add_argument("--say-as", nargs="+", metavar="WORD=SPELLING", help="say WORD as SPELLING from now on")
     speak.add_argument("--unsay", nargs="+", metavar="WORD", help="stop respelling WORD")
+    speak.add_argument("--accent", action="store_true",
+                       help="with --say-as or --unsay: change the accent's respellings, which `voice accent off` silences")
     speak.set_defaults(func=cmd_speak)
+    accent = voice_sub.add_parser("accent", help="switch the voice's accent respellings on or off, or say which")
+    accent.add_argument("state", nargs="?", choices=("on", "off"))
+    accent.set_defaults(func=cmd_accent)
     voice_sub.add_parser("show", help="the agent's voice settings and the traits behind them").set_defaults(func=cmd_show)
     sel = voice_sub.add_parser("select", help="choose the agent's voice with the operator")
     sel_sub = sel.add_subparsers(dest="voice_select_cmd")
@@ -55,8 +60,8 @@ def cmd_speak(args) -> int:
         print(f"stopped; {speech.stop(home)} queued message(s) dropped")
         return 0
     if args.say_as or args.unsay:
-        path = speech.pronounce_path(home)
-        table = speech.pronunciations(home)
+        path = speech.accent_path(home) if args.accent else speech.pronounce_path(home)
+        table = speech._table(path)
         for pair in args.say_as or []:
             word, sep, spelling = pair.partition("=")
             if not sep or not word or not spelling:
@@ -83,6 +88,15 @@ def cmd_speak(args) -> int:
         return 1
     overrides = {k: v for k, v in (("voice", args.voice), ("speed", args.speed)) if v is not None}
     speech.enqueue(home, text, overrides)
+    return 0
+
+
+def cmd_accent(args) -> int:
+    home = _home()
+    if args.state:
+        speech.set_accent(home, args.state == "on")
+    count = len(speech._table(speech.accent_path(home)))
+    print(f"accent {'on' if speech.accent_on(home) else 'off'}: {count} respelling(s) in {speech.accent_path(home)}")
     return 0
 
 

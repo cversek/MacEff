@@ -217,3 +217,38 @@ def test_the_prompt_tells_a_cut_once(tmp_path):
     line = speech_cut.prompt_line(tmp_path)
     assert "Heard whole." in line and "Never said." in line and "measured" not in line
     assert speech_cut.prompt_line(tmp_path) == ""
+
+
+def test_an_accent_is_a_respelling_table_of_its_own_that_the_operator_can_switch_off(tmp_path):
+    """The operator's switch: accent respellings apply only while the accent is on, and plain
+    respellings (a name said right) apply either way."""
+    import json
+    from macf.voice.speech import worker as w
+    w.pronounce_path(tmp_path).parent.mkdir(parents=True, exist_ok=True)
+    w.pronounce_path(tmp_path).write_text(json.dumps({"Bez": "Bezz"}))
+    w.accent_path(tmp_path).write_text(json.dumps({"coffee": "cawfee", "Bez": "Bezzie"}))
+    assert w.pronunciations(tmp_path) == {"Bez": "Bezzie", "coffee": "cawfee"}
+    w.set_accent(tmp_path, False)
+    assert not w.accent_on(tmp_path)
+    assert w.pronunciations(tmp_path) == {"Bez": "Bezz"}
+    w.set_accent(tmp_path, True)
+    assert w.pronunciations(tmp_path)["coffee"] == "cawfee"
+
+
+def test_the_accent_switch_and_accent_respellings_from_the_command_line(tmp_path, monkeypatch, capsys):
+    from macf.voice.speech import cli, worker as w
+    monkeypatch.setattr(cli, "_home", lambda: tmp_path)
+    parser = __import__("argparse").ArgumentParser()
+    cli.add_parsers(parser.add_subparsers())
+    for argv in (["speak", "--accent", "--say-as", "talk=tawk"], ["accent", "off"]):
+        args = parser.parse_args(argv)
+        assert args.func(args) == 0
+    assert json_of(w.accent_path(tmp_path)) == {"talk": "tawk"}
+    assert not w.accent_on(tmp_path)
+    args = parser.parse_args(["accent", "on"])
+    assert args.func(args) == 0 and w.accent_on(tmp_path)
+
+
+def json_of(path):
+    import json
+    return json.loads(path.read_text())
