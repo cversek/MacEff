@@ -74,6 +74,19 @@ def test_the_live_macos_backends_pass_their_contract():
     contract.check_audio_in(MacAudioIn)
 
 
+@pytest.mark.skipif(not MACOS, reason="macOS HID usages")
+def test_mac_keys_carry_the_linux_names_and_only_declared_keyboards_count():
+    """R17: a key is named as the voice section names it everywhere, and a keyboard counts only when declared."""
+    from macf.voice.capture.macos import declared, hid_key_name
+    assert hid_key_name(0x07, 0x43) == "KEY_F10" and hid_key_name(0x07, 0x68) == "KEY_F13"
+    assert hid_key_name(0x07, 0xE7) == "KEY_RIGHTMETA" and hid_key_name(0x07, 0x01) is None
+    assert hid_key_name(0x0C, 0xE9) is None   # a consumer key (volume) is not a keyboard key
+    assert declared("05ac:0342", "Apple Internal Keyboard / Trackpad", 0x05AC, 0x0342)
+    assert declared("Apple Internal Keyboard / Trackpad", "apple internal keyboard / trackpad", 1, 2)
+    assert not declared("05ac:0342", "Apple Internal Keyboard / Trackpad", 0x05AC, 0x0343)
+    assert not declared("zz:01", "x", 0, 1)
+
+
 @pytest.mark.skipif(not MACOS, reason="macOS audio out")
 def test_the_macos_audio_out_passes_its_contract():
     """Plays only silence, so it runs without asking: stop works idle, mid-sentence and from another thread."""
