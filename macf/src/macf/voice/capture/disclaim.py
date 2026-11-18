@@ -48,9 +48,23 @@ def run_disclaimed(argv: List[str]) -> int:
         # Python drops __PYVENV_LAUNCHER__ from the environment once it has read it; the child needs it
         # to start inside the same venv rather than the bare interpreter the bundle wraps
         env["__PYVENV_LAUNCHER__"] = sys.executable
-    pid = _spawn_disclaimed(argv, env)
+    # handlers first: a stop that arrives while the child starts is held and passed on once its pid
+    # is known, rather than killing only this parent and leaving the child holding the microphone
+    child: List[int] = []
+    pending: List[int] = []
+
+    def forward(sig, _frame):
+        if child:
+            os.kill(child[0], sig)
+        else:
+            pending.append(sig)
+
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(sig, lambda s, _f: os.kill(pid, s))
+        signal.signal(sig, forward)
+    pid = _spawn_disclaimed(argv, env)
+    child.append(pid)
+    for sig in pending:
+        os.kill(pid, sig)
     while True:
         try:
             _, status = os.waitpid(pid, 0)

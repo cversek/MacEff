@@ -68,7 +68,8 @@ class MacAudioIn(AudioIn):
         access = _microphone_access()
         if access != AUTHORIZED:
             why = {DENIED: "was denied", RESTRICTED: "is restricted", NOT_DETERMINED: "was not answered"}[access]
-            raise AudioEnded(f"microphone access {why} for {sys.executable}; allow it in System Settings, "
+            from macf.voice.capture.disclaim import own_executable
+            raise AudioEnded(f"microphone access {why} for {own_executable()}; allow it in System Settings, "
                              f"Privacy & Security, Microphone, then restart the capture unit")
         try:
             self._stream = _open_stream()
@@ -120,13 +121,16 @@ class MacLockState(LockState):
 
     def __init__(self, read: Callable[[], Optional[dict]] = _session_dictionary) -> None:
         self._read = read
+        self._warned = False
 
     def state(self) -> Screen:
         try:
             session = self._read()
-        except Exception as e:  # noqa: BLE001 - R07: any failure to read is "unknown", said once per call
-            print(f"⚠️ MACF: voice: the screen's lock state can't be read ({e}); treating it as unknown",
-                  file=sys.stderr)
+        except Exception as e:  # noqa: BLE001 - R07: any failure to read is "unknown"; said the first time
+            if not self._warned:
+                self._warned = True
+                print(f"⚠️ MACF: voice: the screen's lock state can't be read ({e}); treating it as unknown "
+                      f"(said once; later failures are silent while they last)", file=sys.stderr)
             return "unknown"
         if not session:
             return "unknown"
@@ -188,8 +192,8 @@ class MacTriggers(TriggerSource):
     (R18): no socket, no event tap, no synthetic events, since the HID manager sees hardware reports.
 
     Reading keyboards needs the Input Monitoring permission for the process that runs the unit. Without
-    it opening is refused naming the grant. A declared device that isn't attached gives no keys and is
-    said, as on Linux; the wake phrase still works.
+    it opening is refused naming the grant. A declared keyboard that isn't attached simply sends no
+    keys; the HID manager can't tell an absent device from a quiet one, and the wake phrase still works.
     """
 
     def __init__(self, devices: Sequence[str]):
@@ -198,7 +202,6 @@ class MacTriggers(TriggerSource):
         import queue
         self._devices = [d for d in devices if d.strip()]
         self._events: "queue.SimpleQueue[KeyEvent]" = queue.SimpleQueue()
-        self._seen_declared = False
         self._iokit = ctypes.cdll.LoadLibrary(ctypes.util.find_library("IOKit"))
         self._cf = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreFoundation"))
         self._prepare_ctypes(ctypes)
@@ -309,7 +312,6 @@ class MacTriggers(TriggerSource):
             product, vendor_id, product_id = self._device_identity(self._iokit.IOHIDElementGetDevice(element))
             if not any(declared(d, product, vendor_id, product_id) for d in self._devices):
                 return
-            self._seen_declared = True
             self._events.put(KeyEvent(name, self._iokit.IOHIDValueGetIntegerValue(value) != 0))
         except Exception as e:  # noqa: BLE001 - a callback from C must not raise; say it and drop this report
             print(f"⚠️ MACF: voice: a key report couldn't be read ({e}); dropped", file=sys.stderr)

@@ -217,3 +217,36 @@ def test_an_indicator_that_cannot_start_is_refused_before_any_recording(tmp_path
     failing.write_text('import sys\nprint("indicator overlay: no display to draw on", file=sys.stderr)\nsys.exit(2)\n')
     with pytest.raises(RuntimeError, match="couldn't start .exit 2.: indicator overlay: no display"):
         OverlayIndicator(python=sys.executable, overlay=failing, preload=None)
+
+
+@pytest.mark.skipif(not MACOS, reason="macOS microphone access")
+def test_a_denied_microphone_names_the_program_macos_asks_about(monkeypatch):
+    """Under the disclaimed spawn, macOS asks about the voice app's binary, not this interpreter."""
+    from macf.voice.capture import disclaim, macos
+    monkeypatch.setattr(macos, "_microphone_access", lambda: macos.DENIED)
+    monkeypatch.setattr(disclaim, "own_executable", lambda: "/Apps/MacEffVoice.app/Contents/MacOS/MacEffVoice")
+    with pytest.raises(AudioEnded, match="MacEffVoice"):
+        macos.MacAudioIn().open()
+
+
+@pytest.mark.skipif(not MACOS, reason="macOS HID manager")
+def test_keyboards_without_input_monitoring_are_refused_naming_the_grant(monkeypatch):
+    from macf.voice.capture import macos
+
+    def refused_open(self, ready):
+        self._opened.append(macos.K_IO_RETURN_NOT_PERMITTED)
+        ready.set()
+
+    monkeypatch.setattr(macos.MacTriggers, "_run", refused_open)
+    with pytest.raises(PermissionError, match="Input Monitoring"):
+        macos.MacTriggers(["Apple Internal Keyboard / Trackpad"])
+
+
+@pytest.mark.skipif(not MACOS, reason="macOS session dictionary")
+def test_an_unreadable_lock_state_is_said_once_not_every_frame(capsys):
+    from macf.voice.capture.macos import MacLockState
+    def broken():
+        raise RuntimeError("Quartz went away")
+    lock = MacLockState(read=broken)
+    assert [lock.state() for _ in range(5)] == ["unknown"] * 5
+    assert capsys.readouterr().err.count("can't be read") == 1
