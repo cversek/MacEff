@@ -164,7 +164,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 
 - **R61** [MUST · decidable: macf/tests/test_voice_kept.py::test_kept_audio_goes_only_under_the_declared_folder_for_its_account_alone] Where kept audio is on, a capture unit MUST write each recording only under its declared local folder, readable by its own account alone. (kept_audio_MUST_stay_in_its_declared_folder)
 - **R62** [MUST · decidable: macf/tests/test_voice_kept.py::test_a_kept_recording_is_an_event_without_content] When a capture unit keeps a recording, it MUST record an event holding the recording's hash, trigger and time, and none of its content. (kept_recording_MUST_be_an_event)
-- **R63** [MUST · decidable: macf/tests/test_voice_kept.py::test_deleting_a_kept_recording_deletes_what_was_derived_from_it] When a kept recording is deleted, the system MUST delete every item derived from that recording. (deleting_kept_audio_MUST_delete_derived_items)
+- **R63** [MUST · decidable: macf/tests/test_voice_kept.py::test_deleting_a_kept_recording_deletes_what_was_derived_from_it] When a kept recording is deleted, the system MUST delete every item it recorded as derived from that recording. (deleting_kept_audio_MUST_delete_derived_items)
 - **R64** [MUST NOT · judgment: the operator, when a training set is made] A training set MUST NOT include a kept recording of a person whose consent the operator has not recorded. (training_MUST-NOT_use_unconsented_voices)
 
 ### 6.5 Wake phrases
@@ -263,7 +263,7 @@ It concerns every agent that will take dictation or speak, every deployment that
   - the audio never leaves the system, as before, which rules out a backup to an outside service as much as a transcription service (R13);
   - it goes to one declared folder that only the unit's account reads (R61);
   - each keep is an event, so the record of what was kept is the event log's, and it carries no content (R62);
-  - a deletion takes the derived items with it, since a spectrogram or an embedding of a voice is still that voice (R63);
+  - a deletion takes the derived items with it, since a spectrogram or an embedding of a voice is still that voice (R63). The system can only delete what it knows was derived, so derivation is recorded against the recording's hash when the item is made, a trained model included, and a copy made by hand is outside the rule (the host-side maintainer's re-review, 2026-11-18);
   - nobody's voice trains a model without their recorded consent (R64).
   The first deployment keeps its audio in a private store outside the framework; the framework's own tests for R61 to R63 are planned, and land when that store is promoted.
 - **R55:** an interrupted agent doesn't know where it was cut off, and the operator heard only part of what it meant to say. Without this, the agent answers the interruption as if its whole message had landed. The words heard are measured when the speech engine reports when each word ends. Otherwise they're estimated from how long the cut sentence had played, counting a word only once its estimated end has played. The note says which, so an estimate isn't read as a measurement. It rides on the utterance the interrupting key opened, since that is usually what the operator meant to say instead. If no utterance follows, the agent's next prompt carries it. Either way it is told once. These are the agent's own words, read by its daemon from the agent's home, never a sender's.
@@ -469,6 +469,7 @@ None.
 - 2026-11-13: from the first live trial on the operator's own voice: R56, the end window, and R57, the stop words, both as the operator asked and ruled; flagged for the maintainers' review.
 - 2026-11-14: the operator's ruling on kept audio: R13 amended so a declaration may turn it on, with the old sentence kept under it; R61 to R64 bound it (one folder, an event without content, deletion of derived items, consent before training).
 - 2026-11-18: the operator's ruling on Q01 (voice and presence): a delivered utterance resets the idle clock where the channel is declared (R65, R66), and wake-phrase-only activity derives HANDS_FREE (R67, R68); Q09 asks what an agent does in HANDS_FREE. On Q09 he confirmed that a hold or toggle key clears HANDS_FREE, and deferred how agents are told their posture to a deliberation after the MIS is live.
+- 2026-11-18: R63 scoped to the items the system recorded as derived, at the host-side maintainer's re-review, so the text and its test agree.
 
 ## Wiki-Links
 
