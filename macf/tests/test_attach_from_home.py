@@ -135,3 +135,34 @@ def test_another_accounts_server_beside_ours_is_passed_over(tmp_path, monkeypatc
                               ancestors=lambda pid: chains.get(pid, [pid]), tmux_panes=panes,
                               tmux_tmpdir=str(tmp_path / "Resident_1a2b3c.tmux"))
     assert plan.kind != TMUX
+
+
+def _held_for_login(tmp_path, auth_failed):
+    from macf.utils.attach import plan_attach
+    (tmp_path / "Resident_1a2b3c.tmux").mkdir()
+    unit = {"unit": "seat", "state": "failed", "pid": 500, "proc_start": "x"}
+    if auth_failed:
+        unit["auth_failed"] = auth_failed
+    return plan_attach({"ok": True, "units": [unit]}, "seat", **_probes(),
+                       tmux_tmpdir=str(tmp_path / "Resident_1a2b3c.tmux"))
+
+
+def test_a_session_held_failed_for_its_login_is_attachable_to_log_in(tmp_path):
+    """MIS-0002-R19 keeps a session that can't log in running, so a person can run /login in it
+    (persistent_layer 3.2's alert: attach and run /login). Attach must reach it (MacEff #1015)."""
+    plan = _held_for_login(tmp_path, "Login expired")
+    assert plan.kind == TMUX
+    assert "/login" in plan.reason and "Login expired" in plan.reason
+
+
+def test_a_session_failed_for_another_reason_is_still_not_attached(tmp_path):
+    plan = _held_for_login(tmp_path, None)
+    assert plan.kind == NONE and "failed" in plan.reason
+
+
+def test_a_unit_status_from_a_newer_daemon_is_read_by_an_older_cli():
+    """A status is part of a reply: a field this build doesn't know is ignored, not refused (#816)."""
+    from macf.pd.interface import UnitStatus
+    status = UnitStatus.model_validate({"unit": "session", "state": "failed", "since": 1.0,
+                                        "auth_failed": "Login expired", "a_later_field": 1})
+    assert status.auth_failed == "Login expired"

@@ -1017,7 +1017,12 @@ class UnitStatus(_Closed):
     """A unit as the daemon sees it now. ``restart_held_until`` is the end of the quiet
     window, ``HH:MM`` in the declaration's time, that a session's restart waits for,
     asked or due by its policy (MIS-0002-R50 (layer_MUST-NOT_act_in_quiet_window)), so
-    whoever asked for it learns that it waits rather than that it happened."""
+    whoever asked for it learns that it waits rather than that it happened.
+
+    Part of a reply, so like ``Response`` it ignores fields it doesn't know: a newer daemon's
+    status must never stop an older CLI from reading it (MacEff #816, #1015)."""
+
+    model_config = ConfigDict(extra="ignore")
 
     unit: str
     state: State
@@ -1025,6 +1030,9 @@ class UnitStatus(_Closed):
     proc_start: Optional[str] = None
     since: float
     restart_held_until: Optional[str] = None
+    #: What the client said while it can't log in, on a session held failed for its login (MIS-0002-R19
+    #: (auth_failure_MUST_read_failed)). That session still runs, so a person can attach and log in.
+    auth_failed: Optional[str] = None
 
 
 class Response(_Closed):
