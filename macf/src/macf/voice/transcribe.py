@@ -145,6 +145,39 @@ def transcribe_mlx(wav_path: str, model: str = "mlx-community/whisper-large-v3-t
     )
 
 
+def transcribe_faster_whisper(wav_path: str, model: str = "large-v3-turbo",
+                              language: str = "en", initial_prompt: Optional[str] = None) -> TranscriptResult:
+    """Transcribe using faster-whisper (Linux and containers; the GPU when CUDA loads, else the CPU)."""
+    from faster_whisper import WhisperModel
+
+    try:
+        whisper_model = WhisperModel(model, device="cuda", compute_type="float16")
+    except (RuntimeError, ValueError) as e:
+        print(f"⚠️ MACF: faster-whisper can't use the GPU ({e}); transcribing on the CPU", file=sys.stderr)
+        whisper_model = WhisperModel(model, device="cpu", compute_type="int8")
+
+    kwargs = {"language": language}
+    if initial_prompt:
+        kwargs["initial_prompt"] = initial_prompt
+
+    t0 = time.time()
+    seg_iter, info = whisper_model.transcribe(wav_path, **kwargs)
+    segments = [TranscriptSegment(text=s.text.strip(), start=s.start, end=s.end,
+                                  confidence=1.0 - getattr(s, "no_speech_prob", 0.0))
+                for s in seg_iter]          # the iterator decodes lazily, so time it whole
+    elapsed = time.time() - t0
+
+    return TranscriptResult(
+        text=" ".join(s.text for s in segments).strip(),
+        segments=segments,
+        language=getattr(info, "language", None) or language,
+        engine="faster-whisper",
+        model=model,
+        duration_audio=segments[-1].end if segments else 0.0,
+        duration_transcribe=elapsed,
+    )
+
+
 def transcribe_whisper(wav_path: str, model: str = "turbo",
                        language: str = "en", initial_prompt: Optional[str] = None) -> TranscriptResult:
     """Transcribe using OpenAI Whisper (universal fallback)."""
@@ -222,6 +255,14 @@ def transcribe(audio_path: str, engine: Optional[str] = None,
             result = transcribe_mlx(
                 wav_path,
                 model=model or "mlx-community/whisper-large-v3-turbo",
+                language=language,
+                initial_prompt=initial_prompt,
+            )
+        elif engine == "faster-whisper":
+            # detect_engine's choice on Linux; it had no branch here, so every Linux run failed (#1013)
+            result = transcribe_faster_whisper(
+                wav_path,
+                model=model or "large-v3-turbo",
                 language=language,
                 initial_prompt=initial_prompt,
             )
