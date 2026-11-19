@@ -48,7 +48,7 @@ def _home() -> Path:
 
 def _worker_running() -> bool:
     """Whether a speech worker holds the lock: if this process can take it, none does."""
-    lock = speech.WorkerLock(speech.lock_path())
+    lock = speech.WorkerLock(speech.lock_path(_home()))
     free = lock.acquire()
     lock.release()
     return not free

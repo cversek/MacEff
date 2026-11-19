@@ -1,0 +1,3 @@
+### Changed
+
+- **Several agents speaking on one system** (MIS-0008 R27 to R29 as revised). Each agent runs its own speech worker (its lock now in the agent's voice folder), and one playback lock per system (`speech-playback.lock` in the daemon runtime directory) is held while a message plays, so two agents never speak at once and neither is shut out; a stop ends the wait, and a message that waits 300 s for another agent is dropped and said in the log. Speaking and recording are also marked system-wide, so no agent's capture unit wakes on another agent's speech and no agent speaks while another's microphone records.

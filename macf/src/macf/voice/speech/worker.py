@@ -122,6 +122,39 @@ class WorkerLock:
         self._file.close()
 
 
+class PlaybackLock:
+    """One playback lock per system (R28 as revised): an agent's worker holds it while one message plays,
+    so two agents never speak at once and neither is shut out for the other's whole run."""
+
+    def __init__(self, path: Optional[Path] = None):
+        if path is None:
+            from macf.pd.names import runtime_dir
+            path = runtime_dir() / "speech-playback.lock"
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._file = open(self.path, "a")
+
+    def acquire(self, wait_s: float = 0.0, still_wanted: Callable[[], bool] = lambda: True,
+                poll_s: float = 0.05) -> bool:
+        """Take the lock, waiting up to ``wait_s`` while ``still_wanted()``; False if not taken."""
+        deadline = time.monotonic() + wait_s
+        while True:
+            try:
+                fcntl.flock(self._file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return True
+            except BlockingIOError:
+                if time.monotonic() >= deadline or not still_wanted():
+                    return False
+                time.sleep(poll_s)
+
+    def release(self) -> None:
+        fcntl.flock(self._file, fcntl.LOCK_UN)
+
+
+#: How long a message waits for another agent's speech to finish before it is dropped, said in the log.
+PLAYBACK_WAIT_S = 300.0
+
+
 class SpeechWorker:
     def __init__(self, home: Path, engine: "SpeechEngine", out: "AudioOut", settings: Callable[[], object],
                  recording: Callable[[], bool], screen_locked: Callable[[], bool],
@@ -131,9 +164,10 @@ class SpeechWorker:
         self._settings, self._recording, self._locked = settings, recording, screen_locked
         self.sleep, self.clock, self.log = sleep, clock, log
         self.played = 0
+        self.playback: Optional[PlaybackLock] = None  # the system's, set by run(); None in a lone worker
 
     def _mark(self) -> None:
-        state.speaking_path(self.home).touch()
+        state._touch(state.speaking_path(self.home), state.host_speaking_path())
 
     def _wait_for_the_microphone(self) -> bool:
         """Hold while the capture unit records (R29). False if it outlasted the wait."""
@@ -189,6 +223,19 @@ class SpeechWorker:
             self.log("the screen is locked and the voice section says silent: a message dropped unspoken")
             item.unlink(missing_ok=True)
             return True
+        if self.playback is not None:
+            if not self.playback.acquire(PLAYBACK_WAIT_S, still_wanted=item.exists):
+                if item.exists():
+                    self.log(f"another agent spoke for {PLAYBACK_WAIT_S:g} s; a message was dropped unspoken")
+                    item.unlink(missing_ok=True)
+                return True
+            try:
+                return self._speak(item, job, conf)
+            finally:
+                self.playback.release()
+        return self._speak(item, job, conf)
+
+    def _speak(self, item: Path, job: dict, conf) -> bool:
         voice, speed = job.get("voice", conf.voice), float(job.get("speed", conf.speed))
         said = list(sentences(clean(job.get("text", ""), pronunciations(self.home))))
         for index, sentence in enumerate(said):
@@ -221,8 +268,11 @@ class SpeechWorker:
 def run(worker: SpeechWorker, lock: WorkerLock, stopping: Callable[[], bool], beat: Callable[[], None]) -> int:
     """The unit's loop: take the lock or exit, then speak each message as it arrives."""
     if not lock.acquire():
-        print("⚠️ MACF: voice: another speech worker holds the lock; one per system (MIS-0008 R28)", file=sys.stderr)
+        print("⚠️ MACF: voice: this agent's speech worker is already running (one per agent; the system's "
+              "playback lock keeps agents from speaking at once, MIS-0008 R28)", file=sys.stderr)
         return 75
+    if worker.playback is None:
+        worker.playback = PlaybackLock()
     try:
         while not stopping():
             beat()
@@ -233,10 +283,10 @@ def run(worker: SpeechWorker, lock: WorkerLock, stopping: Callable[[], bool], be
     return 0
 
 
-def lock_path() -> Path:
-    """The one-worker lock, in the runtime directory the daemons use."""
-    from macf.pd.names import runtime_dir
-    return runtime_dir() / "speech-worker.lock"
+def lock_path(home: Path) -> Path:
+    """This agent's one-worker lock, in its own voice folder: each agent on a system runs its own
+    worker, and the system's PlaybackLock keeps them from speaking at once (R28 as revised)."""
+    return state.voice_dir(home) / "speech-worker.lock"
 
 
 __all__ = ["SpeechWorker", "WorkerLock", "enqueue", "lock_path", "run", "stop"]
