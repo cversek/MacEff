@@ -48,3 +48,37 @@ def test_an_agent_reclaiming_after_a_restart_replaces_its_own_claim(tmp_path):
     registry.claim("Ira_ee9a78", section(hold="KEY_F9"), pid=os.getpid())
     registry.release("Bez_bc8705")
     assert set(registry.live()) == {"Ira_ee9a78"}
+
+
+def test_a_pid_reused_by_another_process_does_not_keep_a_dead_claim(tmp_path):
+    """After a reboot or a long uptime a pid can come back as an unrelated process; the claim is bound to the
+    unit's start time, so the dead unit's key is free again."""
+    import json
+    from macf.notify.session import proc_start, proc_start_from_key, proc_start_key
+    registry = claims.HostClaims(tmp_path / "claims.json")
+    registry.claim("Bez_bc8705", section(hold="KEY_F9"), pid=os.getpid())
+    table = json.loads(registry.path.read_text())
+    assert table["Bez_bc8705"]["start"] == proc_start(os.getpid())
+    table["Bez_bc8705"]["start"] = proc_start_from_key(proc_start_key(proc_start(os.getpid())) - 3600)
+    registry.path.write_text(json.dumps(table))  # the same pid, but an earlier process: the unit is gone
+    registry.claim("Ira_ee9a78", section(hold="KEY_F9"), pid=os.getpid())
+    assert set(registry.live()) == {"Ira_ee9a78"}
+
+
+def test_a_stopping_unit_releases_only_its_own_claim(tmp_path):
+    registry = claims.HostClaims(tmp_path / "claims.json")
+    registry.claim("Bez_bc8705", section(hold="KEY_F9"), pid=os.getpid())
+    registry.release("Bez_bc8705", pid=os.getpid() + 1)  # a later unit of the same agent already claimed
+    assert set(registry.live()) == {"Bez_bc8705"}
+    registry.release("Bez_bc8705", pid=os.getpid())
+    assert registry.live() == {}
+
+
+def test_an_unreadable_registry_refuses_the_start_naming_the_file(tmp_path):
+    registry = claims.HostClaims(tmp_path / "claims.json")
+    registry.path.write_text('{"Bez_bc8705": {"pid"')  # a hand edit, or a write cut short
+    with pytest.raises(claims.ClaimsUnreadable, match="claims.json"):
+        registry.claim("Ira_ee9a78", section(hold="KEY_F10"), pid=os.getpid())
+    with pytest.raises(claims.ClaimsUnreadable, match="claims.json"):
+        registry.live()
+    assert issubclass(claims.ClaimsUnreadable, RuntimeError)  # the unit's start reports it and exits
