@@ -405,6 +405,9 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         if unit.get("microphone"):
             from macf.voice.cli import Reading, describe
             line += f"; microphone: {describe(Reading(unit['microphone']))}"
+        if unit.get("auth_failed"):
+            # Held failed for its login and still running: the way back is a person's /login (#1015)
+            line += f"; can't log in ({unit['auth_failed']}): attach and run /login"
         if "liveness" in unit:
             line += f"; liveness {unit['liveness']}: {unit['detail']}"
         print(line)

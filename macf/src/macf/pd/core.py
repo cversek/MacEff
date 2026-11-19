@@ -724,7 +724,8 @@ class Core:
         return [UnitStatus(unit=r.spec.name, state=r.state, pid=r.pid if r.proc else None,
                            proc_start=r.proc_start if r.proc else None, since=r.since,
                            restart_held_until=self._restart_held_until(r),
-                           microphone=r.microphone if r.proc else None)
+                           microphone=r.microphone if r.proc else None,
+                           auth_failed=r.auth_failed if r.proc else None)
                 for r in self._units.values()]
 
     def _restart_held_until(self, r: _Runner) -> Optional[str]:
