@@ -74,7 +74,7 @@ def main(argv=None) -> int:
         heartbeat = Heartbeat(agent_card(home), os.environ.get("MACF_PD_UNIT", "speech"), interval).start()
         beat = heartbeat.tick
     try:
-        return speech.run(worker, speech.WorkerLock(speech.lock_path()), stopping=lambda: bool(stopping), beat=beat)
+        return speech.run(worker, speech.WorkerLock(speech.lock_path(home)), stopping=lambda: bool(stopping), beat=beat)
     finally:
         if heartbeat is not None:
             heartbeat.stop()

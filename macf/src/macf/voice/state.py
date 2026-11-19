@@ -21,6 +21,34 @@ def listen_off_path(home: Path) -> Path:
     return voice_dir(home) / "listen_off"
 
 
+def _host(name: str) -> Path:
+    """A mark every agent on this system shares, in the daemon runtime directory (R27, R29 as revised)."""
+    from macf.pd.names import runtime_dir
+    return runtime_dir() / name
+
+
+def host_speaking_path() -> Path:
+    return _host("voice-speaking")
+
+
+def host_recording_path() -> Path:
+    return _host("voice-recording")
+
+
+def _fresh(path: Path, within_s: float, now: float = None) -> bool:
+    try:
+        touched = path.stat().st_mtime
+    except FileNotFoundError:
+        return False
+    return (now or time.time()) - touched < within_s
+
+
+def _touch(*paths: Path) -> None:
+    for path in paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+
+
 def speaking_path(home: Path) -> Path:
     """Touched by the speech worker while it plays, so the capture unit never wakes on it (R27)."""
     return voice_dir(home) / "speaking"
@@ -36,18 +64,14 @@ def recording_path(home: Path) -> Path:
 
 
 def mark_recording(home: Path) -> None:
-    path = recording_path(home)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.touch()
+    """Mark this agent's recording, and the system's: any agent's speech holds while it records (R29)."""
+    _touch(recording_path(home), host_recording_path())
 
 
 def recording(home: Path, now: float = None) -> bool:
-    """Whether the capture unit is recording now, by how fresh its mark is."""
-    try:
-        touched = recording_path(home).stat().st_mtime
-    except FileNotFoundError:
-        return False
-    return (now or time.time()) - touched < RECORDING_FRESH_S
+    """Whether a capture unit on this system is recording now, this agent's or another's (R29)."""
+    return (_fresh(recording_path(home), RECORDING_FRESH_S, now)
+            or _fresh(host_recording_path(), RECORDING_FRESH_S, now))
 
 
 def listening_on(home: Path) -> bool:
@@ -55,12 +79,10 @@ def listening_on(home: Path) -> bool:
 
 
 def speaking(home: Path, now: float = None) -> bool:
-    """Whether the agent's own speech is playing, or ended too recently to trust the microphone."""
-    try:
-        touched = speaking_path(home).stat().st_mtime
-    except FileNotFoundError:
-        return False
-    return (now or time.time()) - touched < DEAF_AFTER_SPEECH_S
+    """Whether any agent's speech on this system is playing, or ended too recently to trust the
+    microphone (R27 as revised: a capture unit never wakes on any speech of its system)."""
+    return (_fresh(speaking_path(home), DEAF_AFTER_SPEECH_S, now)
+            or _fresh(host_speaking_path(), DEAF_AFTER_SPEECH_S, now))
 
 
 def set_listening(home: Path, on: bool) -> None:

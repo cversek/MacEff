@@ -40,6 +40,12 @@ def cut_path(home: Path) -> Path:
     return state.voice_dir(home) / "speech_cut.json"
 
 
+def dropped_path(home: Path) -> Path:
+    """Messages dropped unspoken because another agent held the speaker, kept apart from cuts so neither
+    overwrites the other before it is told."""
+    return state.voice_dir(home) / "speech_dropped.json"
+
+
 class Split(NamedTuple):
     """One cut sentence, split at the cut, and whether the split was measured or estimated."""
 
@@ -97,10 +103,39 @@ def record(home: Path, played: Sequence[str], cut_sentence: str, played_s: float
     return entry
 
 
-def take_untold(home: Path, now: Optional[float] = None) -> Optional[dict]:
-    """The latest cut, if it hasn't been told and is recent; marked told as it is taken, so it is
-    told once. None otherwise."""
-    path = cut_path(home)
+def _write(path: Path, entry: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(entry))
+    os.replace(tmp, path)
+
+
+def record_dropped(home: Path, text: str, waited_s: float, now: Optional[float] = None) -> dict:
+    """Note a message dropped unspoken after waiting ``waited_s`` for another agent's speech. Drops not
+    yet told add up in one record, so the agent learns of all of them at once."""
+    now = now if now is not None else time.time()
+    path = dropped_path(home)
+    try:
+        entry = json.loads(path.read_text())
+    except FileNotFoundError:
+        entry = {}  # noqa: MACEFF003 - no record yet is the normal state
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: voice: the record of dropped speech can't be read, so it starts again: {e}",
+              file=sys.stderr)
+        entry = {}
+    if entry.get("told", True) or now - float(entry.get("at", 0)) > TELL_WITHIN_S:
+        entry = {"count": 0, "unheard": ""}
+    unheard = " / ".join(t for t in (entry["unheard"], " ".join(text.split())) if t)
+    entry = {"at": now, "why": "dropped", "waited_s": waited_s, "count": entry["count"] + 1,
+             "unheard": _clip_start(unheard), "told": False}
+    _write(path, entry)
+    return entry
+
+
+def take_untold(home: Path, now: Optional[float] = None, path: Optional[Path] = None) -> Optional[dict]:
+    """The latest cut (or, with ``path``, that record), if it hasn't been told and is recent; marked told
+    as it is taken, so it is told once. None otherwise."""
+    path = path or cut_path(home)
     try:
         entry = json.loads(path.read_text())
     except FileNotFoundError:
@@ -126,10 +161,26 @@ def describe(entry: dict) -> str:
             f"They did not hear: \"{unheard}\".")
 
 
+def describe_dropped(entry: dict) -> str:
+    """One line for the agent: what it said that was never played."""
+    n = int(entry.get("count", 1))
+    what = "One of your spoken messages wasn't" if n == 1 else f"{n} of your spoken messages weren't"
+    return (f"{what} played: another agent held the speaker for {float(entry.get('waited_s', 0)):g} s, "
+            f"so it was dropped. The operator did not hear: \"{entry.get('unheard') or 'nothing'}\".")
+
+
 def prompt_line(home: Path, now: Optional[float] = None) -> str:
-    """For the prompt hook: a cut no utterance carried, told once; empty otherwise."""
+    """For the prompt hook: a cut no utterance carried, and any speech dropped unspoken, each told once;
+    empty otherwise."""
+    lines = []
     entry = take_untold(home, now)
-    return f"✂️ {describe(entry)}" if entry else ""
+    if entry:
+        lines.append(f"✂️ {describe(entry)}")
+    dropped = take_untold(home, now, path=dropped_path(home))
+    if dropped:
+        lines.append(f"🔇 {describe_dropped(dropped)}")
+    return "\n".join(lines)
 
 
-__all__ = ["cut_path", "describe", "heard_in_sentence", "prompt_line", "record", "take_untold"]
+__all__ = ["cut_path", "describe", "describe_dropped", "dropped_path", "heard_in_sentence", "prompt_line",
+           "record", "record_dropped", "take_untold"]
