@@ -178,6 +178,35 @@ def test_the_voice_channel_is_set_up_only_where_a_voice_section_is_declared(stac
     assert _by_step(results)["channel"].status == ALREADY
 
 
+def test_a_voice_plugin_declared_from_the_agents_own_marketplace_is_kept(stack):
+    """Plugins install per login, so a second agent on the login runs the voice channel from a marketplace
+    of its own and declares it so. Init gives the harness that plugin and never installs the packaged
+    one in its place, which would load another agent's channel server into this agent's session."""
+    rc, _ = _run(stack)
+    harness_path = stack.home / ".maceff" / "harness_Tester_abc123.json"
+    harness_path.unlink()
+    (stack.home / ".local" / "bin" / "maceff_cc_child_Tester_abc123").unlink()
+    declaration = _declaration(stack)
+    declaration["units"].append(dict(declaration["units"][-1], name="capture", command=["true"]))
+    declaration["voice"] = {"capture_unit": "capture"}
+    declaration["allowlisted_channels"].append({"plugin": "maceff-voice-input-channel", "marketplace": "own"})
+    (stack.home / ".maceff" / "pd" / "declaration.json").write_text(json.dumps(declaration))
+    stack.claude.clear()
+    rc, results = _run(stack)
+    steps = _by_step(results)
+    channels = json.loads(harness_path.read_text())["channels"]
+    assert "plugin:maceff-voice-input-channel@own" in channels
+    assert "plugin:maceff-voice-input-channel@maceff" not in channels
+    assert not any("maceff-voice-input-channel@maceff" in argv for argv in stack.claude), stack.claude
+    # Not installed from its own marketplace yet: said, naming it, since init doesn't build that marketplace.
+    assert steps["channel"].status == REFUSED and "maceff-voice-input-channel@own" in steps["channel"].detail
+    record = stack.home / ".claude" / "plugins" / "installed_plugins.json"
+    held = json.loads(record.read_text())["plugins"]
+    record.write_text(json.dumps({"version": 2, "plugins": {**held, "maceff-voice-input-channel@own": []}}))
+    rc, results = _run(stack)
+    assert _by_step(results)["channel"].status == ALREADY, results
+
+
 def test_telegram_and_mail_are_declared_when_the_agent_uses_them(stack):
     (stack.home / ".claude").mkdir()
     (stack.home / ".claude" / "settings.json").write_text(
