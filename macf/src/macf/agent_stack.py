@@ -693,27 +693,43 @@ def step_declaration(ctx: Context) -> Result:
     return Result("declaration", DONE, f"{target}: units {', '.join(u['name'] for u in default['units'])}")
 
 
-def _declares_voice(ctx: Context) -> bool:
-    """Whether the agent's declaration has a voice section (MIS-0008): the one on disk, or the
-    one the declaration step would write. Voice is opt-in, so an unreadable declaration is no."""
+def _voice_declaration(ctx: Context) -> dict:
+    """The agent's declaration as voice set-up reads it: the one on disk, or the one the declaration
+    step would write. Voice is opt-in, so an unreadable declaration reads as none."""
     from macf.pd.names import declaration_path
     path = declaration_path(ctx.home)
     try:
         declaration = json.loads(path.read_text()) if path.exists() else (ctx.declaration or {})
     except (OSError, ValueError) as e:
         print(f"⚠️ MACF: agent init: {path} can't be read, so no voice channel is set up: {e}", file=sys.stderr)
-        return False
-    return isinstance(declaration, dict) and bool(declaration.get("voice"))
+        return {}
+    return declaration if isinstance(declaration, dict) else {}
+
+
+def _declares_voice(ctx: Context) -> bool:
+    """Whether the agent's declaration has a voice section (MIS-0008)."""
+    return bool(_voice_declaration(ctx).get("voice"))
+
+
+def _voice_plugin_id(ctx: Context) -> str:
+    """The Voice Input Channel plugin this agent runs: the packaged one, unless the declaration
+    allowlists it from a marketplace of the agent's own. Plugins install per login, so a second agent on
+    a login runs its channel from its own marketplace, and init must not swap in the packaged one."""
+    from macf.channels.marketplace import VOICE_PLUGIN, VOICE_PLUGIN_ID
+    for channel in _voice_declaration(ctx).get("allowlisted_channels") or []:
+        if isinstance(channel, dict) and channel.get("plugin") == VOICE_PLUGIN and channel.get("marketplace"):
+            return f"{VOICE_PLUGIN}@{channel['marketplace']}"
+    return VOICE_PLUGIN_ID
 
 
 def _declared_channel_flags(ctx: Context) -> List[str]:
-    from macf.channels.marketplace import CHANNEL_FLAG, VOICE_FLAG
+    from macf.channels.marketplace import CHANNEL_FLAG
     from macf.pd import default_declaration as dd
     declared = (ctx.declaration or {}).get("allowlisted_channels")
     if declared is None:
         declared = (default_declaration(ctx) if ctx.card else {}).get("allowlisted_channels") or []
     flags = [dd.channel_flag(c["plugin"], c["marketplace"]) for c in declared]
-    for flag in [CHANNEL_FLAG] + ([VOICE_FLAG] if _declares_voice(ctx) else []):
+    for flag in [CHANNEL_FLAG] + ([f"plugin:{_voice_plugin_id(ctx)}"] if _declares_voice(ctx) else []):
         if flag not in flags:
             flags.append(flag)
     # Channels already recorded for the harness are kept, first: a reinstall that dropped one
@@ -760,11 +776,18 @@ def _plugin_state(login_home: Path) -> Tuple[set, set]:
 
 
 def step_channel(ctx: Context) -> Result:
-    from macf.channels.marketplace import CHANNEL_PLUGIN_ID, MARKETPLACE, VOICE_PLUGIN_ID, packaged_marketplace
+    from macf.channels.marketplace import CHANNEL_PLUGIN_ID, MARKETPLACE, packaged_marketplace
     known, installed = _plugin_state(ctx.login_home)
     update = getattr(ctx.args, "update", False)
-    # The Voice Input Channel only where the declaration has a voice section (MIS-0008).
-    wanted = [CHANNEL_PLUGIN_ID] + ([VOICE_PLUGIN_ID] if _declares_voice(ctx) else [])
+    # The Voice Input Channel only where the declaration has a voice section (MIS-0008). One the agent
+    # declares from a marketplace of its own isn't installed from the packaged one: it must be there.
+    voice = _voice_plugin_id(ctx) if _declares_voice(ctx) else None
+    own_voice = voice if voice and not voice.endswith(f"@{MARKETPLACE}") else None
+    if own_voice and own_voice not in installed:
+        return Result("channel", REFUSED, f"the declaration runs {own_voice}, from the agent's own marketplace, "
+                                          f"and it isn't installed: `claude plugin install {own_voice}` after "
+                                          "adding that marketplace")
+    wanted = [CHANNEL_PLUGIN_ID] + ([voice] if voice and not own_voice else [])
     if MARKETPLACE in known and all(p in installed for p in wanted) and not update:
         return Result("channel", ALREADY, ", ".join(wanted))
     claude = shutil.which("claude")
