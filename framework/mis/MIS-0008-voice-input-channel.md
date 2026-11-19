@@ -9,7 +9,7 @@
 **Created**: 2026-11-13
 **Updates**: MIS-0002, MIS-0007
 **Supersedes**: none
-**Lands-in**: framework/policies/base/infrastructure/persistent_layer.md, framework/policies/base/infrastructure/voice_input.md (new), framework/policies/base/infrastructure/voice_generation.md (new), framework/policies/base/infrastructure/voice_lock.md (new), macf/src/macf/voice/, macf/src/macf/channels/, macf/src/macf/pd/, macf_tools voice
+**Lands-in**: framework/policies/base/infrastructure/persistent_layer.md, framework/policies/base/infrastructure/voice_input.md (new), framework/policies/base/infrastructure/voice_generation.md (new), framework/policies/base/infrastructure/voice_lock.md (new), framework/policies/base/operations/mode_system.md (HANDS_FREE), framework/glossary.md (HANDS_FREE), macf/src/macf/voice/, macf/src/macf/channels/, macf/src/macf/pd/, macf_tools voice
 **Resolution**: none
 
 ---
@@ -132,7 +132,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **R09** [MUST NOT · judgment: the maintainers, at review of each path that checks an authorization] An utterance MUST NOT satisfy anything an authorization depends on, whatever its trigger or voice-lock result. (utterance_MUST-NOT_authorize)
 - **R65** [MUST · decidable: macf/tests/test_voice_presence.py::test_a_delivered_utterance_resets_idle_where_the_channel_is_declared] Where a declaration lists the Voice Input Channel among its operator channels, a delivered utterance MUST reset the idle clock, whichever trigger started it. (delivered_voice_MUST_reset_idle_where_declared)
 - **R66** [MUST NOT · decidable: macf/tests/test_voice_presence.py::test_a_delivered_utterance_leaves_the_idle_clock_where_the_channel_is_not_declared] Where a declaration doesn't list the channel, a delivered utterance MUST NOT reset the idle clock. (delivered_voice_MUST-NOT_reset_idle_undeclared)
-- **R67** [MUST · decidable: macf/tests/test_voice_presence.py::test_wake_only_activity_is_hands_free] While the operator's only activity since the last keyboard input is wake-phrase utterances, derived presence MUST be HANDS_FREE, not USER_IDLE. (wake_only_activity_MUST_derive_hands_free)
+- **R67** [MUST · decidable: macf/tests/test_voice_presence.py::test_wake_only_activity_is_hands_free] Where a declaration lists the channel, and the operator's only activity since the last keyboard input is wake-phrase utterances, derived presence MUST be HANDS_FREE, not USER_IDLE. (wake_only_activity_MUST_derive_hands_free)
 - **R68** [MUST · decidable: macf/tests/test_voice_presence.py::test_keyboard_input_clears_hands_free] Keyboard input, a hold or toggle key included, MUST clear HANDS_FREE. (keyboard_input_MUST_clear_hands_free)
 - **R69** [MUST · decidable: macf/tests/test_voice_presence.py::test_wake_voice_older_than_the_idle_window_is_idle_not_hands_free] Once the idle window passes with no delivered utterance, HANDS_FREE MUST lapse to USER_IDLE. (hands_free_MUST_lapse_after_idle_window)
 - **R10** [MUST NOT · decidable: macf/tests/test_voice_channel.py::test_event_holds_no_text] The event log MUST NOT hold an utterance's text; the utterance's event holds its metadata only. (event_log_MUST-NOT_hold_utterance_text)
@@ -475,6 +475,7 @@ None.
 - 2026-11-18: the operator's ruling on Q01 (voice and presence): a delivered utterance resets the idle clock where the channel is declared (R65, R66), and wake-phrase-only activity derives HANDS_FREE (R67, R68); Q09 asks what an agent does in HANDS_FREE. On Q09 he confirmed that a hold or toggle key clears HANDS_FREE, and deferred how agents are told their posture to a deliberation after the MIS is live.
 - 2026-11-18: R63 scoped to the items the system recorded as derived, at the host-side maintainer's re-review, so the text and its test agree.
 - 2026-11-18: the operator's rulings by dialog: R69, HANDS_FREE lapses to USER_IDLE after the idle window; and kept audio as written, with consent gating training only.
+- 2026-11-18: at the head maintainer's re-review: R67 carries R65's condition, so it cannot conflict with R66 where the channel is not declared; HANDS_FREE gets a glossary entry, and mode_system is named as its policy home in Lands-in.
 
 ## Wiki-Links
 

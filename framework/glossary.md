@@ -45,6 +45,7 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **event stream**: one merged stream of the persistent layer's own events, published as they are recorded, for subscribers to read.
 - **final**: the status of an accepted Standards or Process MIS that has landed and been proven: every decidable requirement passes its check, every judgment review is recorded, and a cold-reader trial has succeeded. An Informational MIS never becomes final.
 - **final comment period**: the time, set by the initiator and starting when every maintainer has posted a first comment, in which anyone may object before the operator ratifies.
+- **HANDS_FREE**: an operational mode: the operator is present but speaking only, after wake-phrase utterances with no keyboard input since, on a channel the declaration lists as the operator's. It replaces USER_IDLE for the idle window, then lapses to it (MIS-0008 R65 to R69).
 - **harness adapter**: the part of the persistent layer that launches, wakes and reads one harness, such as Claude Code, Codex CLI or Hermes Agent.
 - **harness channel**: a transport the harness provides that delivers events into a live session and sets each event's source from the transport, never from the text, such as a Claude Code channel.
 - **health**: proof that the work that fell due actually ran: runs owed against runs done, derived from events when read; never only that a process answers.
