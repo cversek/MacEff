@@ -1,12 +1,18 @@
-"""The speech worker: one per system, playing every agent's queued speech in order, a sentence at a
-time (MIS-0008 R27 to R29, R33).
+"""The speech worker: one per agent, playing its agent's queued speech in order, a sentence at a time
+(MIS-0008 R27 to R29 as revised, R33).
 
-Messages wait in a spool folder under the agent's voice directory. The worker runs as a declared
-unit and holds an exclusive lock, so a second worker never starts playing beside it (R28). While a
-message plays it keeps the speaking mark fresh, so the capture unit never wakes on it (R27). Before
-each sentence it waits while the capture unit is recording, so the agent never talks over the
-operator or into a recording (R29). While the screen is locked and the voice section says silent,
-a message is dropped unspoken, and its text stays on screen (R33).
+Messages wait in a spool folder under the agent's voice directory. Each agent's worker runs as a
+declared unit and holds that agent's worker lock, so the agent never has two. A playback lock is held
+around each message, so two agents never speak at once (R28). While a message plays the worker keeps
+the speaking marks fresh, its agent's and the login's, so no capture unit wakes on it (R27). Before
+each sentence it waits while any capture unit is recording, so no agent talks over the operator or
+into a recording (R29). While the screen is locked and the voice section says silent, a message is
+dropped unspoken, and its text stays on screen (R33).
+
+PER LOGIN, NOT PER SYSTEM. The playback lock and the login's marks are in the daemon runtime
+directory, which is per account. Where every agent shares the operator's login, as on a Mac, that is
+the whole system. Where agents run as accounts of their own, each account has its own lock and marks,
+so two accounts' agents can speak at once; the system daemon's shared unit is the answer there.
 """
 from __future__ import annotations
 
@@ -123,8 +129,14 @@ class WorkerLock:
 
 
 class PlaybackLock:
-    """One playback lock per system (R28 as revised): an agent's worker holds it while one message plays,
-    so two agents never speak at once and neither is shut out for the other's whole run."""
+    """One playback lock per login (R28 as revised; see the module's note on per login): an agent's worker
+    holds it while one message plays, so two agents never speak at once and neither is shut out for the
+    other's whole run."""
+
+    #: How long a worker leaves the lock after releasing it before it tries again. ``flock`` grants no
+    #: order, so without this a worker with a long queue could win every time; a waiting worker polls
+    #: every ``poll_s`` and takes its turn in this gap.
+    HANDOFF_S = 0.15
 
     def __init__(self, path: Optional[Path] = None):
         if path is None:
@@ -133,11 +145,16 @@ class PlaybackLock:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._file = open(self.path, "a")
+        self._released_at: Optional[float] = None
 
     def acquire(self, wait_s: float = 0.0, still_wanted: Callable[[], bool] = lambda: True,
                 poll_s: float = 0.05) -> bool:
         """Take the lock, waiting up to ``wait_s`` while ``still_wanted()``; False if not taken."""
         deadline = time.monotonic() + wait_s
+        if self._released_at is not None:
+            gap = self._released_at + self.HANDOFF_S - time.monotonic()
+            if gap > 0:
+                time.sleep(gap)
         while True:
             try:
                 fcntl.flock(self._file, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -149,9 +166,10 @@ class PlaybackLock:
 
     def release(self) -> None:
         fcntl.flock(self._file, fcntl.LOCK_UN)
+        self._released_at = time.monotonic()
 
 
-#: How long a message waits for another agent's speech to finish before it is dropped, said in the log.
+#: How long a message waits for another agent's speech to finish before it is dropped; the agent is told.
 PLAYBACK_WAIT_S = 300.0
 
 
@@ -227,6 +245,8 @@ class SpeechWorker:
             if not self.playback.acquire(PLAYBACK_WAIT_S, still_wanted=item.exists):
                 if item.exists():
                     self.log(f"another agent spoke for {PLAYBACK_WAIT_S:g} s; a message was dropped unspoken")
+                    # the agent would otherwise believe the operator heard it (told as a cut is, R55)
+                    cut.record_dropped(self.home, job.get("text", ""), PLAYBACK_WAIT_S)
                     item.unlink(missing_ok=True)
                 return True
             try:
