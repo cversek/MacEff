@@ -174,12 +174,13 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **R24** [MUST · decidable: macf/tests/test_voice_wake.py::test_model_stored_with_report] A wake model MUST be stored with its test report: misses, false alarms per hour, false wakes on other agents' phrases, and conditions. (wake_model_MUST_carry_its_report)
 - **R25** [MUST NOT · decidable: macf/tests/test_voice_wake.py::test_test_set_disjoint_from_training] A wake model's test MUST NOT use any clip that its training used. (wake_test_MUST-NOT_reuse_training_clips)
 - **R26** [MUST · decidable: macf/tests/test_voice_declaration.py::test_duplicate_phrase_or_key_refused] A capture unit MUST refuse two agents that declare the same wake phrase or the same hotkey. (wake_phrase_and_keys_MUST_be_unique_per_capture_unit)
-- **R27** [MUST NOT · decidable: macf/tests/test_voice_capture.py::test_no_wake_during_own_speech] A capture unit MUST NOT take a wake while its system's speech worker is playing; a declared key still opens its recording, and the speech gives way (R29). (capture_MUST-NOT_wake_on_own_speech)
+- **R27** [MUST NOT · decidable: macf/tests/test_voice_capture.py::test_no_wake_during_own_speech] A capture unit MUST NOT take a wake while any speech on its system is playing; a declared key still opens its recording, and the speech gives way (R29). (capture_MUST-NOT_wake_on_own_speech)
 
 ### 6.6 Voice generation and selection
 
 - **R55** [MUST · decidable: macf/tests/test_voice_speech.py::test_cut_speech_tells_agent_what_was_heard] When a recording cuts an agent's speech, the agent MUST be told once which of its words played before the cut, which didn't, and whether that was measured. (cut_speech_MUST_be_told_to_the_agent)
-- **R28** [MUST · decidable: macf/tests/test_voice_speech.py::test_one_worker_serializes_agents] Spoken output MUST pass through one speech worker per system, so two agents never speak at once. (speech_MUST_pass_one_worker)
+- **R28** [MUST · decidable: macf/tests/test_voice_speech.py::test_playback_lock_serializes_agents] Spoken output on a system MUST be serialized by one playback lock per system, so two agents never speak at once. (speech_MUST_be_serialized_per_system)
+  - *Revised 2026-11-18 from the macOS port (#1008, comment 6995108065). Previous text: "Spoken output MUST pass through one speech worker per system, so two agents never speak at once." Previous slug (speech_MUST_pass_one_worker); previous test `test_one_worker_serializes_agents`. One worker per system silenced every agent but the first on a shared login.*
 - **R29** [MUST NOT · decidable: macf/tests/test_voice_speech.py::test_no_playback_while_microphone_open] The speech worker MUST NOT play while the capture unit is recording on its system. (speech_MUST-NOT_play_while_microphone_open)
 - **R30** [MUST · decidable: macf/tests/test_voice_select.py::test_choice_recorded_with_traits] An agent's chosen voice MUST be recorded in its voice section with the traits the operator accepted for it. (voice_choice_MUST_record_traits)
 - **R31** [MUST · judgment: the operator, at each selection] Before it generates samples, a selecting agent MUST put its inferred traits to the operator and take the operator's answer. (voice_selection_MUST_ask_operator_first)
@@ -400,7 +401,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R25 | decidable | macf/tests/test_voice_wake.py::test_test_set_disjoint_from_training | passing |
 | R26 | decidable | macf/tests/test_voice_declaration.py::test_duplicate_phrase_or_key_refused | passing |
 | R27 | decidable | macf/tests/test_voice_capture.py::test_no_wake_during_own_speech | passing |
-| R28 | decidable | macf/tests/test_voice_speech.py::test_one_worker_serializes_agents | passing |
+| R28 | decidable | macf/tests/test_voice_speech.py::test_playback_lock_serializes_agents | passing |
 | R29 | decidable | macf/tests/test_voice_speech.py::test_no_playback_while_microphone_open | passing |
 | R30 | decidable | macf/tests/test_voice_select.py::test_choice_recorded_with_traits | passing |
 | R31 | judgment | the operator, at each selection | pending |
@@ -476,6 +477,7 @@ None.
 - 2026-11-18: R63 scoped to the items the system recorded as derived, at the host-side maintainer's re-review, so the text and its test agree.
 - 2026-11-18: the operator's rulings by dialog: R69, HANDS_FREE lapses to USER_IDLE after the idle window; and kept audio as written, with consent gating training only.
 - 2026-11-18: at the head maintainer's re-review: R67 carries R65's condition, so it cannot conflict with R66 where the channel is not declared; HANDS_FREE gets a glossary entry, and mode_system is named as its policy home in Lands-in.
+- 2026-11-18: R28 revised from the macOS port: one playback lock per system serializes speech, with a worker per agent, since one worker per system left every agent but the first unheard on a shared login; R27 reads any speech on the system.
 
 ## Wiki-Links
 
