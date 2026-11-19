@@ -83,7 +83,7 @@ def _group_alive(pgid: int) -> bool:
         for stat in proc.glob("[0-9]*/stat"):
             try:
                 fields = stat.read_text().rpartition(")")[2].split()
-            except OSError:
+            except OSError:  # noqa: S112 - a /proc entry that exits during the scan is routine
                 continue
             if len(fields) > 2 and fields[2] == str(pgid) and fields[0] != "Z":
                 return True
@@ -428,8 +428,9 @@ def _remove_leftovers(tmux: str, env: Mapping[str, str], directory: Path) -> Non
     if socket.is_socket() and _tmux(tmux, env, "has-session").returncode != 0:
         try:
             socket.unlink()
-        except OSError:
-            pass
+        except OSError as e:
+            print(f"⚠️ MACF: session unit: removing the stale tmux socket {socket} failed "
+                  f"(leaving it in place): {e}", file=sys.stderr)
     for path in (socket.parent, directory):
         if not path.is_dir() or any(path.iterdir()):
             break                      # something else is in it: it stays

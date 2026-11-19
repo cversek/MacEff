@@ -65,7 +65,7 @@ def _until(text: str) -> datetime:
     try:
         if text.endswith("Z"):
             return datetime.strptime(text, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
-    except ValueError:
+    except ValueError:  # noqa: S110 - the refusal below names the form when this does not parse
         pass  # noqa: MACEFF003 - falls through to the refusal below, which names the form
     raise ValueError(f"UNTIL={text!r} must be a UTC time, such as 20261231T235959Z")
 

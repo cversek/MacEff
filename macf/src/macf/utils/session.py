@@ -171,7 +171,7 @@ def get_last_user_prompt_uuid(session_id: Optional[str] = None,
 
                     # Found actual user text prompt
                     return data.get('uuid')
-            except json.JSONDecodeError:
+            except json.JSONDecodeError:  # noqa: S112 - the live transcript's newest line can be cut mid-write; a line that doesn't parse can't be the one sought, and a warning would fire on most hook calls
                 continue
 
     except Exception as e:

@@ -129,7 +129,7 @@ def deliver(home: Path, message: Message) -> Path:
                 except BaseException:
                     try:
                         os.unlink(name, dir_fd=tmp_fd)
-                    except OSError:
+                    except OSError:  # noqa: S110 - the temp file is removed on a failing write, and the original error re-raises below
                         pass
                     raise
                 # Atomic, and both endpoints are the verified inodes.
@@ -196,7 +196,7 @@ def deliver_sent(home: Path, message: Message) -> Path:
                 except BaseException:
                     try:
                         os.unlink(name, dir_fd=tmp_fd)
-                    except OSError:
+                    except OSError:  # noqa: S110 - the temp file is removed on a failing write, and the original error re-raises below
                         pass
                     raise
                 os.rename(name, name, src_dir_fd=tmp_fd, dst_dir_fd=sent_fd)
@@ -224,7 +224,8 @@ def read_sent(home: Path) -> List[Message]:
             continue
         try:
             out.append(Message.deserialize(f.read_text()))
-        except (OSError, ValueError):
+        except (OSError, ValueError) as e:
+            print(f"⚠️ MACF: reading sent message {f.name} failed (leaving it out of the sent list): {e}", file=sys.stderr)
             continue
     return sorted(out, key=lambda m: m.sort_key())
 
@@ -283,14 +284,14 @@ def deliver_raw(home: Path, raw: bytes, sidecar: str) -> Path:
                         except BaseException:
                             try:
                                 os.unlink(name, dir_fd=tmp_fd)
-                            except OSError:
+                            except OSError:  # noqa: S110 - the temp file is removed on a failing write, and the original error re-raises below
                                 pass
                             raise
                         os.rename(name, name, src_dir_fd=tmp_fd, dst_dir_fd=new_fd)
                     except BaseException:
                         try:
                             os.unlink(f"{name}.json", dir_fd=side_fd)
-                        except OSError:
+                        except OSError:  # noqa: S110 - the sidecar is removed on a failing write, and the original error re-raises below
                             pass
                         raise
                 finally:
@@ -467,9 +468,10 @@ def read_all(home: Path, include_seen: bool = True) -> List[Message]:
                 continue
             try:
                 out.append(Message.deserialize(f.read_text()))
-            except (OSError, ValueError):
+            except (OSError, ValueError) as e:
                 # A malformed file is skipped rather than fatal: one bad message
                 # must not make the whole mailbox unreadable.
+                print(f"⚠️ MACF: reading mailbox message {f.name} failed (leaving it out of the listing): {e}", file=sys.stderr)
                 continue
     return sorted(out, key=lambda m: m.sort_key())
 
@@ -553,7 +555,7 @@ def unread_message_ids(home: Path) -> List[str]:
     for name in unread_names(home):
         try:
             mid = json.loads((side / f"{name}.json").read_text()).get("message_id")
-        except FileNotFoundError:
+        except FileNotFoundError:  # noqa: S112 - internet mail, or mail ingested before sidecars, has no id to name
             continue  # noqa: MACEFF003 - internet mail, or mail ingested before sidecars: no id to name
         except (OSError, ValueError) as e:
             print(f"⚠️ MACF: unreadable sidecar for {name}, its id left out: {e}", file=sys.stderr)
@@ -594,7 +596,8 @@ def mark_read(home: Path, ref: str, reader: str) -> Optional[str]:
             continue
         try:
             m = Message.deserialize((new / n).read_text())
-        except (OSError, ValueError):
+        except (OSError, ValueError) as e:
+            print(f"⚠️ MACF: reading message {n} failed (skipping it): {e}", file=sys.stderr)
             continue        # a malformed file is skipped, as read_all skips it
         if m.message_id == ref:
             name, sidecar = n, bundle_sidecars_for(home) / f"{n}.json"

@@ -160,12 +160,12 @@ def environment_patterns(env: Optional[Dict[str, str]] = None) -> List[List[str]
     if env is None:
         try:
             e.setdefault("hostname", socket.gethostname())
-        except OSError:
-            pass
+        except OSError as e:
+            print(f"⚠️ MACF: could not read hostname (hostname rule not applied to this scan): {e}", file=sys.stderr)
         try:
             e.setdefault("username", own_username())
-        except (OSError, KeyError):
-            pass
+        except (OSError, KeyError) as e:
+            print(f"⚠️ MACF: could not read username (username rule not applied to this scan): {e}", file=sys.stderr)
         try:
             from .utils.paths import find_agent_home
             home = find_agent_home()
@@ -177,8 +177,8 @@ def environment_patterns(env: Optional[Dict[str, str]] = None) -> List[List[str]
                 full_id = _agent_uuid_from(home)
                 if full_id:
                     e.setdefault("agent_uuid", full_id)
-        except (ImportError, OSError):
-            pass
+        except (ImportError, OSError) as e:
+            print(f"⚠️ MACF: could not resolve agent home (agent home, moniker and uuid rules not applied): {e}", file=sys.stderr)
 
     out: List[List[str]] = []
     host = (e.get("hostname") or "").strip()
