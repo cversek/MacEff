@@ -149,6 +149,9 @@ def build(home: Path):
     if unit_name and unit_name != voice.capture_unit:
         raise RuntimeError(f"this unit is {unit_name!r}, but the voice section names "
                          f"{voice.capture_unit!r} as its capture unit")
+    # another agent's own unit on this host may already answer a key or phrase this one declares (R26)
+    from macf.voice.capture import claims, disclaim
+    claims.HostClaims().claim(card, voice, pid=disclaim.unit_pid() or os.getpid())
     from macf.voice.capture import platform
     here = platform.backends(voice.trigger_devices)
     detector = None
