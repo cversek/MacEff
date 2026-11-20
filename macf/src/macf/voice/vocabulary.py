@@ -125,8 +125,8 @@ def extract_vocabulary(
                     text = md_file.read_text(errors='replace')[:10000]
                     all_terms.update(extract_terms_from_text(text))
                     sources_read += 1
-                except (OSError, PermissionError):
-                    pass
+                except (OSError, PermissionError) as e:
+                    print(f"⚠️ MACF: could not read memory file {md_file.name} (its terms are left out of the vocabulary): {e}", file=sys.stderr)
 
     # Read extra files if provided
     if extra_files:
@@ -137,8 +137,8 @@ def extract_vocabulary(
                     text = p.read_text(errors='replace')[:20000]
                     all_terms.update(extract_terms_from_text(text))
                     sources_read += 1
-                except (OSError, PermissionError):
-                    pass
+                except (OSError, PermissionError) as e:
+                    print(f"⚠️ MACF: could not read extra vocabulary file {p.name} (its terms are left out): {e}", file=sys.stderr)
 
     return sorted(all_terms)
 

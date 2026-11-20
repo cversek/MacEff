@@ -319,14 +319,6 @@ class AgentAddressing(AgentBinding):
                     "exception is visible to whoever reads about it.")
 
 
-#: Supervision values MIS-0002 retired, mapped to their current name. The old
-#: name keeps meaning the new one (MIS-0002-R76), so a deployment that already
-#: wrote it does not strand on a rename.
-_RETIRED_SUPERVISION_VALUES = {
-    "hypervisor": "primal-daemon",
-}
-
-
 def _require_zone_cards(addressing: "AddressingConfig") -> None:
     """Under a zone every agent needs a card the broker can use, or its zone mail would be
     refused as not ours with no word at all. Refuse the start and name them instead."""
@@ -394,7 +386,7 @@ def _refuse_double_claims(addressing: "AddressingConfig", peers: Dict[str, Any])
     for name, b in addressing.agents.items():
         try:
             local = local_part_from_card(b.card or agent_card(b.home), b.zone_token)
-        except (IdentityError, ValueError):
+        except (IdentityError, ValueError):  # noqa: S112 - _require_zone_cards already refused this agent
             continue   # _require_zone_cards has already refused this agent
         claims.setdefault(local, []).append(f"local agent '{name}'")
     missing = []
@@ -450,22 +442,12 @@ class AddressingConfig(BaseModel):
     supervision: Optional[str] = Field(
         default=None,
         description="who or what watches a host-tier deployment: "
-                    "`operator-at-terminal` or `primal-daemon`. The retired "
-                    "name `hypervisor` is still accepted and read as "
-                    "`primal-daemon` (MIS-0002-R76). Required under "
+                    "`operator-at-terminal` or `primal-daemon`. Required under "
                     "`tier: host`; `none` is refused, because the tier's "
                     "justification is supervision and a file may not declare "
                     "the tier while declaring the justification absent.")
     agents: Dict[str, AgentAddressing] = Field(
         description="address local-part -> agent")
-
-    @field_validator("supervision")
-    @classmethod
-    def _normalize_retired_supervision(cls, v: Optional[str]) -> Optional[str]:
-        """Read a retired supervision value as its current name (MIS-0002-R76)."""
-        if v is None:
-            return v
-        return _RETIRED_SUPERVISION_VALUES.get(v.strip().lower(), v)
 
     @field_validator("agents")
     @classmethod

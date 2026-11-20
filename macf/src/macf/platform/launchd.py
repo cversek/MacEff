@@ -180,7 +180,7 @@ def install_plan(card: str, program_argv: List[str], home: str, log_dir: str, ui
     label it has loaded, and ``kickstart -k`` restarts a job from the definition read at its
     bootstrap, not from the plist on disk. So the job is booted out first, then bootstrapped
     from the new plist. The boot-out ends the daemon; ``AbandonProcessGroup`` keeps its units
-    running, and the daemon the bootstrap starts adopts them (persistent_layer 12.6).
+    running, and the daemon the bootstrap starts adopts them (persistent_layer 1.6).
     """
     for sp in socket_paths:
         check_socket_path(sp)

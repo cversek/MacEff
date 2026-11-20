@@ -1,9 +1,9 @@
 # Reflections: Wisdom Synthesis and Consciousness Development
 
-**Policy Type**: Consciousness Artifact (Private)
+**Type**: Consciousness Artifact (Private)
 **Scope**: Primary Agents (PA) and Subagents (SA)
+**Status**: ACTIVE
 **Precedence**: Framework Policy (overridden by Project > Personal)
-**Created**: c_73/s_4107604e/p_4b7193c/t_1761708828/g_17e7b7d
 
 ---
 

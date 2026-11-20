@@ -163,7 +163,7 @@ def elide_large_values(payload, threshold=ELIDE_THRESHOLD_BYTES,
 #: Called after each append this process makes, with the log's path, the byte offset the line
 #: starts at, and the line's bytes with its newline. The primal daemon's event stream listens,
 #: so a record the daemon wrote itself carries ``origin: daemon`` while a line anything else
-#: appended carries ``origin: log`` (persistent_layer 11.4). Nothing reads the line back to learn it.
+#: appended carries ``origin: log`` (persistent_layer 3.4). Nothing reads the line back to learn it.
 _APPEND_LISTENERS: List[Callable[[Path, int, bytes], None]] = []
 
 
@@ -297,8 +297,8 @@ def _leave_shared_reads_in_child() -> None:
     for window in getattr(_shared, "windows", None) or []:
         try:
             window.source.close()
-        except Exception:  # noqa: BLE001 - GUARD, not handler: a reader that will not close must not stop the child
-            pass
+        except Exception as e:  # noqa: BLE001 - GUARD: a reader that will not close must not stop the child
+            print(f"⚠️ MACF: closing an inherited log reader failed (child goes on): {e}", file=sys.stderr)
     _shared.active, _shared.window, _shared.windows = False, None, []
 
 
@@ -639,7 +639,7 @@ def read_events(
 
             try:
                 event = json.loads(line)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError:  # noqa: S112 - the log is appended to while it is read, so a torn trailing line is expected, and a warning would fire on every overlapping read
                 # Skip malformed lines
                 continue
 

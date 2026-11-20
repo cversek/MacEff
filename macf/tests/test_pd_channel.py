@@ -1,4 +1,4 @@
-"""The MacEff channel (MIS-0002 section 6.14).
+"""The MacEff channel (MIS-0002 section 6.2.3).
 
 Test names follow MIS-0002's Conformance table, so each requirement's row names a
 test that exists. The primal daemon is not built yet (step 1 of the landing), so a
@@ -296,7 +296,7 @@ def test_a_daemon_notice_with_a_count_is_refused(source):
 def test_every_daemon_source_is_known_in_every_place():
     """A daemon notice source lives in several places, and they must agree (#736): the
     notifier's sources, the channel's pointers and factories, the record's source list, and the
-    policy's list (persistent_layer 1.2). A source the record doesn't list is refused by the
+    policy's list (persistent_layer 6.2). A source the record doesn't list is refused by the
     channel after the daemon has logged it delivered, and one the policy leaves out is a
     notice no agent can look up."""
     import re
@@ -310,7 +310,7 @@ def test_every_daemon_source_is_known_in_every_place():
     assert set(typing.get_args(NoticeRecord.model_fields["source"].annotation)) == daemon | {"amail"}
     policy = (Path(__file__).resolve().parents[2] / "framework" / "policies" / "base" / "infrastructure"
               / "persistent_layer.md").read_text()
-    section = policy.split("\n### 1.2 ")[1].split("\n### 1.3 ")[0]
+    section = policy.split("\n### 6.2 ")[1].split("\n### 6.3 ")[0]
     assert set(re.findall(r"^ *- `([a-z_]+)`:", section, re.M)) == daemon | {"amail"}
 
 

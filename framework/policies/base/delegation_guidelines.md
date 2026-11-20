@@ -1,12 +1,14 @@
 # DELEGATION_GUIDELINES
 
+**Type**: Framework Foundation
+**Scope**: All agents (PA and SA)
+**Status**: ACTIVE
+
 ## Meta-Policy: Policy Classification
 - **Tier**: MANDATORY
-- **Category**: Framework Foundation
 - **Version**: 1.2.0
 - **Dependencies**: policy_awareness, core_principles
 - **Authority**: MacEff Framework
-- **Status**: ACTIVE
 
 ## Policy Statement
 Primary Agents must delegate specialized tasks appropriately, understanding when delegation is mandatory, optional, or prohibited, while working within the Task tool's stateless architecture.

@@ -64,6 +64,17 @@ STEPS: List[Tuple[str, str, str]] = [
      "no_registry"),
 ]
 
+#: The steps that read the agent's calling card, which the calling-card step writes first.
+NEEDS_CARD = ("declaration", "harness", "daemon")
+#: What those steps say when the home has no card yet.
+NO_CARD_PHRASE = "names no agent"
+
+
+def _card_step_would_name(results: "List[Result]") -> bool:
+    """Whether the calling-card step, already run under --plan, found it would write the card."""
+    return any(r.step == "calling-card" and r.status == WOULD for r in results)
+
+
 #: The steps ``--update`` runs: the declaration only to report its drift, the channel and the
 #: daemon to bring them current. The rest belong to a first init.
 UPDATE_STEPS = ("declaration", "channel", "daemon")
@@ -292,8 +303,8 @@ def _clients_from_proc(proc: Path = Path("/proc")) -> List[Tuple[int, str]]:
             if not _is_claude(argv):
                 continue
             found.append((int(entry.name), os.readlink(entry / "cwd")))
-        except (OSError, ValueError):
-            continue  # it ended while we looked, or is not ours to read
+        except (OSError, ValueError):  # noqa: S112 - it ended while we looked, or is not ours to read
+            continue
     return found
 
 
@@ -313,7 +324,8 @@ def _clients_from_ps() -> List[Tuple[int, str]]:
         try:
             cwd = subprocess.run(["lsof", "-a", "-p", fields[0], "-d", "cwd", "-Fn"],
                                  capture_output=True, text=True, timeout=10, env=env).stdout
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, subprocess.SubprocessError) as e:
+            print(f"⚠️ MACF: lsof for client pid {fields[0]} failed (skipping it): {e}", file=sys.stderr)
             continue
         names = [ln[1:] for ln in cwd.splitlines() if ln.startswith("n")]
         if names:
@@ -360,7 +372,7 @@ def legacy_harness_live(ctx: Context) -> Optional[str]:
     """Why a session for this agent may already be running outside its daemon, or None: the
     legacy harness's systemd unit, its LaunchAgent on macOS, or any live client in the
     project directory, however it was started. A session unit started beside any of them
-    would be a second client on one conversation (persistent_layer 6.2, 6.3)."""
+    would be a second client on one conversation (persistent_layer 5.1, 5.2)."""
     return _systemd_harness_live(ctx) or _launchd_harness_live(ctx) or live_client_here(ctx)
 
 
@@ -404,7 +416,7 @@ def pd_unit_installed(card: str, home: Path) -> bool:
 
 def daemon_restart(card: str) -> None:
     """Restart the daemon under its service manager. Its units outlive it and the next daemon
-    adopts them (persistent_layer 12.6), so the session keeps running."""
+    adopts them (persistent_layer 1.6), so the session keeps running."""
     tier = _adapter()
     restart = getattr(tier, "restart", None)
     if restart is None:
@@ -1042,6 +1054,13 @@ def run_stack(args: argparse.Namespace, home: Path, *, in_container: bool,
             result = preamble() if step == "preamble" else RUNNERS[step](ctx)
         except Exception as e:  # noqa: BLE001 - one step's defect is reported, the rest still run
             result = Result(step, REFUSED, f"{type(e).__name__}: {e}")
+        if plan and result.status == REFUSED and step in NEEDS_CARD and _card_step_would_name(results) \
+                and NO_CARD_PHRASE in result.detail:
+            # The calling-card step creates the file this step reads, so in a real run it proceeds.
+            # A plan that called it refused read, to a newcomer, as an init that fails at half its
+            # steps (#860 item 1).
+            result = Result(step, WOULD, "once the calling card is written, as the step before it does; "
+                                         "it can't be checked until then")
         if result.status == REFUSED:
             ctx.refused[step] = result.detail
         results.append(result)

@@ -73,7 +73,9 @@ def declared_broker_ports(own_home: Path, homes: Optional[Sequence[Path]] = None
         candidates = [h for h in shared_view.declared_homes() if isinstance(h, Path)]
         try:
             candidates += sorted(p for p in shared_view.HOMES.iterdir())
-        except OSError:
+        except OSError as e:
+            print(f"⚠️ MACF: listing {shared_view.HOMES} failed (checking only the declared daemons): {e}",
+                  file=sys.stderr)
             pass  # noqa: MACEFF003 - no /home listing: only the declared daemons are checked
     else:
         candidates = list(homes)
@@ -88,7 +90,7 @@ def declared_broker_ports(own_home: Path, homes: Optional[Sequence[Path]] = None
                 continue
             seen.add(path)
             doc = json.loads(path.read_text())
-        except (OSError, ValueError):
+        except (OSError, ValueError):  # noqa: S112 - most homes hold no declaration, its daemon checks the rest
             continue  # noqa: MACEFF003 - unreadable or absent: that daemon's start checks for itself
         broker = doc.get("broker") if isinstance(doc, dict) else None
         if isinstance(broker, dict) and isinstance(broker.get("port"), int):
@@ -348,7 +350,7 @@ class ExportLink:
         """A clean stop says offline itself: a will fires only on an unclean disconnect."""
         try:
             self.client.publish(assoc.presence_topic(self.card), b"offline", qos=1, retain=True).wait_for_publish(2)
-        except (RuntimeError, ValueError):
+        except (RuntimeError, ValueError):  # noqa: S110 - not connected at stop: the will covers the offline record
             pass  # noqa: MACEFF003 - not connected: the will or the association's silence covers it
         self.client.loop_stop()
         self.client.disconnect()

@@ -399,7 +399,7 @@ class Notifier:
             self.on_detach(conn)
         try:
             conn.close()
-        except OSError:
+        except OSError:  # noqa: S110 - closing a socket that already failed; nothing is lost, and the channel was detached above
             pass  # noqa: MACEFF003 - closing a socket that already failed; nothing is lost
 
     @property
@@ -407,7 +407,7 @@ class Notifier:
         return list(self._channels)
 
     def pace(self, refractory_s: float) -> None:
-        """Set how long the keystroke wake rests after each wake (persistent_layer 1.9). The daemon
+        """Set how long the keystroke wake rests after each wake (persistent_layer 6.9). The daemon
         has already checked the floor and recorded the pace; a window running now is measured
         against the new length at the next tick."""
         if self.waker is not None:

@@ -184,7 +184,7 @@ def _newest_in_cycle_usage(jsonl_path: str, min_ts_iso: str) -> Optional[Tuple[i
             continue
         try:
             data = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - the live transcript's newest line can be cut mid-write; a line that doesn't parse can't be the one sought, and a warning would fire on most hook calls
             continue
         if data.get("type") != "assistant":
             continue
@@ -230,12 +230,15 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
 
         if sidecar_dir:
             cache_path = sidecar_dir / "token_cache.json"
-            try:
-                cache_data = read_json(cache_path)
-                if cache_data and cache_data.get("session_id") == session_id:
-                    cached_max = cache_data.get("max_tokens_used", 0)
-            except (FileNotFoundError, OSError, json.JSONDecodeError):
-                pass  # Cache miss is non-critical, continue with cached_max = 0
+            # A session has no cache until the first write, so a missing one is the normal case on
+            # the first hook calls: nothing to say (#999). One that is there and can't be read is said.
+            if cache_path.exists():
+                try:
+                    cache_data = read_json(cache_path)
+                    if cache_data and cache_data.get("session_id") == session_id:
+                        cached_max = cache_data.get("max_tokens_used", 0)
+                except (FileNotFoundError, OSError, json.JSONDecodeError) as e:
+                    print(f"⚠️ MACF: token cache {cache_path.name} unreadable (cached maximum taken as 0): {e}", file=sys.stderr)
 
         jsonl_path = get_session_transcript_path(session_id)
 
@@ -317,7 +320,7 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
                                                     "timestamp": ts,
                                                 }
                                             )
-                            except (json.JSONDecodeError, UnicodeDecodeError):
+                            except (json.JSONDecodeError, UnicodeDecodeError):  # noqa: S112 - the tail window starts mid-line whenever the file is bigger than it, so its first line fails to parse on nearly every read and a warning would fire on nearly every prompt
                                 continue
 
                         # Pick the assistant message with the latest TIMESTAMP, not

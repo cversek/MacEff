@@ -777,7 +777,7 @@ from anything the broker says about itself:
 A sweep in flight, or due and not yet late, leaves the last ended one's verdict standing.
 
 **Stuck mail reaches a person** [MIS-0004-R32 (stuck_mail_MUST_reach_a_person)] through the
-outside watch (persistent_layer §7.1), which reads that verdict for every home that
+outside watch (persistent_layer §4.1), which reads that verdict for every home that
 declares a sweep and alerts once per stretch as `mail-broker: SWEEP-FAILED`, by a path
 that is neither the broker nor any session. Mail an agent leaves unread past its own
 threshold reaches the same watch as `mail: UNREAD` (persistent_layer, the unread-mail

@@ -187,7 +187,7 @@ def proc_start_key(value) -> Optional[int]:
         return None
     try:
         return int(text)
-    except ValueError:
+    except ValueError:  # noqa: S110 - probe: a non-ticks form is expected, the asctime parse decides
         pass
     try:
         return calendar.timegm(time.strptime(text, _ASCTIME))
@@ -496,7 +496,7 @@ def live_sessions() -> list:
             continue
         try:
             pid = int(name[: -len(".json")])
-        except ValueError:
+        except ValueError:  # noqa: S112 - a file in the sessions directory whose name is not a pid is not a session record, so skipping it is the expected case
             continue
         actual = proc_start(pid)
         if actual is None:
@@ -623,7 +623,7 @@ def addressable_sessions() -> list:
             continue
         try:
             pid = int(name.split(".")[0])
-        except ValueError:
+        except ValueError:  # noqa: S112 - a .key file whose name is not a pid belongs to no session, so skipping it is the expected case
             continue
         if socket_path_for(pid).exists() and proc_start(pid) is not None:
             found.append(pid)

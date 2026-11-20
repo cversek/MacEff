@@ -274,8 +274,8 @@ def _resolve_roots(agent_home: Path) -> Tuple[List[Tuple[str, Path]], List[Tuple
             mis_dir = pol.parent / "mis"
             if mis_dir.is_dir():
                 roots.append(("mis", mis_dir))
-    except (OSError, ImportError):
-        pass
+    except (OSError, ImportError) as e:
+        print(f"⚠️ MACF: framework policies lookup failed (policy and MIS nodes left out of the web): {e}", file=sys.stderr)
     # The task store participates wherever it is configured to live. It sits
     # under the agent tree by default, but MACF_TASK_STORE_DIR or the
     # task_store config can move it, and a moved store must not silently drop
@@ -436,7 +436,7 @@ def _pointer_node(pointer: str, path_to_node: Dict[str, str], ca_nodes: Dict[str
                 t = TaskReader().read_task(tid)
                 if t:
                     title = re_mod.sub(r"\x1b\[[0-9;]*m", "", t.subject).strip()[:50]
-            except (OSError, ValueError, ImportError, AttributeError):
+            except (OSError, ValueError, ImportError, AttributeError):  # noqa: S110 - title is cosmetic; store may be absent by design
                 pass  # the store may be absent under a scan_dirs build; the id still names the task
             ca_nodes[node_id] = {"type": "tasks", "title": title, "path": f"task:{tid}",
                                  "node_class": node_class_for("tasks")}
@@ -445,7 +445,7 @@ def _pointer_node(pointer: str, path_to_node: Dict[str, str], ca_nodes: Dict[str
     try:
         from .utils.paths import find_agent_home
         candidates.append(find_agent_home() / ref)
-    except (OSError, ImportError):
+    except (OSError, ImportError):  # noqa: S110 - if the import fails only the relative candidate is tried, and a ref that matches neither gets no node, as before
         pass
     for c in candidates:
         try:
@@ -503,12 +503,14 @@ def build_knowledge_web(scan_dirs: Optional[List[Path]] = None) -> Dict[str, Any
     for ca_type, type_root, md_file in walk:
         try:
             content = md_file.read_text(errors='replace')
-        except OSError:
+        except OSError as e:
+            print(f"⚠️ MACF: could not read {md_file.name} (its links left out of the web): {e}", file=sys.stderr)
             continue
         if ca_type == "duties":
             try:
                 rec = json.loads(content)
-            except ValueError:
+            except ValueError as e:
+                print(f"⚠️ MACF: duty record {md_file} unreadable (skipped, its edges are missing from the web): {e}", file=sys.stderr)
                 continue
             node_id = f"duties:{rec.get('id', md_file.stem)}"
             ca_nodes[node_id] = {"type": "duties", "title": str(rec.get("title", md_file.stem))[:50],
@@ -1160,7 +1162,8 @@ def suggest_concepts(kg: Optional[Dict[str, Any]] = None, min_members: int = 3) 
             continue
         try:
             content = path.read_text(errors="replace")
-        except OSError:
+        except OSError as e:
+            print(f"⚠️ MACF: could not read {path.name} (its declared keywords not counted): {e}", file=sys.stderr)
             continue
         for kw in declared_keywords(content):
             if len(kw) > 3 and kw not in covered:

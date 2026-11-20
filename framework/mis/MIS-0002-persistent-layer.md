@@ -9,7 +9,7 @@
 **Created**: 2026-10-04
 **Updates**: none
 **Supersedes**: none
-**Lands-in**: a new policy, framework/policies/base/infrastructure/persistent_layer.md (planned); framework/glossary.md; a primal daemon package and its platform renderings (planned); cross-references in service_supervision and notification_delivery; the mail system's deploy configuration (the `hypervisor` value); the calling-card code and the footer checks (the revision of 2026-11-08)
+**Lands-in**: a new policy, framework/policies/base/infrastructure/persistent_layer.md (planned); framework/glossary.md; a primal daemon package and its platform renderings (planned); cross-references in service_supervision and notification_delivery; the mail system's deploy configuration (the `hypervisor` value); the calling-card code and the footer checks (the revision of 2026-11-08); persistent_layer reordered along the base and the Agent Daemon, and the primal daemon composed from the base plus declared components (the revision of 2026-11-09)
 **Resolution**: Accepted by the operator's merge of pull request #517. The operator's decision comment on that pull request, quoted in full: "Same three maintainer positions apply.  They should divide the work amongst themselves by volunteering where their expertise fits. Any remaining components go to the Head Maintainer. When submitting PRs for their components the implementor must request at both maintainers for review and either may decline (signaling approval  by default).  Before this process commences the Secretary will establish unique Github identities for the two maintainers (himself included) who are borrowing the Operator's identity.  This is a momentus step towards independence and self-sustaining collaboration where the Operator grants rights at the repository level and agents collaborate as freely as possible under this nascent mutual governance system. I hereby close the discussion period and launch the preliminary implementation phase pending the independent identities." https://github.com/cversek/MacEff/pull/517#issuecomment-6089541979. The maintainers are the three of MIS-0001: the head maintainer, the container-management maintainer and the host-side maintainer (P30, P31 and the Secretary). O01 (typed_wake_read_as_operator) is answered in the operator's words on the deliberation: "typed_wake_read_as_operator: accepted. The presence state and the operational modes must not count a wake as my activity. That goes for typed wakes and for notices from a MacEff channel alike, told apart from my own channels by the channel's name. Please add it with the proposed test." https://github.com/cversek/MacEff/issues/493#issuecomment-6087760243. R106 and R107 carry it, as revised after P30. No maintainer raised a critical objection. The operator asked the Secretary to complete the ceremony with the operator's identity, so the Secretary made this commit and performed the merge at that instruction. Final on 2026-10-25, after the use trial recorded in section 11 (MIS-0001-R59 (final_MUST_show_capabilities_in_use), R60 (final_MUST_meet_landing_criteria)), judged row by row by the head maintainer and the host-side maintainer on the pull request that records it; the rows they placed in the observation period are listed there as loose ends that don't block Final, as the repo owner asked on 2026-10-24. The repo owner's word for Final, 2026-10-25: "Lets go final on MIS-0002".
 
 ---
@@ -18,11 +18,13 @@
 
 MacEff grew its long-lived machinery one piece at a time: a session supervisor, a transcript monitor, mail brokers and watchers, a notifier, health checks and reminders. Each piece has its own way to start and its own way to die, and most recurring work lives in session cron, which a restart erases. This MIS specifies one persistent layer instead. Each agent gets one **primal daemon** (`maceff_pd`), kept alive by the operating system's own service manager, that starts, stops, restarts, checks and schedules that agent's managed units, and never reads, writes or decides the agent's work. Every unit and every schedule the operator sets is declared, and an agent's own entries are events in its log, so a host is audited by reading its declarations and its agenda. An agent plans its own wakes and checks from its live session, and every event the layer records is published on one event stream, which the MacEff channel, the tray and a bridge to the operator each read. Liveness and runs are events in the agent's own event log, and health means that due work ran, not that a process answers. Notices and wakes travel through the harness's own channel where it offers one; a wake typed into a session is a marked fallback that never counts as the operator's activity. The layer never answers a permission prompt, reports a session that waits on a person instead of clearing it, and is itself watched from outside.
 
+The specification has two parts with one seam between them. The **base** is what every primal daemon is, whether it serves an agent, a system or a fleet: identity, declarations, liveness and health, unit states, the scheduler, outside control, limits, the outside watch, and the event stream on its own broker. The **Agent Daemon** is the base plus the components an agent adds, each built only where the declaration adds it: the session, notices and wakes, the channel, entries, duties, observation, mail and the tray. Placement in containers and on macOS binds both. MIS-0007 places the same base again, as a system daemon and above it.
+
 ## 2 Motivation
 
 Every position on the deliberation described mechanisms that died without a word. The evidence below is first-hand; each tier follows the `empiricism` policy.
 
-- **A scheduler nobody could use serves no one.** By 2026-10-18 every decidable schedule row passed its named test, and no schedule had ever run on the host whose agent wrote them. Only the operator could add one, nothing reached the live session, and timing was cron alone. The repo owner, that evening: "The scheduler was supposed to replace the Claude Code cron functionality with enhanced persistance, scope, and transparency, to enable agent self wake planning, enable arbitrary calendar events, provide a new basis for the duties system, etc. Its supposed to be a killer app enabler - a basis for a conscientious personal assistant. Right now its a rigid system that serves no-one." Section 6.15 and the revised rows answer it (#552, comment 6271268641). Evidence: the host's event log held no schedule run (measurement).
+- **A scheduler nobody could use serves no one.** By 2026-10-18 every decidable schedule row passed its named test, and no schedule had ever run on the host whose agent wrote them. Only the operator could add one, nothing reached the live session, and timing was cron alone. The repo owner, that evening: "The scheduler was supposed to replace the Claude Code cron functionality with enhanced persistance, scope, and transparency, to enable agent self wake planning, enable arbitrary calendar events, provide a new basis for the duties system, etc. Its supposed to be a killer app enabler - a basis for a conscientious personal assistant. Right now its a rigid system that serves no-one." Section 6.2.4 (then 6.15) and the revised rows answer it (#552, comment 6271268641). Evidence: the host's event log held no schedule run (measurement).
 
 - **Recurring work dies with its session.** Session cron loses every job at a restart, expires after seven days, and does not fire while the session waits on a permission dialog. A host agent moved the same overnight job twice in one evening because the session holding it was about to end (P02). Seat C keeps every time-gated obligation in a task note as well, so that a fresh context can re-create it (P04). Evidence: incidents reported in positions (incident).
 - **A dated duty has code and no host.** The roles store knows when a duty falls due, and nothing long-lived runs that code (the issue body's inventory; P02, P07). A dated duty was done fourteen hours late in a live, idle session while every process was alive (P05). Evidence: incident.
@@ -85,6 +87,10 @@ stateDiagram-v2
 ## 5 Terms
 
 - **access path**: the means by which the operator reaches a container, such as its SSH service.
+- **Agent Daemon**: an agent's primal daemon: the base plus the components its declaration adds.
+- **base**: what every primal daemon is, whatever principal it serves, and all that a daemon whose declaration adds no component runs.
+- **component**: a part of the Agent Daemon, such as the session or the channel, that a primal daemon builds only where its declaration adds it.
+- **principal**: whoever a primal daemon serves and takes its identity from: an agent, a system or a fleet.
 - **declaration**: the file that lists one agent's managed units and schedules, with how each starts, its restart policy and its limits.
 - **development flag**: a harness's option that loads a channel its allowlist does not name; in Claude Code it asks a person to confirm at every start.
 - **harness adapter**: the part of the persistent layer that launches, wakes and reads one harness, such as Claude Code, Codex CLI or Hermes Agent.
@@ -111,7 +117,7 @@ stateDiagram-v2
 - **persistent layer**: the subsystem this MIS specifies: the outer tier, every primal daemon, their declarations, schedules, notices and the outside watch.
 - **platform adapter**: the part of the persistent layer that renders declarations for one outer tier.
 - **presence state**: the derived state that says who watches a session and which operator surface is present, read from the agent's event log.
-- **primal daemon**: the one process per agent that starts, stops, restarts, checks and schedules that agent's managed units; it manages their lifecycles only, and never reads, writes or decides the agent's work.
+- **primal daemon**: the one process per principal that starts, stops, restarts, checks and schedules that principal's managed units; it manages their lifecycles only, and never reads, writes or decides the principal's work.
 - **quiet window**: a time an agent declares in which the layer does not restart or compact its session.
 - **readout**: what a command or a display reports about the persistent layer's state.
 - **run done**: an event recording that a run owed ran, with its result.
@@ -131,17 +137,33 @@ stateDiagram-v2
 
 ## 6 Specification
 
-### 6.1 Tiers and identity
+Section 6 has three parts. 6.1 is the base, what every primal daemon is. 6.2 is the Agent Daemon, the base plus the components an agent adds. 6.3 is placement, which binds a daemon by where it runs. Requirement IDs keep their numbers wherever they moved (MIS-0001-R11 (req_IDs_MUST-NOT_repeat)).
 
-- **R01** [MUST · decidable: macf/tests/test_primal_daemon.py::test_one_per_agent] Each agent MUST have exactly one primal daemon, keyed by the identity in the agent's identity file. (agent_MUST_have_one_primal_daemon)
+### 6.1 The base
+
+The base is what every primal daemon is, whether it serves an agent, a system or a fleet. A daemon whose declaration adds nothing else is the base alone (R184), and every requirement in this section binds it.
+
+#### 6.1.1 Tiers and identity
+
+- **R01** [MUST · decidable: macf/tests/test_primal_daemon.py::test_one_per_agent] Each principal, an agent, a system or a fleet, MUST have exactly one primal daemon, keyed by the identity in its identity file. (agent_MUST_have_one_primal_daemon)
+  - *Revised 2026-11-09 at the repo owner's request (the requirement map, ruled "Accept as is" on #552, comment 6731243851); previous text: MacEff g_f1ad7283.*
 - **R02** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_identity_not_from_env] A primal daemon MUST NOT take its agent's identity from an environment variable. (pd_MUST-NOT_take_identity_from_env)
 - **R03** [MUST · decidable: macf/tests/test_pd_render.py::TestMacOSLaunchAgent::test_outer_tier_restarts_pd and macf/tests/test_pd_render_systemd.py::test_outer_tier_restarts_pd and macf/tests/test_container_outer_tier.py::test_a_failing_daemon_is_restarted_with_the_units_backoff] The outer tier MUST restart each primal daemon whenever it exits. (outer_tier_MUST_restart_pd)
 - **R04** [MUST NOT · judgment: the head maintainer, at review of each rendering] The outer tier MUST NOT hold any agent's declaration or configuration. (outer_tier_MUST-NOT_hold_agent_config)
-- **R05** [MUST · decidable: macf/tests/test_pd_render.py::TestMacOSLaunchAgent::test_launchd_is_launchagent] Where the host runs macOS, the platform adapter MUST render each primal daemon as a per-user LaunchAgent. (macos_MUST_render_LaunchAgent)
 - **R06** [MUST · decidable: macf/tests/test_pd_render.py::TestMacOSLaunchAgent::test_identifier and macf/tests/test_pd_render.py::TestEveryNameCarriesTheIdentifier::test_a_running_daemon_is_listed_as_maceff_pd_and_binds_only_maceff_pd_sockets and macf/tests/test_pd_render.py::TestEveryNameCarriesTheIdentifier::test_every_socket_path_runs_through_a_directory_named_maceff_pd and macf/tests/test_pd_render.py::TestEveryNameCarriesTheIdentifier::test_the_launch_agent_names_the_daemon_maceff_pd and macf/tests/test_pd_render.py::TestEveryNameCarriesTheIdentifier::test_a_framework_build_is_started_through_its_python_app and macf/tests/test_pd_render.py::TestEveryNameCarriesTheIdentifier::test_the_daemons_interpreter_started_as_the_launch_agent_says_is_listed_as_maceff_pd] Each process name, unit name, launchd label and socket of a primal daemon MUST use the identifier `maceff_pd`. (pd_identifiers_MUST_use_maceff_pd)
 - **R07** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_cross_agent_control and macf/tests/test_primal_daemon.py::test_a_running_daemon_controls_no_other_agents_unit] A primal daemon MUST NOT start, stop or signal a managed unit of another agent. (pd_MUST-NOT_control_other_agents)
-- **R80** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_network_listener] A primal daemon MUST NOT listen on a network port. (pd_MUST-NOT_listen_on_network)
+- **R80** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_network_listener] A primal daemon MUST NOT listen on a network port itself, so only its broker unit listens, and only as R170 allows. (pd_MUST-NOT_listen_on_network)
+  - *Revised 2026-11-09 at the repo owner's request (the requirement map, ruled "Accept as is" on #552, comment 6731243851); previous text: MacEff g_f1ad7283.*
 - **R129** [MUST · decidable: macf/tests/test_pd_render.py::TestMacOSInstall::test_socket_path_length and macf/tests/test_pd_install.py::test_a_socket_path_too_long_stops_the_systemd_install_before_anything_is_written] When the platform adapter installs a primal daemon, it MUST check that the daemon's socket path fits the platform's length limit. (adapter_MUST_check_socket_path_length)
+- **R185** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_refused_start_holds_before_it_exits_so_keepalive_is_paced and macf/tests/test_pd_composition.py::test_a_start_that_finds_its_daemon_running_holds_before_it_exits] When a primal daemon refuses its start, or finds its principal's daemon already running, it MUST hold for a set time before it exits. (refused_start_MUST_hold_before_exit)
+  - *Added by the revision of 2026-11-09 (the requirement map, ruled on #552, comment 6731243851).*
+- **R183** [MUST · decidable: macf/tests/test_pd_composition.py::test_each_agent_component_is_built_only_where_its_declaration_adds_it] A primal daemon MUST build an Agent Daemon component only where its declaration adds that component. (component_MUST_be_added_by_declaration)
+  - *Added by the revision of 2026-11-09 (the requirement map, ruled on #552, comment 6731243851).*
+- **R184** [MUST · decidable: macf/tests/test_pd_composition.py::test_a_declaration_that_adds_no_component_runs_the_base_alone] Where a declaration adds no Agent Daemon component, the primal daemon MUST run its units, record its events and answer its outside watch as the base specifies. (base_MUST_stand_alone)
+  - *Added by the revision of 2026-11-09 (the requirement map, ruled on #552, comment 6731243851).*
+
+#### 6.1.2 Calling cards, and the names derived from them
+
 - **R157** [MUST · decidable: macf/tests/test_calling_card.py::test_card_is_name_underscore_shortid (planned)] A calling card MUST be the agent's name, one underscore, and the agent's short id. (card_MUST_be_name_underscore_shortid)
 - **R158** [MUST · decidable: macf/tests/test_calling_card.py::test_name_is_a_letter_then_at_most_23_letters_or_digits (planned)] An agent's name in its calling card MUST be one ASCII letter followed by at most 23 ASCII letters or digits. (card_name_MUST_be_letter_then_23_alnum)
 - **R159** [MUST · decidable: macf/tests/test_calling_card.py::test_shortid_is_the_first_six_hex_of_the_identity_file (planned)] An agent's short id MUST be the first six hexadecimal characters of its identity file, in lowercase. (shortid_MUST_be_first_six_hex)
@@ -155,7 +177,7 @@ stateDiagram-v2
 - **R167** [MUST · decidable: macf/tests/test_attribution.py::test_own_card_in_the_underscore_spelling_is_accepted] Until the cut-over of landing step 8 ends, a footer check MUST accept the agent's own card as either `Name_shortid` or `Name@shortid`. (footer_check_MUST_accept_both_forms_during_cut-over)
 - **R168** [MUST · decidable: macf/tests/test_attribution.py::test_only_the_new_form_signs_after_the_cut_over (planned)] After the cut-over of landing step 8 ends, a footer check MUST accept the agent's own card only as `Name_shortid`. (footer_check_MUST_accept_only_new_form_after_cut-over)
 
-### 6.2 Declarations
+#### 6.1.3 Declarations
 
 - **R08** [MUST · decidable: macf/tests/test_pd_declaration.py::test_every_unit_declared and macf/tests/test_pd_declaration.py::test_schedules_hosted] Each managed unit and each schedule the operator sets MUST appear in its agent's declaration. (unit_MUST_be_declared)
   - *Revised 2026-10-20 at the repo owner's request (#552, comment 6271268641); previous text: MacEff g_551b8506.*
@@ -165,26 +187,32 @@ stateDiagram-v2
 - **R11** [MUST · decidable: macf/tests/test_pd_declaration.py::test_schedules_hosted] CI MUST fail when a declared schedule has no primal daemon to run it. (CI_MUST_fail_unhosted_schedule)
 - **R12** [MUST · decidable: macf/tests/test_primal_daemon.py::test_clean_parent] The primal daemon MUST start each managed unit itself, as the unit's parent, with the declared environment only. (pd_MUST_start_units_itself)
 - **R13** [MUST · decidable: macf/tests/test_primal_daemon.py::test_env_is_only_what_the_declaration_says] When a primal daemon starts, it MUST render the declared environment, instead of reading environment files a persistent volume carried forward. (pd_MUST_render_env_at_start)
+- **R186** [SHOULD · decidable: macf/tests/test_pd_composition.py::test_declared_needs_refused_by_name (planned)] A unit SHOULD declare the commands and variables it needs, so a start that lacks one is refused by name. (unit_SHOULD_declare_its_needs)
+  - *Moved from MIS-0007-R46 by the revision of 2026-11-09 (the requirement map, ruled on #552, comment 6731243851): it binds every daemon of its kind, not only a system daemon.*
+- **R187** [MUST · decidable: macf/tests/test_pd_composition.py::test_one_time_zone (planned)] Each primal daemon MUST declare one time zone for all its units, and state it in every restart report. (each_daemon_MUST_declare_one_time_zone)
+  - *Moved from MIS-0007-R13 by the revision of 2026-11-09 (the requirement map, ruled on #552, comment 6731243851): it binds every daemon of its kind, not only a system daemon Its subject is now each primal daemon, with a new slug; MIS-0007's slug (system_daemon_MUST_declare_one_time_zone).*
+- **R188** [MUST · decidable: macf/tests/test_pd_composition.py::test_code_version_recorded (planned)] When a unit starts, its daemon MUST record the code version it started from, and report a unit that runs older code. (unit_code_version_MUST_be_recorded)
+  - *Moved from MIS-0007-R14 by the revision of 2026-11-09 (the requirement map, ruled on #552, comment 6731243851): it binds every daemon of its kind, not only a system daemon.*
 
-### 6.3 Liveness, runs and health
+#### 6.1.4 Liveness, runs and health
 
 - **R14** [MUST · decidable: macf/tests/test_pd_liveness.py::test_the_heartbeat_reports_at_once_and_then_at_its_interval and macf/tests/test_pd_liveness.py::test_a_managed_unit_writes_its_liveness_to_its_agents_log_at_its_declared_interval] Each managed unit MUST emit liveness events to its agent's event log at its declared interval. (unit_MUST_emit_liveness_events)
 - **R15** [MUST · decidable: macf/tests/test_pd_readout.py::test_liveness_probed] When the readout reports a unit alive, it MUST first confirm, by process id and start time, that the process named in the last liveness event is still that unit. (readout_MUST_probe_liveness)
 - **R16** [MUST NOT · judgment: the head maintainer, at review of each landing pull request] The persistent layer MUST NOT keep a store of liveness, runs owed or runs done apart from the agent's event log. (layer_MUST-NOT_keep_second_ledger)
 - **R17** [MUST · decidable: macf/tests/test_pd_readout.py::test_health_is_runs] The readout MUST derive health from runs owed and runs done when it is read. (readout_MUST_derive_health_from_runs)
 - **R18** [MUST · decidable: macf/tests/test_pd_readout.py::test_overdue_is_unhealthy] If a unit is alive and a run it owes is overdue, then the readout MUST report the unit unhealthy. (overdue_run_MUST_read_unhealthy)
-- **R19** [MUST · decidable: macf/tests/test_pd_readout.py::test_auth_failure_is_failed] When a harness adapter reads an authentication failure, the primal daemon MUST set the session's state to failed. (auth_failure_MUST_read_failed)
 
-### 6.4 Unit states
+#### 6.1.5 Unit states
 
 - **R20** [MUST · decidable: macf/tests/test_primal_daemon.py::test_states] Each managed unit MUST be in one of these states: declared, starting, running, waiting on a person, failed or stopped. (unit_MUST_have_listed_state)
 - **R21** [MUST · decidable: macf/tests/test_pd_harness.py::test_waiting_reported] When a managed unit is blocked on a prompt that only a person can answer, the primal daemon MUST report the state waiting on a person. (pd_MUST_report_waiting_on_person)
 - **R22** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_restart_while_waiting] The persistent layer MUST NOT restart a unit because the unit is waiting on a person. (layer_MUST-NOT_restart_waiting_unit)
-- **R23** [MUST NOT · judgment: the head maintainer, at review of each harness adapter] The persistent layer MUST NOT answer a permission prompt, or approve any act on an agent's behalf. (layer_MUST-NOT_answer_prompts)
 - **R78** [MUST NOT · judgment: the operator, at review of each declaration] The persistent layer MUST NOT widen an agent's permissions. (layer_MUST-NOT_widen_permissions)
 - **R79** [MUST NOT · judgment: the head maintainer, at review of each landing pull request] The persistent layer MUST NOT copy file content from an agent's home into its events or logs. (layer_MUST-NOT_copy_home_content)
 
-### 6.5 Schedules
+#### 6.1.6 The scheduler
+
+These bind every schedule a daemon runs. A schedule that targets an agent's session also meets 6.2.1.
 
 - **R24** [MUST · decidable: macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails and macf/tests/test_pd_entries.py::test_an_entry_request_without_a_missed_run_policy_is_refused_at_the_socket] Each schedule and each entry MUST declare its missed-run policy. (schedule_MUST_declare_missed-run_policy)
   - *Revised 2026-10-20 at the repo owner's request (#552, comment 6271268641); previous text: MacEff g_551b8506.*
@@ -195,21 +223,88 @@ stateDiagram-v2
 - **R26** [MUST · decidable: macf/tests/test_pd_schedule.py::test_advance_before_run] The scheduler MUST move a schedule's next run time forward before the run starts. (scheduler_MUST_advance_before_run)
 - **R27** [MUST NOT · decidable: macf/tests/test_pd_schedule.py::test_the_scheduler_replays_no_restart_after_downtime] After the scheduler restarts, it MUST NOT replay a missed run whose act restarts a unit. (scheduler_MUST-NOT_replay_restart_runs)
 - **R28** [MUST · decidable: macf/tests/test_pd_schedule.py::test_leases_released] When the scheduler restarts, it MUST release every lease held before the restart. (scheduler_MUST_release_leases_on_restart)
+- **R33** [MUST NOT · decidable: macf/tests/test_pd_schedule.py::test_run_cannot_schedule] A run MUST NOT create, change or delete a schedule. (run_MUST-NOT_change_schedules)
+- **R34** [MUST · decidable: macf/tests/test_pd_schedule.py::test_late_run_says_so and macf/tests/test_pd_entries.py::test_an_entry_that_fired_late_says_how_late_where_its_notice_points] When a run starts late, or an entry fires late, the record its notice points to MUST state how late it is. (late_run_MUST_state_lateness)
+  - *Revised 2026-10-20 at the repo owner's request (#552, comment 6271268641); previous text: MacEff g_551b8506.*
+- **R35** [MUST NOT · judgment: the Secretary, at review of each declaration] A schedule MUST NOT fetch its instructions from the network. (schedule_MUST-NOT_fetch_instructions)
+- **R36** [MUST · decidable: macf/tests/test_pd_schedule.py::test_wall_clock_cap] Each run MUST have a wall-clock limit, in addition to any inactivity limit. (run_MUST_have_wall-clock_limit)
+
+#### 6.1.7 Outside control of units
+
+- **R49** [MUST · decidable: macf/tests/test_primal_daemon.py::test_work_in_flight_checked] Before a primal daemon restarts a unit, it MUST check the unit for work in flight and drain it or wait. (pd_MUST_check_work_in_flight)
+- **R52** [MUST · decidable: macf/tests/test_primal_daemon.py::test_control_events and macf/tests/test_primal_daemon.py::test_a_held_restart_is_the_operators_act_when_the_window_ends] Each stop, restart or compaction that the persistent layer performs MUST be an event that names who asked and why. (control_act_MUST_name_who_asked)
+
+#### 6.1.8 Limits
+
+- **R58** [MUST NOT · decidable: macf/tests/test_container_start_order.py::test_optional_units_independent] An optional unit MUST NOT delay the start of another unit. (optional_unit_MUST-NOT_delay_others)
+- **R59** [MUST · decidable: macf/tests/test_pd_interface.py::test_a_unit_missing_a_required_field_is_refused] Each declared unit MUST state a memory limit. (unit_MUST_declare_memory_limit)
+- **R60** [MUST · decidable: macf/tests/test_pd_notice.py::test_a_unit_measured_past_its_limit_reaches_the_channel and macf/tests/test_pd_notice.py::test_the_daemon_wires_its_core_and_scheduler_notices_to_its_notifier and macf/tests/test_pd_notice.py::test_a_unit_past_its_limit_is_a_notice_held_and_delivered and macf/tests/test_pd_composition.py::test_a_limit_crossed_without_notices_is_recorded] When a unit uses more than its declared limit, the primal daemon MUST record it, and deliver a notice where the notices component is present. (pd_MUST_notice_limit_exceeded)
+  - *Revised 2026-11-09 at the repo owner's request (the requirement map, ruled "Accept as is" on #552, comment 6731243851); previous text: MacEff g_f1ad7283.*
+
+#### 6.1.9 The outside watch
+
+- **R74** [MUST · decidable: macf/tests/test_pd_watch.py::test_a_stopped_daemon_alerts_once_then_recovers_once] Each primal daemon MUST be checked by an outside watch. (pd_MUST_have_outside_watch)
+- **R75** [MUST · judgment: the operator, at review of each deployment's alert path] The outside watch MUST alert a person through a credential that does not depend on any agent's channel. (outside_watch_MUST_alert_independently)
+
+#### 6.1.10 The event stream
+
+- **R150** [MUST · decidable: macf/tests/test_pd_broker.py::test_each_new_record_publishes_in_order_naming_its_own_sources_previous and macf/tests/test_pd_broker.py::test_every_daemon_runs_its_own_broker] Each primal daemon MUST publish each of its events, as it records it, to its own MQTT broker, on its source's topic. (layer_MUST_publish_event_stream)
+  - *Revised 2026-11-08 at the repo owner's request (his review on #923, 15:30Z): the stream moved from the daemon's socket to its own MQTT broker; previous text: MacEff g_f9dfeef9.*
+- **R151** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_subscriber_receives_only_the_sources_it_subscribed] Each subscriber MUST receive only the sources it chose. (subscriber_MUST_receive_chosen_sources)
+- **R152** [MUST · decidable: macf/tests/test_pd_stream_rules.py::test_the_operator_silences_and_reroutes_without_a_restart and macf/tests/test_pd_stream_rules.py::test_a_container_operator_uid_alone_sets_the_streams_rules and macf/tests/test_pd_stream_rules.py::test_the_stream_rules_start_in_ask_and_a_loosened_one_stays_loose and macf/tests/test_pd_stream_rules.py::test_a_silenced_source_never_reaches_the_session_and_is_not_owed and macf/tests/test_pd_stream_rules.py::test_silencing_the_session_stops_every_source_to_it and macf/tests/test_pd_stream_rules.py::test_a_source_routed_elsewhere_leaves_the_session_and_others_reach_it and macf/tests/test_pd_stream_rules.py::test_a_forged_carried_line_reaches_the_session_as_no_text and macf/tests/test_pd_stream_rules.py::test_no_stream_subscriber_takes_the_sessions_name and macf/tests/test_pd_wake.py::test_the_wake_honors_the_operators_rules] The persistent layer MUST let the operator silence or reroute any source or subscriber without a restart. (operator_MUST_silence_and_reroute)
+  - *Stated limit, 2026-10-21 (the macOS maintainer, #552, comment 6330824548): where agents share one login, every agent on it has the operator's uid, so taking rules only from the operator's uid separates nothing there; the client's ask prompt on `pd stream silence`, `unsilence` and `route` is what makes a rule the operator's act on a shared login. Not a change to the requirement.*
+- **R153** [MUST NOT · decidable: macf/tests/test_pd_broker.py::test_a_long_replay_is_answered_in_bounded_passes_and_ends_once and macf/tests/test_pd_broker.py::test_a_publish_that_fails_keeps_its_record_and_the_order] A subscriber that falls behind or disconnects MUST NOT block the persistent layer. (subscriber_MUST-NOT_block_layer)
+- **R154** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_replay_sends_the_granted_records_since_the_position_then_done and macf/tests/test_pd_broker.py::test_a_replay_from_a_rotated_log_starts_with_a_gap and macf/tests/test_pd_broker.py::test_a_reader_that_reconnects_gets_each_record_once_in_log_order] When a subscriber reconnects, the daemon MUST replay its records from the log since the subscriber's last position, or say they are gone. (subscriber_MUST_resume_from_last_record)
+  - *Revised 2026-11-08 at the repo owner's request (his review on #923, 15:30Z): the stream moved from the daemon's socket to its own MQTT broker; previous text: MacEff g_f9dfeef9.*
+- **R155** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_record_publishes_on_its_source_topic_with_its_previous] Each record on the event stream MUST name its source, its agent and its time, as the layer set them, never as a publisher claimed. (stream_record_MUST_name_source)
+- **R156** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_reader_reads_only_the_sources_granted and macf/tests/test_pd_broker.py::test_the_responder_answers_only_granted_readers_on_their_own_topic] A subscriber MUST receive only the sources that its daemon's declaration grants the subscriber's certificate. (subscriber_MUST_be_granted_agents)
+  - *Revised 2026-11-08 at the repo owner's request (his review on #923, 15:30Z): the stream moved from the daemon's socket to its own MQTT broker; previous text: MacEff g_f9dfeef9.*
+  - *Stated limit, 2026-10-21 (the macOS maintainer, #552, comment 6330824548): a stream grant separates uids, not agents. Where agents share one login, each is the others' own uid and may read their streams; separating agents needs an account per agent, as containers have. The stream is no more private than the event log, mode 0600 to the login. Not a change to the requirement.*
+
+#### 6.1.11 The MQTT broker
+
+The event stream of 6.1.10 is carried by each primal daemon's own MQTT broker. Where a daemon admits members, 6.4 adds to these.
+
+- **R169** [MUST · decidable: macf/tests/test_pd_broker.py::test_the_wrapper_beats_only_while_the_broker_listens_and_ends_with_its_status and macf/tests/test_pd_broker.py::test_every_daemon_runs_its_own_broker] Each primal daemon MUST run its own MQTT broker as one of its units, beating only while the broker listens. (mqtt_broker_MUST_be_daemons_own_unit)
+- **R170** [MUST · decidable: macf/tests/test_pd_broker.py::test_the_daemon_and_its_link_use_one_loopback_address and macf/tests/test_pd_broker.py::test_only_an_association_admits_members_or_listens_on_the_lan] A daemon's MQTT broker MUST bind only the loopback address, unless the daemon admits members. (mqtt_broker_MUST_bind_loopback)
+- **R171** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_broker_port_another_declaration_names_is_refused_naming_it] Install and start MUST refuse an MQTT broker port that another declaration on the host already names, naming that declaration. (mqtt_broker_port_MUST_be_unique_on_host)
+- **R172** [MUST · decidable: macf/tests/test_pd_broker.py::test_the_broker_requires_a_certificate_and_names_users_by_it and macf/tests/test_pd_broker.py::test_only_named_certificates_get_rules_and_never_by_pattern] A daemon's MQTT broker MUST refuse a client without a certificate, and give access only to certificates its declaration names, never by pattern. (mqtt_broker_MUST_admit_only_named_certificates)
+- **R173** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_reader_declared_in_another_case_gets_the_same_topics and macf/tests/test_pd_association.py::test_a_member_declared_in_another_case_is_the_same_member] Every MQTT topic level that names a calling card MUST carry the card lowercased. (mqtt_topic_MUST_name_card_lowercased)
+- **R174** [MUST NOT · decidable: macf/tests/test_pd_broker.py::test_only_named_certificates_get_rules_and_never_by_pattern] A certificate other than the daemon's own MUST NOT publish under the daemon's card. (other_certificate_MUST-NOT_publish_under_card)
+- **R175** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_record_publishes_on_its_source_topic_with_its_previous and macf/tests/test_pd_broker.py::test_a_gap_is_judged_per_source_not_by_global_position] Each record published to an MQTT broker MUST carry the position of its source's previous record, so a reader can find a gap. (mqtt_record_MUST_carry_previous_position)
+- **R176** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_backlog_past_its_bound_becomes_one_gap] When records waiting for an MQTT broker pass their bound, the daemon MUST replace them with one gap. (mqtt_backlog_MUST_become_one_gap)
+
+### 6.2 The Agent Daemon
+
+An agent's primal daemon, `kind: agent` in its declaration (the default), is the base plus the components below. Each subsection opens with what adds its component, and a daemon builds a component only where its declaration adds it (R183). A system or a fleet daemon adds none (MIS-0007).
+
+#### 6.2.1 The session
+
+**Added by:** a unit of kind `session` in the declaration.
+
+- **R19** [MUST · decidable: macf/tests/test_pd_readout.py::test_auth_failure_is_failed] When a harness adapter reads an authentication failure, the primal daemon MUST set the session's state to failed. (auth_failure_MUST_read_failed)
+- **R23** [MUST NOT · judgment: the head maintainer, at review of each harness adapter] The persistent layer MUST NOT answer a permission prompt, or approve any act on an agent's behalf. (layer_MUST-NOT_answer_prompts)
 - **R29** [MUST · decidable: macf/tests/test_pd_schedule.py::test_target_declared and macf/tests/test_pd_schedule.py::test_a_schedule_targeting_another_agent_is_refused_at_load] Each schedule MUST declare its target: an isolated session, or its own agent's live session. (schedule_MUST_declare_target)
   - *Revised 2026-10-20 at the repo owner's request (#552, comment 6271268641); previous text: MacEff g_551b8506.*
 - **R30** [SHOULD · judgment: the Secretary, at review of each declaration] A schedule SHOULD target an isolated session, unless its work needs the live session's context. (schedule_SHOULD_target_isolated)
 - **R31** [MUST · decidable: macf/tests/test_pd_schedule.py::test_permissions_settled and macf/tests/test_pd_entries.py::test_an_entry_request_carrying_a_permission_is_refused_at_the_socket] When a declared schedule's work needs a permission, its declaration MUST settle that permission when the schedule is created. An entry carries no permission of its own. (schedule_MUST_settle_permission_at_creation)
   - *Revised 2026-10-20 at the repo owner's request (#552, comment 6271268641); previous text: MacEff g_551b8506.*
 - **R32** [MUST · decidable: macf/tests/test_pd_schedule.py::test_prompt_fails_run] If a run meets a permission prompt, then the run MUST fail and deliver a notice, instead of waiting. (run_MUST_fail_on_prompt)
-- **R33** [MUST NOT · decidable: macf/tests/test_pd_schedule.py::test_run_cannot_schedule] A run MUST NOT create, change or delete a schedule. (run_MUST-NOT_change_schedules)
-- **R34** [MUST · decidable: macf/tests/test_pd_schedule.py::test_late_run_says_so and macf/tests/test_pd_entries.py::test_an_entry_that_fired_late_says_how_late_where_its_notice_points] When a run starts late, or an entry fires late, the record its notice points to MUST state how late it is. (late_run_MUST_state_lateness)
-  - *Revised 2026-10-20 at the repo owner's request (#552, comment 6271268641); previous text: MacEff g_551b8506.*
-- **R35** [MUST NOT · judgment: the Secretary, at review of each declaration] A schedule MUST NOT fetch its instructions from the network. (schedule_MUST-NOT_fetch_instructions)
-- **R36** [MUST · decidable: macf/tests/test_pd_schedule.py::test_wall_clock_cap] Each run MUST have a wall-clock limit, in addition to any inactivity limit. (run_MUST_have_wall-clock_limit)
+- **R48** [MUST · decidable: macf/tests/test_primal_daemon.py::test_outside_stop_beats_gates] A stop or restart that the operator asks for from outside a session MUST succeed, whatever gate the session enforces. (outside_stop_MUST_override_gates)
+- **R50** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_quiet_window and macf/tests/test_primal_daemon.py::test_control_refuses_what_it_cannot_do] The persistent layer MUST NOT restart or compact a session during a quiet window its agent declared. (layer_MUST-NOT_act_in_quiet_window)
+- **R51** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_own_compaction] The persistent layer MUST NOT compact or clear a session's context on its own initiative. (layer_MUST-NOT_compact_on_own)
+- **R108** [MUST · decidable: macf/tests/test_pd_interface.py::test_a_compaction_may_be_asked_only_by_the_operator_or_the_wind_down] The primal daemon MUST compact a session only when the operator, or the agent's own declared wind-down, asks for it. (compaction_MUST_be_asked_by_operator_or_wind-down)
+- **R126** [MUST · decidable: macf/tests/test_pd_harness.py::test_idle_compaction_off and macf/tests/test_pd_harness.py::test_the_adapter_turns_idle_compaction_off_when_it_starts_the_session and macf/tests/test_pd_harness.py::test_the_adapter_leaves_idle_compaction_alone_when_the_declaration_keeps_it and macf/tests/test_pd_harness.py::test_an_unreadable_declaration_keeps_nothing_so_idle_compaction_goes_off] Where the harness can compact an idle session on its own, the harness adapter MUST turn that off unless the declaration keeps it. (adapter_MUST_turn_off_harness_idle_compaction)
+- **R127** [MUST · decidable: macf/tests/test_primal_daemon.py::test_unasked_compaction_recorded] When the harness compacts a session that nobody asked to compact, the primal daemon MUST record a control event naming the harness as the asker. (harness_compaction_MUST_be_recorded)
+- **R66** [MUST · decidable: macf/tests/test_pd_harness.py::test_adopts_harness_supervisor] Where the harness's own supervisor already runs a session, the primal daemon MUST adopt that session instead of starting a second supervisor. (pd_MUST_adopt_harness_supervisor)
+- **R190** [MUST · decidable: macf/tests/test_pd_composition.py::test_agent_controls_own_units (planned)] An agent MUST be able to start, stop, read the status of, and read the logs of the units under its primal daemon, without root or a prompt. (agent_MUST_control_its_own_units)
+  - *Moved from MIS-0007-R16 by the revision of 2026-11-09 (the requirement map, ruled on #552, comment 6731243851): it binds every daemon of its kind, not only a system daemon.*
+
+#### 6.2.2 Notices and wakes
+
+**Added by:** `kind: agent`. `notice_routes` routes its sources; a source left unrouted goes to the agent.
+
 - **R37** [SHOULD · judgment: the Secretary, at review of each declaration] Where a schedule's work needs no judgment, the schedule SHOULD run without a model turn and wake its agent only when a declared condition holds. (no-judgment_work_SHOULD_skip_model_turn)
-
-### 6.6 Notices and wakes
-
 - **R38** [MUST · decidable: macf/tests/test_pd_notice.py::test_source_named] Each notice MUST name its source. (notice_MUST_name_source)
 - **R39** [MUST · decidable: macf/tests/test_pd_notice.py::test_three_times and macf/tests/test_pd_channel.py::test_receipt_from_prompt_hook] Each notice MUST carry three times: when its content was read, when it was sent, and when it was received. (notice_MUST_carry_three_times)
 - **R40** [MUST NOT · judgment: the head maintainer, at review of the notifier] The persistent layer MUST NOT present a notice as a person's instruction. (layer_MUST-NOT_present_notice_as_instruction)
@@ -227,109 +322,56 @@ stateDiagram-v2
 - **R107** [MUST · decidable: macf/tests/test_mode_activity.py::test_channels_told_apart_by_name] Each producer of the operator's activity MUST count a channel event as the operator's only when its exact channel name is one the declaration lists as the operator's. (hooks_MUST_tell_channels_apart_by_name)
 - **R46** [MUST NOT · judgment: the Secretary, at review of each notice source] The persistent layer MUST NOT spend an agent's context to report that nothing changed. (layer_MUST-NOT_report_no_change)
 - **R47** [MUST · decidable: macf/tests/test_pd_notice.py::test_after_restart_notice and macf/tests/test_pd_notice.py::test_an_unrouted_carried_notice_reaches_the_agent] After each restart, recreate or compaction, the primal daemon MUST deliver one notice that states what was carried, what changed and what was lost. (pd_MUST_report_carried_changed_lost)
+- **R189** [MUST · decidable: macf/tests/test_pd_composition.py::test_failure_notifies_once_per_stretch (planned)] A unit's failures MUST reach its agent once when they begin and once when they end, never once per restart attempt. (unit_failure_MUST_notify_once_per_stretch)
+  - *Moved from MIS-0007-R45 by the revision of 2026-11-09 (the requirement map, ruled on #552, comment 6731243851): it binds every daemon of its kind, not only a system daemon.*
 
-### 6.15 An agent's own entries, and the event stream
+#### 6.2.3 The Claude Code channel
 
-These rows serve the stories in the scheduler's catalog on #552 (comment 6272659067), and each guards a hazard the design names (comment 6274590229, section 8). They were added by the revision of 2026-10-20 at the repo owner's request (#552, comment 6271268641).
+**Added by:** `kind: agent`, which binds the channel's socket; `channel_connect_s` adds the dark-channel watch.
+
+- **R112** [MUST · judgment: the head maintainer, at review of the Claude Code harness adapter] Where the harness is Claude Code, the harness adapter MUST be a MacEff channel. (claude_code_adapter_MUST_be_maceff_channel)
+- **R113** [MUST · decidable: macf/tests/test_pd_channel.py::test_unix_socket_peer and macf/tests/test_pd_channel.py::test_verify_peer_needs_a_published_record_that_matches] The MacEff channel MUST connect to its primal daemon only through a local Unix socket whose peer the kernel identifies. (channel_MUST_connect_by_unix_socket)
+- **R114** [MUST · decidable: macf/tests/test_pd_channel.py::test_notice_metadata] Each channel event that carries a notice MUST carry the notice's identifier, source, read time and sent time as metadata. (channel_event_MUST_carry_notice_metadata)
+- **R115** [MUST · decidable: macf/tests/test_pd_channel.py::test_dark_channel_event and macf/tests/test_pd_channel_watch.py::test_a_session_that_never_connects_goes_dark_once_past_its_window and macf/tests/test_pd_channel_watch.py::test_the_watch_reads_the_newest_channel_event_of_this_agent] If a running session's MacEff channel drops, or misses its declared connect time after a start, then the primal daemon MUST record an event and notify the operator. (dark_channel_MUST_raise_event)
+- **R116** [MUST · decidable: macf/tests/test_pd_channel.py::test_onlooker_card_from_invitation] Where the MacEff channel carries an onlooker's message, the primal daemon MUST set the onlooker's calling card in its metadata from the invitation. (onlooker_card_MUST_come_from_invitation)
+  - *Revised 2026-10-18 at the repo owner's request ([section 15](#15-revision-history)); previous text: MacEff g_8fb9ea3e.*
+- **R117** [MUST NOT · decidable: macf/tests/test_pd_channel.py::test_no_permission_relay] The MacEff channel MUST NOT relay permission prompts. (channel_MUST-NOT_relay_permissions)
+- **R118** [MUST NOT · decidable: macf/tests/test_restart_without_prompt.py::test_the_session_command_never_carries_a_development_channel_flag] A restart that the primal daemon performs MUST NOT wait for a person to confirm the development flag. (restart_MUST-NOT_wait_on_development_flag)
+- **R119** [SHOULD · judgment: the operator, at review of each deployment] The MacEff channel SHOULD load through an organization allowlist or an official listing, instead of the development flag. (channel_SHOULD_load_without_development_flag)
+- **R120** [MUST · decidable: macf/tests/test_pd_channel.py::test_receipt_from_prompt_hook] When the session's prompt hook takes a MacEff channel event, it MUST record an event naming the notice's identifier and the time the hook took it. (prompt_hook_MUST_record_notice_receipt)
+- **R121** [MUST · decidable: macf/tests/test_mode_activity.py::test_source_from_origin_or_opening_tag] Each producer of the operator's activity MUST read a channel event's source from its origin record, or, only where none exists, from the tag that opens its text. (hooks_MUST_read_source_from_origin_or_opening_tag)
+- **R122** [MUST · decidable: macf/tests/test_pd_notice.py::test_peer_lineage_checked_by_the_daemon and macf/tests/test_pd_channel.py::test_a_peer_outside_the_session_lineage_is_refused and macf/tests/test_pd_channel.py::test_a_stale_session_incarnation_is_refused] The primal daemon MUST accept a MacEff channel connection only from a process that descends from its agent's live session, matched by process id and start time. (pd_MUST_check_channel_peer_lineage)
+- **R123** [MUST · decidable: macf/tests/test_pd_channel.py::test_channel_checks_its_pd and macf/tests/test_pd_channel.py::test_channel_refuses_a_stale_daemon_incarnation] The MacEff channel MUST connect only to a peer that is its agent's own primal daemon, matched by process id and start time. (channel_MUST_check_its_peer_is_its_pd)
+- **R124** [MUST · decidable: macf/tests/test_pd_declaration.py::test_allowlist_lists_every_channel] Where a deployment sets an organization allowlist, its declaration MUST list every channel the list admits, the operator's channels included. (allowlist_declaration_MUST_list_every_channel)
+- **R125** [MUST · judgment: the head maintainer, at review of the Claude Code harness adapter] The MacEff channel MUST ship as a channel plugin from a marketplace. (channel_MUST_ship_as_plugin)
+- **R149** [MUST · decidable: macf/tests/test_pd_notice.py::test_a_source_the_attached_channel_did_not_declare_stays_held and macf/tests/test_pd_notice.py::test_a_channel_that_sends_no_hello_is_sent_nothing and macf/tests/test_pd_notice.py::test_the_maceff_channel_declares_every_source_its_record_takes] The primal daemon MUST hold each notice whose source the attached harness channel did not declare when it attached, until a channel that declared it attaches. (pd_MUST_hold_sources_channel_did_not_declare)
+
+#### 6.2.4 An agent's own entries
+
+**Added by:** the session unit. Entries are made from the agent's live session (R130), and these rows serve the stories in the scheduler's catalog on #552 (comment 6272659067). Each guards a hazard the design names (comment 6274590229, section 8). They were added by the revision of 2026-10-20 at the repo owner's request (#552, comment 6271268641).
 
 - **R130** [MUST · decidable: macf/tests/test_pd_entries.py::test_only_the_live_session_makes_an_entry and macf/tests/test_pd_entry_edit_pause.py::test_edit_and_resume_come_only_from_the_live_session_and_pause_from_anyone] The primal daemon MUST make, change or resume an agent's entry only at a request from a process descended from that agent's session unit. (entry_MUST_come_from_live_session)
   - *Revised 2026-10-24 at the repo owner's request (#552, comments 6384736928 and the ruling at 10:33 EDT recorded on this pull request); previous text: MacEff g_16ce10a7.*
 - **R131** [MUST · decidable: macf/tests/test_pd_entries.py::test_entry_add_and_remove_are_events_and_a_restarted_scheduler_holds_their_fold and macf/tests/test_pd_entries.py::test_the_entries_held_are_what_the_events_fold_to] Each entry, and each change to it, MUST be an event in its agent's event log, and the entries an agent holds are what those events fold to. (entry_MUST_be_events)
 - **R132** [MUST · decidable: macf/tests/test_pd_entries.py::test_a_due_entry_fires_once_through_the_channel_even_across_a_restart] An entry's wake MUST carry an opaque id that the harness channel's own record accepts, shown by a test that receives it through that record. (entry_wake_MUST_pass_channel_record)
-- **R149** [MUST · decidable: macf/tests/test_pd_notice.py::test_a_source_the_attached_channel_did_not_declare_stays_held and macf/tests/test_pd_notice.py::test_a_channel_that_sends_no_hello_is_sent_nothing and macf/tests/test_pd_notice.py::test_the_maceff_channel_declares_every_source_its_record_takes] The primal daemon MUST hold each notice whose source the attached harness channel did not declare when it attached, until a channel that declared it attaches. (pd_MUST_hold_sources_channel_did_not_declare)
 - **R133** [MUST · decidable: macf/tests/test_pd_entries.py::test_an_entry_from_a_tainted_context_is_marked] If the context an entry is made from held untrusted input, then the entry MUST be marked. (tainted_entry_MUST_be_marked)
 - **R146** [MUST · decidable: macf/tests/test_pd_entries.py::test_setting_the_mode_puts_pd_entry_add_in_ask_unless_the_operator_allowed_it and macf/tests/test_pd_entries.py::test_pd_entry_add_starts_in_ask_and_an_operator_who_loosens_it_keeps_that] Setting the mode MUST put `pd entry add` in the client's ask list, unless the operator has moved it to allow. (entry_add_MUST_start_in_ask)
 - **R134** [MUST · judgment: the operator, at the verdict on each use trial] A woken agent MUST report, not do, anything a marked entry asks that it wouldn't do unprompted. (marked_entry_MUST_be_read_with_care)
 - **R135** [MUST · decidable: macf/tests/test_pd_entries.py::test_an_entry_is_removed_by_the_agent_or_the_operator_and_stops and macf/tests/test_pd_entry_edit_pause.py::test_edit_and_resume_come_only_from_the_live_session_and_pause_from_anyone] The primal daemon MUST remove or pause an entry at the request of anyone with its uid, so the operator can revoke or pause any entry. (entry_MUST_be_revocable_by_operator)
   - *Revised 2026-10-24 at the repo owner's request (#552, comments 6384736928 and the ruling at 10:33 EDT recorded on this pull request); previous text: MacEff g_16ce10a7.*
 - **R136** [MUST · judgment: the operator, at review of the persistent_layer policy] On a login the agent shares with the operator, the policy MUST state that the ask rule on adding, revocation and the template rule stop a confused agent only. (shared_login_limits_MUST_be_stated)
-- **R150** [MUST · decidable: macf/tests/test_pd_broker.py::test_each_new_record_publishes_in_order_naming_its_own_sources_previous and macf/tests/test_pd_broker.py::test_every_daemon_runs_its_own_broker] Each primal daemon MUST publish each of its events, as it records it, to its own MQTT broker, on its source's topic. (layer_MUST_publish_event_stream)
-  - *Revised 2026-11-08 at the repo owner's request (his review on #923, 15:30Z): the stream moved from the daemon's socket to its own MQTT broker; previous text: MacEff g_f9dfeef9.*
-- **R151** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_subscriber_receives_only_the_sources_it_subscribed] Each subscriber MUST receive only the sources it chose. (subscriber_MUST_receive_chosen_sources)
-- **R152** [MUST · decidable: macf/tests/test_pd_stream_rules.py::test_the_operator_silences_and_reroutes_without_a_restart and macf/tests/test_pd_stream_rules.py::test_a_container_operator_uid_alone_sets_the_streams_rules and macf/tests/test_pd_stream_rules.py::test_the_stream_rules_start_in_ask_and_a_loosened_one_stays_loose and macf/tests/test_pd_stream_rules.py::test_a_silenced_source_never_reaches_the_session_and_is_not_owed and macf/tests/test_pd_stream_rules.py::test_silencing_the_session_stops_every_source_to_it and macf/tests/test_pd_stream_rules.py::test_a_source_routed_elsewhere_leaves_the_session_and_others_reach_it and macf/tests/test_pd_stream_rules.py::test_a_forged_carried_line_reaches_the_session_as_no_text and macf/tests/test_pd_stream_rules.py::test_no_stream_subscriber_takes_the_sessions_name and macf/tests/test_pd_wake.py::test_the_wake_honors_the_operators_rules] The persistent layer MUST let the operator silence or reroute any source or subscriber without a restart. (operator_MUST_silence_and_reroute)
-  - *Stated limit, 2026-10-21 (the macOS maintainer, #552, comment 6330824548): where agents share one login, every agent on it has the operator's uid, so taking rules only from the operator's uid separates nothing there; the client's ask prompt on `pd stream silence`, `unsilence` and `route` is what makes a rule the operator's act on a shared login. Not a change to the requirement.*
-- **R153** [MUST NOT · decidable: macf/tests/test_pd_broker.py::test_a_long_replay_is_answered_in_bounded_passes_and_ends_once and macf/tests/test_pd_broker.py::test_a_publish_that_fails_keeps_its_record_and_the_order] A subscriber that falls behind or disconnects MUST NOT block the persistent layer. (subscriber_MUST-NOT_block_layer)
-- **R154** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_replay_sends_the_granted_records_since_the_position_then_done and macf/tests/test_pd_broker.py::test_a_replay_from_a_rotated_log_starts_with_a_gap and macf/tests/test_pd_broker.py::test_a_reader_that_reconnects_gets_each_record_once_in_log_order] When a subscriber reconnects, the daemon MUST replay its records from the log since the subscriber's last position, or say they are gone. (subscriber_MUST_resume_from_last_record)
-  - *Revised 2026-11-08 at the repo owner's request (his review on #923, 15:30Z): the stream moved from the daemon's socket to its own MQTT broker; previous text: MacEff g_f9dfeef9.*
-- **R155** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_record_publishes_on_its_source_topic_with_its_previous] Each record on the event stream MUST name its source, its agent and its time, as the layer set them, never as a publisher claimed. (stream_record_MUST_name_source)
-- **R156** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_reader_reads_only_the_sources_granted and macf/tests/test_pd_broker.py::test_the_responder_answers_only_granted_readers_on_their_own_topic] A subscriber MUST receive only the sources that its daemon's declaration grants the subscriber's certificate. (subscriber_MUST_be_granted_agents)
-  - *Revised 2026-11-08 at the repo owner's request (his review on #923, 15:30Z): the stream moved from the daemon's socket to its own MQTT broker; previous text: MacEff g_f9dfeef9.*
-  - *Stated limit, 2026-10-21 (the macOS maintainer, #552, comment 6330824548): a stream grant separates uids, not agents. Where agents share one login, each is the others' own uid and may read their streams; separating agents needs an account per agent, as containers have. The stream is no more private than the event log, mode 0600 to the login. Not a change to the requirement.*
 - **R143** [MUST · decidable: macf/tests/test_pd_entries.py::test_a_check_template_fills_whole_arguments_of_the_declared_kind and macf/tests/test_pd_entries.py::test_a_check_runs_its_template_with_no_shell and macf/tests/test_pd_entries.py::test_a_check_argument_with_a_brace_is_refused_even_by_a_loose_pattern and macf/tests/test_pd_entries.py::test_a_check_whose_program_the_agent_could_rewrite_or_that_changed_since_install_never_runs and macf/tests/test_pd_entries.py::test_a_template_must_name_its_program_by_absolute_path and macf/tests/test_pd_entries.py::test_the_daemon_checks_a_check_entry_against_its_template_when_it_is_made] An entry's check MUST run only a command template the operator declared: no shell, each argument filling one whole argument of its kind, no program the agent can write. (check_MUST_run_operator_template)
-- **R144** [MUST · decidable: macf/tests/test_pd_duties.py::test_a_duty_that_crossed_while_no_daemon_ran_is_announced_once_and_never_again] The primal daemon MUST raise one notice for each crossing of a duty into due soon or overdue, including a crossing that happened while no primal daemon ran. (duty_crossing_MUST_raise_notice_once)
 - **R145** [MUST · decidable: macf/tests/test_pd_entries.py::test_pd_agenda_lists_both_tiers_each_marked and macf/tests/test_pd_entries.py::test_the_agenda_shows_both_tiers_soonest_first] The agenda MUST list the declared schedules and the agent's own entries together, each marked with its tier. (agenda_MUST_list_both_tiers)
 
-### 6.16 The MQTT broker, and associations of daemons
+#### 6.2.5 Duties
 
-The event stream of R150 to R156 is carried by each primal daemon's own MQTT broker. The requirements that name members bind only where a daemon admits members.
+**Added by:** `kind: agent`, with a roles directory in the agent's home.
 
-- **R169** [MUST · decidable: macf/tests/test_pd_broker.py::test_the_wrapper_beats_only_while_the_broker_listens_and_ends_with_its_status and macf/tests/test_pd_broker.py::test_every_daemon_runs_its_own_broker] Each primal daemon MUST run its own MQTT broker as one of its units, beating only while the broker listens. (mqtt_broker_MUST_be_daemons_own_unit)
-- **R170** [MUST · decidable: macf/tests/test_pd_broker.py::test_the_daemon_and_its_link_use_one_loopback_address and macf/tests/test_pd_broker.py::test_only_an_association_admits_members_or_listens_on_the_lan] A daemon's MQTT broker MUST bind only the loopback address, unless the daemon admits members. (mqtt_broker_MUST_bind_loopback)
-- **R171** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_broker_port_another_declaration_names_is_refused_naming_it] Install and start MUST refuse an MQTT broker port that another declaration on the host already names, naming that declaration. (mqtt_broker_port_MUST_be_unique_on_host)
-- **R172** [MUST · decidable: macf/tests/test_pd_broker.py::test_the_broker_requires_a_certificate_and_names_users_by_it and macf/tests/test_pd_broker.py::test_only_named_certificates_get_rules_and_never_by_pattern] A daemon's MQTT broker MUST refuse a client without a certificate, and give access only to certificates its declaration names, never by pattern. (mqtt_broker_MUST_admit_only_named_certificates)
-- **R173** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_reader_declared_in_another_case_gets_the_same_topics and macf/tests/test_pd_association.py::test_a_member_declared_in_another_case_is_the_same_member] Every MQTT topic level that names a calling card MUST carry the card lowercased. (mqtt_topic_MUST_name_card_lowercased)
-- **R174** [MUST NOT · decidable: macf/tests/test_pd_broker.py::test_only_named_certificates_get_rules_and_never_by_pattern] A certificate other than the daemon's own MUST NOT publish under the daemon's card. (other_certificate_MUST-NOT_publish_under_card)
-- **R175** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_record_publishes_on_its_source_topic_with_its_previous and macf/tests/test_pd_broker.py::test_a_gap_is_judged_per_source_not_by_global_position] Each record published to an MQTT broker MUST carry the position of its source's previous record, so a reader can find a gap. (mqtt_record_MUST_carry_previous_position)
-- **R176** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_backlog_past_its_bound_becomes_one_gap] When records waiting for an MQTT broker pass their bound, the daemon MUST replace them with one gap. (mqtt_backlog_MUST_become_one_gap)
-- **R177** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_member_writes_only_its_own_subtree_and_reads_nothing] Where a daemon admits members, its MQTT broker MUST let each declared member's certificate write only that member's own subtree. (member_MUST_write_only_own_subtree)
-- **R178** [MUST · decidable: macf/tests/test_pd_association.py::test_an_export_carries_no_content_even_when_the_record_does and macf/tests/test_pd_association.py::test_only_declared_sources_are_exported_on_the_members_own_subtree] A member MUST export only its declared sources, as summaries that carry none of the records' data. (export_MUST_be_declared_and_contentless)
-- **R179** [MUST · decidable: macf/tests/test_pd_association.py::test_the_association_reports_each_difference_between_declared_and_present] Where a daemon admits members, it MUST record each member that is undeclared, never present, offline or silent. (member_presence_MUST_be_recorded)
-- **R180** [MUST · decidable: macf/tests/test_pd_broker.py::test_the_export_link_records_each_change_of_reason_once and macf/tests/test_pd_broker.py::test_macos_local_network_block_is_named_not_read_as_an_outage] When a member's export fails, the daemon MUST record the cause once for each change of cause. (export_failure_MUST_name_its_cause)
-- **R181** [MUST NOT · judgment: the head maintainer, at review of each pull request touching associations] A daemon that admits members MUST NOT start, stop or signal any member's units. (association_MUST-NOT_control_members)
-- **R182** [MUST · decidable: macf/tests/test_pd_association.py::test_links_start_at_the_end_of_a_log_that_has_history and macf/tests/test_pd_association.py::test_a_link_starts_with_each_units_current_state] When a daemon's MQTT link starts, it MUST publish from its log's end, after one summary of each unit's current state. (mqtt_link_MUST_start_at_log_end)
+- **R144** [MUST · decidable: macf/tests/test_pd_duties.py::test_a_duty_that_crossed_while_no_daemon_ran_is_announced_once_and_never_again] The primal daemon MUST raise one notice for each crossing of a duty into due soon or overdue, including a crossing that happened while no primal daemon ran. (duty_crossing_MUST_raise_notice_once)
 
-### 6.7 Outside control
+#### 6.2.6 Observation and attach
 
-- **R48** [MUST · decidable: macf/tests/test_primal_daemon.py::test_outside_stop_beats_gates] A stop or restart that the operator asks for from outside a session MUST succeed, whatever gate the session enforces. (outside_stop_MUST_override_gates)
-- **R49** [MUST · decidable: macf/tests/test_primal_daemon.py::test_work_in_flight_checked] Before a primal daemon restarts a unit, it MUST check the unit for work in flight and drain it or wait. (pd_MUST_check_work_in_flight)
-- **R50** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_quiet_window and macf/tests/test_primal_daemon.py::test_control_refuses_what_it_cannot_do] The persistent layer MUST NOT restart or compact a session during a quiet window its agent declared. (layer_MUST-NOT_act_in_quiet_window)
-- **R51** [MUST NOT · decidable: macf/tests/test_primal_daemon.py::test_no_own_compaction] The persistent layer MUST NOT compact or clear a session's context on its own initiative. (layer_MUST-NOT_compact_on_own)
-- **R108** [MUST · decidable: macf/tests/test_pd_interface.py::test_a_compaction_may_be_asked_only_by_the_operator_or_the_wind_down] The primal daemon MUST compact a session only when the operator, or the agent's own declared wind-down, asks for it. (compaction_MUST_be_asked_by_operator_or_wind-down)
-- **R52** [MUST · decidable: macf/tests/test_primal_daemon.py::test_control_events and macf/tests/test_primal_daemon.py::test_a_held_restart_is_the_operators_act_when_the_window_ends] Each stop, restart or compaction that the persistent layer performs MUST be an event that names who asked and why. (control_act_MUST_name_who_asked)
-- **R126** [MUST · decidable: macf/tests/test_pd_harness.py::test_idle_compaction_off and macf/tests/test_pd_harness.py::test_the_adapter_turns_idle_compaction_off_when_it_starts_the_session and macf/tests/test_pd_harness.py::test_the_adapter_leaves_idle_compaction_alone_when_the_declaration_keeps_it and macf/tests/test_pd_harness.py::test_an_unreadable_declaration_keeps_nothing_so_idle_compaction_goes_off] Where the harness can compact an idle session on its own, the harness adapter MUST turn that off unless the declaration keeps it. (adapter_MUST_turn_off_harness_idle_compaction)
-- **R127** [MUST · decidable: macf/tests/test_primal_daemon.py::test_unasked_compaction_recorded] When the harness compacts a session that nobody asked to compact, the primal daemon MUST record a control event naming the harness as the asker. (harness_compaction_MUST_be_recorded)
-
-### 6.8 Mail
-
-- **R53** [MUST · decidable: macf/tests/test_pd_declaration.py::test_mail_units] Each mail broker and each mail watcher MUST be a managed unit. (mail_broker_MUST_be_managed)
-- **R54** [MUST · decidable: macf/tests/test_pd_declaration.py::test_periodic_clock_is_schedule] A mail clock that checks on a period MUST be a schedule. (periodic_mail_clock_MUST_be_schedule)
-- **R55** [MUST · decidable: macf/tests/test_pd_notice.py::test_unread_mail_notice and macf/tests/test_pd_notice.py::test_unread_mail_reaches_the_routes_declared_for_it] When mail sits unread past its agent's declared threshold, the primal daemon MUST deliver a notice to the routes declared for it. (unread_mail_MUST_raise_notice)
-- **R56** [SHOULD · judgment: the head maintainer, at review of the mail landing] The mail system SHOULD report each message to its sender as stored, notified or read. (mail_SHOULD_report_state_to_sender)
-
-### 6.9 Containers
-
-- **R57** [MUST · decidable: macf/tests/test_container_outer_tier.py::test_primal_daemons_start_after_access_and_before_optional_units and macf/tests/test_container_outer_tier.py::test_main_starts_the_access_path_before_the_daemons_and_both_before_any_optional_unit] In a container, the primal daemons and the access path MUST start before any optional unit. (container_MUST_start_access_first)
-- **R58** [MUST NOT · decidable: macf/tests/test_container_start_order.py::test_optional_units_independent] An optional unit MUST NOT delay the start of another unit. (optional_unit_MUST-NOT_delay_others)
-- **R59** [MUST · decidable: macf/tests/test_pd_interface.py::test_a_unit_missing_a_required_field_is_refused] Each declared unit MUST state a memory limit. (unit_MUST_declare_memory_limit)
-- **R60** [MUST · decidable: macf/tests/test_pd_notice.py::test_a_unit_measured_past_its_limit_reaches_the_channel and macf/tests/test_pd_notice.py::test_the_daemon_wires_its_core_and_scheduler_notices_to_its_notifier and macf/tests/test_pd_notice.py::test_a_unit_past_its_limit_is_a_notice_held_and_delivered] When a unit uses more than its declared limit, the primal daemon MUST deliver a notice. (pd_MUST_notice_limit_exceeded)
-- **R61** [MUST · decidable: macf/tests/test_pd_watch.py::test_limits_checked_after_recreate] After each recreate, the persistent layer MUST compare the container's declared limits with the limits in force. (layer_MUST_check_limits_after_recreate)
-- **R62** [MUST · judgment: the head maintainer, at review of the container landing] In a container shared by several agents, each agent MUST have a read-only view of every unit in that container and of its shared budget. (agent_MUST_see_shared_container)
-- **R103** [MUST · decidable: macf/tests/test_pd_declaration.py::test_shared_budget_operator_only] In a container shared by several agents, the shared budget MUST change only by an act of the operator. (shared_budget_MUST_change_only_by_operator)
-
-### 6.10 macOS and the harness's own supervisor
-
-- **R63** [MUST · decidable: macf/tests/test_pd_declaration.py::test_grants_declared] Each declared unit MUST state the privacy grants it needs. (unit_MUST_declare_privacy_grants)
-- **R64** [MUST · decidable: macf/tests/test_pd_install.py::test_grants_tested_at_install] When the platform adapter installs a unit, it MUST test the unit's declared grants. (adapter_MUST_test_grants_at_install)
-- **R65** [MUST · decidable: macf/tests/test_primal_daemon.py::test_denied_grant_notice] If a declared grant is denied, then the primal daemon MUST deliver a notice that names the grant. (denied_grant_MUST_raise_notice)
-- **R66** [MUST · decidable: macf/tests/test_pd_harness.py::test_adopts_harness_supervisor] Where the harness's own supervisor already runs a session, the primal daemon MUST adopt that session instead of starting a second supervisor. (pd_MUST_adopt_harness_supervisor)
-
-### 6.11 The tray
-
-- **R67** [MAY · judgment: the operator] Where a host has a desktop session, the operator MAY run the tray. (operator_MAY_run_tray)
-- **R68** [MUST NOT · decidable: macf/tests/test_pd_render.py::test_runs_without_tray] The outer tier and each primal daemon MUST NOT depend on the tray. (layer_MUST-NOT_depend_on_tray)
-- **R69** [MUST · decidable: macf/tests/test_pd_tray.py::test_icon_per_card] The tray MUST show one icon for all the agents installed on the host, with a menu entry per agent keyed by the calling card in the agent's identity file. (tray_MUST_show_icon_per_agent)
-- **R70** [MUST · decidable: macf/tests/test_pd_tray.py::test_acts_through_pd and macf/tests/test_pd_tray.py::test_an_act_goes_only_to_that_agents_daemon] The tray MUST send each start, stop or restart through that agent's primal daemon. (tray_MUST_act_through_pd)
-- **R71** [MUST NOT · judgment: the head maintainer, at review of the tray] The tray MUST NOT type into a session. (tray_MUST-NOT_type_into_session)
-- **R72** [MUST · decidable: macf/tests/test_pd_tray.py::test_waiting_icon] When a session waits on a person, the tray MUST change that agent's menu entry and show the most urgent state among the agents on its icon. (tray_MUST_flag_waiting_on_person)
-- **R73** [MUST · decidable: macf/tests/test_pd_readout.py::test_tray_unavailable_said] Where a host cannot show the tray, the readout MUST say so. (readout_MUST_say_tray_unavailable)
-
-### 6.12 Watching the layer, and the old name
-
-- **R74** [MUST · decidable: macf/tests/test_pd_watch.py::test_a_stopped_daemon_alerts_once_then_recovers_once] Each primal daemon MUST be checked by an outside watch. (pd_MUST_have_outside_watch)
-- **R75** [MUST · judgment: the operator, at review of each deployment's alert path] The outside watch MUST alert a person through a credential that does not depend on any agent's channel. (outside_watch_MUST_alert_independently)
-- **R76** [MUST · decidable: macf/tests/test_amail_deploy_config.py::test_hypervisor_value_accepted] The mail system's deploy configuration MUST accept the old value `hypervisor` as the primal daemon's value. (config_MUST_accept_old_hypervisor_value)
-
-### 6.13 Observation and attach
+**Added by:** the session unit.
 
 - **R81** [MAY · judgment: the operator] The operator MAY attach to any agent's session, with a keyboard, without an invitation. (operator_MAY_attach_without_invitation)
 - **R82** [MUST · decidable: macf/tests/test_pd_observe.py::test_onlooker_needs_invitation] An onlooker MUST receive an observation stream only after the observed agent invites it. (onlooker_MUST_be_invited)
@@ -357,23 +399,76 @@ The event stream of R150 to R156 is carried by each primal daemon's own MQTT bro
 - **R111** [MUST NOT · decidable: macf/tests/test_pd_observe.py::test_no_invitation_across_containers] An agent in one container MUST NOT invite an onlooker that runs in another container. (invitation_MUST-NOT_cross_containers)
 - **R128** [MUST · decidable: macf/tests/test_mode_activity.py::test_dialog_answer_counts] The presence state MUST count a person's answer to a dialog as the operator's activity. (presence_MUST_count_dialog_answers)
 
-### 6.14 The Claude Code channel
+#### 6.2.7 Mail
 
-- **R112** [MUST · judgment: the head maintainer, at review of the Claude Code harness adapter] Where the harness is Claude Code, the harness adapter MUST be a MacEff channel. (claude_code_adapter_MUST_be_maceff_channel)
-- **R113** [MUST · decidable: macf/tests/test_pd_channel.py::test_unix_socket_peer and macf/tests/test_pd_channel.py::test_verify_peer_needs_a_published_record_that_matches] The MacEff channel MUST connect to its primal daemon only through a local Unix socket whose peer the kernel identifies. (channel_MUST_connect_by_unix_socket)
-- **R114** [MUST · decidable: macf/tests/test_pd_channel.py::test_notice_metadata] Each channel event that carries a notice MUST carry the notice's identifier, source, read time and sent time as metadata. (channel_event_MUST_carry_notice_metadata)
-- **R115** [MUST · decidable: macf/tests/test_pd_channel.py::test_dark_channel_event and macf/tests/test_pd_channel_watch.py::test_a_session_that_never_connects_goes_dark_once_past_its_window and macf/tests/test_pd_channel_watch.py::test_the_watch_reads_the_newest_channel_event_of_this_agent] If a running session's MacEff channel drops, or misses its declared connect time after a start, then the primal daemon MUST record an event and notify the operator. (dark_channel_MUST_raise_event)
-- **R116** [MUST · decidable: macf/tests/test_pd_channel.py::test_onlooker_card_from_invitation] Where the MacEff channel carries an onlooker's message, the primal daemon MUST set the onlooker's calling card in its metadata from the invitation. (onlooker_card_MUST_come_from_invitation)
-  - *Revised 2026-10-18 at the repo owner's request ([section 15](#15-revision-history)); previous text: MacEff g_8fb9ea3e.*
-- **R117** [MUST NOT · decidable: macf/tests/test_pd_channel.py::test_no_permission_relay] The MacEff channel MUST NOT relay permission prompts. (channel_MUST-NOT_relay_permissions)
-- **R118** [MUST NOT · decidable: macf/tests/test_restart_without_prompt.py::test_the_session_command_never_carries_a_development_channel_flag] A restart that the primal daemon performs MUST NOT wait for a person to confirm the development flag. (restart_MUST-NOT_wait_on_development_flag)
-- **R119** [SHOULD · judgment: the operator, at review of each deployment] The MacEff channel SHOULD load through an organization allowlist or an official listing, instead of the development flag. (channel_SHOULD_load_without_development_flag)
-- **R120** [MUST · decidable: macf/tests/test_pd_channel.py::test_receipt_from_prompt_hook] When the session's prompt hook takes a MacEff channel event, it MUST record an event naming the notice's identifier and the time the hook took it. (prompt_hook_MUST_record_notice_receipt)
-- **R121** [MUST · decidable: macf/tests/test_mode_activity.py::test_source_from_origin_or_opening_tag] Each producer of the operator's activity MUST read a channel event's source from its origin record, or, only where none exists, from the tag that opens its text. (hooks_MUST_read_source_from_origin_or_opening_tag)
-- **R122** [MUST · decidable: macf/tests/test_pd_notice.py::test_peer_lineage_checked_by_the_daemon and macf/tests/test_pd_channel.py::test_a_peer_outside_the_session_lineage_is_refused and macf/tests/test_pd_channel.py::test_a_stale_session_incarnation_is_refused] The primal daemon MUST accept a MacEff channel connection only from a process that descends from its agent's live session, matched by process id and start time. (pd_MUST_check_channel_peer_lineage)
-- **R123** [MUST · decidable: macf/tests/test_pd_channel.py::test_channel_checks_its_pd and macf/tests/test_pd_channel.py::test_channel_refuses_a_stale_daemon_incarnation] The MacEff channel MUST connect only to a peer that is its agent's own primal daemon, matched by process id and start time. (channel_MUST_check_its_peer_is_its_pd)
-- **R124** [MUST · decidable: macf/tests/test_pd_declaration.py::test_allowlist_lists_every_channel] Where a deployment sets an organization allowlist, its declaration MUST list every channel the list admits, the operator's channels included. (allowlist_declaration_MUST_list_every_channel)
-- **R125** [MUST · judgment: the head maintainer, at review of the Claude Code harness adapter] The MacEff channel MUST ship as a channel plugin from a marketplace. (channel_MUST_ship_as_plugin)
+**Added by:** `kind: agent`, with `unread_mail_threshold_s`, and the agent's mail settings for its receiver.
+
+- **R55** [MUST · decidable: macf/tests/test_pd_notice.py::test_unread_mail_notice and macf/tests/test_pd_notice.py::test_unread_mail_reaches_the_routes_declared_for_it] When mail sits unread past its agent's declared threshold, the primal daemon MUST deliver a notice to the routes declared for it. (unread_mail_MUST_raise_notice)
+- **R56** [SHOULD · judgment: the head maintainer, at review of the mail landing] The mail system SHOULD report each message to its sender as stored, notified or read. (mail_SHOULD_report_state_to_sender)
+
+#### 6.2.8 The tray
+
+**Added by:** the host's desktop. The tray runs outside every daemon, and asks each agent's daemon to act.
+
+- **R67** [MAY · judgment: the operator] Where a host has a desktop session, the operator MAY run the tray. (operator_MAY_run_tray)
+- **R68** [MUST NOT · decidable: macf/tests/test_pd_render.py::test_runs_without_tray] The outer tier and each primal daemon MUST NOT depend on the tray. (layer_MUST-NOT_depend_on_tray)
+- **R69** [MUST · decidable: macf/tests/test_pd_tray.py::test_icon_per_card] The tray MUST show one icon for all the agents installed on the host, with a menu entry per agent keyed by the calling card in the agent's identity file. (tray_MUST_show_icon_per_agent)
+- **R70** [MUST · decidable: macf/tests/test_pd_tray.py::test_acts_through_pd and macf/tests/test_pd_tray.py::test_an_act_goes_only_to_that_agents_daemon] The tray MUST send each start, stop or restart through that agent's primal daemon. (tray_MUST_act_through_pd)
+- **R71** [MUST NOT · judgment: the head maintainer, at review of the tray] The tray MUST NOT type into a session. (tray_MUST-NOT_type_into_session)
+- **R72** [MUST · decidable: macf/tests/test_pd_tray.py::test_waiting_icon] When a session waits on a person, the tray MUST change that agent's menu entry and show the most urgent state among the agents on its icon. (tray_MUST_flag_waiting_on_person)
+- **R73** [MUST · decidable: macf/tests/test_pd_readout.py::test_tray_unavailable_said] Where a host cannot show the tray, the readout MUST say so. (readout_MUST_say_tray_unavailable)
+
+### 6.3 Placement
+
+These bind every primal daemon placed where they name, the base and its components alike.
+
+#### 6.3.1 Containers
+
+- **R57** [MUST · decidable: macf/tests/test_container_outer_tier.py::test_primal_daemons_start_after_access_and_before_optional_units and macf/tests/test_container_outer_tier.py::test_main_starts_the_access_path_before_the_daemons_and_both_before_any_optional_unit] In a container, the primal daemons and the access path MUST start before any optional unit. (container_MUST_start_access_first)
+- **R61** [MUST · decidable: macf/tests/test_pd_watch.py::test_limits_checked_after_recreate] After each recreate, the persistent layer MUST compare the container's declared limits with the limits in force. (layer_MUST_check_limits_after_recreate)
+- **R62** [MUST · judgment: the head maintainer, at review of the container landing] In a container shared by several agents, each agent MUST have a read-only view of every unit in that container and of its shared budget. (agent_MUST_see_shared_container)
+- **R103** [MUST · decidable: macf/tests/test_pd_declaration.py::test_shared_budget_operator_only] In a container shared by several agents, the shared budget MUST change only by an act of the operator. (shared_budget_MUST_change_only_by_operator)
+- **R195** [MUST · decidable: macf/tests/test_container_outer_tier.py::test_a_failing_daemon_is_restarted_with_the_units_backoff] Where the system is a container, its outer tier MUST start each primal daemon as its account, restart it with backoff, and read its exit status. (outer_tier_MUST_parent_in_container)
+  - *Moved from MIS-0007-R11 by the revision of 2026-11-09 (the requirement map, ruled on #552, comment 6731243851): it binds every daemon of its kind, not only a system daemon.*
+- **R196** [MUST · decidable: macf/tests/test_container_outer_tier.py::test_an_unusable_home_is_not_restarted] A primal daemon MUST tell its outer tier what it wants only by its exit status, read through the exit table. (pd_MUST_speak_to_outer_tier_by_exit_status)
+  - *Moved from MIS-0007-R21 by the revision of 2026-11-09 (the requirement map, ruled on #552, comment 6731243851): it binds every daemon of its kind, not only a system daemon.*
+- **R197** [MUST · decidable: macf/tests/test_container_outer_tier.py::test_the_longest_stop_chain_fits_the_stop_timeout (planned)] In a container, the longest chain of unit stop graces, in reverse start order, MUST fit inside the container's stop timeout. (container_stop_timeout_MUST_exceed_unit_grace)
+  - *Moved from MIS-0007-R20 by the revision of 2026-11-09 (the requirement map, ruled on #552, comment 6731243851): it binds every daemon of its kind, not only a system daemon.*
+- **R198** [MUST · decidable: macf/tests/test_container_outer_tier.py::test_outer_stop_timeout_matches_declaration (planned)] Before a daemon starts, the install or start step MUST set the outer tier's stop timeout from the declaration, or refuse to start where they differ. (outer_stop_timeout_MUST_match_declaration)
+  - *Moved from MIS-0007-R26 by the revision of 2026-11-09 (the requirement map, ruled on #552, comment 6731243851): it binds every daemon of its kind, not only a system daemon.*
+
+#### 6.3.2 macOS and the harness's own supervisor
+
+- **R05** [MUST · decidable: macf/tests/test_pd_render.py::TestMacOSLaunchAgent::test_launchd_is_launchagent] Where the host runs macOS, the platform adapter MUST render each primal daemon as a per-user LaunchAgent. (macos_MUST_render_LaunchAgent)
+- **R63** [MUST · decidable: macf/tests/test_pd_declaration.py::test_grants_declared] Each declared unit MUST state the privacy grants it needs. (unit_MUST_declare_privacy_grants)
+- **R64** [MUST · decidable: macf/tests/test_pd_install.py::test_grants_tested_at_install] When the platform adapter installs a unit, it MUST test the unit's declared grants. (adapter_MUST_test_grants_at_install)
+- **R65** [MUST · decidable: macf/tests/test_primal_daemon.py::test_denied_grant_notice and macf/tests/test_pd_composition.py::test_a_denied_grant_without_notices_reaches_the_outside_watch (planned)] If a declared grant is denied, then the primal daemon MUST name the grant in a notice, or in the outside watch's alert where no notices component is present. (denied_grant_MUST_raise_notice)
+  - *Revised 2026-11-09 at the repo owner's request (the requirement map, ruled "Accept as is" on #552, comment 6731243851); previous text: MacEff g_f1ad7283.*
+- **R191** [MUST · judgment: the head maintainer, at review of each new unit] Where a service needs a login's session, it MUST run in that session, as a unit of that login's own daemon. (session_bound_unit_MUST_run_in_its_session)
+  - *Moved from MIS-0007-R10 by the revision of 2026-11-09 (the requirement map, ruled on #552, comment 6731243851): it binds every daemon of its kind, not only a system daemon.*
+- **R192** [MUST · decidable: macf/tests/test_pd_render.py::TestMacOSInstall::test_reload_waits_for_bootout (planned)] On macOS, a reload MUST wait until launchd reports the booted-out job gone before it bootstraps the job again. (reload_MUST_wait_for_bootout)
+  - *Moved from MIS-0007-R19 by the revision of 2026-11-09 (the requirement map, ruled on #552, comment 6731243851): it binds every daemon of its kind, not only a system daemon.*
+- **R193** [MUST · decidable: macf/tests/test_pd_broker.py::test_macos_local_network_block_is_named_not_read_as_an_outage] When a link to an address beyond loopback fails for lack of macOS's Local Network grant, the primal daemon MUST name that grant, never an outage. (local_network_grant_MUST_be_named)
+  - *Added by the revision of 2026-11-09 (the requirement map, ruled on #552, comment 6731243851).*
+- **R194** [MUST · judgment: the operator, at review of the persistent_layer policy] Where agents share one login, the persistent_layer policy MUST state that their exports read as claimed and that the operator's key stays beyond their reach. (shared_login_MUST_be_stated_in_placement)
+  - *Added by the revision of 2026-11-09 (the requirement map, ruled on #552, comment 6731243851).*
+
+### 6.4 Held here until MIS-0007 holds them
+
+The requirement map places these rows in MIS-0007: associations of daemons in its recursion, and the mail broker in its System Daemon, as the broker account's own daemon, by the placement rule that is R09 in MIS-0007's draft. MIS-0007 is not yet accepted, so they bind here until it is. The revision that accepts it withdraws them here, keeping their IDs unused, and this section then cites MIS-0007. The rows that name members bind only where a daemon admits members.
+
+- **R177** [MUST · decidable: macf/tests/test_pd_broker.py::test_a_member_writes_only_its_own_subtree_and_reads_nothing] Where a daemon admits members, its MQTT broker MUST let each declared member's certificate write only that member's own subtree. (member_MUST_write_only_own_subtree)
+- **R178** [MUST · decidable: macf/tests/test_pd_association.py::test_an_export_carries_no_content_even_when_the_record_does and macf/tests/test_pd_association.py::test_only_declared_sources_are_exported_on_the_members_own_subtree] A member MUST export only its declared sources, as summaries that carry none of the records' data. (export_MUST_be_declared_and_contentless)
+- **R179** [MUST · decidable: macf/tests/test_pd_association.py::test_the_association_reports_each_difference_between_declared_and_present] Where a daemon admits members, it MUST record each member that is undeclared, never present, offline or silent. (member_presence_MUST_be_recorded)
+- **R180** [MUST · decidable: macf/tests/test_pd_broker.py::test_the_export_link_records_each_change_of_reason_once and macf/tests/test_pd_broker.py::test_macos_local_network_block_is_named_not_read_as_an_outage] When a member's export fails, the daemon MUST record the cause once for each change of cause. (export_failure_MUST_name_its_cause)
+- **R181** [MUST NOT · judgment: the head maintainer, at review of each pull request touching associations] A daemon that admits members MUST NOT start, stop or signal any member's units. (association_MUST-NOT_control_members)
+- **R182** [MUST · decidable: macf/tests/test_pd_association.py::test_links_start_at_the_end_of_a_log_that_has_history and macf/tests/test_pd_association.py::test_a_link_starts_with_each_units_current_state] When a daemon's MQTT link starts, it MUST publish from its log's end, after one summary of each unit's current state. (mqtt_link_MUST_start_at_log_end)
+- **R53** [MUST · decidable: macf/tests/test_pd_declaration.py::test_mail_units] Each mail broker and each mail watcher MUST be a managed unit. (mail_broker_MUST_be_managed)
+- **R54** [MUST · decidable: macf/tests/test_pd_declaration.py::test_periodic_clock_is_schedule] A mail clock that checks on a period MUST be a schedule. (periodic_mail_clock_MUST_be_schedule)
+
+### 6.5 Withdrawn
+
+- R76 (config_MUST_accept_old_hypervisor_value) is withdrawn by the revision of 2026-11-09, with the code that read the old `hypervisor` value. A development-phase framework carries no legacy reader, and no deployment checked still writes the old value. Its ID is not reused.
 
 ## 7 Rationale and Rejected Alternatives
 
@@ -426,7 +521,7 @@ The positions are cited by their IDs in section 14.
   - the association records each difference between the members it declares and those present;
   - an export that fails says why once per change of cause, which on macOS names the Local Network block and its grant.
 
-  Unit names travel up in those summaries, and they are the only free text that leaves the host, so persistent_layer 11.5 asks that they carry nothing private.
+  Unit names travel up in those summaries, and they are the only free text that leaves the host, so persistent_layer 3.5 asks that they carry nothing private.
 - **R181** keeps supervision one-way: an association reads summaries and controls nothing, as **R07** keeps one agent's daemon from another's units.
 - **R182** came from the live run. Links that followed the log from its start read a long-lived host's whole log in one pass and flooded the association with every unit state ever recorded. They now start at the end, and readers catch up by replay. Each connect first sends one summary of every unit's current state, so a restarted member's association doesn't keep its states from before the restart (#921).
 
@@ -442,6 +537,16 @@ The positions are cited by their IDs in section 14.
 - **The harness compacts on its own.** On two days in a row a host session was compacted about 54 minutes after its last request, at 768k and 550k of a 1M window, with no wind-down (P30, P31). R51 and R108 bind the layer, which cannot stop the harness. So **R126** has the Claude Code adapter turn the harness's idle compaction off unless the declaration keeps it; the client has offered such a setting since 2.1.290. **R127** records any compaction nobody asked for as a control event with the harness as the asker, found by the absence of an ask. Then section 10's claim, that a lost hour of work can be traced to a decision, holds again (harness_compacts_unasked).
 - **Socket paths have a length limit.** **R129**: on macOS a Unix socket's path must stay under 104 bytes, and agent homes are long, so the primal daemon's socket needs a short runtime directory, checked at install. The mail broker already checks this (P30).
 - **Q05 is answered: files, not sockets.** The head maintainer tested it on macOS on Apple silicon under Docker Desktop. Sockets fail across the bind mount in both directions. Files work: lines a container appends reach the host in about 7 ms, and one new file per message, renamed into a folder, makes a round trip in about 6 ms (P30). Section 10 now says so, and R80 stays whole.
+
+**The base and the Agent Daemon (the revision of 2026-11-09).** The repo owner asked for this shape on 2026-11-08: "MIS-0002 needs to become the spec describing the minimal PD base and the Agent Daemon based on it - like a reshuffle of requirements and maybe a few deletions and additions", with MIS-0007 to "describe the recursion of super structures based on the PD". The prototype of mission 958 had shown why. A system daemon and a fleet daemon ran the same program as an agent's, on their own accounts, and the parts that serve an agent ran there too: the notice path to a session, role duties and the login check. Nothing in MIS-0002 said which requirements bind every daemon and which bind only an agent's. A requirement map placed every row of MIS-0002 and of MIS-0007's revision exactly once, checked by a script against both files. Both maintainers reviewed it on #552, and the repo owner ruled it "Accept as is" (comment 6731243851). This revision moves each row to where the map placed it, keeping its ID and slug, so every citation still resolves.
+- **R183** and **R184** are the seam. An Agent Daemon component is built only where the declaration adds it, and a daemon that adds none runs the base alone, which is all a system or a fleet daemon needs. The switch is the declaration's `kind`, which the prototype added for associations: only `kind: agent` adds the components, so a container agent whose declaration routes no notice keeps its notices. Landing step 10 built it, and a planted defect turned each named test red.
+- **R185** is the hold after a refused start, from #930. A daemon that refuses its start (78), or finds its own already running (75), waits before it exits, so an outer tier that restarts on exit doesn't spin. The host-side maintainer asked for it in the map's review.
+- **R186**, **R187** and **R188** come from MIS-0007's draft, where they bound a system daemon. They bind every daemon's units. R12's check under `env -i` tests that nothing is inherited, not that what a unit needs is there, so a unit that states its needs lets a start refuse a gap by name (R186). One restart moved a seat's time zone, and its scheduled wakes fired at the same clock numbers in the new zone (R187, reworded from "a system or fleet daemon" to "each primal daemon", so it takes a new slug). A worker without reload served stale code after an update until someone restarted it by hand, and a supervisor can't know when a unit needs new code, so it records and reports (R188).
+- **R189** and **R190** also come from MIS-0007's draft, and bind an Agent Daemon. A failing unit woke one seat dozens of times in a night, each wake re-reading a large cached context (R189). Long-lived services survive restarts under a supervisor only if the agent keeps control of its own, without a prompt that hangs when nobody watches (R190).
+- **R191** to **R198** are placement. A session-bound service runs in its login's session, since macOS ties privacy grants to the responsible process and the login session (R191). `launchctl bootout` returns before the job has exited, so a bootstrap straight after it failed with error 5 (#841; R192). A link blocked by macOS's Local Network grant fails with EHOSTUNREACH, which reads as an outage unless the daemon names the grant (R193, from the host-side maintainer's review). Where agents share one login, what they export is claimed, not proven, and the operator's key must stay beyond them (R194, a sibling of R136). In a container the outer tier parents each daemon and reads its exit status, and the daemon's exit status is its one channel up, since asking over a socket would be instructing (R195, R196). Docker's default stop timeout of 10 s is shorter than a session's 30 s stop grace, so `docker stop` killed units mid-grace; the chain of graces must fit the timeout, and the timeout is set from the declaration (R197, R198).
+- **R01**, **R80**, **R60** and **R65** are reworded so the base can stand alone. R01 binds each principal, not each agent. R80 keeps the daemon itself off the network and leaves its broker unit to R170. R60 records a crossed limit at every level and sends a notice only where the notices component is present. R65 names a denied grant in the outside watch's alert where no session would read a notice, as the host-side maintainer asked.
+- **R76** is withdrawn. It kept the retired name `hypervisor` working in the mail system's deploy configuration. Nothing on the container-management maintainer's host, on the macOS host of the other two maintainers, or in either container writes that value, and a framework in its development phase carries no legacy reader, so the requirement and its reader go together.
+- **Section 6.4** holds the rows the map placed in MIS-0007, R177 to R182 and R53 and R54, because MIS-0007 is not yet accepted. Moving them out now would leave them binding nowhere. The revision that accepts MIS-0007 withdraws them here.
 
 **Rejected**
 - **One manager per host** (the strawman in P02): one controller is one place where one agent's restart policy, environment or grants can leak into another's (P05). The host's view is built read-only from per-agent events instead (D1).
@@ -511,38 +616,91 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R02 | decidable | macf/tests/test_primal_daemon.py::test_identity_not_from_env | passing |
 | R03 | decidable | macf/tests/test_pd_render.py::TestMacOSLaunchAgent::test_outer_tier_restarts_pd and macf/tests/test_pd_render_systemd.py::test_outer_tier_restarts_pd and macf/tests/test_container_outer_tier.py::test_a_failing_daemon_is_restarted_with_the_units_backoff | passing |
 | R04 | judgment | the head maintainer, at review of each rendering | standing |
-| R05 | decidable | macf/tests/test_pd_render.py::TestMacOSLaunchAgent::test_launchd_is_launchagent | passing |
 | R06 | decidable | macf/tests/test_pd_render.py::TestMacOSLaunchAgent::test_identifier and macf/tests/test_pd_render.py::TestEveryNameCarriesTheIdentifier::test_a_running_daemon_is_listed_as_maceff_pd_and_binds_only_maceff_pd_sockets and macf/tests/test_pd_render.py::TestEveryNameCarriesTheIdentifier::test_every_socket_path_runs_through_a_directory_named_maceff_pd and macf/tests/test_pd_render.py::TestEveryNameCarriesTheIdentifier::test_the_launch_agent_names_the_daemon_maceff_pd and macf/tests/test_pd_render.py::TestEveryNameCarriesTheIdentifier::test_a_framework_build_is_started_through_its_python_app and macf/tests/test_pd_render.py::TestEveryNameCarriesTheIdentifier::test_the_daemons_interpreter_started_as_the_launch_agent_says_is_listed_as_maceff_pd | passing (Linux: the kernel's process name, set with prctl. macOS: the listed name, argv[0], which the LaunchAgent sets at exec, starting a framework build's Python.app directly so its launcher can't rename it; ps and pgrep show maceff_pd under a plain or a framework build, and the kernel's own name, which top shows, stays the interpreter's) |
 | R07 | decidable | macf/tests/test_primal_daemon.py::test_no_cross_agent_control and macf/tests/test_primal_daemon.py::test_a_running_daemon_controls_no_other_agents_unit | passing |
+| R80 | decidable | macf/tests/test_primal_daemon.py::test_no_network_listener | passing |
+| R129 | decidable | macf/tests/test_pd_render.py::TestMacOSInstall::test_socket_path_length and macf/tests/test_pd_install.py::test_a_socket_path_too_long_stops_the_systemd_install_before_anything_is_written | passing |
+| R185 | decidable | macf/tests/test_pd_broker.py::test_a_refused_start_holds_before_it_exits_so_keepalive_is_paced and macf/tests/test_pd_composition.py::test_a_start_that_finds_its_daemon_running_holds_before_it_exits | passing |
+| R183 | decidable | macf/tests/test_pd_composition.py::test_each_agent_component_is_built_only_where_its_declaration_adds_it | passing |
+| R184 | decidable | macf/tests/test_pd_composition.py::test_a_declaration_that_adds_no_component_runs_the_base_alone | passing |
+| R157 | decidable | macf/tests/test_calling_card.py::test_card_is_name_underscore_shortid | planned |
+| R158 | decidable | macf/tests/test_calling_card.py::test_name_is_a_letter_then_at_most_23_letters_or_digits | planned |
+| R159 | decidable | macf/tests/test_calling_card.py::test_shortid_is_the_first_six_hex_of_the_identity_file | planned |
+| R160 | decidable | macf/tests/test_calling_card.py::test_case_sensitive_names_keep_the_card_exactly | planned |
+| R161 | decidable | macf/tests/test_calling_card.py::test_lowercase_targets_take_the_card_lowercased | planned |
+| R162 | decidable | macf/tests/test_calling_card.py::test_provisioning_names_a_new_account_with_the_card_lowercased | planned |
+| R163 | decidable | macf/tests/test_calling_card.py::test_dns_label_replaces_only_the_underscore | planned |
+| R164 | decidable | macf/tests/test_calling_card.py::test_a_declared_card_compares_without_case | planned |
+| R165 | decidable | macf/tests/test_calling_card.py::test_a_declared_card_in_another_form_is_refused | planned |
+| R166 | decidable | macf/tests/test_calling_card.py::test_stored_history_maps_the_old_form | planned |
+| R167 | decidable | macf/tests/test_attribution.py::test_own_card_in_the_underscore_spelling_is_accepted | passing (#916) |
+| R168 | decidable | macf/tests/test_attribution.py::test_only_the_new_form_signs_after_the_cut_over | planned |
 | R08 | decidable | macf/tests/test_pd_declaration.py::test_every_unit_declared and macf/tests/test_pd_declaration.py::test_schedules_hosted | passing |
 | R09 | decidable | macf/tests/test_pd_interface.py::test_unit_fields_are_required_and_the_exit_code_contract_defaults | passing |
 | R10 | decidable | macf/tests/test_pd_declaration.py::test_renderings_exist | passing (under the reading recorded on 2026-10-10: the outer tier renders the daemon and the daemon starts the units, so a platform without a rendering of the daemon is what CI must catch; a rewording to say so is the maintainers' choice) |
 | R11 | decidable | macf/tests/test_pd_declaration.py::test_schedules_hosted | passing |
 | R12 | decidable | macf/tests/test_primal_daemon.py::test_clean_parent | passing |
 | R13 | decidable | macf/tests/test_primal_daemon.py::test_env_is_only_what_the_declaration_says | passing |
+| R186 | decidable | macf/tests/test_pd_composition.py::test_declared_needs_refused_by_name | planned: lands with step 10, the base in code |
+| R187 | decidable | macf/tests/test_pd_composition.py::test_one_time_zone | planned: lands with step 10, the base in code; today a declaration names a time zone only once it has crons or quiet windows |
+| R188 | decidable | macf/tests/test_pd_composition.py::test_code_version_recorded | planned: lands with step 10, the base in code; today the daemon reports its own build, not each unit's |
 | R14 | decidable | macf/tests/test_pd_liveness.py::test_the_heartbeat_reports_at_once_and_then_at_its_interval and macf/tests/test_pd_liveness.py::test_a_managed_unit_writes_its_liveness_to_its_agents_log_at_its_declared_interval | passing |
 | R15 | decidable | macf/tests/test_pd_readout.py::test_liveness_probed | passing |
 | R16 | judgment | the head maintainer, at review of each landing pull request | standing |
 | R17 | decidable | macf/tests/test_pd_readout.py::test_health_is_runs | passing |
 | R18 | decidable | macf/tests/test_pd_readout.py::test_overdue_is_unhealthy | passing |
-| R19 | decidable | macf/tests/test_pd_readout.py::test_auth_failure_is_failed | passing |
 | R20 | decidable | macf/tests/test_primal_daemon.py::test_states | passing |
 | R21 | decidable | macf/tests/test_pd_harness.py::test_waiting_reported | passing |
 | R22 | decidable | macf/tests/test_primal_daemon.py::test_no_restart_while_waiting | passing |
-| R23 | judgment | the head maintainer, at review of each harness adapter | standing |
+| R78 | judgment | the operator, at review of each declaration | standing |
+| R79 | judgment | the head maintainer, at review of each landing pull request | standing |
 | R24 | decidable | macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails and macf/tests/test_pd_entries.py::test_an_entry_request_without_a_missed_run_policy_is_refused_at_the_socket | passing |
 | R25 | decidable | macf/tests/test_pd_schedule.py::test_policy_values and macf/tests/test_pd_entries.py::test_an_entry_whose_missed_run_policy_is_not_listed_is_refused_at_the_socket | passing |
+| R109 | decidable | macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails | passing |
+| R110 | decidable | macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails | passing |
 | R26 | decidable | macf/tests/test_pd_schedule.py::test_advance_before_run | passing |
 | R27 | decidable | macf/tests/test_pd_schedule.py::test_the_scheduler_replays_no_restart_after_downtime | passing |
 | R28 | decidable | macf/tests/test_pd_schedule.py::test_leases_released | passing |
-| R29 | decidable | macf/tests/test_pd_schedule.py::test_target_declared and macf/tests/test_pd_schedule.py::test_a_schedule_targeting_another_agent_is_refused_at_load | passing |
-| R30 | judgment | the Secretary, at review of each declaration | standing |
-| R31 | decidable | macf/tests/test_pd_schedule.py::test_permissions_settled and macf/tests/test_pd_entries.py::test_an_entry_request_carrying_a_permission_is_refused_at_the_socket | passing |
-| R32 | decidable | macf/tests/test_pd_schedule.py::test_prompt_fails_run | passing |
 | R33 | decidable | macf/tests/test_pd_schedule.py::test_run_cannot_schedule | passing |
 | R34 | decidable | macf/tests/test_pd_schedule.py::test_late_run_says_so and macf/tests/test_pd_entries.py::test_an_entry_that_fired_late_says_how_late_where_its_notice_points | passing |
 | R35 | judgment | the Secretary, at review of each declaration | standing |
 | R36 | decidable | macf/tests/test_pd_schedule.py::test_wall_clock_cap | passing |
+| R49 | decidable | macf/tests/test_primal_daemon.py::test_work_in_flight_checked | passing |
+| R52 | decidable | macf/tests/test_primal_daemon.py::test_control_events and macf/tests/test_primal_daemon.py::test_a_held_restart_is_the_operators_act_when_the_window_ends | passing (the layer performs no compaction yet, so the compaction clause binds when it does) |
+| R58 | decidable | macf/tests/test_container_start_order.py::test_optional_units_independent | passing |
+| R59 | decidable | macf/tests/test_pd_interface.py::test_a_unit_missing_a_required_field_is_refused | passing |
+| R60 | decidable | macf/tests/test_pd_notice.py::test_a_unit_measured_past_its_limit_reaches_the_channel and macf/tests/test_pd_notice.py::test_the_daemon_wires_its_core_and_scheduler_notices_to_its_notifier and macf/tests/test_pd_notice.py::test_a_unit_past_its_limit_is_a_notice_held_and_delivered and macf/tests/test_pd_composition.py::test_a_limit_crossed_without_notices_is_recorded | passing |
+| R74 | decidable | macf/tests/test_pd_watch.py::test_a_stopped_daemon_alerts_once_then_recovers_once | passing |
+| R75 | judgment | the operator, at review of each deployment's alert path | standing |
+| R150 | decidable | macf/tests/test_pd_broker.py::test_each_new_record_publishes_in_order_naming_its_own_sources_previous and macf/tests/test_pd_broker.py::test_every_daemon_runs_its_own_broker | passing |
+| R151 | decidable | macf/tests/test_pd_broker.py::test_a_subscriber_receives_only_the_sources_it_subscribed | passing |
+| R152 | decidable | macf/tests/test_pd_stream_rules.py::test_the_operator_silences_and_reroutes_without_a_restart and macf/tests/test_pd_stream_rules.py::test_a_container_operator_uid_alone_sets_the_streams_rules and macf/tests/test_pd_stream_rules.py::test_the_stream_rules_start_in_ask_and_a_loosened_one_stays_loose and macf/tests/test_pd_stream_rules.py::test_a_silenced_source_never_reaches_the_session_and_is_not_owed and macf/tests/test_pd_stream_rules.py::test_silencing_the_session_stops_every_source_to_it and macf/tests/test_pd_stream_rules.py::test_a_source_routed_elsewhere_leaves_the_session_and_others_reach_it and macf/tests/test_pd_stream_rules.py::test_a_forged_carried_line_reaches_the_session_as_no_text and macf/tests/test_pd_stream_rules.py::test_no_stream_subscriber_takes_the_sessions_name and macf/tests/test_pd_wake.py::test_the_wake_honors_the_operators_rules | passing |
+| R153 | decidable | macf/tests/test_pd_broker.py::test_a_long_replay_is_answered_in_bounded_passes_and_ends_once and macf/tests/test_pd_broker.py::test_a_publish_that_fails_keeps_its_record_and_the_order | passing |
+| R154 | decidable | macf/tests/test_pd_broker.py::test_a_replay_sends_the_granted_records_since_the_position_then_done and macf/tests/test_pd_broker.py::test_a_replay_from_a_rotated_log_starts_with_a_gap and macf/tests/test_pd_broker.py::test_a_reader_that_reconnects_gets_each_record_once_in_log_order | passing |
+| R155 | decidable | macf/tests/test_pd_broker.py::test_a_record_publishes_on_its_source_topic_with_its_previous | passing |
+| R156 | decidable | macf/tests/test_pd_broker.py::test_a_reader_reads_only_the_sources_granted and macf/tests/test_pd_broker.py::test_the_responder_answers_only_granted_readers_on_their_own_topic | passing |
+| R169 | decidable | macf/tests/test_pd_broker.py::test_the_wrapper_beats_only_while_the_broker_listens_and_ends_with_its_status and macf/tests/test_pd_broker.py::test_every_daemon_runs_its_own_broker | passing |
+| R170 | decidable | macf/tests/test_pd_broker.py::test_the_daemon_and_its_link_use_one_loopback_address and macf/tests/test_pd_broker.py::test_only_an_association_admits_members_or_listens_on_the_lan | passing |
+| R171 | decidable | macf/tests/test_pd_broker.py::test_a_broker_port_another_declaration_names_is_refused_naming_it | passing |
+| R172 | decidable | macf/tests/test_pd_broker.py::test_the_broker_requires_a_certificate_and_names_users_by_it and macf/tests/test_pd_broker.py::test_only_named_certificates_get_rules_and_never_by_pattern | passing |
+| R173 | decidable | macf/tests/test_pd_broker.py::test_a_reader_declared_in_another_case_gets_the_same_topics and macf/tests/test_pd_association.py::test_a_member_declared_in_another_case_is_the_same_member | passing |
+| R174 | decidable | macf/tests/test_pd_broker.py::test_only_named_certificates_get_rules_and_never_by_pattern | passing |
+| R175 | decidable | macf/tests/test_pd_broker.py::test_a_record_publishes_on_its_source_topic_with_its_previous and macf/tests/test_pd_broker.py::test_a_gap_is_judged_per_source_not_by_global_position | passing |
+| R176 | decidable | macf/tests/test_pd_broker.py::test_a_backlog_past_its_bound_becomes_one_gap | passing |
+| R19 | decidable | macf/tests/test_pd_readout.py::test_auth_failure_is_failed | passing |
+| R23 | judgment | the head maintainer, at review of each harness adapter | standing |
+| R29 | decidable | macf/tests/test_pd_schedule.py::test_target_declared and macf/tests/test_pd_schedule.py::test_a_schedule_targeting_another_agent_is_refused_at_load | passing |
+| R30 | judgment | the Secretary, at review of each declaration | standing |
+| R31 | decidable | macf/tests/test_pd_schedule.py::test_permissions_settled and macf/tests/test_pd_entries.py::test_an_entry_request_carrying_a_permission_is_refused_at_the_socket | passing |
+| R32 | decidable | macf/tests/test_pd_schedule.py::test_prompt_fails_run | passing |
+| R48 | decidable | macf/tests/test_primal_daemon.py::test_outside_stop_beats_gates | passing |
+| R50 | decidable | macf/tests/test_primal_daemon.py::test_quiet_window and macf/tests/test_primal_daemon.py::test_control_refuses_what_it_cannot_do | passing (binds while the daemon refuses every compaction; when compaction lands (R108) the row needs a quiet-window compaction test) |
+| R51 | decidable | macf/tests/test_primal_daemon.py::test_no_own_compaction | passing |
+| R108 | decidable | macf/tests/test_pd_interface.py::test_a_compaction_may_be_asked_only_by_the_operator_or_the_wind_down | passing |
+| R126 | decidable | macf/tests/test_pd_harness.py::test_idle_compaction_off and macf/tests/test_pd_harness.py::test_the_adapter_turns_idle_compaction_off_when_it_starts_the_session and macf/tests/test_pd_harness.py::test_the_adapter_leaves_idle_compaction_alone_when_the_declaration_keeps_it and macf/tests/test_pd_harness.py::test_an_unreadable_declaration_keeps_nothing_so_idle_compaction_goes_off | passing |
+| R127 | decidable | macf/tests/test_primal_daemon.py::test_unasked_compaction_recorded | passing |
+| R66 | decidable | macf/tests/test_pd_harness.py::test_adopts_harness_supervisor | passing |
+| R190 | decidable | macf/tests/test_pd_composition.py::test_agent_controls_own_units | planned: lands with step 10, the base in code |
 | R37 | judgment | the Secretary, at review of each declaration | standing |
 | R38 | decidable | macf/tests/test_pd_notice.py::test_source_named | passing |
 | R39 | decidable | macf/tests/test_pd_notice.py::test_three_times and macf/tests/test_pd_channel.py::test_receipt_from_prompt_hook | passing |
@@ -552,41 +710,40 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R43 | decidable | macf/tests/test_pd_wake.py::test_wake_through_notifier | passing |
 | R44 | judgment | the head maintainer, at review of each harness adapter | standing |
 | R45 | decidable | macf/tests/test_pd_wake.py::test_a_busy_stretch_is_said_once_and_nothing_is_typed and macf/tests/test_pd_wake.py::test_a_running_turn_is_seen_by_its_phrase_or_by_the_spinner_alone | passing (the running turn is checked at the classifier the waker consults) |
+| R77 | decidable | macf/tests/test_pd_wake.py::test_a_wake_carries_fixed_words_and_message_ids_oldest_first | passing |
+| R104 | decidable | macf/tests/test_pd_harness.py::test_channel_first | passing |
+| R105 | decidable | macf/tests/test_pd_wake.py::test_wake_through_notifier | passing |
+| R106 | decidable | macf/tests/test_mode_activity.py::test_wake_is_not_operator_activity | passing |
+| R107 | decidable | macf/tests/test_mode_activity.py::test_channels_told_apart_by_name | passing |
 | R46 | judgment | the Secretary, at review of each notice source | standing |
 | R47 | decidable | macf/tests/test_pd_notice.py::test_after_restart_notice and macf/tests/test_pd_notice.py::test_an_unrouted_carried_notice_reaches_the_agent | passing |
-| R48 | decidable | macf/tests/test_primal_daemon.py::test_outside_stop_beats_gates | passing |
-| R49 | decidable | macf/tests/test_primal_daemon.py::test_work_in_flight_checked | passing |
-| R50 | decidable | macf/tests/test_primal_daemon.py::test_quiet_window and macf/tests/test_primal_daemon.py::test_control_refuses_what_it_cannot_do | passing (binds while the daemon refuses every compaction; when compaction lands (R108) the row needs a quiet-window compaction test) |
-| R51 | decidable | macf/tests/test_primal_daemon.py::test_no_own_compaction | passing |
-| R52 | decidable | macf/tests/test_primal_daemon.py::test_control_events and macf/tests/test_primal_daemon.py::test_a_held_restart_is_the_operators_act_when_the_window_ends | passing (the layer performs no compaction yet, so the compaction clause binds when it does) |
-| R53 | decidable | macf/tests/test_pd_declaration.py::test_mail_units | passing |
-| R54 | decidable | macf/tests/test_pd_declaration.py::test_periodic_clock_is_schedule | passing |
-| R55 | decidable | macf/tests/test_pd_notice.py::test_unread_mail_notice and macf/tests/test_pd_notice.py::test_unread_mail_reaches_the_routes_declared_for_it | passing |
-| R56 | judgment | the head maintainer, at review of the mail landing | recorded: not met, by the head maintainer on 2026-10-18; it waits on MIS-0004 (#520), and the departure is recorded below |
-| R57 | decidable | macf/tests/test_container_outer_tier.py::test_primal_daemons_start_after_access_and_before_optional_units and macf/tests/test_container_outer_tier.py::test_main_starts_the_access_path_before_the_daemons_and_both_before_any_optional_unit | passing |
-| R58 | decidable | macf/tests/test_container_start_order.py::test_optional_units_independent | passing |
-| R59 | decidable | macf/tests/test_pd_interface.py::test_a_unit_missing_a_required_field_is_refused | passing |
-| R60 | decidable | macf/tests/test_pd_notice.py::test_a_unit_measured_past_its_limit_reaches_the_channel and macf/tests/test_pd_notice.py::test_the_daemon_wires_its_core_and_scheduler_notices_to_its_notifier and macf/tests/test_pd_notice.py::test_a_unit_past_its_limit_is_a_notice_held_and_delivered | passing |
-| R61 | decidable | macf/tests/test_pd_watch.py::test_limits_checked_after_recreate | passing |
-| R62 | judgment | the head maintainer, at review of the container landing | recorded: met, judged live by the head maintainer on 2026-10-25, as a seat on its own account in a multi-seat container at MacEff f9edbf0c (#552, comment 6400761918): the shared view showed every unit, the mail broker's included, and the container's budget |
-| R63 | decidable | macf/tests/test_pd_declaration.py::test_grants_declared | passing |
-| R64 | decidable | macf/tests/test_pd_install.py::test_grants_tested_at_install | passing |
-| R65 | decidable | macf/tests/test_primal_daemon.py::test_denied_grant_notice | passing |
-| R66 | decidable | macf/tests/test_pd_harness.py::test_adopts_harness_supervisor | passing |
-| R67 | judgment | the operator | standing |
-| R68 | decidable | macf/tests/test_pd_render.py::test_runs_without_tray | passing |
-| R69 | decidable | macf/tests/test_pd_tray.py::test_icon_per_card | passing |
-| R70 | decidable | macf/tests/test_pd_tray.py::test_acts_through_pd and macf/tests/test_pd_tray.py::test_an_act_goes_only_to_that_agents_daemon | passing |
-| R71 | judgment | the head maintainer, at review of the tray | standing |
-| R72 | decidable | macf/tests/test_pd_tray.py::test_waiting_icon | passing |
-| R73 | decidable | macf/tests/test_pd_readout.py::test_tray_unavailable_said | passing |
-| R74 | decidable | macf/tests/test_pd_watch.py::test_a_stopped_daemon_alerts_once_then_recovers_once | passing |
-| R75 | judgment | the operator, at review of each deployment's alert path | standing |
-| R76 | decidable | macf/tests/test_amail_deploy_config.py::test_hypervisor_value_accepted | passing |
-| R77 | decidable | macf/tests/test_pd_wake.py::test_a_wake_carries_fixed_words_and_message_ids_oldest_first | passing |
-| R78 | judgment | the operator, at review of each declaration | standing |
-| R79 | judgment | the head maintainer, at review of each landing pull request | standing |
-| R80 | decidable | macf/tests/test_primal_daemon.py::test_no_network_listener | passing |
+| R189 | decidable | macf/tests/test_pd_composition.py::test_failure_notifies_once_per_stretch | planned: lands with step 10, the base in code |
+| R112 | judgment | the head maintainer, at review of the Claude Code harness adapter | standing |
+| R113 | decidable | macf/tests/test_pd_channel.py::test_unix_socket_peer and macf/tests/test_pd_channel.py::test_verify_peer_needs_a_published_record_that_matches | passing |
+| R114 | decidable | macf/tests/test_pd_channel.py::test_notice_metadata | passing |
+| R115 | decidable | macf/tests/test_pd_channel.py::test_dark_channel_event and macf/tests/test_pd_channel_watch.py::test_a_session_that_never_connects_goes_dark_once_past_its_window and macf/tests/test_pd_channel_watch.py::test_the_watch_reads_the_newest_channel_event_of_this_agent | passing (the operator notice is the outside watch's alert line) |
+| R116 | decidable | macf/tests/test_pd_channel.py::test_onlooker_card_from_invitation | n/a: onlooker messages are optional and not implemented, so the channel has carried none |
+| R117 | decidable | macf/tests/test_pd_channel.py::test_no_permission_relay | passing |
+| R118 | decidable | macf/tests/test_restart_without_prompt.py::test_the_session_command_never_carries_a_development_channel_flag | passing |
+| R119 | judgment | the operator, at review of each deployment | standing |
+| R120 | decidable | macf/tests/test_pd_channel.py::test_receipt_from_prompt_hook | passing |
+| R121 | decidable | macf/tests/test_mode_activity.py::test_source_from_origin_or_opening_tag | passing |
+| R122 | decidable | macf/tests/test_pd_notice.py::test_peer_lineage_checked_by_the_daemon and macf/tests/test_pd_channel.py::test_a_peer_outside_the_session_lineage_is_refused and macf/tests/test_pd_channel.py::test_a_stale_session_incarnation_is_refused | passing (the refusals are checked at the lineage helper the daemon calls) |
+| R123 | decidable | macf/tests/test_pd_channel.py::test_channel_checks_its_pd and macf/tests/test_pd_channel.py::test_channel_refuses_a_stale_daemon_incarnation | passing |
+| R124 | decidable | macf/tests/test_pd_declaration.py::test_allowlist_lists_every_channel | passing |
+| R125 | judgment | the head maintainer, at review of the Claude Code harness adapter | standing |
+| R149 | decidable | macf/tests/test_pd_notice.py::test_a_source_the_attached_channel_did_not_declare_stays_held and macf/tests/test_pd_notice.py::test_a_channel_that_sends_no_hello_is_sent_nothing and macf/tests/test_pd_notice.py::test_the_maceff_channel_declares_every_source_its_record_takes | passing |
+| R130 | decidable | macf/tests/test_pd_entries.py::test_only_the_live_session_makes_an_entry and macf/tests/test_pd_entry_edit_pause.py::test_edit_and_resume_come_only_from_the_live_session_and_pause_from_anyone | passing |
+| R131 | decidable | macf/tests/test_pd_entries.py::test_entry_add_and_remove_are_events_and_a_restarted_scheduler_holds_their_fold and macf/tests/test_pd_entries.py::test_the_entries_held_are_what_the_events_fold_to | passing |
+| R132 | decidable | macf/tests/test_pd_entries.py::test_a_due_entry_fires_once_through_the_channel_even_across_a_restart | passing |
+| R133 | decidable | macf/tests/test_pd_entries.py::test_an_entry_from_a_tainted_context_is_marked | passing |
+| R146 | decidable | macf/tests/test_pd_entries.py::test_setting_the_mode_puts_pd_entry_add_in_ask_unless_the_operator_allowed_it and macf/tests/test_pd_entries.py::test_pd_entry_add_starts_in_ask_and_an_operator_who_loosens_it_keeps_that | passing |
+| R134 | judgment | the operator, at the verdict on each use trial | recorded: met, by the repo owner on 2026-10-24 for the scheduler's use trial (#552): woken agents acted on marked entries only within standing rules |
+| R135 | decidable | macf/tests/test_pd_entries.py::test_an_entry_is_removed_by_the_agent_or_the_operator_and_stops and macf/tests/test_pd_entry_edit_pause.py::test_edit_and_resume_come_only_from_the_live_session_and_pause_from_anyone | passing |
+| R136 | judgment | the operator, at review of the persistent_layer policy | recorded: met, by the repo owner on 2026-10-24 (#552): persistent_layer 8.1 states the shared-login limits |
+| R143 | decidable | macf/tests/test_pd_entries.py::test_a_check_template_fills_whole_arguments_of_the_declared_kind and macf/tests/test_pd_entries.py::test_a_check_runs_its_template_with_no_shell and macf/tests/test_pd_entries.py::test_a_check_argument_with_a_brace_is_refused_even_by_a_loose_pattern and macf/tests/test_pd_entries.py::test_a_check_whose_program_the_agent_could_rewrite_or_that_changed_since_install_never_runs and macf/tests/test_pd_entries.py::test_a_template_must_name_its_program_by_absolute_path and macf/tests/test_pd_entries.py::test_the_daemon_checks_a_check_entry_against_its_template_when_it_is_made | passing |
+| R145 | decidable | macf/tests/test_pd_entries.py::test_pd_agenda_lists_both_tiers_each_marked and macf/tests/test_pd_entries.py::test_the_agenda_shows_both_tiers_soonest_first | passing |
+| R144 | decidable | macf/tests/test_pd_duties.py::test_a_duty_that_crossed_while_no_daemon_ran_is_announced_once_and_never_again | passing |
 | R81 | judgment | the operator | standing |
 | R82 | decidable | macf/tests/test_pd_observe.py::test_onlooker_needs_invitation | passing |
 | R83 | decidable | macf/tests/test_pd_observe.py::test_onlooker_has_no_keyboard | passing |
@@ -609,78 +766,41 @@ Every decidable requirement names a planned test; every judgment names its revie
 | R100 | decidable | macf/tests/test_pd_observe.py::test_attach_resolves_from_pd | passing |
 | R101 | decidable | macf/tests/test_pd_observe.py::test_nothing_attachable_said | passing |
 | R102 | decidable | macf/tests/test_pd_observe.py::test_reachable_state | passing |
-| R103 | decidable | macf/tests/test_pd_declaration.py::test_shared_budget_operator_only | passing |
-| R104 | decidable | macf/tests/test_pd_harness.py::test_channel_first | passing |
-| R105 | decidable | macf/tests/test_pd_wake.py::test_wake_through_notifier | passing |
-| R106 | decidable | macf/tests/test_mode_activity.py::test_wake_is_not_operator_activity | passing |
-| R107 | decidable | macf/tests/test_mode_activity.py::test_channels_told_apart_by_name | passing |
-| R108 | decidable | macf/tests/test_pd_interface.py::test_a_compaction_may_be_asked_only_by_the_operator_or_the_wind_down | passing |
-| R109 | decidable | macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails | passing |
-| R110 | decidable | macf/tests/test_pd_declaration.py::test_schedule_without_policy_fails | passing |
 | R111 | decidable | macf/tests/test_pd_observe.py::test_no_invitation_across_containers | passing |
-| R112 | judgment | the head maintainer, at review of the Claude Code harness adapter | standing |
-| R113 | decidable | macf/tests/test_pd_channel.py::test_unix_socket_peer and macf/tests/test_pd_channel.py::test_verify_peer_needs_a_published_record_that_matches | passing |
-| R114 | decidable | macf/tests/test_pd_channel.py::test_notice_metadata | passing |
-| R115 | decidable | macf/tests/test_pd_channel.py::test_dark_channel_event and macf/tests/test_pd_channel_watch.py::test_a_session_that_never_connects_goes_dark_once_past_its_window and macf/tests/test_pd_channel_watch.py::test_the_watch_reads_the_newest_channel_event_of_this_agent | passing (the operator notice is the outside watch's alert line) |
-| R116 | decidable | macf/tests/test_pd_channel.py::test_onlooker_card_from_invitation | n/a: onlooker messages are optional and not implemented, so the channel has carried none |
-| R117 | decidable | macf/tests/test_pd_channel.py::test_no_permission_relay | passing |
-| R118 | decidable | macf/tests/test_restart_without_prompt.py::test_the_session_command_never_carries_a_development_channel_flag | passing |
-| R119 | judgment | the operator, at review of each deployment | standing |
-| R120 | decidable | macf/tests/test_pd_channel.py::test_receipt_from_prompt_hook | passing |
-| R121 | decidable | macf/tests/test_mode_activity.py::test_source_from_origin_or_opening_tag | passing |
-| R122 | decidable | macf/tests/test_pd_notice.py::test_peer_lineage_checked_by_the_daemon and macf/tests/test_pd_channel.py::test_a_peer_outside_the_session_lineage_is_refused and macf/tests/test_pd_channel.py::test_a_stale_session_incarnation_is_refused | passing (the refusals are checked at the lineage helper the daemon calls) |
-| R123 | decidable | macf/tests/test_pd_channel.py::test_channel_checks_its_pd and macf/tests/test_pd_channel.py::test_channel_refuses_a_stale_daemon_incarnation | passing |
-| R124 | decidable | macf/tests/test_pd_declaration.py::test_allowlist_lists_every_channel | passing |
-| R125 | judgment | the head maintainer, at review of the Claude Code harness adapter | standing |
-| R126 | decidable | macf/tests/test_pd_harness.py::test_idle_compaction_off and macf/tests/test_pd_harness.py::test_the_adapter_turns_idle_compaction_off_when_it_starts_the_session and macf/tests/test_pd_harness.py::test_the_adapter_leaves_idle_compaction_alone_when_the_declaration_keeps_it and macf/tests/test_pd_harness.py::test_an_unreadable_declaration_keeps_nothing_so_idle_compaction_goes_off | passing |
-| R127 | decidable | macf/tests/test_primal_daemon.py::test_unasked_compaction_recorded | passing |
 | R128 | decidable | macf/tests/test_mode_activity.py::test_dialog_answer_counts | passing |
-| R129 | decidable | macf/tests/test_pd_render.py::TestMacOSInstall::test_socket_path_length and macf/tests/test_pd_install.py::test_a_socket_path_too_long_stops_the_systemd_install_before_anything_is_written | passing |
-| R130 | decidable | macf/tests/test_pd_entries.py::test_only_the_live_session_makes_an_entry and macf/tests/test_pd_entry_edit_pause.py::test_edit_and_resume_come_only_from_the_live_session_and_pause_from_anyone | passing |
-| R131 | decidable | macf/tests/test_pd_entries.py::test_entry_add_and_remove_are_events_and_a_restarted_scheduler_holds_their_fold and macf/tests/test_pd_entries.py::test_the_entries_held_are_what_the_events_fold_to | passing |
-| R132 | decidable | macf/tests/test_pd_entries.py::test_a_due_entry_fires_once_through_the_channel_even_across_a_restart | passing |
-| R133 | decidable | macf/tests/test_pd_entries.py::test_an_entry_from_a_tainted_context_is_marked | passing |
-| R146 | decidable | macf/tests/test_pd_entries.py::test_setting_the_mode_puts_pd_entry_add_in_ask_unless_the_operator_allowed_it and macf/tests/test_pd_entries.py::test_pd_entry_add_starts_in_ask_and_an_operator_who_loosens_it_keeps_that | passing |
-| R134 | judgment | the operator, at the verdict on each use trial | recorded: met, by the repo owner on 2026-10-24 for the scheduler's use trial (#552): woken agents acted on marked entries only within standing rules |
-| R135 | decidable | macf/tests/test_pd_entries.py::test_an_entry_is_removed_by_the_agent_or_the_operator_and_stops and macf/tests/test_pd_entry_edit_pause.py::test_edit_and_resume_come_only_from_the_live_session_and_pause_from_anyone | passing |
-| R136 | judgment | the operator, at review of the persistent_layer policy | recorded: met, by the repo owner on 2026-10-24 (#552): persistent_layer 10.6 states the shared-login limits |
-| R149 | decidable | macf/tests/test_pd_notice.py::test_a_source_the_attached_channel_did_not_declare_stays_held and macf/tests/test_pd_notice.py::test_a_channel_that_sends_no_hello_is_sent_nothing and macf/tests/test_pd_notice.py::test_the_maceff_channel_declares_every_source_its_record_takes | passing |
-| R150 | decidable | macf/tests/test_pd_broker.py::test_each_new_record_publishes_in_order_naming_its_own_sources_previous and macf/tests/test_pd_broker.py::test_every_daemon_runs_its_own_broker | passing |
-| R151 | decidable | macf/tests/test_pd_broker.py::test_a_subscriber_receives_only_the_sources_it_subscribed | passing |
-| R152 | decidable | macf/tests/test_pd_stream_rules.py::test_the_operator_silences_and_reroutes_without_a_restart and macf/tests/test_pd_stream_rules.py::test_a_container_operator_uid_alone_sets_the_streams_rules and macf/tests/test_pd_stream_rules.py::test_the_stream_rules_start_in_ask_and_a_loosened_one_stays_loose and macf/tests/test_pd_stream_rules.py::test_a_silenced_source_never_reaches_the_session_and_is_not_owed and macf/tests/test_pd_stream_rules.py::test_silencing_the_session_stops_every_source_to_it and macf/tests/test_pd_stream_rules.py::test_a_source_routed_elsewhere_leaves_the_session_and_others_reach_it and macf/tests/test_pd_stream_rules.py::test_a_forged_carried_line_reaches_the_session_as_no_text and macf/tests/test_pd_stream_rules.py::test_no_stream_subscriber_takes_the_sessions_name and macf/tests/test_pd_wake.py::test_the_wake_honors_the_operators_rules | passing |
-| R153 | decidable | macf/tests/test_pd_broker.py::test_a_long_replay_is_answered_in_bounded_passes_and_ends_once and macf/tests/test_pd_broker.py::test_a_publish_that_fails_keeps_its_record_and_the_order | passing |
-| R154 | decidable | macf/tests/test_pd_broker.py::test_a_replay_sends_the_granted_records_since_the_position_then_done and macf/tests/test_pd_broker.py::test_a_replay_from_a_rotated_log_starts_with_a_gap and macf/tests/test_pd_broker.py::test_a_reader_that_reconnects_gets_each_record_once_in_log_order | passing |
-| R155 | decidable | macf/tests/test_pd_broker.py::test_a_record_publishes_on_its_source_topic_with_its_previous | passing |
-| R156 | decidable | macf/tests/test_pd_broker.py::test_a_reader_reads_only_the_sources_granted and macf/tests/test_pd_broker.py::test_the_responder_answers_only_granted_readers_on_their_own_topic | passing |
-| R143 | decidable | macf/tests/test_pd_entries.py::test_a_check_template_fills_whole_arguments_of_the_declared_kind and macf/tests/test_pd_entries.py::test_a_check_runs_its_template_with_no_shell and macf/tests/test_pd_entries.py::test_a_check_argument_with_a_brace_is_refused_even_by_a_loose_pattern and macf/tests/test_pd_entries.py::test_a_check_whose_program_the_agent_could_rewrite_or_that_changed_since_install_never_runs and macf/tests/test_pd_entries.py::test_a_template_must_name_its_program_by_absolute_path and macf/tests/test_pd_entries.py::test_the_daemon_checks_a_check_entry_against_its_template_when_it_is_made | passing |
-| R144 | decidable | macf/tests/test_pd_duties.py::test_a_duty_that_crossed_while_no_daemon_ran_is_announced_once_and_never_again | passing |
-| R145 | decidable | macf/tests/test_pd_entries.py::test_pd_agenda_lists_both_tiers_each_marked and macf/tests/test_pd_entries.py::test_the_agenda_shows_both_tiers_soonest_first | passing |
-| R157 | decidable | macf/tests/test_calling_card.py::test_card_is_name_underscore_shortid | planned |
-| R158 | decidable | macf/tests/test_calling_card.py::test_name_is_a_letter_then_at_most_23_letters_or_digits | planned |
-| R159 | decidable | macf/tests/test_calling_card.py::test_shortid_is_the_first_six_hex_of_the_identity_file | planned |
-| R160 | decidable | macf/tests/test_calling_card.py::test_case_sensitive_names_keep_the_card_exactly | planned |
-| R161 | decidable | macf/tests/test_calling_card.py::test_lowercase_targets_take_the_card_lowercased | planned |
-| R162 | decidable | macf/tests/test_calling_card.py::test_provisioning_names_a_new_account_with_the_card_lowercased | planned |
-| R163 | decidable | macf/tests/test_calling_card.py::test_dns_label_replaces_only_the_underscore | planned |
-| R164 | decidable | macf/tests/test_calling_card.py::test_a_declared_card_compares_without_case | planned |
-| R165 | decidable | macf/tests/test_calling_card.py::test_a_declared_card_in_another_form_is_refused | planned |
-| R166 | decidable | macf/tests/test_calling_card.py::test_stored_history_maps_the_old_form | planned |
-| R167 | decidable | macf/tests/test_attribution.py::test_own_card_in_the_underscore_spelling_is_accepted | passing (#916) |
-| R168 | decidable | macf/tests/test_attribution.py::test_only_the_new_form_signs_after_the_cut_over | planned |
-| R169 | decidable | macf/tests/test_pd_broker.py::test_the_wrapper_beats_only_while_the_broker_listens_and_ends_with_its_status and macf/tests/test_pd_broker.py::test_every_daemon_runs_its_own_broker | passing |
-| R170 | decidable | macf/tests/test_pd_broker.py::test_the_daemon_and_its_link_use_one_loopback_address and macf/tests/test_pd_broker.py::test_only_an_association_admits_members_or_listens_on_the_lan | passing |
-| R171 | decidable | macf/tests/test_pd_broker.py::test_a_broker_port_another_declaration_names_is_refused_naming_it | passing |
-| R172 | decidable | macf/tests/test_pd_broker.py::test_the_broker_requires_a_certificate_and_names_users_by_it and macf/tests/test_pd_broker.py::test_only_named_certificates_get_rules_and_never_by_pattern | passing |
-| R173 | decidable | macf/tests/test_pd_broker.py::test_a_reader_declared_in_another_case_gets_the_same_topics and macf/tests/test_pd_association.py::test_a_member_declared_in_another_case_is_the_same_member | passing |
-| R174 | decidable | macf/tests/test_pd_broker.py::test_only_named_certificates_get_rules_and_never_by_pattern | passing |
-| R175 | decidable | macf/tests/test_pd_broker.py::test_a_record_publishes_on_its_source_topic_with_its_previous and macf/tests/test_pd_broker.py::test_a_gap_is_judged_per_source_not_by_global_position | passing |
-| R176 | decidable | macf/tests/test_pd_broker.py::test_a_backlog_past_its_bound_becomes_one_gap | passing |
+| R55 | decidable | macf/tests/test_pd_notice.py::test_unread_mail_notice and macf/tests/test_pd_notice.py::test_unread_mail_reaches_the_routes_declared_for_it | passing |
+| R56 | judgment | the head maintainer, at review of the mail landing | recorded: not met, by the head maintainer on 2026-10-18; it waits on MIS-0004 (#520), and the departure is recorded below |
+| R67 | judgment | the operator | standing |
+| R68 | decidable | macf/tests/test_pd_render.py::test_runs_without_tray | passing |
+| R69 | decidable | macf/tests/test_pd_tray.py::test_icon_per_card | passing |
+| R70 | decidable | macf/tests/test_pd_tray.py::test_acts_through_pd and macf/tests/test_pd_tray.py::test_an_act_goes_only_to_that_agents_daemon | passing |
+| R71 | judgment | the head maintainer, at review of the tray | standing |
+| R72 | decidable | macf/tests/test_pd_tray.py::test_waiting_icon | passing |
+| R73 | decidable | macf/tests/test_pd_readout.py::test_tray_unavailable_said | passing |
+| R57 | decidable | macf/tests/test_container_outer_tier.py::test_primal_daemons_start_after_access_and_before_optional_units and macf/tests/test_container_outer_tier.py::test_main_starts_the_access_path_before_the_daemons_and_both_before_any_optional_unit | passing |
+| R61 | decidable | macf/tests/test_pd_watch.py::test_limits_checked_after_recreate | passing |
+| R62 | judgment | the head maintainer, at review of the container landing | recorded: met, judged live by the head maintainer on 2026-10-25, as a seat on its own account in a multi-seat container at MacEff f9edbf0c (#552, comment 6400761918): the shared view showed every unit, the mail broker's included, and the container's budget |
+| R103 | decidable | macf/tests/test_pd_declaration.py::test_shared_budget_operator_only | passing |
+| R195 | decidable | macf/tests/test_container_outer_tier.py::test_a_failing_daemon_is_restarted_with_the_units_backoff | passing |
+| R196 | decidable | macf/tests/test_container_outer_tier.py::test_an_unusable_home_is_not_restarted | passing |
+| R197 | decidable | macf/tests/test_container_outer_tier.py::test_the_longest_stop_chain_fits_the_stop_timeout | planned: lands with step 10, the base in code |
+| R198 | decidable | macf/tests/test_container_outer_tier.py::test_outer_stop_timeout_matches_declaration | planned: lands with step 10, the base in code |
+| R05 | decidable | macf/tests/test_pd_render.py::TestMacOSLaunchAgent::test_launchd_is_launchagent | passing |
+| R63 | decidable | macf/tests/test_pd_declaration.py::test_grants_declared | passing |
+| R64 | decidable | macf/tests/test_pd_install.py::test_grants_tested_at_install | passing |
+| R65 | decidable | macf/tests/test_primal_daemon.py::test_denied_grant_notice and macf/tests/test_pd_composition.py::test_a_denied_grant_without_notices_reaches_the_outside_watch | planned: the notice half passes on the first test; the outside watch's alert where no notices component is present lands with step 10 |
+| R191 | judgment | the head maintainer, at review of each new unit | standing |
+| R192 | decidable | macf/tests/test_pd_render.py::TestMacOSInstall::test_reload_waits_for_bootout | planned: the wait landed with #841; its test moves here from MIS-0007's draft |
+| R193 | decidable | macf/tests/test_pd_broker.py::test_macos_local_network_block_is_named_not_read_as_an_outage | passing |
+| R194 | judgment | the operator, at review of the persistent_layer policy | pending: persistent_layer 13.4 states it, for the operator's review |
 | R177 | decidable | macf/tests/test_pd_broker.py::test_a_member_writes_only_its_own_subtree_and_reads_nothing | passing |
 | R178 | decidable | macf/tests/test_pd_association.py::test_an_export_carries_no_content_even_when_the_record_does and macf/tests/test_pd_association.py::test_only_declared_sources_are_exported_on_the_members_own_subtree | passing |
 | R179 | decidable | macf/tests/test_pd_association.py::test_the_association_reports_each_difference_between_declared_and_present | passing |
 | R180 | decidable | macf/tests/test_pd_broker.py::test_the_export_link_records_each_change_of_reason_once and macf/tests/test_pd_broker.py::test_macos_local_network_block_is_named_not_read_as_an_outage | passing |
 | R181 | judgment | the head maintainer, at review of each pull request touching associations | standing |
 | R182 | decidable | macf/tests/test_pd_association.py::test_links_start_at_the_end_of_a_log_that_has_history and macf/tests/test_pd_association.py::test_a_link_starts_with_each_units_current_state | passing |
+| R53 | decidable | macf/tests/test_pd_declaration.py::test_mail_units | passing |
+| R54 | decidable | macf/tests/test_pd_declaration.py::test_periodic_clock_is_schedule | passing |
 
 The test for **R106** is the head maintainer's (P25): set USER_REMOTE, type a wake through the adapter, and assert that USER_REMOTE and USER_IDLE are unchanged. Its channel form sends a notice through the MacEff channel and asserts the same. Both forms run at idle and again while a turn is running, because the queued path is the one main gets wrong (P30). The tests for R120 and R121 likewise include an event absorbed into a running turn (P31), and the test for R122 a channel whose session has ended.
 
@@ -757,6 +877,7 @@ The build starts small, as the strawman asked (P02), and a landing roadmap plans
 | 7 | Observation and attach: invitations as events, the presence state, the stream, attach by name | R81 to R102, R111, R128 |
 | 8 | Calling cards: the card builder, the identity reader, the names derived from a card, the footer checks; then the cut-over, in which each maintainer changes their footer and its local hook together, and which ends when the last of them has, as recorded on #552 | R157 to R168 |
 | 9 | The event stream moves to each daemon's own MQTT broker and the socket stream is removed; associations of daemons | R150, R151, R153 to R156, R169 to R182 |
+| 10 | The base in code: the daemon composes the base, and builds each Agent Daemon component only where its declaration adds it, so a system or fleet daemon runs no agent component; the rows moved from MIS-0007's draft; the hold after a refused start; R76's reader removed | R60, R65, R183 to R190, R192, R197, R198 |
 
 **The Secretary proposes that R106 land first, on its own.** The mail clocks type wakes into sessions today, and on main each wake counts as the operator's activity (P25). The fix to the hooks needs no primal daemon, so after acceptance it can go ahead of step 1 as an ordinary pull request that cites R106, with the head maintainer's test. The head maintainer agreed and widened its scope (P30). Besides the clocks' wakes, `macf_tools inject`, the session supervisor's keys after a start, and a recovery prompt after a self-compaction also type into a pane, and only the clocks use fixed words. That pull request decides whether R77's fixed words become a marker all of them carry. The fix for the queued-message producer (R107, R121) needs no primal daemon either, and can go with it. The landing roadmap decides.
 
@@ -777,7 +898,7 @@ Answered questions keep their IDs and slugs, so that citations of them still res
 - **Q12** Can a session record the time it takes a channel event, so that the Claude Code adapter meets R39's received time? Answered by test on 2026-10-09: yes; the prompt hook takes the event, with the channel's name in the tag that opens the prompt (section 7, "The Claude Code channel"); R120 and R121 carry it. (channel_receipt_time)
 - **Q13** A channel running older code drops a notice source it doesn't know, while the primal daemon, judging by its own code, records the notice delivered. The use trial's first wake was lost that way. Should the channel declare the sources it takes when it attaches, so the daemon never calls a notice delivered that the attached channel can't take? Answered: yes, by the repo owner during the comment window, after the macOS maintainer answered yes: for Claude Code, skew is the normal state after every upgrade, and the row is decidable, since a channel that attaches without `pd_entry_due` must leave an entry's notice held. R149 carries it. (channel_MUST_declare_sources)
 - **Q14** What carries the event stream: a socket per primal daemon, a log that subscribers follow, or a bus the host's agents share? Answered on 2026-11-08 by the repo owner's review on #923: each primal daemon's own MQTT broker, which replaces the socket stream; R150 and R169 carry it. (event_stream_transport)
-- **Q15** Should anything alert when one of the daemon's own notices is held because no attached channel takes its source? The cold-reader trial of 2026-10-23 found that nothing does: the outside watch alerts on a dark channel and on a typed wake held too long by something in the pane, and an attached channel that leaves a source out is neither (persistent_layer 1.8). Open, owned by the Secretary; the event stream's operator bridge (R42) is the natural place to answer it. Blocks no requirement. (held_source_SHOULD_alert)
+- **Q15** Should anything alert when one of the daemon's own notices is held because no attached channel takes its source? The cold-reader trial of 2026-10-23 found that nothing does: the outside watch alerts on a dark channel and on a typed wake held too long by something in the pane, and an attached channel that leaves a source out is neither (persistent_layer 6.8). Open, owned by the Secretary; the event stream's operator bridge (R42) is the natural place to answer it. Blocks no requirement. (held_source_SHOULD_alert)
 
 ## 14 Deliberation Record
 
@@ -928,6 +1049,7 @@ Objections recorded:
 - 2026-11-08: R152's tests move with the clean break, conformance, editorial (mis 8.1), by the head maintainer. The socket's test file is gone, so R152's eight tests in it keep their names in `macf/tests/test_pd_stream_rules.py`, and its row names that file. The test of silence and reroute now runs through a real daemon, its own broker unit and three readers holding certificates from the daemon's own authority: a silenced source isn't published, a routed source reaches only its reader, a reader silenced by name receives nothing until the rule is lifted, all while connected, and the rules hold after a restart. The test that no subscriber takes the session's name now checks that a broker reader named `channel` is refused at load. Each was checked to fail with its defect planted. No requirement changed.
 - 2026-11-08: R182 is passing, conformance, editorial (mis 8.1), by the head maintainer. Each time a member's link connects, it sends one summary of every unit's current state, marked `snapshot`, then follows the log from its end. `test_a_link_starts_with_each_units_current_state` checks this at a first connect and at a reconnect, and checks that a declaration that doesn't export unit states sends none. It was checked to fail with the connect's snapshot planted out. No requirement changed.
 - 2026-11-08: R150, R151 and R169 move to passing, conformance, editorial (mis 8.1), by the Secretary, with the clean break merged (#926): every daemon now runs its own MQTT broker and the socket stream is gone. Each named test was run on its own on main, and `test_every_daemon_runs_its_own_broker` was seen failing with the default broker skipped. No requirement changed.
+- 2026-11-09: a revision at the repo owner's request (MIS-0001-R52 (repo_owner_MAY_request_revision)), by the Secretary under MIS-0001-R53 (revision_MUST_edit_MIS_in_place); the repo owner merges it. His words of 2026-11-08 are quoted in section 7 ("The base and the Agent Daemon"), and the requirement map behind it, reviewed by both maintainers on #552, was ruled "Accept as is" (comment 6731243851). Section 6 now has three parts: 6.1 the base, 6.2 the Agent Daemon, one subsection per component opening with what adds it, and 6.3 placement. Every row moved with its ID, slug and notes, by a script that refused to write unless each ID was placed exactly once. R01, R60, R65 and R80 are reworded, each with its note; their slugs are unchanged. R183 to R185, R193 and R194 are added. R186 to R192 and R195 to R198 move here from MIS-0007's draft (#855 as revised by #940), each with a note naming its source, and keep their slugs except R187's. R76 is withdrawn with its reader (6.5). Section 6.4 holds R177 to R182, R53 and R54, which the map places in MIS-0007, until MIS-0007 is accepted. The Summary, Terms (Agent Daemon, base, component, principal), rationale, Conformance (in section 6's order, with a row for each new requirement) and landing step 10 change with them, and persistent_layer is reordered along the same seam in the same pull request (mis 8.1). The previous text: MacEff g_f1ad7283.
 
 ## Wiki-Links
 

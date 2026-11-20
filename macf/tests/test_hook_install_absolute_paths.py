@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
+import sys
 from pathlib import Path
 
 import pytest
@@ -70,9 +72,10 @@ def test_local_install_writes_absolute_hook_paths(tmp_path, monkeypatch):
         # Absolute path: starts with python <abs-path>
         # Allow either resolved tmp_path prefix or the canonicalized macOS
         # /private prefix (tmp_path on darwin can resolve via /private/var).
+        import shlex
         assert (
-            f"python {expected_hooks_dir}/" in cmd
-            or f"python {expected_hooks_dir}\\" in cmd  # Windows safety
+            f"{shlex.quote(sys.executable)} {expected_hooks_dir}/" in cmd
+            or f"{shlex.quote(sys.executable)} {expected_hooks_dir}\\" in cmd  # Windows safety
         ), f"Hook command not absolute: {cmd}"
 
 
@@ -130,6 +133,40 @@ def test_global_host_install_writes_absolute_home_path(tmp_path, monkeypatch):
     )
     commands = _read_hook_commands(settings_path)
     for cmd in commands:
-        assert f"python {fake_home}/.claude/hooks/" in cmd, (
+        assert f"{shlex.quote(sys.executable)} {fake_home}/.claude/hooks/" in cmd, (
             f"Host-global hook command not absolute-home: {cmd}"
         )
+
+
+def _install(tmp_path, monkeypatch, *, local):
+    from macf.cli import cmd_hook_install
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "fakehome")
+    monkeypatch.setattr(
+        "pathlib.Path.exists",
+        lambda self: False if str(self) == "/.dockerenv" else Path(str(self)).is_file() or Path(str(self)).is_dir(),
+    )
+    assert cmd_hook_install(argparse.Namespace(local_install=local, global_install=not local)) == 0
+    path = (tmp_path / ".claude" / "settings.local.json") if local else (tmp_path / "fakehome" / ".claude" / "settings.json")
+    return _read_hook_commands(path)
+
+
+@pytest.mark.parametrize("local", [True, False])
+def test_a_host_hook_runs_under_the_interpreter_that_installed_it(tmp_path, monkeypatch, local):
+    """A bare `python` finds the system interpreter, which can't import macf from the README's own
+    virtual environment install, so every hook failed with ModuleNotFoundError at the first session
+    after `framework install` (#860 item 6). Each hook names the interpreter that ran the installer."""
+    import shlex
+    commands = _install(tmp_path, monkeypatch, local=local)
+    assert commands
+    for cmd in commands:
+        assert cmd.startswith(shlex.quote(sys.executable) + " "), cmd
+        assert not cmd.startswith("python "), cmd
+
+
+def test_an_interpreter_path_with_a_space_is_quoted_for_the_shell(tmp_path, monkeypatch):
+    """The command is run by a shell, so a virtual environment under a path with a space has to
+    stay one word."""
+    monkeypatch.setattr(sys, "executable", "/opt/my env/bin/python")
+    commands = _install(tmp_path, monkeypatch, local=False)
+    assert commands and all(c.startswith("'/opt/my env/bin/python' ") for c in commands)

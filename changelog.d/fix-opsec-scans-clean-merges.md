@@ -1,0 +1,3 @@
+### Fixed
+
+- **The opsec gate scans a clean merge too** (`opsec.py`, `githooks.py`, `.githooks/pre-merge-commit`, #646). A merge git completes by itself runs `pre-merge-commit`, not `pre-commit`, so nothing it brought was scanned. The dispatcher now runs `pre-merge-commit`, and `opsec install-hook` puts the gate there as well. A clean merge has no `MERGE_HEAD` yet, so the gate names the incoming side from the ref the merge names, or a pull's for-merge line in `FETCH_HEAD`. Where that side is on a remote, only what the merge adds is scanned, as for a merge finished by hand. A side it can't name (an octopus) is let through unscanned, as before, and the gate says so. An existing install takes effect after `macf_tools opsec install-hook` is run again.

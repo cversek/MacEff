@@ -9,12 +9,14 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **accepted**: the MIS status set when the operator merges an MIS after its final comment period; its requirements may now land.
 - **access path**: the means by which the operator reaches a container, such as its SSH service.
 - **agent**: an AI process that runs on MacEff under one identity, with its own memory, tasks and event log.
+- **Agent Daemon**: an agent's primal daemon: the base plus the components its declaration adds.
 - **amendment**: a substantive change to an accepted MIS that an amendment spec describes and the MIS's other maintainers sign off, made in the MIS itself.
 - **amendment spec**: an MIS of Type Amendment that gives the old and new text of each requirement an amendment changes, the reason, and the sign-off record.
 - **architecture across components**: how MacEff's responsibilities are divided among its components and how the components talk to each other; a change moves a responsibility, or changes a file format, a protocol or a shared store between two components.
 - **asserted**: the state of a notice that stays raised until the reader's cursor passes the mail it names.
 - **attested**: the trust state of a message whose signature verified against its sender's declared key.
 - **author**: an agent or the operator who writes an MIS and answers for its content.
+- **base**: what every primal daemon is, whatever principal it serves, and all that a daemon whose declaration adds no component runs.
 - **box**: the place where the broker puts one agent's mail on its own system; the amail policy's pickup box.
 - **broker**: the unit that accepts agents' submissions, enforces their contacts and limits, holds the route credentials, and moves mail between boxes and intakes.
 - **calling card**: an agent's name and short id, as its identity file gives them.
@@ -23,6 +25,7 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **cold reader**: an agent with no memory of an MIS's design or deliberation, who is given only the landed policy and this glossary.
 - **cold-reader trial**: a test in which a cold reader does a task that the landed policy governs, and the result is compared with the policy's intent.
 - **compaction**: the loss of most of an agent's working context when its context window fills, or when the operator or the agent asks for it earlier; the agent continues from a summary and its own artifacts.
+- **component**: a part of the Agent Daemon, such as the session or the channel, that a primal daemon builds only where its declaration adds it.
 - **conformance**: the record, for each requirement, of its check and whether the check passes.
 - **container agent**: an agent that runs inside a deployment's container rather than on the operator's own machine.
 - **critical objection**: an objection that the maintainer raising it declares critical; it keeps an MIS's discussion open, and the operator answers it before the merge.
@@ -70,7 +73,7 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **MQI**: Many Questions Interview: one or more rounds in which an agent asks the operator multiple-choice questions (in Claude Code, the AskUserQuestion dialog), each with options drawn from the agent's research and its recommended option first, and the operator picks an option or writes in an answer. After each round the agent thinks through what the answers mean for the work, then asks another round or stops when the operator's direction is clear. Roadmap and experiment drafting encourage it where trade-offs exist. It needs the operator at the agent's own terminal, because the dialog does not reach a remote channel; under USER_REMOTE the agent asks the same questions in a channel message instead.
 - **new policy**: a policy document added under `framework/policies`, as opposed to a change to an existing one; a document split out of, or renamed from, an existing policy is a change to that policy.
 - **notice**: a message the persistent layer delivers to an agent, the operator, or both, naming its source and stamped with when its content was read, sent and received.
-- **notifier**: the managed unit that delivers notices into a live session, with de-duplication and a daily cap on typed wakes. The agent-side masking that `notification_delivery` specifies isn't applied yet (persistent_layer 1.2).
+- **notifier**: the managed unit that delivers notices into a live session, with de-duplication and a daily cap on typed wakes. The agent-side masking that `notification_delivery` specifies isn't applied yet (persistent_layer 6.2).
 - **observation stream**: what an onlooker receives: the observed session's events or output from the invitation onward, never its history and never a keyboard.
 - **official listing**: a channel plugin's entry in the harness vendor's official marketplace, which puts it on the harness's default allowlist.
 - **onlooker**: an agent, or later a person, that watches another agent's session by its invitation and never types into it.
@@ -87,7 +90,8 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **position**: one participant's argued view in a deliberation, posted as a comment.
 - **posture**: a system's declared security mode, either prevention or detection alone.
 - **presence state**: the derived state that says who watches a session and which operator surface is present, read from the agent's event log.
-- **primal daemon**: the one process per agent that starts, stops, restarts, checks and schedules that agent's managed units; it manages their lifecycles only, and never reads, writes or decides the agent's work.
+- **primal daemon**: the one process per principal that starts, stops, restarts, checks and schedules that principal's managed units; it manages their lifecycles only, and never reads, writes or decides the principal's work.
+- **principal**: whoever a primal daemon serves and takes its identity from: an agent, a system or a fleet.
 - **quarantined**: the receipt state for a message that the broker set aside (R20).
 - **quiet window**: a time an agent declares in which the layer does not restart or compact its session.
 - **raised**: the receipt state for a notice that the recipient's primal daemon has raised through the notifier.

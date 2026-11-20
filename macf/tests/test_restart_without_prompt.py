@@ -1,5 +1,5 @@
 """A supervised restart never waits on a person (MIS-0002 landing, "channel first,
-keystrokes as the fallback", success criterion 3; persistent_layer 1.7).
+keystrokes as the fallback", success criterion 3; persistent_layer 6.7).
 
 Claude Code asks a person to confirm a channel loaded under its development flag, at every
 start. A restart the primal daemon performs has no person to answer, so the session's command
