@@ -151,12 +151,18 @@ def check_capture(no_capture: bool) -> None:
         raise Refused("this page is marked as showing secrets: no screenshots (MIS-0009-R28)")
 
 
+# The agent's own state: memory, artifacts, framework state and harness settings. Project directories in
+# the home are where the operator's files belong; these never are (as macf_tools gmail draws the same line).
+STATE_TREES = ("agent", ".maceff", ".claude")
+
+
 def check_destination(dest, agent_home) -> Path:
-    """A destination for the operator's files: never inside the agent's home (R16, R27)."""
+    """A destination for the operator's files: never the agent's home itself or its state trees (R16, R27)."""
     dest = Path(dest).expanduser().resolve()
     home = Path(agent_home).expanduser().resolve()
-    if dest == home or home in dest.parents:
-        raise Refused(f"{dest} is inside the agent's home: the operator's files go elsewhere (MIS-0009-R16)")
+    protected = [home / d for d in STATE_TREES]
+    if dest == home or any(dest == p or p in dest.parents for p in protected):
+        raise Refused(f"{dest} is in the agent's own state: the operator's files go elsewhere (MIS-0009-R16)")
     return dest
 
 

@@ -22,6 +22,8 @@ DRAFT_SAVED_PATTERN = re.compile(r"\bdraft saved\b", re.I)
 _ATTACHMENTS = re.compile(r"\battachments?\b", re.I)
 # The search box is "Search" in one state and "Search for email, meetings, files and more." in another.
 SEARCH_NAME = re.compile(r"^Search\b(?! Folders)")
+# The tab of an open compose form: "Editing <subject> Close". Closing it keeps the draft in Drafts.
+OPEN_DRAFT_TAB = re.compile(r"^Editing .* Close$")
 
 
 def add_arguments(parser, common) -> None:
@@ -152,7 +154,9 @@ def read(backend, args):
         body = page.locator('[aria-label="Message body"]')
     if body.count() == 0:
         raise guard.Refused("the mail page shows no Message body (MIS-0009-R38)")
-    subject = page.get_by_role("heading").first.inner_text() if page.get_by_role("heading").count() else ""
+    pane = page.get_by_role("main", name="Reading Pane")
+    heads = (pane if pane.count() else page).get_by_role("heading")
+    subject = heads.first.inner_text().strip() if heads.count() else ""
     links = [{"text": (a.inner_text() or "").strip()[:80], "href": a.get_attribute("href")}
              for a in body.first.locator("a[href]").all()]
     return {"id": args.id, "subject": subject, "body": body.first.inner_text(), "links": links}
@@ -161,8 +165,17 @@ def read(backend, args):
 def _attachment_names(page) -> List[str]:
     names = []
     for o in page.locator('[role="listbox"][aria-label*="ttachment"] [role="option"]').all():
-        names.append((o.get_attribute("aria-label") or o.inner_text()).strip())
+        names.append(attachment_name((o.get_attribute("aria-label") or o.inner_text()).strip()))
     return names
+
+
+_FILE = re.compile(r"^(.+?\.[A-Za-z0-9]{1,6})(?=\s|$)")
+
+
+def attachment_name(label: str) -> str:
+    """The file name from an attachment's label, which also carries its actions and size ("x.xlsx Open 40 KB")."""
+    m = _FILE.match(label.strip())
+    return m.group(1) if m else label.strip()
 
 
 def attachments(backend, args):
@@ -187,12 +200,17 @@ def draft(backend, args):
     """Compose and leave the message in Drafts. Fields are set by value with fill(); nothing is typed."""
     page = _page(backend)
     enforce(PLUGIN, "draft", page.url, None)
-    composing = page.get_by_role("textbox", name="Message body")
-    if not (composing.count() == 1 and composing.is_visible()):  # reuse a compose form this tab already has open
-        leave_search = page.get_by_role("button", name="Exit search", exact=True)
-        if leave_search.count() == 1 and leave_search.is_visible():  # the search ribbon hides New mail
-            backend.click(page, "button", "Exit search", exact=True)
-        backend.click(page, "button", "New mail", exact=True)
+    # A compose form already open in this tab is closed first: the client keeps it in Drafts, never refilled.
+    for _ in range(3):
+        open_form = page.get_by_role("button", name=OPEN_DRAFT_TAB)
+        if open_form.count() == 0:
+            break
+        open_form.first.click()
+        backend.settle(page)
+    leave_search = page.get_by_role("button", name="Exit search", exact=True)
+    if leave_search.count() == 1 and leave_search.is_visible():  # the search ribbon hides New mail
+        backend.click(page, "button", "Exit search", exact=True)
+    backend.click(page, "button", "New mail", exact=True)
     for label in ("Cc", "Bcc"):
         if getattr(args, label.lower()):
             btn = page.get_by_role("button", name=f"Show {label}")

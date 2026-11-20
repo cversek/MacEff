@@ -25,10 +25,14 @@ def test_download_saved_by_event_with_checksum(tmp_path):
 def test_destination_in_agent_home_refused(tmp_path):
     home = tmp_path / "agent_home"
     (home / "agent").mkdir(parents=True)
-    for bad in (home, home / "agent", home / "agent" / ".." / "agent" / "x"):
+    for bad in (home, home / "agent", home / "agent" / ".." / "agent" / "x", home / ".maceff" / "x",
+                home / ".claude"):
         with pytest.raises(guard.Refused):
             guard.check_destination(bad, agent_home=home)
     assert guard.check_destination(tmp_path / "elsewhere", agent_home=home) == (tmp_path / "elsewhere").resolve()
+    # a project directory in the home is where the operator's files belong
+    spoke = home / "projects" / "course" / "workbooks"
+    assert guard.check_destination(spoke, agent_home=home) == spoke.resolve()
 
 
 def test_download_name_cannot_escape_destination(tmp_path):
