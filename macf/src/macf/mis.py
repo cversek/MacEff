@@ -621,3 +621,41 @@ def default_glossary(paths: list[Path]) -> Optional[Path]:
         if candidate.is_file():
             return candidate
     return None
+
+
+def index(paths: Iterable[Path]) -> list[dict]:
+    """The registry of MIS files: one row per file, read from its own header (#1066).
+
+    Number, title, status, type, secretary, deliberation, created, what it updates, where it lands and how
+    it was resolved, each as the file states it, blank where it doesn't. The template is not a row.
+    Nothing here is stored: a row is the header the file already carries, so the index can't drift."""
+    rows = []
+    for path in mis_files(paths):
+        text, problem = read_utf8(path)
+        if text is None:
+            continue
+        lines = text.splitlines()
+        fields = {k: v[0].strip() for k, v in read_header(lines).items()}
+        title = next((m.group(1).strip() for m in (re.match(r"^# MIS-\d+: (.+)$", line) for line in lines) if m), "")
+        number = fields.get("Number", "")
+        if number == "0000":
+            continue
+        rows.append({"number": number, "title": title, "status": fields.get("Status", ""),
+                     "type": fields.get("Type", ""), "secretary": fields.get("Secretary", ""),
+                     "deliberation": fields.get("Deliberation", ""), "created": fields.get("Created", ""),
+                     "updates": fields.get("Updates", ""), "lands_in": fields.get("Lands-in", ""),
+                     "resolution": fields.get("Resolution", "")[:160], "file": str(path)})
+    return sorted(rows, key=lambda r: (r["number"], r["file"]))
+
+
+def format_index(rows: list[dict]) -> str:
+    """The rows as a table a person can read in a terminal."""
+    lines = [f"{'MIS':<9}{'STATUS':<10}TITLE", "-" * 72]
+    for r in rows:
+        lines.append(f"MIS-{r['number']:<5}{r['status']:<10}{r['title']}")
+        if r["deliberation"]:
+            lines.append(f"{'':<19}deliberation: {r['deliberation']}")
+        if r["lands_in"]:
+            lines.append(f"{'':<19}lands in: {r['lands_in'][:140]}")
+    return "\n".join(lines)
+

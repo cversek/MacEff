@@ -626,6 +626,20 @@ def cmd_mis_check(args: argparse.Namespace) -> int:
     return 1 if findings else 0
 
 
+def cmd_mis_index(args: argparse.Namespace) -> int:
+    """The registry of MIS files, from their own headers (#1066)."""
+    from pathlib import Path
+    from macf import mis
+    paths = [Path(x) for x in (args.paths or ["framework/mis"])]
+    missing = [str(x) for x in paths if not x.exists()]
+    if missing:
+        print(f"❌ not found: {', '.join(missing)}", file=sys.stderr)
+        return 2
+    rows = mis.index(paths)
+    print(json.dumps(rows, indent=2) if args.json else mis.format_index(rows))
+    return 0
+
+
 def cmd_budget_status(args: argparse.Namespace) -> int:
     from macf import budget
     def go() -> int:
@@ -12736,6 +12750,11 @@ def _build_parser() -> argparse.ArgumentParser:
     m.add_argument("paths", nargs="*", help="MIS files or directories (default: framework/mis)")
     m.add_argument("--glossary", metavar="PATH", help="glossary file (default: glossary.md beside the mis directory)")
     m.set_defaults(func=cmd_mis_check)
+    m = mis_sub.add_parser("index", help="the registry: every MIS file's number, title, status, deliberation and "
+                                         "where it lands, read from the files' own headers")
+    m.add_argument("paths", nargs="*", help="MIS files or directories (default: framework/mis)")
+    m.add_argument("--json", action="store_true", help="machine-readable output")
+    m.set_defaults(func=cmd_mis_index)
     budget_p = sub.add_parser("budget", help="print budget thresholds (JSON); subcommands: the subscription's rate limits")
     budget_p.set_defaults(func=cmd_budget)
     budget_sub = budget_p.add_subparsers(dest="budget_cmd")
