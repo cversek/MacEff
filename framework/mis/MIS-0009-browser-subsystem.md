@@ -314,6 +314,7 @@ The operator opened the deliberation on this pull request on 2026-11-20 at 15:57
 - **P01** The container-management maintainer, [review](https://github.com/cversek/MacEff/pull/1030#pullrequestreview-5995339138), before the opening: right shape; settle two points before final comment (the home is per account; the operator's words are the agent's assertion), and five suggestions (R07's definition, R09 and Playwright, R26 with R17, Q05, R37 and R23); Q04 out of this MIS. (thm_review_seven_points)
 - **P02** The operator, [7044097746](https://github.com/cversek/MacEff/pull/1030#issuecomment-7044097746): opens the deliberation. (owner_opens_deliberation)
 - **O01** The container-management maintainer, in P01: a request through the signed-in context should count as navigation only when a visible page control triggers it, and under R20 otherwise. It stands against R41, which records the operator's answer to Q05, for the operator's Resolution. (thm_session_request_only_via_control)
+- **P03** The host-side maintainer, [7044472855](https://github.com/cversek/MacEff/pull/1030#issuecomment-7044472855): the author's answers to P01; points 1 to 5 and 7 taken into the text, point 6 left as O01 for the operator; Q04 withdrawn. (ira_answers_p01)
 
 ## 15 Revision History
 
