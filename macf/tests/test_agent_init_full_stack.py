@@ -68,8 +68,9 @@ def stack(tmp_path, monkeypatch):
         return 0
 
     real_which = agent_stack.shutil.which
+    # claude and the channel's console script are on the PATH Claude Code starts with, wherever the suite runs.
     monkeypatch.setattr(agent_stack.shutil, "which",
-                        lambda name: "/fake/bin/claude" if name == "claude" else real_which(name))
+                        lambda name: f"/fake/bin/{name}" if name in ("claude", "maceff-channel") else real_which(name))
     monkeypatch.setattr(agent_stack.subprocess, "run", fake_claude)
     monkeypatch.setattr(agent_stack, "legacy_harness_live", lambda ctx: None)
     # No live session and no daemon unless a test says so: nothing reads the real host.
@@ -139,11 +140,13 @@ def test_plan_lists_every_step_and_changes_nothing(stack, capsys):
     assert results[0].status == PLANNED
     # Each checked, none acted. The fixture's home is already named, so that step finds it so.
     assert _by_step(results)["calling-card"].status == ALREADY, results
-    assert {r.status for r in results[1:] if r.step not in ("calling-card", "registry")} == {WOULD}, results
+    assert {r.status for r in results[1:] if r.step not in ("calling-card", "registry", "framework")} == {WOULD}, results
+    # The framework step only looks, under a plan as in a run: this home has no hooks bound.
+    assert _by_step(results)["framework"].status == DRIFT
     # The fixture's home has no signing key yet, so there is nothing to declare (MIS-0004 R42).
     assert _by_step(results)["registry"].status == SKIPPED and "amail keygen" in _by_step(results)["registry"].detail
     assert {s for s, _w, _f in STEPS} >= {"preamble", "task-store", "calling-card", "declaration", "harness",
-                                          "channel", "permissions", "daemon"}
+                                          "channel", "permissions", "framework", "daemon"}
     assert not (stack.home / ".maceff" / "pd").exists() and stack.claude == [] and stack.installs == []
 
 
@@ -221,9 +224,11 @@ def test_a_second_run_reports_everything_already_done(stack):
     claude_before, installs_before = len(stack.claude), len(stack.installs)
     rc2, results = _run(stack, preamble_status=ALREADY)
     assert rc1 == rc2 == 0
-    # Every step already done, except the registry, which has no signing key to declare yet.
-    assert [r.status for r in results if r.step != "registry"] == [ALREADY] * (len(STEPS) - 1), results
+    # Every step already done, except the registry, which has no signing key to declare yet, and the
+    # framework step, which reports the hooks and commands this home doesn't have (#1049).
+    assert [r.status for r in results if r.step not in ("registry", "framework")] == [ALREADY] * (len(STEPS) - 2), results
     assert _by_step(results)["registry"].status == SKIPPED
+    assert _by_step(results)["framework"].status == DRIFT
     assert len(stack.claude) == claude_before and len(stack.installs) == installs_before
 
 
@@ -1024,3 +1029,94 @@ def test_a_session_unit_with_its_own_command_is_still_told_it_lacks_the_login():
                                     "--project-dir", "/h/work", "--no-proxy"],
                         "environment": {"HOME": "/h"}}]}
     assert dd.drift(older, default) == ["the session unit's environment lacks USER, LOGNAME"]
+
+
+def _channel_command_missing(monkeypatch):
+    """The channel's console script isn't on the PATH, as with a virtual-environment install."""
+    was = agent_stack.shutil.which
+    monkeypatch.setattr(agent_stack.shutil, "which", lambda name: None if name == "maceff-channel" else was(name))
+
+
+def test_a_channel_command_that_does_not_resolve_refuses_the_step_and_names_it(stack, monkeypatch):
+    """The plugin runs maceff-channel by that bare name; with a venv install Claude Code can't find it and says
+    only 'Executable not found in $PATH: stdio' at every session start. The step installs the plugin, then says
+    which command is missing and what to do, rather than reporting done (#1051)."""
+    _channel_command_missing(monkeypatch)
+    rc, results = _run(stack)
+    channel = _by_step(results)["channel"]
+    assert channel.status == REFUSED, channel
+    assert "maceff-channel" in channel.detail and "not on PATH" in channel.detail
+    assert "Executable not found in $PATH: stdio" in channel.detail and "ln -s" in channel.detail
+    assert any(c[1:3] == ["plugin", "install"] for c in stack.claude), "the plugin is still installed"
+    assert rc == 1
+
+
+def test_an_installed_channel_is_refused_too_when_its_command_does_not_resolve(stack, monkeypatch):
+    _run(stack)
+    _channel_command_missing(monkeypatch)
+    rc, results = _run(stack)
+    channel = _by_step(results)["channel"]
+    assert channel.status == REFUSED and "maceff-channel" in channel.detail and "already" not in channel.status
+
+
+def test_a_plan_says_the_channel_command_will_not_resolve(stack, monkeypatch):
+    _channel_command_missing(monkeypatch)
+    rc, results = _run(stack, "--plan")
+    assert _by_step(results)["channel"].status == REFUSED
+    assert stack.claude == [], "a plan runs nothing"
+
+
+def test_the_plugin_runs_the_command_the_step_checks():
+    """The step checks CHANNEL_COMMAND; the plugin's own file has to run that name."""
+    from macf.channels.marketplace import CHANNEL_COMMAND, packaged_marketplace
+    mcp = json.loads((packaged_marketplace() / "plugins" / "maceff-channel" / ".mcp.json").read_text())
+    assert [s["command"] for s in mcp["mcpServers"].values()] == [CHANNEL_COMMAND]
+
+
+def _install_framework_in(project):
+    """What `framework install` leaves in a project: every hook event bound and a /maceff command."""
+    from macf.cli import _hooks_to_install_list
+    (project / ".claude" / "commands" / "maceff").mkdir(parents=True)
+    events = {name: [] for name in range(len(_hooks_to_install_list()))}
+    (project / ".claude" / "settings.local.json").write_text(json.dumps({"hooks": {str(k): v for k, v in events.items()}}))
+
+
+def test_init_says_when_the_hooks_commands_and_skills_are_not_installed_and_names_the_command(stack):
+    """`agent init` doesn't install them, `framework install` does, and nothing said so: a newcomer's agent
+    started with no hooks and no /maceff commands (#1049). The step reports it, without failing the run."""
+    rc, results = _run(stack)
+    framework = _by_step(results)["framework"]
+    assert framework.status == DRIFT and rc == 0
+    assert "macf_tools framework install" in framework.detail and str(stack.home) in framework.detail
+    assert "hooks" in framework.detail and "/maceff skills and commands" in framework.detail
+    assert "never fails the run" in framework.detail
+
+
+def test_the_framework_step_finds_the_hooks_and_commands_already_installed(stack):
+    _install_framework_in(stack.home)
+    framework = _by_step(_run(stack)[1])["framework"]
+    assert framework.status == ALREADY, framework
+
+
+def test_the_framework_step_names_only_what_is_missing(stack):
+    _install_framework_in(stack.home)
+    for entry in (stack.home / ".claude" / "commands" / "maceff").parent.iterdir():
+        entry.rmdir()
+    framework = _by_step(_run(stack)[1])["framework"]
+    assert framework.status == DRIFT and "/maceff skills and commands" in framework.detail and "hooks (" not in framework.detail
+
+
+def test_the_framework_step_leaves_a_container_to_its_start_step_and_can_be_skipped(stack):
+    assert _by_step(_run(stack, in_container=True)[1])["framework"].status == SKIPPED
+    assert _by_step(_run(stack, "--no-framework")[1])["framework"].status == SKIPPED
+
+
+def test_hooks_bound_globally_or_skills_alone_count_as_installed(stack):
+    """`framework install` has a global mode that writes the home's settings.json, and the /maceff commands are
+    pointers to skills, so either place and either directory counts (a note on #1071)."""
+    from macf.cli import _hooks_to_install_list
+    (stack.home / ".claude" / "skills" / "maceff-delegation").mkdir(parents=True)
+    (stack.home / ".claude" / "settings.json").write_text(
+        json.dumps({"hooks": {str(i): [] for i in range(len(_hooks_to_install_list()))}}))
+    framework = _by_step(_run(stack)[1])["framework"]
+    assert framework.status == ALREADY, framework

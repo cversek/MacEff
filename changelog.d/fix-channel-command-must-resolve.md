@@ -1,0 +1,3 @@
+### Fixed
+
+- **`agent init` refuses the channel step when `maceff-channel` is not on PATH, and names it** (`agent_stack.py` `step_channel`, #1051, #860 item 3): the plugin runs `maceff-channel` by that bare name, which a virtual-environment install leaves only in the environment's `bin/`, so Claude Code reported `Executable not found in $PATH: stdio` at every session start and the channel never came up, with no word in `agent init` about it. The step now installs the plugin as before, then reports the missing command, where this install has it, and a link that puts it on PATH, for an installed channel and in `--plan` as well. A test holds the plugin's `.mcp.json` to the command name the step checks.
