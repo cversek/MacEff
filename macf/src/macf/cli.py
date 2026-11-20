@@ -1007,6 +1007,19 @@ def _hooks_to_install_list():
     ]
 
 
+def _hook_interpreter() -> str:
+    """The interpreter a host's hook commands run under: the one running this installer, quoted
+    for the shell that runs the command, by its absolute path.
+
+    A bare ``python`` resolves to whatever the shell finds first. With the README's own virtual
+    environment install that is the system interpreter, which can't import ``macf``, so every
+    hook failed with ``ModuleNotFoundError`` at the first session after ``framework install``
+    (#860 item 6). The interpreter that ran the installer is the one that has ``macf``, as the
+    container's hooks and the daemon's declaration already name theirs."""
+    import shlex
+    return shlex.quote(sys.executable)
+
+
 def cmd_hook_install(args: argparse.Namespace) -> int:
     """Install consciousness hooks with local/global mode selection.
 
@@ -1083,14 +1096,14 @@ def cmd_hook_install(args: argparse.Namespace) -> int:
                 # Host global: write the absolute home path. ~ expansion is
                 # shell-dependent and CC's hook exec model isn't documented to
                 # guarantee it; absolute removes the assumption.
-                hooks_prefix = f"python {Path.home()}/.claude/hooks"
+                hooks_prefix = f"{_hook_interpreter()} {Path.home()}/.claude/hooks"
         else:
             # Local mode (host only - container always uses global).
             # Resolve to canonical absolute path so symlinked project trees,
             # relative invocations, and CWD-shifts all hit the same hooks dir.
             hooks_dir = Path.cwd() / ".claude" / "hooks"
             settings_file = Path.cwd() / ".claude" / "settings.local.json"
-            hooks_prefix = f"python {hooks_dir.resolve()}"
+            hooks_prefix = f"{_hook_interpreter()} {hooks_dir.resolve()}"
 
         # Create hooks directory
         hooks_dir.mkdir(parents=True, exist_ok=True)
