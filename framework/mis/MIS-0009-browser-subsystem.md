@@ -294,6 +294,7 @@ On acceptance, one landing pull request carries all of it together (MIS-0001-R29
 - **Q02** Where should the private plugin directory live, so that backup and migration carry it but no publishing path ever does? (private_plugin_directory_location)
 - **Q03** Should a second backend (WebDriver BiDi, or a browser extension's channel) be specified now, or only when one is built? (second_backend_timing)
 - **Q04** How should container agents reach a browser, if ever? This is likely through the system daemon (MIS-0007), and it is not for this MIS. (container_agent_browser)
+- **Q05** Is a request a plugin sends through the browser's own signed-in request context, such as a file API call that a download page would make, navigation or token reuse under R20? (session_request_vs_token_reuse)
 
 ## 14 Deliberation Record
 
