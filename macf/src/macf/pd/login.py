@@ -23,7 +23,7 @@ from typing import Callable, Dict, Optional
 #: The event the daemon records.
 EVENT = "pd_login_state"
 #: A grant this close to its end reads ``expiring``: three days leaves a weekend to log in again.
-from macf.pd.interface import EXPIRING_DAYS
+from macf.pd.interface import EXPIRING_DAYS  # noqa: E402 -- the declaration's default, kept as one number
 EXPIRING_S = EXPIRING_DAYS * 86400.0
 #: How often the daemon reads the credential.
 POLL_S = 3600.0
