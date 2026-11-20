@@ -74,7 +74,8 @@ def observe(page, session) -> dict:
         role = (n.get("role") or {}).get("value") or ""
         if name.strip() and role != "InlineTextBox":  # inline boxes repeat their StaticText parent
             nodes.append({"role": role, "name": name})
-    return {"url": page.url, "title": page.title(), "nodes": nodes,
+    root = next((n["name"] for n in nodes if n["role"] == "RootWebArea"), "")  # the title, without page script
+    return {"url": page.url, "title": root, "nodes": nodes,
             "digest": guard.digest(f"{n['role']}:{n['name']}" for n in nodes)}
 
 

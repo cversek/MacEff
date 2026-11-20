@@ -4,7 +4,7 @@ import sys
 # The only fields an event may carry. Page text, message content and typed values have no key here, so they
 # can't be recorded by accident; the operator's own words for an act can (R17).
 ALLOWED = {"backend", "plugin", "host", "tab", "reason", "count", "changed", "sha256", "bytes", "operator_said",
-           "elapsed_s"}
+           "said_source", "elapsed_s"}
 
 
 def _append(name: str, data: dict) -> bool:

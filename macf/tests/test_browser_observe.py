@@ -12,6 +12,7 @@ class FakeSession:
         self.calls.append(method)
         if method == "Accessibility.getFullAXTree":
             return {"nodes": [
+                {"role": {"value": "RootWebArea"}, "name": {"value": "Inbox"}, "ignored": False},
                 {"role": {"value": "heading"}, "name": {"value": "Inbox"}, "ignored": False},
                 {"role": {"value": "option"}, "name": {"value": "A sender  A subject  9:01 AM"}, "ignored": False},
                 {"role": {"value": "generic"}, "name": {"value": ""}, "ignored": False},
@@ -27,7 +28,7 @@ class FakePage:
         self.evaluated = []
 
     def title(self):
-        return "Inbox"
+        raise AssertionError("observation asked the page for its title (that runs script)")
 
     def evaluate(self, *a, **k):
         self.evaluated.append(a)
@@ -39,7 +40,7 @@ def test_observation_runs_no_page_script():
     snap = cdp.observe(page, session)
     assert page.evaluated == []
     assert session.calls == ["Accessibility.getFullAXTree"]
-    assert [(n["role"], n["name"]) for n in snap["nodes"]] == [("heading", "Inbox"),
+    assert [(n["role"], n["name"]) for n in snap["nodes"]] == [("RootWebArea", "Inbox"), ("heading", "Inbox"),
                                                               ("option", "A sender  A subject  9:01 AM")]
     assert snap["title"] == "Inbox" and len(snap["digest"]) == 12
 

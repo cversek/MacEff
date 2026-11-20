@@ -32,3 +32,15 @@ def test_missing_extra_names_install(monkeypatch, capsys):
     args = p.parse_args(["browser", "cdp", "tabs", "--host", "mail.example.com"])
     assert args.func(args) != 0
     assert "pip install 'macf[browser]'" in capsys.readouterr().err
+
+
+def test_operator_words_need_their_source(monkeypatch, capsys):
+    from macf.browser import events
+    seen = []
+    monkeypatch.setattr(events, "_append", lambda name, data: seen.append(data) or True)
+    monkeypatch.setattr(bcli, "_backend", lambda args, plugin=None: (_ for _ in ()).throw(AssertionError("reached")))
+    p = _parser()
+    args = p.parse_args(["browser", "cdp", "click", "--host", "a.example", "--role", "button", "--name", "Submit",
+                         "--operator-said", "submit it"])
+    assert args.func(args) == 3
+    assert "MIS-0009-R42" in capsys.readouterr().err and seen[0]["decision"] == "refused"

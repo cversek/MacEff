@@ -46,9 +46,14 @@ def run_guarded(args, verb: str, act, plugin=None) -> int:
     common = {"backend": "cdp", "plugin": plugin.name if plugin else None, "host": host}
     backend = None
     try:
+        words, source = getattr(args, "operator_said", None), getattr(args, "said_source", None)
+        if words and not (source or "").strip():
+            raise guard.Refused("the operator's words need their source (--said-source: a channel message id or "
+                                "a transcript turn), so a reader can check the quote (MIS-0009-R42)")
         backend = _backend(args, plugin)
         result = act(backend)
         events.record(verb, "allowed", operator_said=getattr(args, "operator_said", None),
+                      said_source=getattr(args, "said_source", None),
                       elapsed_s=round(time.monotonic() - started, 2), **common)
         if result is not None:
             _emit(args, result)
@@ -194,6 +199,7 @@ def add_browser_parser(sub, private_dir: Optional[str] = None) -> None:
     _common(p)
     _target(p)
     p.add_argument("--operator-said", help="the operator's words for this act, verbatim; recorded with it")
+    p.add_argument("--said-source", help="where the operator said it: a channel message id or a transcript turn")
     p.add_argument("--real-input", action="store_true", help="real mouse input, for pages that ignore scripted clicks")
     p.set_defaults(func=cmd_click)
     p = verbs.add_parser("fill", help="set a visible field's value (never a credential field)")
@@ -207,12 +213,14 @@ def add_browser_parser(sub, private_dir: Optional[str] = None) -> None:
     _common(p)
     p.add_argument("chord", help="e.g. Enter, Escape, Control+Enter")
     p.add_argument("--operator-said")
+    p.add_argument("--said-source", help="where the operator said it: a channel message id or a transcript turn")
     p.set_defaults(func=cmd_press)
     p = verbs.add_parser("download", help="click a control that downloads; save by event with a sha256")
     _common(p)
     _target(p)
     p.add_argument("--out", required=True, help="destination directory (never inside the agent's home)")
     p.add_argument("--operator-said")
+    p.add_argument("--said-source", help="where the operator said it: a channel message id or a transcript turn")
     p.set_defaults(func=cmd_download)
     p = verbs.add_parser("launch", help="start a browser on a separate profile with its debugging port open")
     p.add_argument("--profile-dir", required=True, help="a separate profile directory, never the default one")
