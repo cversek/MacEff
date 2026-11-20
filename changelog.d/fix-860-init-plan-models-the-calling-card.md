@@ -1,0 +1,3 @@
+### Fixed
+
+- **`agent init --plan` no longer reports "refused" for steps that would succeed** (`agent_stack.py`): on a home with no calling card yet, the dry run reported the declaration, harness and daemon steps as refused with "names no agent", though the calling-card step before them writes the file they read, so a real run proceeds. A newcomer's plan read as an init that fails at half its steps. Under `--plan`, when the calling-card step would write the card, those steps now say they would run once it is written. With the calling-card step skipped, nothing will write it, so they stay refused. Item 1 of #860.
