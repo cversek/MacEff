@@ -83,3 +83,12 @@ def test_the_text_output_says_what_since_left_out_and_how_recent_orders(monkeypa
     text = out.getvalue()
     assert "since 2026-11-01: 1 undated result left out" in text
     assert "ordered newest first, not by score" in text
+
+
+def test_a_real_idea_record_is_dated_from_its_provenance():
+    """Real idea files keep the creation stamp at provenance.created, not at the top (the fixture above had
+    invented a top-level key, so every idea in a real web read undated: THM's run on #1064)."""
+    record = {"id": 1, "title": "x", "status": "captured",
+              "provenance": {"created": "2026-04-30T16:39:04-04:00", "created_by": "someone"}}
+    assert node_date(1, record) == "2026-04-30"
+    assert node_date(2, {"title": "no stamp anywhere", "provenance": {}}) is None

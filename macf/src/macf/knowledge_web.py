@@ -831,7 +831,8 @@ def node_date(node_id: Any, idea: Optional[Dict[str, Any]] = None) -> Optional[s
     an artifact's modified time moves with every curation edit, so a node whose name has no date is
     undated here, not guessed (#1040)."""
     if idea is not None:
-        created = str(idea.get("created") or "")
+        # A real idea record keeps the stamp at provenance.created; a top-level key is the older shape.
+        created = str(idea.get("created") or (idea.get("provenance") or {}).get("created") or "")
         return created[:10] if re.fullmatch(r"\d{4}-\d{2}-\d{2}.*", created) else None
     m = _DATE_IN_NAME.search(str(node_id))
     return m.group(1) if m else None
