@@ -659,3 +659,47 @@ def format_index(rows: list[dict]) -> str:
             lines.append(f"{'':<19}lands in: {r['lands_in'][:140]}")
     return "\n".join(lines)
 
+
+MIS_TITLE = re.compile(r"^MIS-(\d{4})\b", re.I)
+
+
+def gh_runner(repo: str = "cversek/MacEff"):
+    """A function running ``gh`` and returning its output, for ``open_index``; a refusal is raised."""
+    import subprocess
+
+    def run(args: list) -> str:
+        done = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=60)
+        if done.returncode != 0:
+            raise RuntimeError(f"gh {' '.join(args[:2])} failed: {(done.stderr or done.stdout).strip()[:200]}")
+        return done.stdout
+    run.repo = repo
+    return run
+
+
+def open_index(run, repo: str = "cversek/MacEff") -> list[dict]:
+    """The MIS drafts, one row per open pull request whose title begins ``MIS-NNNN``, read from the
+    header of the MIS file at the pull request's head (#1066). A network step, kept apart from ``index``,
+    which is read from the tree and reproducible; these rows are drafts and are never mixed into the landed ones."""
+    import base64
+    import json
+    listed = json.loads(run(["pr", "list", "-R", repo, "--state", "open", "--limit", "200",
+                             "--json", "number,title,headRefOid,url,isDraft"]))
+    rows = []
+    for pr in listed:
+        m = MIS_TITLE.match(pr.get("title", ""))
+        if not m:
+            continue
+        files = json.loads(run(["pr", "view", str(pr["number"]), "-R", repo, "--json", "files"]))["files"]
+        path = next((f["path"] for f in files if re.search(r"framework/mis/MIS-\d{4}[^/]*\.md$", f["path"])), None)
+        fields, title = {}, ""
+        if path:
+            raw = json.loads(run(["api", f"repos/{repo}/contents/{path}?ref={pr['headRefOid']}"]))["content"]
+            lines = base64.b64decode(raw).decode("utf-8", "replace").splitlines()
+            fields = {k: v[0].strip() for k, v in read_header(lines).items()}
+            title = next((mm.group(1).strip() for mm in (re.match(r"^# MIS-\d+: (.+)$", ln) for ln in lines) if mm), "")
+        rows.append({"number": fields.get("Number", m.group(1)), "title": title or pr["title"],
+                     "status": fields.get("Status", ""), "secretary": fields.get("Secretary", ""),
+                     "deliberation": fields.get("Deliberation", ""), "lands_in": fields.get("Lands-in", ""),
+                     "pr": pr["number"], "url": pr.get("url", ""), "draft": bool(pr.get("isDraft"))})
+    return sorted(rows, key=lambda r: (r["number"], r["pr"]))
+
