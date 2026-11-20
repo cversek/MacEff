@@ -56,7 +56,7 @@ class DutyTierSource:
         try:
             from .focus import current_focus
             focused = current_focus()
-        except OSError:
+        except OSError:  # noqa: S110 - no events log means nothing is focused
             pass    # no events log: nothing is focused
         for role, folder in store.roles():
             if role.state != "active":

@@ -494,7 +494,7 @@ class BrokerConfig:
                 try:
                     if local_part_from_card(card, token) == local:
                         return SharedRoute(domain=dom, local=box, decl=decl)
-                except ValueError:
+                except ValueError:  # noqa: S112 - declared cards are validated at config load; skip only for hand-built configs
                     continue
         return None
 
@@ -991,7 +991,9 @@ class Broker:
             try:
                 if json.loads(f.read_text()).get("thread_id") == thread_id:
                     return True
-            except (OSError, json.JSONDecodeError):
+            except (OSError, json.JSONDecodeError) as e:
+                print(f"⚠️ MACF: ledger scan for thread {thread_id} failed on {f} (record skipped, "
+                      f"thread treated as unseen): {e}", file=sys.stderr)
                 continue
         return False
 
