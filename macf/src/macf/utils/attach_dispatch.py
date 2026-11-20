@@ -47,9 +47,9 @@ def control_refusal(argv: Sequence[str], environ: Optional[Dict[str, str]] = Non
             or env.get("MACF_ATTACH_CONTROL") == "force":
         return None
     return ("tmux control mode (--control, -CC) works only in iTerm2: any other terminal shows nothing and "
-            "never returns, so it is not started. Attach without --control (`macf_tools harness attach "
-            "<name>`, or --read-only to watch) or run this from iTerm2. If this is iTerm2 and it isn't "
-            "recognized, set MACF_ATTACH_CONTROL=force.")
+            "never returns, so it is not started. Attach with --no-control (a plain attach; it also overrides a "
+            "declared `control: true`), or --read-only to watch, or run this from iTerm2. If this is iTerm2 and "
+            "it isn't recognized, set MACF_ATTACH_CONTROL=force.")
 
 
 @dataclass(frozen=True)

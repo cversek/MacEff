@@ -98,8 +98,8 @@ def test_control_mode_is_refused_on_a_terminal_that_is_not_iterm2_and_the_altern
     from macf.utils.attach_dispatch import control_refusal
     argv = ["tmux", "-CC", "attach", "-t", "=Agent_abc123", "-d"]
     said = control_refusal(argv, {"TERM": "xterm-256color"})
-    assert said and "--control" in said and "iTerm2" in said and "macf_tools harness attach" in said
-    assert "--read-only" in said or "without --control" in said
+    assert said and "--control" in said and "iTerm2" in said
+    assert "--no-control" in said, "a declared control: true is overridden only by --no-control, so that is the advice"
 
 
 @pytest.mark.parametrize("environ", [{"TERM_PROGRAM": "iTerm.app"}, {"LC_TERMINAL": "iTerm2"}])
@@ -125,24 +125,45 @@ def test_the_override_lets_an_unrecognized_terminal_try_control_mode():
     assert control_refusal(["tmux", "-CC", "attach"], {"MACF_ATTACH_CONTROL": "force"}) is None
 
 
-def test_the_command_refuses_before_it_execs_tmux(monkeypatch, capsys):
-    """The hang was an exec of tmux -CC into a terminal that cannot speak it: nothing is printed and nothing
-    returns. The command now says why and exits without the exec."""
+def _attach(monkeypatch, control, declared):
+    """cmd_harness_attach on a terminal that is not iTerm2, with tmux's exec recorded, not run."""
     import argparse
+    import types
     from macf import cli
     from macf.utils import attach_dispatch as ad
+    from macf.utils import remotes, roster
     called = []
     monkeypatch.setattr(cli.os, "execvpe", lambda *a: called.append(a))
     monkeypatch.setenv("TERM", "xterm-256color")
     for var in ("TERM_PROGRAM", "LC_TERMINAL", "MACF_ATTACH_CONTROL"):
         monkeypatch.delenv(var, raising=False)
-    decision = ad.Decision(argv=["tmux", "-CC", "attach", "-t", "=A", "-d"])
-    monkeypatch.setattr(ad, "decide", lambda *a, **k: decision)
-    import types
-    from macf.utils import remotes, roster
+
+    def decide(entry, remotes_, control=None, **k):
+        on = remotes_.control if control is None else control
+        return ad.Decision(argv=["tmux"] + (["-CC"] if on else []) + ["attach", "-t", "=A", "-d"])
+    monkeypatch.setattr(ad, "decide", decide)
     monkeypatch.setattr(roster, "local_roster", lambda probe=None: types.SimpleNamespace(entries=[_entry()], problems=[]))
-    monkeypatch.setattr(remotes, "load_remotes", lambda *a, **k: REMOTES)
-    args = argparse.Namespace(name=None, card=_entry().card, control=True, read_only=False, agent=None)
-    rc = cli.cmd_harness_attach(args)
+    monkeypatch.setattr(remotes, "load_remotes", lambda *a, **k: RemotesConfig(control=declared, remotes=[]))
+    args = argparse.Namespace(name=None, card=_entry().card, control=control, read_only=False, agent=None)
+    return cli.cmd_harness_attach(args), called
+
+
+def test_the_flag_refuses_before_it_execs_tmux(monkeypatch, capsys):
+    """The hang was an exec of tmux -CC into a terminal that cannot speak it: nothing is printed and nothing
+    returns. An explicit --control now says why and exits without the exec."""
+    rc, called = _attach(monkeypatch, control=True, declared=False)
     assert rc == 2 and called == []
+    assert "--no-control" in capsys.readouterr().err
+
+
+def test_a_declared_default_falls_back_to_a_plain_attach_with_a_line_on_stderr(monkeypatch, capsys):
+    """control: true was asked by nobody at this terminal, so refusing would leave the command unusable
+    there: it attaches plainly and says so (the reviewer's suggestion on #1067)."""
+    rc, called = _attach(monkeypatch, control=None, declared=True)
+    assert len(called) == 1 and "-CC" not in called[0][1]
     assert "iTerm2" in capsys.readouterr().err
+
+
+def test_no_control_attaches_plainly_under_a_declared_default(monkeypatch, capsys):
+    rc, called = _attach(monkeypatch, control=False, declared=True)
+    assert len(called) == 1 and "-CC" not in called[0][1] and capsys.readouterr().err == ""
