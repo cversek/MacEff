@@ -723,9 +723,17 @@ def read_delivered_internet(home: Path, ref: str):
     return store.find_internet(home, ref)
 
 
-def status(socket_path: Path, timeout: float = 10.0) -> Dict[str, Any]:
+def status(socket_path: Path, timeout: float = 10.0,
+           sender: Optional[str] = None) -> Dict[str, Any]:
     """The caller's mailbox counts, including the one it cannot compute
     itself: quarantined mail lives where the refused party cannot edit it,
-    so its count only exists on the far side of the socket."""
-    return _roundtrip({"op": "status"}, socket_path, timeout,
-                      "No status was returned.")
+    so its count only exists on the far side of the socket.
+
+    `sender` is the agent's claim, as `submit` sends it. On a uid the host
+    tier declares shared, the broker cannot tell whose counts to answer
+    without it (amail.md §1.3); on any other uid the kernel's answer stands
+    and a disagreeing claim is refused."""
+    req: Dict[str, Any] = {"op": "status"}
+    if sender:
+        req["sender"] = sender
+    return _roundtrip(req, socket_path, timeout, "No status was returned.")
