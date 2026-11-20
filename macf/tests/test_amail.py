@@ -3363,7 +3363,7 @@ class TestAccessFollowsCustody:
         sock = deployment["sock"] / "live.sock"
         srv = self._listening_socket(sock)
         try:
-            monkeypatch.setattr(client, "status", lambda p: {
+            monkeypatch.setattr(client, "status", lambda p, **kw: {
                 "ok": False, "error": "ValueError: unknown operation 'status'"})
             cli = self._cfg(monkeypatch, home, sock)
             cli.cmd_amail_status(Namespace(json=False))
@@ -3389,7 +3389,7 @@ class TestAccessFollowsCustody:
         sock = deployment["sock"] / "live2.sock"
         srv = self._listening_socket(sock)
         try:
-            monkeypatch.setattr(client, "status", lambda p: {
+            monkeypatch.setattr(client, "status", lambda p, **kw: {
                 "ok": True, "messages": 0, "internet": 0,
                 "quarantined": 0, "pending_pickup": 2})
             cli = self._cfg(monkeypatch, home, sock)

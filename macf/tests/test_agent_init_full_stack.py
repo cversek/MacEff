@@ -104,6 +104,32 @@ def _declaration(stack):
     return json.loads((stack.home / ".maceff" / "pd" / "declaration.json").read_text())
 
 
+def test_a_plan_on_an_unnamed_home_does_not_refuse_the_steps_the_calling_card_enables(stack, capsys):
+    """The calling-card step writes the file the declaration, harness and daemon steps read, so in a real
+    run they proceed. A plan that reported them refused read, to a newcomer, as an init that fails at half
+    its steps (#860 item 1)."""
+    (stack.home / ".maceff" / "config.json").unlink()
+    rc, results = _run(stack, "--plan")
+    by = _by_step(results)
+    assert by["calling-card"].status == WOULD
+    for step in ("declaration", "harness", "daemon"):
+        assert by[step].status == WOULD, (step, by[step])
+        assert "once the calling card is written" in by[step].detail
+    assert rc == 0, results
+    assert not (stack.home / ".maceff" / "config.json").exists()      # and the plan wrote nothing
+
+
+def test_with_the_calling_card_step_skipped_the_dependent_steps_stay_refused(stack):
+    """If nothing will write the card, the steps that need it really will fail, and a plan says so."""
+    (stack.home / ".maceff" / "config.json").unlink()
+    rc, results = _run(stack, "--plan", "--no-calling-card")
+    by = _by_step(results)
+    assert by["calling-card"].status == SKIPPED
+    for step in ("declaration", "harness", "daemon"):
+        assert by[step].status == REFUSED, (step, by[step])
+    assert rc == 1
+
+
 def test_plan_lists_every_step_and_changes_nothing(stack, capsys):
     rc, results = _run(stack, "--plan")
     out = capsys.readouterr().out

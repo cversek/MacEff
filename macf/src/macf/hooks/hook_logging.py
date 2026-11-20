@@ -1,7 +1,7 @@
 """
 Hook logging infrastructure with unified agent-scoped paths.
 
-All logging uses {session_root}/{agent_id}/{session_id}/hooks/ (utils.paths.session_root)
+All logging uses <session root>/{agent_id}/{session_id}/hooks/, under this user's own runtime directory
 """
 import json
 import logging

@@ -133,6 +133,45 @@ def test_a_host_declaration_naming_its_own_card_the_old_way_is_cut_over_once(tmp
     assert len(events) == 1 and kept.read_text() == original
 
 
+def test_the_pending_cut_over_describes_the_rewrite_and_writes_nothing(tmp_path, monkeypatch):
+    """A plan has to say what the next start would do without doing it (#919)."""
+    from macf.pd import core
+    events = []
+    monkeypatch.setattr(core, "append_event", lambda event, data: events.append((event, data)))
+    path = _home_declaration(tmp_path, "ExampleAgent@0a1b2c")
+    before = path.read_bytes()
+    pending = core.cutover_pending(tmp_path, "ExampleAgent_0a1b2c")
+    assert pending is not None and pending.old == "ExampleAgent@0a1b2c"
+    assert pending.rewritten == before.decode().replace("ExampleAgent@0a1b2c", "ExampleAgent_0a1b2c")
+    assert pending.kept == path.with_name("declaration.json.pre-card-underscore")
+    assert path.read_bytes() == before and not pending.kept.exists() and events == []
+
+
+def test_the_staged_copy_is_cut_over_and_the_live_file_is_left_alone(tmp_path, monkeypatch):
+    """A move installs from declaration.json.cutover, so a staged file made before the card
+    revision is rewritten the same way, with its own kept original (#919)."""
+    from macf.pd import core
+    monkeypatch.setattr(core, "append_event", lambda event, data: None)
+    live = _home_declaration(tmp_path, "ExampleAgent_0a1b2c")
+    staged = live.with_name("declaration.json.cutover")
+    staged.write_text('{"version": 1,  "agent": "ExampleAgent@0a1b2c", "units": []}\n')
+    old = staged.read_text()
+    kept = core.cutover_declaration(tmp_path, "ExampleAgent_0a1b2c", path=staged)
+    assert kept == staged.with_name("declaration.json.cutover.pre-card-underscore")
+    assert kept.read_text() == old and staged.read_text() == old.replace("@", "_")
+    assert live.read_text().count("ExampleAgent_0a1b2c") == 1
+
+
+def test_only_the_agents_own_declaration_and_its_staged_copy_are_cut_over(tmp_path, monkeypatch):
+    from macf.pd import core
+    monkeypatch.setattr(core, "append_event", lambda event, data: None)
+    _home_declaration(tmp_path, "ExampleAgent_0a1b2c")
+    other = tmp_path / ".maceff" / "pd" / "declaration.json.other"
+    other.write_text('{"version": 1, "agent": "ExampleAgent@0a1b2c", "units": []}')
+    assert core.cutover_declaration(tmp_path, "ExampleAgent_0a1b2c", path=other) is None
+    assert "@" in other.read_text()
+
+
 def test_another_agents_old_card_is_not_cut_over_and_stays_refused(tmp_path, monkeypatch):
     from macf.pd import core
     from macf.pd.core import DeclarationRefused

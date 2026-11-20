@@ -9,27 +9,7 @@ import subprocess
 import sys
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional
-
-
-def installed_cc_version(binary_line: str) -> Optional[str]:
-    """The version of the installed Claude Code that *binary_line* (``detect_cc_binary``) names,
-    read from its ``versions/X.Y.Z`` path; None when the path doesn't carry one."""
-    import re
-    m = re.search(r"/versions/(\d+\.\d+\.\d+)(?:\s|$)", binary_line or "")
-    return m.group(1) if m else None
-
-
-def cc_version_lines(binary_line: str, running: Optional[str]) -> List[str]:
-    """``env``'s lines for Claude Code (#866): the installed binary, with its version, and, when the
-    session runs another, a second line saying which and why. A session that started before an
-    auto-update keeps running the version it started with."""
-    installed = installed_cc_version(binary_line)
-    lines = [f"CC Installed:   {binary_line}"]
-    if installed and running and running != installed:
-        lines.append(f"CC Running:     {running}, not the installed {installed}: this session started before "
-                     f"an update, and runs {installed} once it is restarted")
-    return lines
+from typing import Optional
 
 
 def detect_cc_binary() -> str:
@@ -61,6 +41,32 @@ def detect_cc_binary() -> str:
         print(f"Warning: CC binary detection failed: {e}", file=sys.stderr)
 
     return "(not found on PATH)"
+
+
+def detect_cc_running() -> str:
+    """The binary this session is executing, named by the system, or "" when it can't be told.
+
+    ``detect_cc_binary`` names what is installed. An auto-update moves the launcher under a session
+    that keeps running its older binary, so the two can differ (#866). Claude Code gives its hooks
+    and tool commands its pid as CLAUDE_PID.
+    """
+    from macf.utils.formatting import _running_executable
+
+    pid = os.environ.get("CLAUDE_PID", "")
+    return _running_executable(int(pid)) if pid.isdigit() else ""
+
+
+def describe_cc_running(installed: str, running: str) -> str:
+    """The "CC Running" line: the running binary, marked when it isn't the installed one.
+
+    *installed* is what ``detect_cc_binary`` returned, which may end in " (via <launcher>)".
+    """
+    if not running:
+        return "(unknown: no CLAUDE_PID, or the system won't name its binary)"
+    installed_path = installed.split(" (via ")[0]
+    if not installed_path or installed_path.startswith("(") or installed_path == running:
+        return running
+    return f"{running} (not the installed binary: an update came after this session started)"
 
 
 def encode_cc_project_path(path: str) -> str:
@@ -356,15 +362,19 @@ def find_agent_home() -> Path:
     return Path.home()
 
 def session_root() -> Path:
-    """Where per-session directories live: ``sessions`` in this user's private runtime
-    directory (``user_runtime_dir``), unless ``MACF_SESSION_ROOT`` names another.
+    """Where per-session directories live: ``sessions`` inside this user's own runtime
+    directory (``user_runtime_dir``) unless ``MACF_SESSION_ROOT`` names another.
 
     Each agent and session gets a directory under it for the hook log, scratch
-    scripts and caches. It was a bare ``/tmp/macf``, which the first account to create
-    it owned, so on a host or in a container with several agent accounts every other
-    agent's folders failed to be made (#780), as the scope gate's counter and the
-    supervisor's registry had found before. The test suite points it at a temporary
-    directory, so a run inside a live session cannot write into that session's hook log.
+    scripts and caches. The test suite points it at a temporary directory, so a
+    run inside a live session cannot write into that session's hook log.
+
+    The default used to be a bare ``/tmp/macf``. ``/tmp`` is shared by every account on a
+    host or in a container, and the first account to create ``/tmp/macf`` owned it, so
+    every other agent's session folders failed to create (#780).
+
+    Raises:
+        PermissionError: from ``user_runtime_dir``, when the fallback directory isn't this user's.
     """
     override = os.environ.get("MACF_SESSION_ROOT")
     return Path(override) if override else user_runtime_dir() / "sessions"
@@ -380,7 +390,7 @@ def get_session_dir(
     Get agent-scoped session directory with optional subdirectory.
 
     Path structure: {session_root}/{agent_id}/{session_id}/{subdir}/, where the
-    root is this user's own (see ``session_root``).
+    root is this user's own runtime directory by default (see ``session_root``).
 
     Args:
         session_id: Session ID (auto-detected if None)
@@ -418,7 +428,13 @@ def get_session_dir(
             agent_id = os.environ.get('MACEFF_USER') or os.environ.get('USER') or 'unknown_agent'
 
     # Build unified path: {session_root}/{agent_id}/{session_id}/{subdir}/
-    base_path = session_root() / agent_id / session_id
+    try:
+        root = session_root()
+    except OSError as e:
+        # No private directory to keep them in: say so, never fall back to a shared one.
+        print(f"⚠️ MACF: no private directory for session folders: {e}", file=sys.stderr)
+        return None
+    base_path = root / agent_id / session_id
 
     if subdir:
         base_path = base_path / subdir
