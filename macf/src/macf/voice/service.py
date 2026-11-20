@@ -107,6 +107,29 @@ def send_request(request: dict, host: str = DEFAULT_HOST, port: int = DEFAULT_PO
 #: The suffixes of audio the service will stage, and the most audio it takes in one request.
 AUDIO_SUFFIXES = (".oga", ".ogg", ".opus", ".wav", ".mp3", ".m4a", ".flac", ".webm")
 MAX_AUDIO_BYTES = 64 * 1024 * 1024
+#: The most one request line may hold: the base64 of the largest audio, and a megabyte of JSON
+#: around it. Reading stops here, before anything is parsed, so no caller can make the service
+#: hold more than this however long it keeps sending (#868).
+MAX_REQUEST_BYTES = (MAX_AUDIO_BYTES + 2) // 3 * 4 + 1024 * 1024
+
+
+class RequestTooLarge(Exception):
+    """A request line ran past MAX_REQUEST_BYTES without ending."""
+
+
+def read_request_line(conn) -> bytes:
+    """One request line from *conn*, read up to its newline, or RequestTooLarge at the bound."""
+    data = b''
+    while True:
+        chunk = conn.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+        if len(data) > MAX_REQUEST_BYTES:
+            raise RequestTooLarge
+        if b'\n' in data:
+            break
+    return data
 
 
 def _transcribe_staged(request: dict) -> dict:
@@ -309,16 +332,13 @@ def start_service(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
             break
 
         try:
-            data = b''
             conn.settimeout(30.0)
-            while True:
-                chunk = conn.recv(4096)
-                if not chunk:
-                    break
-                data += chunk
-                if b'\n' in data:
-                    break
-
+            try:
+                data = read_request_line(conn)
+            except RequestTooLarge:
+                print(f"⚠️ MACF: voice: a request ran past {MAX_REQUEST_BYTES} bytes and was refused unread", file=sys.stderr)
+                conn.sendall(json.dumps({"error": f"the request is over {MAX_REQUEST_BYTES // (1024 * 1024)} MB"}).encode('utf-8') + b'\n')
+                continue
             if data:
                 request = json.loads(data.decode('utf-8').strip())
                 response = handle_request(request)

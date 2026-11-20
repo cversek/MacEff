@@ -2,6 +2,8 @@
 (cversek/MacEff#868): no request stops the service, and a refused file isn't echoed back."""
 import signal
 
+import pytest
+
 from macf.voice import service
 
 
@@ -65,9 +67,6 @@ def test_the_staged_audio_is_transcribed_from_a_private_directory_and_removed_af
     assert not seen["path"].exists() and not seen["path"].parent.exists(), "removed whether or not it transcribed"
 
 
-import pytest
-
-
 @pytest.mark.parametrize("request_", [
     {"action": "transcribe"},                                              # no audio at all
     {"action": "transcribe", "audio": "AAAA", "suffix": ".sh"},            # not an audio suffix
@@ -84,3 +83,62 @@ def test_audio_over_the_limit_is_refused(monkeypatch):
     monkeypatch.setattr(service, "MAX_AUDIO_BYTES", 8)
     reply = service.handle_request(_audio(b"123456789"))
     assert "over" in reply["error"]
+
+
+def test_a_failed_correction_gets_a_fixed_reply(monkeypatch, capsys, tmp_path):
+    """The #969 review: the correction step returned its exception's text. It works on the transcript,
+    not the audio, but the same fixed-reply rule closes it, and the detail stays in the log."""
+    from types import SimpleNamespace
+
+    from macf.voice import correction, transcribe
+    secret = tmp_path / "private-notes.oga"
+    monkeypatch.setattr(transcribe, "transcribe", lambda **kw: SimpleNamespace(
+        text="hello", to_dict=lambda: {"text": "hello"}))
+
+    def broken(text):
+        raise OSError(f"cannot read {secret}")
+    monkeypatch.setattr(correction, "correct_transcript", broken)
+    reply = service.handle_request({**_audio(b"x"), "conditioned": False})
+    assert reply["correction_error"] == "the correction failed"
+    assert str(secret) not in str(reply)
+    assert str(secret) in capsys.readouterr().err
+
+
+class _Endless:
+    """A connection whose caller sends without end and never sends a newline."""
+
+    def __init__(self):
+        self.received = 0
+
+    def recv(self, n):
+        self.received += n
+        assert self.received < 1_000_000, "the reader never stopped"      # a missing bound fails, not hangs
+        return b"A" * n
+
+
+def test_a_request_line_is_read_only_up_to_its_bound(monkeypatch):
+    monkeypatch.setattr(service, "MAX_REQUEST_BYTES", 10_000)
+    conn = _Endless()
+    with pytest.raises(service.RequestTooLarge):
+        service.read_request_line(conn)
+    assert conn.received <= 10_000 + 4096        # it stopped reading at the bound, not at the end of the stream
+
+
+def test_a_request_at_the_bound_is_still_read(monkeypatch):
+    monkeypatch.setattr(service, "MAX_REQUEST_BYTES", 10_000)
+
+    class Whole:
+        sent = False
+
+        def recv(self, n):
+            if self.sent:
+                return b""
+            self.sent = True
+            return b"x" * 9_000 + b"\n"
+    assert service.read_request_line(Whole()).endswith(b"\n")
+
+
+def test_the_bound_leaves_room_for_the_largest_audio_in_base64():
+    import base64
+    largest = base64.b64encode(b"\0" * service.MAX_AUDIO_BYTES)
+    assert len(largest) < service.MAX_REQUEST_BYTES
