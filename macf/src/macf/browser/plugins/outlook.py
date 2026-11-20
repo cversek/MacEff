@@ -224,9 +224,15 @@ def draft(backend, args):
         # The recipient wells are editable regions labeled To, Cc and Bcc, not text boxes in the tree.
         field = page.locator(f'[contenteditable="true"][aria-label="{label}"]')
         guard.check_target(field.count(), field.count() == 1 and field.is_visible(), True, f"{label} field")
+        # The client's recipient picker answers only to typed characters: fill() replaced the well (wiping
+        # resolved recipients) and inserted text never resolved. So each address is typed as plain characters,
+        # which can't form a sending chord, and Enter, checked by the guard, turns it into a recipient (R18).
+        # Message text is still set by value (R37).
+        field.focus()
         for address in values:
-            field.fill(address)
-            backend.press(page, "Enter")  # resolves the address into a recipient; Enter in a well sends nothing
+            page.keyboard.type(address, delay=20)
+            page.wait_for_timeout(1500)
+            backend.press(page, "Enter")
     subject = page.get_by_role("textbox", name="Subject")
     if subject.count() == 0:
         subject = page.get_by_role("textbox", name="Add a subject")

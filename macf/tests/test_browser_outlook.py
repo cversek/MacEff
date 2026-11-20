@@ -1,5 +1,6 @@
 """MIS-0009 6.7: the mail plugin reads and drafts, never sends. Snapshots here are synthetic, with invented names."""
 import inspect
+import re
 
 import pytest
 
@@ -27,10 +28,13 @@ def test_rows_parsed_from_snapshot():
 
 
 def test_text_set_by_value():
-    """Composition fills fields by value; it never types keystrokes into the message."""
+    """Subject and message are set by value; only recipient addresses are typed, as plain characters."""
     src = inspect.getsource(outlook.draft)
-    assert ".fill(" in src
-    assert ".type(" not in src and "press_sequentially" not in src and "keyboard" not in src
+    assert 'subject.fill(args.subject)' in src and 'body.fill(text)' in src
+    typed = re.findall(r"keyboard\.type\(([^,)]+)", src)
+    assert typed == ["address"]                       # nothing but recipient addresses is ever typed
+    assert "press_sequentially" not in src and "keyboard.press" not in src
+    assert "field.fill(address)" not in src           # filling a well wiped recipients already resolved
 
 
 def test_draft_left_in_drafts():
