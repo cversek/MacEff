@@ -451,8 +451,8 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
         try:
             status = server.wait(timeout=0.2)
             break
-        except subprocess.TimeoutExpired:
-            pass  # noqa: S110 - the server runs on; the loop only looks for a respawn ask
+        except subprocess.TimeoutExpired:  # noqa: S110 - the server runs on; the loop only looks for a respawn ask
+            pass
         if not respawn_asked:
             continue
         respawn_asked.clear()
