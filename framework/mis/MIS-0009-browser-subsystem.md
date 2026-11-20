@@ -5,7 +5,7 @@
 **Status**: Draft
 **Authors**: the host-side maintainer
 **Secretary**: the head maintainer
-**Deliberation**: pending
+**Deliberation**: https://github.com/cversek/MacEff/pull/1030#issuecomment-7044097746 (opened by the operator on this pull request, 2026-11-20)
 **Created**: 2026-11-20
 **Updates**: none
 **Supersedes**: none
@@ -267,7 +267,7 @@ An agent with sites of its own writes a plugin in its private plugin directory. 
 | R40 | judgment | the operator, at each occurrence | pending |
 | R41 | judgment | the reviewing maintainers, at each plugin review | pending |
 
-Every decidable test named above exists and passes on the prototype branch `browser/prototype` at 5e21044c (65 tests, no browser needed); the states read planned until the tests land with the capability.
+Every decidable test named above exists and passes on the prototype branch `browser/prototype` at e26e675c (65 tests, no browser needed); the states read planned until the tests land with the capability.
 
 **Cold-reader trial**: not yet held.
 
