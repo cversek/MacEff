@@ -18,7 +18,9 @@ The steps, each skippable by its flag:
 6. ``permissions`` - the mode-safety permission entries;
 7. ``framework`` - whether the hooks and the ``/maceff`` skills and commands are installed, and the
    command that installs them (``framework install``) when they are not;
-8. ``daemon`` - the daemon under the platform's service manager (``pd install``).
+8. ``telegram-dir`` - for a declaration that names a Telegram channel, where the plugin keeps its poller
+   files, from what, and a flag on the account-wide default that agents on one login would share;
+9. ``daemon`` - the daemon under the platform's service manager (``pd install``).
 
 ``pd install`` comes last although it is the heart of the stack: the daemon starts the session
 unit as soon as it starts, and that session needs the child script, the channel plugin and its
@@ -63,6 +65,9 @@ STEPS: List[Tuple[str, str, str]] = [
     ("framework", ("check that the hooks and the /maceff skills and commands are installed, and "
                    "name the command that installs them when they are not (framework install)"),
      "no_framework"),
+    ("telegram-dir", ("say where the Telegram plugin keeps its poller files and from what, and flag the "
+                      "account-wide default that agents and sessions on one login would share (#1069)"),
+     "no_telegram_dir"),
     ("daemon", "put the primal daemon under the service manager (pd install)", "no_daemon"),
     ("registry", ("declare the agent's signing key in the operator's registry, the change shown "
                   "first; on a host the write is root's, printed as one step (MIS-0004 R42)"),
@@ -889,6 +894,48 @@ def step_framework(ctx: Context) -> Result:
                                       f"to install them. This step never fails the run")
 
 
+def step_telegram_dir(ctx: Context) -> Result:
+    """Where the Telegram plugin keeps its poller files for this seat, and from what (#1069).
+
+    Agents on one login are separated for Telegram only by ``TELEGRAM_STATE_DIR`` in each one's own
+    settings ``env``, which gives each its own state directory and so its own bot. An agent without it
+    uses the account-wide default, and the plugin ends an older poller when a newer one starts on the
+    same directory, so another agent on the login, or a session started from another directory, can take
+    the bot's polling from the agent that owns it. Which agents sit on the default is recorded nowhere
+    a check could read, so this step does not refuse it: it says where the files are and from what
+    (the same resolution the outside watch judges the poller by), and reports the default found with
+    drift, naming the setting. It writes nothing and never fails the run."""
+    if ctx.in_container:
+        return Result("telegram-dir", SKIPPED, CONTAINER_OWNS)
+    from pydantic import ValidationError
+
+    from macf.pd import interface, watch
+    try:
+        declaration = interface.Declaration.model_validate_json(interface.declaration_path(ctx.home).read_text())
+    except FileNotFoundError:
+        return Result("telegram-dir", SKIPPED, "no declaration yet, so no Telegram channel is declared")
+    except (OSError, ValidationError, ValueError) as e:
+        return Result("telegram-dir", SKIPPED, f"the declaration can't be read ({type(e).__name__}), so whether "
+                                               f"a Telegram channel is declared isn't known")
+    if not watch.declares_telegram(declaration):
+        return Result("telegram-dir", SKIPPED, "the declaration names no Telegram channel")
+    session = watch.session_places(declaration, ctx.home)
+    project = session.project_dir
+    where, source = watch.telegram_state_dir(ctx.home, project_dir=project, login_home=session.login_home,
+                                             unit_env=session.environment)
+    if source != "the default location":
+        return Result("telegram-dir", ALREADY, f"the Telegram plugin keeps its poller files in {where}, "
+                                               f"from {source}")
+    return Result("telegram-dir", DRIFT,
+                  f"the Telegram plugin will keep its poller files in {where}, the account-wide default. "
+                  f"A newer poller on a directory ends the older one, so another agent on this login, or a "
+                  f"session started from another directory, can take this bot's polling from it, and nothing "
+                  f"records who shares the default. For a seat of its own, set TELEGRAM_STATE_DIR in the "
+                  f"\"env\" of {project / '.claude' / 'settings.local.json'} to a directory that holds that "
+                  f"seat's own bot (the plugin's configure command writes its token and access there). "
+                  f"This step never fails the run")
+
+
 def _missing_permissions(root: Path) -> Optional[List[str]]:
     """The entries ensure_mode_safety_permissions would add, by its own lists, without writing."""
     from macf.utils import claude_settings as cs
@@ -1065,6 +1112,7 @@ RUNNERS: Dict[str, Callable[[Context], Result]] = {
     "channel": step_channel,
     "permissions": step_permissions,
     "framework": step_framework,
+    "telegram-dir": step_telegram_dir,
     "daemon": step_daemon,
     "registry": step_registry,
 }
