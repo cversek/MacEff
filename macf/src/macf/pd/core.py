@@ -18,6 +18,7 @@ A unit's liveness also says what it has in hand, ``in_flight``, which a restart 
 person can give, ``waiting_on`` (MIS-0002-R21 (pd_MUST_report_waiting_on_person)). A
 unit that reports no work in flight is taken as idle, and its restart says so.
 """
+import hashlib
 import json
 import os
 import pwd
@@ -28,7 +29,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
@@ -42,6 +43,7 @@ from macf.pd.interface import (
     EVENT_UNDER_LIMIT,
     EVENT_DAEMON_START,
     EVENT_LIVENESS,
+    EVENT_SESSION_PANE,
     EVENT_STATE,
     Asker,
     Control,
@@ -56,7 +58,7 @@ from macf.pd.interface import (
     declaration_path,
     render,
 )
-from macf.pd.liveness import ENV_HOME, ENV_INTERVAL, ENV_UNIT
+from macf.pd.liveness import ENV_HOME, ENV_INTERVAL, ENV_LAUNCH, ENV_UNIT
 from macf.pd.names import rendered_declaration_problem
 from macf.pd.schedule import CronExpr, check_window
 from macf import calling_card
@@ -289,6 +291,17 @@ def quiet_window_at(declaration: Declaration, at: float):
         if inside:
             return window
     return None
+
+
+#: How long past the wrapper's worst case the daemon waits for a pane's announcement, for the respawn itself.
+PANE_RESPAWN_MARGIN_S = 5.0
+
+
+def launch_digest(command: Sequence[str], env: Mapping[str, str]) -> str:
+    """A short digest of what a unit is launched with, the command and the environment, so a
+    wrapper can say it back and the daemon can tell whether a changed declaration has reached it."""
+    body = json.dumps([list(command), {k: v for k, v in sorted(env.items()) if k != ENV_LAUNCH}])
+    return hashlib.sha256(body.encode()).hexdigest()[:16]
 
 
 def backoff_s(failures: int, base: float = BACKOFF_BASE_S, cap: float = BACKOFF_CAP_S) -> float:
@@ -534,6 +547,12 @@ class _Runner:
     own: List[tuple] = field(default_factory=list)  # (pid, proc_start) of each process started or adopted for it
     held_by: Optional[List[int]] = None  # a session unit not started: the hand-started clients beside it ([] when they couldn't be listed)
     held_check_at: float = 0.0          # monotonic: when a held session unit looks again
+    pane_announced: Optional[tuple] = None   # (pid, start) of a session wrapper that said it can respawn in place (#726)
+    pane_respawns_seen: int = 0         # the respawns that wrapper has announced
+    pane_lookup: Optional[tuple] = None  # (pid, start) whose announcement was looked for in the log, once
+    pane_launch: Optional[str] = None   # what that wrapper said it was launched with (ENV_LAUNCH)
+    pane_respawn_due: Optional[float] = None  # monotonic: a restart in the pane asked, owed by then
+    pane_respawn_reason: Optional[str] = None
 
 
 @dataclass
@@ -556,7 +575,7 @@ class _LogTail:
     credited: liveness that cannot be read is unknown, and unknown is not alive.
     """
 
-    def __init__(self, path: Path, kinds=(EVENT_LIVENESS, EVENT_HARNESS_COMPACTION, EVENT_COMPACTION)):
+    def __init__(self, path: Path, kinds=(EVENT_LIVENESS, EVENT_HARNESS_COMPACTION, EVENT_COMPACTION, EVENT_SESSION_PANE)):
         self.path = path
         self.kinds = tuple(kinds)
         self._needles = tuple(k.encode() for k in self.kinds)
@@ -968,6 +987,7 @@ class Core:
         r.then_start = False
         r.held_restart = None  # a stop also ends a restart a quiet window was holding
         r.held_by = None       # and a session unit held beside a hand-started client
+        r.pane_respawn_due = r.pane_respawn_reason = None  # a stop outranks a restart in the pane
         if r.proc is not None:
             self._signal_stop(r, f"stopped as asked: {reason}")
         elif r.remnant is not None:
@@ -1056,6 +1076,8 @@ class Core:
         for event in self._tail.read():
             if event.get("event") == EVENT_HARNESS_COMPACTION:
                 self._on_harness_compaction(event)
+            elif event.get("event") == EVENT_SESSION_PANE:
+                self._on_session_pane(event)
             elif event.get("event") == EVENT_COMPACTION:
                 self._compacted_at = _float_or_none(event.get("timestamp")) or self._wall()
             else:
@@ -1108,6 +1130,11 @@ class Core:
                     return
                 self._kill(r, signal.SIGKILL)
                 r.kill_at = None
+                return
+            if r.pane_respawn_due is not None and now >= r.pane_respawn_due:
+                reason, r.pane_respawn_due, r.pane_respawn_reason = r.pane_respawn_reason, None, None
+                self._signal_stop(r, f"stopped to restart: {reason} (it did not restart in its pane within "
+                                     f"{r.spec.stop_grace_s:g} s, so the unit restarts whole)")
                 return
             if r.stopping is None:
                 self._check_liveness(r, now)
@@ -1313,7 +1340,11 @@ class Core:
         # An asked restart is half done when the old incarnation exits, whether this
         # core stopped it or it exited while the restart waited on its work in flight.
         asked_restart = r.then_start or r.drain is not None
+        if r.pane_respawn_due is not None:
+            print(f"⚠️ MACF: pd: {r.spec.name} ended instead of restarting in its pane; it restarts whole",
+                  file=sys.stderr)
         r.proc, r.kill_at, r.stopping, r.then_start, r.drain = None, None, None, False, None
+        r.pane_respawn_due = r.pane_respawn_reason = None
         r.alive_at, r.in_flight, r.auth_failed = None, None, None
 
         if stopping is None:
@@ -1524,6 +1555,20 @@ class Core:
             self._transition(r, "failed", why)
         return True
 
+    def _launch(self, r: _Runner) -> Tuple[List[str], Dict[str, str]]:
+        """The command and environment this unit is launched with, rendered from its declaration
+        now (MIS-0002-R13); KeyError when a placeholder has no value here."""
+        command = [render(a, self._placeholders) for a in r.spec.command]
+        env = {k: render(v, self._placeholders) for k, v in r.spec.environment.items()}
+        # Which unit it is and how often it beats come from the unit itself, never typed
+        # again in its environment, where a missing or mistyped value silently stopped
+        # its liveness (persistent_layer 3.2; two of three cutover trial runs).
+        env.setdefault(ENV_UNIT, r.spec.name)
+        env.setdefault(ENV_INTERVAL, f"{r.spec.liveness_interval_s:g}")
+        if "agent_home" in self._placeholders:
+            env.setdefault(ENV_HOME, self._placeholders["agent_home"])
+        return command, env
+
     def _spawn(self, r: _Runner) -> None:
         """Start the unit as this process's child, with the declared environment and
         nothing inherited (MIS-0002-R12 (pd_MUST_start_units_itself)), read from the
@@ -1542,15 +1587,8 @@ class Core:
         if r.spec.kind == "session" and self._held_by_hand_started(r):
             return
         try:
-            command = [render(a, self._placeholders) for a in r.spec.command]
-            env = {k: render(v, self._placeholders) for k, v in r.spec.environment.items()}
-            # Which unit it is and how often it beats come from the unit itself, never typed
-            # again in its environment, where a missing or mistyped value silently stopped
-            # its liveness (persistent_layer 3.2; two of three cutover trial runs).
-            env.setdefault(ENV_UNIT, r.spec.name)
-            env.setdefault(ENV_INTERVAL, f"{r.spec.liveness_interval_s:g}")
-            if "agent_home" in self._placeholders:
-                env.setdefault(ENV_HOME, self._placeholders["agent_home"])
+            command, env = self._launch(r)
+            env[ENV_LAUNCH] = launch_digest(command, env)
         except KeyError as e:
             r.proc, r.pid, r.proc_start = None, None, None
             r.want_up = False
@@ -1665,7 +1703,110 @@ class Core:
 
     def _begin_restart(self, r: _Runner, reason: str) -> None:
         r.then_start = True
+        if self._can_restart_in_pane(r):
+            # The session restarts in its pane and the unit's process, its tmux server and
+            # any attached client stay (#726). SIGUSR1 goes to the wrapper alone: tmux reads
+            # it as "recreate the socket". then_start stays set, so a wrapper that ends
+            # instead completes this as a restart of the whole unit.
+            try:
+                os.kill(r.pid, signal.SIGUSR1)
+            except (ProcessLookupError, PermissionError) as e:
+                print(f"⚠️ MACF: pd: could not ask {r.spec.name} to restart in its pane ({e}); "
+                      f"restarting it whole", file=sys.stderr)
+            else:
+                # The wrapper reaps the old session as the unit's own end does, SIGTERM then SIGKILL, each
+                # for its pane grace, so a session that ignores SIGTERM takes up to twice that before the
+                # pane runs again. The deadline outlasts it, or the case this exists for would get the
+                # whole restart at the stop grace.
+                from macf.pd import session_unit
+                bound = max(r.spec.stop_grace_s, 2 * session_unit.PANE_GRACE_S) + PANE_RESPAWN_MARGIN_S
+                r.pane_respawn_due = self._clock() + bound
+                r.pane_respawn_reason = reason
+                print(f"📡 MACF: pd: restarting {r.spec.name} in its pane: {reason}", file=sys.stderr)
+                return
         self._signal_stop(r, f"stopped to restart: {reason}")
+
+    def _can_restart_in_pane(self, r: _Runner) -> bool:
+        """Whether this session unit's process is a wrapper that said it can restart its session
+        in place. Its word is a ``pd_session_pane`` naming its pid and start; one this daemon's tail
+        missed, because the daemon adopted the wrapper later, is looked for once in the log, back
+        no further than the wrapper's start. A wrapper that never said so is restarted whole:
+        SIGUSR1 would end it."""
+        if (r.spec.kind != "session" or r.proc is None or not r.pid or not r.proc_start
+                or r.client_session or not verify_incarnation(r.pid, r.proc_start)):
+            return False
+        key = (r.pid, r.proc_start)
+        if r.pane_announced == key:
+            return self._launch_unchanged(r)
+        if r.pane_lookup == key:
+            return False
+        r.pane_lookup = key
+        since = start_epoch(r.proc_start)
+        if since is None:
+            return False               # with no start to stop at, the look-back would walk the whole log
+        # The check below stops only at an announcement older than the wrapper, so for a wrapper
+        # that never announced this walks the whole log, once per wrapper. read_events' since=
+        # (#957) bounds it to the wrapper's lifetime; it is passed here once that lands.
+        for event in read_events(reverse=True, scope="all", only=(EVENT_SESSION_PANE,)):
+            at = _float_or_none(event.get("timestamp"))
+            if at is not None and at < since - 60:
+                break                  # older than the wrapper: it never announced
+            data = event.get("data") or {}
+            if data.get("wrapper_pid") == r.pid and data.get("wrapper_start") == r.proc_start:
+                r.pane_announced = key
+                r.pane_launch = data.get("launch") if isinstance(data.get("launch"), str) else None
+                r.pane_respawns_seen = data.get("respawns") if isinstance(data.get("respawns"), int) else 0
+                return self._launch_unchanged(r)
+        return False
+
+    def _launch_unchanged(self, r: _Runner) -> bool:
+        """Whether what the wrapper was launched with is what the declaration would launch now. A
+        restart is how a changed declaration takes effect (MIS-0002-R13), and a pane respawned in
+        place runs on the environment the wrapper already has, so a changed declaration, or a
+        wrapper that doesn't say what it was launched with, gets the whole restart (#726)."""
+        if not r.pane_launch:
+            return False
+        try:
+            command, env = self._launch(r)
+        except KeyError:
+            return False
+        return launch_digest(command, env) == r.pane_launch
+
+    def _on_session_pane(self, event: dict) -> None:
+        """A session wrapper's ``pd_session_pane``: at its start, its word that it can restart in
+        place; after a respawn, the session's new incarnation, reported as a restart (R47)."""
+        data = event.get("data") or {}
+        r = next((u for u in self._units.values() if u.spec.kind == "session"), None)
+        respawns = data.get("respawns")
+        if (r is None or r.proc is None or not isinstance(respawns, int) or data.get("wrapper_pid") != r.pid
+                or not r.proc_start or data.get("wrapper_start") != r.proc_start):
+            return
+        key = (r.pid, r.proc_start)
+        if r.pane_announced != key:
+            r.pane_announced, r.pane_respawns_seen = key, respawns
+            r.pane_launch = data.get("launch") if isinstance(data.get("launch"), str) else None
+            return
+        if respawns <= r.pane_respawns_seen:
+            return
+        r.pane_respawns_seen = respawns
+        reason = r.pane_respawn_reason or "the wrapper restarted it"
+        r.pane_respawn_due = r.pane_respawn_reason = None
+        r.then_start = False
+        r.incarnations += 1
+        self._transition(r, "running", f"restarted in its pane as pid {data.get('pane_pid')}; its tmux "
+                                       f"server and attached clients kept ({reason})")
+        others = {o.spec.name for o in self._units.values() if o is not r and o.state in LIVE_STATES}
+        self._report_carried("session", "the session restarted in its pane", others, {r.spec.name}, {CONTEXT_LOST})
+
+    def session_incarnation_key(self) -> Optional[tuple]:
+        """The session's incarnation for whoever counts them: the unit's process with how many
+        times this daemon has started it or seen it restart in its pane. The lineage check
+        uses ``session_incarnation``, whose root a restart in the pane does not change."""
+        session = self.session_incarnation()
+        if session is None:
+            return None
+        r = next((u for u in self._units.values() if u.spec.kind == "session" and u.pid == session[0]), None)
+        return (*session, r.incarnations if r is not None else 0)
 
     def _fail(self, r: _Runner, reason: str) -> None:
         """A unit that is running but not working: record it failed, then stop what is

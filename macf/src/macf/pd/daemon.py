@@ -478,7 +478,7 @@ class Daemon:
                     self.notifier.flush()
                     self.notifier.wake()
                 if self.dark_channel is not None:
-                    self.dark_channel.tick(self.core.session_incarnation(),
+                    self.dark_channel.tick(self.core.session_incarnation_key(),
                                            bool(self.notifier is not None and self.notifier.channels))
                 if self.unread_mail is not None:
                     self.unread_mail.tick(self.core.session_active_since())

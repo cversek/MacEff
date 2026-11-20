@@ -50,7 +50,7 @@ def short_base():
 
 @pytest.fixture
 def restore_signals():
-    saved = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
+    saved = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGUSR1)}
     yield
     for s, h in saved.items():
         signal.signal(s, h)
