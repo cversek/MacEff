@@ -623,11 +623,11 @@ The checkpoint and the reflection are written wherever steps 1 to 3 end; the las
 
 | Step | Skill | Why it comes here |
 |------|-------|-------------------|
-| 1 | `/maceff:learnings:curate` | First, while the cycle's incidents are fresh; later steps cite what it writes. |
+| 1 | `/maceff-learnings-curate` | First, while the cycle's incidents are fresh; later steps cite what it writes. |
 | 2 | `/maceff-ideas-curate` | After the learnings, so an idea can be the mechanism that would prevent a failure a learning has just named. |
 | 3 | `/maceff-knowledge-web-curate` | Optional: run it only if the context left when this step is reached is above CL15. It links what steps 1 and 2 wrote, so skipping it costs least when they carry their own wiki-links. |
-| 4 | `/maceff:ccp` | After curation, so the checkpoint can point at what curation produced. |
-| 5 | `/maceff:jotewr` | Last, with the whole cycle in view: 5k tokens on a 1M window, 2k on 200K. |
+| 4 | `/maceff-ccp` | After curation, so the checkpoint can point at what curation produced. |
+| 5 | `/maceff-jotewr` | Last, with the whole cycle in view: 5k tokens on a 1M window, 2k on 200K. |
 
 The CL15 condition and the reflection sizes (5k tokens on a 1M window, 2k on 200K) are operator settings, set in 2026-10 and confirmed by the operator, as quoted on the pull request that added this sentence. The condition protects steps 4 and 5, which on one measured 1M deployment took about five CL points between them with policies read by section. An automatic wind-down on a 1M window starts at CL10, so step 3 runs only when the operator starts the sequence earlier.
 

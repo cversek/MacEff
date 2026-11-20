@@ -363,7 +363,7 @@ def group_members(pgid: int) -> List[tuple]:
                 continue
             try:
                 stat = (entry / "stat").read_text()
-            except OSError:
+            except OSError:  # noqa: S112 - a process that exits between the listing and the read is the normal case here, and the docstring says so; a warning per exited process would flood
                 continue  # ended while the table was read
             fields = stat[stat.rfind(")") + 2:].split()
             if len(fields) > 2 and fields[0] != "Z" and fields[2] == str(pgid):
@@ -404,7 +404,7 @@ def tree_rss_mb(root: int) -> Optional[float]:
                 continue
             try:
                 stat = (entry / "stat").read_text()
-            except OSError:
+            except OSError:  # noqa: S112 - a process that ended while the table was read holds no memory
                 continue  # noqa: MACEFF003 - ended while the table was read; it holds no memory now
             fields = stat[stat.rfind(")") + 2:].split()
             if len(fields) > 21:
@@ -714,7 +714,8 @@ class Core:
         """Every declared unit as the core sees it now, for the control socket's status."""
         return [UnitStatus(unit=r.spec.name, state=r.state, pid=r.pid if r.proc else None,
                            proc_start=r.proc_start if r.proc else None, since=r.since,
-                           restart_held_until=self._restart_held_until(r))
+                           restart_held_until=self._restart_held_until(r),
+                           auth_failed=r.auth_failed if r.proc else None)
                 for r in self._units.values()]
 
     def _restart_held_until(self, r: _Runner) -> Optional[str]:
@@ -1203,7 +1204,7 @@ class Core:
             if members:
                 try:
                     os.killpg(r.pid, signal.SIGTERM)
-                except ProcessLookupError:
+                except ProcessLookupError:  # noqa: S110 - the group emptied between the listing and the signal, the normal end of a unit; the remnant's next pass records it
                     pass  # emptied since the listing; the remnant's first pass sees that
                 except PermissionError as e:
                     print(f"⚠️ MACF: pd: cannot signal what {r.spec.name}'s leader left "
@@ -1507,7 +1508,7 @@ class Core:
         if killed_at is None and now >= kill_at:
             try:
                 os.killpg(pgid, signal.SIGKILL)
-            except ProcessLookupError:
+            except ProcessLookupError:  # noqa: S110 - the group emptied between the probe and the signal, the normal end here; the next pass records it
                 pass  # emptied between the probe and the signal
             except PermissionError as e:
                 print(f"⚠️ MACF: pd: cannot signal what is left of {r.spec.name} (group {pgid}): {e}",
@@ -1675,7 +1676,7 @@ class Core:
                 os.kill(r.pid, sig)
                 return
             os.killpg(r.pid, sig)
-        except ProcessLookupError:
+        except ProcessLookupError:  # noqa: S110 - already gone is the normal end of a stop; the next pass reaps the exit
             pass  # already gone; the exit is reaped on the next pass
         except PermissionError as e:
             if r.proc is not None and r.proc.poll() is not None:

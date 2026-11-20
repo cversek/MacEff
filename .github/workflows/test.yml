@@ -146,6 +146,32 @@ jobs:
       - name: Every shard passed
         run: test "${{ needs.shard.result }}" = success
 
+  search-dependencies:
+    # The tests that need the search libraries (lancedb and sentence-transformers, the `recommend`
+    # extra) skip without them, and the shards above don't install sentence-transformers, which
+    # brings torch. So the one test that proves a local search writes nothing to disk could only
+    # run where it failed, never where people see it (#740). Nightly and by hand only: torch is too
+    # heavy for every push. CPU wheels keep it to a few hundred megabytes.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install the package with the search libraries
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install -e "./macf[test,recommend]"
+
+      - name: Run the tests that need them
+        run: >
+          pytest -q -rs --tb=short -m "not live"
+          macf/tests/test_gmail.py macf/tests/test_hybrid_search.py macf/tests/test_policy_roots.py
+        timeout-minutes: 15
+
   style:
     # The gate `ruff.toml` describes as blocking. It was configured, scripted,
     # and invoked by nothing: ruff lives in the `lint` extra, which the test job

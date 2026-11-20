@@ -431,7 +431,9 @@ class Daemon:
         from macf.pd.interface import EVENT_ALLOWLIST_MISMATCH
 
         try:
-            found = allowlist.findings(self.core.declaration, allowlist.managed_allowlist(self._managed))
+            managed = allowlist.managed_allowlist(self._managed)
+            found = (allowlist.findings(self.core.declaration, managed)
+                     + allowlist.unadmitted_without_allowlist(self.core.declaration, managed))
         except (OSError, ValueError) as e:
             found = [f"the managed settings can't be read, so the organization allowlist can't be "
                      f"compared with the declaration: {e}"]
@@ -536,7 +538,7 @@ class Daemon:
         self._stopping = True
         try:
             os.write(self._wake_w, b"x")
-        except BlockingIOError:
+        except BlockingIOError:  # noqa: S110 - stop() runs from a signal handler, where printing is unsafe; a full wake pipe means the loop is already awake
             pass  # the pipe is full, so the loop is already awake
 
     # ------------------------------------------------------------------ the slot
@@ -611,7 +613,7 @@ class Daemon:
             try:
                 if still_mine():
                     path.unlink()
-            except FileNotFoundError:
+            except FileNotFoundError:  # noqa: S112 - a path already gone is what a release wants, not a failure
                 continue  # already gone, which is what a release wants
             except (OSError, ValidationError) as e:
                 print(f"⚠️ MACF: pd: could not release {path}: {e}", file=sys.stderr)

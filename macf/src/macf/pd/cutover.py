@@ -748,7 +748,7 @@ def _process_argv(pid: int) -> List[str]:
     try:
         raw = Path(f"/proc/{pid}/cmdline").read_bytes()
         return [a.decode(errors="replace") for a in raw.split(b"\0") if a]
-    except OSError:
+    except OSError:  # noqa: S110 - no procfs on macOS, where ps is asked next
         pass  # noqa: MACEFF003 - no procfs (macOS): ask ps
     try:
         out = subprocess.run(["ps", "-ww", "-o", "args=", "-p", str(pid)],
@@ -815,7 +815,7 @@ def end_stale_monitors(home: Path, find=None, alive=None, signal_pid=None,
     for pid in stale:
         try:
             signal_pid(pid)
-        except ProcessLookupError:
+        except ProcessLookupError:  # noqa: S110 - the process ended between the listing and the signal, as wanted
             pass  # noqa: MACEFF003 - ended between the listing and the signal, as wanted
     deadline = time.monotonic() + wait_s
     left = [p for p in stale if alive(p)]

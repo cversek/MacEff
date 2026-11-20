@@ -65,6 +65,35 @@ def _no_test_reads_the_hosts_claude_settings(monkeypatch):
     monkeypatch.setattr(cs, "_other_allow_entries", lambda project_root=None: [])
 
 
+#: The client config directory this test run started with, so a test that names its own can be told apart.
+_HOSTS_CLAUDE_CONFIG_DIR = os.environ.get("CLAUDE_CONFIG_DIR")
+
+
+@pytest.fixture(autouse=True)
+def _no_test_reads_the_hosts_feedback_drafts(tmp_path, monkeypatch):
+    """Session start and `pd status` say when the client holds unsent feedback drafts (#903). A
+    developer's own drafts would change what a test sees, so a test reads an empty directory
+    unless it names a config directory of its own, as the drafts' own tests do."""
+    from macf.utils import feedback_drafts as fd
+    real = fd.drafts_dir
+
+    def drafts_dir():
+        configured = os.environ.get("CLAUDE_CONFIG_DIR")
+        if configured and configured != _HOSTS_CLAUDE_CONFIG_DIR:
+            return real()
+        return tmp_path / "no-feedback-drafts"
+    monkeypatch.setattr(fd, "drafts_dir", drafts_dir)
+
+
+@pytest.fixture(autouse=True)
+def _no_test_reads_the_hosts_scheduled_jobs(monkeypatch):
+    """`inject exit` refuses while the session has scheduled jobs, read from the current
+    session's transcript (#854). A test run inside a developer's session would read theirs, so
+    each test sees none; a test of the check sets its own."""
+    from macf import supervisor
+    monkeypatch.setattr(supervisor, "_scheduled_jobs", lambda: [])
+
+
 @pytest.fixture(autouse=True)
 def _no_test_reads_the_hosts_registry(tmp_path, monkeypatch):
     """Every ingest judges agent mail against the operator's registry (MIS-0004 R44), by default

@@ -49,6 +49,27 @@ def test_a_dialog_menu_or_question_is_never_typed_into():
     assert wk.classify(screen(below=("Enter to select · Esc to cancel",))) == wk.DIALOG
 
 
+def test_no_box_on_a_narrow_pane_is_reported_by_its_width_not_as_a_dialog():
+    """#800: a 45-column pane wraps the client's lines past reading, and was reported as a
+    dialog, which sent the agent looking for one. It still holds; it now says why."""
+    assert wk.classify("plain output, no input box", 45) == wk.TOO_NARROW
+    assert wk.classify("plain output, no input box", wk.MIN_READABLE_WIDTH) == wk.DIALOG
+    assert wk.classify("plain output, no input box") == wk.DIALOG, "width unknown"
+    # A box that does read at that width is read; a dialog drawn below it is still a dialog.
+    assert wk.classify(screen(), 45) == wk.IDLE_EMPTY
+    assert wk.classify(screen(below=("Do you want to proceed?",)), 45) == wk.DIALOG
+
+
+def test_a_narrow_pane_hold_names_the_width_and_keeps_the_screen(tmp_path):
+    events, pane = [], FakePane(["wrapped past reading"], columns=45)
+    h = _waker(pane, events, screens_dir=tmp_path / "wake_screens", wall=lambda: 1792292400.0)
+    h.waker.tick([ID1])
+    (event, held), = events
+    assert event == wk.EVENT_HELD and held["reason"] == wk.TOO_NARROW and held["width"] == 45
+    assert Path(held["screen"]).read_text() == "wrapped past reading"
+    assert pane.typed == [] and h.recorded == []
+
+
 def test_a_running_turn_is_seen_by_its_phrase_or_by_the_spinner_alone():
     assert wk.classify(screen(above=("✻ Working… (esc to interrupt)",))) == wk.RUNNING
     # Since 2.1.288 the client prints only the spinner.
@@ -90,11 +111,15 @@ def test_past_eight_ids_the_rest_are_counted_not_named():
 class FakePane:
     """A pane whose screen a test scripts, recording what was typed and pressed."""
 
-    def __init__(self, screens):
+    def __init__(self, screens, columns=None):
         self.screens, self.typed, self.enters, self.log = list(screens), [], 0, []
+        self.columns = columns
 
     def capture(self):
         return self.screens.pop(0) if len(self.screens) > 1 else self.screens[0]
+
+    def width(self):
+        return self.columns
 
     def type(self, text):
         self.typed.append(text)

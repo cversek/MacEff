@@ -67,17 +67,17 @@ def test_a_check_that_raises_records_unknown_and_the_daemon_goes_on(capsys):
     assert events[0]["state"] == "error"
 
 
-def test_several_keychain_logins_read_unknown_not_another_agents(monkeypatch):
-    """A shared macOS login holds one Keychain entry per agent under one service, and nothing
-    says which is this agent's: the verdict is unknown, never another agent's date."""
+def test_two_keychain_entries_judge_the_newest_not_silence(monkeypatch):
+    """#936: a Mac commonly holds two entries under the one service, a newer "unknown" in use
+    and the stale original (#852). Reading those as unknown made the check silent on every such
+    Mac, both maintainers' included. The verdict comes from the newest entry, the login in use,
+    which read_credential returns; agents sharing one macOS login share that one Claude login."""
     import macf.budget as budget
     monkeypatch.setattr(login.sys, "platform", "darwin")
-    monkeypatch.setattr(budget, "keychain_accounts", lambda: ["agent_a", "agent_b"])
+    monkeypatch.setattr(budget, "keychain_accounts", lambda: ["unknown", "operator"])
     monkeypatch.setattr(budget, "read_credential", lambda: _cred(NOW - DAY))
     verdict = login.read_assessment(now=NOW)
-    assert verdict["state"] == "unknown" and "several Keychain logins" in verdict["detail"]
-    monkeypatch.setattr(budget, "keychain_accounts", lambda: ["agent_a"])
-    assert login.read_assessment(now=NOW)["state"] == "expired", "one entry is this agent's own"
+    assert verdict["state"] == "expired", verdict["detail"]
 
 
 def _event(ends):

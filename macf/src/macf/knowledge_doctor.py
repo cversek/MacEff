@@ -14,6 +14,7 @@ specific to this corpus.
 
 from __future__ import annotations
 
+import sys
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -78,7 +79,7 @@ def artifact_date(path: Path) -> float:
         if m:
             try:
                 return _dt.datetime.strptime(m.group(1), "%Y-%m-%d").timestamp()
-            except ValueError:
+            except ValueError:  # noqa: S112 - the name may or may not carry a date; a name without one falls through to the folder name and then the file's mtime
                 continue
     try:
         return path.stat().st_mtime
@@ -123,7 +124,8 @@ def examine(agent_home: Optional[Path] = None,
         examined += 1
         try:
             content = path.read_text(errors="replace")
-        except OSError:
+        except OSError as e:
+            print(f"⚠️ MACF: could not read {path.name} (skipped in the doctor scan): {e}", file=sys.stderr)
             continue
         if concepts_of(ca_type, path, content):
             continue
@@ -216,7 +218,8 @@ def examine(agent_home: Optional[Path] = None,
             continue    # an HTML message is never read for links (amail policy)
         try:
             content = path.read_text(errors="replace")
-        except OSError:
+        except OSError as e:
+            print(f"⚠️ MACF: could not read {path.name} (left out of the drift scan): {e}", file=sys.stderr)
             continue
         # Strip mentions before looking for drift, exactly as extraction does.
         # Scanning raw content made this check internally inconsistent with the

@@ -234,3 +234,48 @@ def test_a_home_keeps_the_name_it_holds_and_only_a_nameless_home_takes_the_key(t
         == "Resident_1a2b3c"
     assert json.loads((bare / ".maceff" / "config.json").read_text())["agent_identity"]["calling_card"] == "Bare"
     assert start.home_agent_name(bare) == "Bare" and start.home_agent_name(tmp_path / "none") is None
+
+
+# --- the deployment container_env reaches the default session (#895) -------------------------
+# A unit inherits nothing, so a variable a deployment sets in defaults.container_env reached its
+# login shells but not the daemon-run session: a tool on the deployment PATH, for one.
+
+def _env_body(container_env):
+    config = AgentsConfig.model_validate({"ids": {"base": 21000}, "agents": {"Resident": _agent()},
+                                          "subagents": {}, "services": {},
+                                          "defaults": {"container_env": container_env}})
+    return config.agents["Resident"].effective_primal_daemon(
+        "Resident", mail=False, container_env=config.defaults.container_env)
+
+
+def test_a_deployment_path_lands_between_the_agent_own_and_the_system():
+    default = _session(_body())["environment"]["PATH"].split(":")
+    env = _session(_env_body({"PATH": "/opt/bun/bin:$PATH:/opt/foundry/bin:${PATH}"}))["environment"]
+    own = default[:2]                       # the interpreter, then the agent's own ~/.local/bin
+    assert env["PATH"].split(":") == own + ["/opt/bun/bin", "/opt/foundry/bin",
+                                            "/usr/local/bin", "/usr/bin", "/bin"]
+
+
+def test_other_deployment_variables_are_added_but_never_over_the_default_own():
+    env = _session(_env_body({"MACF_AMAIL_DOMAIN": "deploy.local", "HOME": "/elsewhere"}))["environment"]
+    assert env["MACF_AMAIL_DOMAIN"] == "deploy.local"
+    assert env["HOME"] != "/elsewhere", "the session keeps the HOME the default states"
+
+
+def test_a_value_with_braces_is_left_out_with_a_warning(capsys):
+    env = _session(_env_body({"GOOD": "1", "BAD": "x{agent_home}y"}))["environment"]
+    assert env["GOOD"] == "1" and "BAD" not in env
+    assert "BAD" in capsys.readouterr().err
+
+
+def test_no_container_env_leaves_the_default_unchanged():
+    assert _session(_body())["environment"] == _session(_env_body({}))["environment"]
+
+
+def test_a_braced_path_entry_is_left_out_and_agents_yaml_still_loads(capsys):
+    """#895 review: ${HOME}/x would read as a daemon placeholder and refuse all of agents.yaml."""
+    env = _session(_env_body({"PATH": "${HOME}/x:/opt/bun/bin:relative"}))["environment"]
+    parts = env["PATH"].split(":")
+    assert "/opt/bun/bin" in parts and not any("{" in p or "$" in p or p == "relative" for p in parts)
+    err = capsys.readouterr().err
+    assert "${HOME}/x" in err and "relative" in err

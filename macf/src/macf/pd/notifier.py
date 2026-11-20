@@ -399,7 +399,7 @@ class Notifier:
             self.on_detach(conn)
         try:
             conn.close()
-        except OSError:
+        except OSError:  # noqa: S110 - closing a socket that already failed; nothing is lost, and the channel was detached above
             pass  # noqa: MACEFF003 - closing a socket that already failed; nothing is lost
 
     @property

@@ -63,3 +63,47 @@ def test_pd_status_says_nothing_without_drafts(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     pd_cli._say_drafts()
     assert capsys.readouterr().out == ""
+
+
+def test_session_start_says_drafts_are_waiting(tmp_path, monkeypatch):
+    """#903: the session-start text names waiting drafts once per session, read only."""
+    from macf.hooks.handle_session_start import _feedback_drafts_block
+    path = _draft(tmp_path, monkeypatch, "e.json", title="A queued note", created_at="2026-10-22T09:00:00Z")
+    block = _feedback_drafts_block()
+    assert "1 unsent feedback draft(s)" in block and '"A queued note"' in block and "inject exit" in block
+    assert json.loads(path.read_text())["title"] == "A queued note"
+
+
+def test_session_start_says_nothing_without_drafts(tmp_path, monkeypatch):
+    from macf.hooks.handle_session_start import _feedback_drafts_block
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    assert _feedback_drafts_block() == ""
+
+
+def test_a_test_that_names_no_config_dir_sees_none_of_the_hosts_drafts():
+    """The conftest keeps a developer's own drafts out of every test that doesn't name its own."""
+    assert unsent_drafts() == []
+
+
+def test_the_recovery_essentials_stay_in_the_preview_with_every_block_present(tmp_path, monkeypatch):
+    """#802 and the review of #961: the blocks in front of the recovery message pushed its
+    essentials past the ~2,000-character preview. With a waiting draft and a long Ask-rules
+    block, the essentials still end inside it, because the recovery message comes right after
+    the identity."""
+    import macf.hooks.handle_session_start as hss
+    from macf.hooks.recovery import format_consciousness_recovery_message
+    from macf.utils import ConsciousnessArtifacts
+    _draft(tmp_path, monkeypatch, "e.json", title="A queued note " * 8, created_at="2026-10-22T09:00:00Z")
+    monkeypatch.setattr(hss, "_ask_rules_block", lambda *a, **k: "<system-reminder>\n" + "ask rule; " * 90 + "\n</system-reminder>\n")
+    monkeypatch.setattr(hss, "_supervision_block", lambda *a, **k: "<system-reminder>\n" + "supervision " * 30 + "\n</system-reminder>\n")
+    files = {k: tmp_path / f"{k}.md" for k in ("reflection", "checkpoint", "roadmap")}
+    for f in files.values():
+        f.write_text("x")
+    artifacts = ConsciousnessArtifacts(reflections=[files["reflection"]], checkpoints=[files["checkpoint"]],
+                                       roadmaps=[files["roadmap"]])
+    message = format_consciousness_recovery_message(session_id="s", auto_mode=True, compaction_count=1,
+                                                    artifacts=artifacts)
+    context = hss._recovery_context(message)
+    assert "unsent feedback draft" in context and "ask rule;" in context    # every block is still there
+    end = context.encode().find(b"has not been read")
+    assert 0 < end < 2000, end
