@@ -43,6 +43,32 @@ def detect_cc_binary() -> str:
     return "(not found on PATH)"
 
 
+def detect_cc_running() -> str:
+    """The binary this session is executing, named by the system, or "" when it can't be told.
+
+    ``detect_cc_binary`` names what is installed. An auto-update moves the launcher under a session
+    that keeps running its older binary, so the two can differ (#866). Claude Code gives its hooks
+    and tool commands its pid as CLAUDE_PID.
+    """
+    from macf.utils.formatting import _running_executable
+
+    pid = os.environ.get("CLAUDE_PID", "")
+    return _running_executable(int(pid)) if pid.isdigit() else ""
+
+
+def describe_cc_running(installed: str, running: str) -> str:
+    """The "CC Running" line: the running binary, marked when it isn't the installed one.
+
+    *installed* is what ``detect_cc_binary`` returned, which may end in " (via <launcher>)".
+    """
+    if not running:
+        return "(unknown: no CLAUDE_PID, or the system won't name its binary)"
+    installed_path = installed.split(" (via ")[0]
+    if not installed_path or installed_path.startswith("(") or installed_path == running:
+        return running
+    return f"{running} (not the installed binary: an update came after this session started)"
+
+
 def encode_cc_project_path(path: str) -> str:
     """Encode a filesystem path the way Claude Code does for project directories.
 
