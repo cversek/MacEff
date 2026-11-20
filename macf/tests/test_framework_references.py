@@ -211,14 +211,50 @@ def test_the_wind_down_dispatcher_can_find_its_protocol():
     # so it should have to be made here as well as in the policy.
     steps = re.findall(r"^\| \d+ \| `/([^`]+)` \|", section.group(1), re.M)
     assert steps == [
-        "maceff:learnings:curate",
+        "maceff-learnings-curate",
         "maceff-ideas-curate",
         "maceff-knowledge-web-curate",
-        "maceff:ccp",
-        "maceff:jotewr",
+        "maceff-ccp",
+        "maceff-jotewr",
     ]
     invocable = _skills() | _commands()
     assert [s for s in steps if s not in invocable] == []
 
     skill = (FRAMEWORK / "skills/maceff-full-wind-down/SKILL.md").read_text()
     assert "macf_tools policy navigate autonomous_operation" in skill
+
+
+# ---- commands moved to skills (#975) ------------------------------------------------------
+
+def test_every_framework_command_is_a_pointer_to_a_skill_that_exists():
+    """Remote Control doesn't list commands reached through a symlink, and the install links the
+    whole commands folder, so the framework's commands moved to skills (#975). For one release
+    each command stays as a pointer that names its skill. A command with a body of its own would
+    be reachable only from the terminal; a pointer naming a missing skill would send the agent
+    nowhere."""
+    root = FRAMEWORK / "commands" / "maceff"
+    skills = _skills()
+    commands = sorted(root.rglob("*.md"))
+    assert commands, "no framework commands found"
+    for path in commands:
+        text = path.read_text()
+        named = re.findall(r"`/(maceff-[a-z0-9-]+)`", text)
+        rel = path.relative_to(FRAMEWORK)
+        assert named, f"{rel}: not a pointer to a skill"
+        assert set(named) <= skills, f"{rel}: names a skill that doesn't exist: {sorted(set(named) - skills)}"
+        assert len(text.splitlines()) <= 6, f"{rel}: has a body of its own, so it is reachable only from the terminal"
+
+
+def test_every_skill_frontmatter_parses_and_names_its_folder():
+    """A command's frontmatter was read leniently; a skill's should parse as YAML. Five hints
+    such as `[token_count] [description]` read as a list followed by stray text, and a skill
+    whose header doesn't parse may not load at all (#975)."""
+    import yaml
+    for path in sorted((FRAMEWORK / "skills").glob("*/SKILL.md")):
+        head = re.match(r"\A---\n(.*?)\n---\n", path.read_text(), re.S)
+        assert head, f"{path.parent.name}: no frontmatter"
+        fields = yaml.safe_load(head.group(1))
+        assert fields["name"] == path.parent.name, f"{path.parent.name}: name is {fields['name']!r}"
+        assert isinstance(fields.get("description"), str) and fields["description"], path.parent.name
+        hint = fields.get("argument-hint")
+        assert hint is None or isinstance(hint, str), f"{path.parent.name}: argument-hint is {hint!r}, not text"

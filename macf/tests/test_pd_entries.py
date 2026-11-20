@@ -560,7 +560,7 @@ def test_the_list_and_agenda_show_when_an_entry_next_fires_not_when_it_first_did
 def test_pd_entry_add_starts_in_ask_and_an_operator_who_loosens_it_keeps_that(tmp_path, monkeypatch):
     """Installing the mode's permissions puts pd entry add in ask, so approving its prompt is the
     operator's consent. One the operator has moved to allow is left there, at every later install,
-    unlike the permanent lists (persistent_layer 10.6)."""
+    unlike the permanent lists (persistent_layer 8.1)."""
     import json
 
     from macf.utils import claude_settings as cs

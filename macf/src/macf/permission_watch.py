@@ -411,7 +411,11 @@ def ask_rules(project_dir: str, home: Path, environ=None) -> List[str]:
     for f in settings_files(project_dir, home, environ):
         try:
             ask = (json.loads(f.read_text(encoding="utf-8")).get("permissions") or {}).get("ask") or []
-        except (OSError, ValueError, AttributeError):
+        except (OSError, ValueError, AttributeError) as e:
+            # Most settings paths are absent on any one host, which is normal; any other failure is
+            # a settings file whose rules are now missing from this answer, so it is said.
+            if not isinstance(e, FileNotFoundError):
+                print(f"⚠️ MACF: reading permissions from {f} failed (its rules are left out): {e}", file=sys.stderr)
             continue
         rules += [r for r in ask if isinstance(r, str) and r not in rules]
     return rules
@@ -430,7 +434,11 @@ def rules_in_force(project_dir: str, home: Path, environ=None) -> List[Tuple[str
     for f in settings_files(project_dir, home, environ):
         try:
             perms = json.loads(f.read_text(encoding="utf-8")).get("permissions") or {}
-        except (OSError, ValueError, AttributeError):
+        except (OSError, ValueError, AttributeError) as e:
+            # Most settings paths are absent on any one host, which is normal; any other failure is
+            # a settings file whose rules are now missing from this answer, so it is said.
+            if not isinstance(e, FileNotFoundError):
+                print(f"⚠️ MACF: reading permissions from {f} failed (its rules are left out): {e}", file=sys.stderr)
             continue
         for kind in RULE_KINDS:
             for rule in perms.get(kind) or []:
@@ -477,15 +485,15 @@ def full_autonomy_denial(modes, play_time_active: bool, permission_mode: Optiona
     """Why an open dialog should be denied at once, or None (autonomous_operation 5.5).
 
     AUTO_MODE alone says nothing: operators stay in it while attending, and a dialog is fine then.
-    It takes a sign that nobody will answer. In the default permission mode nearly every write
-    prompts, so denying there would block the agent's own work; a mode the client did not report
-    could be that one, so unknown leaves the dialog up too."""
+    It takes a sign that nobody will answer: the operator remote, or idle past the presence
+    timeout. A sprint or play time running is no such sign, so a present operator answers its
+    dialogs (#963); ``play_time_active`` is kept for callers and no longer decides. In the default
+    permission mode nearly every write prompts, so denying there would block the agent's own work;
+    a mode the client did not report could be that one, so unknown leaves the dialog up too."""
     if "AUTO_MODE" not in modes or permission_mode in (None, "default"):
         return None
     if "USER_REMOTE" in modes or "USER_IDLE" in modes:
         who = "the operator is away"
-    elif "SPRINT" in modes or play_time_active:
-        who = "a sprint or play time is running"
     else:
         return None
     if tool == "AskUserQuestion":

@@ -187,5 +187,5 @@ def fetch_raw(correlation: str, credential: ImapCredential, *,
         try:
             if client is not None:
                 client.logout()
-        except Exception:  # noqa: BLE001 - a failed logout must not mask a result
-            pass
+        except Exception as e:  # noqa: BLE001 - a failed logout must not mask a result
+            print(f"⚠️ MACF: IMAP logout failed (the connection is left to close on its own): {e}", file=sys.stderr)

@@ -2,7 +2,7 @@
 
 An agent with no declaration has no daemon to vouch for presence, so its line carries
 nothing rather than "unknown" on every call. One with a declaration whose daemon isn't
-alive says ``presence: unknown`` (persistent_layer 5.3), never "nobody". One whose
+alive says ``presence: unknown`` (persistent_layer 10.3), never "nobody". One whose
 daemon is alive shows the onlookers and surfaces its own log records.
 """
 import json

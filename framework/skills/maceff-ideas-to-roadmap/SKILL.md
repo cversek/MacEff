@@ -95,8 +95,8 @@ Using {{ROADMAP_STRUCTURE}}, {{REQUIRED_SECTIONS}}, {{PHASE_FORMAT}} from policy
 1. Create roadmap folder and `roadmap.md`
 2. Reference contributing ideas and their validation experiments in context
 3. Derive phases from idea clusters
-4. Create the MISSION task by invoking `/maceff:task:create_mission`, and each phase
-   by invoking `/maceff:task:create_phase` — not the raw CLI. Those commands are
+4. Create the MISSION task by invoking `/maceff-task-create-mission`, and each phase
+   by invoking `/maceff-task-create-phase` — not the raw CLI. Those skills are
    where per-type framework requirements live, so a path that bypasses them
    silently opts out of every requirement they carry.
 

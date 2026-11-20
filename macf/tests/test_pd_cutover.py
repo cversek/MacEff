@@ -1,4 +1,4 @@
-"""The plan for moving a session onto its primal daemon (persistent_layer 6.3): read from the
+"""The plan for moving a session onto its primal daemon (persistent_layer 5.2): read from the
 host, never acting on it. Every case is played on stand-in probes."""
 import json
 from dataclasses import replace
@@ -71,6 +71,26 @@ def test_a_ready_host_gets_every_step_in_the_runbooks_order(tmp_path):
     # every tmux command names its server's socket: inside a tmux client TMUX outranks TMUX_TMPDIR
     assert all(" -S " in c for c in flat + rollback if c.startswith("tmux"))
     assert not any("TMUX_TMPDIR=" in c for c in flat + rollback)
+
+
+def test_a_staged_declaration_in_the_old_card_form_is_ready_and_says_it_is_rewritten(tmp_path):
+    """The move installs what it finds, and the cut-over rewrites it, so a staged file made before
+    the card revision is not refused at the plan (#919). The plan itself writes nothing."""
+    path = _stage(tmp_path)
+    old = path.read_text().replace(CARD, "Resident@1a2b3c")
+    path.write_text(old)
+    plan = build_plan(tmp_path, CARD, AGENT, _probes(), runtime=RUNTIME)
+    check = next(c for c in plan.checks if c.name == "staged declaration")
+    assert check.ok and "old card form" in check.detail and plan.ready
+    assert path.read_text() == old
+
+
+def test_a_staged_declaration_naming_another_agents_old_card_is_still_refused(tmp_path):
+    path = _stage(tmp_path)
+    path.write_text(path.read_text().replace(CARD, "Other@9f8e7d"))
+    plan = build_plan(tmp_path, CARD, AGENT, _probes(), runtime=RUNTIME)
+    check = next(c for c in plan.checks if c.name == "staged declaration")
+    assert not check.ok and not plan.ready
 
 
 def test_an_already_moved_session_has_nothing_to_do(tmp_path):

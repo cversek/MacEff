@@ -1,5 +1,5 @@
 """The operator's rules on the event stream, through a real daemon (MIS-0002-R152; persistent_layer
-11.4): silence or reroute any source or subscriber, without a restart.
+3.4): silence or reroute any source or subscriber, without a restart.
 
 The stream is each daemon's own MQTT broker. A silenced source is not published; a source routed
 to a reader is published only on that reader's routed subtree; a reader silenced by name keeps no

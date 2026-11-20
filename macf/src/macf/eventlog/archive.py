@@ -24,6 +24,7 @@ and compared by content hash *before* the live log is truncated -- and the whole
 sequence holds the same ``flock`` the writers use, so a concurrent append blocks
 rather than landing in the gap.
 """
+import sys
 import fcntl
 import json
 import lzma
@@ -237,7 +238,7 @@ def rotate_log(
                         if json.loads(lines[i]).get("event") == boundary_event:
                             split = i
                             break
-                    except (json.JSONDecodeError, ValueError):
+                    except (json.JSONDecodeError, ValueError):  # noqa: S112 - scanning back for the boundary event, an unparseable line cannot be the boundary, so the search moves on to older lines
                         continue
 
             to_archive, to_keep = lines[:split], lines[split:]
@@ -251,7 +252,8 @@ def rotate_log(
                     ts = json.loads(line).get("timestamp")
                     if isinstance(ts, (int, float)):
                         stamps.append(ts)
-                except (json.JSONDecodeError, ValueError):
+                except (json.JSONDecodeError, ValueError) as e:
+                    print(f"⚠️ MACF: could not read a timestamp from an archived log line (line stays in the archive, left out of the stamp range): {e}", file=sys.stderr)
                     continue
             if not stamps:
                 return {"rotated": False, "reason": "no parseable timestamps"}

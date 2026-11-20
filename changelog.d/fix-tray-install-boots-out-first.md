@@ -1,0 +1,3 @@
+### Fixed
+
+- **A second `pd tray install` replaces the loaded tray job instead of failing at the bootstrap** (`platform/launchd.py` `tray_install_plan`, #749): launchd refuses to bootstrap a label it has loaded, so a second install wrote the new plist, failed, and left the old job running with the old arguments until the next login. The plan now boots the job out first (going on when nothing is loaded), waits until it is gone, then writes and bootstraps, as the agent daemon's reload plan already does. Tests: the plan's step order, and applying it twice against a stand-in `launchctl` that refuses a bootstrap while the label is loaded.

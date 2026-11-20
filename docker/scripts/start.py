@@ -150,7 +150,7 @@ def check_image_ids(ids) -> None:
         want = ids.slot(name)
         try:
             entry = pwd.getpwnam(name)
-        except KeyError:
+        except KeyError:  # noqa: S112 - the image may not create this account; absence skips its id check
             continue
         if (entry.pw_uid, entry.pw_gid) != (want, want):
             raise DeclaredIdMismatch(
@@ -295,7 +295,7 @@ def write_agent_cards(agents_config: AgentsConfig, *, chown=os.chown) -> Dict[st
         if card_name is None and spec.has_daemon():
             # An agent with only the default keeps the name its home already holds, its card or
             # its moniker, whatever the case of its key; only a home that names no agent takes the
-            # key (persistent_layer 10.1). A home with no usable name costs only that agent its
+            # key (persistent_layer 2.1). A home with no usable name costs only that agent its
             # daemon, said by name when the declaration renders.
             if home_agent_name(home) is not None:
                 continue
@@ -319,9 +319,13 @@ def daemon_accounts(agents_config: AgentsConfig) -> List[tuple]:
     watcher and the aged sweep (MIS-0002-R53 (mail_broker_MUST_be_managed)). A service that
     declares none has no home here, since it has no daemon to read one."""
     # Every agent that isn't vanilla and doesn't opt out gets the container default, with its own
-    # primal_daemon laid over it (persistent_layer 10.1).
+    # primal_daemon laid over it (persistent_layer 2.1).
     mail = agents_config.runs_mail()
-    accounts = [(a.username, a.effective_primal_daemon(key, mail=mail), HOME_ROOT / a.username, None)
+    # The deployment's container_env reaches each default session too, not only login shells (#895).
+    defaults = getattr(agents_config, "defaults", None)
+    env = defaults.container_env if defaults is not None else None
+    accounts = [(a.username, a.effective_primal_daemon(key, mail=mail, container_env=env),
+                 HOME_ROOT / a.username, None)
                 for key, a in agents_config.agents.items()]
     for name, spec in agents_config.services.items():
         declared = spec.primal_daemon is not None
@@ -1119,8 +1123,8 @@ def configure_claude_settings(
     if settings_file.exists():
         try:
             existing_settings = json.loads(settings_file.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass  # Start fresh if file is corrupted
+        except (json.JSONDecodeError, OSError) as e:
+            log(f"⚠️ MACF: could not parse {settings_file} (starting it fresh, so its contents are overwritten): {e}")
     # Merge: existing user keys + managed keys (managed keys win on conflict)
     final_settings = {**existing_settings, **merged_settings.model_dump(exclude_none=True)}
     settings_file.write_text(json.dumps(final_settings, indent=2))
@@ -1131,8 +1135,8 @@ def configure_claude_settings(
     if prefs_file.exists():
         try:
             existing_prefs = json.loads(prefs_file.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass  # Start fresh if file is corrupted
+        except (json.JSONDecodeError, OSError) as e:
+            log(f"⚠️ MACF: could not parse {prefs_file} (starting it fresh, so its contents are overwritten): {e}")
     # Merge: existing user keys + managed keys (managed keys win on conflict)
     final_prefs = {**existing_prefs, **merged_prefs.model_dump()}
     prefs_file.write_text(json.dumps(final_prefs, indent=2))
@@ -2025,10 +2029,13 @@ def render_container_env_script(maceff_tz: Optional[str],
     values /etc/environment carries, for the shells PAM never touches. Plain
     `export` lines only, because every POSIX login shell sources /etc/profile.d.
     """
+    from macf.pd.default_declaration import extra_path_dirs
     exports = {'MACEFF_ROOT_DIR': '/opt/maceff'}
     if maceff_tz:
         exports['MACEFF_TZ'] = maceff_tz
-    exports.update(deployment_env)
+    exports.update({k: v for k, v in deployment_env.items() if k != 'PATH'})
+    # A PATH names directories to add (#895): ahead of the shell's own, never in its place.
+    added = extra_path_dirs(deployment_env.get('PATH') or '')
     lines = [
         '#!/bin/bash',
         '# MacEff container env: framework keys + agents.yaml defaults.container_env.',
@@ -2038,6 +2045,8 @@ def render_container_env_script(maceff_tz: Optional[str],
     ]
     for key in sorted(exports):
         lines.append(f'export {key}={shlex.quote(exports[key])}')
+    if added:
+        lines.append(f'export PATH={shlex.quote(":".join(added))}:"$PATH"')
     return '\n'.join(lines) + '\n'
 
 
@@ -2077,9 +2086,11 @@ def propagate_container_env(agents_config: Optional[AgentsConfig] = None) -> Non
     # Filter out entries we'll rewrite — both the framework's static keys
     # and any deployment-declared keys (so agents.yaml edits propagate
     # correctly across container restarts).
+    # PATH never: a container_env PATH names directories to add (#895), and /etc/environment
+    # can't append, so the profile script adds them; filtering PATH= would drop the system's own.
     filter_prefixes = (
         'MACEFF_TZ=', 'MACEFF_ROOT_DIR=', 'BASH_ENV=',
-        *(f'{k}=' for k in deployment_env),
+        *(f'{k}=' for k in deployment_env if k != 'PATH'),
     )
     lines = [line for line in lines if not any(line.startswith(p) for p in filter_prefixes)]
 
@@ -2093,6 +2104,8 @@ def propagate_container_env(agents_config: Optional[AgentsConfig] = None) -> Non
 
     # Deployment-declared env vars from agents.yaml.defaults.container_env
     for key in sorted(deployment_env):
+        if key == 'PATH':
+            continue                     # added by the profile script, never replaced here
         # Quote values containing spaces/special chars; bare otherwise (PAM-safe)
         value = deployment_env[key]
         lines.append(f'{key}={value}' if all(c.isalnum() or c in '_-/.:' for c in value)
@@ -2555,7 +2568,7 @@ def start_amail_services(agents_config: AgentsConfig) -> None:
     (periodic_mail_clock_MUST_be_schedule)). The daemon restarts a unit that exits or goes
     silent, and the outside watch supervises the daemon. Each sweep run is recorded, and one
     that finds stuck mail is a failed run that `pd status` shows. That is detection, and not yet
-    notification: nothing alerts a person on a failed run (persistent_layer 13).
+    notification: nothing alerts a person on a failed run (persistent_layer 15).
 
     A deployment that configures the broker but declares no such daemon fails this step, by
     name, after everything else in it has run: mail would otherwise have no broker at all.
@@ -2686,7 +2699,7 @@ def _check_inbound_units(agents_config: AgentsConfig) -> None:
     a bare Popen and logged "started" at launch. On their first live start the tunnel exited at
     once on a bad config line while the log said it had started: nothing restarted it and nothing
     reported it. Each is now a declared unit of its account's primal daemon (persistent_layer
-    10.1), whose liveness means working: the receiver answers its health probe, the tunnel holds
+    2.1), whose liveness means working: the receiver answers its health probe, the tunnel holds
     an edge connection (macf.amail.daemons.receiver, macf.amail.daemons.tunnel).
 
     THE TUNNEL IS OPTIONAL AND THE BASE IMAGE STAYS AGNOSTIC. Which transport fronts the receiver
@@ -2720,7 +2733,7 @@ def _check_inbound_units(agents_config: AgentsConfig) -> None:
         raise RuntimeError(
             "amail: /opt/amail_ingest/receiver.env is placed, but no service's primal_daemon "
             "declares a unit running `macf.amail.daemons.receiver`, so nothing accepts inbound "
-            "mail. Declare it on the ingest account: persistent_layer section 8")
+            "mail. Declare it on the ingest account: persistent_layer section 14")
     else:
         log("amail ingest receiver: none configured (no receiver.env)")
     if tunnel:
@@ -2733,7 +2746,7 @@ def _check_inbound_units(agents_config: AgentsConfig) -> None:
         log("amail inbound tunnel: none configured (deployment choice)")
 
 
-#: Where an agent's primal daemon declaration sits in its home (persistent_layer 10.1). An
+#: Where an agent's primal daemon declaration sits in its home (persistent_layer 2.1). An
 #: agent with none is started exactly as before: the container outer tier is opt-in.
 PD_DECLARATION = Path('.maceff') / 'pd' / 'declaration.json'
 
@@ -2862,7 +2875,7 @@ def render_pd_declarations(agents_config: AgentsConfig, *, root: Optional[Path] 
             for leftover in (tmp, target):
                 try:
                     leftover.unlink(missing_ok=True)
-                except OSError:
+                except OSError:  # noqa: S110 - best-effort removal of leftovers; the log below reports the failure
                     pass
             log(f"primal daemon of {account}: not rendered; {e}")
             continue
@@ -2904,7 +2917,7 @@ def start_primal_daemons(agents_config: AgentsConfig) -> List[str]:
         log("primal daemons: none started")
     # Every agent that isn't vanilla and doesn't opt out has a daemon by default; one that couldn't
     # be rendered (its card refused or unusable, or its write failed) is a failed step, named, so
-    # an agent left without supervision isn't a line that scrolls past (persistent_layer 10.1).
+    # an agent left without supervision isn't a line that scrolls past (persistent_layer 2.1).
     unrendered = sorted(spec.username for spec in agents_config.agents.values()
                         if spec.has_daemon() and spec.username not in started)
     if unrendered:
