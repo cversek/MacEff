@@ -138,20 +138,36 @@ class DeclarationRefused(ValueError):
 CUTOVER_KEPT_SUFFIX = ".pre-card-underscore"
 
 
-def cutover_declaration(agent_home: Path, card: str) -> Optional[Path]:
-    """Rewrite a host declaration that names this home's own card in the old ``Name@shortid``
-    form, once, in place, before it is read; the path of the kept original, or None when
-    nothing was rewritten.
+@dataclass(frozen=True)
+class CutoverPending:
+    """What the card cut-over would do to one declaration file: the file, its text now, the old
+    card it names, the text rewritten to the new form, and where the original would be kept."""
+    path: Path
+    text: str
+    old: str
+    rewritten: str
+    kept: Path
+
+
+def cutover_pending(agent_home: Path, card: str, *, path: Optional[Path] = None) -> Optional[CutoverPending]:
+    """The rewrite the cut-over would make to a host declaration that names this home's own card
+    in the old ``Name@shortid`` form, or None when it has nothing to do. Nothing is written.
+
+    *path* names the file: the agent's own declaration by default, or its staged copy
+    (``declaration.json.cutover``) that a move installs from (#919).
 
     A host daemon that restarts onto code refusing the old form (MIS-0002-R165) would exit and
     stay down, and its restart doesn't wait for a person to edit the file. Only the agent's own
     file is rewritten, and only when its old card maps to this home's card (R166); a rendered
     declaration is the deployment's, re-rendered in the new form at start. Every quoted
     occurrence of the old card changes, schedule targets included. The result must validate, or
-    nothing is written. After it, only the new form is ever read."""
-    path = declaration_path(agent_home)
-    if path != Path(agent_home) / ".maceff" / "pd" / "declaration.json":
+    there is nothing to do."""
+    own = declaration_path(agent_home)
+    if own != Path(agent_home) / ".maceff" / "pd" / "declaration.json":
         return None
+    path = own if path is None else path
+    if path.parent != own.parent or path.name not in (own.name, own.name + ".cutover"):
+        return None     # noqa: MACEFF003 - only the agent's own declaration and its staged copy are cut over
     try:
         text = path.read_text()
         old = json.loads(text).get("agent")
@@ -166,18 +182,27 @@ def cutover_declaration(agent_home: Path, card: str) -> Optional[Path]:
         Declaration.model_validate_json(rewritten)
     except ValidationError:
         return None     # noqa: MACEFF003 - left as it was: load_declaration refuses it with the reason
-    mode = path.stat().st_mode & 0o7777
-    kept = path.with_name(path.name + CUTOVER_KEPT_SUFFIX)
-    if not kept.exists():
-        kept.write_text(text)
-        kept.chmod(mode)
-    staged = path.with_name(path.name + ".rewriting")
-    staged.write_text(rewritten)
+    return CutoverPending(path, text, old, rewritten, path.with_name(path.name + CUTOVER_KEPT_SUFFIX))
+
+
+def cutover_declaration(agent_home: Path, card: str, *, path: Optional[Path] = None) -> Optional[Path]:
+    """Make the rewrite ``cutover_pending`` describes, once, in place, before the file is read;
+    the path of the kept original, or None when nothing was rewritten. The original is kept
+    beside it, and the rewrite is recorded as ``pd_declaration_rewritten``."""
+    pending = cutover_pending(agent_home, card, path=path)
+    if pending is None:
+        return None
+    mode = pending.path.stat().st_mode & 0o7777
+    if not pending.kept.exists():
+        pending.kept.write_text(pending.text)
+        pending.kept.chmod(mode)
+    staged = pending.path.with_name(pending.path.name + ".rewriting")
+    staged.write_text(pending.rewritten)
     staged.chmod(mode)
-    os.replace(staged, path)
-    append_event("pd_declaration_rewritten", {"agent": card, "from": old, "path": str(path),
-                                              "kept": str(kept), "reason": "MIS-0002-R165 cut-over"})
-    return kept
+    os.replace(staged, pending.path)
+    append_event("pd_declaration_rewritten", {"agent": card, "from": pending.old, "path": str(pending.path),
+                                              "kept": str(pending.kept), "reason": "MIS-0002-R165 cut-over"})
+    return pending.kept
 
 
 def load_declaration(agent_home: Path, card: str) -> Declaration:
