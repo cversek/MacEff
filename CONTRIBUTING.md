@@ -41,6 +41,13 @@ Hooklets come from two places, and the split is deliberate:
 The OPSEC scanner lives in the second one: it hardcodes the location of a private pattern file,
 and committing that would publish one developer's private vocabulary to everyone who clones.
 
+**An old adopted copy of `macf/scripts/pre-commit-hook.sh` needs refreshing.** Before the dispatcher
+existed, some clones installed that script as their `pre-commit` hook, and the dispatcher adopted it as
+`00-local-preexisting`. Its silent-exception check used to refuse any merge of main (#1023). The script in
+the repository now skips that check while a merge is being concluded, but your adopted copy is a copy:
+to get the fix, carry the same `MERGE_HEAD` guard over to it by hand. Do not copy the repository script
+over it if yours also holds private patterns.
+
 To skip the whole chain deliberately — a scripted flow, or mid-rebase — use `MACF_SKIP_HOOKS=1`
 rather than reaching for `--no-verify` on everything.
 
