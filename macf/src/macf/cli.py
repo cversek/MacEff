@@ -1939,6 +1939,22 @@ def cmd_harness_attach(args: argparse.Namespace) -> int:
         if decision.exit_code is not None:
             print(decision.message, file=sys.stderr)
             return decision.exit_code
+        from .utils.attach_dispatch import control_refusal
+        refused = control_refusal(decision.argv)
+        if refused and getattr(args, "control", None) is not True and entry is not None:
+            # Control mode came from the declared default (`control: true`), not from the flag: this terminal
+            # can't use it, so attach plainly and say so, rather than refuse a command that asked for nothing.
+            print(f"⚠️ MACF: {refused.split(' Attach')[0]} Attaching without it.", file=sys.stderr)
+            decision = decide(entry, remotes, control=False, read_only=getattr(args, "read_only", False),
+                              plan_for_home=plan_attach_for_home, plan_for_card=plan_attach_for_card,
+                              has_session=has_session, environment=client_environment)
+            if decision.exit_code is not None:
+                print(decision.message, file=sys.stderr)
+                return decision.exit_code
+            refused = control_refusal(decision.argv)
+        if refused:
+            print(f"❌ {refused}", file=sys.stderr)
+            return 2
         env = decision.env or dict(os.environ)
         for command in decision.before:
             # Naming the window is a courtesy: a tmux that refuses it still attaches.
