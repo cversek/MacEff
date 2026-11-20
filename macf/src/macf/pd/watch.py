@@ -371,12 +371,37 @@ def declares_telegram(declaration: "interface.Declaration") -> bool:
                for c in declaration.operator_channels or [])
 
 
-def telegram_state_dir(env: Optional[Dict[str, str]] = None) -> Path:
-    """Where the Telegram plugin keeps its poller's files for the user this watch runs as: the
-    plugin's own override, else the login's ``~/.claude/channels/telegram``."""
+def _settings_state_dir(path: Path) -> Optional[str]:
+    """``env.TELEGRAM_STATE_DIR`` from one Claude Code settings file, or None. Only that key is
+    read out of the file, and one that can't be read is said and skipped, never guessed."""
+    try:
+        settings = json.loads(path.read_text())
+    except FileNotFoundError:
+        return None  # noqa: MACEFF003 - a home without this settings file simply has no override there
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: watch: {path} can't be read ({e}), so its Telegram state directory isn't used", file=sys.stderr)
+        return None
+    env = settings.get("env") if isinstance(settings, dict) else None
+    value = env.get(TELEGRAM_STATE_ENV) if isinstance(env, dict) else None
+    return value if isinstance(value, str) and value else None
+
+
+def telegram_state_dir(home: Optional[Path] = None, env: Optional[Dict[str, str]] = None) -> Tuple[Path, str]:
+    """Where the Telegram plugin keeps its poller's files for the agent at *home*, and which source
+    said so (#1069). An isolated seat sets ``TELEGRAM_STATE_DIR`` in its own settings ``env``, which
+    Claude Code hands to the plugin and which the process running this watch never sees, so the
+    home's ``.claude/settings.local.json`` is read first, then its ``.claude/settings.json``, then
+    this process's environment, then the login's ``~/.claude/channels/telegram``."""
     import os
     env = os.environ if env is None else env
-    return Path(env.get(TELEGRAM_STATE_ENV) or Path.home() / ".claude" / "channels" / "telegram")
+    if home is not None:
+        for name in ("settings.local.json", "settings.json"):
+            found = _settings_state_dir(Path(home) / ".claude" / name)
+            if found:
+                return Path(found).expanduser(), f"{name} of the home"
+    if env.get(TELEGRAM_STATE_ENV):
+        return Path(env[TELEGRAM_STATE_ENV]).expanduser(), "the watch's environment"
+    return Path.home() / ".claude" / "channels" / "telegram", "the default location"
 
 
 def _pid_alive(pid: int) -> bool:
@@ -408,7 +433,14 @@ def _newest_heartbeat(diag: Path, pid: int) -> Optional[float]:
 
 
 def check_telegram(card: str, state_dir: Path, now: float,
-                   alive: Callable[[int], bool] = _pid_alive) -> Finding:
+                   alive: Callable[[int], bool] = _pid_alive, source: str = "") -> Finding:
+    """The finding of ``_check_telegram``, with the source of the state directory said in it, so an
+    operator reading CHECK-FAILED or POLLER-DOWN sees whose files were read."""
+    found = _check_telegram(card, state_dir, now, alive)
+    return dataclasses.replace(found, detail=f"{found.detail} [state dir from {source}]") if source else found
+
+
+def _check_telegram(card: str, state_dir: Path, now: float, alive: Callable[[int], bool]) -> Finding:
     """The Telegram poller of a seat whose declaration names Telegram as an operator channel
     (#1069). A poller can end with nothing said: the plugin exits when its parent ends or a
     newer poller takes the bot, and the session carries on without its operator's phone. Read
@@ -420,8 +452,8 @@ def check_telegram(card: str, state_dir: Path, now: float,
         raw = (state_dir / "bot.pid").read_text().strip()
     except FileNotFoundError:
         return Finding(card, "telegram", "CHECK-FAILED",
-                       f"no bot.pid in {state_dir}: no poller has been recorded there, or the plugin keeps its "
-                       f"files elsewhere for this seat")
+                       f"no bot.pid in {state_dir}: no poller has been recorded there, or the plugin keeps "
+                       f"its files elsewhere for this seat")
     except OSError as e:
         return Finding(card, "telegram", "CHECK-FAILED", f"bot.pid cannot be read: {e.strerror}")
     try:
@@ -725,7 +757,8 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
         except FileNotFoundError:
             findings.append(check_remote_control(card, None, now))
     if probe is not None and declares_telegram(declaration):   # the operator's phone rides on a poller
-        findings.append(check_telegram(card, telegram_dir if telegram_dir is not None else telegram_state_dir(), now))
+        where, source = (telegram_dir, "the caller") if telegram_dir is not None else telegram_state_dir(home)
+        findings.append(check_telegram(card, where, now, source=source))
     if declaration.channel_connect_s is not None:      # a channel is expected, so watch it
         try:
             findings.append(check_channel(card, last_channel_event(log_path, card, now), now))

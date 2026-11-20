@@ -106,9 +106,44 @@ def test_the_new_verdict_has_an_exit_code():
     assert watch.exit_code([f]) == watch.EXIT_UNHEALTHY
 
 
-def test_the_state_dir_follows_the_plugins_override_else_the_login(tmp_path):
-    assert watch.telegram_state_dir({watch.TELEGRAM_STATE_ENV: str(tmp_path)}) == tmp_path
-    assert watch.telegram_state_dir({}).parts[-3:] == (".claude", "channels", "telegram")
+def _settings(home, name, body):
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    (home / ".claude" / name).write_text(body if isinstance(body, str) else json.dumps(body))
+
+
+def test_the_state_dir_comes_from_the_homes_settings_before_anything_else(tmp_path):
+    home = tmp_path / "seat"
+    _settings(home, "settings.json", {"env": {watch.TELEGRAM_STATE_ENV: str(tmp_path / "shared")}})
+    _settings(home, "settings.local.json", {"env": {watch.TELEGRAM_STATE_ENV: str(tmp_path / "own")}})
+    env = {watch.TELEGRAM_STATE_ENV: str(tmp_path / "process")}
+    assert watch.telegram_state_dir(home, env) == (tmp_path / "own", "settings.local.json of the home")
+    (home / ".claude" / "settings.local.json").unlink()
+    assert watch.telegram_state_dir(home, env) == (tmp_path / "shared", "settings.json of the home")
+    (home / ".claude" / "settings.json").unlink()
+    assert watch.telegram_state_dir(home, env) == (tmp_path / "process", "the watch's environment")
+    path, source = watch.telegram_state_dir(home, {})
+    assert path.parts[-3:] == (".claude", "channels", "telegram") and source == "the default location"
+
+
+def test_a_settings_file_without_the_key_or_unreadable_falls_through_and_says_so(tmp_path, capsys):
+    home = tmp_path / "seat"
+    _settings(home, "settings.local.json", {"permissions": {"allow": []}, "env": {"OTHER": "x"}})
+    _settings(home, "settings.json", "{not json")
+    path, source = watch.telegram_state_dir(home, {watch.TELEGRAM_STATE_ENV: str(tmp_path / "process")})
+    assert (path, source) == (tmp_path / "process", "the watch's environment")
+    assert "settings.json" in capsys.readouterr().err        # the unreadable one is said, not guessed past
+
+
+def test_an_isolated_seat_whose_settings_name_its_directory_is_judged_by_that_directory(tmp_path):
+    """CTB's finding on the first version: the seat's directory is set in its settings, which the watch's
+    own environment never holds, so every isolated seat read CHECK-FAILED from the default directory."""
+    import os
+    home = _home(tmp_path, ["plugin:telegram:telegram"])
+    seat_dir = _state(tmp_path, pid=os.getpid(), beats=(20,))
+    _settings(home, "settings.local.json", {"env": {watch.TELEGRAM_STATE_ENV: str(seat_dir)}})
+    (f,) = _telegram_findings(watch.check_home(home, NOW, probe=lambda pid, start: True))
+    assert f.verdict == "ALIVE", f
+    assert "settings.local.json of the home" in f.detail      # the finding says whose files were read
 
 
 def _home(tmp_path, channels):
