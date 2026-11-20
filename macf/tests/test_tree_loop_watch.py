@@ -345,3 +345,29 @@ class TestTheLoopRedrawsOnlyForDisplayEvents:
         log.write_text("")                                        # rotated
         self._append(log, "work_mode_change", 400.0)
         assert cli._display_events_mtime(log) == 400.0
+
+    def test_a_first_read_from_the_middle_of_a_big_log_skips_the_partial_line_quietly(self, tmp_path, monkeypatch, capsys):
+        """Review of #990: the first read seeks to size - 64 KiB, which lands mid-line; that fragment is not an
+        unparseable record and must not warn on every loop start."""
+        from macf import cli
+        log = self._log(tmp_path, monkeypatch)
+        for i in range(2000):                                     # well over 64 KiB
+            self._append(log, "tool_call_started", 10.0 + i)
+        self._append(log, "scope_activated", 5000.0)
+        assert cli._display_events_mtime(log) == 5000.0
+        assert "unparseable" not in capsys.readouterr().err
+
+    def test_a_line_still_being_written_is_read_once_it_is_complete(self, tmp_path, monkeypatch, capsys):
+        """Review of #990: the cursor stops at the last newline, so a half-written line is read on the next poll
+        instead of warning and being skipped for good."""
+        import json
+        from macf import cli
+        log = self._log(tmp_path, monkeypatch)
+        line = json.dumps({"timestamp": 700.0, "event": "role_focus_change", "data": {}}) + "\n"
+        with open(log, "a") as f:
+            f.write(line[:20])
+        assert cli._display_events_mtime(log) == 0.0
+        with open(log, "a") as f:
+            f.write(line[20:])
+        assert cli._display_events_mtime(log) == 700.0
+        assert "unparseable" not in capsys.readouterr().err

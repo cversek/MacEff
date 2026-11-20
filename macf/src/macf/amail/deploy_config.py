@@ -386,7 +386,7 @@ def _refuse_double_claims(addressing: "AddressingConfig", peers: Dict[str, Any])
     for name, b in addressing.agents.items():
         try:
             local = local_part_from_card(b.card or agent_card(b.home), b.zone_token)
-        except (IdentityError, ValueError):
+        except (IdentityError, ValueError):  # noqa: S112 - _require_zone_cards already refused this agent
             continue   # _require_zone_cards has already refused this agent
         claims.setdefault(local, []).append(f"local agent '{name}'")
     missing = []
