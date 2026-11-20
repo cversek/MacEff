@@ -1007,6 +1007,19 @@ def _hooks_to_install_list():
     ]
 
 
+def _hook_interpreter() -> str:
+    """The interpreter a host's hook commands run under: the one running this installer, quoted
+    for the shell that runs the command, by its absolute path.
+
+    A bare ``python`` resolves to whatever the shell finds first. With the README's own virtual
+    environment install that is the system interpreter, which can't import ``macf``, so every
+    hook failed with ``ModuleNotFoundError`` at the first session after ``framework install``
+    (#860 item 6). The interpreter that ran the installer is the one that has ``macf``, as the
+    container's hooks and the daemon's declaration already name theirs."""
+    import shlex
+    return shlex.quote(sys.executable)
+
+
 def cmd_hook_install(args: argparse.Namespace) -> int:
     """Install consciousness hooks with local/global mode selection.
 
@@ -1083,14 +1096,14 @@ def cmd_hook_install(args: argparse.Namespace) -> int:
                 # Host global: write the absolute home path. ~ expansion is
                 # shell-dependent and CC's hook exec model isn't documented to
                 # guarantee it; absolute removes the assumption.
-                hooks_prefix = f"python {Path.home()}/.claude/hooks"
+                hooks_prefix = f"{_hook_interpreter()} {Path.home()}/.claude/hooks"
         else:
             # Local mode (host only - container always uses global).
             # Resolve to canonical absolute path so symlinked project trees,
             # relative invocations, and CWD-shifts all hit the same hooks dir.
             hooks_dir = Path.cwd() / ".claude" / "hooks"
             settings_file = Path.cwd() / ".claude" / "settings.local.json"
-            hooks_prefix = f"python {hooks_dir.resolve()}"
+            hooks_prefix = f"{_hook_interpreter()} {hooks_dir.resolve()}"
 
         # Create hooks directory
         hooks_dir.mkdir(parents=True, exist_ok=True)
@@ -1662,9 +1675,10 @@ def cmd_statusline(args: argparse.Namespace) -> int:
                 stdin_data = sys.stdin.read().strip()
                 if stdin_data:
                     cc_json = json.loads(stdin_data)
-            except (json.JSONDecodeError, Exception):  # noqa: S110 - statusline runs on every refresh and its stderr must stay clean; non-JSON stdin is normal when run by hand, and MACF data is used instead
-                # Ignore stdin parsing failures - use MACF data only
+            except json.JSONDecodeError:  # noqa: S110 - non-JSON stdin is normal when the statusline is run by hand, and MACF data is used instead
                 pass
+            except Exception as e:  # noqa: BLE001 - GUARD: a statusline refresh must neither fail nor write to stderr, so a real fault reading stdin is recorded where it can be found (#999)
+                append_event("statusline_stdin_fault", {"error": f"{type(e).__name__}: {e}"})
 
         # Gather statusline data
         data = get_statusline_data(cc_json=cc_json)
