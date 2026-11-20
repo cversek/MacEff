@@ -316,7 +316,7 @@ YYYY-MM-DD_HHMMSS_Description_ccp.md
 ### 4.1 Token Budget Breakdown
 
 **Claude Code 2.0 Transparent Accounting**:
-- **Total context window**: Configurable via `MACF_CONTEXT_WINDOW` env var (default: 200k; set to 1000000 for 1M models)
+- **Total context window**: Configurable via `MACF_CONTEXT_WINDOW` env var (default: 200k; set to 1000000 for 1M models); or `context.window` in `.maceff/config.json`. Nothing detects the window from the account, so when neither is set the 200k is an assumption: `macf_tools env` and the hook's token section say "assumed default" beside it, and every CL level and boundary warning is then measured against that number. An agent that sees the label and has a larger window sets one of the two before trusting a CL level.
 - **Overhead varies by window size**: On 200k, ~45k reserved (22.5%). On 1M, only ~53k overhead (~5%), mostly system prompt/tools — compact buffer drops from 45k to 3k
 - **Usable space**: ~155k on 200k window; ~947k on 1M window
 

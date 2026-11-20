@@ -210,3 +210,31 @@ def test_held_runs_go_through_the_real_event_log_and_a_failed_append_refuses(cor
     monkeypatch.setattr(agent_events_log, "append_event", lambda *a, **k: False)
     with pytest.raises(ke.EvalRefused, match="could not record knowledge_eval_held_run"):
         ke.evaluate(corpus, ["idf"], sources=["xref"], which="held", boot=10)
+
+
+def test_an_orphan_artifact_is_not_a_query_and_the_chart_says_how_many_were_left_out(log):
+    """An artifact outside the web can't be a --like query, so it can't raise from one (#1059); it
+    is left out of the queries and counted."""
+    snap = _snapshot()
+    orphans = [k for k in list(snap["nodes"])[:3]]
+    for k in orphans:
+        snap["nodes"][k]["in_web"] = False
+    out = ke.evaluate(ke.Corpus(snap, "f" * 64), ["random", "like"], sources=["xref"], **log.kw(), boot=50)
+    info = out["chart"]["sources"]["xref"]
+    assert info["orphan_queries"] == len(orphans)
+    assert "outside the web" in ke.format_report(out)
+
+
+def test_an_orphan_target_is_not_counted_as_a_miss_and_a_query_with_only_orphan_targets_is_left_out(log):
+    """The ranked list is cut to the web, so a target outside it can never be returned (THM's review of
+    #1061). Counted against every ranker it would pull recall down for nobody's fault."""
+    snap = _snapshot()
+    names = list(snap["nodes"])
+    # learning i cross-references learning i+4, so making 4 an orphan makes it the only target of 0
+    snap["nodes"][names[4]]["in_web"] = False
+    out = ke.evaluate(ke.Corpus(snap, "f" * 64), ["random", "idf"], sources=["xref"], **log.kw(), boot=50)
+    info = out["chart"]["sources"]["xref"]
+    assert info["orphan_queries"] == 1                       # learning 4 as a query
+    assert info["orphan_targets"] >= 1 and info["no_target_queries"] >= 1
+    report = ke.format_report(out)
+    assert "targets left out" in report and "no target in the web" in report
