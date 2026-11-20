@@ -732,13 +732,17 @@ matches. A dialog can still open for other reasons, and when
 `permissions.deny_under_full_autonomy` is true (default false;
 `MACF_DENY_UNDER_FULL_AUTONOMY` overrides it), the PermissionRequest hook denies it at
 once, with a reason, and records `permission_auto_denied` in the event log. It applies
-in AUTO_MODE when the operator is away (USER_IDLE or USER_REMOTE) or a sprint or play
-time is in active scope.
+in AUTO_MODE when the operator is away: USER_REMOTE, or USER_IDLE, which begins once
+`MACF_USER_IDLE_TIMEOUT_MINS` pass without a message from them.
 
 - **AUTO_MODE alone does not trigger it.** Operators stay in AUTO_MODE while attending,
   and then a dialog is fine.
-- **The state is derived.** There is no flag to arm or forget: the modes and the scope
-  decide, and if they can't be read the dialog stays up.
+- **Neither does a sprint or play time.** An operator present during one answers its
+  dialogs. The dialog stays up until they do, or until the idle timeout says they've gone
+  (the repo owner, 2026-11-09, after a sprint's dialogs were denied with him at the
+  keyboard).
+- **The state is derived.** There is no flag to arm or forget: the modes decide,
+  and if they can't be read the dialog stays up.
 - **The default permission mode is exempt**, because nearly every write prompts there
   and denying would block the agent's own work. A mode the client doesn't report is
   treated the same way.

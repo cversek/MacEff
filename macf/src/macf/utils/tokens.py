@@ -230,12 +230,15 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
 
         if sidecar_dir:
             cache_path = sidecar_dir / "token_cache.json"
-            try:
-                cache_data = read_json(cache_path)
-                if cache_data and cache_data.get("session_id") == session_id:
-                    cached_max = cache_data.get("max_tokens_used", 0)
-            except (FileNotFoundError, OSError, json.JSONDecodeError) as e:
-                print(f"⚠️ MACF: token cache {cache_path.name} unreadable (cached maximum taken as 0): {e}", file=sys.stderr)
+            # A session has no cache until the first write, so a missing one is the normal case on
+            # the first hook calls: nothing to say (#999). One that is there and can't be read is said.
+            if cache_path.exists():
+                try:
+                    cache_data = read_json(cache_path)
+                    if cache_data and cache_data.get("session_id") == session_id:
+                        cached_max = cache_data.get("max_tokens_used", 0)
+                except (FileNotFoundError, OSError, json.JSONDecodeError) as e:
+                    print(f"⚠️ MACF: token cache {cache_path.name} unreadable (cached maximum taken as 0): {e}", file=sys.stderr)
 
         jsonl_path = get_session_transcript_path(session_id)
 

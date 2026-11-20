@@ -264,6 +264,36 @@ agents:
     contacts: [ira, ...]
 ```
 
+**`account` resolves the home too.** An agent declared by `account` gets that
+account's uid **and its home directory**, and a `home` that differs is refused.
+Two agents that share a login but keep separate agent homes (the usual shape on
+an operator's machine) are declared by `uid` and `home` instead:
+
+```yaml
+agents:
+  alpha:
+    uid: 501
+    home: /Users/<login>/agents/alpha
+    shared_uid: true
+    card: Alpha_0a1b2c
+    contacts: [{address: beta@<domain>, direction: both}]
+```
+
+**What each agent needs in its own settings.** The broker's files say who
+exists; each agent's client is told where things are by `.maceff/amail.json` in
+its own agent home, which the agent writes and nobody else does:
+
+```json
+{"agent": "alpha", "domain": "<domain>",
+ "socket": "<deployment dir>/broker.sock", "handoff": "<deployment dir>/handoff",
+ "contacts": "<deployment dir>/addressing.yaml",
+ "broker_config": "<deployment dir>/broker_config.yaml", "autostart": true}
+```
+
+`agent` is the claim the client sends on a shared uid, for `send` and for
+`status` alike. Without `socket` the client looks for `/run/amail/broker.sock`,
+the container's path, and reports the broker unreachable.
+
 **What it changes.** On a uid marked shared, the broker takes the submitting
 identity from the client's claim (the agent name the client holds for itself),
 accepts it only if the file binds that name to the connecting uid, and writes
