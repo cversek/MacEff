@@ -285,12 +285,14 @@ def last_login_event(log_path: Path, card: str, now: float,
     return None
 
 
-def check_login(card: str, event: Optional[dict], now: float) -> Optional[Finding]:
+def check_login(card: str, event: Optional[dict], now: float,
+                expiring_s: Optional[float] = None) -> Optional[Finding]:
     """The agent's login, from the daemon's own reading of its stored credential (#884), so an
     expired login is heard of before the session needs to work, not at its first failed turn.
     The verdict is re-judged against now from the recorded end date, so a login that ran out
     since the daemon last recorded reads expired. None when no daemon here records logins."""
     from macf.pd.login import EXPIRING_S
+    expiring_s = EXPIRING_S if expiring_s is None else expiring_s     # the declaration's warn_days (#1027)
     if event is None:
         return None
     data = event.get("data") or {}
@@ -307,7 +309,7 @@ def check_login(card: str, event: Optional[dict], now: float) -> Optional[Findin
     if left <= 0:
         return Finding(card, "login", "LOGIN-EXPIRED",
                        f"its refresh grant ended {_age(-left)} ago: run /login in its session{reach}")
-    if left <= EXPIRING_S:
+    if left <= expiring_s:
         return Finding(card, "login", "LOGIN-EXPIRING",
                        f"its refresh grant ends in {_age(left)}: run /login in its session before then{reach}")
     return Finding(card, "login", "ALIVE", f"its refresh grant ends in {_age(left)}")
@@ -568,6 +570,9 @@ def check_unit(card: str, unit: interface.Unit, event: Optional[dict], now: floa
     return Finding(card, unit.name, "ALIVE", f"last liveness {_age(r.age)} ago")
 
 
+from macf.pd.login import warn_seconds  # noqa: E402 -- one reading of the declared login window (#1027)
+
+
 def check_home(home: Path, now: float, base: Optional[Path] = None,
                probe: Optional[Probe] = verify_incarnation) -> List[Finding]:
     """Every finding for one agent home. ``probe`` None skips the process probes, for a
@@ -620,7 +625,8 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
         except FileNotFoundError:
             findings.append(check_receipts(card, [], now))
         try:
-            login = check_login(card, last_login_event(log_path, card, now), now)
+            login = check_login(card, last_login_event(log_path, card, now), now,
+                                warn_seconds(declaration))
         except FileNotFoundError:
             login = None
         if login is not None:

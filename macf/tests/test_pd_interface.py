@@ -371,3 +371,49 @@ def test_a_pace_is_asked_by_the_agent_or_the_operator_only():
     for bad in ("Infinity", "NaN", "-Infinity"):          # what json.dumps writes for inf and nan
         with pytest.raises(ValidationError):
             pdi.parse_request(ok.replace("300", bad))
+
+
+# ---- reports (#1027) --------------------------------------------------------
+
+def _reports(**over):
+    rep = {"times": ["07:45", "19:45"], "missed": {"kind": "run_once_in_window",
+                                                   "window": {"start": "07:00", "end": "11:00"}}}
+    rep.update(over)
+    return rep
+
+
+def test_a_declaration_without_reports_is_unchanged():
+    assert pdi.Declaration.model_validate(_declaration()).reports is None
+
+
+def test_reports_carry_times_a_warning_window_and_a_missed_run_policy():
+    decl = pdi.Declaration.model_validate(_declaration(timezone="America/New_York",
+                                                       reports=_reports(warn_days=5, reporter=CARD)))
+    assert decl.reports.times == ["07:45", "19:45"] and decl.reports.warn_days == 5
+    assert decl.reports.reporter == CARD and decl.reports.missed.kind == "run_once_in_window"
+
+
+def test_the_warning_window_defaults_to_the_three_days_the_watch_has_always_used():
+    from macf.pd.login import EXPIRING_S
+    decl = pdi.Declaration.model_validate(_declaration(timezone="UTC", reports=_reports()))
+    assert decl.reports.warn_days * 86400 == EXPIRING_S
+
+
+def test_reports_without_a_missed_run_policy_are_refused():
+    """R25 and R109: no default, since a report on a schedule is a schedule."""
+    rep = _reports()
+    del rep["missed"]
+    with pytest.raises(ValidationError, match="missed"):
+        pdi.Declaration.model_validate(_declaration(timezone="UTC", reports=rep))
+
+
+def test_reports_name_the_timezone_their_times_are_read_in():
+    with pytest.raises(ValidationError, match="timezone"):
+        pdi.Declaration.model_validate(_declaration(reports=_reports()))
+
+
+@pytest.mark.parametrize("over", [{"times": []}, {"times": ["7:45"]}, {"times": ["25:00"]},
+                                  {"times": ["07:45", "07:45"]}, {"warn_days": 0}, {"warn_days": 400}])
+def test_reports_refuse_a_time_or_window_that_is_not_one(over):
+    with pytest.raises(ValidationError):
+        pdi.Declaration.model_validate(_declaration(timezone="UTC", reports=_reports(**over)))
