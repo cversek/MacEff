@@ -2090,9 +2090,16 @@ def cmd_harness_cutover(args: argparse.Namespace) -> int:
             print(format_plan(plan))
             print("\n⚠️ MACF: harness cutover --run: not ready, so nothing was started", file=sys.stderr)
             return 1
+        staged = Path(args.staged) if getattr(args, "staged", None) else staged_path(home)
+        # A staged file made before the card revision names its agent in the old form. The plan
+        # accepted it, and the move installs what it finds, so it is rewritten first (#919).
+        from .pd.core import cutover_declaration
+        kept = cutover_declaration(home, card, path=staged)
+        if kept is not None:
+            print(f"the staged declaration named {card} in the old form; rewritten in place, "
+                  f"the original kept at {kept} (MIS-0002-R165)")
         if plan.init == "launchd":
             import os
-            staged = Path(args.staged) if getattr(args, "staged", None) else staged_path(home)
             try:
                 plist, log_path = arm_launchd(agent, card, home, staged, sys.executable, os.getuid(),
                                               f"{datetime.now():%Y%m%d-%H%M%S}")

@@ -42,6 +42,13 @@ def main() -> int:
                 self.refresh(None)
             return callback
 
+        def _attach(self, card):
+            def callback(_):
+                answer = controller.attach(card)
+                if not answer.get("ok"):
+                    rumps.alert(f"{card}: attach failed", answer.get("error") or "")
+            return callback
+
         @rumps.timer(POLL_S)
         def refresh(self, _):
             state = controller.poll()
@@ -52,6 +59,8 @@ def main() -> int:
                 self.menu.add(rumps.separator)
             for e in state.entries:
                 item = rumps.MenuItem(e.label if not e.error else f"{e.label} ({e.error})")
+                # A window on the agent's session, opened for the operator to use (#726).
+                item.add(rumps.MenuItem("Attach", callback=self._attach(e.card)))
                 for unit in sorted(e.units):
                     sub = rumps.MenuItem(f"{unit}: {e.units[unit].replace('_', ' ')}")
                     for act in ACTS:

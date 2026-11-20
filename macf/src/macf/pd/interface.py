@@ -739,6 +739,11 @@ class UnitState(_Closed):
     #: The host boot this was recorded in (Linux's ``boot_id``), so a later daemon adopts
     #: the pid only within the same boot. None where the platform has no boot id.
     boot_id: Optional[str] = None
+    #: When the state began, in epoch seconds, for a record that repeats a state already recorded
+    #: (a unit still failed for its login, recorded again each day). The readout takes how long a
+    #: unit has been in its state from this when it is present, else from the record's own time,
+    #: so a repeat never makes a failure look as new as the repeat (#896).
+    since: Optional[float] = None
 
 
 class Asker(_Closed):
