@@ -538,7 +538,7 @@ class _Runner:
     stopping: Optional[str] = None      # why a stop is under way, until the exit is reaped
     then_start: bool = False            # the stop under way is half of a restart
     drain: Optional[tuple] = None       # (asker, reason, deadline) of a restart waiting on R49
-    held_restart: Optional[tuple] = None  # (asker, reason, peer) of an asked restart a quiet window holds (R50)
+    held_restart: Optional[tuple] = None  # (asker, reason, peer, server) of an asked restart a quiet window holds (R50)
     client_session: Optional[str] = None  # session id, when the client's own daemon hosts this session (R66)
     dialogs_at: float = float("-inf")   # monotonic time an adopted session's dialogs were last read (R21)
     awaiting_respawn: Optional[float] = None  # monotonic deadline for a respawned worker to be listed
@@ -1027,7 +1027,7 @@ class Core:
         if window is not None:
             # Recorded now and carried out when the window ends (R50); a stop never waits (R48).
             self._control("restart", r, asked_by, f"{reason} (held: quiet window until {window.end})", peer)
-            r.held_restart = (asked_by, reason, peer)
+            r.held_restart = (asked_by, reason, peer, server)
             return
         self._control("restart", r, asked_by, reason, peer)
         r.want_up = True
@@ -1127,10 +1127,16 @@ class Core:
             self._await_respawn(r, now)
             return
         if r.held_restart is not None and quiet_window_at(self.declaration, self._wall()) is None:
-            asked_by, reason, peer = r.held_restart
+            asked_by, reason, peer, server = r.held_restart
             r.held_restart = None
-            # The asked act itself, by its asker and the process that asked (R52).
-            self.restart(r.spec.name, asked_by, f"{reason} (held until a quiet window ended)", peer=peer)
+            # The asked act itself, by its asker and the process that asked (R52), with what the ask said.
+            try:
+                self.restart(r.spec.name, asked_by, f"{reason} (held until a quiet window ended)", peer=peer,
+                             server=server)
+            except RestartRefused as e:
+                # The client that attached while it waited is why: the asker is told by the record, not
+                # by a stderr line that nobody reads (#1068).
+                self._control("restart", r, asked_by, f"refused when the quiet window ended: {e}", peer)
             return
         if r.proc is not None:
             code = r.proc.poll()
