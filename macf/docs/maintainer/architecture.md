@@ -208,7 +208,7 @@ def run(stdin_json: str = "", testing: bool = True, **kwargs) -> Dict[str, Any]:
 - `get_hooks_dir()` - Hook logging directory
 - `get_dev_scripts_dir()` - Development scripts directory
 
-**Unified Path Structure**: `/tmp/macf/{agent_id}/{session_id}/{subdir}/`
+**Unified Path Structure**: `<session root>/{agent_id}/{session_id}/{subdir}/`, where the root is `sessions` inside the user's private runtime directory (`$XDG_RUNTIME_DIR`, else `/tmp/macf-<uid>`)
 
 #### `utils/breadcrumbs.py` - Breadcrumb Management
 
@@ -365,7 +365,7 @@ count = get_compaction_count(session_id)  # Queries compaction_detected events
 
 **Problem**: Ad hoc script proliferation, unclear ownership.
 
-**Solution**: `/tmp/macf/{agent_id}/{session_id}/{subdir}/` structure.
+**Solution**: `<session root>/{agent_id}/{session_id}/{subdir}/` structure, with the root in the user's own runtime directory.
 
 **Benefit**: Agent-scoped isolation, clear organization, easy cleanup.
 
