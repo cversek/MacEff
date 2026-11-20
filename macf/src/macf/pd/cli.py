@@ -174,8 +174,17 @@ def cmd_pd_login(args: argparse.Namespace) -> int:
     """The login verdict for the account running this command; a deployment runs it as a seat's
     own user to check that seat from outside. Reads only the two expiry dates."""
     import json
-    from macf.pd.login import read_assessment
-    verdict = read_assessment()
+    from macf.pd.login import EXPIRING_S, read_assessment
+    expiring_s = EXPIRING_S
+    try:                      # the declaration's warning window, when this home has one that reads (#1027)
+        home, card = _this_agent()
+        from macf.pd.core import load_declaration
+        reports = load_declaration(home, card).reports
+        expiring_s = reports.warn_days * 86400.0 if reports else EXPIRING_S
+    except Exception as e:  # noqa: BLE001 - a seat with no readable declaration still gets its verdict, by the default window
+        print(f"⚠️ MACF: pd login: no declaration read, so the default warning window applies: {type(e).__name__}",
+              file=sys.stderr)
+    verdict = read_assessment(expiring_s=expiring_s)
     if getattr(args, "json", False):
         print(json.dumps(verdict))
     else:

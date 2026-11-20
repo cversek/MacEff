@@ -111,3 +111,16 @@ def test_the_watch_finds_the_newest_login_event_of_this_agent(tmp_path):
     log.write_text("".join(json.dumps(r) + "\n" for r in rows))
     found = watch.last_login_event(log, "Resident_1a2b3c", NOW)
     assert found["data"]["refresh_expires_at"] == NOW + 30 * DAY
+
+
+def test_the_warning_window_is_the_declarations_when_it_names_one():
+    """A login ending in 5 days is ok by the default three-day window and expiring by a week's (#1027)."""
+    raw = _cred(NOW + 5 * DAY)
+    assert login.assess(raw, NOW)["state"] == "ok"
+    assert login.assess(raw, NOW, expiring_s=7 * DAY)["state"] == "expiring"
+
+
+def test_the_watch_warns_by_the_declarations_window_too():
+    f = watch.check_login("Resident_1a2b3c", _event(NOW + 5 * DAY), NOW, expiring_s=7 * DAY)
+    assert f.verdict == "LOGIN-EXPIRING"
+    assert watch.check_login("Resident_1a2b3c", _event(NOW + 5 * DAY), NOW).verdict == "ALIVE"
