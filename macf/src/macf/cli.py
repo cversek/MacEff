@@ -1460,7 +1460,7 @@ def cmd_config_init(args: argparse.Namespace) -> int:
 
     print(f"\n✅ Configuration created: {config_file}")
     print(f"   Agent moniker: {moniker}")
-    print(f"   Logging paths: /tmp/macf_hooks/{moniker}/{{session_id}}/")
+    print(f"   Logging paths: <session root>/{moniker}/{{session_id}}/ (your runtime directory; MACF_SESSION_ROOT moves it)")
 
     return 0
 
