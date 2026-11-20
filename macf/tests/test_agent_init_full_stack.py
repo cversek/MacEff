@@ -1088,7 +1088,8 @@ def test_init_says_when_the_hooks_commands_and_skills_are_not_installed_and_name
     framework = _by_step(results)["framework"]
     assert framework.status == DRIFT and rc == 0
     assert "macf_tools framework install" in framework.detail and str(stack.home) in framework.detail
-    assert "hooks" in framework.detail and "/maceff commands" in framework.detail
+    assert "hooks" in framework.detail and "/maceff skills and commands" in framework.detail
+    assert "never fails the run" in framework.detail
 
 
 def test_the_framework_step_finds_the_hooks_and_commands_already_installed(stack):
@@ -1102,9 +1103,20 @@ def test_the_framework_step_names_only_what_is_missing(stack):
     for entry in (stack.home / ".claude" / "commands" / "maceff").parent.iterdir():
         entry.rmdir()
     framework = _by_step(_run(stack)[1])["framework"]
-    assert framework.status == DRIFT and "/maceff commands" in framework.detail and "hooks (" not in framework.detail
+    assert framework.status == DRIFT and "/maceff skills and commands" in framework.detail and "hooks (" not in framework.detail
 
 
 def test_the_framework_step_leaves_a_container_to_its_start_step_and_can_be_skipped(stack):
     assert _by_step(_run(stack, in_container=True)[1])["framework"].status == SKIPPED
     assert _by_step(_run(stack, "--no-framework")[1])["framework"].status == SKIPPED
+
+
+def test_hooks_bound_globally_or_skills_alone_count_as_installed(stack):
+    """`framework install` has a global mode that writes the home's settings.json, and the /maceff commands are
+    pointers to skills, so either place and either directory counts (a note on #1071)."""
+    from macf.cli import _hooks_to_install_list
+    (stack.home / ".claude" / "skills" / "maceff-delegation").mkdir(parents=True)
+    (stack.home / ".claude" / "settings.json").write_text(
+        json.dumps({"hooks": {str(i): [] for i in range(len(_hooks_to_install_list()))}}))
+    framework = _by_step(_run(stack)[1])["framework"]
+    assert framework.status == ALREADY, framework
