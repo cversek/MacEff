@@ -57,3 +57,18 @@ def test_a_box_that_stays_refused_is_re_checked_not_re_announced(tmp_path, monke
 
 def test_the_interval_is_minutes_not_passes():
     assert RECHECK_S >= 60 and RECHECK_S > receiver_mod.INGEST_S * 10
+
+
+def test_a_box_that_was_removed_is_not_reported_fixed(tmp_path, monkeypatch, capsys):
+    """_access answers None for a missing box (tick checks again), which on a re-check would read as
+    "access is fixed" and clear a refusal nothing fixed; the refusal stands until the box is there (#872)."""
+    h = _receiver(tmp_path, monkeypatch, ["denied", None])
+    h.r.tick(0.0)
+    (tmp_path / "box").rmdir()
+    capsys.readouterr()
+    h.r.tick(RECHECK_S + 5)
+    assert h.r.refused == "denied" and not [e for e in h.events if e[0] == EVENT_REFUSAL_CLEARED]
+    assert "fixed" not in capsys.readouterr().err
+    (tmp_path / "box").mkdir()
+    h.r.tick(2 * RECHECK_S + 10)                   # the box is back and its access is fine: now it clears
+    assert h.r.refused is None and [e for e in h.events if e[0] == EVENT_REFUSAL_CLEARED]
