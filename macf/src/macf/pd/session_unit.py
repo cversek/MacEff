@@ -43,7 +43,7 @@ from typing import Callable, Dict, List, Mapping, Optional
 
 from macf.notify.session import proc_start
 from macf.pd.interface import check_socket_path, runtime_dir
-from macf.pd.liveness import (ENV_HOME, ENV_INTERVAL, ENV_SESSION_INTERVAL, ENV_SESSION_PID,
+from macf.pd.liveness import (ENV_HOME, ENV_INTERVAL, ENV_LAUNCH, ENV_SESSION_INTERVAL, ENV_SESSION_PID,
                               ENV_SESSION_UNIT, ENV_UNIT)
 
 #: What the agent's tmux directory is called inside the runtime directory, after the
@@ -204,7 +204,7 @@ def session_environment(environ: Mapping[str, str], wrapper_pid: int, tmux_tmpdi
     The unit's own variables become the session's: ``MACF_PD_UNIT`` and its interval
     are removed, and ``MACF_PD_SESSION_*`` name the unit and this wrapper's pid for the
     transcript monitor. Without a declared unit there is no liveness to hand on."""
-    env = {k: v for k, v in environ.items() if k not in (ENV_UNIT, ENV_INTERVAL, "TMUX", "TMUX_PANE")}
+    env = {k: v for k, v in environ.items() if k not in (ENV_UNIT, ENV_INTERVAL, ENV_LAUNCH, "TMUX", "TMUX_PANE")}
     unit, interval = environ.get(ENV_UNIT), environ.get(ENV_INTERVAL)
     if unit and interval and environ.get(ENV_HOME):
         env[ENV_SESSION_UNIT] = unit
@@ -257,12 +257,14 @@ def _tmux(tmux: str, env: Mapping[str, str], *args: str) -> subprocess.Completed
 
 
 def _announce(append: Callable[[str, dict], bool], agent: str, pane_pid: Optional[int],
-              respawns: int) -> None:
+              respawns: int, launch: Optional[str] = None) -> None:
     """Say which pane runs the session now: the daemon's word that this wrapper can respawn it,
     and, after a respawn, that the session is a new incarnation (MacEff #726)."""
     from macf.pd.interface import EVENT_SESSION_PANE
     data = {"agent": agent, "wrapper_pid": os.getpid(), "wrapper_start": proc_start(os.getpid()),
             "pane_pid": pane_pid, "respawns": respawns}
+    if launch:
+        data["launch"] = launch      # what the daemon launched this wrapper with, so it can tell a changed declaration
     if not append(EVENT_SESSION_PANE, data):
         print(f"⚠️ MACF: session unit: the {EVENT_SESSION_PANE} event was not recorded; the daemon "
               f"will restart this unit whole", file=sys.stderr)
@@ -427,7 +429,8 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
     print(f"📡 MACF: session unit: session {agent} runs under tmux server {server.pid} "
           f"(TMUX_TMPDIR={directory})", file=sys.stderr)
     respawns = 0
-    _announce(append, agent, int(panes[0]) if panes and panes[0].isdigit() else None, respawns)
+    _announce(append, agent, int(panes[0]) if panes and panes[0].isdigit() else None, respawns,
+              environ.get(ENV_LAUNCH))
     while True:
         try:
             status = server.wait(timeout=0.2)
@@ -449,7 +452,7 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
         respawns += 1
         print(f"📡 MACF: session unit: session {agent} restarted in its pane (pid {pane}); "
               f"tmux server {server.pid} kept", file=sys.stderr)
-        _announce(append, agent, pane, respawns)
+        _announce(append, agent, pane, respawns, environ.get(ENV_LAUNCH))
     # The unit ends only when the session has: a pane that outlived the server's hangup is
     # stopped here, so a restart never starts a second session beside it.
     for pgid, leader_start in pane_groups.items():

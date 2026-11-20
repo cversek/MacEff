@@ -32,7 +32,8 @@ from macf.notify.session import proc_start
 spec = json.loads(sys.argv[1])
 def say(n):
     append_event("pd_session_pane", {"agent": spec["agent"], "wrapper_pid": os.getpid(),
-                 "wrapper_start": proc_start(os.getpid()), "pane_pid": 40000 + n, "respawns": n})
+                 "wrapper_start": proc_start(os.getpid()), "pane_pid": 40000 + n, "respawns": n,
+                 **({"launch": os.environ.get("MACF_PD_LAUNCH")} if spec.get("launch", True) else {})})
 asked = []
 if spec["announce"]:
     signal.signal(signal.SIGUSR1, lambda s, f: asked.append(True))
@@ -59,9 +60,9 @@ def wrapper(tmp_path):
     return path
 
 
-def _session(wrapper, *, announce=True, answer=True, stop_grace_s=1.0):
-    env = {"MACF_EVENTS_LOG_PATH": str(get_log_path()), "PYTHONPATH": MACF_SRC}
-    spec = json.dumps({"agent": CARD, "announce": announce, "answer": answer})
+def _session(wrapper, *, announce=True, answer=True, stop_grace_s=1.0, launch=True, extra_env=None):
+    env = {"MACF_EVENTS_LOG_PATH": str(get_log_path()), "PYTHONPATH": MACF_SRC, **(extra_env or {})}
+    spec = json.dumps({"agent": CARD, "announce": announce, "answer": answer, "launch": launch})
     return Unit(name="session", kind="session", command=[sys.executable, str(wrapper), spec],
                 account=ME, restart="always", liveness_interval_s=60, memory_limit_mb=64,
                 environment=env, stop_grace_s=stop_grace_s)
@@ -144,3 +145,45 @@ def test_a_daemon_that_adopted_the_wrapper_finds_its_announcement(make_core, wra
             if proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGKILL)
                 proc.wait(timeout=5)
+
+
+def test_a_declaration_changed_since_the_wrapper_started_restarts_the_unit_whole(make_core, wrapper):
+    """A restart is how a changed declaration takes effect (MIS-0002-R13), and a respawned pane
+    inherits the tmux server's environment, not the unit's current one. So when what the daemon
+    would launch now differs from what the wrapper was launched with, the unit restarts whole
+    (cversek/MacEff#726)."""
+    core = make_core([_session(wrapper, extra_env={"MODEL": "one"})], hosted=list)
+    core.boot()
+    assert drive(core, lambda: core.state("session") == "running")
+    pid = core.pid("session")
+    assert drive(core, lambda: _announced(pid))
+
+    runner = core._units["session"]          # the declaration was edited and re-read
+    runner.spec = _session(wrapper, extra_env={"MODEL": "two"})
+    core.restart("session", pd_core.POLICY, "asked from the tray")
+    assert drive(core, lambda: core.state("session") == "running" and core.pid("session") not in (None, pid))
+    assert any(c["after"] == "the session unit restarted" for c in _carried())
+    assert not any(c["after"] == "the session restarted in its pane" for c in _carried())
+
+
+def test_an_unchanged_declaration_still_restarts_in_place(make_core, wrapper):
+    core = make_core([_session(wrapper, extra_env={"MODEL": "one"})], hosted=list)
+    core.boot()
+    assert drive(core, lambda: core.state("session") == "running")
+    pid = core.pid("session")
+    assert drive(core, lambda: _announced(pid))
+    core._units["session"].spec = _session(wrapper, extra_env={"MODEL": "one"})
+    core.restart("session", pd_core.POLICY, "asked from the tray")
+    assert drive(core, lambda: any(c["after"] == "the session restarted in its pane" for c in _carried()))
+    assert core.pid("session") == pid
+
+
+def test_a_wrapper_that_does_not_say_what_it_was_launched_with_is_restarted_whole(make_core, wrapper):
+    """With no launch to compare, the daemon can't tell the declaration is unchanged."""
+    core = make_core([_session(wrapper, launch=False)], hosted=list)
+    core.boot()
+    assert drive(core, lambda: core.state("session") == "running")
+    pid = core.pid("session")
+    assert drive(core, lambda: _announced(pid))
+    core.restart("session", pd_core.POLICY, "asked from the tray")
+    assert drive(core, lambda: core.state("session") == "running" and core.pid("session") not in (None, pid))

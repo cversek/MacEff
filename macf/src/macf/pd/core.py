@@ -18,6 +18,7 @@ A unit's liveness also says what it has in hand, ``in_flight``, which a restart 
 person can give, ``waiting_on`` (MIS-0002-R21 (pd_MUST_report_waiting_on_person)). A
 unit that reports no work in flight is taken as idle, and its restart says so.
 """
+import hashlib
 import json
 import os
 import pwd
@@ -28,7 +29,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
@@ -57,7 +58,7 @@ from macf.pd.interface import (
     declaration_path,
     render,
 )
-from macf.pd.liveness import ENV_HOME, ENV_INTERVAL, ENV_UNIT
+from macf.pd.liveness import ENV_HOME, ENV_INTERVAL, ENV_LAUNCH, ENV_UNIT
 from macf.pd.names import rendered_declaration_problem
 from macf.pd.schedule import CronExpr, check_window
 from macf import calling_card
@@ -265,6 +266,13 @@ def quiet_window_at(declaration: Declaration, at: float):
         if inside:
             return window
     return None
+
+
+def launch_digest(command: Sequence[str], env: Mapping[str, str]) -> str:
+    """A short digest of what a unit is launched with, the command and the environment, so a
+    wrapper can say it back and the daemon can tell whether a changed declaration has reached it."""
+    body = json.dumps([list(command), {k: v for k, v in sorted(env.items()) if k != ENV_LAUNCH}])
+    return hashlib.sha256(body.encode()).hexdigest()[:16]
 
 
 def backoff_s(failures: int, base: float = BACKOFF_BASE_S, cap: float = BACKOFF_CAP_S) -> float:
@@ -508,6 +516,7 @@ class _Runner:
     pane_announced: Optional[tuple] = None   # (pid, start) of a session wrapper that said it can respawn in place (#726)
     pane_respawns_seen: int = 0         # the respawns that wrapper has announced
     pane_lookup: Optional[tuple] = None  # (pid, start) whose announcement was looked for in the log, once
+    pane_launch: Optional[str] = None   # what that wrapper said it was launched with (ENV_LAUNCH)
     pane_respawn_due: Optional[float] = None  # monotonic: a restart in the pane asked, owed by then
     pane_respawn_reason: Optional[str] = None
 
@@ -1441,6 +1450,20 @@ class Core:
             self._transition(r, "failed", why)
         return True
 
+    def _launch(self, r: _Runner) -> Tuple[List[str], Dict[str, str]]:
+        """The command and environment this unit is launched with, rendered from its declaration
+        now (MIS-0002-R13); KeyError when a placeholder has no value here."""
+        command = [render(a, self._placeholders) for a in r.spec.command]
+        env = {k: render(v, self._placeholders) for k, v in r.spec.environment.items()}
+        # Which unit it is and how often it beats come from the unit itself, never typed
+        # again in its environment, where a missing or mistyped value silently stopped
+        # its liveness (persistent_layer 11.2; two of three cutover trial runs).
+        env.setdefault(ENV_UNIT, r.spec.name)
+        env.setdefault(ENV_INTERVAL, f"{r.spec.liveness_interval_s:g}")
+        if "agent_home" in self._placeholders:
+            env.setdefault(ENV_HOME, self._placeholders["agent_home"])
+        return command, env
+
     def _spawn(self, r: _Runner) -> None:
         """Start the unit as this process's child, with the declared environment and
         nothing inherited (MIS-0002-R12 (pd_MUST_start_units_itself)), read from the
@@ -1459,15 +1482,8 @@ class Core:
         if r.spec.kind == "session" and self._held_by_hand_started(r):
             return
         try:
-            command = [render(a, self._placeholders) for a in r.spec.command]
-            env = {k: render(v, self._placeholders) for k, v in r.spec.environment.items()}
-            # Which unit it is and how often it beats come from the unit itself, never typed
-            # again in its environment, where a missing or mistyped value silently stopped
-            # its liveness (persistent_layer 11.2; two of three cutover trial runs).
-            env.setdefault(ENV_UNIT, r.spec.name)
-            env.setdefault(ENV_INTERVAL, f"{r.spec.liveness_interval_s:g}")
-            if "agent_home" in self._placeholders:
-                env.setdefault(ENV_HOME, self._placeholders["agent_home"])
+            command, env = self._launch(r)
+            env[ENV_LAUNCH] = launch_digest(command, env)
         except KeyError as e:
             r.proc, r.pid, r.proc_start = None, None, None
             r.want_up = False
@@ -1610,7 +1626,7 @@ class Core:
             return False
         key = (r.pid, r.proc_start)
         if r.pane_announced == key:
-            return True
+            return self._launch_unchanged(r)
         if r.pane_lookup == key:
             return False
         r.pane_lookup = key
@@ -1627,9 +1643,23 @@ class Core:
             data = event.get("data") or {}
             if data.get("wrapper_pid") == r.pid and data.get("wrapper_start") == r.proc_start:
                 r.pane_announced = key
+                r.pane_launch = data.get("launch") if isinstance(data.get("launch"), str) else None
                 r.pane_respawns_seen = data.get("respawns") if isinstance(data.get("respawns"), int) else 0
-                return True
+                return self._launch_unchanged(r)
         return False
+
+    def _launch_unchanged(self, r: _Runner) -> bool:
+        """Whether what the wrapper was launched with is what the declaration would launch now. A
+        restart is how a changed declaration takes effect (MIS-0002-R13), and a pane respawned in
+        place runs on the environment the wrapper already has, so a changed declaration, or a
+        wrapper that doesn't say what it was launched with, gets the whole restart (#726)."""
+        if not r.pane_launch:
+            return False
+        try:
+            command, env = self._launch(r)
+        except KeyError:
+            return False
+        return launch_digest(command, env) == r.pane_launch
 
     def _on_session_pane(self, event: dict) -> None:
         """A session wrapper's ``pd_session_pane``: at its start, its word that it can restart in
@@ -1643,6 +1673,7 @@ class Core:
         key = (r.pid, r.proc_start)
         if r.pane_announced != key:
             r.pane_announced, r.pane_respawns_seen = key, respawns
+            r.pane_launch = data.get("launch") if isinstance(data.get("launch"), str) else None
             return
         if respawns <= r.pane_respawns_seen:
             return
