@@ -279,8 +279,7 @@ def test_a_delivered_queued_copy_counts_only_by_its_declared_server(monkeypatch,
 ACTIVITY_DETECTORS = {"detect_user_activity", "detect_permission_denial",
                       "detect_dialog_answer", "detect_mid_turn_enqueue"}
 OTHER_DETECTORS = {"detect_compact_boundary", "detect_api_error", "detect_context_collapse",
-                   "detect_harness_compaction", "detect_compaction_ask",
-                   "detect_remote_control_disconnect"}  # a client notice, not the operator's activity
+                   "detect_harness_compaction", "detect_compaction_ask"}
 
 
 def test_the_audit_reaches_every_detector():
