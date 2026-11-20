@@ -150,10 +150,12 @@ def get_last_user_prompt_uuid(session_id: Optional[str] = None,
     # Read backwards to find last user message
     try:
         from .streaming import iter_lines_reverse
+        seen = 0  # non-blank lines read so far; the first one read is the newest
         for line in iter_lines_reverse(jsonl_path):
             line = line.strip()
             if not line:
                 continue
+            seen += 1
 
             try:
                 data = json.loads(line)
@@ -171,7 +173,12 @@ def get_last_user_prompt_uuid(session_id: Optional[str] = None,
 
                     # Found actual user text prompt
                     return data.get('uuid')
-            except json.JSONDecodeError:  # noqa: S112 - the live transcript's newest line can be cut mid-write; a line that doesn't parse can't be the one sought, and a warning would fire on most hook calls
+            except json.JSONDecodeError:
+                # Only the newest line can be cut mid-write, and it is skipped quietly.
+                # An earlier line that doesn't parse is a damaged transcript.
+                if seen > 1:
+                    print(f"⚠️ MACF: transcript {jsonl_path.name} has a line that does not parse, "
+                          f"{seen - 1} lines before its end (skipped; the prompt search goes on)", file=sys.stderr)
                 continue
 
     except Exception as e:
