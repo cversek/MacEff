@@ -93,6 +93,9 @@ class RosterEntry(BaseModel):
     aliases: Tuple[str, ...] = ()
     reasons: Dict[str, str] = {}
     detail: str = ""
+    #: The daemon's recorded reading of the agent's Claude login when it is not fine
+    #: (expired, expiring, unjudgeable), else empty; judged against now (#883).
+    login: str = ""
 
     @model_validator(mode="after")
     def _unknown_is_never_empty(self) -> "RosterEntry":
@@ -267,7 +270,24 @@ def _home_entry(home: Path, own_uid: int, probe: Optional["Probe"], legacy: Sequ
         reasons["state"] = ("another account's agent: its state lives with its own daemon, "
                             "which answers only that account (persistent_layer 14)")
     return _entry(card, account=account, home=str(home), session_kind=kind, state=state,
-                  reasons=reasons)
+                  reasons=reasons, login=_login_line(home, card) if uid == own_uid and card else "")
+
+
+def _login_line(home: Path, card: str) -> str:
+    """What the daemon's login check recorded, as a line, when it is a problem; else empty.
+    Read from the agent's own event log and judged against now, the way the watch judges it."""
+    import time
+    from ..pd.watch import check_login, last_login_event
+    try:
+        finding = check_login(card, last_login_event(home / ".maceff" / "agent_events_log.jsonl", card,
+                                                     time.time()), time.time())
+    except FileNotFoundError:
+        return ""
+    except OSError as e:
+        return f"CHECK-FAILED: the event log cannot be read: {e.strerror}"
+    if finding is None or finding.verdict == "ALIVE":
+        return ""
+    return f"{finding.verdict}: {finding.detail}"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -856,6 +876,8 @@ def render_table(entries: Sequence[RosterEntry], verbose: bool = False) -> str:
     quiet = 0
     for e, row in zip(entries, rows[1:], strict=True):
         lines.append("  ".join(c.ljust(w) for c, w in zip(row, widths, strict=True)).rstrip())
+        if e.login:
+            lines.append(f"    login: {e.login}")
         if not verbose:
             if e.card is None and e.reasons.get("card"):
                 lines.append(f"    card unknown: {e.reasons['card']}")
