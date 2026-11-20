@@ -105,6 +105,12 @@ HELLO_TIMEOUT_S = 2.0
 MAX_HELLO_BYTES = 8 * 1024
 
 
+def voice_is_operator_channel(decl) -> bool:
+    """Whether the declaration lists the Voice Input Channel among its operator channels (MIS-0008 Q01)."""
+    from macf.channels.marketplace import VOICE_CHANNEL_NAME
+    return VOICE_CHANNEL_NAME in (decl.operator_channels or [])
+
+
 class AlreadyRunning(RuntimeError):
     """Another primal daemon of this agent is alive (MIS-0002-R01
     (agent_MUST_have_one_primal_daemon))."""
@@ -233,7 +239,8 @@ class Daemon:
             check_socket_path(voice_path)
             from macf.voice.speech import cut as speech_cut
             self.voice = VoiceCarriage(self.card, voice_path, decl.voice, self._outside_session,
-                                       self.core.incarnation, speech_cut=lambda: speech_cut.take_untold(self.home))
+                                       self.core.incarnation, speech_cut=lambda: speech_cut.take_untold(self.home),
+                                       operator=voice_is_operator_channel(decl))
             if decl.voice.dispatched_by is not None:
                 self.voice_verifier()      # the nonce record is rebuilt now, at start (MIS-0007 R56)
         #: The build this daemon started from, said in every status (MacEff #816). Read once:
