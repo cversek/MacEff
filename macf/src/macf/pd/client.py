@@ -3,7 +3,7 @@ daemon can be believed.
 
 A daemon is believed only after it is checked. Its record must name a live process by
 pid and start time, and the process answering on the control socket must be that pid, as
-the kernel reports it. That is the check the MacEff channel makes before it trusts its
+the kernel reports it. That is the check the MacEff Notification Channel makes before it trusts its
 peer (MIS-0002-R123 (channel_MUST_check_its_peer_is_its_pd)). A socket file alone proves
 nothing: any process of the same user can bind the path while the daemon is down.
 """

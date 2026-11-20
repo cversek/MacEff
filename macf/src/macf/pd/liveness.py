@@ -38,24 +38,27 @@ ENV_SESSION_PID = "MACF_PD_SESSION_PID"
 
 def liveness_event(card: str, unit: str, interval_s: float,
                    in_flight: Optional[int] = None, pid: Optional[int] = None,
-                   waiting_on: Optional[str] = None, auth_failed: Optional[str] = None) -> Liveness:
+                   waiting_on: Optional[str] = None, auth_failed: Optional[str] = None,
+                   microphone: Optional[dict] = None) -> Liveness:
     """The liveness of process *pid* (this process by default) as the named unit of *card*."""
     pid = pid or os.getpid()
     return Liveness(agent=card, unit=unit, pid=pid, proc_start=proc_start(pid) or "unknown",
                     interval_s=interval_s, in_flight=in_flight,
                     waiting_on=waiting_on[:200] if waiting_on else None,
-                    auth_failed=auth_failed[:200] if auth_failed else None)
+                    auth_failed=auth_failed[:200] if auth_failed else None,
+                    microphone=microphone)
 
 
 def emit(card: str, unit: str, interval_s: float, in_flight: Optional[int] = None,
          append: Optional[Callable[[str, dict], bool]] = None, pid: Optional[int] = None,
-         waiting_on: Optional[str] = None, auth_failed: Optional[str] = None) -> bool:
+         waiting_on: Optional[str] = None, auth_failed: Optional[str] = None,
+         microphone: Optional[dict] = None) -> bool:
     """Write one liveness event for *pid* (this process by default); True when the log took it."""
     append = append or append_event
     # Fields left unset are left out, so a beat stays readable by a daemon that predates a
     # field: Liveness refuses unknown keys, and an older daemon would refuse "auth_failed": null.
     return append(EVENT_LIVENESS, liveness_event(card, unit, interval_s, in_flight, pid, waiting_on,
-                                                 auth_failed).model_dump(exclude_none=True))
+                                                 auth_failed, microphone).model_dump(exclude_none=True))
 
 
 #: How often a heartbeat asks, between beats, whether what the unit waits on has changed.
@@ -78,7 +81,8 @@ class Heartbeat:
                  append: Optional[Callable[[str, dict], bool]] = None,
                  pid: Optional[int] = None,
                  waiting_on: Optional[Callable[[], Optional[str]]] = None,
-                 auth_failed: Optional[Callable[[], Optional[str]]] = None):
+                 auth_failed: Optional[Callable[[], Optional[str]]] = None,
+                 microphone: Optional[Callable[[], Optional[dict]]] = None):
         # pid: the unit's process when the beat speaks for another one (the session
         # unit's wrapper, from its transcript monitor); this process by default.
         # waiting_on: what the unit waits on a person for, asked on each beat
@@ -89,6 +93,8 @@ class Heartbeat:
         # auth_failed: what the harness said when it could not authenticate, asked on each beat
         # (MIS-0002-R19 (auth_failure_MUST_read_failed)).
         self._auth_failed = auth_failed or (lambda: None)
+        # microphone: a capture unit's microphone state, asked on each beat (MIS-0008 R16).
+        self._microphone = microphone or (lambda: None)
         self._append = append
         self._stop = threading.Event()
         self._ticked = threading.Event()
@@ -124,7 +130,7 @@ class Heartbeat:
                 return
             self._ticked.clear()
             stalled = False
-            said = (self._waiting_on(), self._auth_failed())
+            said = (self._waiting_on(), self._auth_failed(), self._microphone())
             if not emit(self.card, self.unit, self.interval_s, self._in_flight(), self._append, self.pid,
                         *said):
                 print(f"⚠️ MACF: pd: liveness for {self.unit} was not recorded (the unit will read "
@@ -145,7 +151,7 @@ class Heartbeat:
                 return False
             if self._stop.wait(min(CHANGE_CHECK_S, left)):
                 return True
-            if self._ticked.is_set() and (self._waiting_on(), self._auth_failed()) != said:
+            if self._ticked.is_set() and (self._waiting_on(), self._auth_failed(), self._microphone()) != said:
                 return False
 
 

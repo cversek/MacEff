@@ -253,12 +253,12 @@ def test_a_channel_no_allowlist_admits_is_named_and_the_install_goes_on(tmp_path
     home = make_home(tmp_path)
     path = declaration_path(home)
     body = json.loads(path.read_text())
-    body["allowlisted_channels"] = [{"plugin": "maceff-channel", "marketplace": "maceff"}]
+    body["allowlisted_channels"] = [{"plugin": "maceff-notification-channel", "marketplace": "maceff"}]
     path.write_text(json.dumps(body))
     monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(home))
     assert run("install") == 0
     err = capsys.readouterr().err
-    assert tier.installed and "maceff-channel@maceff" in err and "no organization allowlist" in err
+    assert tier.installed and "maceff-notification-channel@maceff" in err and "no organization allowlist" in err
 
 
 def test_grants_tested_at_install(tmp_path, monkeypatch, tier, capsys):

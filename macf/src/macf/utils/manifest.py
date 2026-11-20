@@ -750,15 +750,21 @@ def get_policies_for_task_type(task_type: str, manifest: Optional[Dict[str, Any]
     if manifest is None:
         manifest = load_merged_manifest()
 
+    # A framework manifest without the section has no framework mappings, but the agent's own
+    # task-type policies still apply: returning early here dropped them too, so an agent whose
+    # framework manifest couldn't be found lost its personal policies at task start, silently.
     task_type_policies = manifest.get("task_type_policies")
     if task_type_policies is None:
-        print("[manifest] ⚠️ Missing 'task_type_policies' section", file=sys.stderr)
-        return []
+        print("[manifest] ⚠️ Missing 'task_type_policies' section; only personal task policies apply",
+              file=sys.stderr)
+        task_type_policies = {}
 
     mappings = task_type_policies.get("mappings")
     if mappings is None:
-        print("[manifest] ⚠️ 'task_type_policies' missing 'mappings' key", file=sys.stderr)
-        return []
+        if task_type_policies:
+            print("[manifest] ⚠️ 'task_type_policies' missing 'mappings' key; only personal task policies apply",
+                  file=sys.stderr)
+        mappings = {}
 
     policies = mappings.get(task_type)
     personal = personal_task_policies(task_type)

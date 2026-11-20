@@ -14,7 +14,7 @@ import socket
 from pathlib import Path
 from typing import List, Tuple
 
-from macf.channels.maceff_channel import TAKES, parse_record
+from macf.channels.notification_channel import TAKES, parse_record
 from macf.pd import notifier as nt
 
 

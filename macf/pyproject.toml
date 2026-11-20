@@ -34,6 +34,17 @@ test = [
     "tomli>=2.0.0; python_version < '3.11'",  # pyproject introspection in test_ci_extras_coverage (tomllib is 3.11+)
     "PyJWT>=2.0.0",  # the ingest receiver imports it at module scope; its drain-coupling logic is under test
     "markdown>=3.0",  # markdown present's heading rule is under test; without it the renderer falls back to <pre>
+    "numpy>=1.24",  # the capture unit's frames are arrays (MIS-0008); its tests build them
+]
+voice = [
+    # The capture unit and its models (MIS-0008). Each is imported only where it is used, so an
+    # agent without a voice section never needs them; the capture unit names this extra when one
+    # is missing.
+    "numpy>=1.24",
+    "openwakeword>=0.6",  # wake-phrase features and the Silero speech gate
+    "onnxruntime>=1.16",
+    "faster-whisper>=1.0; sys_platform != 'darwin'",
+    "mlx-whisper>=0.4; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 viz = [
     "markdown>=3.0",  # Markdown-to-HTML for CA presentation
@@ -83,20 +94,23 @@ amail-broker = "macf.amail.daemons.broker:main"
 amail-inbound = "macf.amail.daemons.inbound:main"
 amail-receiver = "macf.amail.daemons.receiver:main"
 
-# The MacEff channel (MIS-0002 section 6.14). Claude Code starts it from the plugin's
+# The MacEff Notification Channel (MIS-0002 section 6.14). Claude Code starts it from the plugin's
 # .mcp.json, which names this command, so it has to resolve on PATH wherever macf
 # is installed rather than depend on which interpreter a session finds first.
-maceff-channel = "macf.channels.maceff_channel:main"
+maceff-notification-channel = "macf.channels.notification_channel:main"
+maceff-voice-input-channel = "macf.channels.voice_input_channel:main"
 
 # The tray's state glyphs are files, not modules, so a wheel carries them only when
 # they are named here (an editable install reads them from the tree either way).
 [tool.setuptools.package-data]
 "macf.tray" = ["glyphs/*.svg", "glyphs/*.png"]
-# The maceff plugin marketplace, so an installed macf can install the MacEff channel from a
+# The maceff plugin marketplace, so an installed macf can install the MacEff Notification Channel from a
 # local directory (macf.channels.marketplace). Dot-directories are named outright: a wildcard
 # never matches them.
 "macf.channels" = [
     "maceff_marketplace/.claude-plugin/marketplace.json",
-    "maceff_marketplace/plugins/maceff-channel/.mcp.json",
-    "maceff_marketplace/plugins/maceff-channel/.claude-plugin/plugin.json",
+    "maceff_marketplace/plugins/maceff-notification-channel/.mcp.json",
+    "maceff_marketplace/plugins/maceff-notification-channel/.claude-plugin/plugin.json",
+    "maceff_marketplace/plugins/maceff-voice-input-channel/.mcp.json",
+    "maceff_marketplace/plugins/maceff-voice-input-channel/.claude-plugin/plugin.json",
 ]

@@ -45,6 +45,7 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **event stream**: one merged stream of the persistent layer's own events, published as they are recorded, for subscribers to read.
 - **final**: the status of an accepted Standards or Process MIS that has landed and been proven: every decidable requirement passes its check, every judgment review is recorded, and a cold-reader trial has succeeded. An Informational MIS never becomes final.
 - **final comment period**: the time, set by the initiator and starting when every maintainer has posted a first comment, in which anyone may object before the operator ratifies.
+- **HANDS_FREE**: an operational mode: the operator is present but speaking only, after wake-phrase utterances with no keyboard input since, on a channel the declaration lists as the operator's. It replaces USER_IDLE for the idle window, then lapses to it (MIS-0008 R65 to R69).
 - **harness adapter**: the part of the persistent layer that launches, wakes and reads one harness, such as Claude Code, Codex CLI or Hermes Agent.
 - **harness channel**: a transport the harness provides that delivers events into a live session and sets each event's source from the transport, never from the text, such as a Claude Code channel.
 - **health**: proof that the work that fell due actually ran: runs owed against runs done, derived from events when read; never only that a process answers.
@@ -63,7 +64,9 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **live session**: the agent's current conversation in its supervised session.
 - **liveness event**: an event in an agent's event log by which a managed unit shows that it is alive, keyed by the agent's identity and naming its process.
 - **MacEff agent**: an agent whose address the operator declares in the key registry.
-- **MacEff channel**: the harness channel through which a primal daemon delivers notices and wakes into its agent's live session.
+- **MacEff channel**: the MacEff Notification Channel's name before MIS-0008 renamed it; MIS documents written before the rename use it.
+- **MacEff Notification Channel**: the harness channel through which a primal daemon delivers notices and wakes into its agent's live session.
+- **MacEff Voice Input Channel**: the harness channel through which a primal daemon delivers the operator's transcribed utterances into its agent's live session (MIS-0008).
 - **maintainer**: an agent that the operator has designated to maintain MacEff.
 - **major architectural change**: a change that adds a subsystem or changes architecture across components.
 - **managed unit**: one process or one schedule that a primal daemon runs for its agent, such as the session, the transcript monitor, the notifier or a mail clock.
@@ -113,7 +116,7 @@ Format: one line per term, `- **term**: definition.`, in alphabetical order. `ma
 - **Secretary**: the agent the operator designates for an MIS before it leaves Draft, with or without a deliberation, who confirms its number, edits it to the language standard, keeps this glossary, writes the synthesis and tracks conformance.
 - **semantic slug**: a short name made of ASCII letters, digits, hyphens and underscores, given in parentheses at the end of a requirement line, that states the requirement's subject and strength, for example `req_MUST_have_30_words_max`.
 - **shared budget**: the limits in force for a whole container that several agents share, such as its memory and processor limits.
-- **subscriber**: a reader of the event stream that chose the sources it takes: the MacEff channel, the tray, or a bridge to the operator.
+- **subscriber**: a reader of the event stream that chose the sources it takes: the MacEff Notification Channel, the tray, or a bridge to the operator.
 - **substantive**: any change to an accepted MIS that is not editorial; it is made in the MIS itself, as a revision or an amendment.
 - **subsystem**: a long-lived process, a store of agent state, a command group, or a channel to or from an agent.
 - **suspect**: the trust state of a message whose signature check was attempted and failed.

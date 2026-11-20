@@ -227,6 +227,99 @@ def transcribe_whisper(wav_path: str, model: str = "turbo",
     )
 
 
+#: Models loaded once per process, by (engine, model): a capture unit transcribes many times, and
+#: loading a model costs seconds each time.
+_LOADED: dict = {}
+
+
+def release_models() -> int:
+    """Drop every loaded transcription model, so the memory it held (the GPU's, where it ran there) is given
+    back; the next transcription loads it again. Returns how many were dropped. A transcription still running
+    keeps its own reference and finishes first (MIS-0008 R58)."""
+    import gc
+    dropped = len(_LOADED)
+    _LOADED.clear()
+    gc.collect()
+    return dropped
+
+#: The model each engine uses when none is named.
+DEFAULT_MODELS = {"mlx": "mlx-community/whisper-large-v3-turbo", "faster-whisper": "large-v3-turbo",
+                  "whisper": "turbo"}
+
+
+def _faster_whisper_model(model: str):
+    key = ("faster-whisper", model)
+    if key not in _LOADED:
+        from faster_whisper import WhisperModel
+        _LOADED[key] = WhisperModel(model, device="auto", compute_type="default")
+    return _LOADED[key]
+
+
+def _segments_result(segments, text: str, language: str, engine: str, model: str, elapsed: float) -> TranscriptResult:
+    return TranscriptResult(text=text.strip(), segments=segments, language=language, engine=engine, model=model,
+                            duration_audio=segments[-1].end if segments else 0.0, duration_transcribe=elapsed)
+
+
+#: Decoding that can't run away. Whisper's defaults retry at rising temperatures and condition each window on
+#: the last, and on a short clip primed with a prompt that can loop: a live trial's "yo tom" came back as the
+#: phrase repeated to the token limit, after 38 s on the CPU. Greedy, unconditioned decoding took at most 1.2 s
+#: on the same clips.
+BOUNDED_DECODE = {"temperature": 0.0, "condition_on_previous_text": False}
+
+#: A full transcription has silence cut out before Whisper sees it. A capture unit's last stretch is often only
+#: the quiet before its end window, and Whisper primed with a vocabulary writes speech into silence: a live
+#: utterance ended in "So, let's get started." a dozen times (2026-11-14). On the kept clips, 5 s of that quiet
+#: came back as "So, let's take a look at the top of the screen."; with this filter every silent tail came back
+#: empty, and the speech in all 13 clips was kept, at the same speed. Short checks are left without it: the
+#: speech gate has already judged their window, and a filter could clip a phrase that short.
+FULL_DECODE = {"vad_filter": True}
+
+
+def transcribe_faster_whisper(audio, model: str = "large-v3-turbo", language: str = "en",
+                              initial_prompt: Optional[str] = None, max_tokens: Optional[int] = None) -> TranscriptResult:
+    """Transcribe with faster-whisper, the Linux engine. ``audio`` is a WAV path, or float32
+    samples at 16 kHz held in memory, which is how a capture unit calls it (MIS-0008 R13). ``max_tokens``
+    caps a short check (a wake phrase, a stop word), so a loop costs a moment rather than the token limit."""
+    whisper_model = _faster_whisper_model(model)
+    t0 = time.time()
+    capped = {"without_timestamps": True, "max_new_tokens": max_tokens} if max_tokens else FULL_DECODE
+    found, info = whisper_model.transcribe(audio, language=language, initial_prompt=initial_prompt,
+                                           **BOUNDED_DECODE, **capped)
+    segments = [TranscriptSegment(text=s.text.strip(), start=s.start, end=s.end, confidence=1.0 - s.no_speech_prob)
+                for s in found]       # the generator does the work, so the time is taken after it
+    return _segments_result(segments, " ".join(s.text for s in segments), info.language or language,
+                            "faster-whisper", model, time.time() - t0)
+
+
+def transcribe_array(audio, engine: Optional[str] = None, model: Optional[str] = None, language: str = "en",
+                     initial_prompt: Optional[str] = None, max_tokens: Optional[int] = None) -> TranscriptResult:
+    """Transcribe samples held in memory: float32 or int16, mono, 16 kHz. Nothing is written to
+    disk, so raw audio stays in the caller's memory (MIS-0008 R13). Every engine takes an array.
+    ``max_tokens`` caps a short check; only faster-whisper honors it so far, and the others say so."""
+    import numpy as np
+    samples = np.asarray(audio)
+    if samples.dtype == np.int16:
+        samples = samples.astype(np.float32) / 32768.0
+    samples = samples.astype(np.float32, copy=False)
+    engine = engine or detect_engine()
+    if engine is None:
+        raise RuntimeError("No transcription engine available. Install one of: "
+                           "mlx-whisper (Mac), faster-whisper (Linux), openai-whisper (universal)")
+    model = model or DEFAULT_MODELS.get(engine, "")
+    if engine == "faster-whisper":
+        return transcribe_faster_whisper(samples, model=model, language=language, initial_prompt=initial_prompt,
+                                         max_tokens=max_tokens)
+    if max_tokens:
+        import warnings
+        warnings.warn(f"{engine} doesn't cap tokens yet: a short check can run as long as a full transcription",
+                      RuntimeWarning, stacklevel=2)
+    if engine == "mlx":
+        return transcribe_mlx(samples, model=model, language=language, initial_prompt=initial_prompt)
+    if engine == "whisper":
+        return transcribe_whisper(samples, model=model, language=language, initial_prompt=initial_prompt)
+    raise ValueError(f"Unknown engine: {engine}")
+
+
 def transcribe(audio_path: str, engine: Optional[str] = None,
                model: Optional[str] = None, language: str = "en",
                initial_prompt: Optional[str] = None) -> TranscriptResult:
@@ -284,6 +377,15 @@ def transcribe(audio_path: str, engine: Optional[str] = None,
             result = transcribe_whisper(
                 wav_path,
                 model=model or "turbo",
+                language=language,
+                initial_prompt=initial_prompt,
+            )
+        elif engine == "faster-whisper":
+            # detect_engine has offered this engine on Linux all along; the dispatch had no
+            # branch for it, so every Linux transcription raised "Unknown engine".
+            result = transcribe_faster_whisper(
+                wav_path,
+                model=model or DEFAULT_MODELS["faster-whisper"],
                 language=language,
                 initial_prompt=initial_prompt,
             )

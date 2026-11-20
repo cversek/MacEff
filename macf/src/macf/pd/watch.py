@@ -308,7 +308,7 @@ def check_login(card: str, event: Optional[dict], now: float) -> Optional[Findin
 
 
 def check_channel(card: str, event: Optional[dict], now: float) -> Finding:
-    """The session's MacEff channel, from the daemon's own record of it (MIS-0002-R115).
+    """The session's MacEff Notification Channel, from the daemon's own record of it (MIS-0002-R115).
     The daemon derives dark and back; this watch is how the operator hears of it, since a
     dark channel can't carry its own news."""
     if event is None or event.get("event") == interface.EVENT_CHANNEL_BACK:
