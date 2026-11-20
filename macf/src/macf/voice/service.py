@@ -92,7 +92,10 @@ def send_request(request: dict, host: str = DEFAULT_HOST, port: int = DEFAULT_PO
         sock.connect((host, port))
         sock.sendall(json.dumps(request).encode('utf-8') + b'\n')
         data = read_request_line(sock)    # the reply is bounded the same way: a squatted port can send without end
-        return json.loads(data.decode('utf-8').strip())
+        try:
+            return json.loads(data.decode('utf-8').strip())
+        except ValueError as e:   # not JSON, or not UTF-8: the service didn't answer in its protocol
+            raise ConnectionError("the voice service sent a reply that is not JSON") from e
     finally:
         sock.close()
 
@@ -106,8 +109,9 @@ MAX_AUDIO_BYTES = 64 * 1024 * 1024
 MAX_REQUEST_BYTES = (MAX_AUDIO_BYTES + 2) // 3 * 4 + 1024 * 1024
 
 
-class RequestTooLarge(Exception):
-    """A request line ran past MAX_REQUEST_BYTES without ending."""
+class RequestTooLarge(ConnectionError):
+    """A request line ran past MAX_REQUEST_BYTES without ending. A connection error, so a caller that
+    already falls back when the service is unreachable falls back for this too."""
 
 
 def read_request_line(conn) -> bytes:
