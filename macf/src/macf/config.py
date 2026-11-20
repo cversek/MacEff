@@ -610,7 +610,7 @@ RESOLVED_SETTINGS: List[Dict[str, Any]] = [
         "config_path": "permissions.deny_under_full_autonomy",
         "default": False,
         "coerce": None,
-        "description": "Deny at once a permission dialog nobody can answer (AUTO_MODE with the operator away, or a sprint or play time)",
+        "description": "Deny at once a permission dialog nobody can answer (AUTO_MODE with the operator remote or idle past the timeout)",
     },
     {
         "name": "hooks.output",
