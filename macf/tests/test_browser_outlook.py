@@ -15,7 +15,7 @@ ROWS = [
 
 def test_no_send_verb():
     assert "send" not in outlook.PLUGIN.verbs
-    assert outlook.PLUGIN.irreversible == ()
+    assert outlook.PLUGIN.irreversible == ("discard",)   # discarding a draft needs the operator's words
     src = inspect.getsource(outlook)
     assert "get_by_role(\"button\", name=\"Send\"" not in src and "'Send'" not in src
 

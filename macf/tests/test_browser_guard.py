@@ -8,7 +8,7 @@ from macf.browser import guard
 
 
 @pytest.mark.parametrize("name", ["Send", "Submit", "Post comment", "Publish", "Delete", "Pay now",
-                                  "Confirm", "Accept", "Request approval", "  send  "])
+                                  "Confirm", "Accept", "Request approval", "Discard", "  send  "])
 def test_irreversible_needs_operator_words(name):
     with pytest.raises(guard.Refused) as e:
         guard.check_activation(role="button", name=name, operator_said=None)

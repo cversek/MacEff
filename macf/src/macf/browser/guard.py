@@ -24,7 +24,7 @@ class Unavailable(Exception):
 # Imperative labels that start a control's accessible name. Anchored at the start, with a word boundary, so
 # "Deleted Items", "Sender" and "Posting policy" are ordinary controls and "Send", "Delete" and "Post comment" are not.
 IRREVERSIBLE = re.compile(
-    r"^\s*(send|submit|post|publish|delete|pay|purchase|buy|place order|confirm|accept|approve|request approval|"
+    r"^\s*(send|submit|post|publish|delete|discard|pay|purchase|buy|place order|confirm|accept|approve|request approval|"
     r"sign and submit|unsubscribe)\b", re.I)
 
 # Keyboard chords that send or submit in common web applications, normalized to lowercase "mod+key" form.

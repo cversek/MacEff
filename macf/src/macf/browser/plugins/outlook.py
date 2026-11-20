@@ -14,8 +14,8 @@ from macf.browser.plugins import Plugin, enforce
 PLUGIN = Plugin(
     name="outlook",
     hosts=("outlook.cloud.microsoft", "outlook.office.com", "outlook.office365.com", "outlook.live.com"),
-    verbs=("status", "list", "read", "attachments", "save", "draft"),
-    irreversible=(),
+    verbs=("status", "list", "read", "attachments", "save", "draft", "discard"),
+    irreversible=("discard",),
 )
 HOME_URL = "https://outlook.cloud.microsoft/mail/"
 DRAFT_SAVED_PATTERN = re.compile(r"\bdraft saved\b", re.I)
@@ -54,6 +54,11 @@ def add_arguments(parser, common) -> None:
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--body")
     g.add_argument("--body-file")
+    p = verbs.add_parser("discard", help="discard one draft by id (irreversible: needs the operator's words)")
+    common(p, scoped=False)
+    p.add_argument("id")
+    p.add_argument("--operator-said", help="the operator's words for this discard, verbatim")
+    p.add_argument("--said-source", help="where the operator said it: a channel message id or a transcript turn")
 
 
 ### pure parts, tested without a browser
@@ -247,8 +252,26 @@ def draft(backend, args):
             "next": "open Drafts in the mail client, check it, and send it yourself"}
 
 
+def discard(backend, args):
+    """Discard one draft. Irreversible, so the operator's words are checked twice: by the plugin's declaration and
+    by the guard on the Discard control and on any confirming button (R17)."""
+    page = _page(backend)
+    enforce(PLUGIN, "discard", page.url, args.operator_said)
+    _open(backend, page, args.id)
+    if page.get_by_text(re.compile(r"^\[Draft\]|^Draft$")).count() == 0 and \
+            page.get_by_role("button", name="Discard", exact=True).count() == 0:
+        raise guard.Refused(f"message {args.id!r} is not a draft: only drafts are discarded")
+    report = backend.click(page, "button", "Discard", exact=True, operator_said=args.operator_said)
+    confirm = page.get_by_role("dialog").get_by_role("button", name=re.compile(r"^(Discard|OK|Delete)$"))
+    if confirm.count() == 1:
+        name = confirm.first.get_attribute("aria-label") or confirm.first.inner_text()
+        report = backend.click(page, "button", name.strip(), exact=True, operator_said=args.operator_said)
+    return {"id": args.id, "discarded": True, "changed": report.get("changed"),
+            "where": "Deleted Items, where the operator can still recover it"}
+
+
 VERBS = {"status": status, "list": list_rows, "read": read, "attachments": attachments, "save": save,
-         "draft": draft}
+         "draft": draft, "discard": discard}
 
 
 def run(backend, args):
