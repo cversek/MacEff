@@ -179,8 +179,8 @@ def cmd_pd_login(args: argparse.Namespace) -> int:
     try:                      # the declaration's warning window, when this home has one that reads (#1027)
         home, card = _this_agent()
         from macf.pd.core import load_declaration
-        reports = load_declaration(home, card).reports
-        expiring_s = reports.warn_days * 86400.0 if reports else EXPIRING_S
+        from macf.pd.login import warn_seconds
+        expiring_s = warn_seconds(load_declaration(home, card))
     except Exception as e:  # noqa: BLE001 - a seat with no readable declaration still gets its verdict, by the default window
         print(f"⚠️ MACF: pd login: no declaration read, so the default warning window applies: {type(e).__name__}",
               file=sys.stderr)

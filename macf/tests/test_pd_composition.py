@@ -128,3 +128,36 @@ def test_a_start_that_finds_its_daemon_running_holds_before_it_exits(tmp_path, m
     held = []
     assert main_module.main([str(tmp_path)], hold=held.append) == 75
     assert held == [main_module.REFUSED_HOLD_S]
+
+
+# ---- the login window comes from the declaration at every site that judges expiry (#1027) -----------
+
+def _with_reports(home, warn_days):
+    reports = {"times": ["07:45"], "warn_days": warn_days, "missed": {"kind": "skip"}} if warn_days else None
+    declaration_path(home).write_text(Declaration.model_validate(
+        {"version": 1, "agent": CARD, "units": [], **({"timezone": "UTC", "reports": reports} if reports else {})}
+    ).model_dump_json())
+    return home
+
+
+def test_the_daemons_login_check_judges_by_the_declared_window(tmp_path, base, isolated_events_log):
+    """Without this the daemon recorded 'expiring' by the default three days whatever the declaration said, so
+    the record and the outside watch disagreed (THM's review of #1058)."""
+    from macf.pd.login import EXPIRING_S
+    declared = Daemon(_with_reports(make_home(tmp_path / "a", []), 7), base=base)
+    assert declared.login.expiring_s == 7 * 86400.0
+    default = Daemon(_with_reports(make_home(tmp_path / "b", []), None), base=base / "b")
+    assert default.login.expiring_s == EXPIRING_S
+
+
+def test_pd_login_judges_by_the_declared_window(tmp_path, monkeypatch, capsys):
+    import argparse
+    from macf.pd import cli as pd_cli
+    from macf.pd import login
+    home = _with_reports(make_home(tmp_path, []), 7)
+    seen = []
+    monkeypatch.setattr(pd_cli, "_this_agent", lambda: (home, CARD))
+    monkeypatch.setattr(login, "read_assessment", lambda expiring_s=login.EXPIRING_S, **k: seen.append(expiring_s)
+                        or {"state": "ok", "detail": "stood in"})
+    assert pd_cli.cmd_pd_login(argparse.Namespace(json=False)) == 0
+    assert seen == [7 * 86400.0]

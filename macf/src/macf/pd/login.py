@@ -89,6 +89,13 @@ def read_assessment(now: Optional[float] = None,
     return assess(raw, now, expiring_s=expiring_s)
 
 
+def warn_seconds(declaration) -> float:
+    """The login warning window in seconds: the declaration's ``reports.warn_days``, else the default. One
+    reading at every site that judges a login's expiry, so none of them can ignore the declaration (#1027)."""
+    reports = getattr(declaration, "reports", None)
+    return reports.warn_days * 86400.0 if reports else EXPIRING_S
+
+
 def daemon_assessment(expiring_s: float = EXPIRING_S) -> Dict[str, object]:
     """What the daemon's check reads: ``read_assessment``, behind a name a test suite can stand in
     for, so no test daemon reads the developer's own credential."""

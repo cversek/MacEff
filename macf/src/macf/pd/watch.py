@@ -570,6 +570,9 @@ def check_unit(card: str, unit: interface.Unit, event: Optional[dict], now: floa
     return Finding(card, unit.name, "ALIVE", f"last liveness {_age(r.age)} ago")
 
 
+from macf.pd.login import warn_seconds  # noqa: E402 -- one reading of the declared login window (#1027)
+
+
 def check_home(home: Path, now: float, base: Optional[Path] = None,
                probe: Optional[Probe] = verify_incarnation) -> List[Finding]:
     """Every finding for one agent home. ``probe`` None skips the process probes, for a
@@ -623,7 +626,7 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
             findings.append(check_receipts(card, [], now))
         try:
             login = check_login(card, last_login_event(log_path, card, now), now,
-                                declaration.reports.warn_days * 86400.0 if declaration.reports else None)
+                                warn_seconds(declaration))
         except FileNotFoundError:
             login = None
         if login is not None:
