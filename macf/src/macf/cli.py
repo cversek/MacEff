@@ -303,7 +303,7 @@ def cmd_env(args: argparse.Namespace) -> int:
             print(f"⚠️ MACF: path resolution failed: {e}", file=sys.stderr)
             return str(p) if p else "(not set)"
 
-    from macf.utils.paths import detect_cc_binary
+    from macf.utils.paths import detect_cc_binary, detect_cc_running, describe_cc_running
     _detect_cc_binary = detect_cc_binary
 
     # Get agent identity
@@ -374,6 +374,7 @@ def cmd_env(args: argparse.Namespace) -> int:
         },
         "cc_internal": {
             "cc_binary": _detect_cc_binary(),
+            "cc_running": describe_cc_running(_detect_cc_binary(), detect_cc_running()),
             "cc_project_dir": resolve_path(cc_project_dir),
             "cc_tasks_dir": resolve_path(cc_tasks_dir)
         },
@@ -464,7 +465,8 @@ def cmd_env(args: argparse.Namespace) -> int:
         print()
 
         print("Claude Code Internal")
-        print(f"  CC Binary:      {data['cc_internal']['cc_binary']}")
+        print(f"  CC Installed:   {data['cc_internal']['cc_binary']}")
+        print(f"  CC Running:     {data['cc_internal']['cc_running']}")
         print(f"  CC Project Dir: {data['cc_internal']['cc_project_dir']}")
         print(f"  CC Tasks Dir:   {data['cc_internal']['cc_tasks_dir']}")
         print()
@@ -1458,7 +1460,7 @@ def cmd_config_init(args: argparse.Namespace) -> int:
 
     print(f"\n✅ Configuration created: {config_file}")
     print(f"   Agent moniker: {moniker}")
-    print(f"   Logging paths: /tmp/macf_hooks/{moniker}/{{session_id}}/")
+    print(f"   Logging paths: <session root>/{moniker}/{{session_id}}/ (your runtime directory; MACF_SESSION_ROOT moves it)")
 
     return 0
 
@@ -5223,7 +5225,7 @@ def get_display_mtime(tasks_dir) -> float:
     try:
         from .roles.hooks import roles_store_mtime
         latest = max(latest, roles_store_mtime())
-    except (OSError, ImportError, ValueError):
+    except (OSError, ImportError, ValueError):  # noqa: S110 - polled each redraw; store-only detection is the fallback
         pass  # no roles store: store-only detection
     try:
         from .agent_events_log import get_log_path
@@ -5262,15 +5264,31 @@ def _display_events_mtime(log_path) -> float:
         st.update(path=str(log_path), offset=max(0, size - 65536), mtime=0.0)
     if size == st["offset"]:
         return st["mtime"]
+    start = st["offset"]
     with open(log_path, "rb") as f:
-        f.seek(st["offset"])
-        chunk = f.read(size - st["offset"])
-    st["offset"] = size
+        # A read that starts mid-file begins with a fragment of a line unless the
+        # byte before it is a newline; that fragment is not a record to parse.
+        mid_line = False
+        if start > 0:
+            f.seek(start - 1)
+            mid_line = f.read(1) != b"\n"
+        f.seek(start)
+        chunk = f.read(size - start)
+    # Advance only past the last complete line: a line still being written is
+    # read whole on the next poll instead of failing to parse and being lost.
+    end = chunk.rfind(b"\n")
+    if end < 0:
+        return st["mtime"]
+    st["offset"] = start + end + 1
+    lines = chunk[:end + 1].splitlines()
+    if mid_line:
+        lines = lines[1:]
     file_mtime = log_path.stat().st_mtime
-    for line in chunk.splitlines():
+    for line in lines:
         try:
             ev = _json.loads(line)
-        except ValueError:
+        except ValueError as e:
+            print(f"⚠️ MACF: display event log line unparseable (skipped, display may miss that event): {e}", file=sys.stderr)
             continue
         name = str(ev.get("event", ""))
         if name.startswith(_DISPLAY_EVENT_PREFIXES):
@@ -11151,7 +11169,7 @@ def _broker_socket_ready(sock: Path, timeout: float = 0.0) -> bool:
                 s.connect(str(sock))
                 s.close()
                 return True
-            except OSError:
+            except OSError:  # noqa: S110 - a refused probe is the normal not-ready state, retried every 0.2 s
                 pass
         if _time.monotonic() >= deadline:
             return False

@@ -38,7 +38,7 @@ def _one_line(e: Exception) -> str:
                 parts.append(f"{loc}: {msg}" if loc else msg)
             if parts:
                 return "; ".join(parts)
-        except (TypeError, AttributeError, KeyError):
+        except (TypeError, AttributeError, KeyError):  # noqa: S110 - odd error shape; str(e) below still reports it
             pass
     return str(e)
 
@@ -69,7 +69,7 @@ def _datetime(text: Optional[str], flag: str) -> Optional[datetime]:
     for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
         try:
             return datetime.strptime(text, fmt)
-        except ValueError:
+        except ValueError:  # noqa: S112 - not this format, try the next
             continue
     raise RoleError(f"{flag} needs YYYY-MM-DD or YYYY-MM-DDTHH:MM, not {text!r}")
 
