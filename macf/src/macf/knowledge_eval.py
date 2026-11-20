@@ -510,12 +510,18 @@ def evaluate(corpus: Corpus, rankers: Sequence[str], sources: Sequence[str] = LA
         # An artifact outside the web can't be a --like query and can't be a target, so it is left
         # out as a query and counted, not raised on (#1059). The doctor's unreachable count is the same set.
         orphans = [q for q in rel if q not in corpus.web_set]
-        rel = {q: v for q, v in rel.items() if q in corpus.web_set}
+        # The ranked list is cut to the web before scoring, so a target outside it can never be returned:
+        # it is dropped from the relevant sets too, and a query left with no target is left out.
+        orphan_targets = sum(len(v - corpus.web_set) for q, v in rel.items() if q in corpus.web_set)
+        rel = {q: v & corpus.web_set for q, v in rel.items() if q in corpus.web_set}
+        no_target = [q for q, v in rel.items() if not v]
+        rel = {q: v for q, v in rel.items() if v}
         dev, held = split(rel, seed)
         labelled[s], split_ids[s] = rel, (dev, held)
         chart["sources"][s] = {"queries": len(rel), "pairs": sum(len(v) for v in rel.values()),
                                "unresolved": unresolved, "dev": len(dev), "held": len(held),
-                               "orphan_queries": len(orphans)}
+                               "orphan_queries": len(orphans), "orphan_targets": orphan_targets,
+                               "no_target_queries": len(no_target)}
         if s == "same_subject" and not index_text:
             chart["sources"][s]["note"] = "no learnings index in this snapshot"
     sealed, held_runs = seal_state(events(), seed)
@@ -589,8 +595,10 @@ def format_report(out: dict) -> str:
                                                       for s, n in by.items()))
     for s, info in c["sources"].items():
         extra = f", {info['note']}" if info.get("note") else ""
-        left_out = (f", {info['orphan_queries']} left out as outside the web"
-                    if info.get("orphan_queries") else "")
+        left_out = "".join(f", {info[k]} {what}" for k, what in (
+            ("orphan_queries", "queries left out as outside the web"),
+            ("orphan_targets", "targets left out as outside the web"),
+            ("no_target_queries", "queries left out with no target in the web")) if info.get(k))
         lines.append(f"   {s}: {info['queries']} queries, {info['pairs']} pairs, {info['unresolved']} unresolved, "
                      f"{info['dev']} dev, {info['held']} held{left_out}{extra}")
     for s, by in out["results"].items():
