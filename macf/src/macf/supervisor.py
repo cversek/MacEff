@@ -238,7 +238,8 @@ def _latest_session_id() -> str:
             continue
         try:
             m = jf.stat().st_mtime
-        except OSError:
+        except OSError as e:
+            print(f"⚠️ MACF: stat of {jf.name} failed (skipping that transcript): {e}", file=sys.stderr)
             continue
         if m > latest_mtime:
             latest_mtime, latest = m, jf.stem
@@ -387,7 +388,8 @@ def _iter_live_supervisors():
             continue
         try:
             data = json.loads(entry.read_text())
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"⚠️ MACF: reading registry entry {entry.name} failed (skipping it): {e}", file=sys.stderr)
             continue
         if is_live_supervisor(data):
             yield data
@@ -442,7 +444,7 @@ def _ppid(pid: int) -> int:
     try:
         stat = Path(f"/proc/{pid}/stat").read_text()
         return int(stat.rsplit(")", 1)[1].split()[1])
-    except (OSError, ValueError, IndexError):
+    except (OSError, ValueError, IndexError):  # noqa: S110 - /proc is tried first and ps is the fallback on macOS, so a miss here is expected and the next block answers it
         pass
     try:
         out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)],
@@ -525,7 +527,63 @@ def _record_keys_sent(text: str, kind: str, tmux_session: str) -> None:
               f"will read as the operator's typing: {e}", file=sys.stderr)
 
 
-def send_slash_to_self(command: str, target: str = "", then: Optional[str] = None) -> int:
+#: Dialogs the client shows in place of exiting: a title, the menu lines that go with it, and how to
+#: name it. Each needs a person: answering one by keystroke would pick a menu entry nobody has read,
+#: and "exit and stop tasks" drops the session's schedules silently (#854). The title alone isn't
+#: enough, since the agent's own conversation is on the screen and may quote it: a dialog is its
+#: title and at least one of its menu lines together. Only wording seen on a real screen belongs here.
+EXIT_DIALOGS = {"Background work is running": (
+    ("Exit and stop tasks", "Move to background and exit", "Stay"),
+    "its 'Background work is running' dialog")}
+#: How long, and how often, the screen is read after /exit is typed.
+EXIT_WATCH_S = 3.0
+EXIT_WATCH_STEP_S = 0.5
+
+
+def _dialog_on(screen: Optional[str]) -> Optional[str]:
+    """The name of the exit dialog *screen* shows, or None: its title with at least one of its
+    menu lines, so a conversation that merely quotes the title is not mistaken for it."""
+    if not screen:
+        return None
+    for title, (menu, name) in EXIT_DIALOGS.items():
+        if title in screen and any(line in screen for line in menu):
+            return name
+    return None
+
+
+def _watch_exit(target: str, cmd: str, before: Optional[str] = None) -> int:
+    """After *cmd* (/exit or /quit) is typed, say what is known about it, and no more.
+
+    The keystrokes going in are not the client exiting. A client that stopped on one of
+    EXIT_DIALOGS is still running and will stay there, so that is an error (non-zero). A screen
+    that shows none proves nothing either: typed mid-turn, /exit waits for the turn to end, and
+    a command that runs inside the session ends with it. So the message names what does confirm
+    the exit, the session unit's restart (#854).
+    """
+    # A dialog already on the screen before the keys went in isn't the answer to them.
+    already = _dialog_on(before)
+    polls = int(EXIT_WATCH_S / EXIT_WATCH_STEP_S)
+    for poll in range(polls + 1):
+        screen = capture_pane(target)
+        if screen is None:
+            print(f"[inject] {cmd} was typed, but the screen can't be read, so whether the client "
+                  f"exited is unknown.", file=sys.stderr)
+            break
+        name = _dialog_on(screen)
+        if name is not None and name != already:
+            print(f"[inject] {cmd} was typed, but the client stopped on {name} and has not "
+                  f"exited. It stays there until a person answers it; typing into it from here "
+                  f"would pick a menu entry no one has read.", file=sys.stderr)
+            return 1
+        if poll < polls:
+            time.sleep(EXIT_WATCH_STEP_S)
+    print(f"[inject] {cmd} was typed; the client's exit is not confirmed by this. It exits when its "
+          f"current turn ends. The session unit's restart confirms it: `macf_tools pd status`, or "
+          f"`macf_tools events query --event pd_carried --limit 1 -v` after it.", file=sys.stderr)
+    return 0
+
+
+def send_slash_to_self(command: str, target: str = "", then: Optional[str] = None, arm_stop: bool = True) -> int:
     """Queue a slash command (e.g. ``/compact``) into this agent's own live CC
     pane via the tmux side channel.
 
@@ -548,11 +606,24 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
             # With a draft waiting, the client answers /exit with a dialog (review and send,
             # or discard) instead of exiting, so the restart this asks for would sit there
             # until someone presses a key. The draft is the operator's, so it is named, not
-            # discarded.
+            # discarded, with its title and age so the operator can decide from this alone (#903).
+            from macf.utils.feedback_drafts import describe, unsent_drafts
+            named = "; ".join(describe(d) for d in unsent_drafts()) or ", ".join(str(d) for d in drafts)
             print(f"[inject] The client holds {len(drafts)} unsent feedback draft(s), so {cmd} "
                   f"would stop on its review-or-discard dialog instead of exiting: "
-                  f"{', '.join(str(d) for d in drafts)}. Ask the operator to send or discard "
+                  f"{named}. Ask the operator to send or discard "
                   f"it (/feedback), then run this again.", file=sys.stderr)
+            return 1
+        jobs = _scheduled_jobs() if not target else []
+        if jobs:
+            # A scheduled job puts /exit on a second dialog ("Background work is running") that
+            # nobody is there to answer. Answering it by keystroke would pick a menu entry a
+            # person hasn't seen, and "exit and stop tasks" would drop the jobs silently (#854).
+            named = "; ".join(f"{j.id} ({j.schedule})" for j in jobs)
+            print(f"[inject] This session has {len(jobs)} scheduled job(s), so {cmd} would stop on "
+                  f"the 'Background work is running' dialog instead of exiting: {named}. Cancel them "
+                  f"(CronDelete) and run this again. They may be restored when the session resumes: "
+                  f"after the restart, list them (CronList) before re-creating any.", file=sys.stderr)
             return 1
     if target:
         if then:
@@ -594,14 +665,18 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
                   f"draft: ask them to send or clear it (autonomous_operation 5.4), then run "
                   f"this again.", file=sys.stderr)
         return 1
+    before = capture_pane(own) if cmd in ("/exit", "/quit") else None
     rc = send_keys(own, [cmd], enter=True, kind="inject")
+    if rc == 0 and cmd in ("/exit", "/quit"):
+        rc = _watch_exit(own, cmd, before)
     if rc == 0:
         # A queued /compact is only submitted when the turn ends, and the Stop
         # gates exist to refuse that. Arm one passage, only after delivery and
         # only on the self-resolved path: with --target the pane may belong to
         # another session, and this log's gates are this session's.
         from .stop_bypass import arm
-        arm(command)
+        if arm_stop:
+            arm(command)
         if cmd == "/compact":
             # The ask is recorded so that a compaction without one can be found
             # (MIS-0002-R127 (harness_compaction_MUST_be_recorded)).
@@ -738,10 +813,28 @@ def _record_box_cleared(text: str, presses: int, tmux_session: str) -> None:
         print(f"⚠️ MACF: could not record the cleared text: {e}", file=sys.stderr)
 
 
+def _scheduled_jobs() -> list:
+    """The jobs this session has scheduled and not cancelled, from its transcript; empty when the
+    transcript can't be found or read, which is said, since this check only advises (#854)."""
+    try:
+        from .utils import get_current_session_id
+        from .utils.paths import get_session_transcript_path
+        from .utils.scheduled_jobs import live_jobs
+        path = get_session_transcript_path(get_current_session_id())
+        if not path:
+            return []
+        # No bound at the client's start: a resumed session gets its jobs back (#854 review).
+        return live_jobs(Path(path))
+    except (OSError, ValueError, ImportError) as e:
+        print(f"[inject] could not read this session's scheduled jobs ({e}); if /exit stops on "
+              f"'Background work is running', a person has to answer it", file=sys.stderr)
+        return []
+
+
 def _unsent_feedback_drafts() -> list:
     """The feedback drafts the client holds unsent, oldest name first; empty when there are none."""
-    base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
-    return sorted((base / "feedback" / "drafts").glob("*.json"))
+    from macf.utils.feedback_drafts import drafts_dir
+    return sorted(drafts_dir().glob("*.json"))
 
 
 def _draft_in_box(target: str) -> Optional[str]:
@@ -792,8 +885,49 @@ def start_compaction_resume(since: float) -> bool:
     return _start_compact_followup(target, RESUME_TEXT, since=since, quiet=True)
 
 
+#: What ``inject model`` may type after ``/model``: an alias the client knows, or a model id, each with an
+#: optional [1m] context suffix. Anything else is refused, so the command can't carry other text into the pane,
+#: and a bare ``/model``, which opens a picker that nobody is there to answer, is impossible.
+MODEL_NAME = re.compile(r"(?:opus|sonnet|haiku|fable|default|opusplan|claude-[a-z0-9][a-z0-9.-]{2,60})(?:\[1m\])?")
+
+
+def switch_own_model(model: str, reason: str, then: Optional[str] = None, confirm: bool = True) -> int:
+    """Queue ``/model <model>`` into this agent's own pane, record why, and type a prompt once it has run.
+
+    A model switch, like a compaction, opens no turn: the queued ``/model`` runs as the turn that queued it ends,
+    and the agent then sits idle on its new model until something wakes it. So, as for ``inject compact``, a
+    detached follower waits for that turn's end and types one prompt, the framework's or ``then``, into an idle,
+    empty box. The switch changes what each turn costs, so the reason is required and is recorded with it."""
+    import time as _time
+    model, reason = model.strip(), " ".join(reason.split())
+    if not MODEL_NAME.fullmatch(model):
+        print(f"[inject] {model!r} is not a model name this command types. Give an alias (opus, sonnet, haiku, "
+              f"fable, default) or a model id such as claude-opus-5-5, optionally with [1m].", file=sys.stderr)
+        return 1
+    if not reason:
+        print("[inject] A model switch changes what every turn costs, so it needs --reason: whose word or "
+              "which standing rule it follows. It is recorded with the switch.", file=sys.stderr)
+        return 1
+    own = own_pane_target()
+    asked_at = _time.time()
+    # The Stop passage lets the turn end through a sprint's scope gate so the queued /model runs; with no
+    # follower to wake the agent afterwards (--no-then), that would end the turn with nothing to resume it.
+    rc = send_slash_to_self(f"model {model}", arm_stop=then != "")
+    if rc != 0:
+        return rc
+    from .agent_events_log import append_event
+    if not append_event("model_change_asked", {"model": model, "reason": reason, "via": "macf_tools inject"}):
+        print("⚠️ MACF: the model switch was sent but could not be recorded in the event log", file=sys.stderr)
+    if then != "" and own:
+        from .compact_followup import MODEL_TEXT, TURN_END_EVENT
+        _start_compact_followup(own, then or MODEL_TEXT.format(model=model, reason=reason), since=asked_at,
+                                after=TURN_END_EVENT, confirm_model=model if confirm else None)
+    return 0
+
+
 def _start_compact_followup(target: str, text: str, since: Optional[float] = None,
-                            quiet: bool = False) -> bool:
+                            quiet: bool = False, after: Optional[str] = None,
+                            confirm_model: Optional[str] = None) -> bool:
     """Start the detached follower that types *text* once the compaction has finished.
 
     Self-resolved path only, like the Stop passage above: the follower reads THIS agent's
@@ -802,7 +936,8 @@ def _start_compact_followup(target: str, text: str, since: Optional[float] = Non
     """
     import time as _time
     argv = [sys.executable, "-m", "macf.compact_followup", target,
-            repr(_time.time() if since is None else since), "--text", text]
+            repr(_time.time() if since is None else since), "--text", text] + (["--after", after] if after else []) \
+        + (["--confirm-switch", confirm_model] if confirm_model else [])
     # Its stderr goes to the transcript monitor's log in the user's runtime directory, so a
     # follower that dies before recording its outcome still leaves a traceback somewhere.
     log = subprocess.DEVNULL
@@ -823,9 +958,20 @@ def _start_compact_followup(target: str, text: str, since: Optional[float] = Non
         if log is not subprocess.DEVNULL:
             os.close(log)
     if not quiet:                       # a hook's stdout is its reply, so a hook passes quiet
-        print("[inject] After the compaction, a recovery prompt will be typed into this pane "
-              "(skipped if something else wakes the session first).")
+        print(_followup_notice(after, confirm_model))
     return True
+
+
+def _followup_notice(after: Optional[str], confirm_model: Optional[str]) -> str:
+    """What the agent is told its follower will do: after a compaction, or after a model switch."""
+    from .compact_followup import TURN_END_EVENT
+    if after != TURN_END_EVENT:
+        return ("[inject] After the compaction, a recovery prompt will be typed into this pane "
+                "(skipped if something else wakes the session first).")
+    dialog = (f"answers the client's 'Switch model?' dialog if it offers {confirm_model}, then "
+              if confirm_model else "leaves any 'Switch model?' dialog for a person (--no-confirm), then ")
+    return (f"[inject] When this turn ends the model switches. The follower {dialog}types a prompt into this "
+            f"pane (skipped if something else wakes the session first).")
 
 
 def record_keys_sent(text: str, kind: str, tmux_session: str) -> None:
@@ -878,6 +1024,17 @@ def capture_pane(target: str) -> Optional[str]:
     r = subprocess.run(["tmux", "capture-pane", "-p", "-e", "-t", _pane_of(data)],
                        capture_output=True, text=True)
     return r.stdout if r.returncode == 0 else None
+
+
+def pane_width(target: str) -> Optional[int]:
+    """The width in columns of *target*'s pane, or None when it can't be read."""
+    data = _resolve_pane_target(target)
+    if not (data or {}).get("tmux_session") or not _tmux_available():
+        return None
+    r = subprocess.run(["tmux", "display-message", "-p", "-t", _pane_of(data), "#{pane_width}"],
+                       capture_output=True, text=True)
+    text = r.stdout.strip() if r.returncode == 0 else ""
+    return int(text) if text.isdigit() else None
 
 
 def press_enter(target: str) -> int:
@@ -1736,5 +1893,5 @@ if __name__ == "__main__":
         print("[auto-restart] Press Enter to close...")
         try:
             input()
-        except (EOFError, KeyboardInterrupt):
+        except (EOFError, KeyboardInterrupt):  # noqa: S110 - the user closing the window at this prompt; the crash is already printed and logged above
             pass

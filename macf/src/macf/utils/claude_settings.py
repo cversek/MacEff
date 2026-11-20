@@ -267,7 +267,7 @@ _DEFAULT_ASK = [
     # An edit or a resume makes an entry fire as nothing consented to before, so it asks as add does.
     "Bash(macf_tools pd entry edit:*)",
     "Bash(macf_tools pd entry resume:*)",
-    # The event stream's rules: approving the prompt is the operator's act (persistent_layer 11.4).
+    # The event stream's rules: approving the prompt is the operator's act (persistent_layer 3.4).
     "Bash(macf_tools pd stream silence:*)",
     "Bash(macf_tools pd stream unsilence:*)",
     "Bash(macf_tools pd stream route:*)",
@@ -280,10 +280,14 @@ _DEFAULT_ASK = [
 # `inject` takes any slash command. inject compact refuses while the input box
 # holds text, so clearing the box is allowed too; clear-input presses only
 # Ctrl-U, in the caller's own pane, and only when the box starts with --expect.
+# inject model switches the agent's own model (the operator, 2026-11-14: "Give yourself allow perms for the
+# command"). Its arguments can't carry anything else: it types /model only with a name it checked against
+# the known aliases and model ids, and refuses without a --reason, which it records.
 _PERMANENT_ALLOW = [
     "Bash(macf_tools mode set MANUAL_MODE:*)",
     "Bash(macf_tools inject compact)",
     "Bash(macf_tools inject clear-input:*)",
+    "Bash(macf_tools inject model:*)",
 ]
 
 # Operations that are NEVER legitimate in normal development (permanent deny)
@@ -385,7 +389,7 @@ def _other_allow_entries(project_root: Optional[Path] = None) -> list:
     for path in (user_dir / "settings.json", Path(project_root) / ".claude" / "settings.json"):
         try:
             allow = (json.loads(path.read_text()).get("permissions") or {}).get("allow") or []
-        except FileNotFoundError:
+        except FileNotFoundError:  # noqa: S112 - a settings file that does not exist is the normal case; only unreadable ones are reported below
             continue
         except (OSError, ValueError, AttributeError) as e:
             print(f"⚠️ MACF: {path} unreadable, its allow rules not consulted: {e}", file=sys.stderr)

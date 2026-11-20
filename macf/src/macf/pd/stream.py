@@ -1,6 +1,6 @@
 """The event stream's source: the event log, followed, for the daemon's own MQTT broker.
 
-Every daemon publishes its stream on its own broker (persistent_layer 11.4; MIS-0002 R150 to R156,
+Every daemon publishes its stream on its own broker (persistent_layer 3.4; MIS-0002 R150 to R156,
 ``macf.pd.broker``). This module is the part that reads the log: it follows the log as the core
 does, renders each new line as a stream record, and answers a replay from a position. The log stays
 the only store; nothing here writes to it.
@@ -97,7 +97,7 @@ class Rules:
         for event in events:
             try:
                 rule = StreamRule.model_validate(event.get("data") or {})
-            except ValidationError:
+            except ValidationError:  # noqa: S112 - foreign stream lines are expected and set no rule
                 continue    # noqa: MACEFF003 - a line that isn't a rule sets none
             if calling_card.is_agent(rule.agent, card):    # a rule stored under the old card still holds (R166)
                 self.apply(rule.act, rule.target, rule.subscriber)

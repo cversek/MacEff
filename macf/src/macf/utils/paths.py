@@ -43,6 +43,32 @@ def detect_cc_binary() -> str:
     return "(not found on PATH)"
 
 
+def detect_cc_running() -> str:
+    """The binary this session is executing, named by the system, or "" when it can't be told.
+
+    ``detect_cc_binary`` names what is installed. An auto-update moves the launcher under a session
+    that keeps running its older binary, so the two can differ (#866). Claude Code gives its hooks
+    and tool commands its pid as CLAUDE_PID.
+    """
+    from macf.utils.formatting import _running_executable
+
+    pid = os.environ.get("CLAUDE_PID", "")
+    return _running_executable(int(pid)) if pid.isdigit() else ""
+
+
+def describe_cc_running(installed: str, running: str) -> str:
+    """The "CC Running" line: the running binary, marked when it isn't the installed one.
+
+    *installed* is what ``detect_cc_binary`` returned, which may end in " (via <launcher>)".
+    """
+    if not running:
+        return "(unknown: no CLAUDE_PID, or the system won't name its binary)"
+    installed_path = installed.split(" (via ")[0]
+    if not installed_path or installed_path.startswith("(") or installed_path == running:
+        return running
+    return f"{running} (not the installed binary: an update came after this session started)"
+
+
 def encode_cc_project_path(path: str) -> str:
     """Encode a filesystem path the way Claude Code does for project directories.
 
@@ -108,7 +134,7 @@ def user_runtime_dir() -> Path:
     path = Path(_TMP_ROOT) / f"macf-{os.getuid()}"
     try:
         path.mkdir(mode=0o700)
-    except FileExistsError:
+    except FileExistsError:  # noqa: S110 - an existing dir is normal; lstat checks it below
         pass
     st = os.lstat(path)
     if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022:
@@ -320,8 +346,8 @@ def find_agent_home() -> Path:
         try:
             home_path.mkdir(parents=True, exist_ok=True, mode=0o755)
             return home_path
-        except OSError:
-            pass  # Fall through to detection
+        except OSError as e:
+            print(f"⚠️ MACF: could not create MACEFF_AGENT_HOME_DIR={agent_home} (falling back to project detection): {e}", file=sys.stderr)
 
     # 2. Project root detection: walk up from cwd looking for .maceff/agent_events_log.jsonl
     # This enables running macf_tools from within a project without setting env vars
@@ -336,14 +362,22 @@ def find_agent_home() -> Path:
     return Path.home()
 
 def session_root() -> Path:
-    """Where per-session directories live: ``/tmp/macf`` unless ``MACF_SESSION_ROOT``
-    names another.
+    """Where per-session directories live: ``sessions`` inside this user's own runtime
+    directory (``user_runtime_dir``) unless ``MACF_SESSION_ROOT`` names another.
 
     Each agent and session gets a directory under it for the hook log, scratch
     scripts and caches. The test suite points it at a temporary directory, so a
     run inside a live session cannot write into that session's hook log.
+
+    The default used to be a bare ``/tmp/macf``. ``/tmp`` is shared by every account on a
+    host or in a container, and the first account to create ``/tmp/macf`` owned it, so
+    every other agent's session folders failed to create (#780).
+
+    Raises:
+        PermissionError: from ``user_runtime_dir``, when the fallback directory isn't this user's.
     """
-    return Path(os.environ.get("MACF_SESSION_ROOT") or "/tmp/macf")
+    override = os.environ.get("MACF_SESSION_ROOT")
+    return Path(override) if override else user_runtime_dir() / "sessions"
 
 
 def get_session_dir(
@@ -356,7 +390,7 @@ def get_session_dir(
     Get agent-scoped session directory with optional subdirectory.
 
     Path structure: {session_root}/{agent_id}/{session_id}/{subdir}/, where the
-    root is /tmp/macf by default (see ``session_root``).
+    root is this user's own runtime directory by default (see ``session_root``).
 
     Args:
         session_id: Session ID (auto-detected if None)
@@ -394,7 +428,13 @@ def get_session_dir(
             agent_id = os.environ.get('MACEFF_USER') or os.environ.get('USER') or 'unknown_agent'
 
     # Build unified path: {session_root}/{agent_id}/{session_id}/{subdir}/
-    base_path = session_root() / agent_id / session_id
+    try:
+        root = session_root()
+    except OSError as e:
+        # No private directory to keep them in: say so, never fall back to a shared one.
+        print(f"⚠️ MACF: no private directory for session folders: {e}", file=sys.stderr)
+        return None
+    base_path = root / agent_id / session_id
 
     if subdir:
         base_path = base_path / subdir
@@ -410,15 +450,15 @@ def get_session_dir(
         return base_path if base_path.exists() else None
 
 def get_hooks_dir(session_id: Optional[str] = None, create: bool = True) -> Optional[Path]:
-    """Get hooks subdirectory: /tmp/macf/{agent_id}/{session_id}/hooks/"""
+    """Get hooks subdirectory: {session_root}/{agent_id}/{session_id}/hooks/"""
     return get_session_dir(session_id=session_id, subdir="hooks", create=create)
 
 def get_dev_scripts_dir(session_id: Optional[str] = None, create: bool = True) -> Optional[Path]:
-    """Get dev_scripts subdirectory: /tmp/macf/{agent_id}/{session_id}/dev_scripts/"""
+    """Get dev_scripts subdirectory: {session_root}/{agent_id}/{session_id}/dev_scripts/"""
     return get_session_dir(session_id=session_id, subdir="dev_scripts", create=create)
 
 def get_logs_dir(session_id: Optional[str] = None, create: bool = True) -> Optional[Path]:
-    """Get logs subdirectory: /tmp/macf/{agent_id}/{session_id}/logs/"""
+    """Get logs subdirectory: {session_root}/{agent_id}/{session_id}/logs/"""
     return get_session_dir(session_id=session_id, subdir="logs", create=create)
 
 def get_session_transcript_path(session_id: str) -> Optional[str]:

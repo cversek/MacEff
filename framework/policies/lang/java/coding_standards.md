@@ -1,9 +1,10 @@
 # Java Coding Standards (with Android)
 
+**Type**: Java
+**Scope**: Any Java source an agent writes or edits
+**Status**: ACTIVE
 **Version**: 1.0
 **Tier**: LANG
-**Category**: Java
-**Status**: ACTIVE
 **Updated**: 2026-10-31
 **Parent**: base/development/coding_standards.md
 

@@ -1,0 +1,3 @@
+### Fixed
+
+- **Two tests no longer depend on the host they run on** (`macf/tests/conftest.py`, `test_search_service_unit.py`, #1000): a suite run from inside a tmux pane inherited `TMUX_PANE`, so `test_sends_configured_keys_to_the_session` saw the pane the run happened to be in instead of the session it names; every test now starts outside any pane. The hung-load ticker test slept for fixed times against a 0.1 s limit, so a thread that first ran late never ticked; it now waits on the ticker's own thread. The two `test_ids_renumber.py` failures from the issue did not reproduce on the same host and are left for a run that does.

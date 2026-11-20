@@ -159,6 +159,11 @@ def _units(home: Path, card: str, *, base: Optional[Path] = None,
            now: Optional[float] = None) -> StatusReport:
     path = declaration_path(home)
     if not path.exists():
+        staged = path.with_name(path.name + ".cutover")  # the suffix pd.cutover.staged_path adds
+        if staged.exists():
+            return StatusReport(card=card, source="none",
+                                why=f"no declaration at {path}, but one is staged at {staged}: "
+                                    "run `macf_tools harness cutover` to install it")
         return StatusReport(card=card, source="none",
                             why=f"no declaration at {path}, so this agent has no primal daemon")
     try:

@@ -150,7 +150,7 @@ def check_task_create(
         reason=f"{task_type} requires plan_ca_ref in MTMD",
         grant_hint=(
             f"To create a {task_type}:\n"
-            f"  1. Use /maceff:roadmap:draft to create {ca_type} first\n"
+            f"  1. Use /maceff-roadmap-draft to create {ca_type} first\n"
             f"  2. Or add plan_ca_ref to MTMD: plan_ca_ref: path/to/{ca_type}"
         )
     )

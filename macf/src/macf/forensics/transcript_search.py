@@ -86,7 +86,7 @@ def find_message_by_breadcrumb(
                 if entry_uuid and prompt_uuid in entry_uuid:
                     msg = _entry_to_message(idx, entry)
                     return (idx, msg, str(path))
-            except json.JSONDecodeError:
+            except json.JSONDecodeError:  # noqa: S112 - a live transcript can end in a torn line, and this scan looks for one matching uuid, so an unparseable line is simply not the match
                 continue
 
     return None
@@ -120,7 +120,7 @@ def extract_window(
             try:
                 entry = json.loads(line.strip())
                 messages.append(_entry_to_message(idx, entry))
-            except json.JSONDecodeError:
+            except json.JSONDecodeError:  # noqa: S112 - a live transcript can end in a torn line, and the message list is built from the lines that parse
                 continue
 
     if target_index < 0 or target_index >= len(messages):

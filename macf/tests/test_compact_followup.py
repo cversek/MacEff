@@ -6,6 +6,8 @@ otherwise sits at an empty input box, recovery unread, until something else wake
 from dataclasses import dataclass
 from unittest.mock import patch
 
+import pytest
+
 from macf import compact_followup as cf
 
 T0 = 1_000.0
@@ -59,7 +61,7 @@ class Run:
     enters: list
 
 
-def _run(rows_by_call, timeout=10.0, takes_on=1, box=None):
+def _run(rows_by_call, timeout=10.0, takes_on=1, box=None, columns=120):
     """A pane whose Enter starts a turn on the *takes_on*-th press (0: never); until then
     the typed text stays in the box. *box* overrides what the box shows."""
     sent, enters, now = [], [], [T0]
@@ -92,7 +94,8 @@ def _run(rows_by_call, timeout=10.0, takes_on=1, box=None):
         now[0] += s
 
     outcome = cf.follow("seat", T0, "recover", timeout=timeout, poll=2.0, read=read, send=send,
-                        capture=capture, enter=enter, clock=lambda: now[0], sleep=sleep)
+                        capture=capture, enter=enter, width=lambda: columns,
+                        clock=lambda: now[0], sleep=sleep)
     return Run(outcome, sent, enters)
 
 
@@ -131,6 +134,22 @@ def test_nothing_is_typed_after_a_draft():
     r = _run([[], rows, rows], takes_on=0, box="the operator was typing this")
     assert r.sent == [] and r.enters == []
     assert r.outcome == "gave up: the input box was never idle and empty (last seen: draft)"
+
+
+def test_a_pane_too_narrow_to_read_gives_up_naming_its_width():
+    """#800: a follower beside a split watch gave up on a 45-column pane saying it last saw a
+    dialog, and nobody could find the dialog. It types nothing either way."""
+    now = [T0]
+    rows = [ev("compaction_detected", T0 + 1)]
+
+    def sleep(s):
+        now[0] += s
+    outcome = cf.follow("seat", T0, "recover", timeout=10.0, poll=2.0, read=lambda since: rows,
+                        send=lambda t, keys: pytest.fail("typed into an unreadable pane"),
+                        capture=lambda: "the box's lines wrapped past reading", enter=lambda: 0,
+                        width=lambda: 45, clock=lambda: now[0], sleep=sleep)
+    assert outcome == ("gave up: the session's pane is 45 columns wide, too narrow to read "
+                       "its input box; widen it")
 
 
 def test_it_types_once_the_box_empties():

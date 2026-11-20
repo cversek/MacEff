@@ -30,11 +30,12 @@ def _stop():
         return run(json.dumps({"stop_reason": "end_turn", "session_id": "test-sess"}))
 
 
-def test_only_compaction_arms_a_passage(isolated_events_log):
+def test_only_compaction_and_a_model_switch_arm_a_passage(isolated_events_log):
     """A passage for any slash command would let `inject help` walk out of the gate."""
     assert stop_bypass.arm("help") is False
     assert stop_bypass.consume() is None
     assert stop_bypass.arm("/compact") is True
+    assert stop_bypass.arm("model opus") is True, "the name decides, not the argument"
 
 
 def test_one_passage_then_the_gate_holds(isolated_events_log):

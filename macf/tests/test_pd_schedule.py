@@ -1018,3 +1018,28 @@ def test_a_run_stopped_on_purpose_owes_no_failure_notice(tmp_path):
         assert channel.received == []
     finally:
         _reap(run)
+
+
+def test_a_run_whose_entry_is_removed_is_stopped_and_owes_no_failure_notice(tmp_path):
+    """Removing an entry revokes it (R135), so its check still running is stopped, reads
+    `stopped: its entry was removed`, and raises no pd_run_failed (#760)."""
+    import time
+    f = tmp_path / "run.pid"
+    log, now = Log(), [at("2026-10-14 12:00")]
+    channel = ChannelReceiver(tmp_path / "agent")
+    cmd = ["/bin/sh", "-c", f"echo $$ > {f}; while true; do sleep 1; done"]
+    s = make_scheduler(tmp_path, [command_schedule(cmd, timeout_s=600)], log, now, on_notice=channel)
+    now[0] = at("2026-10-14 12:05")
+    s.tick()
+    run = _pid_in(f)
+    try:
+        s.stop_run("check", "its entry was removed")
+        deadline = time.monotonic() + 10
+        while s.running and time.monotonic() < deadline:
+            s.tick()
+            time.sleep(0.05)
+        [done] = log.of(sc.EVENT_DONE)
+        assert done["outcome"] == "stopped: its entry was removed"
+        assert channel.received == []
+    finally:
+        _reap(run)

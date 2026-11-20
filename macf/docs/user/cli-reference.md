@@ -237,7 +237,7 @@ macf_tools session info
   "agent_id": "ClaudeTheBuilder",
   "agent_root": "/path/to/agent",
   "cwd": "/path/to/project",
-  "temp_directory": "/tmp/macf/user/session-id/dev_scripts",
+  "temp_directory": "/run/user/1000/sessions/user/session-id/dev_scripts",
   "checkpoints_path": "/path/to/agent/public/checkpoints",
   "reflections_path": "/path/to/agent/public/reflections"
 }
@@ -2417,7 +2417,7 @@ Gates against private-context leakage (agent identity, internal jargon, personal
 
 ### opsec install-hook
 
-Install a pre-commit gate that rejects staged private-context leaks.
+Install a pre-commit (and pre-merge-commit) gate that rejects staged private-context leaks.
 
 **Syntax:**
 ```bash
@@ -2433,7 +2433,7 @@ macf_tools opsec install-hook [--profile PROFILE] [--source-root DIR] <repo>
 
 The hook runs the Python interpreter that performed the install, which is also the one its self-test certifies; the self-test is run a second time through the installed hook, and the agent's moniker is required among the categories it refuses wherever the agent has a calling card. If that interpreter later cannot import macf, the hook refuses every commit rather than check without the moniker: reinstall, or set `MACF_OPSEC_STDLIB_ONLY=1` for a commit to accept the reduced gate. Nothing is written until the dispatcher source and the profile have been found.
 
-While a merge is being committed (`MERGE_HEAD` exists), the hook scans only the lines the merge adds beyond both parents, such as conflict resolutions, and says so: what the incoming side brings was scanned when it was committed there. A squash merge or a cherry-pick has no `MERGE_HEAD` and is scanned whole.
+The gate runs at `pre-commit`, and at `pre-merge-commit` for a merge git completes by itself, so a clean merge is scanned too. In a merge whose incoming side is already on a remote-tracking branch, the hook scans only the lines the merge adds beyond both parents, such as conflict resolutions, and says so: what the incoming side brings was scanned when it was committed there. A side that isn't on any remote is scanned whole. The incoming side is `MERGE_HEAD` for a merge finished by hand; for a clean merge it's the one ref the merge names, or a pull's one for-merge line in `FETCH_HEAD`. A clean merge whose side can't be named that way, such as an octopus, is let through unscanned, as every clean merge was before, and the hook says so. A squash merge or a cherry-pick is not a merge here and is scanned whole.
 
 **Related:** `githooks install`
 
@@ -2600,7 +2600,7 @@ macf_tools ids renumber --root /scratch --service indexer=21900 --apply
 - `.maceff/sessions/{session_id}/session_state.json` - **DEPRECATED** (not used in v0.3+)
 - `.maceff/agent_events_log.jsonl` - **Primary state source** (event-first architecture)
 - `.claude/hooks/` - Installed hook scripts
-- `/tmp/macf/{agent_id}/{session_id}/` - Session temporary files
+- `<session root>/{agent_id}/{session_id}/` - Session temporary files, under your own runtime directory (`$XDG_RUNTIME_DIR`, else `/tmp/macf-<uid>`)
 
 ## Common Workflows
 

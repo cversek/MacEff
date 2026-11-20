@@ -2,7 +2,7 @@
 
 ``macf_tools harness cutover`` reads the host and prints what a move would do for one
 agent, step by step, with the rollback, and changes nothing. It is the runbook the host's
-first move followed (persistent_layer 6.3), generated for the agent at hand from what is
+first move followed (persistent_layer 5.2), generated for the agent at hand from what is
 actually installed, so no step names a unit that isn't there or misses one that is.
 
 The plan is built from probes passed in, so every case can be tested without systemd,
@@ -10,6 +10,7 @@ tmux or a daemon: ``build_plan(..., probes=Probes(...))``. ``host_probes`` are t
 """
 from __future__ import annotations
 
+import json
 import shlex
 import shutil
 import subprocess
@@ -128,9 +129,25 @@ def staged_path(home: Path) -> Path:
     return path.with_name(path.name + STAGED_SUFFIX)
 
 
-def _staged_check(path: Path, card: str, runtime: Optional[str], init: str = "systemd") -> Check:
+def _current_form(text: str, card: str) -> Tuple[str, bool]:
+    """A declaration's text with this home's own card in the old ``Name@shortid`` form changed to
+    the new one, as the cut-over rewrites it (R165, R166), and whether it was: a staged file made
+    before the card revision still validates here, and the move leaves it rewritten (#919)."""
     try:
-        declaration = Declaration.model_validate_json(path.read_text())
+        old = json.loads(text).get("agent")
+    except (ValueError, AttributeError):
+        return text, False
+    if isinstance(old, str) and calling_card.from_history(old) != old \
+            and calling_card.same(calling_card.from_history(old), card):
+        return text.replace(json.dumps(old), json.dumps(card)), True
+    return text, False
+
+
+def _staged_check(path: Path, card: str, runtime: Optional[str], init: str = "systemd") -> Check:
+    old_form = False
+    try:
+        text, old_form = _current_form(path.read_text(), card)
+        declaration = Declaration.model_validate_json(text)
     except FileNotFoundError:
         return Check("staged declaration", False,
                      f"none at {path}: stage the declaration with the session unit there first")
@@ -148,9 +165,9 @@ def _staged_check(path: Path, card: str, runtime: Optional[str], init: str = "sy
     if session.stop_grace_s <= PANE_GRACE_S:
         return Check("staged declaration", False,
                      f"the session unit's stop_grace_s {session.stop_grace_s:g} must exceed the "
-                     f"wrapper's {PANE_GRACE_S:g} s pane grace (persistent_layer 6.2)")
+                     f"wrapper's {PANE_GRACE_S:g} s pane grace (persistent_layer 5.1)")
     # The unit's liveness variables need no check here: the daemon sets them from the unit
-    # (persistent_layer 11.2), and a declared value that disagrees is refused at load.
+    # (persistent_layer 3.2), and a declared value that disagrees is refused at load.
     # A unit gets only its declared environment, so without this its tmux server sits under
     # /tmp, where attach, harness status and the rollback look for it in vain.
     declared = session.environment.get("XDG_RUNTIME_DIR")
@@ -165,7 +182,8 @@ def _staged_check(path: Path, card: str, runtime: Optional[str], init: str = "sy
         return Check("staged declaration", False,
                      f"the session unit's environment must declare XDG_RUNTIME_DIR={runtime or '<yours>'} "
                      f"(it declares {declared or 'none'}), or its tmux server lands where nothing looks")
-    return Check("staged declaration", True, f"{path} validates, with session unit {session.name}")
+    note = ", in the old card form, which the move rewrites in place (R165)" if old_form else ""
+    return Check("staged declaration", True, f"{path} validates, with session unit {session.name}{note}")
 
 
 def default_socket(uid: Optional[int] = None) -> Path:
@@ -210,7 +228,7 @@ def _launchd_init(agent: str, card: str, harness_label: Optional[str], uid: int,
     """launchd's counterparts: a job is stopped with ``bootout`` and kept from starting at
     the next login with ``disable``, the pair systemd's ``disable --now`` is; it is started
     again with ``enable``, then ``bootstrap`` of its plist, since launchd refuses to load a
-    disabled job. The daemon restarts with ``kickstart -k`` (persistent_layer 3.1)."""
+    disabled job. The daemon restarts with ``kickstart -k`` (persistent_layer 13.1)."""
     from macf.platform import launchd
 
     def ctl(verb: str, label: str) -> Command:
@@ -266,7 +284,7 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
     else:
         checks.append(Check("init system", False,
                             "neither systemctl nor launchctl here: this plan covers systemd and "
-                            "launchd hosts (persistent_layer 6.3)"))
+                            "launchd hosts (persistent_layer 5.2)"))
         return Plan(agent, card, False, checks)
     checks.append(Check("init system", True, init.describe))
 
@@ -748,7 +766,7 @@ def _process_argv(pid: int) -> List[str]:
     try:
         raw = Path(f"/proc/{pid}/cmdline").read_bytes()
         return [a.decode(errors="replace") for a in raw.split(b"\0") if a]
-    except OSError:
+    except OSError:  # noqa: S110 - no procfs on macOS, where ps is asked next
         pass  # noqa: MACEFF003 - no procfs (macOS): ask ps
     try:
         out = subprocess.run(["ps", "-ww", "-o", "args=", "-p", str(pid)],
@@ -815,7 +833,7 @@ def end_stale_monitors(home: Path, find=None, alive=None, signal_pid=None,
     for pid in stale:
         try:
             signal_pid(pid)
-        except ProcessLookupError:
+        except ProcessLookupError:  # noqa: S110 - the process ended between the listing and the signal, as wanted
             pass  # noqa: MACEFF003 - ended between the listing and the signal, as wanted
     deadline = time.monotonic() + wait_s
     left = [p for p in stale if alive(p)]
