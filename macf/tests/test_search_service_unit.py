@@ -168,12 +168,15 @@ def test_a_taken_port_fails_fast_before_the_load_and_says_how_to_free_it(unit_en
 
 def test_the_load_ticker_gives_up_on_a_load_that_hangs():
     ticks = []
-    ticker = sd._LoadTicker(lambda: ticks.append(1), period_s=0.01, limit_s=0.1).start()
-    time.sleep(0.4)
+    # The ticker gives up on its own at the limit, so wait for its thread rather than sleeping a fixed
+    # time: on a loaded host a thread that first runs after a short limit has passed never ticks (#1000).
+    ticker = sd._LoadTicker(lambda: ticks.append(1), period_s=0.01, limit_s=0.5).start()
+    ticker._thread.join(timeout=10)
+    assert not ticker._thread.is_alive(), "a hung load must stop the beats"
     count = len(ticks)
     time.sleep(0.2)
     ticker.stop()
-    assert 0 < count == len(ticks), "a hung load must stop the beats"
+    assert 0 < count == len(ticks), "the beats stopped, and none came after"
 
 
 def test_main_unit_flag_runs_in_the_foreground_with_the_env_heartbeat(unit_env, monkeypatch):

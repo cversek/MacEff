@@ -114,6 +114,20 @@ fi
 # See: https://github.com/cversek/MacEff/issues/33, #45
 
 PY_FILES=$(git diff --cached --diff-filter=ACMR --name-only | grep '\.py$')
+
+# A commit that concludes a merge stages every file the other side changed, not just what
+# the merge adds, and this check judges whole files and ignores `noqa` reasons. So it refused
+# a merge of main over handlers that were already on main and kept on purpose (#1023). The
+# merge's own changes are judged by the versioned style gate (.githooks/pre-commit.d/20-style,
+# whose tools/style_check.py ratchet blocks any NEW silent handler and honours a reasoned
+# `noqa`), so while a merge is being concluded this whole-file check stands aside and says so.
+if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+    if [ -n "$PY_FILES" ]; then
+        echo "[silent-exceptions] concluding a merge: the whole-file check is skipped; the style gate judges what the merge adds (#1023)." >&2
+    fi
+    PY_FILES=""
+fi
+
 if [ -n "$PY_FILES" ]; then
     REPO_ROOT=$(git rev-parse --show-toplevel)
     CHECKER="$REPO_ROOT/macf/scripts/check_silent_exceptions.py"

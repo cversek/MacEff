@@ -237,7 +237,7 @@ macf_tools session info
   "agent_id": "ClaudeTheBuilder",
   "agent_root": "/path/to/agent",
   "cwd": "/path/to/project",
-  "temp_directory": "/tmp/macf/user/session-id/dev_scripts",
+  "temp_directory": "/run/user/1000/sessions/user/session-id/dev_scripts",
   "checkpoints_path": "/path/to/agent/public/checkpoints",
   "reflections_path": "/path/to/agent/public/reflections"
 }
@@ -2600,7 +2600,7 @@ macf_tools ids renumber --root /scratch --service indexer=21900 --apply
 - `.maceff/sessions/{session_id}/session_state.json` - **DEPRECATED** (not used in v0.3+)
 - `.maceff/agent_events_log.jsonl` - **Primary state source** (event-first architecture)
 - `.claude/hooks/` - Installed hook scripts
-- `/tmp/macf/{agent_id}/{session_id}/` - Session temporary files
+- `<session root>/{agent_id}/{session_id}/` - Session temporary files, under your own runtime directory (`$XDG_RUNTIME_DIR`, else `/tmp/macf-<uid>`)
 
 ## Common Workflows
 
