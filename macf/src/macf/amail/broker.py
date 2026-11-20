@@ -2452,6 +2452,15 @@ MAX_REQUEST_BYTES = 1 << 20  # 1 MiB
 CONNECTION_TIMEOUT = 30.0
 
 
+def _peer_closed_without_request(conn) -> bool:
+    """True when the peer hung up and sent no byte: a probe, not a request."""
+    try:
+        conn.settimeout(0.2)
+        return conn.recv(1, socket.MSG_PEEK) == b""
+    except OSError:
+        return False
+
+
 class _Handler(socketserver.StreamRequestHandler):
     timeout = CONNECTION_TIMEOUT
 
@@ -2467,7 +2476,19 @@ class _Handler(socketserver.StreamRequestHandler):
             # reachable set would become the union of everyone's contacts, and the
             # audit log would blame the impersonated agent. SO_PEERCRED is supplied
             # by the kernel about the connected process and cannot be forged by it.
-            who = broker.identify(self.connection)
+            try:
+                who = broker.identify(self.connection)
+            except PermissionError:
+                # A peer that connected and closed without sending anything
+                # (a client's "is anyone there?" probe) submitted nothing, so
+                # there is nothing to refuse and nobody to answer. On macOS the
+                # kernel no longer answers for a closed peer (ENOTCONN), which
+                # used to write a refused-submission error and a broken-pipe
+                # error into the audit for every probe. A peer still connected
+                # is refused as before.
+                if _peer_closed_without_request(self.connection):
+                    return
+                raise
 
             # A TOTAL deadline, not a per-recv one. socket timeout resets on
             # every byte received, so a one-byte-per-second trickle holds a
