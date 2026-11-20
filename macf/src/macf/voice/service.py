@@ -7,14 +7,14 @@ protocol. Model stays in GPU memory for ~150ms transcription vs
 ~1.9s cold load.
 
 Protocol (newline-delimited JSON):
-    Request:  {"action": "transcribe", "file": "/path/to/audio.oga", "language": "en", "conditioned": true, "correct": true}
+    Request:  {"action": "transcribe", "audio": "<base64 of the file>", "suffix": ".oga", "language": "en", "conditioned": true, "correct": true}
     Response: {"text": "...", "segments": [...], "engine": "mlx-whisper", "duration_ms": 150, "corrections": [...]}
 
     Request:  {"action": "status"}
     Response: {"status": "ready", "engine": "mlx-whisper", "model": "...", "uptime_s": 3600}
 
     There is no stop verb: the port answers any local caller, so stopping is the service's
-    own account's act, by signal (``macf_tools voice service stop``) (cversek/MacEff#868).
+    own account's act, by signal (``macf_tools voice service stop``) (#868).
 
 Usage:
     macf_tools voice service start
@@ -104,6 +104,121 @@ def send_request(request: dict, host: str = DEFAULT_HOST, port: int = DEFAULT_PO
         sock.close()
 
 
+#: The suffixes of audio the service will stage, and the most audio it takes in one request.
+AUDIO_SUFFIXES = (".oga", ".ogg", ".opus", ".wav", ".mp3", ".m4a", ".flac", ".webm")
+MAX_AUDIO_BYTES = 64 * 1024 * 1024
+#: The most one request line may hold: the base64 of the largest audio, and a megabyte of JSON
+#: around it. Reading stops here, before anything is parsed, so no caller can make the service
+#: hold more than this however long it keeps sending (#868).
+MAX_REQUEST_BYTES = (MAX_AUDIO_BYTES + 2) // 3 * 4 + 1024 * 1024
+
+
+class RequestTooLarge(Exception):
+    """A request line ran past MAX_REQUEST_BYTES without ending."""
+
+
+def read_request_line(conn) -> bytes:
+    """One request line from *conn*, read up to its newline, or RequestTooLarge at the bound."""
+    data = b''
+    while True:
+        chunk = conn.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+        if len(data) > MAX_REQUEST_BYTES:
+            raise RequestTooLarge
+        if b'\n' in data:
+            break
+    return data
+
+
+def _transcribe_staged(request: dict) -> dict:
+    """Transcribe the audio a request carries, never a file it names.
+
+    The port takes any local process, and a request that named a path made the service read any file its
+    account can, for a caller who may not (a confused deputy, #868). The caller reads its own
+    file and sends the bytes (``audio``, base64, with the ``suffix`` that says its format); the service
+    stages them in a private directory it removes afterwards, and opens nothing the caller named."""
+    import base64
+    import binascii
+    import shutil
+    import tempfile
+    if "file" in request:
+        return {"error": "transcribe takes the audio itself ('audio', base64, and its 'suffix'), not a path"}
+    suffix = str(request.get("suffix") or "").lower()
+    raw = request.get("audio")
+    if suffix not in AUDIO_SUFFIXES or not isinstance(raw, str):
+        return {"error": f"transcribe takes 'audio' (base64) and a 'suffix' of one of {', '.join(AUDIO_SUFFIXES)}"}
+    try:
+        data = base64.b64decode(raw, validate=True)
+    except (binascii.Error, ValueError):
+        return {"error": "the audio isn't valid base64"}
+    if not data or len(data) > MAX_AUDIO_BYTES:
+        return {"error": f"the audio is empty or over {MAX_AUDIO_BYTES // (1024 * 1024)} MB"}
+    staging = tempfile.mkdtemp(prefix="macf-voice-")       # mode 0700: only the service's account reads it
+    try:
+        staged = Path(staging) / f"audio{suffix}"
+        staged.write_bytes(data)
+        return _transcribe_file(str(staged), request)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def _transcribe_file(file_path: str, request: dict) -> dict:
+    """Transcribe the staged file *file_path* with the request's options and return the reply."""
+    language = request.get("language", "en")
+    conditioned = request.get("conditioned", True)
+    correct = request.get("correct", True)
+
+    # Build prompt
+    prompt = None
+    if conditioned:
+        try:
+            from .vocabulary import build_whisper_prompt
+            prompt = build_whisper_prompt()
+        except ImportError as e:
+            print(f"⚠️ MACF: vocabulary module unavailable, proceeding without prompt: {e}", file=sys.stderr)
+
+    # Transcribe (model is already warm in memory)
+    try:
+        from .transcribe import transcribe
+        t0 = time.time()
+        result = transcribe(
+            audio_path=file_path,
+            engine=request.get("engine"),
+            language=language,
+            initial_prompt=prompt,
+        )
+        elapsed_ms = (time.time() - t0) * 1000
+
+        response = result.to_dict()
+        response["duration_ms"] = round(elapsed_ms)
+
+        # Apply fuzzy correction if requested
+        if correct:
+            try:
+                from .correction import correct_transcript
+                corrected = correct_transcript(result.text)
+                response["corrected_text"] = corrected.corrected_text
+                response["corrections"] = [
+                    {"original": c.original, "corrected": c.corrected, "confidence": c.confidence}
+                    for c in corrected.corrections
+                ]
+            except Exception as e:  # noqa: BLE001 - any failure becomes the fixed reply below
+                # A fixed reply, like the transcription's: the detail goes to the log only.
+                print(f"⚠️ MACF: voice: correction failed: {e}", file=sys.stderr)
+                response["correction_error"] = "the correction failed"
+
+        return response
+
+    except Exception as e:  # noqa: BLE001 - any failure becomes the one fixed reply below
+        # The detail (ffmpeg's command line names the path) goes to the service's own log, which
+        # only its account reads; the caller learns only that the file couldn't be transcribed
+        # (#868).
+        print(f"⚠️ MACF: voice: transcription failed: {e}", file=sys.stderr)
+        return {"error": "the audio file can't be read"}
+
+
 def handle_request(request: dict) -> dict:
     """Handle a single request from a client."""
     global _start_time, _engine, _model_name
@@ -122,68 +237,12 @@ def handle_request(request: dict) -> dict:
 
     elif action == "shutdown":
         # Any local process can reach the port, so a stop verb here let anyone stop the service.
-        # Stopping is a signal from the service's own account (cversek/MacEff#868).
+        # Stopping is a signal from the service's own account (#868).
         return {"error": "shutdown is not a request this service takes; stop it with "
                          "`macf_tools voice service stop`"}
 
     elif action == "transcribe":
-        file_path = request.get("file")
-        if not file_path or not Path(file_path).exists():
-            # The reply never echoes the path or says whether it exists: any local caller can ask,
-            # and naming it would answer "does this path exist?" for them (cversek/MacEff#868).
-            return {"error": "the audio file can't be read"}
-
-        language = request.get("language", "en")
-        conditioned = request.get("conditioned", True)
-        correct = request.get("correct", True)
-
-        # Build prompt
-        prompt = None
-        if conditioned:
-            try:
-                from .vocabulary import build_whisper_prompt
-                prompt = build_whisper_prompt()
-            except ImportError as e:
-                print(f"⚠️ MACF: vocabulary module unavailable, proceeding without prompt: {e}", file=sys.stderr)
-
-        # Transcribe (model is already warm in memory)
-        try:
-            from .transcribe import transcribe
-            t0 = time.time()
-            result = transcribe(
-                audio_path=file_path,
-                engine=request.get("engine"),
-                language=language,
-                initial_prompt=prompt,
-            )
-            elapsed_ms = (time.time() - t0) * 1000
-
-            response = result.to_dict()
-            response["duration_ms"] = round(elapsed_ms)
-
-            # Apply fuzzy correction if requested
-            if correct:
-                try:
-                    from .correction import correct_transcript
-                    corrected = correct_transcript(result.text)
-                    response["corrected_text"] = corrected.corrected_text
-                    response["corrections"] = [
-                        {"original": c.original, "corrected": c.corrected, "confidence": c.confidence}
-                        for c in corrected.corrections
-                    ]
-                except Exception as e:  # noqa: BLE001 - any failure becomes the fixed reply below
-                    # A fixed reply, like the transcription's: the detail goes to the log only.
-                    print(f"⚠️ MACF: voice: correction failed: {e}", file=sys.stderr)
-                    response["correction_error"] = "the correction failed"
-
-            return response
-
-        except Exception as e:  # noqa: BLE001 - any failure becomes the one fixed reply below
-            # The detail (ffmpeg's command line names the path) goes to the service's own log, which
-            # only its account reads; the caller learns only that the file couldn't be transcribed
-            # (cversek/MacEff#868).
-            print(f"⚠️ MACF: voice: transcription failed: {e}", file=sys.stderr)
-            return {"error": "the audio file can't be read"}
+        return _transcribe_staged(request)
 
     else:
         return {"error": f"Unknown action: {action}"}
@@ -273,16 +332,13 @@ def start_service(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
             break
 
         try:
-            data = b''
             conn.settimeout(30.0)
-            while True:
-                chunk = conn.recv(4096)
-                if not chunk:
-                    break
-                data += chunk
-                if b'\n' in data:
-                    break
-
+            try:
+                data = read_request_line(conn)
+            except RequestTooLarge:
+                print(f"⚠️ MACF: voice: a request ran past {MAX_REQUEST_BYTES} bytes and was refused unread", file=sys.stderr)
+                conn.sendall(json.dumps({"error": f"the request is over {MAX_REQUEST_BYTES // (1024 * 1024)} MB"}).encode('utf-8') + b'\n')
+                continue
             if data:
                 request = json.loads(data.decode('utf-8').strip())
                 response = handle_request(request)
@@ -317,7 +373,7 @@ def stop_service() -> int:
         get_pid_file_path().unlink(missing_ok=True)
         return 1
 
-    # By signal: the service takes no stop request over its port (cversek/MacEff#868).
+    # By signal: the service takes no stop request over its port (#868).
     try:
         os.kill(pid, signal.SIGTERM)
         print(f"Voice service stopped via SIGTERM (PID {pid})")
