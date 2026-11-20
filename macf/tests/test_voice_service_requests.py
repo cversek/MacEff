@@ -142,3 +142,40 @@ def test_the_bound_leaves_room_for_the_largest_audio_in_base64():
     import base64
     largest = base64.b64encode(b"\0" * service.MAX_AUDIO_BYTES)
     assert len(largest) < service.MAX_REQUEST_BYTES
+
+
+class _Stream:
+    """A connection that delivers *total* bytes in 4 KB chunks, then a newline."""
+
+    def __init__(self, total):
+        self.left = total
+
+    def recv(self, n):
+        if self.left <= 0:
+            return b"\n"
+        self.left -= n
+        return b"A" * n
+
+
+def test_a_long_request_line_is_read_in_linear_time():
+    """Ira's review of #1082: joining bytes on every chunk copies the buffer each time, so 80 MB took
+    109 s to read and a caller sending slowly could hold the service for minutes. In place it is
+    milliseconds; the budget here is wide, and the quadratic version is far past it."""
+    import time
+    start = time.monotonic()
+    assert len(service.read_request_line(_Stream(40 * 1024 * 1024))) > 40 * 1024 * 1024
+    assert time.monotonic() - start < 5
+
+
+def test_the_clients_reply_is_read_with_the_same_bound(monkeypatch):
+    monkeypatch.setattr(service, "MAX_REQUEST_BYTES", 10_000)
+
+    class Sock:
+        def settimeout(self, t): pass
+        def connect(self, a): pass
+        def sendall(self, b): pass
+        def close(self): pass
+        def recv(self, n): return b"A" * n
+    monkeypatch.setattr(service.socket, "socket", lambda *a, **k: Sock())
+    with pytest.raises(service.RequestTooLarge):
+        service.send_request({"action": "transcribe"})

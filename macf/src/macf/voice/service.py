@@ -91,14 +91,7 @@ def send_request(request: dict, host: str = DEFAULT_HOST, port: int = DEFAULT_PO
     try:
         sock.connect((host, port))
         sock.sendall(json.dumps(request).encode('utf-8') + b'\n')
-        data = b''
-        while True:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            data += chunk
-            if b'\n' in data:
-                break
+        data = read_request_line(sock)    # the reply is bounded the same way: a squatted port can send without end
         return json.loads(data.decode('utf-8').strip())
     finally:
         sock.close()
@@ -119,7 +112,7 @@ class RequestTooLarge(Exception):
 
 def read_request_line(conn) -> bytes:
     """One request line from *conn*, read up to its newline, or RequestTooLarge at the bound."""
-    data = b''
+    data = bytearray()       # appended in place: bytes += would copy the buffer on every chunk
     while True:
         chunk = conn.recv(4096)
         if not chunk:
@@ -127,9 +120,9 @@ def read_request_line(conn) -> bytes:
         data += chunk
         if len(data) > MAX_REQUEST_BYTES:
             raise RequestTooLarge
-        if b'\n' in data:
+        if b'\n' in chunk:
             break
-    return data
+    return bytes(data)
 
 
 def _transcribe_staged(request: dict) -> dict:
