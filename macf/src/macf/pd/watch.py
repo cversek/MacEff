@@ -62,7 +62,7 @@ SEND_TIMEOUT_S = 30
 _FINDING_FIELDS = {"agent", "subject", "verdict", "detail", "opened"}
 Verdict = Literal["ALIVE", "STALE", "GONE", "ABSENT", "UNREADABLE", "UNREACHABLE", "CHECK-FAILED", "DARK", "HELD", "UNREAD",
                   "UNRECEIVED", "DRIFTED", "SWEEP-FAILED", "FAILED", "AUTH-FAILED", "LOGIN-EXPIRED", "LOGIN-EXPIRING",
-                  "RC-DISCONNECTED"]
+                  "RC-DISCONNECTED", "POLLER-DOWN"]
 
 #: Exit codes, worst wins (``service_supervision`` section 4.2): each state its own code.
 EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_UNREACHABLE, EXIT_CHECK_FAILED = 0, 1, 2, 3
@@ -74,7 +74,7 @@ _EXIT_FOR = {"ALIVE": EXIT_HEALTHY, "STALE": EXIT_UNHEALTHY, "GONE": EXIT_UNHEAL
              "DRIFTED": EXIT_UNHEALTHY, "SWEEP-FAILED": EXIT_UNHEALTHY,
              "FAILED": EXIT_UNHEALTHY, "AUTH-FAILED": EXIT_UNHEALTHY,
              "LOGIN-EXPIRED": EXIT_UNHEALTHY, "LOGIN-EXPIRING": EXIT_UNHEALTHY,
-             "RC-DISCONNECTED": EXIT_UNHEALTHY,
+             "RC-DISCONNECTED": EXIT_UNHEALTHY, "POLLER-DOWN": EXIT_UNHEALTHY,
              "UNREACHABLE": EXIT_UNREACHABLE,
              "UNREADABLE": EXIT_CHECK_FAILED, "CHECK-FAILED": EXIT_CHECK_FAILED}
 
@@ -359,6 +359,92 @@ def check_remote_control(card: str, event: Optional[dict], now: float) -> Findin
                    opened=stamp if isinstance(stamp, (int, float)) else None)
 
 
+#: A Telegram poller writes a heartbeat to its ``diag.jsonl`` every 60 s; two missed ones
+#: and the poller reads silent. The plugin's own heartbeat is the evidence, nothing added to it.
+POLLER_SILENT_S = 120.0
+TELEGRAM_STATE_ENV = "TELEGRAM_STATE_DIR"
+
+
+def declares_telegram(declaration: "interface.Declaration") -> bool:
+    """Whether the declaration names a Telegram plugin among the operator's channels."""
+    return any(isinstance(c, str) and c.startswith("plugin:telegram:")
+               for c in declaration.operator_channels or [])
+
+
+def telegram_state_dir(env: Optional[Dict[str, str]] = None) -> Path:
+    """Where the Telegram plugin keeps its poller's files for the user this watch runs as: the
+    plugin's own override, else the login's ``~/.claude/channels/telegram``."""
+    import os
+    env = os.environ if env is None else env
+    return Path(env.get(TELEGRAM_STATE_ENV) or Path.home() / ".claude" / "channels" / "telegram")
+
+
+def _pid_alive(pid: int) -> bool:
+    import os
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:   # a process of another user exists
+        return True
+    return True
+
+
+def _newest_heartbeat(diag: Path, pid: int) -> Optional[float]:
+    """The epoch seconds of the newest ``heartbeat`` that poller *pid* wrote, or None."""
+    from datetime import datetime
+    for line in iter_lines_reverse(diag):
+        try:
+            rec = json.loads(line)
+        except ValueError:  # noqa: S112 - a partial last line is expected while the poller writes
+            continue
+        if not isinstance(rec, dict) or rec.get("event") != "heartbeat" or rec.get("pid") != pid:
+            continue
+        try:
+            return datetime.fromisoformat(str(rec.get("ts")).replace("Z", "+00:00")).timestamp()
+        except ValueError:  # noqa: S112 - a record whose stamp can't be read proves nothing; the next older one is tried
+            continue
+    return None
+
+
+def check_telegram(card: str, state_dir: Path, now: float,
+                   alive: Callable[[int], bool] = _pid_alive) -> Finding:
+    """The Telegram poller of a seat whose declaration names Telegram as an operator channel
+    (#1069). A poller can end with nothing said: the plugin exits when its parent ends or a
+    newer poller takes the bot, and the session carries on without its operator's phone. Read
+    from the plugin's own files: the poller named in ``bot.pid`` must be running and its newest
+    heartbeat in ``diag.jsonl`` recent. Without ``bot.pid`` the watch cannot tell, and unknown
+    is never healthy."""
+    fix = "run /mcp in the session to reconnect the plugin (macf_tools harness attach --card " + card + ")"
+    try:
+        raw = (state_dir / "bot.pid").read_text().strip()
+    except FileNotFoundError:
+        return Finding(card, "telegram", "CHECK-FAILED",
+                       f"no bot.pid in {state_dir}: no poller has been recorded there, or the plugin keeps its "
+                       f"files elsewhere for this seat")
+    except OSError as e:
+        return Finding(card, "telegram", "CHECK-FAILED", f"bot.pid cannot be read: {e.strerror}")
+    try:
+        pid = int(raw)
+    except ValueError:
+        return Finding(card, "telegram", "CHECK-FAILED", "bot.pid does not hold a pid")
+    if not alive(pid):
+        return Finding(card, "telegram", "POLLER-DOWN", f"the poller named in bot.pid (pid {pid}) is not running; {fix}")
+    try:
+        beat = _newest_heartbeat(state_dir / "diag.jsonl", pid)
+    except FileNotFoundError:
+        return Finding(card, "telegram", "ALIVE", f"poller pid {pid} runs; no diag.jsonl to read heartbeats from")
+    except OSError as e:
+        return Finding(card, "telegram", "CHECK-FAILED", f"diag.jsonl cannot be read: {e.strerror}")
+    if beat is None:
+        return Finding(card, "telegram", "POLLER-DOWN",
+                       f"poller pid {pid} runs but has written no heartbeat; {fix}")
+    if now - beat > POLLER_SILENT_S:
+        return Finding(card, "telegram", "POLLER-DOWN",
+                       f"poller pid {pid} runs but its last heartbeat was {_age(now - beat)} ago; {fix}")
+    return Finding(card, "telegram", "ALIVE", f"poller pid {pid} heartbeat {_age(now - beat)} ago")
+
+
 def check_channel(card: str, event: Optional[dict], now: float) -> Finding:
     """The session's MacEff channel, from the daemon's own record of it (MIS-0002-R115).
     The daemon derives dark and back; this watch is how the operator hears of it, since a
@@ -574,9 +660,12 @@ from macf.pd.login import warn_seconds  # noqa: E402 -- one reading of the decla
 
 
 def check_home(home: Path, now: float, base: Optional[Path] = None,
-               probe: Optional[Probe] = verify_incarnation) -> List[Finding]:
+               probe: Optional[Probe] = verify_incarnation,
+               telegram_dir: Optional[Path] = None) -> List[Finding]:
     """Every finding for one agent home. ``probe`` None skips the process probes, for a
-    home whose processes run in a pid namespace this watch cannot see."""
+    home whose processes run in a pid namespace this watch cannot see; the Telegram poller's
+    pid is one of them, so it is checked only where the probes are. ``telegram_dir`` is where
+    that poller's files are, by default the plugin's own location for the user this runs as."""
     home = Path(home)
     if not home.is_dir():
         return [Finding(str(home), "home", "UNREACHABLE", "the agent home cannot be read; nothing was measured")]
@@ -635,6 +724,8 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
             findings.append(check_remote_control(card, last_remote_control_event(log_path, card, now), now))
         except FileNotFoundError:
             findings.append(check_remote_control(card, None, now))
+    if probe is not None and declares_telegram(declaration):   # the operator's phone rides on a poller
+        findings.append(check_telegram(card, telegram_dir if telegram_dir is not None else telegram_state_dir(), now))
     if declaration.channel_connect_s is not None:      # a channel is expected, so watch it
         try:
             findings.append(check_channel(card, last_channel_event(log_path, card, now), now))
