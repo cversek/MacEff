@@ -64,6 +64,17 @@ STEPS: List[Tuple[str, str, str]] = [
      "no_registry"),
 ]
 
+#: The steps that read the agent's calling card, which the calling-card step writes first.
+NEEDS_CARD = ("declaration", "harness", "daemon")
+#: What those steps say when the home has no card yet.
+NO_CARD_PHRASE = "names no agent"
+
+
+def _card_step_would_name(results: "List[Result]") -> bool:
+    """Whether the calling-card step, already run under --plan, found it would write the card."""
+    return any(r.step == "calling-card" and r.status == WOULD for r in results)
+
+
 #: The steps ``--update`` runs: the declaration only to report its drift, the channel and the
 #: daemon to bring them current. The rest belong to a first init.
 UPDATE_STEPS = ("declaration", "channel", "daemon")
@@ -1043,6 +1054,13 @@ def run_stack(args: argparse.Namespace, home: Path, *, in_container: bool,
             result = preamble() if step == "preamble" else RUNNERS[step](ctx)
         except Exception as e:  # noqa: BLE001 - one step's defect is reported, the rest still run
             result = Result(step, REFUSED, f"{type(e).__name__}: {e}")
+        if plan and result.status == REFUSED and step in NEEDS_CARD and _card_step_would_name(results) \
+                and NO_CARD_PHRASE in result.detail:
+            # The calling-card step creates the file this step reads, so in a real run it proceeds.
+            # A plan that called it refused read, to a newcomer, as an init that fails at half its
+            # steps (#860 item 1).
+            result = Result(step, WOULD, "once the calling card is written, as the step before it does; "
+                                         "it can't be checked until then")
         if result.status == REFUSED:
             ctx.refused[step] = result.detail
         results.append(result)
