@@ -1026,16 +1026,32 @@ def test_control_events(tmp_path, script, base, run_daemon):
 
 
 def test_a_request_cannot_claim_an_inside_asker(tmp_path, script, base, run_daemon):
-    """Over the socket the asker is the operator or the declared wind-down. A request that
-    claims the daemon's own policy is refused, and nothing is done (R52)."""
+    """Over the socket the asker is the operator, the agent or the declared wind-down. A request
+    that claims the daemon's own policy is refused, and nothing is done (R52)."""
     daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
     assert wait_for(lambda: unit_state(daemon, "worker") == "running")
 
     reply = ask(daemon, {"op": "stop", "unit": "worker", "reason": "posing as policy",
                          "asked_by": {"kind": "policy"}})
-    assert not reply["ok"] and "operator or the declared wind-down" in reply["error"]
+    assert not reply["ok"] and "the operator, the agent or the declared wind-down" in reply["error"]
     assert unit_state(daemon, "worker") == "running"
     assert all(d["reason"] != "posing as policy" for d in events("pd_control", "worker"))
+
+
+def test_the_agent_may_ask_for_a_unit_act_and_is_recorded_as_the_agent(tmp_path, script, base, run_daemon):
+    """The agent, over the socket from its own command line, may stop and start its own daemon's
+    units (#1007). It is recorded as the agent, beside the process the kernel observed, so an act
+    the agent took is never read back as the operator's (R52)."""
+    daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+    assert wait_for(lambda: unit_state(daemon, "worker") == "running")
+
+    reply = ask(daemon, {"op": "stop", "unit": "worker", "reason": "the agent's own call",
+                         "asked_by": {"kind": "agent", "card": "Tester_abc123"}})
+    assert reply["ok"]
+    assert wait_for(lambda: unit_state(daemon, "worker") == "stopped")
+    control = events("pd_control", "worker")[-1]
+    assert (control["act"], control["asked_by"]["kind"]) == ("stop", "agent")
+    assert control["peer"]["pid"] == os.getpid()
 
 
 def test_start_and_restart_over_socket(tmp_path, script, base, run_daemon):

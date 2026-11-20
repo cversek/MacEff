@@ -66,7 +66,7 @@ from macf import calling_card
 #: ask from inside, so no requesting process exists to record (MIS-0002-R52
 #: (control_act_MUST_name_who_asked)). A pace, which acts on no unit, names the agent or the
 #: operator (``PaceRequest``).
-SOCKET_ASKERS = ("operator", "wind_down")
+SOCKET_ASKERS = ("operator", "wind_down", "agent")
 
 #: How often the core makes its pass when nothing else wakes the loop.
 TICK_S = 0.25
@@ -808,9 +808,9 @@ class Daemon:
         if isinstance(request, ActRequest):
             if request.asked_by.kind not in SOCKET_ASKERS:
                 return Response(ok=False, error=(
-                    f"a request over this socket is asked by the operator or the declared wind-down, "
-                    f"not {request.asked_by.kind!r}: that asker acts from inside and has no process "
-                    f"to record (MIS-0002-R52 (control_act_MUST_name_who_asked))"))
+                    f"a request over this socket is asked by the operator, the agent or the declared "
+                    f"wind-down, not {request.asked_by.kind!r}: that asker acts from inside and has "
+                    f"no process to record (MIS-0002-R52 (control_act_MUST_name_who_asked))"))
             started = proc_start(creds.pid)
             if not started:
                 return Response(ok=False, error=(
