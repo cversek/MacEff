@@ -268,6 +268,10 @@ def quiet_window_at(declaration: Declaration, at: float):
     return None
 
 
+#: How long past the wrapper's worst case the daemon waits for a pane's announcement, for the respawn itself.
+PANE_RESPAWN_MARGIN_S = 5.0
+
+
 def launch_digest(command: Sequence[str], env: Mapping[str, str]) -> str:
     """A short digest of what a unit is launched with, the command and the environment, so a
     wrapper can say it back and the daemon can tell whether a changed declaration has reached it."""
@@ -1609,7 +1613,13 @@ class Core:
                 print(f"⚠️ MACF: pd: could not ask {r.spec.name} to restart in its pane ({e}); "
                       f"restarting it whole", file=sys.stderr)
             else:
-                r.pane_respawn_due = self._clock() + r.spec.stop_grace_s
+                # The wrapper reaps the old session as the unit's own end does, SIGTERM then SIGKILL, each
+                # for its pane grace, so a session that ignores SIGTERM takes up to twice that before the
+                # pane runs again. The deadline outlasts it, or the case this exists for would get the
+                # whole restart at the stop grace.
+                from macf.pd import session_unit
+                bound = max(r.spec.stop_grace_s, 2 * session_unit.PANE_GRACE_S) + PANE_RESPAWN_MARGIN_S
+                r.pane_respawn_due = self._clock() + bound
                 r.pane_respawn_reason = reason
                 print(f"📡 MACF: pd: restarting {r.spec.name} in its pane: {reason}", file=sys.stderr)
                 return

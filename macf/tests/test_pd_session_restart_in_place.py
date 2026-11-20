@@ -48,6 +48,7 @@ while True:
     if asked:
         asked.clear()
         if spec["answer"]:
+            time.sleep(spec.get("delay", 0))     # a session that takes a while to die
             respawns += 1
             say(respawns)
 '''
@@ -60,9 +61,9 @@ def wrapper(tmp_path):
     return path
 
 
-def _session(wrapper, *, announce=True, answer=True, stop_grace_s=1.0, launch=True, extra_env=None):
+def _session(wrapper, *, announce=True, answer=True, stop_grace_s=1.0, launch=True, extra_env=None, delay=0):
     env = {"MACF_EVENTS_LOG_PATH": str(get_log_path()), "PYTHONPATH": MACF_SRC, **(extra_env or {})}
-    spec = json.dumps({"agent": CARD, "announce": announce, "answer": answer, "launch": launch})
+    spec = json.dumps({"agent": CARD, "announce": announce, "answer": answer, "launch": launch, "delay": delay})
     return Unit(name="session", kind="session", command=[sys.executable, str(wrapper), spec],
                 account=ME, restart="always", liveness_interval_s=60, memory_limit_mb=64,
                 environment=env, stop_grace_s=stop_grace_s)
@@ -111,7 +112,10 @@ def test_a_wrapper_that_never_announced_is_restarted_whole(make_core, wrapper):
     assert any(c["after"] == "the session unit restarted" for c in _carried())
 
 
-def test_a_respawn_not_reported_within_the_grace_restarts_the_unit_whole(make_core, wrapper):
+def test_a_respawn_not_reported_within_the_grace_restarts_the_unit_whole(make_core, wrapper, monkeypatch):
+    from macf.pd import session_unit
+    monkeypatch.setattr(session_unit, "PANE_GRACE_S", 0.5)      # the wrapper's worst case is 1 s,
+    monkeypatch.setattr(pd_core, "PANE_RESPAWN_MARGIN_S", 0.5)  # so the daemon gives up after 1.5 s
     core = make_core([_session(wrapper, answer=False, stop_grace_s=1.0)], hosted=list)
     core.boot()
     assert drive(core, lambda: core.state("session") == "running")
@@ -187,3 +191,23 @@ def test_a_wrapper_that_does_not_say_what_it_was_launched_with_is_restarted_whol
     assert drive(core, lambda: _announced(pid))
     core.restart("session", pd_core.POLICY, "asked from the tray")
     assert drive(core, lambda: core.state("session") == "running" and core.pid("session") not in (None, pid))
+
+
+def test_a_session_slow_to_die_still_gets_its_restart_in_the_pane(make_core, wrapper, monkeypatch):
+    """The wrapper's reap of a session that ignores SIGTERM takes up to twice its pane grace, which can
+    be longer than the unit's stop grace, so the daemon's deadline for the announcement outlasts the
+    wrapper's worst case. Otherwise the slow-to-die session, the case this feature is for, got the whole
+    restart (THM's review of #958)."""
+    from macf.pd import session_unit
+    monkeypatch.setattr(session_unit, "PANE_GRACE_S", 1.0)       # the wrapper's worst case is 2 s
+    monkeypatch.setattr(pd_core, "PANE_RESPAWN_MARGIN_S", 0.5)
+    core = make_core([_session(wrapper, stop_grace_s=1.0, delay=1.5)], hosted=list)   # between 1 s and 2.5 s
+    core.boot()
+    assert drive(core, lambda: core.state("session") == "running")
+    pid = core.pid("session")
+    assert drive(core, lambda: _announced(pid))
+    core.restart("session", pd_core.POLICY, "asked from the tray")
+    assert drive(core, lambda: any(c["after"] == "the session restarted in its pane" for c in _carried()),
+                 timeout=10)
+    assert core.pid("session") == pid, "the unit was restarted whole before the wrapper could answer"
+    assert not any("did not restart in its pane" in s.get("reason", "") for s in _states())
