@@ -570,8 +570,8 @@ def cmd_budget(_: argparse.Namespace) -> int:
     if used is not None:
         try:
             payload["used"] = float(used)
-        except ValueError:
-            pass
+        except ValueError as e:
+            print(f"⚠️ MACF: MACEFF_TOKEN_USED is not a number (ignoring it): {e}", file=sys.stderr)
     print(json.dumps(payload, indent=2))
     return 0
 
@@ -1660,7 +1660,7 @@ def cmd_statusline(args: argparse.Namespace) -> int:
                 stdin_data = sys.stdin.read().strip()
                 if stdin_data:
                     cc_json = json.loads(stdin_data)
-            except (json.JSONDecodeError, Exception):
+            except (json.JSONDecodeError, Exception):  # noqa: S110 - statusline runs on every refresh and its stderr must stay clean; non-JSON stdin is normal when run by hand, and MACF data is used instead
                 # Ignore stdin parsing failures - use MACF data only
                 pass
 
@@ -2742,7 +2742,8 @@ def other_claude_md_in_load_path(reconciled_path):
     for c in candidates:
         try:
             rc = c.resolve()
-        except OSError:
+        except OSError as e:
+            print(f"⚠️ MACF: could not resolve {c} (skipping it): {e}", file=sys.stderr)
             continue
         if rc == reconciled or rc in seen or not c.exists():
             continue
@@ -4079,8 +4080,8 @@ def cmd_mode_set_work(args: argparse.Namespace) -> int:
                     })
             except Exception as e:
                 print(f"⚠️ MACF: PLAY_TIME mode_transitions update failed: {e}", file=sys.stderr)
-    except (ImportError, OSError, ValueError):
-        pass
+    except (ImportError, OSError, ValueError) as e:
+        print(f"⚠️ MACF: PLAY_TIME transition recording skipped (mode change not recorded on the play-time task): {e}", file=sys.stderr)
 
     return 0
 
@@ -5221,7 +5222,7 @@ def get_display_mtime(tasks_dir) -> float:
         log_path = get_log_path()
         if log_path and log_path.exists():
             latest = max(latest, _display_events_mtime(log_path))
-    except (OSError, ImportError):
+    except (OSError, ImportError):  # noqa: S110 - polled on every redraw tick, so a warning here would corrupt the live frame; store-only detection is the fallback
         pass  # event log unreadable: fall back to store-only detection
     return latest
 
@@ -8128,7 +8129,8 @@ def cmd_task_hide_completed(args: argparse.Namespace) -> int:
                     hidden_count += 1
                 else:
                     skipped_count += 1
-        except (json.JSONDecodeError, IOError):
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"⚠️ MACF: could not read task file {task_file.name} to check its status (skipping it): {e}", file=sys.stderr)
             continue
 
     # Re-count after all renames complete. Same dotfile trap: an unfiltered
@@ -9225,7 +9227,8 @@ def _commit_landed_in_merged_pr(repo_slug: str, commits: list) -> bool:
             )
             if result.returncode == 0 and result.stdout.strip() not in ("", "[]"):
                 return True
-        except (FileNotFoundError, _subprocess.TimeoutExpired):
+        except (FileNotFoundError, _subprocess.TimeoutExpired) as e:
+            print(f"⚠️ MACF: gh pr list for {sha[:7]} failed (trying next commit): {e}", file=sys.stderr)
             continue
     return False
 
@@ -9485,7 +9488,7 @@ def _autowork_counts(task, reader, scoped_ids):
             for p in ldir.glob("*.md"):
                 try:
                     named = _dt.strptime(p.name[:17], "%Y-%m-%d_%H%M%S")
-                except ValueError:
+                except ValueError:  # noqa: S112 - non-timestamped files (INDEX.md and similar) are expected here; a warning per file would flood
                     continue      # INDEX.md, and anything else not named for a moment
                 if named >= since:
                     learnings += 1
@@ -10284,7 +10287,7 @@ def _check_port_available(port: int, host: str = "127.0.0.1") -> tuple:
         try:
             s.bind((host, port))
             return True, None
-        except OSError:
+        except OSError:  # noqa: S110 - a failed bind is how a busy port is detected; the lsof lookup below names the owner
             pass
     # Port in use — try to find owner via lsof
     try:
@@ -10295,8 +10298,8 @@ def _check_port_available(port: int, host: str = "127.0.0.1") -> tuple:
         if result.returncode == 0 and result.stdout.strip():
             owner_pid = int(result.stdout.strip().split("\n")[0])
             return False, owner_pid
-    except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
-        pass
+    except (subprocess.TimeoutExpired, ValueError, FileNotFoundError) as e:
+        print(f"⚠️ MACF: lsof port owner lookup failed (port {port} reported busy, owner unknown): {e}", file=sys.stderr)
     return False, None
 
 
@@ -11943,6 +11946,21 @@ def _cmd_inject(args):
                   "refused.", file=sys.stderr)
             return 1
         return clear_own_input(getattr(args, "expect", "") or "")
+    if args.command.lstrip("/") == "model":
+        from .supervisor import switch_own_model
+        if getattr(args, "target", ""):
+            print("[inject] model switches only this agent's own model; --target is refused.", file=sys.stderr)
+            return 1
+        if not getattr(args, "value", None):
+            print("[inject] model needs a name (inject model opus --reason ...): a bare /model opens a picker "
+                  "that nobody is there to answer.", file=sys.stderr)
+            return 1
+        then = "" if getattr(args, "no_then", False) else getattr(args, "then", None)
+        return switch_own_model(args.value, getattr(args, "reason", "") or "", then=then,
+                                confirm=not getattr(args, "no_confirm", False))
+    if getattr(args, "value", None):
+        print(f"[inject] {args.command} takes no argument here; only model does.", file=sys.stderr)
+        return 1
     then = None if getattr(args, "no_then", False) else (getattr(args, "then", None) or DEFAULT_TEXT)
     return send_slash_to_self(args.command, target=getattr(args, "target", "") or "", then=then)
 
@@ -14034,7 +14052,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="queue a slash command into this agent's own CC pane (e.g. inject compact)")
     inject_parser.add_argument("command", help="slash command without the slash, e.g. 'compact'; "
                                                 "or 'clear-input' to empty this pane's input box "
-                                                "of framework text (with --expect)")
+                                                "of framework text (with --expect); or 'model NAME' "
+                                                "to switch this agent's own model (with --reason)")
+    inject_parser.add_argument("value", nargs="?", default=None, metavar="NAME",
+                               help="for model: an alias (opus, sonnet, haiku, fable, default) or a model id")
+    inject_parser.add_argument("--reason", default="",
+                               help="for model, required: whose word or which standing rule the switch "
+                                    "follows; recorded with it")
     inject_parser.add_argument("--expect", default="", metavar="OPENING",
                                help="for clear-input: the opening words of the text to clear; "
                                     "nothing is pressed unless the box starts with them")
@@ -14042,10 +14066,13 @@ def _build_parser() -> argparse.ArgumentParser:
                                help="supervisor name/pid to target directly "
                                     "(default: self-resolve from this session id)")
     inject_parser.add_argument("--then", default=None, metavar="TEXT",
-                               help="for compact: the prompt typed into this pane once the "
-                                    "compaction has finished (default: a short recovery prompt)")
+                               help="for compact or model: the prompt typed into this pane once it has run "
+                                    "(default: the framework's short prompt)")
     inject_parser.add_argument("--no-then", action="store_true",
-                               help="for compact: type nothing after the compaction")
+                               help="for compact or model: type nothing afterwards")
+    inject_parser.add_argument("--no-confirm", action="store_true",
+                               help="for model: leave the client's 'Switch model?' cost dialog for a person "
+                                    "(by default the follower answers it when it offers the model asked)")
     inject_parser.set_defaults(func=lambda args: _cmd_inject(args))
 
     # channel: settings for the channels the operator reads (GH #477)
@@ -14722,7 +14749,7 @@ def main(argv=None) -> None:
     try:
         import argcomplete
         argcomplete.autocomplete(parser)
-    except ImportError:
+    except ImportError:  # noqa: S110 - argcomplete is optional; a warning on every CLI run would reach users who never installed it
         pass  # argcomplete not installed — completions silently disabled
 
     args = parser.parse_args(argv)

@@ -60,7 +60,8 @@ def live_supervisors() -> list:
     for f in sorted(REGISTRY_DIR.glob("*.json")):
         try:
             data = json.loads(f.read_text())
-        except (OSError, ValueError):
+        except (OSError, ValueError) as e:
+            print(f"⚠️ MACF: could not read supervisor registry entry {f.name} (leaving it out of the live list): {e}", file=sys.stderr)
             continue
         if is_live_supervisor(data):
             out.append(data)

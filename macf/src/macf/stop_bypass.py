@@ -13,7 +13,9 @@ purpose:
 
 - Only commands in ``BYPASS_COMMANDS`` arm it. A passage for any slash command
   would let ``inject help`` walk out of the gate. Compaction is the exit the
-  sprint policy sanctions, and scope is carried across it.
+  sprint policy sanctions, and scope is carried across it. A model switch is the
+  other: ``inject model`` types a prompt as soon as the switch has run, so the
+  turn the passage lets end is followed by the next one, on the new model.
 - It is armed only after the injection was delivered to the pane.
 - It lasts one Stop, and dies at the next cycle boundary (the read is cycle
   scoped) or after ``BYPASS_TTL_SEC``, so a token whose command the client
@@ -27,13 +29,15 @@ from .agent_events_log import append_event, read_events
 
 BYPASS_ARMED_EVENT = "stop_gate_suspend_once"
 BYPASS_CONSUMED_EVENT = "stop_gate_bypassed_once"
-BYPASS_COMMANDS = frozenset({"compact"})
+BYPASS_COMMANDS = frozenset({"compact", "model"})
 BYPASS_TTL_SEC = 30 * 60
 
 
 def arm(command: str) -> bool:
-    """Record an injected command that needs the turn to end. False if not eligible."""
-    command = command.lstrip("/").strip()
+    """Record an injected command that needs the turn to end. False if not eligible.
+    The command's name decides, not its arguments: ``model opus`` arms as ``model``."""
+    words = command.lstrip("/").split()
+    command = words[0] if words else ""
     if command not in BYPASS_COMMANDS:
         return False
     return append_event(BYPASS_ARMED_EVENT, {

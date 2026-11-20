@@ -22,6 +22,7 @@ import grp
 import os
 import pwd
 import stat
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple
@@ -83,7 +84,7 @@ def derive(config, services: Dict[str, int],
             new_seen[new] = name
             try:
                 old = lookup(name)
-            except KeyError:
+            except KeyError:  # noqa: S112 - a name absent from the live tables has nothing to move
                 continue
             if old == new:
                 continue
@@ -125,12 +126,14 @@ def _walk(root: Path) -> Iterator[Tuple[Path, os.stat_result]]:
         here = stack.pop()
         try:
             entries = list(os.scandir(here))
-        except (PermissionError, FileNotFoundError, NotADirectoryError):
+        except (PermissionError, FileNotFoundError, NotADirectoryError) as e:
+            print(f"⚠️ MACF: listing {here} failed (its contents are skipped, not re-owned): {e}",
+                  file=sys.stderr)
             continue
         for e in entries:
             try:
                 st = e.stat(follow_symlinks=False)
-            except FileNotFoundError:
+            except FileNotFoundError:  # noqa: S112 - the entry vanished after listing, so nothing to move
                 continue                                     # gone since the listing: nothing to move
             p = Path(e.path)
             if st.st_dev != top.st_dev:
@@ -227,7 +230,7 @@ def processes_on(numbers: Iterable[int], proc: Path = Path("/proc"),
         try:
             status = (d / "status").read_text()
             comm = (d / "comm").read_text().strip()
-        except OSError:
+        except OSError:  # noqa: S112 - a process that exited during the scan holds no number now
             continue
         if _zombie(status):
             continue  # a zombie runs nothing and holds no files; only its parent can reap it

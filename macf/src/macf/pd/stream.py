@@ -97,7 +97,7 @@ class Rules:
         for event in events:
             try:
                 rule = StreamRule.model_validate(event.get("data") or {})
-            except ValidationError:
+            except ValidationError:  # noqa: S112 - foreign stream lines are expected and set no rule
                 continue    # noqa: MACEFF003 - a line that isn't a rule sets none
             if calling_card.is_agent(rule.agent, card):    # a rule stored under the old card still holds (R166)
                 self.apply(rule.act, rule.target, rule.subscriber)

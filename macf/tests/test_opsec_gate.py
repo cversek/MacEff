@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from macf.opsec import DEFAULT_PROFILE, install_hook
+from macf.opsec import DEFAULT_PROFILE, install_hook, own_username
 
 
 def _git(repo, *args, check=True):
@@ -152,11 +152,10 @@ class TestCredentialSentinelScoping:
 
 
 def _env_decoy():
-    import getpass
     import os
     import socket
     return ("deployed on %s by %s from %s/work\n"
-            % (socket.gethostname(), getpass.getuser(), os.path.expanduser("~")))
+            % (socket.gethostname(), own_username(), os.path.expanduser("~")))
 
 
 def test_environment_identifiers_rejected_with_default_profile(repo, profile):

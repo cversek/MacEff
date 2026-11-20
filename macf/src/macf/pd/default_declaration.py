@@ -233,10 +233,58 @@ def deployment_timezone() -> Optional[str]:
     return name
 
 
+def extra_path_dirs(value: str) -> List[str]:
+    """The directories a ``container_env`` ``PATH`` adds (#895). It names directories to add,
+    never a whole PATH: its ``$PATH`` or ``${PATH}`` is dropped, since every reader puts the
+    directories ahead of a PATH it already has. Any other entry holding ``$``, ``{`` or ``}``
+    can't be expanded where it is used (a unit's environment, ``/etc/environment``) and would
+    read as a daemon placeholder in a declaration, so it is left out with a warning rather than
+    refusing the whole agents.yaml. Only absolute directories are kept, in order, once each."""
+    out: List[str] = []
+    for d in value.split(":"):
+        if not d or d in ("$PATH", "${PATH}"):
+            continue
+        if any(c in d for c in "${}") or not d.startswith("/"):
+            print(f"⚠️ MACF: container_env PATH entry {d!r} is left out: name an absolute directory, "
+                  f"with no $ or braces", file=sys.stderr)
+            continue
+        if d not in out:
+            out.append(d)
+    return out
+
+
+def deployment_env(container_env: Dict[str, str], path_dirs: List[str]) -> Tuple[List[str], Dict[str, str]]:
+    """What the deployment's ``defaults.container_env`` adds to a container session (#895): the
+    session's PATH directories, and every other variable.
+
+    Login shells get ``container_env`` through ``/etc/profile.d``; a unit inherits nothing, so the
+    default session used to lose it, and with it any tool a deployment puts on its own PATH. A
+    ``PATH`` value adds its directories after the agent's own and before the system's; a
+    ``$PATH`` or ``${PATH}`` in it, which a profile script needs, is dropped, since the session's
+    PATH is stated whole. Any other variable is added unless the default already sets it. A value
+    still holding a ``{name}`` would read as a daemon placeholder, so it is left out, with a
+    warning naming it."""
+    extra_path = extra_path_dirs(container_env.get("PATH") or "")
+    system = list(CONTAINER_SYSTEM_PATH)
+    head = [d for d in path_dirs if d not in system]
+    merged = head + [d for d in extra_path if d not in path_dirs] + system
+    env: Dict[str, str] = {}
+    for key, value in container_env.items():
+        if key == "PATH":
+            continue
+        if "{" in value or "}" in value:
+            print(f"⚠️ MACF: container_env {key} holds braces, which a declaration reads as a "
+                  f"daemon placeholder; the session leaves it out", file=sys.stderr)
+            continue
+        env[key] = value
+    return merged, env
+
+
 def container_body(*, account: str, harness_session: str, project_dir: Optional[str],
                    channels: Sequence[str], mail: bool,
                    memory_limit_mb: Optional[int] = None,
-                   timezone: Optional[str] = None) -> Dict[str, Any]:
+                   timezone: Optional[str] = None,
+                   container_env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """The declaration body a container agent runs when agents.yaml writes none for it: the
     host default's session unit (``build``), as a body without ``agent`` and ``version``, which
     container start-up fills in (persistent_layer 2.1).
@@ -257,11 +305,14 @@ def container_body(*, account: str, harness_session: str, project_dir: Optional[
     channels = list(channels) + ([own] if own not in channels else [])
     parsed = [p for p in (parse_channel_flag(c) for c in channels) if p is not None]
     telegram = next((p for p in parsed if p[0] == TELEGRAM[0]), None)
+    path_dirs, extra_env = deployment_env(dict(container_env or {}), container_path(home))
     declaration = build("placeholder", agent_home=home, login_home=home, account=account,
-                        python=CONTAINER_PYTHON, project_dir=project, path_dirs=container_path(home),
+                        python=CONTAINER_PYTHON, project_dir=project, path_dirs=path_dirs,
                         mail=mail, telegram=telegram)
     session = next(u for u in declaration["units"] if u.get("kind") == "session")
     session["command"] += ["--agent", harness_session, "--no-proxy"]
+    for key, value in extra_env.items():
+        session["environment"].setdefault(key, value)
     session["environment"].update({
         "SHELL": "/bin/bash", "LANG": "C.UTF-8",
         "MACEFF_HARNESS_SESSION": harness_session,

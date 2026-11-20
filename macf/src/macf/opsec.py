@@ -12,6 +12,7 @@ real leaks on its first day — an internal idea-number in a code comment and a
 non-ASCII em-dash — both of which had slipped past manual grep sweeps.
 Deliberate disclosures bypass with a reviewed `git commit --no-verify`.
 """
+import getpass
 import json
 import re
 import os
@@ -129,6 +130,17 @@ def _literal(value: str) -> str:
     return r"(?<!\w)" + _re.escape(value) + r"(?!\w)"
 
 
+def own_username() -> str:
+    """The account this process runs as, by its uid. getpass.getuser() reads LOGNAME first,
+    which whoever started the process can set to any name, so it's the fallback only where
+    there is no pwd (cversek/MacEff#972). Raises OSError or KeyError as getpass does."""
+    try:
+        import pwd
+    except ImportError:
+        return getpass.getuser()
+    return pwd.getpwuid(os.getuid()).pw_name
+
+
 def environment_patterns(env: Optional[Dict[str, str]] = None) -> List[List[str]]:
     """Patterns for the six environment-derived categories.
 
@@ -142,19 +154,18 @@ def environment_patterns(env: Optional[Dict[str, str]] = None) -> List[List[str]
     leak unreviewed. Covering less and being believed is the better trade, and
     it is the same reasoning the private scanner records for its own omissions.
     """
-    import getpass
     import socket
 
     e = dict(env or {})
     if env is None:
         try:
             e.setdefault("hostname", socket.gethostname())
-        except OSError:
-            pass
+        except OSError as e:
+            print(f"⚠️ MACF: could not read hostname (hostname rule not applied to this scan): {e}", file=sys.stderr)
         try:
-            e.setdefault("username", getpass.getuser())
-        except (OSError, KeyError):
-            pass
+            e.setdefault("username", own_username())
+        except (OSError, KeyError) as e:
+            print(f"⚠️ MACF: could not read username (username rule not applied to this scan): {e}", file=sys.stderr)
         try:
             from .utils.paths import find_agent_home
             home = find_agent_home()
@@ -166,8 +177,8 @@ def environment_patterns(env: Optional[Dict[str, str]] = None) -> List[List[str]
                 full_id = _agent_uuid_from(home)
                 if full_id:
                     e.setdefault("agent_uuid", full_id)
-        except (ImportError, OSError):
-            pass
+        except (ImportError, OSError) as e:
+            print(f"⚠️ MACF: could not resolve agent home (agent home, moniker and uuid rules not applied): {e}", file=sys.stderr)
 
     out: List[List[str]] = []
     host = (e.get("hostname") or "").strip()
@@ -317,7 +328,12 @@ def environment_checks():
         if first != host and len(first) >= 4:
             out.append((re.compile(_literal(first)), "hostname", "hard"))
     try:
-        user = getpass.getuser().strip()
+        # By uid: LOGNAME, which getpass reads first, can name another account.
+        try:
+            import pwd
+            user = pwd.getpwuid(os.getuid()).pw_name.strip()
+        except ImportError:
+            user = getpass.getuser().strip()
     except (OSError, KeyError):
         user = ""
     if len(user) >= 4:
@@ -472,7 +488,12 @@ def main():
         # Labels only -- the decoy contains this host's own name.
         decoy = []
         try:
-            decoy.append("deployed on " + socket.gethostname() + " by " + getpass.getuser())
+            try:
+                import pwd
+                who = pwd.getpwuid(os.getuid()).pw_name
+            except ImportError:
+                who = getpass.getuser()
+            decoy.append("deployed on " + socket.gethostname() + " by " + who)
         except (OSError, KeyError):
             pass
         decoy.append("see " + os.path.expanduser("~") + "/notes for the details")

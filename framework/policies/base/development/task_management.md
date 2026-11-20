@@ -610,8 +610,8 @@ With MTMD:
 - `creation_breadcrumb`: Current breadcrumb
 
 **Enforcement Points**:
-1. `/maceff:roadmap:draft` - After approval, prompts to pin MISSION with phases
-2. `/maceff:task:start` - If MISSION has no children, offers to expand from roadmap
+1. `/maceff-roadmap-draft` - After approval, prompts to pin MISSION with phases
+2. `/maceff-task-start` - If MISSION has no children, offers to expand from roadmap
 
 **Why Mandatory**: Task hierarchy provides observability. Without phase tasks, user cannot track progress through MISSION phases in task UI.
 

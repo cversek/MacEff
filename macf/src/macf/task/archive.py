@@ -9,6 +9,7 @@ Archive vs Status:
 - `task archive #N` = "full archive" (disk preservation + status change)
 """
 
+import sys
 import json
 import os
 import re
@@ -222,8 +223,8 @@ def restore_task(
                 # Use most recent
                 matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
                 archive_path = matches[0]
-        except ValueError:
-            pass
+        except ValueError as e:
+            print(f"⚠️ MACF: could not search archives for task {search_id} (treating it as not found): {e}", file=sys.stderr)
 
     if not archive_path or not archive_path.exists():
         return RestoreResult(
@@ -309,7 +310,8 @@ def list_archived_tasks() -> List[Dict[str, Any]]:
                 "archived_at": archive_meta.get("archived_at"),
                 "original_session": archive_meta.get("original_session"),
             })
-        except (json.JSONDecodeError, IOError):
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"⚠️ MACF: could not read archive {archive_file.name} (left out of the list): {e}", file=sys.stderr)
             continue
 
     return archives
