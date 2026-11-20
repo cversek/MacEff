@@ -1038,6 +1038,63 @@ def test_a_request_cannot_claim_an_inside_asker(tmp_path, script, base, run_daem
     assert all(d["reason"] != "posing as policy" for d in events("pd_control", "worker"))
 
 
+def _stopped_by(make_core, script, asker, peer):
+    """A unit a first daemon ran and *asker* stopped, with the first daemon then gone."""
+    unit = make_unit("worker", script, {})
+    first = make_core([unit])
+    first.boot()
+    assert drive(first, lambda: first.state("worker") == "running")
+    first.stop("worker", asker, "the GPU is wanted", peer=peer)
+    assert drive(first, lambda: first.state("worker") == "stopped")
+    _crash(first)
+    return unit
+
+
+def test_an_operators_stop_holds_across_a_daemon_restart(make_core, script):
+    """The unit the operator stopped is not started again by a restart he didn't connect to it
+    (#1009). It reads stopped with why, and the carried report names it."""
+    unit = _stopped_by(make_core, script, OPERATOR, PEER)
+    starts = states("worker").count("starting")
+
+    second = make_core([unit])
+    second.boot()
+
+    assert second.state("worker") == "stopped" and second.pid("worker") is None
+    assert states("worker").count("starting") == starts
+    assert "held down by the operator since" in events("pd_unit_state", "worker")[-1]["reason"]
+    assert list(events("pd_carried")[-1]["held"]) == ["worker"]
+
+
+def test_the_hold_survives_every_restart_until_a_start_clears_it(make_core, script):
+    unit = _stopped_by(make_core, script, OPERATOR, PEER)
+    for _ in range(2):
+        again = make_core([unit])
+        again.boot()
+        assert again.state("worker") == "stopped"
+        _crash(again)
+
+    again = make_core([unit])
+    again.boot()
+    again.start("worker", OPERATOR, "the GPU is free again", peer=PEER)
+    assert drive(again, lambda: again.state("worker") == "running")
+    pid = again.pid("worker")
+    left = _crash(again)
+    os.killpg(pid, signal.SIGKILL)       # the unit is gone with no stop on record: nothing to adopt
+    left["worker"].wait(timeout=5)
+
+    after = make_core([unit])
+    after.boot()
+    assert drive(after, lambda: after.state("worker") == "running")
+
+
+def test_a_stop_the_operator_did_not_ask_for_is_not_held(make_core, script):
+    """The agent's own stop, or the wind-down's, is not the operator's decision to keep."""
+    for asker in (Asker(kind="agent", card="Tester_abc123"), Asker(kind="wind_down")):
+        unit = _stopped_by(make_core, script, asker, PEER)
+        second = make_core([unit])
+        second.boot()
+        assert drive(second, lambda: second.state("worker") == "running"), asker.kind
+        second.shutdown("the test is over")
 def test_the_agent_may_ask_for_a_unit_act_and_is_recorded_as_the_agent(tmp_path, script, base, run_daemon):
     """The agent, over the socket from its own command line, may stop and start its own daemon's
     units (#1007). It is recorded as the agent, beside the process the kernel observed, so an act
@@ -1732,6 +1789,70 @@ def test_a_failed_login_holds_the_session_failed(make_core, script):
     assert core.pid("session") == pid
     assert events("pd_unit_state", "session")[-1]["reason"] == "authenticated again"
     assert states("session").count("starting") == 1
+
+
+def test_a_unit_still_failed_for_its_login_is_recorded_failed_again_each_day(make_core, script):
+    """The failed record is written once, and a unit that beats steadily writes no other state
+    event, so the record can be rotated away or outlive the outside watch's lookback while the
+    process keeps beating, and the watch reads it healthy (#896). The daemon says it again once a
+    day, as the same state of the same process, for as long as the failure lasts."""
+    from macf.pd.core import FAILED_RERECORD_S
+    clock = [1_800_000_000.0]
+    core = make_core([make_unit("session", script, {"auth_failed": LOGIN_EXPIRED})], wall=lambda: clock[0])
+    core.boot()
+    assert drive(core, lambda: core.state("session") == "failed")
+    pid = core.pid("session")
+    once = states("session").count("failed")
+
+    clock[0] += FAILED_RERECORD_S - 60          # not a day yet: nothing more is said
+    assert not drive(core, lambda: states("session").count("failed") > once, timeout=0.5)
+
+    clock[0] += 120                              # a day since it failed
+    assert drive(core, lambda: states("session").count("failed") == once + 1)
+    again = events("pd_unit_state", "session")[-1]
+    assert again["state"] == "failed" and again["pid"] == pid
+    assert again["reason"].startswith(f"authentication failed: {LOGIN_EXPIRED}") and "still failed" in again["reason"]
+
+    assert not drive(core, lambda: states("session").count("failed") > once + 1, timeout=0.5)
+    clock[0] += FAILED_RERECORD_S + 1            # and each day after
+    assert drive(core, lambda: states("session").count("failed") == once + 2)
+    assert core.state("session") == "failed" and core.pid("session") == pid
+    assert states("session").count("starting") == 1
+
+
+def test_the_readout_still_says_when_the_failure_began_after_a_repeat(make_core, script):
+    """A repeat is a new record with a new time, so the readout, which takes how long a unit has been
+    in its state from the newest record, would call a login that failed on Monday failed since today.
+    The repeat carries when the state began, and the readout reads that (#896 review)."""
+    from macf.pd import health
+    from macf.pd.core import FAILED_RERECORD_S
+    began = 1_800_000_000.0
+    clock = [began]
+    core = make_core([make_unit("session", script, {"auth_failed": LOGIN_EXPIRED})], wall=lambda: clock[0])
+    core.boot()
+    assert drive(core, lambda: core.state("session") == "failed")
+    first = events("pd_unit_state", "session")[-1]
+    clock[0] = began + 2 * FAILED_RERECORD_S + 60          # two days on
+    assert drive(core, lambda: events("pd_unit_state", "session")[-1] is not first
+                 and "still failed" in events("pd_unit_state", "session")[-1]["reason"])
+    repeat = events("pd_unit_state", "session")[-1]
+    assert repeat["since"] == began
+    row = health._unit_health("session", {"event": "pd_unit_state", "timestamp": clock[0], "data": repeat},
+                              None, clock[0], lambda pid, start: True)
+    assert row.since == began
+
+
+def test_a_unit_that_is_running_is_not_recorded_again(make_core, script):
+    """Only a failure the watch could lose is repeated: a healthy unit writes no state event
+    however long it runs."""
+    from macf.pd.core import FAILED_RERECORD_S
+    clock = [1_800_000_000.0]
+    core = make_core([make_unit("worker", script, {})], wall=lambda: clock[0])
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    before = len(states("worker"))
+    clock[0] += 3 * FAILED_RERECORD_S
+    assert not drive(core, lambda: len(states("worker")) > before, timeout=0.5)
 
 
 def test_a_daemon_restart_adopts_a_session_failed_for_its_login(make_core, script):

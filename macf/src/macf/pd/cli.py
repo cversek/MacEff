@@ -785,17 +785,28 @@ def daemon_macf(python: str, modules: Tuple[str, ...] = ("macf.pd",)) -> Tuple[O
 
 def cmd_pd_install(args: argparse.Namespace) -> int:
     from macf.pd import adapter as adapters
-    from macf.pd.core import POLICY_POINTER, DeclarationRefused, cutover_declaration, load_declaration
+    from macf.pd.core import (POLICY_POINTER, DeclarationRefused, cutover_declaration, cutover_pending,
+                              load_declaration)
+    from macf.pd.interface import Declaration
 
     from macf.pd import allowlist
 
     try:
         home, card = _this_agent()
-        kept = cutover_declaration(home, card)
-        if kept is not None:
-            print(f"maceff_pd: the declaration named {card} in the old form; rewritten in place, "
-                  f"the original kept at {kept} (MIS-0002-R165)")
-        declaration = load_declaration(home, card)
+        pending = cutover_pending(home, card) if args.plan else None
+        if pending is not None:
+            # --plan changes nothing, so it says what the next start would do and reads the file as
+            # that start would leave it, without writing it (#919).
+            print(f"maceff_pd: the declaration names {card} in the old form; --plan leaves it as it is. "
+                  f"The next start rewrites it in place and keeps the original at {pending.kept} "
+                  f"(MIS-0002-R165)")
+            declaration = Declaration.model_validate_json(pending.rewritten)
+        else:
+            kept = cutover_declaration(home, card)
+            if kept is not None:
+                print(f"maceff_pd: the declaration named {card} in the old form; rewritten in place, "
+                      f"the original kept at {kept} (MIS-0002-R165)")
+            declaration = load_declaration(home, card)
         tier = adapters.adapter_for(sys.platform)
     except (DeclarationRefused, LookupError) as e:
         print(f"maceff_pd: nothing installed: {e}\n{POLICY_POINTER}", file=sys.stderr)

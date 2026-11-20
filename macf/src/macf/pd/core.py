@@ -138,20 +138,36 @@ class DeclarationRefused(ValueError):
 CUTOVER_KEPT_SUFFIX = ".pre-card-underscore"
 
 
-def cutover_declaration(agent_home: Path, card: str) -> Optional[Path]:
-    """Rewrite a host declaration that names this home's own card in the old ``Name@shortid``
-    form, once, in place, before it is read; the path of the kept original, or None when
-    nothing was rewritten.
+@dataclass(frozen=True)
+class CutoverPending:
+    """What the card cut-over would do to one declaration file: the file, its text now, the old
+    card it names, the text rewritten to the new form, and where the original would be kept."""
+    path: Path
+    text: str
+    old: str
+    rewritten: str
+    kept: Path
+
+
+def cutover_pending(agent_home: Path, card: str, *, path: Optional[Path] = None) -> Optional[CutoverPending]:
+    """The rewrite the cut-over would make to a host declaration that names this home's own card
+    in the old ``Name@shortid`` form, or None when it has nothing to do. Nothing is written.
+
+    *path* names the file: the agent's own declaration by default, or its staged copy
+    (``declaration.json.cutover``) that a move installs from (#919).
 
     A host daemon that restarts onto code refusing the old form (MIS-0002-R165) would exit and
     stay down, and its restart doesn't wait for a person to edit the file. Only the agent's own
     file is rewritten, and only when its old card maps to this home's card (R166); a rendered
     declaration is the deployment's, re-rendered in the new form at start. Every quoted
     occurrence of the old card changes, schedule targets included. The result must validate, or
-    nothing is written. After it, only the new form is ever read."""
-    path = declaration_path(agent_home)
-    if path != Path(agent_home) / ".maceff" / "pd" / "declaration.json":
+    there is nothing to do."""
+    own = declaration_path(agent_home)
+    if own != Path(agent_home) / ".maceff" / "pd" / "declaration.json":
         return None
+    path = own if path is None else path
+    if path.parent != own.parent or path.name not in (own.name, own.name + ".cutover"):
+        return None     # noqa: MACEFF003 - only the agent's own declaration and its staged copy are cut over
     try:
         text = path.read_text()
         old = json.loads(text).get("agent")
@@ -166,18 +182,27 @@ def cutover_declaration(agent_home: Path, card: str) -> Optional[Path]:
         Declaration.model_validate_json(rewritten)
     except ValidationError:
         return None     # noqa: MACEFF003 - left as it was: load_declaration refuses it with the reason
-    mode = path.stat().st_mode & 0o7777
-    kept = path.with_name(path.name + CUTOVER_KEPT_SUFFIX)
-    if not kept.exists():
-        kept.write_text(text)
-        kept.chmod(mode)
-    staged = path.with_name(path.name + ".rewriting")
-    staged.write_text(rewritten)
+    return CutoverPending(path, text, old, rewritten, path.with_name(path.name + CUTOVER_KEPT_SUFFIX))
+
+
+def cutover_declaration(agent_home: Path, card: str, *, path: Optional[Path] = None) -> Optional[Path]:
+    """Make the rewrite ``cutover_pending`` describes, once, in place, before the file is read;
+    the path of the kept original, or None when nothing was rewritten. The original is kept
+    beside it, and the rewrite is recorded as ``pd_declaration_rewritten``."""
+    pending = cutover_pending(agent_home, card, path=path)
+    if pending is None:
+        return None
+    mode = pending.path.stat().st_mode & 0o7777
+    if not pending.kept.exists():
+        pending.kept.write_text(pending.text)
+        pending.kept.chmod(mode)
+    staged = pending.path.with_name(pending.path.name + ".rewriting")
+    staged.write_text(pending.rewritten)
     staged.chmod(mode)
-    os.replace(staged, path)
-    append_event("pd_declaration_rewritten", {"agent": card, "from": old, "path": str(path),
-                                              "kept": str(kept), "reason": "MIS-0002-R165 cut-over"})
-    return kept
+    os.replace(staged, pending.path)
+    append_event("pd_declaration_rewritten", {"agent": card, "from": pending.old, "path": str(pending.path),
+                                              "kept": str(pending.kept), "reason": "MIS-0002-R165 cut-over"})
+    return pending.kept
 
 
 def load_declaration(agent_home: Path, card: str) -> Declaration:
@@ -284,6 +309,10 @@ EXIT_NOT_SEEN = -1000
 
 #: Unit states with a process behind them, which a restarted daemon may adopt.
 LIVE_STATES = ("starting", "running", "waiting_on_a_person")
+#: How often a unit that is still failed, and still beating, has its failed state recorded again.
+#: The outside watch reads state within a 7-day lookback and liveness more often, so a failure
+#: recorded once and then rotated away, or older than the lookback, would read healthy (#896).
+FAILED_RERECORD_S = 24 * 3600.0
 
 #: How often the core reads what an adopted session waits on, which no beat carries (R21).
 DIALOG_POLL_S = 5.0
@@ -484,6 +513,7 @@ class _Runner:
     alive_interval_s: Optional[float] = None
     in_flight: Optional[int] = None     # as the unit last reported it; None if it never has
     auth_failed: Optional[str] = None   # what the harness said while it can't authenticate (R19)
+    rerecorded_at: float = 0.0          # wall time of the last repeat of a still-failed state (#896)
     failures: int = 0
     want_up: bool = False               # whether the unit should be running
     restart_at: Optional[float] = None  # monotonic: a restart under its policy is due
@@ -743,8 +773,16 @@ class Core:
         (optional_unit_MUST-NOT_delay_others)). A unit the previous daemon started that is
         still running is adopted, not started again."""
         carried = self._adopt_survivors()
+        held = self._held_by_operator({n for n, r in self._units.items()
+                                       if n not in carried and not r.spec.optional})
         for r in self._units.values():
             if r.spec.name in carried:
+                continue
+            if r.spec.name in held:
+                # The operator stopped it and nobody has started it since. A restart the operator
+                # didn't ask for doesn't undo that (#1009): only an explicit start clears the hold.
+                self._transition(r, "stopped", f"held down by the operator since "
+                                               f"{self._since(held[r.spec.name])}; start it to clear")
                 continue
             if not r.spec.optional:
                 self._control("start", r, POLICY, "declared and not optional")
@@ -754,8 +792,43 @@ class Core:
             # A first start carries nothing, so only a restart is reported (R47).
             changed = {n for n in self._previously_live - carried if self._units[n].state in LIVE_STATES}
             self._report_carried("daemon", "the primal daemon restarted", carried, changed,
-                                 self._previously_live - carried - changed)
+                                 self._previously_live - carried - changed - set(held),
+                                 held={n: self._since(t) for n, t in sorted(held.items())})
         self._recover_compaction()
+
+    def _held_by_operator(self, candidates: set) -> Dict[str, Optional[float]]:
+        """The units an operator stopped that no start has followed since, with when (#1009).
+
+        Folded from the event log, newest first: a unit's last start, stop or restart decides it,
+        and it is held when that was a stop the operator asked for. A stop the agent or the
+        wind-down asked, and one the daemon made on its own, is not held. Only a candidate is
+        looked up, so the scan ends once each has been decided; a unit with no act on record
+        reads the log to its start, once, at the boot that first sees it.
+        """
+        held: Dict[str, Optional[float]] = {}
+        if not candidates:
+            return held
+        decided: set = set()
+        for event in read_events(reverse=True, scope="all", only=(EVENT_CONTROL,)):
+            data = event.get("data") or {}
+            unit = data.get("unit")
+            if unit not in candidates or unit in decided or data.get("act") not in ("start", "stop", "restart"):
+                continue
+            if not calling_card.is_agent(data.get("agent"), self.card):
+                continue
+            decided.add(unit)
+            if data.get("act") == "stop" and (data.get("asked_by") or {}).get("kind") == "operator":
+                held[unit] = _float_or_none(event.get("timestamp"))
+            if len(decided) == len(candidates):
+                break
+        return held
+
+    @staticmethod
+    def _since(timestamp: Optional[float]) -> str:
+        """When a hold began, as the date and time a reader can place, or "an earlier time"."""
+        if timestamp is None:
+            return "an earlier time"
+        return datetime.fromtimestamp(timestamp).astimezone().strftime("%Y-%m-%d %H:%M %Z")
 
     def _recover_compaction(self) -> None:
         """A compaction this daemon's tail can't see, made while no daemon ran or inside the
@@ -1064,6 +1137,26 @@ class Core:
                           f"restart policy {r.spec.restart} after failure {r.failures}")
             self._spawn(r)
 
+    def _rerecord_failed(self, r: _Runner) -> None:
+        """Say again, once a day, that a unit still running is failed for its login (#896).
+
+        State events are rare and liveness events frequent: a unit that runs steadily writes no
+        state event, so the one that says it failed can be rotated into an archive, or be older
+        than the outside watch's lookback, while the process keeps beating. The watch would then
+        read it healthy. The repeat keeps the newest failed record inside the lookback for as long
+        as the failure lasts. It is the same state and the same process, so nothing changes for any
+        reader but the one that was missing it; the reason says how long it has lasted."""
+        now = self._wall()
+        if now - max(r.since, r.rerecorded_at) < FAILED_RERECORD_S:
+            return
+        r.rerecorded_at = now
+        began = datetime.fromtimestamp(r.since).astimezone().strftime("%Y-%m-%d %H:%M %Z")
+        self._emit(EVENT_STATE, UnitState(
+            agent=self.card, unit=r.spec.name, state="failed", pid=r.pid, proc_start=r.proc_start,
+            reason=f"{AUTH_FAILED_REASON}: {r.auth_failed} (still failed; first recorded {began})",
+            boot_id=self._boot_id, since=r.since,
+        ).model_dump())
+
     def _check_liveness(self, r: _Runner, now: float) -> None:
         if r.state == "waiting_on_a_person":
             # Silence while a person is awaited is not death, and waiting is never a
@@ -1075,6 +1168,8 @@ class Core:
                 self._fail(r, f"no liveness from pid {r.pid} within {bound:g} s of its start")
             return
         held = r.state == "failed" and r.auth_failed is not None
+        if held:
+            self._rerecord_failed(r)
         if (r.state == "running" or held) and r.alive_at is not None:
             # A session failed for its login still beats; if the beat stops too, it has died.
             interval = r.alive_interval_s or r.spec.liveness_interval_s

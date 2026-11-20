@@ -1,0 +1,4 @@
+### Fixed
+
+- **Hooks run under the interpreter that installed them, not a bare `python`** (`cli.py`): `macf_tools hooks install` and `framework install` wrote every host hook as `python <hooks dir>/<hook>.py`. With the README's virtual environment install, a bare `python` is the system interpreter, which can't import `macf`, so every hook failed with `ModuleNotFoundError` at the first session after install. Each hook command now names the absolute interpreter that ran the installer, quoted for the shell, as the container's hooks and the daemon's declaration already did. Item 6 of #860.
+  **Upgrade note:** hook commands already written keep their `python` until the installer runs again. On a host whose hooks fail this way, run `macf_tools framework install` (or `hooks install`) from the virtual environment's own `macf_tools`.
