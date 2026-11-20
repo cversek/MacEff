@@ -630,6 +630,34 @@ def cmd_mis_check(args: argparse.Namespace) -> int:
     return 1 if findings else 0
 
 
+def cmd_mis_index(args: argparse.Namespace) -> int:
+    """The registry of MIS files, from their own headers (#1066)."""
+    from pathlib import Path
+    from macf import mis
+    paths = [Path(x) for x in (args.paths or ["framework/mis"])]
+    missing = [str(x) for x in paths if not x.exists()]
+    if missing:
+        print(f"❌ not found: {', '.join(missing)}", file=sys.stderr)
+        return 2
+    rows = mis.index(paths)
+    if not getattr(args, "open", False):
+        print(json.dumps(rows, indent=2) if args.json else mis.format_index(rows))
+        return 0
+    try:
+        drafts = mis.open_index(mis.gh_runner())
+    except (RuntimeError, OSError, ValueError, KeyError) as e:
+        print(f"❌ the open MIS pull requests could not be read: {e}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({"landed": rows, "open": drafts}, indent=2))
+        return 0
+    print(mis.format_index(rows))
+    print("\nOpen, from pull requests (drafts; not landed):")
+    for r in drafts:
+        print(f"MIS-{r['number']:<5}{r['status'] or '?':<10}{r['title']}  (PR #{r['pr']}{', draft' if r['draft'] else ''})")
+    return 0
+
+
 def cmd_budget_status(args: argparse.Namespace) -> int:
     from macf import budget
     def go() -> int:
@@ -2053,7 +2081,8 @@ def cmd_harness_cutover(args: argparse.Namespace) -> int:
     from .platform.launchd import cutover_label
     try:
         plan = build_plan(home, card, agent, host_probes(home, card),
-                          staged=Path(args.staged) if getattr(args, "staged", None) else None)
+                          staged=Path(args.staged) if getattr(args, "staged", None) else None,
+                          accept_no_linger=bool(getattr(args, "accept_no_linger", False)))
     except Exception as e:  # noqa: BLE001 - the one-shot job must remove itself whatever failed
         job_plist = Path(args.job_plist) if getattr(args, "job_plist", None) else None
         said = str(e) if isinstance(e, ProbeUnavailable) else f"{type(e).__name__}: {e}"
@@ -2136,7 +2165,8 @@ def cmd_harness_cutover(args: argparse.Namespace) -> int:
         log_path = home / ".maceff" / "logs" / f"cutover-{datetime.now():%Y%m%d-%H%M%S}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         staged = Path(args.staged) if getattr(args, "staged", None) else staged_path(home)
-        argv = arm_argv(agent, home, staged, log_path, sys.executable)
+        argv = arm_argv(agent, home, staged, log_path, sys.executable,
+                        accept_no_linger=bool(getattr(args, "accept_no_linger", False)))
         started = subprocess.run(argv, capture_output=True, text=True)
         if started.returncode != 0:
             print(f"⚠️ MACF: harness cutover --run: the transient unit didn't start: "
@@ -12789,6 +12819,14 @@ def _build_parser() -> argparse.ArgumentParser:
     m.add_argument("paths", nargs="*", help="MIS files or directories (default: framework/mis)")
     m.add_argument("--glossary", metavar="PATH", help="glossary file (default: glossary.md beside the mis directory)")
     m.set_defaults(func=cmd_mis_check)
+    m = mis_sub.add_parser("index", help="the registry: every MIS file's number, title, status, deliberation and "
+                                         "where it lands, read from the files' own headers")
+    m.add_argument("paths", nargs="*", help="MIS files or directories (default: framework/mis)")
+    m.add_argument("--json", action="store_true", help="machine-readable output")
+    m.add_argument("--open", action="store_true",
+                   help="also list the open MIS pull requests as drafts, read from the pull requests' heads "
+                        "(needs gh and the network; never mixed into the landed rows)")
+    m.set_defaults(func=cmd_mis_index)
     budget_p = sub.add_parser("budget", help="print budget thresholds (JSON); subcommands: the subscription's rate limits")
     budget_p.set_defaults(func=cmd_budget)
     budget_sub = budget_p.add_subparsers(dest="budget_cmd")
@@ -13139,6 +13177,10 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_cutover.add_argument("--execute", action="store_true",
                                  help="what the transient unit or launchd job runs: carry the plan out "
                                       "here and now (refused inside a Claude Code session)")
+    harness_cutover.add_argument("--accept-no-linger", action="store_true",
+                                 help="move although `loginctl` linger is off for this user, so the daemon stops at "
+                                      "the last logout and doesn't start at boot (systemd hosts; the plan names the "
+                                      "command that turns it on, which is the host operator's call)")
     harness_cutover.add_argument("--log", help="where --execute writes its progress")
     harness_cutover.add_argument("--job-plist", help=argparse.SUPPRESS)   # the launchd job's own plist, removed when it ends
     harness_cutover.set_defaults(func=cmd_harness_cutover)
