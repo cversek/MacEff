@@ -114,7 +114,12 @@ class HostedLoginCheck:
             return
         self.last_poll = now
         try:
-            verdict = self.assess_now() if self.assess_now else daemon_assessment(self.expiring_s)   # looked up here, so a test can stand in
+            if self.assess_now:
+                verdict = self.assess_now()
+            elif self.expiring_s == EXPIRING_S:
+                verdict = daemon_assessment()    # looked up here, with no argument, so a test can stand in
+            else:
+                verdict = daemon_assessment(self.expiring_s)   # looked up here, so a test can stand in
         except Exception as e:  # noqa: BLE001 - a credential that won't read must not end the daemon
             # "error", not "unknown": the check itself broke, which the watch reports. "unknown" is
             # a login with no date to judge (an API key, an older credential), which it doesn't.
