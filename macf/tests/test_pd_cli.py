@@ -124,6 +124,20 @@ def test_no_declaration_means_no_daemon(tmp_path, base):
     assert "no declaration" in report.why
 
 
+def test_a_staged_declaration_is_named_not_denied(tmp_path, base):
+    """Init beside a live session stages the declaration; the readout names the file and the command
+    that installs it, rather than saying the agent has no daemon (#860)."""
+    home = make_home(tmp_path, declared=False)
+    path = declaration_path(home)
+    path.parent.mkdir(parents=True)
+    staged = path.with_name(path.name + ".cutover")
+    staged.write_text("{}")
+    report = status(home, CARD, base=base)
+    assert report.source == "none"
+    assert str(staged) in report.why and "harness cutover" in report.why
+    assert "has no primal daemon" not in report.why
+
+
 def test_the_command_reports_its_source(tmp_path, monkeypatch, capsys):
     """``macf_tools pd status --json`` names the agent and where its answer came from."""
     monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(make_home(tmp_path)))

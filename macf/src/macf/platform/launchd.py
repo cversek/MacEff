@@ -311,9 +311,16 @@ def render_tray_launch_agent(program_argv: List[str], home: str, log_dir: str) -
 
 
 def tray_install_plan(program_argv: List[str], home: str, log_dir: str, uid: int) -> List[Step]:
-    """What installing the tray does, in order, without doing it."""
+    """What installing the tray does, in order, without doing it.
+
+    The job is booted out first, going on when nothing is loaded, because launchd refuses to
+    bootstrap a label it has loaded: without this a second install wrote the new plist, failed
+    at the bootstrap, and left the old job running with the old arguments (#749)."""
     path, data = render_tray_launch_agent(program_argv, home, log_dir)
-    return [Step("write", path=path, content=data),
+    return [Step("launchctl", argv=launchctl_argv("bootout", TRAY_LABEL, uid), not_loaded_ok=True),
+            # bootout returns while the job is still stopping; a bootstrap before it's gone fails.
+            Step("unloaded", argv=launchctl_argv("print", TRAY_LABEL, uid), wait_s=RELOAD_WAIT_S),
+            Step("write", path=path, content=data),
             Step("launchctl", argv=launchctl_argv("bootstrap", TRAY_LABEL, uid, plist_path=path))]
 
 
