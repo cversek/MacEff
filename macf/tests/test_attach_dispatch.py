@@ -2,6 +2,8 @@
 legacy harness, or handed off to a remote."""
 import shlex
 
+import pytest
+
 from macf.utils.attach import NONE, TMUX, AttachPlan
 from macf.utils.attach_dispatch import decide
 from macf.utils.remotes import Remote, RemotesConfig
@@ -88,3 +90,59 @@ def test_a_slug_no_row_carries_still_attaches_by_its_exact_name(monkeypatch):
     gone = ad.legacy_by_slug("Other_aabbcc", control=False, read_only=False,
                              has_session=lambda target, env: False, environment=lambda agent: None)
     assert gone.exit_code == 1 and "systemctl" not in gone.message
+
+
+# ---- tmux control mode needs iTerm2 (#987) -----------------------------------------------------
+
+def test_control_mode_is_refused_on_a_terminal_that_is_not_iterm2_and_the_alternative_is_named():
+    from macf.utils.attach_dispatch import control_refusal
+    argv = ["tmux", "-CC", "attach", "-t", "=Agent_abc123", "-d"]
+    said = control_refusal(argv, {"TERM": "xterm-256color"})
+    assert said and "--control" in said and "iTerm2" in said and "macf_tools harness attach" in said
+    assert "--read-only" in said or "without --control" in said
+
+
+@pytest.mark.parametrize("environ", [{"TERM_PROGRAM": "iTerm.app"}, {"LC_TERMINAL": "iTerm2"}])
+def test_control_mode_is_allowed_on_iterm2_even_over_ssh(environ):
+    from macf.utils.attach_dispatch import control_refusal
+    assert control_refusal(["tmux", "-CC", "attach"], environ) is None
+
+
+def test_a_plain_attach_and_an_ssh_hand_off_without_control_are_never_refused():
+    from macf.utils.attach_dispatch import control_refusal
+    assert control_refusal(["tmux", "attach", "-t", "=A", "-d"], {"TERM": "xterm"}) is None
+    assert control_refusal(["ssh", "host", "macf_tools harness attach A"], {"TERM": "xterm"}) is None
+
+
+def test_control_mode_inside_an_env_wrapper_or_an_ssh_command_string_is_still_seen():
+    from macf.utils.attach_dispatch import control_refusal
+    assert control_refusal(["env", "TMUX_TMPDIR=/x", "tmux", "-CC", "attach"], {"TERM": "xterm"})
+    assert control_refusal(["ssh", "-t", "host", "tmux -CC attach -t =A"], {"TERM": "xterm"})
+
+
+def test_the_override_lets_an_unrecognized_terminal_try_control_mode():
+    from macf.utils.attach_dispatch import control_refusal
+    assert control_refusal(["tmux", "-CC", "attach"], {"MACF_ATTACH_CONTROL": "force"}) is None
+
+
+def test_the_command_refuses_before_it_execs_tmux(monkeypatch, capsys):
+    """The hang was an exec of tmux -CC into a terminal that cannot speak it: nothing is printed and nothing
+    returns. The command now says why and exits without the exec."""
+    import argparse
+    from macf import cli
+    from macf.utils import attach_dispatch as ad
+    called = []
+    monkeypatch.setattr(cli.os, "execvpe", lambda *a: called.append(a))
+    monkeypatch.setenv("TERM", "xterm-256color")
+    for var in ("TERM_PROGRAM", "LC_TERMINAL", "MACF_ATTACH_CONTROL"):
+        monkeypatch.delenv(var, raising=False)
+    decision = ad.Decision(argv=["tmux", "-CC", "attach", "-t", "=A", "-d"])
+    monkeypatch.setattr(ad, "decide", lambda *a, **k: decision)
+    import types
+    from macf.utils import remotes, roster
+    monkeypatch.setattr(roster, "local_roster", lambda probe=None: types.SimpleNamespace(entries=[_entry()], problems=[]))
+    monkeypatch.setattr(remotes, "load_remotes", lambda *a, **k: REMOTES)
+    args = argparse.Namespace(name=None, card=_entry().card, control=True, read_only=False, agent=None)
+    rc = cli.cmd_harness_attach(args)
+    assert rc == 2 and called == []
+    assert "iTerm2" in capsys.readouterr().err

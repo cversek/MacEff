@@ -1935,6 +1935,11 @@ def cmd_harness_attach(args: argparse.Namespace) -> int:
         if decision.exit_code is not None:
             print(decision.message, file=sys.stderr)
             return decision.exit_code
+        from .utils.attach_dispatch import control_refusal
+        refused = control_refusal(decision.argv)
+        if refused:
+            print(f"❌ {refused}", file=sys.stderr)
+            return 2
         env = decision.env or dict(os.environ)
         for command in decision.before:
             # Naming the window is a courtesy: a tmux that refuses it still attaches.
