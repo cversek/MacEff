@@ -527,6 +527,45 @@ def _record_keys_sent(text: str, kind: str, tmux_session: str) -> None:
               f"will read as the operator's typing: {e}", file=sys.stderr)
 
 
+#: Dialogs the client shows in place of exiting, by text on its screen. Each needs a person:
+#: answering one by keystroke would pick a menu entry nobody has read, and "exit and stop tasks"
+#: drops the session's schedules silently (#854). Only wording seen on a real screen belongs here.
+EXIT_DIALOGS = {"Background work is running": "its 'Background work is running' dialog"}
+#: How long, and how often, the screen is read after /exit is typed.
+EXIT_WATCH_S = 3.0
+EXIT_WATCH_STEP_S = 0.5
+
+
+def _watch_exit(target: str, cmd: str) -> int:
+    """After *cmd* (/exit or /quit) is typed, say what is known about it, and no more.
+
+    The keystrokes going in are not the client exiting. A client that stopped on one of
+    EXIT_DIALOGS is still running and will stay there, so that is an error (non-zero). A screen
+    that shows none proves nothing either: typed mid-turn, /exit waits for the turn to end, and
+    a command that runs inside the session ends with it. So the message names what does confirm
+    the exit, the session unit's restart (#854).
+    """
+    polls = int(EXIT_WATCH_S / EXIT_WATCH_STEP_S)
+    for poll in range(polls + 1):
+        screen = capture_pane(target)
+        if screen is None:
+            print(f"[inject] {cmd} was typed, but the screen can't be read, so whether the client "
+                  f"exited is unknown.", file=sys.stderr)
+            break
+        for marker, name in EXIT_DIALOGS.items():
+            if marker in screen:
+                print(f"[inject] {cmd} was typed, but the client stopped on {name} and has not "
+                      f"exited. It stays there until a person answers it; typing into it from here "
+                      f"would pick a menu entry no one has read.", file=sys.stderr)
+                return 1
+        if poll < polls:
+            time.sleep(EXIT_WATCH_STEP_S)
+    print(f"[inject] {cmd} was typed; the client's exit is not confirmed by this. It exits when its "
+          f"current turn ends. The session unit's restart confirms it: `macf_tools pd status`, or "
+          f"`macf_tools events query --event pd_carried --limit 1 -v` after it.", file=sys.stderr)
+    return 0
+
+
 def send_slash_to_self(command: str, target: str = "", then: Optional[str] = None, arm_stop: bool = True) -> int:
     """Queue a slash command (e.g. ``/compact``) into this agent's own live CC
     pane via the tmux side channel.
@@ -610,6 +649,8 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
                   f"this again.", file=sys.stderr)
         return 1
     rc = send_keys(own, [cmd], enter=True, kind="inject")
+    if rc == 0 and cmd in ("/exit", "/quit"):
+        rc = _watch_exit(own, cmd)
     if rc == 0:
         # A queued /compact is only submitted when the turn ends, and the Stop
         # gates exist to refuse that. Arm one passage, only after delivery and
