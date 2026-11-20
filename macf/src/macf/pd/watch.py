@@ -386,22 +386,64 @@ def _settings_state_dir(path: Path) -> Optional[str]:
     return value if isinstance(value, str) and value else None
 
 
-def telegram_state_dir(home: Optional[Path] = None, env: Optional[Dict[str, str]] = None) -> Tuple[Path, str]:
-    """Where the Telegram plugin keeps its poller's files for the agent at *home*, and which source
-    said so (#1069). An isolated seat sets ``TELEGRAM_STATE_DIR`` in its own settings ``env``, which
-    Claude Code hands to the plugin and which the process running this watch never sees, so the
-    home's ``.claude/settings.local.json`` is read first, then its ``.claude/settings.json``, then
-    this process's environment, then the login's ``~/.claude/channels/telegram``."""
-    import os
-    env = os.environ if env is None else env
-    if home is not None:
+@dataclass(frozen=True, kw_only=True)
+class SessionPlaces:
+    """What the declared session unit fixes about where its plugins look: the directory it starts in,
+    its ``HOME`` where the unit declares one, and the environment the daemon starts it with."""
+
+    project_dir: Path
+    login_home: Optional[Path] = None
+    environment: Dict[str, str] = dataclasses.field(default_factory=dict)
+
+
+def session_places(declaration: "interface.Declaration", home: Path) -> SessionPlaces:
+    """Where the declared session unit starts, what its ``HOME`` is, and the environment it declares. Claude Code reads its settings, and so the plugin
+    its environment, from the project directory the session starts in; the plugin's default state
+    directory is under the session's own ``HOME``; and a daemon starts the session with the unit's
+    declared environment, not with the environment of any process that reads the declaration afterwards.
+    The project directory is the unit's ``--project-dir``, else the agent home; the login home is the
+    unit's ``HOME``, else None (the caller's own)."""
+    project, login, environment = Path(home), None, {}
+    for unit in declaration.units:
+        if unit.kind != "session":
+            continue
+        command = list(unit.command)
+        if "--project-dir" in command and command.index("--project-dir") + 1 < len(command):
+            project = Path(command[command.index("--project-dir") + 1].replace("{agent_home}", str(home)))
+        environment = dict(unit.environment or {})
+        if environment.get("HOME"):
+            login = Path(environment["HOME"].replace("{agent_home}", str(home)))
+        break
+    return SessionPlaces(project_dir=project, login_home=login, environment=environment)
+
+
+def telegram_state_dir(home: Optional[Path] = None, project_dir: Optional[Path] = None,
+                       login_home: Optional[Path] = None,
+                       unit_env: Optional[Dict[str, str]] = None) -> Tuple[Path, str]:
+    """Where the Telegram plugin keeps its poller files for the agent at *home*, and which source
+    said so (#1069). An isolated seat sets ``TELEGRAM_STATE_DIR`` for the plugin, and the process
+    running this check never sees it, so it is read where the session gets it: the settings of the
+    session's project directory (``.claude/settings.local.json``, then ``.claude/settings.json``), then
+    the agent home's where that is another directory, then the session unit's declared environment,
+    then ``<login home>/.claude/channels/telegram``, the plugin's default. This process's own
+    environment is not a source: a session started by the daemon doesn't inherit it."""
+    is_home = home is not None and project_dir is not None and Path(home).resolve() == Path(project_dir).resolve()
+    places = [(Path(project_dir), "the home" if is_home else "the session's project directory")] \
+        if project_dir is not None else []
+    if home is not None and not is_home:
+        places.append((Path(home), "the home"))
+    for place, label in places:
         for name in ("settings.local.json", "settings.json"):
-            found = _settings_state_dir(Path(home) / ".claude" / name)
+            found = _settings_state_dir(place / ".claude" / name)
             if found:
-                return Path(found).expanduser(), f"{name} of the home"
-    if env.get(TELEGRAM_STATE_ENV):
-        return Path(env[TELEGRAM_STATE_ENV]).expanduser(), "the watch's environment"
-    return Path.home() / ".claude" / "channels" / "telegram", "the default location"
+                return Path(found).expanduser(), f"{name} of {label}"
+    declared = (unit_env or {}).get(TELEGRAM_STATE_ENV)
+    if declared:
+        if home is not None:
+            declared = declared.replace("{agent_home}", str(home))     # the daemon fills the placeholder in
+        return Path(declared).expanduser(), "the session unit's declared environment"
+    return (Path(login_home) if login_home is not None else Path.home()) / ".claude" / "channels" / "telegram", \
+        "the default location"
 
 
 def _pid_alive(pid: int) -> bool:
@@ -757,7 +799,12 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
         except FileNotFoundError:
             findings.append(check_remote_control(card, None, now))
     if probe is not None and declares_telegram(declaration):   # the operator's phone rides on a poller
-        where, source = (telegram_dir, "the caller") if telegram_dir is not None else telegram_state_dir(home)
+        if telegram_dir is not None:
+            where, source = telegram_dir, "the caller"
+        else:
+            session = session_places(declaration, home)
+            where, source = telegram_state_dir(home, project_dir=session.project_dir,
+                                               login_home=session.login_home, unit_env=session.environment)
         findings.append(check_telegram(card, where, now, source=source))
     if declaration.channel_connect_s is not None:      # a channel is expected, so watch it
         try:

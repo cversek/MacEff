@@ -111,26 +111,35 @@ def _settings(home, name, body):
     (home / ".claude" / name).write_text(body if isinstance(body, str) else json.dumps(body))
 
 
-def test_the_state_dir_comes_from_the_homes_settings_before_anything_else(tmp_path):
+def test_the_state_dir_comes_from_the_sessions_settings_before_its_declared_environment(tmp_path):
     home = tmp_path / "seat"
     _settings(home, "settings.json", {"env": {watch.TELEGRAM_STATE_ENV: str(tmp_path / "shared")}})
     _settings(home, "settings.local.json", {"env": {watch.TELEGRAM_STATE_ENV: str(tmp_path / "own")}})
-    env = {watch.TELEGRAM_STATE_ENV: str(tmp_path / "process")}
-    assert watch.telegram_state_dir(home, env) == (tmp_path / "own", "settings.local.json of the home")
+    unit_env = {watch.TELEGRAM_STATE_ENV: str(tmp_path / "unit")}
+    assert watch.telegram_state_dir(home, home, unit_env=unit_env) == (tmp_path / "own", "settings.local.json of the home")
     (home / ".claude" / "settings.local.json").unlink()
-    assert watch.telegram_state_dir(home, env) == (tmp_path / "shared", "settings.json of the home")
+    assert watch.telegram_state_dir(home, home, unit_env=unit_env) == (tmp_path / "shared", "settings.json of the home")
     (home / ".claude" / "settings.json").unlink()
-    assert watch.telegram_state_dir(home, env) == (tmp_path / "process", "the watch's environment")
-    path, source = watch.telegram_state_dir(home, {})
-    assert path.parts[-3:] == (".claude", "channels", "telegram") and source == "the default location"
+    assert watch.telegram_state_dir(home, home, unit_env=unit_env) == (
+        tmp_path / "unit", "the session unit's declared environment")
+    path, source = watch.telegram_state_dir(home, home, login_home=tmp_path / "login")
+    assert path == tmp_path / "login" / ".claude" / "channels" / "telegram" and source == "the default location"
+
+
+def test_the_watchs_own_environment_is_not_a_source(tmp_path, monkeypatch):
+    """A session the daemon starts doesn't inherit the environment of whatever reads the declaration."""
+    monkeypatch.setenv(watch.TELEGRAM_STATE_ENV, str(tmp_path / "process"))
+    path, source = watch.telegram_state_dir(tmp_path / "seat", tmp_path / "seat", login_home=tmp_path / "login")
+    assert source == "the default location" and "process" not in str(path)
 
 
 def test_a_settings_file_without_the_key_or_unreadable_falls_through_and_says_so(tmp_path, capsys):
     home = tmp_path / "seat"
     _settings(home, "settings.local.json", {"permissions": {"allow": []}, "env": {"OTHER": "x"}})
     _settings(home, "settings.json", "{not json")
-    path, source = watch.telegram_state_dir(home, {watch.TELEGRAM_STATE_ENV: str(tmp_path / "process")})
-    assert (path, source) == (tmp_path / "process", "the watch's environment")
+    path, source = watch.telegram_state_dir(home, home, login_home=tmp_path / "login",
+                                            unit_env={watch.TELEGRAM_STATE_ENV: str(tmp_path / "unit")})
+    assert (path, source) == (tmp_path / "unit", "the session unit's declared environment")
     assert "settings.json" in capsys.readouterr().err        # the unreadable one is said, not guessed past
 
 
