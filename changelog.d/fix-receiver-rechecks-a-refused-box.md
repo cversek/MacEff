@@ -1,0 +1,3 @@
+### Fixed
+
+- **The mail receiver looks again at a pickup box it was refused, so a fixed group or grant takes effect without a daemon restart** (`pd/receiver.py`, #872): the access refusal was remembered for the daemon's life, so after the operator fixed the box's group or the store's permissions, mail waited until the daemon restarted. A refused box is now re-checked every five minutes, the clearing is said once on stderr and recorded as a `pd_mail_access_cleared` event, and a box that stays refused is not announced again. The per-box lock for a copied settings file, the other half of the issue, is with the container-management maintainer on the broker side.
