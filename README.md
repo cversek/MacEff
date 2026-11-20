@@ -65,6 +65,22 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e ./macf
 ```
 
+The commands live in the virtual environment's `bin/`, so `macf_tools` works
+in a shell only once the environment is activated. To use it from any directory
+without activating, link the console scripts into a directory on your `PATH`:
+
+```bash
+for s in macf_tools amail-broker amail-inbound amail-receiver maceff-channel; do
+  ln -s "$PWD/.venv/bin/$s" ~/.local/bin/$s
+done
+```
+
+The script's first line names the environment's Python, and the editable
+install still finds `framework/`, so a link works as the original does. Do this
+before `agent init` if you will use the channel: its plugin starts
+`maceff-channel` by that name from whatever `PATH` Claude Code starts with, and
+`agent init` refuses its channel step, saying so, when the command isn't found.
+
 Confirm it landed:
 
 ```bash
@@ -130,6 +146,11 @@ prompt, on a notification, and when a settings file changes.
 What they do, in one line: inject the agent's own current state into its context
 — time, context remaining, active modes, recent policy guidance — and record what
 happened to an append-only event log.
+
+The hooks and the `/maceff` commands and skills come from one command,
+`macf_tools framework install`, run in the project directory; `agent init` does
+not run it, and its `framework` step reports whether they are there and names the
+command if not.
 
 ```bash
 macf_tools hooks logs      # what fired, and when

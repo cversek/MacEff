@@ -420,3 +420,12 @@ def test_channels_told_apart_by_name(isolated_events_log, capsys):
     _declare("{not a declaration")
     assert counted(DISCORD) == no
     assert "can't be read" in capsys.readouterr().err
+
+
+def test_a_compact_the_framework_typed_is_known_across_the_compaction(isolated_events_log):
+    """`inject compact` records /compact before the compaction; the client writes its row after,
+    in the next cycle. The record must still be found, or the row reads as the operator (#653)."""
+    from macf.agent_events_log import CYCLE_BOUNDARY_EVENT
+    append_event(KEYS_SENT_EVENT, {"text": "/compact", "kind": "inject", "tmux_session": "s"})
+    append_event(CYCLE_BOUNDARY_EVENT, {"session_id": "s", "cycle": 2})
+    assert typed_by_framework("/compact", consumer="t") == "inject"
