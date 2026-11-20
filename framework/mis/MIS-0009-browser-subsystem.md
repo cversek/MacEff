@@ -94,6 +94,7 @@ An agent with sites of its own writes a plugin in its private plugin directory. 
 - **irreversible control**: a page control, or its keyboard shortcut, that sends, submits, posts, publishes, deletes, pays or confirms something outside the browser.
 - **operator's words**: the operator's own instruction for one act, quoted verbatim by the agent and recorded with the act.
 - **private plugin directory**: `.maceff/browser_plugins/` in the agent's home, from which the backend loads browser plugins that never enter the framework repository.
+- **backend tab**: a tab that a backend call created and marked as its own when it created it; every other tab is the operator's.
 - **agent's state trees**: the directories in the agent's home that hold its own state: `agent/`, `.maceff/` and `.claude/`. Project directories in the home are not among them.
 
 ## 6 Specification
@@ -109,12 +110,12 @@ An agent with sites of its own writes a plugin in its private plugin directory. 
 
 - **R05** [MUST · decidable: macf/tests/test_browser_scope.py::test_out_of_scope_tab_refused] Each browser command MUST act only on tabs whose host is within its host scope. (command_MUST_act_within_host_scope)
 - **R06** [MUST · decidable: macf/tests/test_browser_scope.py::test_tab_matched_by_host_not_title] When a command selects a tab, the backend MUST match the tab by its host and path, not by its title. (tab_MUST_be_matched_by_host)
-- **R07** [MUST NOT · decidable: macf/tests/test_browser_scope.py::test_operator_tab_not_driven_unless_named] An interaction verb MUST NOT drive a tab the operator opened unless the call names that tab. (interaction_MUST-NOT_drive_unnamed_operator_tab)
+- **R07** [MUST NOT · decidable: macf/tests/test_browser_scope.py::test_operator_tab_not_driven_unless_named] An interaction verb MUST NOT drive a tab other than a backend tab unless the call names that tab. (interaction_MUST-NOT_drive_unnamed_operator_tab)
 - **R08** [SHOULD · judgment: the reviewing maintainer, at each plugin review] A plugin SHOULD keep and reuse its own tab across calls. (plugin_SHOULD_reuse_its_tab)
 
 ### 6.3 Observation and interaction
 
-- **R09** [MUST · decidable: macf/tests/test_browser_observe.py::test_observation_runs_no_page_script] Each observation verb MUST read the page through protocol domains, without running script in the page. (observation_MUST_use_protocol_domains)
+- **R09** [MUST · decidable: macf/tests/test_browser_observe.py::test_observation_runs_no_page_script] Each observation verb MUST read the page through protocol domains, without running script in any of the page's worlds. (observation_MUST_use_protocol_domains)
 - **R10** [MUST · decidable: macf/tests/test_browser_interact.py::test_hidden_or_disabled_target_refused] Each interaction verb MUST act only on a target that is visible and enabled when it acts. (interaction_MUST_target_visible_element)
 - **R11** [MUST · decidable: macf/tests/test_browser_interact.py::test_change_report_after_act] After each act, an interaction verb MUST report the address, title and visible-text digest before and after. (interaction_MUST_report_change)
 - **R12** [SHOULD · judgment: the reviewing maintainer, at each plugin review] When a caller repeats an interaction, the caller SHOULD stop on an observed change rather than on a count. (repetition_SHOULD_stop_on_change)
@@ -126,6 +127,7 @@ An agent with sites of its own writes a plugin in its private plugin directory. 
 ### 6.4 Irreversible acts and the person's own acts
 
 - **R17** [MUST · decidable: macf/tests/test_browser_guard.py::test_irreversible_needs_operator_words] The backend MUST refuse to activate an irreversible control unless the call carries the operator's words for that act. (irreversible_MUST_carry_operator_words)
+- **R42** [MUST · decidable: macf/tests/test_browser_cli.py::test_operator_words_need_their_source] When a call carries the operator's words, its event MUST record them with their source: a channel message or a transcript turn. (operator_words_MUST_name_source)
 - **R18** [MUST · decidable: macf/tests/test_browser_guard.py::test_shortcut_treated_as_control] The backend MUST treat a keyboard shortcut for an irreversible control as that control. (shortcut_MUST_count_as_control)
 - **R19** [MUST NOT · decidable: macf/tests/test_browser_guard.py::test_credential_fields_refused] The backend MUST NOT enter text into a password field or a field the page marks for credentials. (backend_MUST-NOT_enter_credentials)
 - **R20** [MUST NOT · decidable: macf/tests/test_browser_guard.py::test_no_cookie_storage_token_access] The backend MUST NOT read or replay a page's cookies, storage or tokens. (backend_MUST-NOT_reuse_credentials)
@@ -175,16 +177,17 @@ An agent with sites of its own writes a plugin in its private plugin directory. 
 - **R10, R11, R12, R13**: the hidden-editor and authored-player incidents. Acting only on what is visible, reporting what changed, and stopping on change is what prevented every repeat of those failures. Real input is allowed because some authored pages ignore anything else, and using it is not disguise: it is how a person's click reaches that page.
 - **R14**: reloading a filled page posted its contents once. A form's unsaved input is assumed to matter until the caller says otherwise.
 - **R15, R16**: downloads that vanish silently are worse than ones that fail. A checksum identifies what arrived, and the agent's home stays free of the operator's documents.
+- **R42**: the operator's words are text the agent types, so an honest agent and a misled one supply them equally easily. Naming where they were said lets a later reader compare the quote with what was actually said; without it the log shows only that words were claimed.
 - **R17, R18**: the "submit it" practice, made the rule. Irreversible acts are the ones a person must own. Recording their words with the act is what lets anyone check later that they did. A keyboard shortcut is the same act by another route.
 - **R41**: the operator ruled on this case during drafting. A file the page would offer for download, fetched through the browser's own request context, reads nothing the agent could reuse; R20 still forbids reading or replaying the cookies, storage or tokens behind it.
 - **R16, R27** were narrowed during prototyping: forbidding the whole home refused saving an operator's file into a project directory there, which is where it belonged. The state trees are the line `macf_tools gmail` already draws.
 - **R19, R20, R21**: credentials and challenges belong to the person. Reusing a session's tokens to call a service's internal API would be a route around the organization's decision in §2, so it is refused outright.
-- **R22, R23, R24**: pace was the operator's request, for comfort and to treat sites as a person would. Randomized timing serves only concealment, and §2 shows evasion is fragile as well. The line is drawn at intent: a person's pace is courtesy; imitation of a person is disguise.
-- **R25, R26, R27, R28**: "derive, do not store". One event per act, with nothing of the page in it, gives a record without making the event log a second copy of the operator's mail. The screenshot incident is why capture can be refused per page.
+- **R22, R23, R24**: a page has settled when R11's change report says so, so pace and verification come from one mechanism. Pace was the operator's request, for comfort and to treat sites as a person would. Randomized timing serves only concealment, and §2 shows evasion is fragile as well. The line is drawn at intent: a person's pace is courtesy; imitation of a person is disguise.
+- **R25, R26, R27, R28**: "derive, do not store". The operator's words and their source are recorded (R17, R42); the values the agent typed into fields never are, even where the words describe them. One event per act, with nothing of the page in it, gives a record without making the event log a second copy of the operator's mail. The screenshot incident is why capture can be refused per page.
 - **R29**: page text is the largest prompt-injection surface an agent has. A page can say anything.
 - **R30, R31, R32, R33**: plugins keep the core small and site knowledge local. Enforcing a declaration means a plugin's bug cannot widen its own scope. Private plugins exist because some of an agent's sites must never be named in a public repository.
 - **R34**: the browser is the slow, fragile path. An API the operator can grant is preferred, which is why `macf_tools gmail` stays where it is.
-- **R35, R36, R37, R38**: the mail plugin's whole safety rests on never sending. The send shortcut is the subtle risk, which is why the subject and message text are set by value. Recipient addresses are typed as plain characters, because the client's recipient picker answers to nothing else; plain characters cannot form a sending chord, and R18 checks the Enter that resolves each one. A changed page refuses with a name rather than guessing.
+- **R35, R36, R37, R38**: the mail plugin's whole safety rests on never sending. The send shortcut is the subtle risk, which is why the subject and message text are set by value; in a rich editor that runs script in the page, which interaction verbs may do (R09 binds observation only). Recipient addresses are typed as plain characters, because the client's recipient picker answers to nothing else; plain characters cannot form a sending chord, and R18 checks the Enter that resolves each one. A changed page refuses with a name rather than guessing.
 - **R39, R40**: by `capability_boundaries`' own sizing test, nothing in this tool is a boundary, since the agent could drive the browser some other way. The permission rules the operator sets, and the agent cannot edit, are the boundary. The policy says so plainly rather than describing the tool as safer than it is.
 
 **Rejected**
@@ -266,8 +269,9 @@ An agent with sites of its own writes a plugin in its private plugin directory. 
 | R39 | judgment | the Secretary, at review of the landed policy | pending |
 | R40 | judgment | the operator, at each occurrence | pending |
 | R41 | judgment | the reviewing maintainers, at each plugin review | pending |
+| R42 | decidable | macf/tests/test_browser_cli.py::test_operator_words_need_their_source | planned |
 
-Every decidable test named above exists and passes on the prototype branch `browser/prototype` at e26e675c (65 tests, no browser needed); the states read planned until the tests land with the capability.
+Every decidable test named above exists and passes on the prototype branch `browser/prototype` at 5bb52051 (66 tests, no browser needed); the states read planned until the tests land with the capability.
 
 **Cold-reader trial**: not yet held.
 
@@ -300,16 +304,20 @@ On acceptance, one landing pull request carries all of it together (MIS-0001-R29
 - **Q01** Should observation verbs also require the operator's standing consent per host, or does the host scope on each call suffice? (observation_consent_per_host)
 - **Q02** Answered during prototyping: the private plugin directory is `.maceff/browser_plugins/` in the agent's home (section 5). (private_plugin_directory_location)
 - **Q03** Should a second backend (WebDriver BiDi, or a browser extension's channel) be specified now, or only when one is built? (second_backend_timing)
-- **Q04** How should container agents reach a browser, if ever? This is likely through the system daemon (MIS-0007), and it is not for this MIS. (container_agent_browser)
+- **Q04** Withdrawn at review: container agents belong with MIS-0007, not here (section 3 already excludes them). (container_agent_browser)
 - **Q05** Answered by the operator during drafting: yes, as navigation, now R41. (session_request_vs_token_reuse)
 
 ## 14 Deliberation Record
 
-None.
+The operator opened the deliberation on this pull request on 2026-11-20 at 15:57Z.
+
+- **P01** The container-management maintainer, [review](https://github.com/cversek/MacEff/pull/1030#pullrequestreview-5995339138), before the opening: right shape; settle two points before final comment (the home is per account; the operator's words are the agent's assertion), and five suggestions (R07's definition, R09 and Playwright, R26 with R17, Q05, R37 and R23); Q04 out of this MIS. (thm_review_seven_points)
+- **P02** The operator, [7044097746](https://github.com/cversek/MacEff/pull/1030#issuecomment-7044097746): opens the deliberation. (owner_opens_deliberation)
+- **O01** The container-management maintainer, in P01: a request through the signed-in context should count as navigation only when a visible page control triggers it, and under R20 otherwise. It stands against R41, which records the operator's answer to Q05, for the operator's Resolution. (thm_session_request_only_via_control)
 
 ## 15 Revision History
 
-- Draft revisions from the prototype and its probe on a live mail client, before deliberation: R16 and R27 narrowed from the agent's home to its state trees; R37 names the subject and message text, and the rationale says why recipients are typed; R41 added from the operator's answer to Q05; Q02 answered; the Secretary designated by the operator.
+- Draft revisions from the prototype and its probe on a live mail client, before deliberation: R16 and R27 narrowed from the agent's home to its state trees; after P01: R07 defined by the backend tab, R09 bound to every world of the page, R42 added (the source of the operator's words), clarifications on R26, R37 and R23, Q04 withdrawn; R37 names the subject and message text, and the rationale says why recipients are typed; R41 added from the operator's answer to Q05; Q02 answered; the Secretary designated by the operator.
 
 ## Wiki-Links
 
