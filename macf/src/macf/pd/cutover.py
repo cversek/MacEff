@@ -122,6 +122,9 @@ class Probes:
     #: Whether the daemon is installed under the service manager at all. One that isn't is
     #: installed by the move, after the declaration (``pd install``, undone by ``pd uninstall``).
     daemon_installed: Callable[[], bool] = lambda: True
+    #: Whether this user's systemd instance outlives their logins (``loginctl`` Linger): True, False, or
+    #: None when it can't be read. Read on systemd hosts only (#860).
+    linger: Callable[[], Optional[bool]] = lambda: None
 
 
 def staged_path(home: Path) -> Path:
@@ -247,10 +250,31 @@ def _launchd_init(agent: str, card: str, harness_label: Optional[str], uid: int,
                  restart_daemon=lambda: ctl("kickstart", daemon))
 
 
+def _linger_check(lingers: Optional[bool], accepted: bool) -> Check:
+    """Whether the daemon, and the session unit under it, outlive the user's last logout (#860).
+
+    Without linger the user's systemd instance stops at the last logout and doesn't start at boot, so a
+    move that reads "Ready" would leave an agent that is only up while someone is logged in, which
+    defeats an always-on one. Enabling it is the host operator's decision, so the plan names the command
+    and holds until it is on or the move is accepted without it."""
+    if lingers is True:
+        return Check("linger", True, "on: the user's systemd instance, and the daemon with it, outlives their logins")
+    if lingers is None:
+        return Check("linger", True, "could not be read; `loginctl show-user $USER -p Linger` says whether the "
+                                     "daemon outlives the last logout")
+    command = "loginctl enable-linger $USER"
+    if accepted:
+        return Check("linger", True, f"off, and the move is accepted without it (--accept-no-linger): the daemon "
+                                     f"stops at the last logout; `{command}` is the host operator's call")
+    return Check("linger", False, f"off: the user's systemd instance, and the daemon and session unit with it, stop "
+                                  f"at the last logout and don't start at boot; `{command}` keeps them up and is the "
+                                  f"host operator's call, or add --accept-no-linger to move without it")
+
+
 def build_plan(home: Path, card: str, agent: str, probes: Probes,
                staged: Optional[Path] = None, harness_unit: Optional[str] = None,
                runtime: Optional[str] = None, uid: Optional[int] = None,
-               launch_agents: Optional[Path] = None) -> Plan:
+               launch_agents: Optional[Path] = None, accept_no_linger: bool = False) -> Plan:
     """What moving *agent*'s session onto its daemon would do, and whether it can be done now.
 
     *agent* is the session identifier (``Name_uuid6``), *card* the calling card, *runtime*
@@ -287,6 +311,8 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
                             "launchd hosts (persistent_layer 5.2)"))
         return Plan(agent, card, False, checks)
     checks.append(Check("init system", True, init.describe))
+    if init.name == "systemd":
+        checks.append(_linger_check(probes.linger(), accept_no_linger))
 
     checks.append(_staged_check(staged, card, runtime, init.name))
     why = probes.daemon_answers()
@@ -557,6 +583,7 @@ def host_probes(home: Path, card: str, platform: Optional[str] = None) -> Probes
         harness_label=harness_label,
         hand_started=hand_started,
         daemon_installed=daemon_installed,
+        linger=lambda: _own_linger(),
     )
 
 
@@ -644,8 +671,15 @@ def came_up_by_status(home: Path, card: str, unit: str, timeout_s: float = COME_
     return poll
 
 
+def _own_linger() -> Optional[bool]:
+    import os
+    import pwd
+    from macf.platform.systemd import linger_enabled
+    return linger_enabled(pwd.getpwuid(os.getuid()).pw_name)
+
+
 def arm_argv(agent: str, home: Path, staged: Path, log_path: Path, python: str,
-             environ: Optional[Dict[str, str]] = None) -> List[str]:
+             environ: Optional[Dict[str, str]] = None, accept_no_linger: bool = False) -> List[str]:
     """The transient unit that carries the plan out, outside the session it stops: the
     session's own process tree ends at step 2, so nothing of the move may live in it.
     A ``PYTHONPATH`` the caller runs under is passed on, so the unit imports the same macf
@@ -656,7 +690,8 @@ def arm_argv(agent: str, home: Path, staged: Path, log_path: Path, python: str,
     return ["systemd-run", "--user", "--unit", f"{RUN_UNIT_PREFIX}{agent}", "--collect",
             "--property", "Type=exec", *setenv, "--",
             python, "-m", "macf.cli", "harness", "cutover", "--agent", agent, "--home", str(home),
-            "--staged", str(staged), "--execute", "--log", str(log_path)]
+            "--staged", str(staged), "--execute", "--log", str(log_path),
+            *(["--accept-no-linger"] if accept_no_linger else [])]
 
 
 def job_paths(home: Path, card: str, stamp: str) -> "tuple[Path, Path]":
