@@ -303,7 +303,7 @@ def cmd_env(args: argparse.Namespace) -> int:
             print(f"⚠️ MACF: path resolution failed: {e}", file=sys.stderr)
             return str(p) if p else "(not set)"
 
-    from macf.utils.paths import detect_cc_binary
+    from macf.utils.paths import detect_cc_binary, detect_cc_running, describe_cc_running
     _detect_cc_binary = detect_cc_binary
 
     # Get agent identity
@@ -374,6 +374,7 @@ def cmd_env(args: argparse.Namespace) -> int:
         },
         "cc_internal": {
             "cc_binary": _detect_cc_binary(),
+            "cc_running": describe_cc_running(_detect_cc_binary(), detect_cc_running()),
             "cc_project_dir": resolve_path(cc_project_dir),
             "cc_tasks_dir": resolve_path(cc_tasks_dir)
         },
@@ -464,7 +465,8 @@ def cmd_env(args: argparse.Namespace) -> int:
         print()
 
         print("Claude Code Internal")
-        print(f"  CC Binary:      {data['cc_internal']['cc_binary']}")
+        print(f"  CC Installed:   {data['cc_internal']['cc_binary']}")
+        print(f"  CC Running:     {data['cc_internal']['cc_running']}")
         print(f"  CC Project Dir: {data['cc_internal']['cc_project_dir']}")
         print(f"  CC Tasks Dir:   {data['cc_internal']['cc_tasks_dir']}")
         print()
@@ -1458,7 +1460,7 @@ def cmd_config_init(args: argparse.Namespace) -> int:
 
     print(f"\n✅ Configuration created: {config_file}")
     print(f"   Agent moniker: {moniker}")
-    print(f"   Logging paths: /tmp/macf_hooks/{moniker}/{{session_id}}/")
+    print(f"   Logging paths: <session root>/{moniker}/{{session_id}}/ (your runtime directory; MACF_SESSION_ROOT moves it)")
 
     return 0
 

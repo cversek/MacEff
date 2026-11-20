@@ -364,7 +364,7 @@ by querying that log.
 - This is the sole source of truth — there is nothing else to keep in sync
 
 **Hook logs:**
-- `/tmp/macf/{agent_id}/{session_id}/hooks/hook_events.log`
+- `<session root>/{agent_id}/{session_id}/hooks/hook_events.log` (the session root is `sessions` in your runtime directory: `$XDG_RUNTIME_DIR`, else `/tmp/macf-<uid>`)
 - Lifetime: Session temporary
 - Contains: JSONL structured execution logs (forensic/debugging record, not state)
 
@@ -373,7 +373,7 @@ by querying that log.
 Hooks create sidecar files for consciousness awareness:
 
 ```
-/tmp/macf/{agent_id}/{session_id}/hooks/
+<session root>/{agent_id}/{session_id}/hooks/
 └── hook_events.log
 ```
 
@@ -434,7 +434,7 @@ macf_tools hooks install --local
 macf_tools events query
 
 # Fix permissions on temp directory
-chmod -R u+w /tmp/macf/
+chmod -R u+w "${XDG_RUNTIME_DIR:-/tmp/macf-$(id -u)}/sessions"
 ```
 
 ### Cycle Counter Incorrect
@@ -549,7 +549,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
 
 **Created:**
 - The agent's event log (append-only; queried via `macf_tools events`) - all hook-observed facts
-- `/tmp/macf/{agent_id}/{session_id}/hooks/` - Hook logs and sidecars
+- `<session root>/{agent_id}/{session_id}/hooks/` - Hook logs and sidecars
 
 **Read:**
 - `.maceff/config.json` - Agent configuration
