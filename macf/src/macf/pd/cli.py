@@ -108,7 +108,7 @@ def add_pd_parser(sub) -> None:
     unit = pd_sub.add_parser(
         "unit", help="start, stop or restart one declared unit, and say the state it reached "
                      "(persistent_layer 1.4)")
-    unit_sub = unit.add_subparsers(dest="unit_act", required=True)
+    unit_sub = unit.add_subparsers(dest="unit_act")
     for act, what in (("start", "start a unit that isn't running"),
                       ("stop", "stop a unit now; it is not started again by a daemon restart "
                                "when the operator asked for the stop"),
