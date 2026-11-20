@@ -68,8 +68,9 @@ def stack(tmp_path, monkeypatch):
         return 0
 
     real_which = agent_stack.shutil.which
+    # claude and the channel's console script are on the PATH Claude Code starts with, wherever the suite runs.
     monkeypatch.setattr(agent_stack.shutil, "which",
-                        lambda name: "/fake/bin/claude" if name == "claude" else real_which(name))
+                        lambda name: f"/fake/bin/{name}" if name in ("claude", "maceff-channel") else real_which(name))
     monkeypatch.setattr(agent_stack.subprocess, "run", fake_claude)
     monkeypatch.setattr(agent_stack, "legacy_harness_live", lambda ctx: None)
     # No live session and no daemon unless a test says so: nothing reads the real host.
@@ -1024,3 +1025,45 @@ def test_a_session_unit_with_its_own_command_is_still_told_it_lacks_the_login():
                                     "--project-dir", "/h/work", "--no-proxy"],
                         "environment": {"HOME": "/h"}}]}
     assert dd.drift(older, default) == ["the session unit's environment lacks USER, LOGNAME"]
+
+
+def _channel_command_missing(monkeypatch):
+    """The channel's console script isn't on the PATH, as with a virtual-environment install."""
+    was = agent_stack.shutil.which
+    monkeypatch.setattr(agent_stack.shutil, "which", lambda name: None if name == "maceff-channel" else was(name))
+
+
+def test_a_channel_command_that_does_not_resolve_refuses_the_step_and_names_it(stack, monkeypatch):
+    """The plugin runs maceff-channel by that bare name; with a venv install Claude Code can't find it and says
+    only 'Executable not found in $PATH: stdio' at every session start. The step installs the plugin, then says
+    which command is missing and what to do, rather than reporting done (#1051)."""
+    _channel_command_missing(monkeypatch)
+    rc, results = _run(stack)
+    channel = _by_step(results)["channel"]
+    assert channel.status == REFUSED, channel
+    assert "maceff-channel" in channel.detail and "not on PATH" in channel.detail
+    assert "Executable not found in $PATH: stdio" in channel.detail and "ln -s" in channel.detail
+    assert any(c[1:3] == ["plugin", "install"] for c in stack.claude), "the plugin is still installed"
+    assert rc == 1
+
+
+def test_an_installed_channel_is_refused_too_when_its_command_does_not_resolve(stack, monkeypatch):
+    _run(stack)
+    _channel_command_missing(monkeypatch)
+    rc, results = _run(stack)
+    channel = _by_step(results)["channel"]
+    assert channel.status == REFUSED and "maceff-channel" in channel.detail and "already" not in channel.status
+
+
+def test_a_plan_says_the_channel_command_will_not_resolve(stack, monkeypatch):
+    _channel_command_missing(monkeypatch)
+    rc, results = _run(stack, "--plan")
+    assert _by_step(results)["channel"].status == REFUSED
+    assert stack.claude == [], "a plan runs nothing"
+
+
+def test_the_plugin_runs_the_command_the_step_checks():
+    """The step checks CHANNEL_COMMAND; the plugin's own file has to run that name."""
+    from macf.channels.marketplace import CHANNEL_COMMAND, packaged_marketplace
+    mcp = json.loads((packaged_marketplace() / "plugins" / "maceff-channel" / ".mcp.json").read_text())
+    assert [s["command"] for s in mcp["mcpServers"].values()] == [CHANNEL_COMMAND]
