@@ -1360,6 +1360,19 @@ def _identity(me: int, owner: int, transcript: Path) -> dict:
             "owner": owner, "transcript": str(transcript)}
 
 
+def _own_card() -> Optional[str]:
+    """This agent's calling card, which the Remote Control events carry so the outside watch can
+    tell them from another agent's (#883); None, said on stderr, when the home has none to read."""
+    from ..pd.names import agent_card
+    from ..utils.paths import find_agent_home
+    try:
+        return agent_card(find_agent_home())
+    except Exception as e:  # noqa: BLE001 - no card must not stop the monitor that beats for the session
+        print(f"⚠️ MACF: transcript monitor: no calling card ({type(e).__name__}); Remote Control "
+              f"disconnects are recorded without one, and the outside watch won't match them", file=sys.stderr)
+        return None
+
+
 def _session_monitor(transcript: Path, poll_interval: float, owner: int, session_env,
                      extra_pass: Optional[Callable[[], None]] = None):
     """The monitor for one session's transcript, and the session unit's heartbeat it ticks.
@@ -1380,7 +1393,14 @@ def _session_monitor(transcript: Path, poll_interval: float, owner: int, session
     from ..pd.liveness import session_heartbeat_from_env
     from ..permission_watch import SessionDialogs
     from .rewind import RewindWatch
+    from .remote_control import RemoteControlWatch
     auth = AuthWatch()
+    remote_control = RemoteControlWatch(_own_card())
+    try:
+        remote_control.prime(transcript)
+    except OSError as e:
+        print(f"⚠️ MACF: could not read the transcript's tail, so a Remote Control disconnect already open "
+              f"will not have its remedy recorded: {e}", file=sys.stderr)
     rewinds = RewindWatch()
     try:
         rewinds.prime(transcript)
@@ -1398,7 +1418,7 @@ def _session_monitor(transcript: Path, poll_interval: float, owner: int, session
 
     monitor = TranscriptMonitor(transcript, poll_interval=poll_interval, owner=owner,
                                 on_pass=on_pass if passes else None,
-                                detectors=list(DEFAULT_DETECTORS) + [auth, rewinds])
+                                detectors=list(DEFAULT_DETECTORS) + [auth, rewinds, remote_control])
     return monitor, heartbeat
 
 
