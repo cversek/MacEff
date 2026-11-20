@@ -135,3 +135,14 @@ def test_a_reason_is_required(daemon, capsys):
     assert run("stop", "worker") == 2
     assert "--reason" in capsys.readouterr().err
     assert daemon.asked == []
+
+
+def test_server_is_asked_only_when_the_flag_is_given(daemon):
+    """The whole restart that ends the tmux server is its own explicit ask (#1055)."""
+    daemon.statuses = [status(worker=("running", 11)), status(worker=("running", 12))]
+    assert run("restart", "worker", "--reason", "a server-side change", "--server") == 0
+    assert acts(daemon)[0]["server"] is True
+    daemon.asked.clear()
+    daemon.statuses = [status(worker=("running", 11)), status(worker=("running", 12))]
+    assert run("restart", "worker", "--reason", "plain") == 0
+    assert "server" not in acts(daemon)[0]

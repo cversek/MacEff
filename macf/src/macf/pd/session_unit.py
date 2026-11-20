@@ -256,6 +256,22 @@ def _tmux(tmux: str, env: Mapping[str, str], *args: str) -> subprocess.Completed
     return subprocess.run([tmux, *args], env=dict(env), capture_output=True, text=True, timeout=15)
 
 
+def attached_clients(agent: str, base: Optional[Path] = None) -> int:
+    """How many tmux clients are attached to the agent's session unit server, 0 when none or when no server
+    answers (a missing server has nothing to end)."""
+    env = client_environment(agent, base)
+    if env is None:
+        return 0
+    try:
+        done = subprocess.run(["tmux", "list-clients", "-F", "#{client_pid}"], env=env, capture_output=True,
+                              text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"⚠️ MACF: session unit: could not count the clients attached to {agent}'s tmux server "
+              f"({type(e).__name__}); a restart is not held back for them", file=sys.stderr)
+        return 0
+    return len(done.stdout.split()) if done.returncode == 0 else 0
+
+
 def _announce(append: Callable[[str, dict], bool], agent: str, pane_pid: Optional[int],
               respawns: int, launch: Optional[str] = None) -> None:
     """Say which pane runs the session now: the daemon's word that this wrapper can respawn it,
@@ -435,8 +451,8 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
         try:
             status = server.wait(timeout=0.2)
             break
-        except subprocess.TimeoutExpired:
-            pass  # noqa: MACEFF003 - the server runs on; the loop only looks for a respawn ask
+        except subprocess.TimeoutExpired:  # noqa: S110 - the server runs on; the loop only looks for a respawn ask
+            pass
         if not respawn_asked:
             continue
         respawn_asked.clear()

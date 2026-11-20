@@ -211,3 +211,50 @@ def test_a_session_slow_to_die_still_gets_its_restart_in_the_pane(make_core, wra
                  timeout=10)
     assert core.pid("session") == pid, "the unit was restarted whole before the wrapper could answer"
     assert not any("did not restart in its pane" in s.get("reason", "") for s in _states())
+
+
+# ---- a whole restart that would end the server refuses while a client is attached (#1055) -------
+
+def test_a_whole_restart_refuses_while_a_client_is_attached_and_nothing_is_signalled(make_core, wrapper):
+    """A wrapper that never announced is restarted whole, which ends the tmux server and every client attached
+    to it: an iTerm2 window in control mode crashes. The restart refuses and says how to ask for it."""
+    core = make_core([_session(wrapper, announce=False)], hosted=list)
+    core.attached_clients = lambda card: 2
+    core.boot()
+    assert drive(core, lambda: core.state("session") == "running")
+    pid = core.pid("session")
+    with pytest.raises(pd_core.RestartRefused, match="2 clients attached.*--server"):
+        core.restart("session", pd_core.POLICY, "asked from the tray")
+    assert core.pid("session") == pid and core.state("session") == "running"
+
+
+def test_the_server_flag_asks_for_the_whole_restart_with_a_client_attached(make_core, wrapper):
+    core = make_core([_session(wrapper, announce=False)], hosted=list)
+    core.attached_clients = lambda card: 1
+    core.boot()
+    assert drive(core, lambda: core.state("session") == "running")
+    pid = core.pid("session")
+    core.restart("session", pd_core.POLICY, "a change that lives in the server", server=True)
+    assert drive(core, lambda: core.state("session") == "running" and core.pid("session") not in (None, pid))
+
+
+def test_a_restart_in_the_pane_is_never_refused_for_an_attached_client(make_core, wrapper):
+    """It keeps the server and the client, which is what it is for."""
+    core = make_core([_session(wrapper)], hosted=list)
+    core.attached_clients = lambda card: 3
+    core.boot()
+    assert drive(core, lambda: core.state("session") == "running")
+    pid = core.pid("session")
+    assert drive(core, lambda: _announced(pid))
+    core.restart("session", pd_core.POLICY, "asked from the tray")
+    assert drive(core, lambda: any(c["after"] == "the session restarted in its pane" for c in _carried()))
+
+
+def test_with_no_client_attached_a_whole_restart_goes_ahead_as_before(make_core, wrapper):
+    core = make_core([_session(wrapper, announce=False)], hosted=list)
+    core.attached_clients = lambda card: 0
+    core.boot()
+    assert drive(core, lambda: core.state("session") == "running")
+    pid = core.pid("session")
+    core.restart("session", pd_core.POLICY, "asked from the tray")
+    assert drive(core, lambda: core.state("session") == "running" and core.pid("session") not in (None, pid))
