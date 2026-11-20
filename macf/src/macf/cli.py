@@ -27,6 +27,7 @@ from .utils import (
     get_macf_package_path,
     get_hooks_dir,
     get_total_context,
+    get_total_context_and_source,
 )
 from .modes import detect_auto_mode
 from .utils.environment import current_model, detect_model
@@ -356,7 +357,8 @@ def cmd_env(args: argparse.Namespace) -> int:
             "model": (_model := current_model())["id"],
             "model_display": _model["display"],
             "model_source": _model["source"],
-            "context_window": f"{get_total_context():,}",
+            "context_window": f"{(_window := get_total_context_and_source())[0]:,}",
+            "context_window_source": _window[1],
             "python_path": sys.executable,
             "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
         },
@@ -446,7 +448,9 @@ def cmd_env(args: argparse.Namespace) -> int:
         print(f"  Claude Code:  {data['versions']['claude_code']}")
         _v = data['versions']
         print(f"  Model:        {_v.get('model_display', _v['model'])} ({_v['model']}, from {_v.get('model_source', '?')})")
-        print(f"  Context:      {data['versions']['context_window']} tokens")
+        from macf.utils.tokens import UNVERIFIED_CONTEXT_NOTE
+        _assumed = f" ({UNVERIFIED_CONTEXT_NOTE})" if _v.get("context_window_source") == "default" else ""
+        print(f"  Context:      {data['versions']['context_window']} tokens{_assumed}")
         print(f"  Python:       {data['versions']['python_path']} ({data['versions']['python_version']})")
         print()
 
@@ -1935,6 +1939,22 @@ def cmd_harness_attach(args: argparse.Namespace) -> int:
         if decision.exit_code is not None:
             print(decision.message, file=sys.stderr)
             return decision.exit_code
+        from .utils.attach_dispatch import control_refusal
+        refused = control_refusal(decision.argv)
+        if refused and getattr(args, "control", None) is not True and entry is not None:
+            # Control mode came from the declared default (`control: true`), not from the flag: this terminal
+            # can't use it, so attach plainly and say so, rather than refuse a command that asked for nothing.
+            print(f"⚠️ MACF: {refused.split(' Attach')[0]} Attaching without it.", file=sys.stderr)
+            decision = decide(entry, remotes, control=False, read_only=getattr(args, "read_only", False),
+                              plan_for_home=plan_attach_for_home, plan_for_card=plan_attach_for_card,
+                              has_session=has_session, environment=client_environment)
+            if decision.exit_code is not None:
+                print(decision.message, file=sys.stderr)
+                return decision.exit_code
+            refused = control_refusal(decision.argv)
+        if refused:
+            print(f"❌ {refused}", file=sys.stderr)
+            return 2
         env = decision.env or dict(os.environ)
         for command in decision.before:
             # Naming the window is a courtesy: a tmux that refuses it still attaches.
@@ -3723,11 +3743,16 @@ def cmd_policy_recommend(args: argparse.Namespace) -> int:
         return 1
 
     from .utils.manifest import policies_newer_than_index
-    from .utils.paths import find_agent_home
-    stale = policies_newer_than_index(find_agent_home() / ".maceff" / "policy_index.lance")
+    from .utils.recommend import get_policy_db_path
+    stale = policies_newer_than_index(get_policy_db_path())
     if stale:
+        # The warm search service keeps the index it loaded, so a rebuild alone leaves it
+        # answering from the old one (#898).
         print(f"⚠️ {len(stale)} policies changed since the index was built ({', '.join(stale[:3])}"
-              f"{', ...' if len(stale) > 3 else ''}). Rebuild: macf_tools policy build_index", file=sys.stderr)
+              f"{', ...' if len(stale) > 3 else ''}). Rebuild: macf_tools policy build_index, then "
+              f"restart the search service, which keeps the index it loaded: where a primal daemon "
+              f"runs it, restart its `search` unit (the tray's Restart); otherwise "
+              f"macf_tools search-service stop, then start", file=sys.stderr)
 
     # Try warm service first (fast path)
     result = query_search_service("policy", query, limit=limit, timeout_s=1.0)
@@ -3846,6 +3871,14 @@ def cmd_policy_build_index(args: argparse.Namespace) -> int:
             db_path=db_path,
             extra_roots=extra_roots,
         )
+        # What the index holds, by content, so its staleness check isn't fooled by a checkout's
+        # new mtimes (#898). An index built from a named directory holds something other than the
+        # agent's roots, so it records nothing, and its staleness is judged by time.
+        if not args.policies_dir:
+            from .utils.manifest import record_index_build
+            if not record_index_build(db_path):
+                print("⚠️ MACF: the index's contents could not be recorded in the event log; "
+                      "its staleness will be judged by time", file=sys.stderr)
 
         # Output
         if json_output:
