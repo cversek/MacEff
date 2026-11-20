@@ -329,6 +329,42 @@ def detect_harness_compaction(entry: dict) -> Optional[Detection]:
     })
 
 
+#: The client writes this row when Remote Control drops: "Remote Control disconnected — <reason> — run
+#: /login" (or "— run /remote-control to reconnect"). No row is written when it comes back, so this
+#: records the drop only; what clears it is decided where the state is kept (#883). A client that
+#: rewords the row will stop matching here first; check this text against the new version.
+_RC_DISCONNECT = "Remote Control disconnected"
+_RC_REMEDY = re.compile(r"run\s+(/[a-z-]+)")
+# Reason texts seen in transcripts, matched case-insensitively. The login ones are fixed by /login at the
+# terminal; the network ones by /remote-control; the last two mean the session ended elsewhere.
+_RC_KINDS = (
+    ("login", ("oauth token unavailable", "no oauth token", "login expired", "jwt refresh failed")),
+    ("network", ("could not reach the remote control server", "couldn't reconnect")),
+    ("ended_elsewhere", ("no longer reports this session", "ended or archived from another device")),
+)
+
+
+def detect_remote_control_disconnect(entry: dict) -> Optional[Detection]:
+    """A Remote Control disconnect: its reason, the kind of reason and the remedy the row names (#883)."""
+    if entry.get("type") != "system" or entry.get("subtype") != "informational":
+        return None
+    content = entry.get("content")
+    if not isinstance(content, str) or not content.startswith(_RC_DISCONNECT):
+        return None
+    parts = [p.strip() for p in content.split("—")]
+    reason = parts[1] if len(parts) > 1 else ""
+    remedy = _RC_REMEDY.search(parts[-1]) if len(parts) > 2 else None
+    lowered = reason.lower()
+    kind = next((k for k, needles in _RC_KINDS if any(n in lowered for n in needles)), "unknown")
+    return Detection("remote_control_disconnected", {
+        "kind": kind,
+        "reason": reason,
+        "remedy": remedy.group(1) if remedy else None,
+        "timestamp": entry.get("timestamp", ""),
+        "detector": "transcript_monitor",
+    })
+
+
 def detect_compaction_ask(entry: dict) -> Optional[Detection]:
     """A /compact the operator typed: the client records it as a command row.
 
@@ -443,6 +479,7 @@ DEFAULT_DETECTORS: List[Detector] = [
     detect_mid_turn_enqueue,
     detect_compact_boundary,
     detect_harness_compaction,
+    detect_remote_control_disconnect,
     detect_compaction_ask,
     detect_api_error,
     detect_context_collapse,
