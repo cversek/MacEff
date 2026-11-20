@@ -142,3 +142,95 @@ def test_the_bound_leaves_room_for_the_largest_audio_in_base64():
     import base64
     largest = base64.b64encode(b"\0" * service.MAX_AUDIO_BYTES)
     assert len(largest) < service.MAX_REQUEST_BYTES
+
+
+class _Stream:
+    """A connection that delivers *total* bytes in 4 KB chunks, then a newline."""
+
+    def __init__(self, total):
+        self.left = total
+
+    def recv(self, n):
+        if self.left <= 0:
+            return b"\n"
+        self.left -= n
+        return b"A" * n
+
+
+def test_a_long_request_line_is_read_in_linear_time():
+    """Ira's review of #1082: joining bytes on every chunk copies the buffer each time, so 80 MB took
+    109 s to read and a caller sending slowly could hold the service for minutes. In place it is
+    milliseconds; the budget here is wide, and the quadratic version is far past it."""
+    import time
+    start = time.monotonic()
+    assert len(service.read_request_line(_Stream(40 * 1024 * 1024))) > 40 * 1024 * 1024
+    assert time.monotonic() - start < 5
+
+
+def test_the_clients_reply_is_read_with_the_same_bound(monkeypatch):
+    monkeypatch.setattr(service, "MAX_REQUEST_BYTES", 10_000)
+
+    class Sock:
+        def settimeout(self, t): pass
+        def connect(self, a): pass
+        def sendall(self, b): pass
+        def close(self): pass
+        def recv(self, n): return b"A" * n
+    monkeypatch.setattr(service.socket, "socket", lambda *a, **k: Sock())
+    with pytest.raises(service.RequestTooLarge):
+        service.send_request({"action": "transcribe"})
+
+
+def _transcribe_args(path):
+    from argparse import Namespace
+    return Namespace(file=str(path), initial_prompt=None, conditioned=False, language=None, engine=None,
+                     model=None, correct=False, json_output=False)
+
+
+class _Sock:
+    """A stand-in socket that answers with *reply*, forever when *endless*."""
+
+    def __init__(self, reply=b"", endless=False):
+        self.reply, self.endless = reply, endless
+
+    def settimeout(self, t): pass
+    def connect(self, a): pass
+    def sendall(self, b): pass
+    def close(self): pass
+
+    def recv(self, n):
+        if self.endless:
+            return b"A" * n
+        out, self.reply = self.reply[:n], self.reply[n:]
+        return out
+
+
+@pytest.mark.parametrize("sock", [_Sock(endless=True), _Sock(reply=b"this is not json\n"), _Sock(reply=b"\xff\xfe\n")],
+                         ids=["endless reply", "reply that is not JSON", "reply that is not UTF-8"])
+def test_a_service_that_answers_wrongly_sends_the_command_to_direct_transcription(sock, monkeypatch, tmp_path, capsys):
+    """Ira's review of the bounded client read: the command falls back only on OSError, so a reply that
+    broke the protocol crashed it instead of falling back."""
+    from types import SimpleNamespace
+
+    from macf import cli
+    audio = tmp_path / "clip.oga"
+    audio.write_bytes(b"x")
+    monkeypatch.setattr(service, "MAX_REQUEST_BYTES", 10_000)
+    monkeypatch.setattr(service, "is_service_running", lambda: True)
+    monkeypatch.setattr(service.socket, "socket", lambda *a, **k: sock)
+    direct = []
+    monkeypatch.setattr("macf.voice.transcribe.transcribe", lambda **kw: direct.append(kw) or SimpleNamespace(
+        text="heard directly", engine="e", model="m", duration_audio=1.0, duration_transcribe=1.0,
+        to_dict=lambda: {}))
+    assert cli.cmd_voice_transcribe(_transcribe_args(audio)) == 0
+    assert len(direct) == 1, "the command did not fall back to direct transcription"
+    captured = capsys.readouterr()
+    assert "falling back to direct transcription" in captured.err and "heard directly" in captured.out
+
+
+def test_the_status_call_reports_a_service_that_answers_wrongly_instead_of_raising(monkeypatch):
+    """The other caller of send_request: a squatted port's endless reply reads as not responding."""
+    monkeypatch.setattr(service, "MAX_REQUEST_BYTES", 10_000)
+    monkeypatch.setattr(service, "is_service_running", lambda: True)
+    monkeypatch.setattr(service.socket, "socket", lambda *a, **k: _Sock(endless=True))
+    assert service.get_service_status() == {"running": False, "error": "PID exists but service not responding"}
