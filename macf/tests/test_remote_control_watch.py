@@ -220,3 +220,46 @@ def test_the_watch_alerts_again_for_a_disconnect_newer_than_its_open_stretch(tmp
     watch.run_pass(config, now=NOW + 720, probe=None)
     text = sink.read_text()
     assert text.count("RC-DISCONNECTED") == 2 and "second" in text
+
+
+def _write(path, entries, tail=""):
+    path.write_text("".join(json.dumps(e) + "\n" for e in entries) + tail)
+
+
+def test_a_watch_started_after_a_disconnect_still_records_the_remedy(tmp_path):
+    """The session monitor starts at the end of the transcript, so a daemon restart between a disconnect
+    and its /login left the new watch with nothing open: no remedy was recorded and the outside watch
+    reported the disconnect for the rest of its lookback (THM's review of #1054)."""
+    transcript = tmp_path / "t.jsonl"
+    _write(transcript, [_disconnect(NO_TOKEN)])
+    watch_ = RemoteControlWatch(CARD)
+    watch_.prime(transcript)
+    assert watch_.state() is not None and watch_.state()["kind"] == "login"
+    done = watch_(LOGIN_OK)
+    assert done is not None and done.event_name == EVENT_REMEDIED and watch_.state() is None
+
+
+def test_priming_reports_nothing_and_a_remedied_disconnect_leaves_nothing_open(tmp_path):
+    transcript = tmp_path / "t.jsonl"
+    _write(transcript, [_disconnect(NO_TOKEN), LOGIN_OK], tail='{"type": "system", "subt')   # a half-written last line
+    watch_ = RemoteControlWatch(CARD)
+    assert watch_.prime(transcript) == 2
+    assert watch_.state() is None
+
+
+def test_priming_reads_only_the_end_of_a_large_transcript(tmp_path):
+    transcript = tmp_path / "t.jsonl"
+    _write(transcript, [_disconnect(NO_TOKEN)] + [_typed("x" * 200)] * 50)
+    watch_ = RemoteControlWatch(CARD)
+    watch_.prime(transcript, max_bytes=2000)      # the disconnect is before what is read
+    assert watch_.state() is None
+
+
+def test_every_session_monitor_primes_its_watch_from_the_transcript(tmp_path, monkeypatch):
+    from macf.transcript_monitor import daemon
+    transcript = tmp_path / "session.jsonl"
+    _write(transcript, [_disconnect(NO_TOKEN)])
+    monkeypatch.setattr(daemon, "_own_card", lambda: CARD)
+    monitor, _ = daemon._session_monitor(transcript, 1.0, 0, session_env={})
+    watches = [d for d in monitor.detectors if isinstance(d, RemoteControlWatch)]
+    assert watches[0].state() is not None

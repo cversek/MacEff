@@ -1396,6 +1396,11 @@ def _session_monitor(transcript: Path, poll_interval: float, owner: int, session
     from .remote_control import RemoteControlWatch
     auth = AuthWatch()
     remote_control = RemoteControlWatch(_own_card())
+    try:
+        remote_control.prime(transcript)
+    except OSError as e:
+        print(f"⚠️ MACF: could not read the transcript's tail, so a Remote Control disconnect already open "
+              f"will not have its remedy recorded: {e}", file=sys.stderr)
     rewinds = RewindWatch()
     try:
         rewinds.prime(transcript)

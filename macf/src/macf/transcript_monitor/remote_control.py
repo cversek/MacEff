@@ -21,11 +21,15 @@ What clears which kind:
 The outside watch reads these events and alerts by its own path (``macf.pd.watch``), because the
 channel that broke is the one the operator would have used.
 """
+import json
 import re
+import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Optional
 
 from .daemon import Detection
+from .rewind import PRIME_BYTES
 
 #: The events this detector records.
 EVENT_DISCONNECTED = "remote_control_disconnected"
@@ -108,6 +112,32 @@ class RemoteControlWatch:
     def state(self) -> Optional[Dict[str, Optional[str]]]:
         """The open disconnect, ``{kind, remedy, reason}``, or None."""
         return self._open
+
+    def prime(self, path: Path, max_bytes: int = PRIME_BYTES) -> int:
+        """Learn what the end of an existing transcript says, without recording anything in it.
+
+        The monitor starts at the transcript's end, and the state here is in memory, so a daemon
+        restarted between a disconnect and its remedy would have nothing open and record no remedy:
+        the outside watch would report the disconnect for the rest of its lookback. The earlier
+        daemon recorded the disconnect, so only the state is rebuilt. Returns the lines read."""
+        size = path.stat().st_size
+        with open(path, "rb") as f:
+            start = max(0, size - max_bytes)
+            f.seek(start)
+            data = f.read()
+        lines = data.split(b"\n")
+        if start > 0:
+            lines = lines[1:]      # the first line was cut by the seek
+        read = 0
+        for raw in lines:
+            try:
+                entry = json.loads(raw)
+            except ValueError:  # noqa: S112 - priming only remembers history; the last line is often half-written
+                continue
+            if isinstance(entry, dict):
+                self(entry)          # the detection is dropped: it was recorded when the line was new
+                read += 1
+        return read
 
     def __call__(self, entry: dict) -> Optional[Detection]:
         text = _content(entry)
