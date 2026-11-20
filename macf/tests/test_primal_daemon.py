@@ -206,7 +206,7 @@ def test_clean_parent(make_core, script, tmp_path, monkeypatch):
     own = {"__CF_USER_TEXT_ENCODING"} if sys.platform == "darwin" else set()
     # Beside the declaration, only what the daemon itself says about the unit (11.2): its
     # name and interval. This core has no agent_home placeholder, so no home is added.
-    from_daemon = {"MACF_PD_UNIT", "MACF_PD_LIVENESS_S"}
+    from_daemon = {"MACF_PD_UNIT", "MACF_PD_LIVENESS_S", "MACF_PD_LAUNCH"}   # the last is the digest of this launch (#726)
     assert set(seen["env"]) - own == set(unit.environment) | from_daemon
 
 
@@ -233,7 +233,7 @@ def test_env_is_only_what_the_declaration_says(make_core, script, tmp_path, monk
     never a file a persistent volume carried forward, and never the daemon's own environment.
     Stale env files are planted where a home keeps them, and a stray variable in the daemon's
     environment, and none of them reaches the unit."""
-    from macf.pd.core import ENV_HOME, ENV_INTERVAL, ENV_UNIT
+    from macf.pd.core import ENV_HOME, ENV_INTERVAL, ENV_LAUNCH, ENV_UNIT
     home = tmp_path / "home"
     for stale in (home / ".env", home / ".maceff" / "pd" / "worker.env", home / ".maceff" / "env"):
         stale.parent.mkdir(parents=True, exist_ok=True)
@@ -246,7 +246,7 @@ def test_env_is_only_what_the_declaration_says(make_core, script, tmp_path, monk
     assert drive(core, lambda: dump.exists())
     env = json.loads(dump.read_text())["env"]
     assert env["SETTING"] == "declared"
-    declared = set(unit.environment) | {ENV_UNIT, ENV_INTERVAL, ENV_HOME}
+    declared = set(unit.environment) | {ENV_UNIT, ENV_INTERVAL, ENV_HOME, ENV_LAUNCH}   # the last: the launch's digest (#726)
     assert set(env) - declared <= _INTERPRETER_KEYS, set(env) - declared
     assert "STALE_KEY" not in env and "STRAY_FROM_DAEMON" not in env
 
@@ -1026,16 +1026,121 @@ def test_control_events(tmp_path, script, base, run_daemon):
 
 
 def test_a_request_cannot_claim_an_inside_asker(tmp_path, script, base, run_daemon):
-    """Over the socket the asker is the operator or the declared wind-down. A request that
-    claims the daemon's own policy is refused, and nothing is done (R52)."""
+    """Over the socket the asker is the operator, the agent or the declared wind-down. A request
+    that claims the daemon's own policy is refused, and nothing is done (R52)."""
     daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
     assert wait_for(lambda: unit_state(daemon, "worker") == "running")
 
     reply = ask(daemon, {"op": "stop", "unit": "worker", "reason": "posing as policy",
                          "asked_by": {"kind": "policy"}})
-    assert not reply["ok"] and "operator or the declared wind-down" in reply["error"]
+    assert not reply["ok"] and "the operator, the agent or the declared wind-down" in reply["error"]
     assert unit_state(daemon, "worker") == "running"
     assert all(d["reason"] != "posing as policy" for d in events("pd_control", "worker"))
+
+
+def _stopped_by(make_core, script, asker, peer):
+    """A unit a first daemon ran and *asker* stopped, with the first daemon then gone."""
+    unit = make_unit("worker", script, {})
+    first = make_core([unit])
+    first.boot()
+    assert drive(first, lambda: first.state("worker") == "running")
+    first.stop("worker", asker, "the GPU is wanted", peer=peer)
+    assert drive(first, lambda: first.state("worker") == "stopped")
+    _crash(first)
+    return unit
+
+
+def test_an_operators_stop_holds_across_a_daemon_restart(make_core, script):
+    """The unit the operator stopped is not started again by a restart he didn't connect to it
+    (#1009). It reads stopped with why, and the carried report names it."""
+    unit = _stopped_by(make_core, script, OPERATOR, PEER)
+    starts = states("worker").count("starting")
+
+    second = make_core([unit])
+    second.boot()
+
+    assert second.state("worker") == "stopped" and second.pid("worker") is None
+    assert states("worker").count("starting") == starts
+    assert "held down by the operator since" in events("pd_unit_state", "worker")[-1]["reason"]
+    assert list(events("pd_carried")[-1]["held"]) == ["worker"]
+
+
+def test_the_hold_survives_every_restart_until_a_start_clears_it(make_core, script):
+    unit = _stopped_by(make_core, script, OPERATOR, PEER)
+    for _ in range(2):
+        again = make_core([unit])
+        again.boot()
+        assert again.state("worker") == "stopped"
+        _crash(again)
+
+    again = make_core([unit])
+    again.boot()
+    again.start("worker", OPERATOR, "the GPU is free again", peer=PEER)
+    assert drive(again, lambda: again.state("worker") == "running")
+    pid = again.pid("worker")
+    left = _crash(again)
+    os.killpg(pid, signal.SIGKILL)       # the unit is gone with no stop on record: nothing to adopt
+    left["worker"].wait(timeout=5)
+
+    after = make_core([unit])
+    after.boot()
+    assert drive(after, lambda: after.state("worker") == "running")
+
+
+def test_a_stop_the_operator_did_not_ask_for_is_not_held(make_core, script):
+    """The agent's own stop, or the wind-down's, is not the operator's decision to keep."""
+    for asker in (Asker(kind="agent", card="Tester_abc123"), Asker(kind="wind_down")):
+        unit = _stopped_by(make_core, script, asker, PEER)
+        second = make_core([unit])
+        second.boot()
+        assert drive(second, lambda: second.state("worker") == "running"), asker.kind
+        second.shutdown("the test is over")
+def test_the_agent_may_ask_for_a_unit_act_and_is_recorded_as_the_agent(tmp_path, script, base, run_daemon):
+    """The agent, over the socket from its own command line, may stop and start its own daemon's
+    units (#1007). It is recorded as the agent, beside the process the kernel observed, so an act
+    the agent took is never read back as the operator's (R52)."""
+    daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+    assert wait_for(lambda: unit_state(daemon, "worker") == "running")
+
+    reply = ask(daemon, {"op": "stop", "unit": "worker", "reason": "the agent's own call",
+                         "asked_by": {"kind": "agent", "card": "Tester_abc123"}})
+    assert reply["ok"]
+    assert wait_for(lambda: unit_state(daemon, "worker") == "stopped")
+    control = events("pd_control", "worker")[-1]
+    assert (control["act"], control["asked_by"]["kind"]) == ("stop", "agent")
+    assert control["peer"]["pid"] == os.getpid()
+
+
+def _session_and_service(script):
+    session = make_unit("sess", script, {}, restart="always").model_copy(update={"kind": "session"})
+    return [session, make_unit("worker", script, {})]
+
+
+def test_an_agent_cannot_stop_or_restart_its_own_session_unit(tmp_path, script, base, run_daemon):
+    """inject exit refuses while the client holds unsent feedback drafts or the session has scheduled
+    jobs, and a stop here is a SIGTERM that passes both. So an agent-asked stop or restart of the
+    session unit is refused with a pointer to inject exit, and nothing is done (#1007)."""
+    daemon = run_daemon(make_home(tmp_path, _session_and_service(script)), base)
+    assert wait_for(lambda: unit_state(daemon, "sess") == "running")
+    first = unit_pid(daemon, "sess")
+
+    for op in ("stop", "restart"):
+        reply = ask(daemon, {"op": op, "unit": "sess", "reason": "its own call",
+                             "asked_by": {"kind": "agent", "card": "Tester_abc123"}})
+        assert not reply["ok"] and "inject exit" in reply["error"], op
+    assert unit_state(daemon, "sess") == "running" and unit_pid(daemon, "sess") == first
+    assert all(d["reason"] != "its own call" for d in events("pd_control", "sess"))
+
+
+def test_the_agent_may_still_act_on_a_service_unit_and_the_operator_on_the_session(
+        tmp_path, script, base, run_daemon):
+    daemon = run_daemon(make_home(tmp_path, _session_and_service(script)), base)
+    assert wait_for(lambda: unit_state(daemon, "worker") == "running")
+    assert ask(daemon, {"op": "stop", "unit": "worker", "reason": "a service is the agent's",
+                        "asked_by": {"kind": "agent", "card": "Tester_abc123"}})["ok"]
+    assert wait_for(lambda: unit_state(daemon, "worker") == "stopped")
+    assert ask(daemon, {"op": "restart", "unit": "sess", "reason": "the operator's call",
+                        "asked_by": {"kind": "operator", "card": "Operator_000000"}})["ok"]
 
 
 def test_start_and_restart_over_socket(tmp_path, script, base, run_daemon):
@@ -1402,7 +1507,7 @@ def _child_pid(path):
 
 
 def test_a_stop_reaches_the_units_whole_group(tmp_path, script, make_core):
-    """A stop reaches every process the unit started (persistent_layer 10.2): a child in
+    """A stop reaches every process the unit started (persistent_layer 2.2): a child in
     the unit's group that ignores SIGTERM outlives its leader's exit, and is killed at the
     stop's deadline rather than left running."""
     marker = tmp_path / "child.pid"
@@ -1686,6 +1791,70 @@ def test_a_failed_login_holds_the_session_failed(make_core, script):
     assert states("session").count("starting") == 1
 
 
+def test_a_unit_still_failed_for_its_login_is_recorded_failed_again_each_day(make_core, script):
+    """The failed record is written once, and a unit that beats steadily writes no other state
+    event, so the record can be rotated away or outlive the outside watch's lookback while the
+    process keeps beating, and the watch reads it healthy (#896). The daemon says it again once a
+    day, as the same state of the same process, for as long as the failure lasts."""
+    from macf.pd.core import FAILED_RERECORD_S
+    clock = [1_800_000_000.0]
+    core = make_core([make_unit("session", script, {"auth_failed": LOGIN_EXPIRED})], wall=lambda: clock[0])
+    core.boot()
+    assert drive(core, lambda: core.state("session") == "failed")
+    pid = core.pid("session")
+    once = states("session").count("failed")
+
+    clock[0] += FAILED_RERECORD_S - 60          # not a day yet: nothing more is said
+    assert not drive(core, lambda: states("session").count("failed") > once, timeout=0.5)
+
+    clock[0] += 120                              # a day since it failed
+    assert drive(core, lambda: states("session").count("failed") == once + 1)
+    again = events("pd_unit_state", "session")[-1]
+    assert again["state"] == "failed" and again["pid"] == pid
+    assert again["reason"].startswith(f"authentication failed: {LOGIN_EXPIRED}") and "still failed" in again["reason"]
+
+    assert not drive(core, lambda: states("session").count("failed") > once + 1, timeout=0.5)
+    clock[0] += FAILED_RERECORD_S + 1            # and each day after
+    assert drive(core, lambda: states("session").count("failed") == once + 2)
+    assert core.state("session") == "failed" and core.pid("session") == pid
+    assert states("session").count("starting") == 1
+
+
+def test_the_readout_still_says_when_the_failure_began_after_a_repeat(make_core, script):
+    """A repeat is a new record with a new time, so the readout, which takes how long a unit has been
+    in its state from the newest record, would call a login that failed on Monday failed since today.
+    The repeat carries when the state began, and the readout reads that (#896 review)."""
+    from macf.pd import health
+    from macf.pd.core import FAILED_RERECORD_S
+    began = 1_800_000_000.0
+    clock = [began]
+    core = make_core([make_unit("session", script, {"auth_failed": LOGIN_EXPIRED})], wall=lambda: clock[0])
+    core.boot()
+    assert drive(core, lambda: core.state("session") == "failed")
+    first = events("pd_unit_state", "session")[-1]
+    clock[0] = began + 2 * FAILED_RERECORD_S + 60          # two days on
+    assert drive(core, lambda: events("pd_unit_state", "session")[-1] is not first
+                 and "still failed" in events("pd_unit_state", "session")[-1]["reason"])
+    repeat = events("pd_unit_state", "session")[-1]
+    assert repeat["since"] == began
+    row = health._unit_health("session", {"event": "pd_unit_state", "timestamp": clock[0], "data": repeat},
+                              None, clock[0], lambda pid, start: True)
+    assert row.since == began
+
+
+def test_a_unit_that_is_running_is_not_recorded_again(make_core, script):
+    """Only a failure the watch could lose is repeated: a healthy unit writes no state event
+    however long it runs."""
+    from macf.pd.core import FAILED_RERECORD_S
+    clock = [1_800_000_000.0]
+    core = make_core([make_unit("worker", script, {})], wall=lambda: clock[0])
+    core.boot()
+    assert drive(core, lambda: core.state("worker") == "running")
+    before = len(states("worker"))
+    clock[0] += 3 * FAILED_RERECORD_S
+    assert not drive(core, lambda: len(states("worker")) > before, timeout=0.5)
+
+
 def test_a_daemon_restart_adopts_a_session_failed_for_its_login(make_core, script):
     """The session is still running while it can't authenticate, so a daemon that starts then
     adopts it rather than starting a second session beside it."""
@@ -1702,6 +1871,17 @@ def test_a_daemon_restart_adopts_a_session_failed_for_its_login(make_core, scrip
     assert states("session").count("starting") == 1
     assert drive(second, lambda: second.state("session") == "failed")
 
+
+
+def test_status_says_a_session_failed_for_its_login_and_why(make_core, script):
+    """A session held failed for its login is still running, so its status carries its pid and
+    what the client said: attach reaches it, and pd status names the cause (MacEff #1015)."""
+    unit = make_unit("session", script, {"auth_failed": LOGIN_EXPIRED})
+    core = make_core([unit])
+    core.boot()
+    assert drive(core, lambda: core.state("session") == "failed")
+    status = next(s for s in core.statuses() if s.unit == "session")
+    assert status.pid == core.pid("session") and status.auth_failed == LOGIN_EXPIRED
 
 def test_denied_grant_notice(tmp_path, script, base, run_daemon):
     """MIS-0002-R65 (denied_grant_MUST_raise_notice): a daemon that starts reads the newest
@@ -1740,13 +1920,16 @@ def test_an_untested_newest_probe_speaks_for_the_grants(tmp_path, script, base, 
     assert not [o for o in daemon.notifier.owed.values() if o.source == "pd_grant_denied"]
 
 
-# ---- pacing the keystroke wake (persistent_layer 1.9) ------------------------------------
+# ---- pacing the keystroke wake (persistent_layer 6.9) ------------------------------------
 
 class _NoPane:
     """A pane for a waker that never ticks here: with no mail owed, the notifier types nothing."""
 
     def capture(self):
         return ""
+
+    def width(self):
+        return None
 
     def type(self, text):
         return False

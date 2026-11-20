@@ -329,6 +329,42 @@ def detect_harness_compaction(entry: dict) -> Optional[Detection]:
     })
 
 
+#: The client writes this row when Remote Control drops: "Remote Control disconnected — <reason> — run
+#: /login" (or "— run /remote-control to reconnect"). No row is written when it comes back, so this
+#: records the drop only; what clears it is decided where the state is kept (#883). A client that
+#: rewords the row will stop matching here first; check this text against the new version.
+_RC_DISCONNECT = "Remote Control disconnected"
+_RC_REMEDY = re.compile(r"run\s+(/[a-z-]+)")
+# Reason texts seen in transcripts, matched case-insensitively. The login ones are fixed by /login at the
+# terminal; the network ones by /remote-control; the last two mean the session ended elsewhere.
+_RC_KINDS = (
+    ("login", ("oauth token unavailable", "no oauth token", "login expired", "jwt refresh failed")),
+    ("network", ("could not reach the remote control server", "couldn't reconnect")),
+    ("ended_elsewhere", ("no longer reports this session", "ended or archived from another device")),
+)
+
+
+def detect_remote_control_disconnect(entry: dict) -> Optional[Detection]:
+    """A Remote Control disconnect: its reason, the kind of reason and the remedy the row names (#883)."""
+    if entry.get("type") != "system" or entry.get("subtype") != "informational":
+        return None
+    content = entry.get("content")
+    if not isinstance(content, str) or not content.startswith(_RC_DISCONNECT):
+        return None
+    parts = [p.strip() for p in content.split("—")]
+    reason = parts[1] if len(parts) > 1 else ""
+    remedy = _RC_REMEDY.search(parts[-1]) if len(parts) > 2 else None
+    lowered = reason.lower()
+    kind = next((k for k, needles in _RC_KINDS if any(n in lowered for n in needles)), "unknown")
+    return Detection("remote_control_disconnected", {
+        "kind": kind,
+        "reason": reason,
+        "remedy": remedy.group(1) if remedy else None,
+        "timestamp": entry.get("timestamp", ""),
+        "detector": "transcript_monitor",
+    })
+
+
 def detect_compaction_ask(entry: dict) -> Optional[Detection]:
     """A /compact the operator typed: the client records it as a command row.
 
@@ -443,6 +479,7 @@ DEFAULT_DETECTORS: List[Detector] = [
     detect_mid_turn_enqueue,
     detect_compact_boundary,
     detect_harness_compaction,
+    detect_remote_control_disconnect,
     detect_compaction_ask,
     detect_api_error,
     detect_context_collapse,
@@ -604,7 +641,7 @@ def _monitors_from_proc(proc: Path) -> List[MonitorProcess]:
             if MONITOR_MODULE not in argv:
                 continue
             started = _stat_started((entry / "stat").read_text())
-        except (OSError, ValueError, IndexError):
+        except (OSError, ValueError, IndexError):  # noqa: S112 - a process that ends during the scan, or is not ours to read, is normal on a shared host; a warning for each would flood
             continue  # it ended while we looked, or is not ours to read
         monitor = _monitor_from_argv(int(entry.name), started, argv)
         if monitor is not None:
@@ -629,7 +666,8 @@ def _parse_ps(output: str) -> List[MonitorProcess]:
             continue
         try:
             started = _parse_lstart(" ".join(fields[1:6]))
-        except ValueError:
+        except ValueError as e:
+            print(f"⚠️ MACF: reading the start time of monitor {fields[0]} failed (skipping it): {e}", file=sys.stderr)
             continue
         monitor = _monitor_from_argv(int(fields[0]), started,
                                      head.split() + ["--transcript", transcript.rstrip()])
@@ -1109,7 +1147,8 @@ class TranscriptMonitor:
         return self._fwd_cached
 
     def _detect_rewind(self, current_size: int) -> None:
-        """Check if JSONL was truncated (context rewind)."""
+        """Check if the JSONL got smaller. A Claude Code rewind does not do this: it appends
+        a prompt that branches from an earlier entry, which RewindWatch reports (#1003)."""
         if self.last_file_size > 0 and current_size < self.last_file_size:
             self._emit("context_rewind_detected", {
                 "previous_size": self.last_file_size,
@@ -1193,7 +1232,7 @@ class TranscriptMonitor:
 
                         time.sleep(self.poll_interval)
 
-        except KeyboardInterrupt:
+        except KeyboardInterrupt:  # noqa: S110 - Ctrl-C is the ordinary way this loop ends, and the finally block reports the totals
             # Ordinary shutdown path: the finally block reports the totals.
             pass
         finally:
@@ -1369,12 +1408,22 @@ def _session_monitor(transcript: Path, poll_interval: float, owner: int, session
     It also says when the session waits on a permission dialog (MIS-0002-R21), read from
     the event log for this transcript's session, since the client can't say so while it waits.
     And when it can't authenticate, read from the transcript as it arrives (MIS-0002-R19).
+    And when the session was rewound (#1003): the monitor reads from the end of the file,
+    so the rewind watch first remembers the transcript's tail, or a resume onto an earlier
+    point could not be told.
     *extra_pass* runs on every pass too: a follow-mode monitor's own unit beat and its check
     for a newly announced session.
     """
     from ..pd.liveness import session_heartbeat_from_env
     from ..permission_watch import SessionDialogs
+    from .rewind import RewindWatch
     auth = AuthWatch()
+    rewinds = RewindWatch()
+    try:
+        rewinds.prime(transcript)
+    except OSError as e:
+        print(f"⚠️ MACF: could not read the transcript's tail, so a rewind to before this "
+              f"monitor started will go unreported: {e}", file=sys.stderr)
     heartbeat = session_heartbeat_from_env(environ=session_env,
                                            waiting_on=SessionDialogs(transcript.stem),
                                            auth_failed=auth.state)
@@ -1386,7 +1435,7 @@ def _session_monitor(transcript: Path, poll_interval: float, owner: int, session
 
     monitor = TranscriptMonitor(transcript, poll_interval=poll_interval, owner=owner,
                                 on_pass=on_pass if passes else None,
-                                detectors=list(DEFAULT_DETECTORS) + [auth])
+                                detectors=list(DEFAULT_DETECTORS) + [auth, rewinds])
     return monitor, heartbeat
 
 
@@ -1585,7 +1634,7 @@ class _AnnouncementTail:
                 continue
             try:
                 event = json.loads(line)
-            except ValueError:
+            except ValueError:  # noqa: S112 - a line cut short by an interrupted append; the scan reads on
                 continue
             if event.get("event") == EVENT_SESSION_ANNOUNCED:
                 newest = AnnouncedSession.from_event(event) or newest

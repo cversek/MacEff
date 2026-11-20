@@ -10,7 +10,7 @@ The order of preference, for an agent on this endpoint:
 2. the legacy harness's session, only for an agent that declares no session unit.
 
 A declared session unit that can't be resolved is said, with the reason, and nothing is
-attached: falling back to a name there is exactly what R100 forbids (persistent_layer 4.1).
+attached: falling back to a name there is exactly what R100 forbids (persistent_layer 9.1).
 """
 from __future__ import annotations
 

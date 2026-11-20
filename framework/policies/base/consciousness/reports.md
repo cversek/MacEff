@@ -1,7 +1,8 @@
 # Reports: Project Completion Narratives
 
-**Policy Type**: Consciousness Artifact (Public)
+**Type**: Consciousness Artifact (Public)
 **Scope**: Primary Agents (PA) and Subagents (SA)
+**Status**: ACTIVE
 **Precedence**: Framework Policy (overridden by Project > Personal)
 
 ---

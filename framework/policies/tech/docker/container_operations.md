@@ -417,7 +417,7 @@ CMD ["python", "agent.py"]
 
 ### 4.2 Agent sessions run under their primal daemons
 
-In a MacEff container, start-up gives every agent that isn't vanilla a primal daemon, and the agent's Claude Code session runs as a unit of it, restarted when it ends. A deployment needs no daemon block to get this. It declares one only to change the default, and opts an agent out only with a reason (persistent_layer 10.1). So a deployment doesn't start sessions itself: a Makefile target or a typed command that does would start a second session beside the daemon's. To reach a session, use `macf_tools harness attach`. To see whether it runs, use `macf_tools pd status` as the agent.
+In a MacEff container, start-up gives every agent that isn't vanilla a primal daemon, and the agent's Claude Code session runs as a unit of it, restarted when it ends. A deployment needs no daemon block to get this. It declares one only to change the default, and opts an agent out only with a reason (persistent_layer 2.1). So a deployment doesn't start sessions itself: a Makefile target or a typed command that does would start a second session beside the daemon's. To reach a session, use `macf_tools harness attach`. To see whether it runs, use `macf_tools pd status` as the agent.
 
 ---
 

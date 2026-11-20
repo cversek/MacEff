@@ -88,21 +88,21 @@ def detect_engine():
         try:
             import mlx_whisper
             return "mlx"
-        except ImportError:
+        except ImportError:  # noqa: S110 - not installed is the normal miss; the next engine is probed
             pass
 
     # Linux/other: prefer faster-whisper
     try:
         import faster_whisper
         return "faster-whisper"
-    except ImportError:
+    except ImportError:  # noqa: S110 - not installed is the normal miss; the next engine is probed
         pass
 
     # Universal fallback: openai-whisper
     try:
         import whisper
         return "whisper"
-    except ImportError:
+    except ImportError:  # noqa: S110 - not installed is the normal miss; None is returned if no engine loads
         pass
 
     return None
@@ -140,6 +140,53 @@ def transcribe_mlx(wav_path: str, model: str = "mlx-community/whisper-large-v3-t
         language=result.get("language", language),
         engine="mlx-whisper",
         model=model.split("/")[-1] if "/" in model else model,
+        duration_audio=segments[-1].end if segments else 0.0,
+        duration_transcribe=elapsed,
+    )
+
+
+#: Set once a CPU transcription has worked after the GPU failed, so later calls in this process don't
+#: build the CUDA model and fail on it again (#1024).
+_faster_whisper_cpu_only = False
+
+
+def transcribe_faster_whisper(wav_path: str, model: str = "large-v3-turbo",
+                              language: str = "en", initial_prompt: Optional[str] = None) -> TranscriptResult:
+    """Transcribe using faster-whisper (Linux and containers; the GPU when CUDA loads, else the CPU)."""
+    from faster_whisper import WhisperModel
+
+    kwargs = {"language": language}
+    if initial_prompt:
+        kwargs["initial_prompt"] = initial_prompt
+
+    def decode(device: str, compute_type: str):
+        # The model builds, and the audio decodes lazily as the segments are read. CUDA often fails
+        # only at the first inference, when cuDNN or cuBLAS is loaded, so the read belongs in here.
+        seg_iter, info = WhisperModel(model, device=device, compute_type=compute_type).transcribe(wav_path, **kwargs)
+        return [TranscriptSegment(text=s.text.strip(), start=s.start, end=s.end,
+                                  confidence=1.0 - getattr(s, "no_speech_prob", 0.0))
+                for s in seg_iter], info
+
+    global _faster_whisper_cpu_only
+    t0 = time.time()
+    if _faster_whisper_cpu_only:
+        segments, info = decode("cpu", "int8")
+    else:
+        try:
+            segments, info = decode("cuda", "float16")
+        except (RuntimeError, ValueError) as e:
+            print(f"⚠️ MACF: faster-whisper can't use the GPU ({e}); transcribing on the CPU", file=sys.stderr)
+            segments, info = decode("cpu", "int8")
+            # Remembered only once the CPU worked, so a bad recording doesn't turn the GPU off for good.
+            _faster_whisper_cpu_only = True
+    elapsed = time.time() - t0
+
+    return TranscriptResult(
+        text=" ".join(s.text for s in segments).strip(),
+        segments=segments,
+        language=getattr(info, "language", None) or language,
+        engine="faster-whisper",
+        model=model,
         duration_audio=segments[-1].end if segments else 0.0,
         duration_transcribe=elapsed,
     )
@@ -222,6 +269,14 @@ def transcribe(audio_path: str, engine: Optional[str] = None,
             result = transcribe_mlx(
                 wav_path,
                 model=model or "mlx-community/whisper-large-v3-turbo",
+                language=language,
+                initial_prompt=initial_prompt,
+            )
+        elif engine == "faster-whisper":
+            # detect_engine's choice on Linux; it had no branch here, so every Linux run failed (#1013)
+            result = transcribe_faster_whisper(
+                wav_path,
+                model=model or "large-v3-turbo",
                 language=language,
                 initial_prompt=initial_prompt,
             )

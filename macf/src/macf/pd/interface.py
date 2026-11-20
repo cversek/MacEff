@@ -154,7 +154,7 @@ class Unit(_Closed):
 
     @model_validator(mode="after")
     def _liveness_names_this_unit(self) -> "Unit":
-        # The daemon sets both from the unit itself (persistent_layer 11.2); a declaration may
+        # The daemon sets both from the unit itself (persistent_layer 3.2); a declaration may
         # still state them, but never different, or the unit would beat as another or late.
         env = self.environment
         if "MACF_PD_UNIT" in env and env["MACF_PD_UNIT"] != self.name:
@@ -179,6 +179,23 @@ class Unit(_Closed):
             raise ValueError(f"unknown privacy grant(s) {bad}; known: {', '.join(PRIVACY_GRANTS)}, "
                              f"automation:<bundle id>")
         return v
+
+    @model_validator(mode="after")
+    def _wrapper_outlasts_its_stop_path(self) -> "Unit":
+        # A unit that runs a MacEff wrapper is killed stop_grace_s after its stop. The wrapper
+        # needs a poll to notice the stop and then gives its child a grace, so a shorter unit
+        # grace kills the wrapper first and the child runs on, orphaned (#992, #1001).
+        wrappers = {"macf.pd.watched_unit", "macf.pd.broker_unit"}
+        runs = [b for a, b in zip(self.command, self.command[1:]) if a == "-m" and b in wrappers]
+        if runs:
+            from macf.pd.broker_unit import WRAPPER_UNIT_STOP_GRACE_S
+            if self.stop_grace_s < WRAPPER_UNIT_STOP_GRACE_S:
+                raise ValueError(f"unit {self.name}: runs {runs[0]} with stop_grace_s {self.stop_grace_s:g}; "
+                                 f"declare stop_grace_s: {WRAPPER_UNIT_STOP_GRACE_S:g} or more, since the "
+                                 f"wrapper needs that long to stop its program, and with less the daemon "
+                                 f"kills the wrapper first and leaves the program running "
+                                 f"(persistent_layer 3.2)")
+        return self
 
     @model_validator(mode="after")
     def _session_restarts_always(self) -> "Unit":
@@ -368,7 +385,7 @@ CHANNEL_SUBSCRIBER = "channel"
 
 class StreamGrant(_Closed):
     """A uid other than the agent's own that may subscribe to its event stream, and the sources
-    it may take (MIS-0002-R156 (subscriber_MUST_be_granted_agents); persistent_layer 11.4). Least
+    it may take (MIS-0002-R156 (subscriber_MUST_be_granted_agents); persistent_layer 3.4). Least
     privilege: a tray or a host-wide watch is granted unit states and notices, not tool events."""
 
     uid: int = Field(ge=0)
@@ -445,7 +462,7 @@ class Declaration(_Closed):
       local time and a container usually in UTC, so the same declaration would act at
       different moments.
     - ``stream_grants``: the other uids that may subscribe to the event stream, each with the
-      sources it may take; the agent's own uid needs none (persistent_layer 11.4).
+      sources it may take; the agent's own uid needs none (persistent_layer 3.4).
     - ``operator_uid``: where the operator has an account of its own, as in a container, the
       only uid the daemon takes the event stream's rules from. None: the daemon's own uid, as
       for every control act.
@@ -468,7 +485,7 @@ class Declaration(_Closed):
     #: health (MIS-0004-R31), and which the outside watch reads (R32). None: no broker here.
     mail_sweep_schedule: Optional[str] = None
     #: How long the keystroke wake rests after each wake, until the agent paces it otherwise
-    #: over the control socket (persistent_layer 1.9).
+    #: over the control socket (persistent_layer 6.9).
     wake_refractory_s: float = Field(default=DEFAULT_WAKE_REFRACTORY_S, gt=0, allow_inf_nan=False)
     #: The shortest window a pace may set. Only the declaration sets it, never the socket, and
     #: in a container the declaration is rendered by root. None: no floor.
@@ -648,7 +665,7 @@ EVENT_DAEMON_START = "pd_daemon_start"
 #: ``respawns`` (0 at start). A wrapper that has announced one can restart its session in place,
 #: so the daemon sends it SIGUSR1 rather than restarting the unit whole.
 EVENT_SESSION_PANE = "pd_session_pane"
-#: An operator's rule for the event stream: what its rules in force fold to (persistent_layer 11.4).
+#: An operator's rule for the event stream: what its rules in force fold to (persistent_layer 3.4).
 EVENT_STREAM_RULE = "pd_stream_rule"
 
 
@@ -691,6 +708,11 @@ class UnitState(_Closed):
     #: The host boot this was recorded in (Linux's ``boot_id``), so a later daemon adopts
     #: the pid only within the same boot. None where the platform has no boot id.
     boot_id: Optional[str] = None
+    #: When the state began, in epoch seconds, for a record that repeats a state already recorded
+    #: (a unit still failed for its login, recorded again each day). The readout takes how long a
+    #: unit has been in its state from this when it is present, else from the record's own time,
+    #: so a repeat never makes a failure look as new as the repeat (#896).
+    since: Optional[float] = None
 
 
 class Asker(_Closed):
@@ -701,7 +723,7 @@ class Asker(_Closed):
     (MIS-0002-R127 (harness_compaction_MUST_be_recorded)); ``policy`` for the daemon
     acting on its own declared rules: a unit's restart policy after a failure, the start of
     declared units at boot, and the stops of a shutdown. ``agent`` is the agent itself, over
-    the control socket from its own command line, pacing its wake (persistent_layer 1.9).
+    the control socket from its own command line, pacing its wake (persistent_layer 6.9).
     """
 
     kind: Literal["operator", "wind_down", "policy", "harness", "agent"]
@@ -743,7 +765,7 @@ class Control(_Closed):
 
 
 class WakePaced(_Closed):
-    """The keystroke wake was paced over the control socket (persistent_layer 1.9): written
+    """The keystroke wake was paced over the control socket (persistent_layer 6.9): written
     before the daemon answers, beside the act's ``Control`` record, and read back by the next
     daemon at its start, which re-asserts it. ``refractory_s`` is the window asked for, or None
     to go back to the declared one; ``previous_s`` is the window it replaced."""
@@ -936,7 +958,7 @@ class EntryRemoveRequest(_Closed):
 class EntryEditRequest(_Closed):
     """Change an entry the agent holds: its time, its purpose or its missed-run policy, keeping
     its id. Like making one, it is taken only from the agent's live session, and the operator's
-    consent is the ask prompt on the command (persistent_layer 10.6)."""
+    consent is the ask prompt on the command (persistent_layer 8.1)."""
 
     op: Literal["entry_edit"]
     id: str = Field(pattern=r"^e-[0-9a-f]{12}$")
@@ -963,7 +985,7 @@ class EntryPauseRequest(_Closed):
 class PaceRequest(_Closed):
     """How long the keystroke wake rests after each wake, or None to go back to the declared
     window. The agent paces itself, or the operator paces it; it acts on no unit. No pace goes
-    under the declared floor, which only the declaration sets (persistent_layer 1.9)."""
+    under the declared floor, which only the declaration sets (persistent_layer 6.9)."""
 
     op: Literal["pace"]
     refractory_s: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
@@ -979,7 +1001,7 @@ class PaceRequest(_Closed):
 
 class StreamRuleRequest(_Closed):
     """Silence, unsilence or reroute a source or a subscriber of the event stream, asked by the
-    operator; it takes effect at once and is recorded first (persistent_layer 11.4)."""
+    operator; it takes effect at once and is recorded first (persistent_layer 3.4)."""
 
     op: Literal["stream_rule"]
     act: Literal["silence", "unsilence", "route", "unroute"]
@@ -1005,7 +1027,12 @@ class UnitStatus(_Closed):
     """A unit as the daemon sees it now. ``restart_held_until`` is the end of the quiet
     window, ``HH:MM`` in the declaration's time, that a session's restart waits for,
     asked or due by its policy (MIS-0002-R50 (layer_MUST-NOT_act_in_quiet_window)), so
-    whoever asked for it learns that it waits rather than that it happened."""
+    whoever asked for it learns that it waits rather than that it happened.
+
+    Part of a reply, so like ``Response`` it ignores fields it doesn't know: a newer daemon's
+    status must never stop an older CLI from reading it (MacEff #816, #1015)."""
+
+    model_config = ConfigDict(extra="ignore")
 
     unit: str
     state: State
@@ -1013,6 +1040,9 @@ class UnitStatus(_Closed):
     proc_start: Optional[str] = None
     since: float
     restart_held_until: Optional[str] = None
+    #: What the client said while it can't log in, on a session held failed for its login (MIS-0002-R19
+    #: (auth_failure_MUST_read_failed)). That session still runs, so a person can attach and log in.
+    auth_failed: Optional[str] = None
 
 
 class Response(_Closed):

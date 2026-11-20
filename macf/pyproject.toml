@@ -12,11 +12,11 @@ authors = [{ name = "Craig Versek" }]
 dependencies = [
     "PyYAML>=6.0.0",  # Required for task system YAML parsing
     "pydantic>=2.0.0",  # Core: task/agent/project model validation, imported at CLI startup
-    # Every daemon's event stream is its own MQTT broker (persistent_layer 11.4): the client, and
+    # Every daemon's event stream is its own MQTT broker (persistent_layer 3.4): the client, and
     # the library each daemon makes its own certificate authority and certificate with.
     # mosquitto, the broker itself, is a host package.
     "paho-mqtt>=2.0",
-    "cryptography>=40.0.0",
+    "cryptography>=42.0",  # not_valid_after_utc (pd.broker_defaults) arrived in 42
 ]
 
 [project.optional-dependencies]
@@ -68,7 +68,7 @@ recommend = [
 # classify every message as unverified while appearing to work. A capability
 # that is off is honest; one that is present-but-hollow is not.
 amail = [
-    "cryptography>=40.0.0",  # Ed25519 per-correspondent authorship signing
+    "cryptography>=42.0",  # Ed25519 per-correspondent authorship signing
 ]
 
 [project.scripts]

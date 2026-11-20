@@ -1,12 +1,14 @@
 # EXPERIMENTS
 
+**Type**: Consciousness Development - Public Artifacts
+**Scope**: All agents (PA and SA)
+**Status**: ACTIVE
+
 ## Meta-Policy: Policy Classification
 - **Tier**: RECOMMENDED
-- **Category**: Consciousness Development - Public Artifacts
 - **Version**: 1.1.0
 - **Dependencies**: policy_awareness, observations, reflections
 - **Authority**: MacEff Framework
-- **Status**: ACTIVE
 
 ## Policy Statement
 Agents conduct structured experiments with clear hypotheses, methods, and success criteria to validate assumptions, test new patterns, and systematically expand framework capabilities through empirical investigation.
@@ -1276,7 +1278,7 @@ Failed experiments (REJECTED, INCONCLUSIVE, ABANDONED) are often MORE valuable t
 ✅ User validated
 ✅ Scope definable
 
-ACTION: Create roadmap via /maceff:roadmap:convert_from_experiment
+ACTION: Create roadmap via /maceff-roadmap-convert-from-experiment
 ```
 
 **Missing Validation** → Continue Experimenting:
@@ -1553,9 +1555,9 @@ Experiment → MISSION conversion complete.
 **Task Structure Created**:
 - MISSION pinned with roadmap path
 - [N] phase tasks expanded
-- Ready for /maceff:task:start when you authorize
+- Ready for /maceff-task-start when you authorize
 
-**Next Step**: Review roadmap, then authorize start with `/maceff:task:start [MISSION]`
+**Next Step**: Review roadmap, then authorize start with `/maceff-task-start [MISSION]`
 
 **Important**: Do NOT begin implementation until you explicitly authorize. Roadmap drafted, awaiting your strategic approval.
 ```

@@ -1,9 +1,10 @@
 # Autonomous Operation Policy
 
+**Type**: Operations
+**Scope**: All agents (PA and SA) capable of extended autonomous operation
+**Status**: ACTIVE
 **Version**: 1.9
 **Tier**: CORE
-**Category**: Operations
-**Status**: ACTIVE
 **Updated**: 2026-10-04
 
 ---
@@ -622,11 +623,11 @@ The checkpoint and the reflection are written wherever steps 1 to 3 end; the las
 
 | Step | Skill | Why it comes here |
 |------|-------|-------------------|
-| 1 | `/maceff:learnings:curate` | First, while the cycle's incidents are fresh; later steps cite what it writes. |
+| 1 | `/maceff-learnings-curate` | First, while the cycle's incidents are fresh; later steps cite what it writes. |
 | 2 | `/maceff-ideas-curate` | After the learnings, so an idea can be the mechanism that would prevent a failure a learning has just named. |
 | 3 | `/maceff-knowledge-web-curate` | Optional: run it only if the context left when this step is reached is above CL15. It links what steps 1 and 2 wrote, so skipping it costs least when they carry their own wiki-links. |
-| 4 | `/maceff:ccp` | After curation, so the checkpoint can point at what curation produced. |
-| 5 | `/maceff:jotewr` | Last, with the whole cycle in view: 5k tokens on a 1M window, 2k on 200K. |
+| 4 | `/maceff-ccp` | After curation, so the checkpoint can point at what curation produced. |
+| 5 | `/maceff-jotewr` | Last, with the whole cycle in view: 5k tokens on a 1M window, 2k on 200K. |
 
 The CL15 condition and the reflection sizes (5k tokens on a 1M window, 2k on 200K) are operator settings, set in 2026-10 and confirmed by the operator, as quoted on the pull request that added this sentence. The condition protects steps 4 and 5, which on one measured 1M deployment took about five CL points between them with policies read by section. An automatic wind-down on a 1M window starts at CL10, so step 3 runs only when the operator starts the sequence earlier.
 
@@ -731,13 +732,17 @@ matches. A dialog can still open for other reasons, and when
 `permissions.deny_under_full_autonomy` is true (default false;
 `MACF_DENY_UNDER_FULL_AUTONOMY` overrides it), the PermissionRequest hook denies it at
 once, with a reason, and records `permission_auto_denied` in the event log. It applies
-in AUTO_MODE when the operator is away (USER_IDLE or USER_REMOTE) or a sprint or play
-time is in active scope.
+in AUTO_MODE when the operator is away: USER_REMOTE, or USER_IDLE, which begins once
+`MACF_USER_IDLE_TIMEOUT_MINS` pass without a message from them.
 
 - **AUTO_MODE alone does not trigger it.** Operators stay in AUTO_MODE while attending,
   and then a dialog is fine.
-- **The state is derived.** There is no flag to arm or forget: the modes and the scope
-  decide, and if they can't be read the dialog stays up.
+- **Neither does a sprint or play time.** An operator present during one answers its
+  dialogs. The dialog stays up until they do, or until the idle timeout says they've gone
+  (the repo owner, 2026-11-09, after a sprint's dialogs were denied with him at the
+  keyboard).
+- **The state is derived.** There is no flag to arm or forget: the modes decide,
+  and if they can't be read the dialog stays up.
 - **The default permission mode is exempt**, because nearly every write prompts there
   and denying would block the agent's own work. A mode the client doesn't report is
   treated the same way.

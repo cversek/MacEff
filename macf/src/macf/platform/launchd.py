@@ -180,7 +180,7 @@ def install_plan(card: str, program_argv: List[str], home: str, log_dir: str, ui
     label it has loaded, and ``kickstart -k`` restarts a job from the definition read at its
     bootstrap, not from the plist on disk. So the job is booted out first, then bootstrapped
     from the new plist. The boot-out ends the daemon; ``AbandonProcessGroup`` keeps its units
-    running, and the daemon the bootstrap starts adopts them (persistent_layer 12.6).
+    running, and the daemon the bootstrap starts adopts them (persistent_layer 1.6).
     """
     for sp in socket_paths:
         check_socket_path(sp)
@@ -311,9 +311,16 @@ def render_tray_launch_agent(program_argv: List[str], home: str, log_dir: str) -
 
 
 def tray_install_plan(program_argv: List[str], home: str, log_dir: str, uid: int) -> List[Step]:
-    """What installing the tray does, in order, without doing it."""
+    """What installing the tray does, in order, without doing it.
+
+    The job is booted out first, going on when nothing is loaded, because launchd refuses to
+    bootstrap a label it has loaded: without this a second install wrote the new plist, failed
+    at the bootstrap, and left the old job running with the old arguments (#749)."""
     path, data = render_tray_launch_agent(program_argv, home, log_dir)
-    return [Step("write", path=path, content=data),
+    return [Step("launchctl", argv=launchctl_argv("bootout", TRAY_LABEL, uid), not_loaded_ok=True),
+            # bootout returns while the job is still stopping; a bootstrap before it's gone fails.
+            Step("unloaded", argv=launchctl_argv("print", TRAY_LABEL, uid), wait_s=RELOAD_WAIT_S),
+            Step("write", path=path, content=data),
             Step("launchctl", argv=launchctl_argv("bootstrap", TRAY_LABEL, uid, plist_path=path))]
 
 
