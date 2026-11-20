@@ -14548,8 +14548,8 @@ def _build_parser() -> argparse.ArgumentParser:
     kg_query.add_argument("--min-idf", type=float, default=None, metavar="T",
                           help="admit a neighbour only through a concept this specific (default: chosen by knowledge eval)")
     kg_query.add_argument("--since", metavar="DATE|Nd",
-                          help="only nodes dated on or after this (2026-09-01, or 7d, 12h); a node whose name "
-                               "carries no date is left out and counted")
+                          help="only nodes dated on or after this day (2026-09-01, or 7d; an age is cut to the day); "
+                               "a node whose name carries no date is left out and counted")
     kg_query.add_argument("--recent", action="store_true",
                           help="order the results newest first instead of by match score")
     kg_query.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")

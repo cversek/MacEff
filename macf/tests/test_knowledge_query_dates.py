@@ -70,3 +70,16 @@ def test_recent_orders_newest_first_and_puts_the_undated_last(monkeypatch):
 def test_a_bad_since_is_refused(monkeypatch, capsys):
     rc, _ = _run(monkeypatch, since="last tuesday")
     assert rc == 2
+
+
+def test_the_text_output_says_what_since_left_out_and_how_recent_orders(monkeypatch):
+    kg = _web()
+    monkeypatch.setattr(knowledge_web, "query_knowledge_web", partial(query_knowledge_web, kg=kg))
+    args = Namespace(term=["topic"], like=None, any_term=False, min_idf=0.0, node_class=None,
+                     json_output=False, since="2026-11-01", recent=True)
+    out = io.StringIO()
+    with redirect_stdout(out):
+        assert cmd_knowledge_query(args) == 0
+    text = out.getvalue()
+    assert "since 2026-11-01: 1 undated result left out" in text
+    assert "ordered newest first, not by score" in text

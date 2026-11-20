@@ -982,6 +982,11 @@ def format_query_result(result: Dict[str, Any]) -> str:
         f"with IDF ≥ {result.get('min_idf', DEFAULT_MIN_IDF)}",
         "",
     ]
+    if result.get("since"):
+        n = result.get("undated_left_out", 0)
+        lines.insert(2, f"   since {result['since']}: {n} undated result{'s' if n != 1 else ''} left out")
+    if result.get("ordered"):
+        lines.insert(2, f"   ordered {result['ordered']}, not by score")
 
     if result["nodes"]:
         lines.append("📌 Matched:")
