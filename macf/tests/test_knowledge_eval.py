@@ -210,3 +210,16 @@ def test_held_runs_go_through_the_real_event_log_and_a_failed_append_refuses(cor
     monkeypatch.setattr(agent_events_log, "append_event", lambda *a, **k: False)
     with pytest.raises(ke.EvalRefused, match="could not record knowledge_eval_held_run"):
         ke.evaluate(corpus, ["idf"], sources=["xref"], which="held", boot=10)
+
+
+def test_an_orphan_artifact_is_not_a_query_and_the_chart_says_how_many_were_left_out(log):
+    """An artifact outside the web can't be a --like query, so it can't raise from one (#1059); it
+    is left out of the queries and counted."""
+    snap = _snapshot()
+    orphans = [k for k in list(snap["nodes"])[:3]]
+    for k in orphans:
+        snap["nodes"][k]["in_web"] = False
+    out = ke.evaluate(ke.Corpus(snap, "f" * 64), ["random", "like"], sources=["xref"], **log.kw(), boot=50)
+    info = out["chart"]["sources"]["xref"]
+    assert info["orphan_queries"] == len(orphans)
+    assert "outside the web" in ke.format_report(out)

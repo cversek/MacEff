@@ -507,10 +507,15 @@ def evaluate(corpus: Corpus, rankers: Sequence[str], sources: Sequence[str] = LA
     labelled, split_ids = {}, {}
     for s in sources:
         rel, unresolved = labels_for(corpus, s, index_text)
+        # An artifact outside the web can't be a --like query and can't be a target, so it is left
+        # out as a query and counted, not raised on (#1059). The doctor's unreachable count is the same set.
+        orphans = [q for q in rel if q not in corpus.web_set]
+        rel = {q: v for q, v in rel.items() if q in corpus.web_set}
         dev, held = split(rel, seed)
         labelled[s], split_ids[s] = rel, (dev, held)
         chart["sources"][s] = {"queries": len(rel), "pairs": sum(len(v) for v in rel.values()),
-                               "unresolved": unresolved, "dev": len(dev), "held": len(held)}
+                               "unresolved": unresolved, "dev": len(dev), "held": len(held),
+                               "orphan_queries": len(orphans)}
         if s == "same_subject" and not index_text:
             chart["sources"][s]["note"] = "no learnings index in this snapshot"
     sealed, held_runs = seal_state(events(), seed)
@@ -584,8 +589,10 @@ def format_report(out: dict) -> str:
                                                       for s, n in by.items()))
     for s, info in c["sources"].items():
         extra = f", {info['note']}" if info.get("note") else ""
+        left_out = (f", {info['orphan_queries']} left out as outside the web"
+                    if info.get("orphan_queries") else "")
         lines.append(f"   {s}: {info['queries']} queries, {info['pairs']} pairs, {info['unresolved']} unresolved, "
-                     f"{info['dev']} dev, {info['held']} held{extra}")
+                     f"{info['dev']} dev, {info['held']} held{left_out}{extra}")
     for s, by in out["results"].items():
         lines.append(f"\n{s}")
         lines.append(f"   {'ranker':<10} {'MRR':>22} {'nDCG@10':>22} {'R@50':>22} {'returned':>9}")

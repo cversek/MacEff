@@ -1,0 +1,3 @@
+### Fixed
+
+- **`knowledge eval` no longer stops with a traceback when a labelled artifact is outside the web** (`knowledge_eval.py`, #1059): the `like` ranker asked the web for an orphan, which names no node, and raised. An artifact outside the web can't be a query or a target, so it is now left out of the queries and counted: the chart carries `orphan_queries` per source and the report says how many were left out. On a corpus with orphans the dev and held splits are drawn from the artifacts in the web only, so a held set sealed before this change may read as changed since sealing, which the report already says when a corpus grows.
