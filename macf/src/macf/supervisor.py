@@ -527,16 +527,31 @@ def _record_keys_sent(text: str, kind: str, tmux_session: str) -> None:
               f"will read as the operator's typing: {e}", file=sys.stderr)
 
 
-#: Dialogs the client shows in place of exiting, by text on its screen. Each needs a person:
-#: answering one by keystroke would pick a menu entry nobody has read, and "exit and stop tasks"
-#: drops the session's schedules silently (#854). Only wording seen on a real screen belongs here.
-EXIT_DIALOGS = {"Background work is running": "its 'Background work is running' dialog"}
+#: Dialogs the client shows in place of exiting: a title, the menu lines that go with it, and how to
+#: name it. Each needs a person: answering one by keystroke would pick a menu entry nobody has read,
+#: and "exit and stop tasks" drops the session's schedules silently (#854). The title alone isn't
+#: enough, since the agent's own conversation is on the screen and may quote it: a dialog is its
+#: title and at least one of its menu lines together. Only wording seen on a real screen belongs here.
+EXIT_DIALOGS = {"Background work is running": (
+    ("Exit and stop tasks", "Move to background and exit", "Stay"),
+    "its 'Background work is running' dialog")}
 #: How long, and how often, the screen is read after /exit is typed.
 EXIT_WATCH_S = 3.0
 EXIT_WATCH_STEP_S = 0.5
 
 
-def _watch_exit(target: str, cmd: str) -> int:
+def _dialog_on(screen: Optional[str]) -> Optional[str]:
+    """The name of the exit dialog *screen* shows, or None: its title with at least one of its
+    menu lines, so a conversation that merely quotes the title is not mistaken for it."""
+    if not screen:
+        return None
+    for title, (menu, name) in EXIT_DIALOGS.items():
+        if title in screen and any(line in screen for line in menu):
+            return name
+    return None
+
+
+def _watch_exit(target: str, cmd: str, before: Optional[str] = None) -> int:
     """After *cmd* (/exit or /quit) is typed, say what is known about it, and no more.
 
     The keystrokes going in are not the client exiting. A client that stopped on one of
@@ -545,6 +560,8 @@ def _watch_exit(target: str, cmd: str) -> int:
     a command that runs inside the session ends with it. So the message names what does confirm
     the exit, the session unit's restart (#854).
     """
+    # A dialog already on the screen before the keys went in isn't the answer to them.
+    already = _dialog_on(before)
     polls = int(EXIT_WATCH_S / EXIT_WATCH_STEP_S)
     for poll in range(polls + 1):
         screen = capture_pane(target)
@@ -552,12 +569,12 @@ def _watch_exit(target: str, cmd: str) -> int:
             print(f"[inject] {cmd} was typed, but the screen can't be read, so whether the client "
                   f"exited is unknown.", file=sys.stderr)
             break
-        for marker, name in EXIT_DIALOGS.items():
-            if marker in screen:
-                print(f"[inject] {cmd} was typed, but the client stopped on {name} and has not "
-                      f"exited. It stays there until a person answers it; typing into it from here "
-                      f"would pick a menu entry no one has read.", file=sys.stderr)
-                return 1
+        name = _dialog_on(screen)
+        if name is not None and name != already:
+            print(f"[inject] {cmd} was typed, but the client stopped on {name} and has not "
+                  f"exited. It stays there until a person answers it; typing into it from here "
+                  f"would pick a menu entry no one has read.", file=sys.stderr)
+            return 1
         if poll < polls:
             time.sleep(EXIT_WATCH_STEP_S)
     print(f"[inject] {cmd} was typed; the client's exit is not confirmed by this. It exits when its "
@@ -648,9 +665,10 @@ def send_slash_to_self(command: str, target: str = "", then: Optional[str] = Non
                   f"draft: ask them to send or clear it (autonomous_operation 5.4), then run "
                   f"this again.", file=sys.stderr)
         return 1
+    before = capture_pane(own) if cmd in ("/exit", "/quit") else None
     rc = send_keys(own, [cmd], enter=True, kind="inject")
     if rc == 0 and cmd in ("/exit", "/quit"):
-        rc = _watch_exit(own, cmd)
+        rc = _watch_exit(own, cmd, before)
     if rc == 0:
         # A queued /compact is only submitted when the turn ends, and the Stop
         # gates exist to refuse that. Arm one passage, only after delivery and
