@@ -1038,6 +1038,63 @@ def test_a_request_cannot_claim_an_inside_asker(tmp_path, script, base, run_daem
     assert all(d["reason"] != "posing as policy" for d in events("pd_control", "worker"))
 
 
+def _stopped_by(make_core, script, asker, peer):
+    """A unit a first daemon ran and *asker* stopped, with the first daemon then gone."""
+    unit = make_unit("worker", script, {})
+    first = make_core([unit])
+    first.boot()
+    assert drive(first, lambda: first.state("worker") == "running")
+    first.stop("worker", asker, "the GPU is wanted", peer=peer)
+    assert drive(first, lambda: first.state("worker") == "stopped")
+    _crash(first)
+    return unit
+
+
+def test_an_operators_stop_holds_across_a_daemon_restart(make_core, script):
+    """The unit the operator stopped is not started again by a restart he didn't connect to it
+    (#1009). It reads stopped with why, and the carried report names it."""
+    unit = _stopped_by(make_core, script, OPERATOR, PEER)
+    starts = states("worker").count("starting")
+
+    second = make_core([unit])
+    second.boot()
+
+    assert second.state("worker") == "stopped" and second.pid("worker") is None
+    assert states("worker").count("starting") == starts
+    assert "held down by the operator since" in events("pd_unit_state", "worker")[-1]["reason"]
+    assert list(events("pd_carried")[-1]["held"]) == ["worker"]
+
+
+def test_the_hold_survives_every_restart_until_a_start_clears_it(make_core, script):
+    unit = _stopped_by(make_core, script, OPERATOR, PEER)
+    for _ in range(2):
+        again = make_core([unit])
+        again.boot()
+        assert again.state("worker") == "stopped"
+        _crash(again)
+
+    again = make_core([unit])
+    again.boot()
+    again.start("worker", OPERATOR, "the GPU is free again", peer=PEER)
+    assert drive(again, lambda: again.state("worker") == "running")
+    pid = again.pid("worker")
+    left = _crash(again)
+    os.killpg(pid, signal.SIGKILL)       # the unit is gone with no stop on record: nothing to adopt
+    left["worker"].wait(timeout=5)
+
+    after = make_core([unit])
+    after.boot()
+    assert drive(after, lambda: after.state("worker") == "running")
+
+
+def test_a_stop_the_operator_did_not_ask_for_is_not_held(make_core, script):
+    """The agent's own stop, or the wind-down's, is not the operator's decision to keep."""
+    for asker in (Asker(kind="agent", card="Tester_abc123"), Asker(kind="wind_down")):
+        unit = _stopped_by(make_core, script, asker, PEER)
+        second = make_core([unit])
+        second.boot()
+        assert drive(second, lambda: second.state("worker") == "running"), asker.kind
+        second.shutdown("the test is over")
 def test_the_agent_may_ask_for_a_unit_act_and_is_recorded_as_the_agent(tmp_path, script, base, run_daemon):
     """The agent, over the socket from its own command line, may stop and start its own daemon's
     units (#1007). It is recorded as the agent, beside the process the kernel observed, so an act
