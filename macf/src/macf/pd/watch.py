@@ -363,6 +363,9 @@ def check_remote_control(card: str, event: Optional[dict], now: float) -> Findin
 #: and the poller reads silent. The plugin's own heartbeat is the evidence, nothing added to it.
 POLLER_SILENT_S = 120.0
 TELEGRAM_STATE_ENV = "TELEGRAM_STATE_DIR"
+#: The source named when the directory comes from the login's own ``.claude/settings.json``, which Claude Code
+#: reads for every agent on the login: the one place a directory is named and still shared.
+LOGIN_SETTINGS_SOURCE = "settings.json of the login (shared by every agent on it)"
 
 
 def declares_telegram(declaration: "interface.Declaration") -> bool:
@@ -424,19 +427,27 @@ def telegram_state_dir(home: Optional[Path] = None, project_dir: Optional[Path] 
     said so (#1069). An isolated seat sets ``TELEGRAM_STATE_DIR`` for the plugin, and the process
     running this check never sees it, so it is read where the session gets it: the settings of the
     session's project directory (``.claude/settings.local.json``, then ``.claude/settings.json``), then
-    the agent home's where that is another directory, then the session unit's declared environment,
-    then ``<login home>/.claude/channels/telegram``, the plugin's default. This process's own
+    the agent home's where that is another directory, then the login's own ``.claude/settings.json``
+    (which every agent on the login reads, so it is named as shared), then the session unit's declared
+    environment, then ``<login home>/.claude/channels/telegram``, the plugin's default. This process's own
     environment is not a source: a session started by the daemon doesn't inherit it."""
     is_home = home is not None and project_dir is not None and Path(home).resolve() == Path(project_dir).resolve()
     places = [(Path(project_dir), "the home" if is_home else "the session's project directory")] \
         if project_dir is not None else []
     if home is not None and not is_home:
         places.append((Path(home), "the home"))
+    login_place = Path(login_home) if login_home is not None else Path.home()
     for place, label in places:
         for name in ("settings.local.json", "settings.json"):
             found = _settings_state_dir(place / ".claude" / name)
             if found:
-                return Path(found).expanduser(), f"{name} of {label}"
+                # The login's own settings.json is read by every agent on the login, wherever it is found.
+                shared = name == "settings.json" and place.resolve() == login_place.resolve()
+                return Path(found).expanduser(), LOGIN_SETTINGS_SOURCE if shared else f"{name} of {label}"
+    if all(login_place.resolve() != place.resolve() for place, _label in places):
+        found = _settings_state_dir(login_place / ".claude" / "settings.json")
+        if found:
+            return Path(found).expanduser(), LOGIN_SETTINGS_SOURCE
     declared = (unit_env or {}).get(TELEGRAM_STATE_ENV)
     if declared:
         if home is not None:
