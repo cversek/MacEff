@@ -63,7 +63,8 @@ def _serviced_since(duty: Duty, since: datetime) -> bool:
         try:
             if datetime.fromisoformat(u.at) >= since:
                 return True
-        except ValueError:
+        except ValueError as e:
+            print(f"⚠️ MACF: duty update time {u.at!r} parse failed (update not counted as a service): {e}", file=sys.stderr)
             continue
     return False
 
@@ -147,7 +148,7 @@ def _due_now_cached(at: datetime) -> List[Dict[str, Any]]:
         if (cached.get("root") == str(root) and cached.get("mtime") == mtime
                 and 0 <= at.timestamp() - cached.get("at", 0) < NAG_CACHE_TTL_S):
             return cached["due_now"]
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError):  # noqa: S110 - a missing or unreadable cache only costs the rebuild below
         pass
     due = _due_now(_store(None), at)
     try:
