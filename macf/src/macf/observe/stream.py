@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import re
 import socket
+import sys
 import time
 from typing import Callable, Dict, Iterator, Optional, Tuple
 
@@ -119,7 +120,8 @@ def rows_from(path, offset: int) -> Iterator[Tuple[int, dict]]:
             pos += len(raw)
             try:
                 row = json.loads(raw)
-            except ValueError:
+            except ValueError as e:
+                print(f"⚠️ MACF: reading a transcript row failed (row skipped, not sent to the onlooker): {e}", file=sys.stderr)
                 continue
             if isinstance(row, dict):
                 yield pos, row
