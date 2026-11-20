@@ -127,9 +127,8 @@ def build(home: Path, phrases: List[str], models: List[str], vocabulary: Optiona
         raise ValueError("give one --model for each --phrase, in the same order")
     if vocabulary is None and voice is not None:
         vocabulary = voice.transcription_prompt
-    if not sys.platform.startswith("linux"):
-        raise RuntimeError("this platform has no capture backends yet; docs/VOICE_PORTING.md says what to write (MIS-0008 R14)")
-    from macf.voice.capture.linux import LinuxLockState, OverlayIndicator, PipeWireAudio
+    from macf.voice.capture import platform
+    here = platform.backends()
     tally = Tally()
     log = logger(tally, out)
     members = []
@@ -140,8 +139,8 @@ def build(home: Path, phrases: List[str], models: List[str], vocabulary: Optiona
         members.append(AgentBinding(agent=agent, wake_phrase=phrase, detector_bar=detector.threshold,
                                     detector=PeakReporting(detector, phrase, detector.threshold, log)))
 
-    unit = CaptureUnit(CaptureConfig(agent=card, live_text=True, stream_after_s=3.0), members=members, audio=PipeWireAudio(), lock=LinuxLockState(),
-                       indicator=OverlayIndicator(), triggers=NoKeys(), gate=SileroGate(),
+    unit = CaptureUnit(CaptureConfig(agent=card, live_text=True, stream_after_s=3.0), members=members, audio=here["audio"], lock=here["lock"],
+                       indicator=here["indicator"], triggers=NoKeys(), gate=SileroGate(),
                        **transcription(vocabulary),
                        deliver=printer(tally, out), log=log, show_words=True)
     listening = ", ".join(f'"{m.wake_phrase}" (bar {m.detector_bar:.2f})' for m in members)

@@ -60,16 +60,46 @@ def stop(home: Path) -> int:
     return dropped
 
 
-def pronunciations(home: Path) -> Dict[str, str]:
-    path = pronounce_path(home)
+def accent_path(home: Path) -> Path:
+    """Respellings that give the voice an accent: kept apart from the plain ones so they can be switched off."""
+    return state.voice_dir(home) / "speech" / "accent.json"
+
+
+def accent_off_path(home: Path) -> Path:
+    return state.voice_dir(home) / "speech" / "accent_off"
+
+
+def accent_on(home: Path) -> bool:
+    """Whether the accent respellings are applied; on until the operator switches them off."""
+    return not accent_off_path(home).exists()
+
+
+def set_accent(home: Path, on: bool) -> None:
+    path = accent_off_path(home)
+    if on:
+        path.unlink(missing_ok=True)
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+
+
+def _table(path: Path) -> Dict[str, str]:
     if not path.exists():
         return {}
     try:
         table = json.loads(path.read_text())
     except ValueError as e:
-        print(f"⚠️ MACF: voice: {path} is not readable JSON, so no words are respelled: {e}", file=sys.stderr)
+        print(f"⚠️ MACF: voice: {path} is not readable JSON, so its words are not respelled: {e}", file=sys.stderr)
         return {}
     return {str(k): str(v) for k, v in table.items()}
+
+
+def pronunciations(home: Path, accent: Optional[bool] = None) -> Dict[str, str]:
+    """The respellings to speak with: the plain ones, and over them the accent's while it is on."""
+    table = _table(pronounce_path(home))
+    if accent_on(home) if accent is None else accent:
+        table.update(_table(accent_path(home)))
+    return table
 
 
 class WorkerLock:
