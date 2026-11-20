@@ -3,7 +3,7 @@
 **Type**: Development Infrastructure
 **Scope**: All agents (PA and SA)
 **Status**: ACTIVE (successor to todo_hygiene.md)
-**Version**: 1.4
+**Version**: 1.5
 
 ---
 
@@ -119,9 +119,9 @@ Task management policy governs the use of Claude Code native Task* tools (TaskCr
 - Under whose identity is a close-out posted, what must its body pass, and when is it not posted?
 
 **7 Archive Protocol**
-- How do I archive completed tasks?
-- How does multi-repo archiving work?
-- What is cascade behavior?
+- When is a task archived rather than completed or deleted?
+- What does `task archive` change, record and report, and how is it undone?
+- How does an archived subtree show in `task tree`, `--succinct`, `--all` and `--archived`?
 
 **8 Grant System (Protection)**
 - What operations require grants?
@@ -821,7 +821,7 @@ The agent ALWAYS has visibility into CA refs via enhanced `task list` display.
 macf_tools task start #67     # → in_progress (records started_breadcrumb)
 macf_tools task pause #67     # → pending (for temporary pause)
 macf_tools task complete #67  # → completed (mandatory --report)
-# task archive is RETIRED — use `task hide-completed` to declutter; see §7
+macf_tools task archive #67 --reason "..."  # → archived, with its subtree (see §7)
 ```
 
 **Why Lifecycle Commands**: Status transitions are **consciousness events**, not raw data mutations. Each transition:
@@ -902,7 +902,7 @@ macf_tools task note <task_id> "message"
 
 **Why Notes Matter**:
 - **Forensic Recovery**: Post-compaction context restoration relies on task notes trail
-- **User Visibility**: Notes appear in `task tree --verbose`, giving user insight into progress
+- **User Visibility**: Notes are counted on each task's line in `task tree`, listed with `-v` and shown whole with `-vv`, giving user insight into progress
 - **Handoff Context**: If task is delegated or resumed later, notes preserve decision rationale
 - **Completion Reports**: Notes inform comprehensive `--report` text at task completion
 
@@ -1126,37 +1126,60 @@ Completing a GH_PR task reads the pull request's terminal state from GitHub and 
 
 ---
 
-## 7 Archive Protocol — RETIRED
+## 7 Archive Protocol
 
-**The `task archive` / `task restore` / `task archived` trio is retired.** All
-three fail closed (exit `2`) and print a deprecation notice; none performs
-archiving, restoring, or listing.
-
-**Why it was retired.** `task archive` printed a ✅ success line while archiving
-nothing — the task stayed live. A subcommand that reports success for an
-operation it did not perform is the exact failure mode this policy exists to
-prevent, so rather than repair an unwanted feature it was failed closed. `restore`
-(restored *from* an archive) and `archived` (listed archives) were both premised on
-`archive` producing real archives; with no supported way to produce one, they were
-retired in the same move rather than left as paths into dead machinery. The
-subcommands still *resolve* (they were kept as self-explaining stubs, not removed)
-so existing muscle memory meets an explanation instead of an "invalid choice"
-error.
-
-**Use instead — to declutter the task tree:**
+**Archiving puts work down without finishing it here**: it moved to another
+agent, was abandoned, or belongs to a project that ended. It is not completion
+(nothing was delivered) and not deletion (the record stays).
 
 ```bash
-macf_tools task hide-completed   # dot-prefix completed task files (hidden from CC scanner)
-macf_tools task unhide-all       # reverse it
+macf_tools task archive 96 121 --reason "owned by another agent from 2026-11-13" --dry-run
+macf_tools task archive 96 121 --reason "owned by another agent from 2026-11-13"
+macf_tools task unarchive 121
 ```
 
-Hiding is reversible, writes nothing it cannot undo, and never claims a state
-change it did not make — the property the archive command violated.
+**What it does.** Each named task and, unless `--no-cascade`, every descendant
+gets status `archived`, whatever its status was. Each records an `archive`
+update carrying the reason, the breadcrumb and the status it had, and the MTMD
+`archived` flag is set. Archived tasks leave sprint scope (the output names
+them). A task an open role duty tracks is named, so the duty's owner can
+re-point it. One `task_archived` event records the call. `--reason` is required:
+a reader who finds an archived open task is owed the why.
 
-**Durable history** does not depend on archiving: with the **home store**
-(`task_store.mode: "home"`, §0.1) task files are project-scoped and survive
-fork/rewind/compaction in place, so there is nothing an archive step needs to
-rescue.
+**What it reports.** Counts come from reading each task back after the write:
+archived, already archived, failed. A write that did not stick is named by task
+id and the command exits `1`. `--dry-run` lists every task it would touch and
+changes none.
+
+**Reversal.** `task unarchive ID` puts each archived task back at the status
+recorded when it was archived. With cascade (the default) it restores the
+descendants archived by the same call as the named task, identified by the
+call's one `archived_at` stamp; a descendant put down earlier, on its own, stays
+archived and is named in the output. A task carrying only the legacy MTMD flag
+was never moved to `archived`, so unarchiving it clears the flag and leaves its
+status as it is. Archiving an already-archived task changes nothing, so its
+recorded prior status survives.
+
+**How it shows.** In `task tree`, an archived subtree is one 📦 line with a count
+of the archived tasks beneath it; an open task left under an archived parent
+(with `--no-cascade`) is still drawn below that line. `--succinct` draws no
+archived work. `--all` draws it expanded and dimmed; `--archived` draws only
+archived tasks and the ancestors that lead to them. `task list` hides archived
+tasks unless `--all` or `--archived`.
+
+**No copy is made.** Archives used to be copied into `task_archives/`. With the
+home store (§0.1) every task file stays where it is, so a copy could only
+drift; the archive is the status, the update and the event.
+
+**History.** The first `task archive` was retired on 2026-08-06 because it
+printed a ✅ success line while archiving nothing. The present command is held
+to the opposite (`tests/test_task_archive.py` plants that defect and requires a
+nonzero exit naming the task). `task restore` and `task archived list` stay
+retired: they point at `task unarchive` and `task tree --archived`.
+
+**Hiding is a different thing.** `task hide-completed` and `task unhide-all`
+rename completed task files in a legacy store so Claude Code's scanner skips
+them; they change no status.
 
 ---
 
@@ -1293,7 +1316,8 @@ macf_tools task metadata add #67 label "v0.4.0"          # Add metadata tags
 macf_tools task start #67              # pending → in_progress
 macf_tools task pause #67              # in_progress → pending
 macf_tools task complete #67 --report "..." # → completed (report mandatory)
-# task archive is RETIRED — use `task hide-completed`; see §7
+macf_tools task archive #67 --reason "..."  # → archived, with its subtree (§7)
+macf_tools task unarchive #67              # archived → the status it had
 ```
 
 **Why Lifecycle Commands**:
@@ -1305,7 +1329,8 @@ Status transitions are **consciousness events**, not raw data mutations. Each li
 | `task start` | → `in_progress` | `started_breadcrumb` | Marks when work began |
 | `task pause` | → `pending` | Update entry added | Correction only (see below) |
 | `task complete` | → `completed` | `completion_breadcrumb` | Requires `--report` |
-| ~~`task archive`~~ | RETIRED | — | Fails closed; use `task hide-completed` (§7) |
+| `task archive` | → `archived` | `archive` update with reason and prior status | Requires `--reason`; cascades; read back (§7) |
+| `task unarchive` | → prior status | `unarchive` update | Reverses `task archive` (§7) |
 
 **`task pause` — Corrections Only**:
 
@@ -1336,7 +1361,7 @@ macf_tools task complete #67 --report "Implemented feature X. No difficulties. C
 ### 9.4 Hide & Delete
 
 ```bash
-macf_tools task hide-completed                # RETIRED task archive's replacement; see §7
+macf_tools task hide-completed                # hide completed files from CC's scanner (no status change)
 macf_tools task unhide-all                    # reverse hide-completed
 macf_tools task delete #67                    # Delete (HIGH grant required)
 ```
@@ -1398,7 +1423,7 @@ macf_tools task note #67 "Investigated root cause, found in create.py"
 macf_tools task note #67 "Fix applied, awaiting user verification"
 ```
 
-Notes appear in `task tree --verbose` output and provide lightweight progress documentation.
+Notes are counted on each task's line in `task tree`, listed (truncated) with `-v` and shown in full with `-vv`; they provide lightweight progress documentation.
 
 ### 9.7 Dependency Management
 
@@ -1419,7 +1444,9 @@ macf_tools task unblocked-by #68 #67   # Remove blocked-by
 macf_tools task tree                   # Default: from sentinel #000
 macf_tools task tree #67               # From specific task
 macf_tools task tree --succinct        # Compact one-line display
-macf_tools task tree --verbose         # Full details with notes and reports
+macf_tools task tree                   # Notes counted; no completion reports; plan lines for top-level tasks and GH issues/PRs only
+macf_tools task tree -v                # Notes, plans and completion reports listed, truncated
+macf_tools task tree -vv               # Everything in full, wrapped to 80% of the terminal
 macf_tools task tree --loop            # Live monitoring (refreshes)
 ```
 
@@ -1443,7 +1470,7 @@ macf_tools task tree --loop            # Live monitoring (refreshes)
 - **Fix**: Archive completed hierarchies before cleanup
 
 **❌ Direct status editing**:
-- **Fix**: Use lifecycle commands (`task start`, `task pause`, `task complete`, `task archive`) - direct editing is blocked
+- **Fix**: Use lifecycle commands (`task start`, `task pause`, `task complete`, `task archive`, `task unarchive`) - direct editing is blocked
 
 ---
 

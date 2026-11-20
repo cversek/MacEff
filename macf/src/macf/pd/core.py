@@ -900,6 +900,11 @@ class Core:
         if r.proc is None:
             self._spawn(r)
 
+    def is_session(self, unit: str) -> bool:
+        """Whether *unit* is the declared session unit; False for any other, and for one not declared."""
+        r = self._units.get(unit)
+        return r is not None and r.spec.kind == "session"
+
     def state_of(self, unit: str) -> Optional[str]:
         """A declared unit's state now; None for a unit not declared."""
         r = self._units.get(unit)
