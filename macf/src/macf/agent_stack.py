@@ -755,7 +755,34 @@ def _plugin_state(login_home: Path) -> Tuple[set, set]:
     return known, installed
 
 
+def _channel_command_problem() -> Optional[str]:
+    """Why Claude Code can't start the channel plugin's server, or None when it can (#1051).
+
+    The plugin's ``.mcp.json`` runs ``maceff-channel`` by that bare name. With a virtual-environment
+    install the console script lives only in the environment's ``bin/``, so Claude Code reports
+    ``Executable not found in $PATH: stdio`` at every session start, naming neither the command nor the
+    plugin. The installer's own PATH stands in for Claude Code's, which is the closest it can see."""
+    from macf.channels.marketplace import CHANNEL_COMMAND
+    if shutil.which(CHANNEL_COMMAND):
+        return None
+    beside = Path(sys.executable).parent / CHANNEL_COMMAND
+    where = (f"this install has it at {beside}" if beside.exists()
+             else f"it is not beside this Python ({beside.parent}) either")
+    return (f"the {CHANNEL_COMMAND} command is not on PATH, so Claude Code can't start the plugin's server "
+            f"(it reports 'Executable not found in $PATH: stdio' at session start); {where}. Put it on the "
+            f"PATH Claude Code starts with, for example ln -s {beside} ~/.local/bin/{CHANNEL_COMMAND}")
+
+
 def step_channel(ctx: Context) -> Result:
+    result = _install_channel(ctx)
+    problem = _channel_command_problem()
+    if problem and result.status in (DONE, ALREADY, WOULD):
+        done = f"{result.detail}; but " if result.detail else ""
+        return Result("channel", REFUSED, f"{done}{problem}")
+    return result
+
+
+def _install_channel(ctx: Context) -> Result:
     from macf.channels.marketplace import CHANNEL_PLUGIN_ID, MARKETPLACE, packaged_marketplace
     known, installed = _plugin_state(ctx.login_home)
     update = getattr(ctx.args, "update", False)

@@ -59,8 +59,10 @@ LOOKBACK_S = 7 * 86400
 #: How long an alert command may take before it counts as failed.
 SEND_TIMEOUT_S = 30
 
+_FINDING_FIELDS = {"agent", "subject", "verdict", "detail", "opened"}
 Verdict = Literal["ALIVE", "STALE", "GONE", "ABSENT", "UNREADABLE", "UNREACHABLE", "CHECK-FAILED", "DARK", "HELD", "UNREAD",
-                  "UNRECEIVED", "DRIFTED", "SWEEP-FAILED", "FAILED", "AUTH-FAILED", "LOGIN-EXPIRED", "LOGIN-EXPIRING"]
+                  "UNRECEIVED", "DRIFTED", "SWEEP-FAILED", "FAILED", "AUTH-FAILED", "LOGIN-EXPIRED", "LOGIN-EXPIRING",
+                  "RC-DISCONNECTED"]
 
 #: Exit codes, worst wins (``service_supervision`` section 4.2): each state its own code.
 EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_UNREACHABLE, EXIT_CHECK_FAILED = 0, 1, 2, 3
@@ -72,6 +74,7 @@ _EXIT_FOR = {"ALIVE": EXIT_HEALTHY, "STALE": EXIT_UNHEALTHY, "GONE": EXIT_UNHEAL
              "DRIFTED": EXIT_UNHEALTHY, "SWEEP-FAILED": EXIT_UNHEALTHY,
              "FAILED": EXIT_UNHEALTHY, "AUTH-FAILED": EXIT_UNHEALTHY,
              "LOGIN-EXPIRED": EXIT_UNHEALTHY, "LOGIN-EXPIRING": EXIT_UNHEALTHY,
+             "RC-DISCONNECTED": EXIT_UNHEALTHY,
              "UNREACHABLE": EXIT_UNREACHABLE,
              "UNREADABLE": EXIT_CHECK_FAILED, "CHECK-FAILED": EXIT_CHECK_FAILED}
 
@@ -89,6 +92,9 @@ class Finding:
     subject: str    # "daemon", a unit's name, or "home"
     verdict: Verdict
     detail: str
+    #: When the bad state this finding reports began, where its record says: a newer start than
+    #: the stretch already alerted is a new occurrence and gets its own alert (#883).
+    opened: Optional[float] = None
 
     @property
     def key(self) -> str:
@@ -307,6 +313,50 @@ def check_login(card: str, event: Optional[dict], now: float,
         return Finding(card, "login", "LOGIN-EXPIRING",
                        f"its refresh grant ends in {_age(left)}: run /login in its session before then{reach}")
     return Finding(card, "login", "ALIVE", f"its refresh grant ends in {_age(left)}")
+
+
+def last_remote_control_event(log_path: Path, card: str, now: float,
+                              lookback_s: float = LOOKBACK_S) -> Optional[dict]:
+    """The newest Remote Control disconnect or remedy of agent *card* within the lookback, or None.
+    The session's transcript monitor records both (``transcript_monitor.remote_control``)."""
+    from macf.transcript_monitor.remote_control import EVENT_DISCONNECTED, EVENT_REMEDIED
+    cutoff = now - lookback_s
+    for line in iter_lines_reverse(log_path):
+        try:
+            event = json.loads(line)
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
+            continue
+        if not isinstance(event, dict):
+            continue
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        if event.get("event") not in (EVENT_DISCONNECTED, EVENT_REMEDIED):
+            continue
+        data = event.get("data")
+        if isinstance(data, dict) and calling_card.is_agent(data.get("agent"), card):
+            return event
+    return None
+
+
+def check_remote_control(card: str, event: Optional[dict], now: float) -> Finding:
+    """The session's Remote Control, from its transcript as the monitor read it (#883). A
+    disconnect leaves the session unreachable from any other device while it stays open, and
+    the channel that broke is the one the operator would have used, so this watch says it.
+    The client records no reconnect: a remedy run in the session (a login that worked, or
+    /remote-control) is what closes the stretch."""
+    from macf.transcript_monitor.remote_control import EVENT_DISCONNECTED
+    if event is None or event.get("event") != EVENT_DISCONNECTED:
+        return Finding(card, "remote-control", "ALIVE", "no open Remote Control disconnect recorded")
+    data = event.get("data") or {}
+    stamp = event.get("timestamp")
+    age = f" {_age(now - stamp)} ago" if isinstance(stamp, (int, float)) else ""
+    remedy = data.get("remedy") if isinstance(data.get("remedy"), str) else "/login or /remote-control"
+    reason = data.get("reason") or "no reason recorded"
+    return Finding(card, "remote-control", "RC-DISCONNECTED",
+                   f"disconnected{age}: {reason}; run {remedy} in its session "
+                   f"(macf_tools harness attach --card {card})",
+                   opened=stamp if isinstance(stamp, (int, float)) else None)
 
 
 def check_channel(card: str, event: Optional[dict], now: float) -> Finding:
@@ -578,6 +628,10 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
             login = None
         if login is not None:
             findings.append(login)
+        try:
+            findings.append(check_remote_control(card, last_remote_control_event(log_path, card, now), now))
+        except FileNotFoundError:
+            findings.append(check_remote_control(card, None, now))
     if declaration.channel_connect_s is not None:      # a channel is expected, so watch it
         try:
             findings.append(check_channel(card, last_channel_event(log_path, card, now), now))
@@ -635,9 +689,14 @@ def check_container_home(container: str, user: str, path: str, python: str = "/o
         return [Finding(where, "home", "CHECK-FAILED", f"docker exec into {container} did not run: {type(e).__name__}")]
     try:
         rows = json.loads(out)
+        # Four string fields, and optionally when a bad state began (#883), a number a seat on an
+        # older MacEff doesn't send.
         if not isinstance(rows, list) or not all(
-                isinstance(row, dict) and set(row) == {"agent", "subject", "verdict", "detail"}
-                and all(isinstance(v, str) for v in row.values()) for row in rows):
+                isinstance(row, dict) and {"agent", "subject", "verdict", "detail"} <= set(row) <= _FINDING_FIELDS
+                and all(isinstance(row[k], str) for k in ("agent", "subject", "verdict", "detail"))
+                and (row.get("opened") is None or (isinstance(row["opened"], (int, float))
+                                                   and not isinstance(row["opened"], bool)))
+                for row in rows):
             raise TypeError("not a list of findings with four string fields")
         findings = [Finding(**row) for row in rows]
     except (ValueError, TypeError) as e:
@@ -678,7 +737,9 @@ def transitions(findings: Sequence[Finding], open_stretches: Dict[str, dict],
             if was is not None:
                 lines.append(f"recovered: {f.line()} (after {_age(now - was['since'])})")
             continue
-        if was is None:
+        if was is None or (f.opened is not None and f.opened > was["since"]):
+            # A new stretch, or a new occurrence that began after the one already alerted:
+            # a Remote Control disconnect after an unrecorded reconnect (#883).
             lines.append(f"ALERT: {f.line()}")
             after[f.key] = {"since": now, "verdict": f.verdict}
         else:
@@ -974,7 +1035,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.home_findings is not None:
         found = check_home(args.home_findings, time.time(), None,
                            None if args.no_probe else verify_incarnation)
-        print(json.dumps([dataclasses.asdict(f) for f in found]))
+        print(json.dumps([{k: v for k, v in dataclasses.asdict(f).items() if k != "opened" or v is not None}
+                          for f in found]))
         return EXIT_HEALTHY      # the findings are the answer; the watch outside judges them
     if args.config is None:
         parser.error("--config is required, unless --home-findings is given")

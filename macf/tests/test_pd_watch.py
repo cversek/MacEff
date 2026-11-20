@@ -587,6 +587,23 @@ def test_a_container_seat_s_findings_come_back_from_inside_it():
     assert [(f.agent, f.subject, f.verdict) for f in found] == [("Seat4_7efebd", "login", "LOGIN-EXPIRED")]
 
 
+def test_a_container_seat_s_remote_control_disconnect_keeps_when_it_began():
+    """The finding says when its disconnect began, so a later one is a new alert (#883). The JSON
+    between the seat and the host carries that, and a finding without it carries no such field."""
+    run = _answering([{"agent": "Seat4_7efebd", "subject": "remote-control", "verdict": "RC-DISCONNECTED",
+                       "detail": "disconnected", "opened": 1800000000.5},
+                      {"agent": "Seat4_7efebd", "subject": "login", "verdict": "ALIVE", "detail": "ok"}])
+    found = watch.check_container_home("deploy-box", "seat4", "/agents/seat4", run=run)
+    assert [(f.subject, f.verdict, f.opened) for f in found] == [
+        ("remote-control", "RC-DISCONNECTED", 1800000000.5), ("login", "ALIVE", None)]
+
+
+def test_a_finding_without_a_start_is_printed_without_the_field(tmp_path, capsys):
+    home = _home(tmp_path)
+    watch.main(["--home-findings", str(home), "--no-probe"])
+    assert all("opened" not in row for row in json.loads(capsys.readouterr().out))
+
+
 def test_the_watch_only_runs_the_read_only_home_check_in_the_container():
     run = _answering([])
     watch.check_container_home("deploy-box", "seat4", "/agents/seat4", probe=False, run=run)
