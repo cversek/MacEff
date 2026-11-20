@@ -16,7 +16,9 @@ The steps, each skippable by its flag:
    channels the declaration allows, the MacEff channel included;
 5. ``channel`` - the MacEff channel plugin from the marketplace packaged with macf;
 6. ``permissions`` - the mode-safety permission entries;
-7. ``daemon`` - the daemon under the platform's service manager (``pd install``).
+7. ``framework`` - whether the hooks, commands and skills are installed in the project, and the
+   command that installs them (``framework install``) when they are not;
+8. ``daemon`` - the daemon under the platform's service manager (``pd install``).
 
 ``pd install`` comes last although it is the heart of the stack: the daemon starts the session
 unit as soon as it starts, and that session needs the child script, the channel plugin and its
@@ -58,6 +60,9 @@ STEPS: List[Tuple[str, str, str]] = [
     ("channel", "add the packaged maceff marketplace and install maceff-channel@maceff", "no_channel"),
     ("permissions", "add the mode-safety permission entries to the project's settings.local.json",
      "no_permissions"),
+    ("framework", ("check that the hooks, commands and skills are installed in the project, and "
+                   "name the command that installs them when they are not (framework install)"),
+     "no_framework"),
     ("daemon", "put the primal daemon under the service manager (pd install)", "no_daemon"),
     ("registry", ("declare the agent's signing key in the operator's registry, the change shown "
                   "first; on a host the write is root's, printed as one step (MIS-0004 R42)"),
@@ -849,6 +854,31 @@ def step_permissions(ctx: Context) -> Result:
     return Result("permissions", DONE, f"{added} entr{'y' if added == 1 else 'ies'} added to {where}")
 
 
+def step_framework(ctx: Context) -> Result:
+    """Whether the framework's hooks, commands and skills are in the project (#1049).
+
+    ``agent init`` writes the daemon, the harness and the channel, but the hooks and the ``/maceff``
+    commands come from ``framework install``, which works on the directory it is run in. Without them
+    the agent starts with no hooks bound and no commands, and nothing said so. This step looks, and when
+    something is missing it is reported found with drift, naming the command and where to run it; it
+    installs nothing, because that command writes settings in the directory it is run from."""
+    if ctx.in_container:
+        return Result("framework", SKIPPED, CONTAINER_OWNS)
+    from macf.cli import _count_hook_events_in_settings, _hooks_to_install_list
+    root = project_dir(ctx)
+    bound = _count_hook_events_in_settings(root / ".claude" / "settings.local.json")
+    expected = len(_hooks_to_install_list())
+    commands = root / ".claude" / "commands"
+    has_commands = commands.is_dir() and any(e.name.startswith("maceff") for e in commands.iterdir())
+    if bound == expected and has_commands:
+        return Result("framework", ALREADY, f"{bound} hook events bound and the commands installed in {root / '.claude'}")
+    missing = ([f"hooks ({bound} of {expected} events bound)"] if bound != expected else []) + \
+              (["the /maceff commands"] if not has_commands else [])
+    return Result("framework", DRIFT, f"{' and '.join(missing)} not installed in {root}; run "
+                                      f"`cd {root} && macf_tools framework install` to install the hooks, "
+                                      f"commands and skills")
+
+
 def _missing_permissions(root: Path) -> Optional[List[str]]:
     """The entries ensure_mode_safety_permissions would add, by its own lists, without writing."""
     from macf.utils import claude_settings as cs
@@ -1023,6 +1053,7 @@ RUNNERS: Dict[str, Callable[[Context], Result]] = {
     "harness": step_harness,
     "channel": step_channel,
     "permissions": step_permissions,
+    "framework": step_framework,
     "daemon": step_daemon,
     "registry": step_registry,
 }
