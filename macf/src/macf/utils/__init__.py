@@ -69,6 +69,7 @@ from .tokens import (
     get_usable_context,
     CC2_TOTAL_CONTEXT,
     get_total_context,
+    get_total_context_and_source,
 )
 from .claude_settings import (
     get_autocompact_setting,
@@ -102,6 +103,7 @@ from .temporal import DATEUTIL_AVAILABLE
 __all__ = [
     "CC2_TOTAL_CONTEXT",
     "get_total_context",
+    "get_total_context_and_source",
     "ConsciousnessArtifacts",
     "DATEUTIL_AVAILABLE",
     "_deep_merge",
