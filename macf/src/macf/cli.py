@@ -27,6 +27,7 @@ from .utils import (
     get_macf_package_path,
     get_hooks_dir,
     get_total_context,
+    get_total_context_and_source,
 )
 from .modes import detect_auto_mode
 from .utils.environment import current_model, detect_model
@@ -356,7 +357,8 @@ def cmd_env(args: argparse.Namespace) -> int:
             "model": (_model := current_model())["id"],
             "model_display": _model["display"],
             "model_source": _model["source"],
-            "context_window": f"{get_total_context():,}",
+            "context_window": f"{(_window := get_total_context_and_source())[0]:,}",
+            "context_window_source": _window[1],
             "python_path": sys.executable,
             "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
         },
@@ -446,7 +448,9 @@ def cmd_env(args: argparse.Namespace) -> int:
         print(f"  Claude Code:  {data['versions']['claude_code']}")
         _v = data['versions']
         print(f"  Model:        {_v.get('model_display', _v['model'])} ({_v['model']}, from {_v.get('model_source', '?')})")
-        print(f"  Context:      {data['versions']['context_window']} tokens")
+        from macf.utils.tokens import UNVERIFIED_CONTEXT_NOTE
+        _assumed = f" ({UNVERIFIED_CONTEXT_NOTE})" if _v.get("context_window_source") == "default" else ""
+        print(f"  Context:      {data['versions']['context_window']} tokens{_assumed}")
         print(f"  Python:       {data['versions']['python_path']} ({data['versions']['python_version']})")
         print()
 
