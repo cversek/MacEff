@@ -40,3 +40,10 @@ def test_the_inbox_follows_the_plugin_state_dir(tmp_path, monkeypatch):
 
 def test_a_message_with_no_time_gets_no_guess(tmp_path):
     assert voice_file_for_message('attachment_kind="voice"', now_inbox=tmp_path) is None
+
+
+def test_a_later_voice_message_s_file_is_not_taken_for_this_one(tmp_path):
+    sent = datetime(2026, 11, 20, 21, 30, tzinfo=timezone.utc).timestamp()
+    mine = _file(tmp_path, "mine.oga", sent + 2)
+    _file(tmp_path, "next.oga", sent + 9)       # the next message's download, written after this one's
+    assert voice_file_for_message(_prompt("2026-11-20T21:30:00.000Z"), now_inbox=tmp_path) == mine

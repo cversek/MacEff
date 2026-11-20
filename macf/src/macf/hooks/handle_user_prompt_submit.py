@@ -55,7 +55,8 @@ def voice_file_for_message(prompt: str, now_inbox: Optional[Path] = None) -> Opt
     The newest ``.oga`` in an inbox is not necessarily this message's: the hook usually runs before the
     message is downloaded, and an older voice file then sat newest, so a clip from months before was
     transcribed as the message (#1079). A file counts only when it was written at or after the
-    message's own ``ts``. The inbox is the plugin's state directory: ``TELEGRAM_STATE_DIR``, else the
+    message's own ``ts``, and the oldest such file is taken: a later voice message's file is written after
+    this one's. The inbox is the plugin's state directory: ``TELEGRAM_STATE_DIR``, else the
     account default."""
     import datetime as _dt
     m = re.search(r'\bts="([^"]+)"', prompt)
@@ -73,7 +74,7 @@ def voice_file_for_message(prompt: str, now_inbox: Optional[Path] = None) -> Opt
     except OSError as e:
         print(f"⚠️ MACF: voice inbox unreadable ({e})", file=sys.stderr)
         return None
-    return max(fresh, key=lambda f: f.stat().st_mtime) if fresh else None
+    return min(fresh, key=lambda f: f.stat().st_mtime) if fresh else None
 
 
 #: How much of the transcript's end is read to find the entry for a prompt.
