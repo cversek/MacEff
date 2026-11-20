@@ -1026,16 +1026,121 @@ def test_control_events(tmp_path, script, base, run_daemon):
 
 
 def test_a_request_cannot_claim_an_inside_asker(tmp_path, script, base, run_daemon):
-    """Over the socket the asker is the operator or the declared wind-down. A request that
-    claims the daemon's own policy is refused, and nothing is done (R52)."""
+    """Over the socket the asker is the operator, the agent or the declared wind-down. A request
+    that claims the daemon's own policy is refused, and nothing is done (R52)."""
     daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
     assert wait_for(lambda: unit_state(daemon, "worker") == "running")
 
     reply = ask(daemon, {"op": "stop", "unit": "worker", "reason": "posing as policy",
                          "asked_by": {"kind": "policy"}})
-    assert not reply["ok"] and "operator or the declared wind-down" in reply["error"]
+    assert not reply["ok"] and "the operator, the agent or the declared wind-down" in reply["error"]
     assert unit_state(daemon, "worker") == "running"
     assert all(d["reason"] != "posing as policy" for d in events("pd_control", "worker"))
+
+
+def _stopped_by(make_core, script, asker, peer):
+    """A unit a first daemon ran and *asker* stopped, with the first daemon then gone."""
+    unit = make_unit("worker", script, {})
+    first = make_core([unit])
+    first.boot()
+    assert drive(first, lambda: first.state("worker") == "running")
+    first.stop("worker", asker, "the GPU is wanted", peer=peer)
+    assert drive(first, lambda: first.state("worker") == "stopped")
+    _crash(first)
+    return unit
+
+
+def test_an_operators_stop_holds_across_a_daemon_restart(make_core, script):
+    """The unit the operator stopped is not started again by a restart he didn't connect to it
+    (#1009). It reads stopped with why, and the carried report names it."""
+    unit = _stopped_by(make_core, script, OPERATOR, PEER)
+    starts = states("worker").count("starting")
+
+    second = make_core([unit])
+    second.boot()
+
+    assert second.state("worker") == "stopped" and second.pid("worker") is None
+    assert states("worker").count("starting") == starts
+    assert "held down by the operator since" in events("pd_unit_state", "worker")[-1]["reason"]
+    assert list(events("pd_carried")[-1]["held"]) == ["worker"]
+
+
+def test_the_hold_survives_every_restart_until_a_start_clears_it(make_core, script):
+    unit = _stopped_by(make_core, script, OPERATOR, PEER)
+    for _ in range(2):
+        again = make_core([unit])
+        again.boot()
+        assert again.state("worker") == "stopped"
+        _crash(again)
+
+    again = make_core([unit])
+    again.boot()
+    again.start("worker", OPERATOR, "the GPU is free again", peer=PEER)
+    assert drive(again, lambda: again.state("worker") == "running")
+    pid = again.pid("worker")
+    left = _crash(again)
+    os.killpg(pid, signal.SIGKILL)       # the unit is gone with no stop on record: nothing to adopt
+    left["worker"].wait(timeout=5)
+
+    after = make_core([unit])
+    after.boot()
+    assert drive(after, lambda: after.state("worker") == "running")
+
+
+def test_a_stop_the_operator_did_not_ask_for_is_not_held(make_core, script):
+    """The agent's own stop, or the wind-down's, is not the operator's decision to keep."""
+    for asker in (Asker(kind="agent", card="Tester_abc123"), Asker(kind="wind_down")):
+        unit = _stopped_by(make_core, script, asker, PEER)
+        second = make_core([unit])
+        second.boot()
+        assert drive(second, lambda: second.state("worker") == "running"), asker.kind
+        second.shutdown("the test is over")
+def test_the_agent_may_ask_for_a_unit_act_and_is_recorded_as_the_agent(tmp_path, script, base, run_daemon):
+    """The agent, over the socket from its own command line, may stop and start its own daemon's
+    units (#1007). It is recorded as the agent, beside the process the kernel observed, so an act
+    the agent took is never read back as the operator's (R52)."""
+    daemon = run_daemon(make_home(tmp_path, [make_unit("worker", script, {})]), base)
+    assert wait_for(lambda: unit_state(daemon, "worker") == "running")
+
+    reply = ask(daemon, {"op": "stop", "unit": "worker", "reason": "the agent's own call",
+                         "asked_by": {"kind": "agent", "card": "Tester_abc123"}})
+    assert reply["ok"]
+    assert wait_for(lambda: unit_state(daemon, "worker") == "stopped")
+    control = events("pd_control", "worker")[-1]
+    assert (control["act"], control["asked_by"]["kind"]) == ("stop", "agent")
+    assert control["peer"]["pid"] == os.getpid()
+
+
+def _session_and_service(script):
+    session = make_unit("sess", script, {}, restart="always").model_copy(update={"kind": "session"})
+    return [session, make_unit("worker", script, {})]
+
+
+def test_an_agent_cannot_stop_or_restart_its_own_session_unit(tmp_path, script, base, run_daemon):
+    """inject exit refuses while the client holds unsent feedback drafts or the session has scheduled
+    jobs, and a stop here is a SIGTERM that passes both. So an agent-asked stop or restart of the
+    session unit is refused with a pointer to inject exit, and nothing is done (#1007)."""
+    daemon = run_daemon(make_home(tmp_path, _session_and_service(script)), base)
+    assert wait_for(lambda: unit_state(daemon, "sess") == "running")
+    first = unit_pid(daemon, "sess")
+
+    for op in ("stop", "restart"):
+        reply = ask(daemon, {"op": op, "unit": "sess", "reason": "its own call",
+                             "asked_by": {"kind": "agent", "card": "Tester_abc123"}})
+        assert not reply["ok"] and "inject exit" in reply["error"], op
+    assert unit_state(daemon, "sess") == "running" and unit_pid(daemon, "sess") == first
+    assert all(d["reason"] != "its own call" for d in events("pd_control", "sess"))
+
+
+def test_the_agent_may_still_act_on_a_service_unit_and_the_operator_on_the_session(
+        tmp_path, script, base, run_daemon):
+    daemon = run_daemon(make_home(tmp_path, _session_and_service(script)), base)
+    assert wait_for(lambda: unit_state(daemon, "worker") == "running")
+    assert ask(daemon, {"op": "stop", "unit": "worker", "reason": "a service is the agent's",
+                        "asked_by": {"kind": "agent", "card": "Tester_abc123"}})["ok"]
+    assert wait_for(lambda: unit_state(daemon, "worker") == "stopped")
+    assert ask(daemon, {"op": "restart", "unit": "sess", "reason": "the operator's call",
+                        "asked_by": {"kind": "operator", "card": "Operator_000000"}})["ok"]
 
 
 def test_start_and_restart_over_socket(tmp_path, script, base, run_daemon):

@@ -743,8 +743,16 @@ class Core:
         (optional_unit_MUST-NOT_delay_others)). A unit the previous daemon started that is
         still running is adopted, not started again."""
         carried = self._adopt_survivors()
+        held = self._held_by_operator({n for n, r in self._units.items()
+                                       if n not in carried and not r.spec.optional})
         for r in self._units.values():
             if r.spec.name in carried:
+                continue
+            if r.spec.name in held:
+                # The operator stopped it and nobody has started it since. A restart the operator
+                # didn't ask for doesn't undo that (#1009): only an explicit start clears the hold.
+                self._transition(r, "stopped", f"held down by the operator since "
+                                               f"{self._since(held[r.spec.name])}; start it to clear")
                 continue
             if not r.spec.optional:
                 self._control("start", r, POLICY, "declared and not optional")
@@ -754,8 +762,43 @@ class Core:
             # A first start carries nothing, so only a restart is reported (R47).
             changed = {n for n in self._previously_live - carried if self._units[n].state in LIVE_STATES}
             self._report_carried("daemon", "the primal daemon restarted", carried, changed,
-                                 self._previously_live - carried - changed)
+                                 self._previously_live - carried - changed - set(held),
+                                 held={n: self._since(t) for n, t in sorted(held.items())})
         self._recover_compaction()
+
+    def _held_by_operator(self, candidates: set) -> Dict[str, Optional[float]]:
+        """The units an operator stopped that no start has followed since, with when (#1009).
+
+        Folded from the event log, newest first: a unit's last start, stop or restart decides it,
+        and it is held when that was a stop the operator asked for. A stop the agent or the
+        wind-down asked, and one the daemon made on its own, is not held. Only a candidate is
+        looked up, so the scan ends once each has been decided; a unit with no act on record
+        reads the log to its start, once, at the boot that first sees it.
+        """
+        held: Dict[str, Optional[float]] = {}
+        if not candidates:
+            return held
+        decided: set = set()
+        for event in read_events(reverse=True, scope="all", only=(EVENT_CONTROL,)):
+            data = event.get("data") or {}
+            unit = data.get("unit")
+            if unit not in candidates or unit in decided or data.get("act") not in ("start", "stop", "restart"):
+                continue
+            if not calling_card.is_agent(data.get("agent"), self.card):
+                continue
+            decided.add(unit)
+            if data.get("act") == "stop" and (data.get("asked_by") or {}).get("kind") == "operator":
+                held[unit] = _float_or_none(event.get("timestamp"))
+            if len(decided) == len(candidates):
+                break
+        return held
+
+    @staticmethod
+    def _since(timestamp: Optional[float]) -> str:
+        """When a hold began, as the date and time a reader can place, or "an earlier time"."""
+        if timestamp is None:
+            return "an earlier time"
+        return datetime.fromtimestamp(timestamp).astimezone().strftime("%Y-%m-%d %H:%M %Z")
 
     def _recover_compaction(self) -> None:
         """A compaction this daemon's tail can't see, made while no daemon ran or inside the
@@ -856,6 +899,11 @@ class Core:
         r.restart_at = None
         if r.proc is None:
             self._spawn(r)
+
+    def is_session(self, unit: str) -> bool:
+        """Whether *unit* is the declared session unit; False for any other, and for one not declared."""
+        r = self._units.get(unit)
+        return r is not None and r.spec.kind == "session"
 
     def state_of(self, unit: str) -> Optional[str]:
         """A declared unit's state now; None for a unit not declared."""

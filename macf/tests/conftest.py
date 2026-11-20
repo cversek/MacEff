@@ -57,6 +57,15 @@ def _a_refused_daemon_exits_at_once_in_tests(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_test_reads_the_pane_it_runs_in(monkeypatch):
+    """A suite run from inside a tmux pane inherits TMUX and TMUX_PANE, and the supervisor sends its
+    keys to that pane, not to the session a test names (#1000). Each test starts outside any pane;
+    a test of the pane path sets its own."""
+    monkeypatch.delenv("TMUX", raising=False)
+    monkeypatch.delenv("TMUX_PANE", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _no_test_reads_the_hosts_claude_settings(monkeypatch):
     """The mode-safety rules consult the allow lists of the user's and the project's own
     settings files (#759). A developer's broad allow there would change what a test sees, so
