@@ -52,6 +52,6 @@ def test_missing_control_named():
 
 
 def test_attachment_name_from_label():
-    assert outlook.attachment_name("PhysicsLabEXP19.xlsx Open 40 KB") == "PhysicsLabEXP19.xlsx"
+    assert outlook.attachment_name("WeekFiveData.xlsx Open 40 KB") == "WeekFiveData.xlsx"
     assert outlook.attachment_name("Lab Report 5.docx 1 MB") == "Lab Report 5.docx"
     assert outlook.attachment_name("notes") == "notes"
