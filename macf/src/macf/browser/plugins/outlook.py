@@ -20,6 +20,8 @@ PLUGIN = Plugin(
 HOME_URL = "https://outlook.cloud.microsoft/mail/"
 DRAFT_SAVED_PATTERN = re.compile(r"\bdraft saved\b", re.I)
 _ATTACHMENTS = re.compile(r"\battachments?\b", re.I)
+# The search box is "Search" in one state and "Search for email, meetings, files and more." in another.
+SEARCH_NAME = re.compile(r"^Search\b(?! Folders)")
 
 
 def add_arguments(parser, common) -> None:
@@ -79,13 +81,19 @@ def find_control(nodes: List[dict], role: str, name: str) -> dict:
 ### live parts
 
 def _page(backend):
+    """The plugin's own tab, opened on first use, once the client has drawn its message list."""
     page = backend.page_for(None, interact=True, open_url=HOME_URL)
+    ready = page.get_by_role("listbox", name="Message list")
+    try:
+        ready.first.wait_for(timeout=45000)
+    except Exception as e:  # noqa: BLE001 - a client that never draws its list is refused by name below
+        raise guard.Refused(f"the mail client drew no Message list within 45 s (MIS-0009-R38): {e}") from e
     return page
 
 
 def _search_box(page):
-    for role in ("searchbox", "combobox", "textbox"):
-        loc = page.get_by_role(role, name="Search", exact=True)
+    for role in ("combobox", "searchbox"):
+        loc = page.get_by_role(role, name=SEARCH_NAME)
         if loc.count() == 1:
             return loc
     raise guard.Refused("the mail page has no Search box (MIS-0009-R38)")
@@ -106,7 +114,7 @@ def status(backend, args):
 
     def has(role, name):
         return any(n["role"] == role and n["name"].strip() == name for n in nodes)
-    return {"host": guard.host_of(page.url), "search": any(n["name"].strip() == "Search" for n in nodes),
+    return {"host": guard.host_of(page.url), "search": any(n["role"] in ("combobox", "searchbox") and SEARCH_NAME.match(n["name"]) for n in nodes),
             "new_mail": has("button", "New mail"), "rows": sum(1 for n in nodes if n["role"] == "option")}
 
 
@@ -116,7 +124,17 @@ def list_rows(backend, args):
     box = _search_box(page)
     box.fill(args.query)
     backend.press(page, "Enter")
-    options = page.get_by_role("option")
+    # Results draw after the search returns: wait for the Results heading, then for the row count to hold still.
+    page.get_by_role("heading", name="Results").first.wait_for(timeout=30000)
+    options = page.get_by_role("listbox", name="Message list").get_by_role("option")
+    last, steady = -1, 0
+    for _ in range(40):
+        n = options.count()
+        steady = steady + 1 if n == last else 0
+        if steady >= 3:
+            break
+        last = n
+        page.wait_for_timeout(500)
     rows = []
     for i in range(min(options.count(), args.limit)):
         o = options.nth(i)
@@ -135,7 +153,9 @@ def read(backend, args):
     if body.count() == 0:
         raise guard.Refused("the mail page shows no Message body (MIS-0009-R38)")
     subject = page.get_by_role("heading").first.inner_text() if page.get_by_role("heading").count() else ""
-    return {"id": args.id, "subject": subject, "body": body.first.inner_text()}
+    links = [{"text": (a.inner_text() or "").strip()[:80], "href": a.get_attribute("href")}
+             for a in body.first.locator("a[href]").all()]
+    return {"id": args.id, "subject": subject, "body": body.first.inner_text(), "links": links}
 
 
 def _attachment_names(page) -> List[str]:
@@ -167,7 +187,12 @@ def draft(backend, args):
     """Compose and leave the message in Drafts. Fields are set by value with fill(); nothing is typed."""
     page = _page(backend)
     enforce(PLUGIN, "draft", page.url, None)
-    backend.click(page, "button", "New mail", exact=True)
+    composing = page.get_by_role("textbox", name="Message body")
+    if not (composing.count() == 1 and composing.is_visible()):  # reuse a compose form this tab already has open
+        leave_search = page.get_by_role("button", name="Exit search", exact=True)
+        if leave_search.count() == 1 and leave_search.is_visible():  # the search ribbon hides New mail
+            backend.click(page, "button", "Exit search", exact=True)
+        backend.click(page, "button", "New mail", exact=True)
     for label in ("Cc", "Bcc"):
         if getattr(args, label.lower()):
             btn = page.get_by_role("button", name=f"Show {label}")
@@ -178,9 +203,12 @@ def draft(backend, args):
     for label, values in (("To", args.to), ("Cc", args.cc), ("Bcc", args.bcc)):
         if not values:
             continue
-        field = page.get_by_role("textbox", name=label, exact=True)
+        # The recipient wells are editable regions labeled To, Cc and Bcc, not text boxes in the tree.
+        field = page.locator(f'[contenteditable="true"][aria-label="{label}"]')
         guard.check_target(field.count(), field.count() == 1 and field.is_visible(), True, f"{label} field")
-        field.fill("; ".join(values) + ";")
+        for address in values:
+            field.fill(address)
+            backend.press(page, "Enter")  # resolves the address into a recipient; Enter in a well sends nothing
     subject = page.get_by_role("textbox", name="Subject")
     if subject.count() == 0:
         subject = page.get_by_role("textbox", name="Add a subject")

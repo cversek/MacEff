@@ -72,7 +72,7 @@ def observe(page, session) -> dict:
             continue
         name = (n.get("name") or {}).get("value") or ""
         role = (n.get("role") or {}).get("value") or ""
-        if name.strip():
+        if name.strip() and role != "InlineTextBox":  # inline boxes repeat their StaticText parent
             nodes.append({"role": role, "name": name})
     return {"url": page.url, "title": page.title(), "nodes": nodes,
             "digest": guard.digest(f"{n['role']}:{n['name']}" for n in nodes)}
