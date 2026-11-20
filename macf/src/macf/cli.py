@@ -1675,9 +1675,10 @@ def cmd_statusline(args: argparse.Namespace) -> int:
                 stdin_data = sys.stdin.read().strip()
                 if stdin_data:
                     cc_json = json.loads(stdin_data)
-            except (json.JSONDecodeError, Exception):  # noqa: S110 - statusline runs on every refresh and its stderr must stay clean; non-JSON stdin is normal when run by hand, and MACF data is used instead
-                # Ignore stdin parsing failures - use MACF data only
+            except json.JSONDecodeError:  # noqa: S110 - non-JSON stdin is normal when the statusline is run by hand, and MACF data is used instead
                 pass
+            except Exception as e:  # noqa: BLE001 - GUARD: a statusline refresh must neither fail nor write to stderr, so a real fault reading stdin is recorded where it can be found (#999)
+                append_event("statusline_stdin_fault", {"error": f"{type(e).__name__}: {e}"})
 
         # Gather statusline data
         data = get_statusline_data(cc_json=cc_json)
