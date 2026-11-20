@@ -1,0 +1,3 @@
+### Fixed
+
+- **`agent init --update` no longer tells the operator to stop the session its own daemon supervises** (`agent_stack.daemon_session_pid`, #1072): the guard that recognizes a client beneath the agent's own session unit confirmed the unit only while it read `running`, so a unit whose session had failed (for instance a login the client couldn't read) lost its client to the "a second client on one conversation" refusal, and the daemon step was skipped with advice to stop the session. A unit reporting a pid in any state now confirms its client; a stale pid is never an ancestor of a live client, so it can't claim one.
