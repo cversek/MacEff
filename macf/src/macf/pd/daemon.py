@@ -239,8 +239,8 @@ class Daemon:
                                    lambda: read_events(reverse=False, scope="all", only=(DUTY_EVENT,)),
                                    self.notifier.raise_notice, time.monotonic)
         #: The agent's login, read from its stored credential's expiry dates, never by a model turn (#884).
-        from macf.pd.login import HostedLoginCheck
-        self.login = HostedLoginCheck(self.card, append_event)
+        from macf.pd.login import HostedLoginCheck, warn_seconds
+        self.login = HostedLoginCheck(self.card, append_event, expiring_s=warn_seconds(self.core.declaration))
         self.core.on_notice = self.notifier.raise_notice    # the core's own notices (R60)
         self.scheduler.on_notice = self.notifier.raise_notice   # a denied prompt run (R32)
         half = self.core.declaration.half_served_routes()
