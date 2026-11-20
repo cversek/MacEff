@@ -132,6 +132,10 @@ HARNESS = Asker(kind="harness")
 EVENT_HARNESS_COMPACTION = "harness_compaction_detected"
 
 
+class RestartRefused(ValueError):
+    """A restart the daemon won't carry out as asked, with what to ask instead (#1055)."""
+
+
 class DeclarationRefused(ValueError):
     """The declaration cannot be used. Nothing is started: a refusal installs nothing."""
 
@@ -693,6 +697,9 @@ class Core:
     ):
         self.declaration = declaration
         self.card = card
+        #: How many tmux clients are attached to the session unit's server; replaced in tests (#1055).
+        from macf.pd.session_unit import attached_clients
+        self.attached_clients: Callable[[str], int] = attached_clients
         self._clock = clock
         self._wall = wall
         self._backoff = (backoff_base_s, backoff_cap_s)
@@ -1000,10 +1007,22 @@ class Core:
                 if r.awaiting_respawn is not None else ""
             self._transition(r, "stopped", f"stopped as asked: {reason}{caught}")
 
-    def restart(self, unit: str, asked_by: Asker, reason: str, peer: Optional[Peer] = None) -> None:
+    def restart(self, unit: str, asked_by: Asker, reason: str, peer: Optional[Peer] = None,
+                server: bool = False) -> None:
         """Restart a unit, once its work in flight has drained or the drain has timed
-        out (MIS-0002-R49 (pd_MUST_check_work_in_flight))."""
+        out (MIS-0002-R49 (pd_MUST_check_work_in_flight)).
+
+        A restart of the session unit that would end its tmux server, because the wrapper can't restart
+        the session in its pane, ends every terminal attached to it too, so it refuses while a client is
+        attached unless ``server`` asks for exactly that (#1055)."""
         r = self._runner(unit)
+        if r.spec.kind == "session" and r.proc is not None and not server and not self._can_restart_in_pane(r):
+            attached = self.attached_clients(self.card)
+            if attached:
+                raise RestartRefused(
+                    f"restarting {unit!r} would end its tmux server, and {attached} client"
+                    f"{'s' if attached != 1 else ''} attached to it would end too. Ask with --server to restart "
+                    f"the server anyway, or detach first")
         window = quiet_window_at(self.declaration, self._wall()) if r.spec.kind == "session" else None
         if window is not None:
             # Recorded now and carried out when the window ends (R50); a stop never waits (R48).

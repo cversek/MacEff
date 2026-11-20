@@ -903,6 +903,8 @@ class ActRequest(_Closed):
     unit: str
     asked_by: Asker
     reason: str = Field(min_length=1)
+    #: A restart of the session unit that ends its tmux server even with a client attached (#1055).
+    server: bool = False
 
 
 class CompactRequest(_Closed):
