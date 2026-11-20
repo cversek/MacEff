@@ -1120,3 +1120,20 @@ def test_hooks_bound_globally_or_skills_alone_count_as_installed(stack):
         json.dumps({"hooks": {str(i): [] for i in range(len(_hooks_to_install_list()))}}))
     framework = _by_step(_run(stack)[1])["framework"]
     assert framework.status == ALREADY, framework
+
+
+def test_a_failed_session_unit_still_owns_its_client(monkeypatch, tmp_path):
+    """A unit whose session failed (a login that can't be read) still runs the client the guard finds
+    beneath it; reading only `running` units sent the operator to stop the session the daemon supervises (#1072)."""
+    import types
+
+    from macf.pd import client
+    report = types.SimpleNamespace(source="daemon", units=[
+        {"unit": "session", "state": "failed", "pid": 4242},
+        {"unit": "broker", "state": "running", "pid": 11}])
+    monkeypatch.setattr(client, "status", lambda home, card: report)
+    ctx = types.SimpleNamespace(home=tmp_path, card="Lumen3MacEff_0a1b2c")
+    decl = {"units": [{"name": "session", "kind": "session"}]}
+    assert agent_stack.daemon_session_pid(ctx, decl) == 4242
+    report.units[0].pop("pid")
+    assert agent_stack.daemon_session_pid(ctx, decl) is None       # no pid, nothing to confirm
