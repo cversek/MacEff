@@ -6,6 +6,7 @@ DEV_DRV start tracking + full temporal + token/CL awareness injection.
 EXPERIMENT: Claude-mem associative memory injection (Cycle 337)
 """
 import json
+import re
 import os
 import sys
 import time
@@ -43,6 +44,38 @@ from macf.channels.channel_tag import CHANNEL_SOURCE, is_maceff_notice, opening_
 # Lines that change on every prompt by design. The diff header carries them
 # (clock, breadcrumb, CL); diffing them would report a change every time.
 UPS_VOLATILE = ("Current Time:", "Breadcrumb:", "Tokens Used:", "CL Level:", "Remaining:", "Weekly usage:")
+
+#: How much earlier than a message's own time a downloaded voice file may be and still be its audio.
+_VOICE_CLOCK_SLACK_S = 5.0
+
+
+def voice_file_for_message(prompt: str, now_inbox: Optional[Path] = None) -> Optional[Path]:
+    """The downloaded audio of the voice message in ``prompt``, or None when it isn't downloaded yet.
+
+    The newest ``.oga`` in an inbox is not necessarily this message's: the hook usually runs before the
+    message is downloaded, and an older voice file then sat newest, so a clip from months before was
+    transcribed as the message (#1079). A file counts only when it was written at or after the
+    message's own ``ts``, and the oldest such file is taken: a later voice message's file is written after
+    this one's. The inbox is the plugin's state directory: ``TELEGRAM_STATE_DIR``, else the
+    account default."""
+    import datetime as _dt
+    m = re.search(r'\bts="([^"]+)"', prompt)
+    if not m:
+        return None
+    try:
+        sent = _dt.datetime.fromisoformat(m.group(1).replace("Z", "+00:00")).timestamp()
+    except ValueError as e:
+        print(f"⚠️ MACF: voice message time unreadable ({e}); not guessing its audio file", file=sys.stderr)
+        return None
+    state = os.environ.get("TELEGRAM_STATE_DIR")
+    inbox = now_inbox or ((Path(state) if state else Path.home() / ".claude" / "channels" / "telegram") / "inbox")
+    try:
+        fresh = [f for f in inbox.glob("*.oga") if f.stat().st_mtime >= sent - _VOICE_CLOCK_SLACK_S]
+    except OSError as e:
+        print(f"⚠️ MACF: voice inbox unreadable ({e})", file=sys.stderr)
+        return None
+    return min(fresh, key=lambda f: f.stat().st_mtime) if fresh else None
+
 
 #: How much of the transcript's end is read to find the entry for a prompt.
 _TRANSCRIPT_TAIL_BYTES = 64 * 1024
@@ -350,20 +383,13 @@ Breadcrumb: {breadcrumb}"""
         voice_transcript = ""
         if prompt and 'attachment_kind="voice"' in prompt:
             try:
-                import re
                 file_id_match = re.search(r'attachment_file_id="([^"]+)"', prompt)
                 if file_id_match:
                     file_id = file_id_match.group(1)
-                    # Check if we have a downloaded file in the inbox
-                    import glob
-                    inbox = Path.home() / ".claude" / "channels" / "telegram" / "inbox"
-                    # Find the most recent .oga file (Telegram voice format)
-                    oga_files = sorted(inbox.glob("*.oga"), key=lambda f: f.stat().st_mtime, reverse=True)
-                    if oga_files:
-                        latest_voice = str(oga_files[0])
-                        # Try to transcribe directly
+                    latest_voice = voice_file_for_message(prompt)
+                    if latest_voice:
                         from macf.voice.transcribe import transcribe
-                        result = transcribe(audio_path=latest_voice, language="en")
+                        result = transcribe(audio_path=str(latest_voice), language="en")
                         voice_transcript = (
                             f"\n🎤 VOICE TRANSCRIPTION (auto):\n"
                             f"[{result.engine}/{result.model} | "
@@ -372,7 +398,7 @@ Breadcrumb: {breadcrumb}"""
                             f'"{result.text}"\n'
                         )
                     else:
-                        # No downloaded file yet — instruct agent to download and transcribe
+                        # This message's audio isn't downloaded yet: say how to fetch it (#1079).
                         voice_transcript = (
                             f"\n🎤 VOICE MESSAGE DETECTED: Use `mcp__plugin_telegram_telegram__download_attachment` "
                             f"with file_id `{file_id}`, then `macf_tools voice transcribe <path>` to transcribe.\n"
