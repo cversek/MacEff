@@ -1,0 +1,3 @@
+### Added
+
+- **A declaration may carry a `reports` key, and its `warn_days` sets the login warning window** (`pd/interface.py`, `pd/login.py`, `pd/watch.py`, `pd/cli.py`, policy `persistent_layer`, first slice of #1027): the window was fixed at three days. `reports` holds `times`, `warn_days`, `reporter` and a required `missed` policy (no default, as for any schedule), and names the timezone its times are read in. The daemon's login record, `pd login` and the outside watch all judge expiry by `warn_days`, so a deployment that wants a week's notice sets one number. A declaration without the key is unchanged. The report that runs at those times is a later slice of the issue.
