@@ -14220,6 +14220,8 @@ def _build_parser() -> argparse.ArgumentParser:
     add_voice_wake_parsers(voice_sub)
     from .voice.speech.cli import add_parsers as add_voice_speech_parsers
     add_voice_speech_parsers(voice_sub)
+    from .voice.kept import add_parsers as add_voice_kept_parsers
+    add_voice_kept_parsers(voice_sub)
 
     # ── idea ─────────────────────────────────────────────────────────────
     from .roles.cli import add_role_parser

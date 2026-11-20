@@ -171,6 +171,7 @@ def build(home: Path):
         gate=SileroGate(), detector=detector, **transcription(voice.transcription_prompt),
         deliver=lambda u: deliver(card, u), on_voice_event=lambda kind, data: voice_event(card, kind, data),
         guard_lowered=lambda: guard_lowered(card),
+        keep=_kept_store(home, voice),
         listening_on=lambda: state.listening_on(home),
         speaking=lambda: state.speaking(home), log=lambda s: print(f"🎙️ MACF: voice: {s}", file=sys.stderr))
 
@@ -234,6 +235,20 @@ def build_system(home: Path, card: str, declaration, *, backends=None, publish=N
     return CaptureUnit(config, members=members, deliver=sender, listening_on=lambda: state.listening_on(home),
                        speaking=lambda: state.speaking(home), log=lambda s: print(f"🎙️ MACF: voice: {s}", file=sys.stderr),
                        **b)
+
+
+def _kept_store(home: Path, voice):
+    """The store's keep for a voice section that declares kept audio (R61), else None: nothing is kept."""
+    if not voice.kept_audio:
+        return None
+    from macf.voice.kept import KeptStore, not_local
+    folder = Path(voice.kept_audio)
+    folder = folder if folder.is_absolute() else home / folder
+    reason = not_local(folder)
+    if reason:
+        print(f"⚠️ MACF: voice: keeping nothing: {reason}", file=sys.stderr)
+        return None
+    return KeptStore(folder, speaker=voice.kept_speaker or "operator").keep
 
 
 def _platform_backends(trigger_devices, vocabulary: Optional[str] = None) -> dict:
