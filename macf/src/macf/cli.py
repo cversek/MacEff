@@ -630,6 +630,34 @@ def cmd_mis_check(args: argparse.Namespace) -> int:
     return 1 if findings else 0
 
 
+def cmd_mis_index(args: argparse.Namespace) -> int:
+    """The registry of MIS files, from their own headers (#1066)."""
+    from pathlib import Path
+    from macf import mis
+    paths = [Path(x) for x in (args.paths or ["framework/mis"])]
+    missing = [str(x) for x in paths if not x.exists()]
+    if missing:
+        print(f"❌ not found: {', '.join(missing)}", file=sys.stderr)
+        return 2
+    rows = mis.index(paths)
+    if not getattr(args, "open", False):
+        print(json.dumps(rows, indent=2) if args.json else mis.format_index(rows))
+        return 0
+    try:
+        drafts = mis.open_index(mis.gh_runner())
+    except (RuntimeError, OSError, ValueError, KeyError) as e:
+        print(f"❌ the open MIS pull requests could not be read: {e}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({"landed": rows, "open": drafts}, indent=2))
+        return 0
+    print(mis.format_index(rows))
+    print("\nOpen, from pull requests (drafts; not landed):")
+    for r in drafts:
+        print(f"MIS-{r['number']:<5}{r['status'] or '?':<10}{r['title']}  (PR #{r['pr']}{', draft' if r['draft'] else ''})")
+    return 0
+
+
 def cmd_budget_status(args: argparse.Namespace) -> int:
     from macf import budget
     def go() -> int:
@@ -12789,6 +12817,14 @@ def _build_parser() -> argparse.ArgumentParser:
     m.add_argument("paths", nargs="*", help="MIS files or directories (default: framework/mis)")
     m.add_argument("--glossary", metavar="PATH", help="glossary file (default: glossary.md beside the mis directory)")
     m.set_defaults(func=cmd_mis_check)
+    m = mis_sub.add_parser("index", help="the registry: every MIS file's number, title, status, deliberation and "
+                                         "where it lands, read from the files' own headers")
+    m.add_argument("paths", nargs="*", help="MIS files or directories (default: framework/mis)")
+    m.add_argument("--json", action="store_true", help="machine-readable output")
+    m.add_argument("--open", action="store_true",
+                   help="also list the open MIS pull requests as drafts, read from the pull requests' heads "
+                        "(needs gh and the network; never mixed into the landed rows)")
+    m.set_defaults(func=cmd_mis_index)
     budget_p = sub.add_parser("budget", help="print budget thresholds (JSON); subcommands: the subscription's rate limits")
     budget_p.set_defaults(func=cmd_budget)
     budget_sub = budget_p.add_subparsers(dest="budget_cmd")
