@@ -409,3 +409,23 @@ def test_an_own_agent_whose_login_ran_out_says_so_in_the_listing(tmp_path):
     assert "LOGIN-EXPIRED" in m3.login and m1.login == ""
     table = roster.render_table(r.entries)
     assert "login: LOGIN-EXPIRED" in table and table.count("login:") == 1
+
+
+def test_the_listing_judges_a_login_by_the_declared_warning_window(tmp_path):
+    """A login ending in five days is outside the default three-day window and inside a declared
+    week: the listing, the watch and the daemon read one window (#1058, #883)."""
+    import time
+
+    from macf.pd.interface import Declaration, declaration_path
+    card = "Lumen3MacEff_0a1b2c"
+    now = time.time()
+    declared = {"times": ["07:45"], "warn_days": 7, "missed": {"kind": "skip"}}
+    for name, reports in (("a", declared), ("b", None)):
+        home = tmp_path / name
+        (home / ".maceff" / "pd").mkdir(parents=True)
+        declaration_path(home).write_text(Declaration.model_validate(
+            {"version": 1, "agent": card, "units": [], **({"timezone": "UTC", "reports": reports} if reports else {})}
+        ).model_dump_json())
+        _login_event(home, card, now + 5 * 86400, now - 60)
+        line = roster._login_line(home, card, now)
+        assert ("LOGIN-EXPIRING" in line) == (reports is not None), line

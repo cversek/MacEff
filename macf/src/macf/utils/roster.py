@@ -273,14 +273,26 @@ def _home_entry(home: Path, own_uid: int, probe: Optional["Probe"], legacy: Sequ
                   reasons=reasons, login=_login_line(home, card) if uid == own_uid and card else "")
 
 
-def _login_line(home: Path, card: str) -> str:
+def _login_line(home: Path, card: str, now: Optional[float] = None) -> str:
     """What the daemon's login check recorded, as a line, when it is a problem; else empty.
-    Read from the agent's own event log and judged against now, the way the watch judges it."""
+    Read from the agent's own event log and judged against now, by the declaration's warning
+    window, the way the watch and the daemon judge it (#1058): one window at every reader."""
     import time
+    from ..pd.core import DeclarationRefused
+    from ..pd.login import EXPIRING_S, warn_seconds
     from ..pd.watch import check_login, last_login_event
+    now = time.time() if now is None else now
+    window = EXPIRING_S
     try:
-        finding = check_login(card, last_login_event(home / ".maceff" / "agent_events_log.jsonl", card,
-                                                     time.time()), time.time())
+        from ..pd.core import load_declaration
+        window = warn_seconds(load_declaration(home, card))
+    except Exception as e:  # noqa: BLE001 - a home with no readable declaration is still listed, by the default window
+        if not (isinstance(e, DeclarationRefused) and "cannot read" in str(e)):
+            print(f"⚠️ MACF: harness list: {card}: declaration not read, so its login is judged by "
+                  f"the default window: {type(e).__name__}", file=sys.stderr)
+    try:
+        finding = check_login(card, last_login_event(home / ".maceff" / "agent_events_log.jsonl", card, now),
+                              now, window)
     except FileNotFoundError:
         return ""
     except OSError as e:
