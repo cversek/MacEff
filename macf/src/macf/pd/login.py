@@ -99,9 +99,10 @@ def warn_seconds(declaration) -> float:
 def missing_login_env(unit) -> str:
     """Why a unit that can't log in probably can't: its declared environment lacks ``USER`` or ``LOGNAME``
     (on macOS the stored login is looked up by them), and what to add; empty when both are declared (#1073).
-    *unit* is a declared unit, or None when no declaration read."""
+    *unit* is a declared unit, or None when no declaration read. Empty off macOS, where the stored login is a
+    file and not looked up by them, so naming them would label a genuine expiry with a cause that isn't one."""
     from macf.pd.default_declaration import LOGIN_ENV_EFFECT, LOGIN_VARIABLES
-    if unit is None:
+    if unit is None or sys.platform != "darwin":
         return ""
     declared = unit.environment or {}
     lacking = [k for k in LOGIN_VARIABLES if k not in declared]

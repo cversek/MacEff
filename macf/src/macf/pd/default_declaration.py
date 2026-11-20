@@ -41,8 +41,8 @@ SESSION_STOP_GRACE_S = 30.0
 #: program, so drift reports them missing whatever command the unit runs (cversek/MacEff#848).
 LOGIN_VARIABLES = ("USER", "LOGNAME")
 #: What a unit without them suffers, said wherever the absence is reported (#1073).
-LOGIN_ENV_EFFECT = ("a session started without them can't read its stored login, so it reads \"Login expired\" "
-                    "although the account is logged in")
+LOGIN_ENV_EFFECT = ("on macOS a session started without them can't read its stored login (the Keychain entry is "
+                    "found by them), so it reads \"Login expired\" although the account is logged in")
 
 
 def channel_flag(plugin: str, marketplace: str) -> str:

@@ -210,6 +210,7 @@ def test_a_unit_that_cant_log_in_names_a_missing_user_as_the_probable_cause(tmp_
 
     from macf.pd import cli, core
     unit = types.SimpleNamespace(name="session", environment={"HOME": "/h", "PATH": "/bin"})
+    monkeypatch.setattr("macf.pd.login.sys.platform", "darwin")
     monkeypatch.setattr(core, "load_declaration", lambda home, card: types.SimpleNamespace(units=[unit]))
     monkeypatch.setattr("macf.pd.daemon.card_for_home", lambda home: CARD)
     monkeypatch.setattr("macf.utils.paths.find_agent_home", lambda: tmp_path)
@@ -225,3 +226,16 @@ def test_a_unit_that_cant_log_in_names_a_missing_user_as_the_probable_cause(tmp_
     unit.environment = {"USER": "a", "LOGNAME": "a"}
     cli.cmd_pd_status(types.SimpleNamespace(json=False))
     assert "probable cause" not in capsys.readouterr().out
+
+
+def test_the_missing_user_is_a_probable_cause_only_on_macos(monkeypatch):
+    """Off macOS the stored login is a file, not found by USER, so a genuine expiry must not be labelled
+    with a cause that isn't one (THM's review of #1084)."""
+    import types
+
+    from macf.pd import login
+    unit = types.SimpleNamespace(name="session", environment={"HOME": "/h"})
+    monkeypatch.setattr(login.sys, "platform", "darwin")
+    assert "macOS" in login.missing_login_env(unit)
+    monkeypatch.setattr(login.sys, "platform", "linux")
+    assert login.missing_login_env(unit) == ""
