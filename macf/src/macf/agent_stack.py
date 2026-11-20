@@ -909,7 +909,9 @@ def _declares_session(declaration: Optional[Dict]) -> bool:
 
 def daemon_session_pid(ctx: Context, declaration: Optional[Dict]) -> Optional[int]:
     """The pid of this agent's session unit, as its running daemon confirms it, or None: no
-    daemon answers, or it doesn't report the declared session unit up with a pid."""
+    daemon answers, or it doesn't report the declared session unit with a pid. In any state:
+    a unit whose session failed still runs the client beneath it, and a stale pid is never
+    an ancestor of a live client, so it can't claim one (#1072)."""
     names = [u.get("name") for u in (declaration or {}).get("units") or [] if u.get("kind") == "session"]
     if not names or not ctx.card:
         return None
@@ -922,8 +924,7 @@ def daemon_session_pid(ctx: Context, declaration: Optional[Dict]) -> Optional[in
     if report.source != "daemon":
         return None
     for unit in report.units:
-        if unit.get("unit") == names[0] and unit.get("state") in ("running", "waiting_on_a_person") \
-                and unit.get("pid"):
+        if unit.get("unit") == names[0] and unit.get("pid"):
             return int(unit["pid"])
     return None
 

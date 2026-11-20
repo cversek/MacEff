@@ -14989,12 +14989,15 @@ def cmd_voice_transcribe(args) -> int:
 
     # Try voice service first (warm model = fast)
     try:
-        from .voice.service import is_service_running, send_request
-        if is_service_running():
+        from .voice.service import MAX_AUDIO_BYTES, is_service_running, send_request
+        if is_service_running() and Path(audio_path).stat().st_size <= MAX_AUDIO_BYTES:
             print("[routing to voice service (warm)]", file=sys.stderr)
+            import base64
+            suffix = Path(audio_path).suffix.lower()
             response = send_request({
                 "action": "transcribe",
-                "file": str(Path(audio_path).resolve()),
+                "audio": base64.b64encode(Path(audio_path).read_bytes()).decode("ascii"),
+                "suffix": suffix,
                 "language": args.language,
                 "conditioned": args.conditioned,
                 "correct": args.correct,
