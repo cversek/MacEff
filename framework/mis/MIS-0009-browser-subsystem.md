@@ -5,7 +5,7 @@
 **Status**: Draft
 **Authors**: the host-side maintainer
 **Secretary**: the head maintainer
-**Deliberation**: pending
+**Deliberation**: https://github.com/cversek/MacEff/pull/1030#issuecomment-7044097746 (opened by the operator on this pull request, 2026-11-20)
 **Created**: 2026-11-20
 **Updates**: none
 **Supersedes**: none
