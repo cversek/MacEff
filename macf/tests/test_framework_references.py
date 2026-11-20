@@ -132,6 +132,8 @@ DELIBERATE = {
     ("policies/base/consciousness/structure_governance.md", "ca"): 2,
     ("policies/base/development/release_workflow.md", "tasks"): 1,
     ("templates/SUBAGENT_DEF_TEMPLATE.md", "subagent"): 1,
+    # A proposed command group, specified in a Draft MIS; it lands with the capability on acceptance.
+    ("mis/MIS-0009-browser-subsystem.md", "browser"): 5,
 }
 
 
