@@ -379,8 +379,53 @@ def test_verbose_listing_gives_each_carded_row_its_attach_command():
     had expired was hard to reach because its session name had to be reconstructed by hand)."""
     known = RosterEntry(card="Lumen2MacEff_3f9a1c", moniker="Lumen2MacEff", uuid="3f9a1c", account="pa_lumen2",
                         display_name="Lumen 2", session_kind="daemon", state="running", home="/home/pa_lumen2")
-    nameless = RosterEntry(reasons={f: "home unreadable" for f in roster._EXPLAINED} | {"state": "home unreadable"})
+    nameless = RosterEntry(reasons=dict.fromkeys(roster._EXPLAINED, "home unreadable") | {"state": "home unreadable"})
     verbose = roster.render_table([known, nameless], verbose=True)
     assert "    attach: macf_tools harness attach Lumen2MacEff_3f9a1c" in verbose.splitlines()
     assert verbose.count("attach: macf_tools harness attach") == 1   # none for the row with no card
     assert "attach:" not in roster.render_table([known], verbose=False)
+
+
+def _login_event(home, card, ends, now):
+    log = home / ".maceff" / "agent_events_log.jsonl"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    data = {"state": "ok", "refresh_expires_at": ends, "hours_left": 1.0, "detail": "x", "agent": card}
+    log.write_text(json.dumps({"timestamp": now, "event": "pd_login_state", "data": data}) + "\n")
+
+
+def test_an_own_agent_whose_login_ran_out_says_so_in_the_listing(tmp_path):
+    """The daemon's recorded reading of the login is judged against now, so an expired
+    login shows in `harness list` before the session fails its first turn (#883)."""
+    import time
+    f = build(tmp_path)
+    now = time.time()
+    _login_event(f.homes / "pa_lumen3", "Lumen3MacEff_0a1b2c", now - 7200, now - 60)
+    _login_event(f.homes / "pa_lumen", "LumenMacEff_a1b2c3", now + 30 * 86400, now - 60)
+    probe = lambda ident, has_legacy: Probed(kind="daemon", state="running")
+    r = local_roster(homes=f.homes, runtime=f.runtime, unit_dir=f.units, agents_yaml=f.agents_yaml,
+                     uid=os.getuid(), account_of=by_dirname, probe=probe)
+    m3 = next(e for e in r.entries if e.moniker == "Lumen3MacEff")
+    m1 = next(e for e in r.entries if e.moniker == "LumenMacEff")
+    assert "LOGIN-EXPIRED" in m3.login and m1.login == ""
+    table = roster.render_table(r.entries)
+    assert "login: LOGIN-EXPIRED" in table and table.count("login:") == 1
+
+
+def test_the_listing_judges_a_login_by_the_declared_warning_window(tmp_path):
+    """A login ending in five days is outside the default three-day window and inside a declared
+    week: the listing, the watch and the daemon read one window (#1058, #883)."""
+    import time
+
+    from macf.pd.interface import Declaration, declaration_path
+    card = "Lumen3MacEff_0a1b2c"
+    now = time.time()
+    declared = {"times": ["07:45"], "warn_days": 7, "missed": {"kind": "skip"}}
+    for name, reports in (("a", declared), ("b", None)):
+        home = tmp_path / name
+        (home / ".maceff" / "pd").mkdir(parents=True)
+        declaration_path(home).write_text(Declaration.model_validate(
+            {"version": 1, "agent": card, "units": [], **({"timezone": "UTC", "reports": reports} if reports else {})}
+        ).model_dump_json())
+        _login_event(home, card, now + 5 * 86400, now - 60)
+        line = roster._login_line(home, card, now)
+        assert ("LOGIN-EXPIRING" in line) == (reports is not None), line

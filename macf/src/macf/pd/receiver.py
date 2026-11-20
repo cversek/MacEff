@@ -106,6 +106,8 @@ class Receiver:
         if again is not None:
             self.refused = again
             return
+        if not os.path.isdir(self.box):
+            return      # removed, not fixed: _access answers None for a missing box, which is no clearing
         self.refused = None
         print(f"pd: the receiver can ingest {self.agent}'s mail again: access to {self.box} is fixed",
               file=sys.stderr)

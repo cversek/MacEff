@@ -2081,7 +2081,8 @@ def cmd_harness_cutover(args: argparse.Namespace) -> int:
     from .platform.launchd import cutover_label
     try:
         plan = build_plan(home, card, agent, host_probes(home, card),
-                          staged=Path(args.staged) if getattr(args, "staged", None) else None)
+                          staged=Path(args.staged) if getattr(args, "staged", None) else None,
+                          accept_no_linger=bool(getattr(args, "accept_no_linger", False)))
     except Exception as e:  # noqa: BLE001 - the one-shot job must remove itself whatever failed
         job_plist = Path(args.job_plist) if getattr(args, "job_plist", None) else None
         said = str(e) if isinstance(e, ProbeUnavailable) else f"{type(e).__name__}: {e}"
@@ -2164,7 +2165,8 @@ def cmd_harness_cutover(args: argparse.Namespace) -> int:
         log_path = home / ".maceff" / "logs" / f"cutover-{datetime.now():%Y%m%d-%H%M%S}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         staged = Path(args.staged) if getattr(args, "staged", None) else staged_path(home)
-        argv = arm_argv(agent, home, staged, log_path, sys.executable)
+        argv = arm_argv(agent, home, staged, log_path, sys.executable,
+                        accept_no_linger=bool(getattr(args, "accept_no_linger", False)))
         started = subprocess.run(argv, capture_output=True, text=True)
         if started.returncode != 0:
             print(f"⚠️ MACF: harness cutover --run: the transient unit didn't start: "
@@ -13175,6 +13177,10 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_cutover.add_argument("--execute", action="store_true",
                                  help="what the transient unit or launchd job runs: carry the plan out "
                                       "here and now (refused inside a Claude Code session)")
+    harness_cutover.add_argument("--accept-no-linger", action="store_true",
+                                 help="move although `loginctl` linger is off for this user, so the daemon stops at "
+                                      "the last logout and doesn't start at boot (systemd hosts; the plan names the "
+                                      "command that turns it on, which is the host operator's call)")
     harness_cutover.add_argument("--log", help="where --execute writes its progress")
     harness_cutover.add_argument("--job-plist", help=argparse.SUPPRESS)   # the launchd job's own plist, removed when it ends
     harness_cutover.set_defaults(func=cmd_harness_cutover)
@@ -14983,12 +14989,15 @@ def cmd_voice_transcribe(args) -> int:
 
     # Try voice service first (warm model = fast)
     try:
-        from .voice.service import is_service_running, send_request
-        if is_service_running():
+        from .voice.service import MAX_AUDIO_BYTES, is_service_running, send_request
+        if is_service_running() and Path(audio_path).stat().st_size <= MAX_AUDIO_BYTES:
             print("[routing to voice service (warm)]", file=sys.stderr)
+            import base64
+            suffix = Path(audio_path).suffix.lower()
             response = send_request({
                 "action": "transcribe",
-                "file": str(Path(audio_path).resolve()),
+                "audio": base64.b64encode(Path(audio_path).read_bytes()).decode("ascii"),
+                "suffix": suffix,
                 "language": args.language,
                 "conditioned": args.conditioned,
                 "correct": args.correct,
