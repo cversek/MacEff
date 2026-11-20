@@ -12403,6 +12403,26 @@ def cmd_knowledge_query(args: argparse.Namespace) -> int:
     # "which cycle touched X" wants the temporal record. Returning both
     # unlabelled dilutes the first with the second, and the dilution worsens
     # every cycle. See the scholarship policy on node classes and provenance.
+    since = getattr(args, "since", None)
+    if since:
+        import datetime as _dt
+        try:
+            floor = _dt.datetime.fromtimestamp(_parse_since(since)).strftime("%Y-%m-%d")
+        except ValueError as e:
+            print(f"❌ {e}")
+            return 2
+        undated = 0
+        for key in ("nodes", "neighbors"):
+            kept = [n for n in result.get(key, []) if n.get("date") and n["date"] >= floor]
+            undated += sum(1 for n in result.get(key, []) if not n.get("date"))
+            result[key] = kept
+        result["since"], result["undated_left_out"] = floor, undated
+    if getattr(args, "recent", False):
+        for key in ("nodes", "neighbors"):
+            # Stable: equal dates keep their ranked order, and an undated node goes last.
+            dated = sorted((n for n in result.get(key, []) if n.get("date")), key=lambda n: n["date"], reverse=True)
+            result[key] = dated + [n for n in result.get(key, []) if not n.get("date")]
+        result["ordered"] = "newest first"
     node_class = getattr(args, "node_class", None)
     if node_class:
         for key in ("nodes", "neighbors"):
@@ -14560,6 +14580,11 @@ def _build_parser() -> argparse.ArgumentParser:
                           help="with several terms, match nodes that answer any of them")
     kg_query.add_argument("--min-idf", type=float, default=None, metavar="T",
                           help="admit a neighbour only through a concept this specific (default: chosen by knowledge eval)")
+    kg_query.add_argument("--since", metavar="DATE|Nd",
+                          help="only nodes dated on or after this day (2026-09-01, or 7d; an age is cut to the day); "
+                               "a node whose name carries no date is left out and counted")
+    kg_query.add_argument("--recent", action="store_true",
+                          help="order the results newest first instead of by match score")
     kg_query.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
     kg_query.add_argument(
         "--class", dest="node_class",
