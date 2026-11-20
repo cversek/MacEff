@@ -1007,12 +1007,14 @@ def test_a_default_unit_declared_without_the_login_is_reported_as_drift():
                           "environment": {"PATH": "/bin", "USER": "a", "LOGNAME": "a"}}]}
     older = {"units": [{"name": "monitor", "command": ["py", "-m", dd.MONITOR_MODULE, "--follow"],
                         "environment": {"PATH": "/bin"}}]}
-    assert dd.drift(older, default) == ["the monitor unit's environment lacks USER, LOGNAME"]
+    said = dd.drift(older, default)
+    assert len(said) == 1 and said[0].startswith("the monitor unit's environment lacks USER, LOGNAME: ")
+    assert "can't read its stored login" in said[0] and said[0].endswith("add USER=a, LOGNAME=a")
     # The same unit running a command of the agent's own keeps the rest of its environment as
     # the agent's, but the login is the account's, whatever the unit runs.
     own = {"units": [{"name": "monitor", "command": ["my-monitor", "-m", dd.MONITOR_MODULE],
                       "environment": {}}]}
-    assert dd.drift(own, default) == ["the monitor unit's environment lacks USER, LOGNAME"]
+    assert dd.drift(own, default)[0].startswith("the monitor unit's environment lacks USER, LOGNAME")
     own["units"][0]["environment"] = {"USER": "a", "LOGNAME": "a"}
     assert dd.drift(own, default) == []
 
@@ -1028,7 +1030,7 @@ def test_a_session_unit_with_its_own_command_is_still_told_it_lacks_the_login():
                         "command": ["py", "-m", "macf.cli", "harness", "unit", "--agent", "Tester_abc123",
                                     "--project-dir", "/h/work", "--no-proxy"],
                         "environment": {"HOME": "/h"}}]}
-    assert dd.drift(older, default) == ["the session unit's environment lacks USER, LOGNAME"]
+    assert dd.drift(older, default)[0].startswith("the session unit's environment lacks USER, LOGNAME: ")
 
 
 def _channel_command_missing(monkeypatch):

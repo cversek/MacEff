@@ -486,6 +486,12 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
                   f"this command {report.cli_build}. If this command's is the one you mean, {UPDATE_HINT}")
         else:
             print(f"  build: {report.daemon_build}, the same as this command")
+    try:
+        from macf.pd.core import load_declaration
+        declared = {u.name: u for u in load_declaration(home, card).units}
+    except Exception as e:  # noqa: BLE001 - the status reads without a declaration; only the login hint needs it
+        declared = {}
+        print(f"  ⚠️ the declaration did not read, so no login-environment hint: {type(e).__name__}", file=sys.stderr)
     for unit in report.units:
         line = f"  {unit['unit']}: {unit.get('state') or 'no state recorded'}"
         if unit.get("pid"):
@@ -496,6 +502,10 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         if unit.get("auth_failed"):
             # Held failed for its login and still running: the way back is a person's /login (#1015)
             line += f"; can't log in ({unit['auth_failed']}): attach and run /login"
+            from macf.pd.login import missing_login_env
+            cause = missing_login_env(declared.get(unit["unit"]))
+            if cause:
+                line += f"\n    probable cause: {cause}"
         if "liveness" in unit:
             line += f"; liveness {unit['liveness']}: {unit['detail']}"
         print(line)

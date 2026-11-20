@@ -23,7 +23,7 @@ from typing import Callable, Dict, Optional
 #: The event the daemon records.
 EVENT = "pd_login_state"
 #: A grant this close to its end reads ``expiring``: three days leaves a weekend to log in again.
-from macf.pd.interface import EXPIRING_DAYS  # noqa: E402 -- the declaration's default, kept as one number
+from macf.pd.interface import EXPIRING_DAYS
 EXPIRING_S = EXPIRING_DAYS * 86400.0
 #: How often the daemon reads the credential.
 POLL_S = 3600.0
@@ -94,6 +94,21 @@ def warn_seconds(declaration) -> float:
     reading at every site that judges a login's expiry, so none of them can ignore the declaration (#1027)."""
     reports = getattr(declaration, "reports", None)
     return reports.warn_days * 86400.0 if reports else EXPIRING_S
+
+
+def missing_login_env(unit) -> str:
+    """Why a unit that can't log in probably can't: its declared environment lacks ``USER`` or ``LOGNAME``
+    (on macOS the stored login is looked up by them), and what to add; empty when both are declared (#1073).
+    *unit* is a declared unit, or None when no declaration read."""
+    from macf.pd.default_declaration import LOGIN_ENV_EFFECT, LOGIN_VARIABLES
+    if unit is None:
+        return ""
+    declared = unit.environment or {}
+    lacking = [k for k in LOGIN_VARIABLES if k not in declared]
+    if not lacking:
+        return ""
+    return (f"its declared environment lacks {', '.join(lacking)}, and {LOGIN_ENV_EFFECT}: add them to every "
+            f"unit's environment, restart the daemon, then the unit (macf_tools policy read persistent_layer)")
 
 
 def daemon_assessment(expiring_s: float = EXPIRING_S) -> Dict[str, object]:
