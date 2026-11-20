@@ -13838,6 +13838,10 @@ def _build_parser() -> argparse.ArgumentParser:
     amail_status.add_argument("--json", action="store_true", help="machine-readable output")
     amail_status.set_defaults(func=cmd_amail_status)
 
+    # ── browser: the operator's browser, governed (MIS-0009) ─────────────
+    from macf.browser.cli import add_browser_parser
+    add_browser_parser(sub)
+
     # ── gmail ────────────────────────────────────────────────────────────
     gmail_parser = sub.add_parser(
         "gmail", help="per-agent Gmail through a local OAuth grant (no MCP, no send verb)",
