@@ -16,7 +16,9 @@ The steps, each skippable by its flag:
    channels the declaration allows, the MacEff channel included;
 5. ``channel`` - the MacEff channel plugin from the marketplace packaged with macf;
 6. ``permissions`` - the mode-safety permission entries;
-7. ``daemon`` - the daemon under the platform's service manager (``pd install``).
+7. ``framework`` - whether the hooks and the ``/maceff`` skills and commands are installed, and the
+   command that installs them (``framework install``) when they are not;
+8. ``daemon`` - the daemon under the platform's service manager (``pd install``).
 
 ``pd install`` comes last although it is the heart of the stack: the daemon starts the session
 unit as soon as it starts, and that session needs the child script, the channel plugin and its
@@ -58,6 +60,9 @@ STEPS: List[Tuple[str, str, str]] = [
     ("channel", "add the packaged maceff marketplace and install maceff-channel@maceff", "no_channel"),
     ("permissions", "add the mode-safety permission entries to the project's settings.local.json",
      "no_permissions"),
+    ("framework", ("check that the hooks and the /maceff skills and commands are installed, and "
+                   "name the command that installs them when they are not (framework install)"),
+     "no_framework"),
     ("daemon", "put the primal daemon under the service manager (pd install)", "no_daemon"),
     ("registry", ("declare the agent's signing key in the operator's registry, the change shown "
                   "first; on a host the write is root's, printed as one step (MIS-0004 R42)"),
@@ -755,7 +760,34 @@ def _plugin_state(login_home: Path) -> Tuple[set, set]:
     return known, installed
 
 
+def _channel_command_problem() -> Optional[str]:
+    """Why Claude Code can't start the channel plugin's server, or None when it can (#1051).
+
+    The plugin's ``.mcp.json`` runs ``maceff-channel`` by that bare name. With a virtual-environment
+    install the console script lives only in the environment's ``bin/``, so Claude Code reports
+    ``Executable not found in $PATH: stdio`` at every session start, naming neither the command nor the
+    plugin. The installer's own PATH stands in for Claude Code's, which is the closest it can see."""
+    from macf.channels.marketplace import CHANNEL_COMMAND
+    if shutil.which(CHANNEL_COMMAND):
+        return None
+    beside = Path(sys.executable).parent / CHANNEL_COMMAND
+    where = (f"this install has it at {beside}" if beside.exists()
+             else f"it is not beside this Python ({beside.parent}) either")
+    return (f"the {CHANNEL_COMMAND} command is not on PATH, so Claude Code can't start the plugin's server "
+            f"(it reports 'Executable not found in $PATH: stdio' at session start); {where}. Put it on the "
+            f"PATH Claude Code starts with, for example ln -s {beside} ~/.local/bin/{CHANNEL_COMMAND}")
+
+
 def step_channel(ctx: Context) -> Result:
+    result = _install_channel(ctx)
+    problem = _channel_command_problem()
+    if problem and result.status in (DONE, ALREADY, WOULD):
+        done = f"{result.detail}; but " if result.detail else ""
+        return Result("channel", REFUSED, f"{done}{problem}")
+    return result
+
+
+def _install_channel(ctx: Context) -> Result:
     from macf.channels.marketplace import CHANNEL_PLUGIN_ID, MARKETPLACE, packaged_marketplace
     known, installed = _plugin_state(ctx.login_home)
     update = getattr(ctx.args, "update", False)
@@ -820,6 +852,41 @@ def step_permissions(ctx: Context) -> Result:
     if not added:
         return Result("permissions", ALREADY, str(where))
     return Result("permissions", DONE, f"{added} entr{'y' if added == 1 else 'ies'} added to {where}")
+
+
+def step_framework(ctx: Context) -> Result:
+    """Whether the framework's hooks and ``/maceff`` skills or commands are installed (#1049).
+
+    ``agent init`` writes the daemon, the harness and the channel, but the hooks and the ``/maceff``
+    skills and commands come from ``framework install``, which works on the directory it is run in.
+    Without them the agent starts with no hooks bound and no commands, and nothing said so. This step
+    looks, and when something is missing it is reported found with drift, naming the command and where
+    to run it. It installs nothing, because that command writes settings in the directory it is run
+    from, and it never fails the run. Hooks count where either place binds them: the project's
+    ``settings.local.json`` (``framework install``'s mode) or the home's ``settings.json`` (the global
+    mode); the ``/maceff`` artifacts count as installed when either the skills or the commands
+    directory holds one, since the commands are pointers to skills."""
+    if ctx.in_container:
+        return Result("framework", SKIPPED, CONTAINER_OWNS)
+    from macf.cli import _count_hook_events_in_settings, _hooks_to_install_list
+    root = project_dir(ctx)
+    expected = len(_hooks_to_install_list())
+    places = (root / ".claude" / "settings.local.json", Path.home() / ".claude" / "settings.json")
+    bound = max(_count_hook_events_in_settings(p) for p in places)
+
+    def _has_maceff(folder: Path, prefix: str) -> bool:
+        return folder.is_dir() and any(e.name.startswith(prefix) for e in folder.iterdir())
+
+    has_artifacts = (_has_maceff(root / ".claude" / "skills", "maceff-")
+                     or _has_maceff(root / ".claude" / "commands", "maceff"))
+    if bound == expected and has_artifacts:
+        return Result("framework", ALREADY, f"{bound} hook events bound and the /maceff skills or commands "
+                                            f"installed (looked in {root / '.claude'} and {Path.home() / '.claude'})")
+    missing = ([f"hooks ({bound} of {expected} events bound)"] if bound != expected else []) + \
+              (["the /maceff skills and commands"] if not has_artifacts else [])
+    return Result("framework", DRIFT, f"{' and '.join(missing)} not installed (looked in {root / '.claude'} and "
+                                      f"{Path.home() / '.claude'}); run `cd {root} && macf_tools framework install` "
+                                      f"to install them. This step never fails the run")
 
 
 def _missing_permissions(root: Path) -> Optional[List[str]]:
@@ -996,6 +1063,7 @@ RUNNERS: Dict[str, Callable[[Context], Result]] = {
     "harness": step_harness,
     "channel": step_channel,
     "permissions": step_permissions,
+    "framework": step_framework,
     "daemon": step_daemon,
     "registry": step_registry,
 }
