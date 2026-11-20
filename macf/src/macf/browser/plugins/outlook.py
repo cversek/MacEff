@@ -86,7 +86,7 @@ def _page(backend):
     ready = page.get_by_role("listbox", name="Message list")
     try:
         ready.first.wait_for(timeout=45000)
-    except Exception as e:  # noqa: BLE001 - a client that never draws its list is refused by name below
+    except Exception as e:
         raise guard.Refused(f"the mail client drew no Message list within 45 s (MIS-0009-R38): {e}") from e
     return page
 
