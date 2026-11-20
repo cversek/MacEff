@@ -174,8 +174,17 @@ def cmd_pd_login(args: argparse.Namespace) -> int:
     """The login verdict for the account running this command; a deployment runs it as a seat's
     own user to check that seat from outside. Reads only the two expiry dates."""
     import json
-    from macf.pd.login import read_assessment
-    verdict = read_assessment()
+    from macf.pd.login import EXPIRING_S, read_assessment
+    expiring_s = EXPIRING_S
+    try:                      # the declaration's warning window, when this home has one that reads (#1027)
+        home, card = _this_agent()
+        from macf.pd.core import load_declaration
+        from macf.pd.login import warn_seconds
+        expiring_s = warn_seconds(load_declaration(home, card))
+    except Exception as e:  # noqa: BLE001 - a seat with no readable declaration still gets its verdict, by the default window
+        print(f"⚠️ MACF: pd login: no declaration read, so the default warning window applies: {type(e).__name__}",
+              file=sys.stderr)
+    verdict = read_assessment(expiring_s=expiring_s)
     if getattr(args, "json", False):
         print(json.dumps(verdict))
     else:
@@ -984,7 +993,7 @@ def cmd_pd_tray_install(args: argparse.Namespace) -> int:
               f"interpreter with macf[tray] installed in it.", file=sys.stderr)
         return 1
     argv = [sys.executable, "-m", "macf.tray"]
-    steps = launchd.tray_install_plan(argv, str(Path.home()), _tray_log_dir(), os.getuid(), reload=args.force)
+    steps = launchd.tray_install_plan(argv, str(Path.home()), _tray_log_dir(), os.getuid())
     if args.plan:
         print(f"# the tray, not installed (--plan); it runs {sys.executable}, with macf from {planned}")
         for s in steps:

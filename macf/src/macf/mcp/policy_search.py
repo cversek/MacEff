@@ -41,12 +41,12 @@ except ImportError:
     LANCEDB_AVAILABLE = False
     PolicySearch = None
 
-from macf.utils.paths import find_agent_home
 
 
 def get_db_path() -> Path:
     """Get policy index path using portable resolution."""
-    return find_agent_home() / ".maceff" / "policy_index.lance"
+    from macf.utils.recommend import get_policy_db_path
+    return get_policy_db_path()
 
 
 # Configuration

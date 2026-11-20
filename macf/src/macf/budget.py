@@ -218,11 +218,12 @@ def parse_manual(text: str, now: Optional[dt.datetime] = None) -> list[dict]:
 def _recent(event: str, now: float) -> Iterable[dict]:
     """Events of one type, newest first, no older than HISTORY."""
     floor = now - HISTORY.total_seconds()
-    for e in read_events(reverse=True, scope="all"):
+    # The floor bounds the walk to the history window whatever the type, so the type filter can
+    # skip every other event's parse without walking back for a rare one (#881).
+    for e in read_events(reverse=True, scope="all", only=(event,), since=floor):
         if e.get("timestamp", 0) < floor:
             return
-        if e.get("event") == event:
-            yield e
+        yield e
 
 
 def samples(since: Optional[float] = None, now: Optional[float] = None) -> list[dict]:

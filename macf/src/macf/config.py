@@ -26,6 +26,27 @@ class ConfigurationError(Exception):
     pass
 
 
+UNKNOWN_AGENT = "unknown_agent"
+_unresolved_said = False
+
+
+def unresolved_agent_id(why: str) -> str:
+    """The id used when nothing says which agent is running, and one line on stderr saying so, once per process.
+
+    An agent id that doesn't resolve is a defect, not a normal state: per-session folders and logs are
+    then written under ``unknown_agent``, which hides whose they are and lets a lookup by agent id miss
+    (#1036). The line names the process and the two variables the container path reads, so the next time
+    it fires the process that lacks them can be found."""
+    global _unresolved_said
+    if not _unresolved_said:
+        _unresolved_said = True
+        env = {k: ("set" if os.environ.get(k) else "unset") for k in ("MACEFF_USER", "USER")}
+        print(f"⚠️ MACF: the agent id did not resolve ({why}); using '{UNKNOWN_AGENT}' for its folders and logs. "
+              f"process {os.getpid()} ({sys.argv[0] or 'no argv'}); MACEFF_USER {env['MACEFF_USER']}, "
+              f"USER {env['USER']}", file=sys.stderr)
+    return UNKNOWN_AGENT
+
+
 class ConsciousnessConfig:
     """
     Configuration for consciousness-aware operations.
@@ -251,7 +272,8 @@ class ConsciousnessConfig:
         Resolution priority:
         1. Container: MACEFF_USER or USER environment variable
         2. Host: .macf/config.json moniker field
-        3. Fallback: 'unknown_agent'
+        3. The calling card of the agent's home
+        4. Fallback: 'unknown_agent', said once on stderr with the process and why
 
         Returns:
             str: Agent identifier suitable for filesystem paths
@@ -275,10 +297,16 @@ class ConsciousnessConfig:
                             if moniker:
                                 return moniker
                     except Exception as e:
-                        print(f"⚠️ MACF: Config parse failed (fallback: unknown_agent): {e}", file=sys.stderr)
+                        print(f"⚠️ MACF: Config parse failed (trying the calling card next): {e}", file=sys.stderr)
 
-        # Fallback - use unknown_agent
-        return 'unknown_agent'
+        # The calling card in the agent's home, which the primal daemon treats as identity (pd/names.py):
+        # a process with no USER, no moniker and no project still runs in someone's home (#1036).
+        try:
+            from .pd.names import agent_card
+            from .utils.paths import find_agent_home
+            return agent_card(find_agent_home())
+        except Exception as e:  # noqa: BLE001 - why the card didn't resolve goes in the one line said below
+            return unresolved_agent_id(f"no calling card either: {type(e).__name__}: {e}")
 
     def load_config(self) -> dict:
         """
@@ -311,6 +339,7 @@ class ConsciousnessConfig:
                 "checkpoint_format": "structured"
             },
             "paths": {
+                "temp_dir": "/tmp/macf",
                 "logs_dir": "logs"
             },
             "features": {

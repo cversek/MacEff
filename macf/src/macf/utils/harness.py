@@ -874,7 +874,8 @@ set -ga terminal-overrides ",*256col*:Tc"
 set -sg escape-time 10
 # Shift-Tab and other modified keys reach the client only with extended keys on; without them
 # Claude Code's Shift-Tab (cycle modes) did nothing in a harness pane (measured, tmux 3.6a, iTerm2).
-set -s extended-keys on
+# `always`, not `on`: the reporter's fix that held for a session was `always` (#1016).
+set -s extended-keys always
 set -as terminal-features 'xterm*:extkeys'
 set -g history-limit 50000
 set -g mouse on

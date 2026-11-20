@@ -27,6 +27,7 @@ from .utils import (
     get_macf_package_path,
     get_hooks_dir,
     get_total_context,
+    get_total_context_and_source,
 )
 from .modes import detect_auto_mode
 from .utils.environment import current_model, detect_model
@@ -356,7 +357,8 @@ def cmd_env(args: argparse.Namespace) -> int:
             "model": (_model := current_model())["id"],
             "model_display": _model["display"],
             "model_source": _model["source"],
-            "context_window": f"{get_total_context():,}",
+            "context_window": f"{(_window := get_total_context_and_source())[0]:,}",
+            "context_window_source": _window[1],
             "python_path": sys.executable,
             "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
         },
@@ -446,7 +448,9 @@ def cmd_env(args: argparse.Namespace) -> int:
         print(f"  Claude Code:  {data['versions']['claude_code']}")
         _v = data['versions']
         print(f"  Model:        {_v.get('model_display', _v['model'])} ({_v['model']}, from {_v.get('model_source', '?')})")
-        print(f"  Context:      {data['versions']['context_window']} tokens")
+        from macf.utils.tokens import UNVERIFIED_CONTEXT_NOTE
+        _assumed = f" ({UNVERIFIED_CONTEXT_NOTE})" if _v.get("context_window_source") == "default" else ""
+        print(f"  Context:      {data['versions']['context_window']} tokens{_assumed}")
         print(f"  Python:       {data['versions']['python_path']} ({data['versions']['python_version']})")
         print()
 
@@ -624,6 +628,34 @@ def cmd_mis_check(args: argparse.Namespace) -> int:
           "MIS-0001-R21 (terms_MUST_reach_glossary) were not checked")
     print(f"{'❌' if findings else '✅'} {n} MIS file(s){gl}: {len(findings)} finding(s)")
     return 1 if findings else 0
+
+
+def cmd_mis_index(args: argparse.Namespace) -> int:
+    """The registry of MIS files, from their own headers (#1066)."""
+    from pathlib import Path
+    from macf import mis
+    paths = [Path(x) for x in (args.paths or ["framework/mis"])]
+    missing = [str(x) for x in paths if not x.exists()]
+    if missing:
+        print(f"❌ not found: {', '.join(missing)}", file=sys.stderr)
+        return 2
+    rows = mis.index(paths)
+    if not getattr(args, "open", False):
+        print(json.dumps(rows, indent=2) if args.json else mis.format_index(rows))
+        return 0
+    try:
+        drafts = mis.open_index(mis.gh_runner())
+    except (RuntimeError, OSError, ValueError, KeyError) as e:
+        print(f"❌ the open MIS pull requests could not be read: {e}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({"landed": rows, "open": drafts}, indent=2))
+        return 0
+    print(mis.format_index(rows))
+    print("\nOpen, from pull requests (drafts; not landed):")
+    for r in drafts:
+        print(f"MIS-{r['number']:<5}{r['status'] or '?':<10}{r['title']}  (PR #{r['pr']}{', draft' if r['draft'] else ''})")
+    return 0
 
 
 def cmd_budget_status(args: argparse.Namespace) -> int:
@@ -1935,6 +1967,22 @@ def cmd_harness_attach(args: argparse.Namespace) -> int:
         if decision.exit_code is not None:
             print(decision.message, file=sys.stderr)
             return decision.exit_code
+        from .utils.attach_dispatch import control_refusal
+        refused = control_refusal(decision.argv)
+        if refused and getattr(args, "control", None) is not True and entry is not None:
+            # Control mode came from the declared default (`control: true`), not from the flag: this terminal
+            # can't use it, so attach plainly and say so, rather than refuse a command that asked for nothing.
+            print(f"⚠️ MACF: {refused.split(' Attach')[0]} Attaching without it.", file=sys.stderr)
+            decision = decide(entry, remotes, control=False, read_only=getattr(args, "read_only", False),
+                              plan_for_home=plan_attach_for_home, plan_for_card=plan_attach_for_card,
+                              has_session=has_session, environment=client_environment)
+            if decision.exit_code is not None:
+                print(decision.message, file=sys.stderr)
+                return decision.exit_code
+            refused = control_refusal(decision.argv)
+        if refused:
+            print(f"❌ {refused}", file=sys.stderr)
+            return 2
         env = decision.env or dict(os.environ)
         for command in decision.before:
             # Naming the window is a courtesy: a tmux that refuses it still attaches.
@@ -2033,7 +2081,8 @@ def cmd_harness_cutover(args: argparse.Namespace) -> int:
     from .platform.launchd import cutover_label
     try:
         plan = build_plan(home, card, agent, host_probes(home, card),
-                          staged=Path(args.staged) if getattr(args, "staged", None) else None)
+                          staged=Path(args.staged) if getattr(args, "staged", None) else None,
+                          accept_no_linger=bool(getattr(args, "accept_no_linger", False)))
     except Exception as e:  # noqa: BLE001 - the one-shot job must remove itself whatever failed
         job_plist = Path(args.job_plist) if getattr(args, "job_plist", None) else None
         said = str(e) if isinstance(e, ProbeUnavailable) else f"{type(e).__name__}: {e}"
@@ -2116,7 +2165,8 @@ def cmd_harness_cutover(args: argparse.Namespace) -> int:
         log_path = home / ".maceff" / "logs" / f"cutover-{datetime.now():%Y%m%d-%H%M%S}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         staged = Path(args.staged) if getattr(args, "staged", None) else staged_path(home)
-        argv = arm_argv(agent, home, staged, log_path, sys.executable)
+        argv = arm_argv(agent, home, staged, log_path, sys.executable,
+                        accept_no_linger=bool(getattr(args, "accept_no_linger", False)))
         started = subprocess.run(argv, capture_output=True, text=True)
         if started.returncode != 0:
             print(f"⚠️ MACF: harness cutover --run: the transient unit didn't start: "
@@ -3723,11 +3773,16 @@ def cmd_policy_recommend(args: argparse.Namespace) -> int:
         return 1
 
     from .utils.manifest import policies_newer_than_index
-    from .utils.paths import find_agent_home
-    stale = policies_newer_than_index(find_agent_home() / ".maceff" / "policy_index.lance")
+    from .utils.recommend import get_policy_db_path
+    stale = policies_newer_than_index(get_policy_db_path())
     if stale:
+        # The warm search service keeps the index it loaded, so a rebuild alone leaves it
+        # answering from the old one (#898).
         print(f"⚠️ {len(stale)} policies changed since the index was built ({', '.join(stale[:3])}"
-              f"{', ...' if len(stale) > 3 else ''}). Rebuild: macf_tools policy build_index", file=sys.stderr)
+              f"{', ...' if len(stale) > 3 else ''}). Rebuild: macf_tools policy build_index, then "
+              f"restart the search service, which keeps the index it loaded: where a primal daemon "
+              f"runs it, restart its `search` unit (the tray's Restart); otherwise "
+              f"macf_tools search-service stop, then start", file=sys.stderr)
 
     # Try warm service first (fast path)
     result = query_search_service("policy", query, limit=limit, timeout_s=1.0)
@@ -3846,6 +3901,14 @@ def cmd_policy_build_index(args: argparse.Namespace) -> int:
             db_path=db_path,
             extra_roots=extra_roots,
         )
+        # What the index holds, by content, so its staleness check isn't fooled by a checkout's
+        # new mtimes (#898). An index built from a named directory holds something other than the
+        # agent's roots, so it records nothing, and its staleness is judged by time.
+        if not args.policies_dir:
+            from .utils.manifest import record_index_build
+            if not record_index_build(db_path):
+                print("⚠️ MACF: the index's contents could not be recorded in the event log; "
+                      "its staleness will be judged by time", file=sys.stderr)
 
         # Output
         if json_output:
@@ -12370,6 +12433,26 @@ def cmd_knowledge_query(args: argparse.Namespace) -> int:
     # "which cycle touched X" wants the temporal record. Returning both
     # unlabelled dilutes the first with the second, and the dilution worsens
     # every cycle. See the scholarship policy on node classes and provenance.
+    since = getattr(args, "since", None)
+    if since:
+        import datetime as _dt
+        try:
+            floor = _dt.datetime.fromtimestamp(_parse_since(since)).strftime("%Y-%m-%d")
+        except ValueError as e:
+            print(f"❌ {e}")
+            return 2
+        undated = 0
+        for key in ("nodes", "neighbors"):
+            kept = [n for n in result.get(key, []) if n.get("date") and n["date"] >= floor]
+            undated += sum(1 for n in result.get(key, []) if not n.get("date"))
+            result[key] = kept
+        result["since"], result["undated_left_out"] = floor, undated
+    if getattr(args, "recent", False):
+        for key in ("nodes", "neighbors"):
+            # Stable: equal dates keep their ranked order, and an undated node goes last.
+            dated = sorted((n for n in result.get(key, []) if n.get("date")), key=lambda n: n["date"], reverse=True)
+            result[key] = dated + [n for n in result.get(key, []) if not n.get("date")]
+        result["ordered"] = "newest first"
     node_class = getattr(args, "node_class", None)
     if node_class:
         for key in ("nodes", "neighbors"):
@@ -12736,6 +12819,14 @@ def _build_parser() -> argparse.ArgumentParser:
     m.add_argument("paths", nargs="*", help="MIS files or directories (default: framework/mis)")
     m.add_argument("--glossary", metavar="PATH", help="glossary file (default: glossary.md beside the mis directory)")
     m.set_defaults(func=cmd_mis_check)
+    m = mis_sub.add_parser("index", help="the registry: every MIS file's number, title, status, deliberation and "
+                                         "where it lands, read from the files' own headers")
+    m.add_argument("paths", nargs="*", help="MIS files or directories (default: framework/mis)")
+    m.add_argument("--json", action="store_true", help="machine-readable output")
+    m.add_argument("--open", action="store_true",
+                   help="also list the open MIS pull requests as drafts, read from the pull requests' heads "
+                        "(needs gh and the network; never mixed into the landed rows)")
+    m.set_defaults(func=cmd_mis_index)
     budget_p = sub.add_parser("budget", help="print budget thresholds (JSON); subcommands: the subscription's rate limits")
     budget_p.set_defaults(func=cmd_budget)
     budget_sub = budget_p.add_subparsers(dest="budget_cmd")
@@ -13086,6 +13177,10 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_cutover.add_argument("--execute", action="store_true",
                                  help="what the transient unit or launchd job runs: carry the plan out "
                                       "here and now (refused inside a Claude Code session)")
+    harness_cutover.add_argument("--accept-no-linger", action="store_true",
+                                 help="move although `loginctl` linger is off for this user, so the daemon stops at "
+                                      "the last logout and doesn't start at boot (systemd hosts; the plan names the "
+                                      "command that turns it on, which is the host operator's call)")
     harness_cutover.add_argument("--log", help="where --execute writes its progress")
     harness_cutover.add_argument("--job-plist", help=argparse.SUPPRESS)   # the launchd job's own plist, removed when it ends
     harness_cutover.set_defaults(func=cmd_harness_cutover)
@@ -14527,6 +14622,11 @@ def _build_parser() -> argparse.ArgumentParser:
                           help="with several terms, match nodes that answer any of them")
     kg_query.add_argument("--min-idf", type=float, default=None, metavar="T",
                           help="admit a neighbour only through a concept this specific (default: chosen by knowledge eval)")
+    kg_query.add_argument("--since", metavar="DATE|Nd",
+                          help="only nodes dated on or after this day (2026-09-01, or 7d; an age is cut to the day); "
+                               "a node whose name carries no date is left out and counted")
+    kg_query.add_argument("--recent", action="store_true",
+                          help="order the results newest first instead of by match score")
     kg_query.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
     kg_query.add_argument(
         "--class", dest="node_class",
