@@ -1715,6 +1715,28 @@ def test_a_unit_still_failed_for_its_login_is_recorded_failed_again_each_day(mak
     assert states("session").count("starting") == 1
 
 
+def test_the_readout_still_says_when_the_failure_began_after_a_repeat(make_core, script):
+    """A repeat is a new record with a new time, so the readout, which takes how long a unit has been
+    in its state from the newest record, would call a login that failed on Monday failed since today.
+    The repeat carries when the state began, and the readout reads that (#896 review)."""
+    from macf.pd import health
+    from macf.pd.core import FAILED_RERECORD_S
+    began = 1_800_000_000.0
+    clock = [began]
+    core = make_core([make_unit("session", script, {"auth_failed": LOGIN_EXPIRED})], wall=lambda: clock[0])
+    core.boot()
+    assert drive(core, lambda: core.state("session") == "failed")
+    first = events("pd_unit_state", "session")[-1]
+    clock[0] = began + 2 * FAILED_RERECORD_S + 60          # two days on
+    assert drive(core, lambda: events("pd_unit_state", "session")[-1] is not first
+                 and "still failed" in events("pd_unit_state", "session")[-1]["reason"])
+    repeat = events("pd_unit_state", "session")[-1]
+    assert repeat["since"] == began
+    row = health._unit_health("session", {"event": "pd_unit_state", "timestamp": clock[0], "data": repeat},
+                              None, clock[0], lambda pid, start: True)
+    assert row.since == began
+
+
 def test_a_unit_that_is_running_is_not_recorded_again(make_core, script):
     """Only a failure the watch could lose is repeated: a healthy unit writes no state event
     however long it runs."""

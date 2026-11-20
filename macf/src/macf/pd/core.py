@@ -1081,7 +1081,7 @@ class Core:
         self._emit(EVENT_STATE, UnitState(
             agent=self.card, unit=r.spec.name, state="failed", pid=r.pid, proc_start=r.proc_start,
             reason=f"{AUTH_FAILED_REASON}: {r.auth_failed} (still failed; first recorded {began})",
-            boot_id=self._boot_id,
+            boot_id=self._boot_id, since=r.since,
         ).model_dump())
 
     def _check_liveness(self, r: _Runner, now: float) -> None:
