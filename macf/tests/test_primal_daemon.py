@@ -1054,6 +1054,38 @@ def test_the_agent_may_ask_for_a_unit_act_and_is_recorded_as_the_agent(tmp_path,
     assert control["peer"]["pid"] == os.getpid()
 
 
+def _session_and_service(script):
+    session = make_unit("sess", script, {}, restart="always").model_copy(update={"kind": "session"})
+    return [session, make_unit("worker", script, {})]
+
+
+def test_an_agent_cannot_stop_or_restart_its_own_session_unit(tmp_path, script, base, run_daemon):
+    """inject exit refuses while the client holds unsent feedback drafts or the session has scheduled
+    jobs, and a stop here is a SIGTERM that passes both. So an agent-asked stop or restart of the
+    session unit is refused with a pointer to inject exit, and nothing is done (#1007)."""
+    daemon = run_daemon(make_home(tmp_path, _session_and_service(script)), base)
+    assert wait_for(lambda: unit_state(daemon, "sess") == "running")
+    first = unit_pid(daemon, "sess")
+
+    for op in ("stop", "restart"):
+        reply = ask(daemon, {"op": op, "unit": "sess", "reason": "its own call",
+                             "asked_by": {"kind": "agent", "card": "Tester_abc123"}})
+        assert not reply["ok"] and "inject exit" in reply["error"], op
+    assert unit_state(daemon, "sess") == "running" and unit_pid(daemon, "sess") == first
+    assert all(d["reason"] != "its own call" for d in events("pd_control", "sess"))
+
+
+def test_the_agent_may_still_act_on_a_service_unit_and_the_operator_on_the_session(
+        tmp_path, script, base, run_daemon):
+    daemon = run_daemon(make_home(tmp_path, _session_and_service(script)), base)
+    assert wait_for(lambda: unit_state(daemon, "worker") == "running")
+    assert ask(daemon, {"op": "stop", "unit": "worker", "reason": "a service is the agent's",
+                        "asked_by": {"kind": "agent", "card": "Tester_abc123"}})["ok"]
+    assert wait_for(lambda: unit_state(daemon, "worker") == "stopped")
+    assert ask(daemon, {"op": "restart", "unit": "sess", "reason": "the operator's call",
+                        "asked_by": {"kind": "operator", "card": "Operator_000000"}})["ok"]
+
+
 def test_start_and_restart_over_socket(tmp_path, script, base, run_daemon):
     """The control socket's start and restart ops reach the core method of the same name, not
     each other's: restart gives a running unit a new pid, and start brings a stopped one back

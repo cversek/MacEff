@@ -811,6 +811,20 @@ class Daemon:
                     f"a request over this socket is asked by the operator, the agent or the declared "
                     f"wind-down, not {request.asked_by.kind!r}: that asker acts from inside and has "
                     f"no process to record (MIS-0002-R52 (control_act_MUST_name_who_asked))"))
+            if request.asked_by.kind == "agent" and request.op in ("stop", "restart") \
+                    and self.core.is_session(request.unit):
+                # inject exit refuses while the client holds unsent feedback drafts or the session
+                # has scheduled jobs, because exiting past them loses the operator's drafts or drops
+                # the agent's schedules. A stop here is a SIGTERM that passes both and, being the
+                # operator's way to take a session back from a loop (R48), every Stop gate too. So
+                # the agent takes its own session through inject exit; the operator can still ask
+                # with --asked-by operator (#1007).
+                return Response(ok=False, error=(
+                    f"an agent ends or restarts its own session through `macf_tools inject exit`, "
+                    f"which refuses while the client holds unsent feedback drafts or the session has "
+                    f"scheduled jobs; a {request.op} of the session unit {request.unit!r} here would "
+                    f"pass both. The operator can still ask for it (--asked-by operator). "
+                    f"`macf_tools policy read persistent_layer --section 1.4`"))
             started = proc_start(creds.pid)
             if not started:
                 return Response(ok=False, error=(
