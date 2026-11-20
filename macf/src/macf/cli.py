@@ -12097,6 +12097,21 @@ def _cmd_inject(args):
                   "refused.", file=sys.stderr)
             return 1
         return clear_own_input(getattr(args, "expect", "") or "")
+    if args.command.lstrip("/") == "model":
+        from .supervisor import switch_own_model
+        if getattr(args, "target", ""):
+            print("[inject] model switches only this agent's own model; --target is refused.", file=sys.stderr)
+            return 1
+        if not getattr(args, "value", None):
+            print("[inject] model needs a name (inject model opus --reason ...): a bare /model opens a picker "
+                  "that nobody is there to answer.", file=sys.stderr)
+            return 1
+        then = "" if getattr(args, "no_then", False) else getattr(args, "then", None)
+        return switch_own_model(args.value, getattr(args, "reason", "") or "", then=then,
+                                confirm=not getattr(args, "no_confirm", False))
+    if getattr(args, "value", None):
+        print(f"[inject] {args.command} takes no argument here; only model does.", file=sys.stderr)
+        return 1
     then = None if getattr(args, "no_then", False) else (getattr(args, "then", None) or DEFAULT_TEXT)
     return send_slash_to_self(args.command, target=getattr(args, "target", "") or "", then=then)
 
@@ -14212,7 +14227,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="queue a slash command into this agent's own CC pane (e.g. inject compact)")
     inject_parser.add_argument("command", help="slash command without the slash, e.g. 'compact'; "
                                                 "or 'clear-input' to empty this pane's input box "
-                                                "of framework text (with --expect)")
+                                                "of framework text (with --expect); or 'model NAME' "
+                                                "to switch this agent's own model (with --reason)")
+    inject_parser.add_argument("value", nargs="?", default=None, metavar="NAME",
+                               help="for model: an alias (opus, sonnet, haiku, fable, default) or a model id")
+    inject_parser.add_argument("--reason", default="",
+                               help="for model, required: whose word or which standing rule the switch "
+                                    "follows; recorded with it")
     inject_parser.add_argument("--expect", default="", metavar="OPENING",
                                help="for clear-input: the opening words of the text to clear; "
                                     "nothing is pressed unless the box starts with them")
@@ -14220,10 +14241,13 @@ def _build_parser() -> argparse.ArgumentParser:
                                help="supervisor name/pid to target directly "
                                     "(default: self-resolve from this session id)")
     inject_parser.add_argument("--then", default=None, metavar="TEXT",
-                               help="for compact: the prompt typed into this pane once the "
-                                    "compaction has finished (default: a short recovery prompt)")
+                               help="for compact or model: the prompt typed into this pane once it has run "
+                                    "(default: the framework's short prompt)")
     inject_parser.add_argument("--no-then", action="store_true",
-                               help="for compact: type nothing after the compaction")
+                               help="for compact or model: type nothing afterwards")
+    inject_parser.add_argument("--no-confirm", action="store_true",
+                               help="for model: leave the client's 'Switch model?' cost dialog for a person "
+                                    "(by default the follower answers it when it offers the model asked)")
     inject_parser.set_defaults(func=lambda args: _cmd_inject(args))
 
     # channel: settings for the channels the operator reads (GH #477)

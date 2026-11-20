@@ -714,7 +714,8 @@ class Core:
         """Every declared unit as the core sees it now, for the control socket's status."""
         return [UnitStatus(unit=r.spec.name, state=r.state, pid=r.pid if r.proc else None,
                            proc_start=r.proc_start if r.proc else None, since=r.since,
-                           restart_held_until=self._restart_held_until(r))
+                           restart_held_until=self._restart_held_until(r),
+                           auth_failed=r.auth_failed if r.proc else None)
                 for r in self._units.values()]
 
     def _restart_held_until(self, r: _Runner) -> Optional[str]:
