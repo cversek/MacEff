@@ -7,7 +7,6 @@ EXPERIMENT: Claude-mem associative memory injection (Cycle 337)
 """
 import json
 import os
-import subprocess
 import sys
 import time
 import traceback
@@ -44,42 +43,6 @@ from macf.channels.channel_tag import CHANNEL_SOURCE, is_maceff_notice, opening_
 # Lines that change on every prompt by design. The diff header carries them
 # (clock, breadcrumb, CL); diffing them would report a change every time.
 UPS_VOLATILE = ("Current Time:", "Breadcrumb:", "Tokens Used:", "CL Level:", "Remaining:", "Weekly usage:")
-
-# EXPERIMENT: Memory injection script path (Cycle 337)
-MEMORY_RECALL_SCRIPT = Path(__file__).parent.parent.parent / "agent/public/experiments/2026-01-15_140000_001_Claude-Mem_Associative_Injection/artifacts/memory-recall.py"
-
-def get_memory_injection(prompt: str) -> str:
-    """
-    Query claude-mem for associative memories relevant to the prompt.
-
-    EXPERIMENT (Cycle 337): Testing whether injected memories feel more
-    like "remembering" than explicit tool calls.
-
-    Returns empty string on any failure (graceful degradation).
-    """
-    if not MEMORY_RECALL_SCRIPT.exists():
-        return ""
-
-    if len(prompt) < 10:  # Skip very short prompts
-        return ""
-
-    try:
-        result = subprocess.run(
-            [sys.executable, str(MEMORY_RECALL_SCRIPT)],
-            input=json.dumps({"prompt": prompt}),
-            capture_output=True,
-            text=True,
-            timeout=0.2  # 200ms hard timeout
-        )
-
-        if result.returncode == 0 and result.stdout.strip():
-            output = json.loads(result.stdout)
-            return output.get("additionalContext", "")
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as e:
-        print(f"⚠️ MACF: memory recall script failed (no memories injected for this prompt): {e}", file=sys.stderr)
-
-    return ""
-
 
 #: How much of the transcript's end is read to find the entry for a prompt.
 _TRANSCRIPT_TAIL_BYTES = 64 * 1024
@@ -420,11 +383,6 @@ Breadcrumb: {breadcrumb}"""
         # Get boundary guidance (if CL ≤ 10)
         boundary_guidance = get_boundary_guidance(token_info['cl_level'], auto_mode)
 
-        # EXPERIMENT: Get associative memory injection (Cycle 337)
-        # DISABLED: Testing if this causes CL 17 limit
-        # Note: prompt already extracted above for prompt_preview
-        memory_injection = ""  # get_memory_injection(prompt)
-
         # Per-prompt policy-recommendation injection removed (GH#211). Policy
         # discovery in MacEff is pull, not push: agents consult the corpus on
         # recognised demand (task/phase orientation, before shipping a fix, when
@@ -452,7 +410,6 @@ Breadcrumb: {breadcrumb}"""
             token_section,
             voice_transcript if voice_transcript else "",  # Voice auto-transcription
             boundary_guidance if boundary_guidance else "",
-            memory_injection if memory_injection else "",  # EXPERIMENT: associative memories
             focus_line,
             footer
         ]
