@@ -322,7 +322,7 @@ def last_remote_control_event(log_path: Path, card: str, now: float,
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
