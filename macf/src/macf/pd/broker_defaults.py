@@ -165,8 +165,10 @@ def with_own_broker(declaration, home: Path, card: str):
 def broker_unit(card: str, account: str):
     """The broker unit a declaration that declares none gets: the wrapper, run as the daemon's own
     account, with the interpreter the daemon itself runs."""
+    from macf.pd.broker_unit import WRAPPER_UNIT_STOP_GRACE_S
     from macf.pd.interface import Unit
     return Unit(name="broker", kind="service",
                 command=[sys.executable, "-m", "macf.pd.broker_unit", "{runtime_dir}/" + card + ".broker/mosquitto.conf"],
                 account=account, restart="always", liveness_interval_s=60, memory_limit_mb=64,
+                stop_grace_s=WRAPPER_UNIT_STOP_GRACE_S,   # the wrapper's own stop path is longer than the default (#992)
                 environment={"HOME": "{agent_home}", "MACEFF_AGENT_HOME_DIR": "{agent_home}", "PATH": BROKER_PATH})

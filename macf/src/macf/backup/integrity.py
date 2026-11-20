@@ -7,6 +7,7 @@ Provides:
 - Backup retention cleanup
 """
 
+import sys
 import json
 import os
 import shutil
@@ -206,8 +207,8 @@ def get_backup_retention_count() -> int:
     if env_value:
         try:
             return int(env_value)
-        except ValueError:
-            pass
+        except ValueError as e:
+            print(f"⚠️ MACF: MACF_BACKUP_KEEP={env_value!r} is not an integer (using the default of 5): {e}", file=sys.stderr)
     return 5  # Default
 
 

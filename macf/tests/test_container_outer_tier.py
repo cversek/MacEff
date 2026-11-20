@@ -22,7 +22,7 @@ def _agent(username, primal_daemon=None, calling_card=None):
         primal_daemon_opt_out=None if primal_daemon is not None else "a stand-in that declares none",
         has_daemon=lambda: primal_daemon is not None,
         effective_calling_card=lambda key: calling_card,
-        effective_primal_daemon=lambda key, mail: primal_daemon)
+        effective_primal_daemon=lambda key, mail, container_env=None: primal_daemon)
 
 
 def _cfg(agents, services=None):

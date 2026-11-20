@@ -1703,6 +1703,17 @@ def test_a_daemon_restart_adopts_a_session_failed_for_its_login(make_core, scrip
     assert drive(second, lambda: second.state("session") == "failed")
 
 
+
+def test_status_says_a_session_failed_for_its_login_and_why(make_core, script):
+    """A session held failed for its login is still running, so its status carries its pid and
+    what the client said: attach reaches it, and pd status names the cause (MacEff #1015)."""
+    unit = make_unit("session", script, {"auth_failed": LOGIN_EXPIRED})
+    core = make_core([unit])
+    core.boot()
+    assert drive(core, lambda: core.state("session") == "failed")
+    status = next(s for s in core.statuses() if s.unit == "session")
+    assert status.pid == core.pid("session") and status.auth_failed == LOGIN_EXPIRED
+
 def test_denied_grant_notice(tmp_path, script, base, run_daemon):
     """MIS-0002-R65 (denied_grant_MUST_raise_notice): a daemon that starts reads the newest
     grant probe pd install recorded and owes the agent one notice per declared grant it found
@@ -1747,6 +1758,9 @@ class _NoPane:
 
     def capture(self):
         return ""
+
+    def width(self):
+        return None
 
     def type(self, text):
         return False

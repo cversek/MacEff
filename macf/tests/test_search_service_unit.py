@@ -216,7 +216,7 @@ def _agent(username, primal_daemon):
     """A stand-in agent spec whose effective declaration is exactly *primal_daemon*: the search
     unit's discovery is what these tests cover, not the container default."""
     return SimpleNamespace(username=username, primal_daemon=primal_daemon,
-                           effective_primal_daemon=lambda key, mail: primal_daemon)
+                           effective_primal_daemon=lambda key, mail, container_env=None: primal_daemon)
 
 
 @pytest.mark.parametrize("where", ["agent", "service"])

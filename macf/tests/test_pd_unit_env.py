@@ -1,8 +1,9 @@
 """The daemon tells each unit which unit it is and how often it beats (persistent_layer 3.2).
 These were typed again into every declaration, where a missing or mistyped value silently
 stopped a unit's liveness: two of three cutover trial runs failed that way."""
-import getpass
 import json
+import os
+import pwd
 
 import pytest
 
@@ -41,7 +42,7 @@ def test_a_declared_home_that_isnt_this_agents_is_refused_at_load(tmp_path):
     def declare(value):
         path = declaration_path(home)
         path.parent.mkdir(parents=True, exist_ok=True)
-        unit = Unit(name="worker", command=["true"], account=getpass.getuser(), restart="always",
+        unit = Unit(name="worker", command=["true"], account=pwd.getpwuid(os.getuid()).pw_name, restart="always",
                     liveness_interval_s=60, memory_limit_mb=1,
                     environment={"MACEFF_AGENT_HOME_DIR": value})
         path.write_text(Declaration(version=1, agent="Tester_abc123", units=[unit]).model_dump_json())
