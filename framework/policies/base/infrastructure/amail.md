@@ -235,7 +235,7 @@ cheapest rung that can reach the recipient:
 |---|---|---|
 | 1 | Recipient's mailbox is on this host | Hand-off into the recipient's pickup box (§2.3) |
 | 1s | Recipient's broker shares a filesystem with this one | Broker-to-broker hand-off into the peer broker's intake on that filesystem (§2.1.1) |
-| 2 | Recipient's broker is reachable on a private network | Broker-to-broker transfer over that network |
+| 2 | Recipient's broker is reachable on a private network | Broker-to-broker transfer over that network (§2.1.2) |
 | 3 | Anything else | Hand to the configured outbound relay |
 
 Rung selection is **runtime state**, evaluated per message. It is never recorded in
@@ -324,6 +324,24 @@ peer's id is kept in the audit reason.
 The consequence worth stating plainly: adding a second host, moving an agent between
 hosts, or gaining and losing a private network changes **nothing** about addressing,
 contact lists, or stored messages. Only the broker's rung choice changes.
+
+### 2.1.2 Rung 2: a peer broker over a private network
+
+A broker declares each peer by its mail domain, with the peer's private address and port, in
+the operator-written broker configuration (`peer_links`), and declares the one private address it
+listens on (`peer_listen`). It sends a message to a peer by connecting to the peer's listener and
+keeping the message until the peer acknowledges. The acknowledgement is the peer's report that the
+message is durably in its own intake (MIS-0004 R58, R60); a peer that is down, slow or cannot store
+it leaves the message in the sender's outbox, and the next sweep tries again (R61). A peer that
+refuses it is a refusal, recorded as one.
+
+The listener binds only the declared address, never every interface, and closes a connection from an
+address no declared peer holds before it reads from it (R58, R59). It reads a request only up to a
+bound, and only for a deadline (R62, R65). It writes what it takes into its own peer intake, `<handoff>/_peers/<peer domain>/`, and
+that intake is swept as a rung 1s intake is: the receiver's contacts, keys, quarantine, audit and
+hand-off decide what reaches an agent (R63, R64), so a connection says which machine sent a message
+and only the signature says which agent. A peer's domain is reached by one rung: declaring it in both
+`shared_handoffs` and `peer_links` is refused. Internet mail is never sent over this link (R53).
 
 ### 2.2 Local delivery is an optimization, not a special case
 

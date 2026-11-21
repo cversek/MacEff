@@ -18,10 +18,10 @@ delivery time, and is never recorded in the address or the contact list:
     rung 1   recipient's mailbox is on this host          -> pickup box, direct write
     rung 1s  recipient's broker shares a filesystem with   -> pickup box across the
              this one (a bind-mounted hand-off root)          mount, same write
-    rung 2   peer broker on a private network             -> not implemented (seam below)
+    rung 2   peer broker on a private network             -> the peer's listener (peer_link.py)
     rung 3   anything else                                -> outbound relay (Phase 6)
 
-Rungs 1 and 1s are implemented. The others raise a specific, logged error rather
+Rungs 1, 1s and 2 are implemented. Rung 3 raises a specific, logged error rather
 than silently succeeding — a transport that reports delivery it did not perform
 is the failure this whole subsystem is built to avoid.
 
@@ -246,6 +246,29 @@ class SharedRoute:
     decl: SharedHandoff
 
 
+@dataclass(frozen=True)
+class PeerLink:
+    """A peer broker reachable over a private network (rung 2, MIS-0004 R56 to R64).
+
+    Declared per DOMAIN in `BrokerConfig.peer_links`, in the operator-written broker
+    configuration. `host` is the peer's private address: a connection TO it carries our mail,
+    and a connection FROM it is the only one this broker's listener treats as that peer's.
+    `port` is where the peer's listener answers."""
+
+    host: str
+    port: int
+    note: str = ""
+
+
+@dataclass(frozen=True, kw_only=True)
+class PeerRoute:
+    """Where a rung-2 recipient resolves: the peer's domain, the address local-part, and the link."""
+
+    domain: str
+    local: str
+    link: PeerLink
+
+
 class Identity(str):
     """An agent name that remembers how the broker established it.
 
@@ -348,6 +371,10 @@ class BrokerConfig:
     #: sender's contacts decide who may be written to, and the recipient's
     #: own book decides acceptance at ingest, because the sending broker
     #: cannot read the peer's book and must not pretend it did.
+    #: Rung 2: peer brokers reachable over a private network, keyed by mail domain (R56).
+    peer_links: Dict[str, PeerLink] = field(default_factory=dict)
+    #: Rung 2, receiving side: the one private (host, port) the listener binds; None means none runs.
+    peer_listen: Optional[Tuple[str, int]] = None
     shared_handoffs: Dict[str, SharedHandoff] = field(default_factory=dict)
 
     #: How often the broker sweeps its OWN peer intake (rung 1s, receiving
@@ -517,6 +544,17 @@ class BrokerConfig:
             return None
         return SharedRoute(domain=dom, local=local, decl=decl)
 
+    def peer_link_for(self, address: str) -> Optional[PeerRoute]:
+        """The route when *address* is under a peer reachable over a declared private-network
+        link; else None. Our own domain is never a peer, as for shared_for, and a domain that is
+        also a shared hand-off stays shared: the cheaper wire wins."""
+        addr = address.strip().lower()
+        local, _, dom = addr.partition("@")  # noqa: MACEFF005 - str.partition's (before, sep, after) contract is fixed by the stdlib
+        if not local or not dom or dom == self.domain.lower() or dom in self.shared_handoffs:
+            return None
+        link = self.peer_links.get(dom)
+        return PeerRoute(domain=dom, local=local, link=link) if link else None
+
 
 @dataclass(frozen=True)
 class DeliveryOutcome:
@@ -532,7 +570,7 @@ class DeliveryOutcome:
     two shapes in one function. All three are converted here.
     """
 
-    rung: str      #: "local", "shared" or "internet" -- which delivery path was taken
+    rung: str      #: "local", "shared", "peer" or "internet" -- which delivery path was taken
     trust: str     #: what verification actually proved, "" when not applicable
     state: str     #: "delivered", "refused", or the transport's own state
     detail: str    #: human-readable reason; "" on success
@@ -1212,11 +1250,166 @@ class Broker:
         }
         return self._write_pair(box, stem, sidecar, payload, gid=decl.gid)
 
+    # ------------------------------------------------------------- rung 2, sending
+
+    def _outbox(self, domain: str) -> Path:
+        """Where pairs wait for a peer that has not acknowledged them: our own tree, our own account."""
+        root = self.config.inbound_handoff
+        if root is None:
+            raise DeliveryError("no hand-off root is declared, so a message for a peer that is down "
+                                "cannot be kept; refusing rather than risk losing it")
+        return Path(root) / "_outbox" / domain.strip().lower()
+
+    def hand_off_peer(self, route: PeerRoute, message: Message) -> DeliveryOutcome:
+        """Rung 2: send *message* to the peer's listener and keep it until the peer acknowledges.
+
+        The peer's reply after a durable write is the report MIS-0004 R11 asks the next holder for
+        (R60), so a copy is dropped only on `ok`. A peer that is down, slow or answering something
+        that is not a reply leaves the pair in the outbox and the outcome deferred, and the next
+        sweep tries again (R61). A peer that refuses is a refusal, recorded as one: retrying
+        what a peer will not take would only repeat it."""
+        from . import peer_link
+        payload = message.serialize().encode("utf-8")
+        safe_local = re.sub(r"[^A-Za-z0-9._-]", "_", route.local).lower()
+        stem = f"{int(time.time())}-{message.message_id}-{safe_local}"
+        sidecar = {
+            "kind": "bundle",
+            "handed_off_at": _now_iso(),
+            "message_id": message.message_id,
+            "sender": message.sender,
+            "recipient": f"{route.local}@{route.domain}",
+            "raw_sha256": hashlib.sha256(payload).hexdigest(),
+            "authorization": {
+                "outcome": "peer-link",
+                "reason": (f"sender '{message.sender}' is permitted this destination by its own "
+                           f"broker at '{self.config.domain}'; acceptance is the peer broker's "
+                           f"decision, made on its side"),
+            },
+            "rung": "peer",
+            "origin_domain": self.config.domain,
+        }
+        try:
+            return self._send_pair(route.domain, route.link, stem, sidecar, payload)
+        except peer_link.Deferred as e:
+            box = self._outbox(route.domain)
+            box.mkdir(parents=True, mode=0o700, exist_ok=True)
+            try:
+                self._write_pair(box, stem, sidecar, payload, gid=None)
+            except (DeliveryError, OSError) as keep_error:
+                raise DeliveryError(f"the peer '{route.domain}' did not acknowledge ({e}) and the copy "
+                                    f"could not be kept for a retry ({keep_error}); nothing was sent") from keep_error
+            return DeliveryOutcome(rung="peer", trust="", state="deferred",
+                                   detail=f"kept for a retry: {e}")
+
+    def _send_pair(self, domain: str, link: PeerLink, stem: str, sidecar: Dict[str, Any],
+                   payload: bytes) -> DeliveryOutcome:
+        """One attempt: delivered on the peer's acknowledgement, Deferred when there is none,
+        DeliveryError when the peer refuses."""
+        import base64
+        from . import peer_link
+        try:
+            reply = peer_link.send_request(link.host, link.port, {
+                "op": "hand_off", "from": self.config.domain, "stem": stem, "sidecar": sidecar,
+                "payload_b64": base64.b64encode(payload).decode("ascii")})
+        except ConnectionError as e:
+            raise peer_link.Deferred(str(e)) from e
+        if reply.get("ok") is True:
+            return DeliveryOutcome(rung="peer", trust="", state="delivered", detail="")
+        reason = str(reply.get("reason") or "no reason given")
+        if reply.get("refused"):
+            raise DeliveryError(f"the peer '{domain}' refused it: {reason}")
+        raise peer_link.Deferred(f"the peer '{domain}' could not store it: {reason}")
+
+    def flush_outbox(self) -> List[Dict[str, Any]]:
+        """Try again every pair waiting for a peer. Returns one dict per pair examined."""
+        from . import peer_link
+        results: List[Dict[str, Any]] = []
+        root = self.config.inbound_handoff
+        if root is None:
+            return results
+        for domain, link in sorted(self.config.peer_links.items()):
+            box = self._outbox(domain)
+            if not box.is_dir():
+                continue
+            for amsg in sorted(box.glob("*.amsg")):
+                sidecar_path = amsg.with_suffix(".json")
+                entry: Dict[str, Any] = {"name": amsg.name, "peer": domain}
+                try:
+                    payload = amsg.read_bytes()
+                    sidecar = json.loads(sidecar_path.read_text())
+                except (OSError, ValueError) as e:
+                    entry.update(state="unreadable", reason=f"{type(e).__name__}: {e}")
+                    results.append(entry)
+                    continue
+                try:
+                    outcome = self._send_pair(domain, link, amsg.stem, sidecar, payload)
+                except peer_link.Deferred as e:
+                    entry.update(state="deferred", reason=str(e))
+                except DeliveryError as e:
+                    aside = box / "refused"
+                    aside.mkdir(mode=0o700, exist_ok=True)
+                    sidecar["refused"] = {"reason": str(e), "at": _now_iso()}
+                    (aside / amsg.name).write_bytes(payload)
+                    (aside / sidecar_path.name).write_text(json.dumps(sidecar, indent=1))
+                    amsg.unlink()
+                    sidecar_path.unlink(missing_ok=True)
+                    if self.audit:
+                        self.audit.error(context="peer-link", detail=f"{domain}/{amsg.name}: {e}")
+                    entry.update(state="refused", reason=str(e))
+                else:
+                    amsg.unlink()
+                    sidecar_path.unlink(missing_ok=True)
+                    entry.update(state=outcome.state, reason="")
+                results.append(entry)
+        return results
+
+    # ----------------------------------------------------------- rung 2, receiving
+
+    def take_over_link(self, domain: str, stem: str, sidecar: Any, payload: bytes) -> Dict[str, Any]:
+        """Take custody of a pair a declared peer sent: write it, durably, into OUR peer intake
+        for that peer, and return the acknowledgement's fields (R56, R60).
+
+        Nothing here judges the mail. The intake is swept by `sweep_shared`, which hands each pair
+        to `accept_inbound` as a rung 1s pair is handled. What is checked is what makes the pair
+        storable and honest: a safe name, a sidecar naming the sender's own domain, and bytes that
+        match the hash the sidecar carries. A pair whose name is already held with the same bytes
+        is the acknowledgement lost on the way back, and is acknowledged again, not stored twice."""
+        root = self.config.inbound_handoff
+        if root is None:
+            raise DeliveryError("this broker has no hand-off root to take custody into")
+        if not isinstance(sidecar, dict) or not re.fullmatch(r"[A-Za-z0-9._-]{1,200}", stem or ""):
+            raise DeliveryError("the pair has no usable name or sidecar")
+        digest = hashlib.sha256(payload).hexdigest()
+        if sidecar.get("raw_sha256") != digest:
+            raise DeliveryError("the payload does not match the hash its sidecar carries")
+        if str(sidecar.get("origin_domain", "")).lower() != domain.lower():
+            raise DeliveryError("the sidecar names another origin than the declared peer")
+        intake = peer_intake(Path(root), domain)
+        intake.mkdir(parents=True, mode=0o700, exist_ok=True)
+        held = intake / f"{stem}.amsg"
+        if held.exists() and hashlib.sha256(held.read_bytes()).hexdigest() == digest:
+            return {"message_id": sidecar.get("message_id"), "held": True}
+        self._write_pair(intake, stem, sidecar, payload, gid=None)
+        for name in (f"{stem}.amsg", f"{stem}.json"):
+            fd = os.open(intake / name, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        dir_fd = os.open(intake, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+        return {"message_id": sidecar.get("message_id")}
+
     def _rung(self, recipient: str) -> str:
         if self.config.agent_for(recipient):
             return "local"
         if self.config.shared_for(recipient):
             return "shared"
+        if self.config.peer_link_for(recipient):
+            return "peer"
         return "relay"
 
     def _deliver_one(self, recipient: str, message: Message
@@ -1281,6 +1474,12 @@ class Broker:
             self.hand_off_shared(shared.domain, shared.local, shared.decl, message)
             return DeliveryOutcome(rung="shared", trust="",
                                    state="delivered", detail="")
+        route = self.config.peer_link_for(recipient)
+        if route:
+            # RUNG 2: the peer's listener, over a private network. The peer judges and stores;
+            # delivered means it said so after the pair was durably in its intake (R60), and
+            # anything less keeps the pair in our outbox for a retry (R61).
+            return self.hand_off_peer(route, message)
         # RUNG 3: the internet, via a transport that performs NO authorization.
         # Everything that decides whether this message may exist has already
         # run -- destination, rate limit, pre-send gate -- because a transport
@@ -1964,18 +2163,18 @@ class Broker:
         """
         results: List[Dict[str, Any]] = []
         root = self.config.inbound_handoff
-        if root is None or not self.config.shared_handoffs:
+        if root is None or not (self.config.shared_handoffs or self.config.peer_links):
             return results
         peers = Path(root) / "_peers"
         if not peers.is_dir():
             return results
-        declared = {d.lower() for d in self.config.shared_handoffs}
+        declared = {d.lower() for d in self.config.shared_handoffs} | {d.lower() for d in self.config.peer_links}
         for undeclared in sorted(p for p in peers.iterdir()
                                  if p.is_dir() and p.name.lower() not in declared):
             if undeclared.name not in self._warned_peers:
                 self._warned_peers.add(undeclared.name)
                 print(f"⚠️ MACF: {undeclared} is a peer intake for a domain this "
-                      f"deployment has not declared in shared_handoffs; leaving "
+                      f"deployment has not declared in shared_handoffs or peer_links; leaving "
                       f"it unread", file=sys.stderr)
         for dom in sorted(declared):
             intake = peers / dom
@@ -2040,8 +2239,11 @@ class Broker:
                           f"domain whose intake carried it; a peer may only "
                           f"speak for its own domain")
         try:
+            over_link = dom in {d.lower() for d in self.config.peer_links} and dom not in {
+                d.lower() for d in self.config.shared_handoffs}
             outcome = self.accept_inbound(message, recipient,
-                                         via=f"shared hand-off from {dom}", rung="shared",
+                                         via=(f"peer link from {dom}" if over_link else f"shared hand-off from {dom}"),
+                                         rung=("peer" if over_link else "shared"),
                                          keep_peer_id=True)
         except Exception as e:  # noqa: BLE001 - the pair must not vanish on an unexpected error
             return reject(f"{type(e).__name__}: {e}")
