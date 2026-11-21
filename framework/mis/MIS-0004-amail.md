@@ -340,16 +340,16 @@ Detection alone stays allowed only where no agent has a reachable address. Addre
 | R53 | decidable | `macf/tests/test_amail_routing.py::test_internet_mail_is_never_relayed_to_a_peer_broker` | planned |
 | R54 | decidable | `macf/tests/test_amail_ingest_units.py::test_declared_units_are_named_and_started_by_nothing_here` and `macf/tests/test_amail_ingest_units.py::test_a_receiver_declared_on_another_account_refuses_the_start` | passing |
 | R55 | decidable | `macf/tests/test_amail_inbound.py::test_mail_for_unknown_recipient_is_quarantined` | passing |
-| R56 | decidable | `macf/tests/test_amail_peer_link.py::test_the_receiver_takes_custody_at_its_own_listener` | planned |
-| R57 | decidable | `macf/tests/test_amail_peer_link.py::test_only_a_declared_link_is_used` | planned |
-| R58 | decidable | `macf/tests/test_amail_peer_link.py::test_the_listener_binds_only_the_declared_address` | planned |
-| R59 | decidable | `macf/tests/test_amail_peer_link.py::test_a_stranger_is_closed_unread` | planned |
-| R60 | decidable | `macf/tests/test_amail_peer_link.py::test_no_acknowledgement_before_the_write_is_durable` | planned |
-| R61 | decidable | `macf/tests/test_amail_peer_link.py::test_an_unacknowledged_send_is_kept_and_retried` | planned |
-| R62 | decidable | `macf/tests/test_amail_peer_link.py::test_a_request_is_read_only_up_to_its_bound` | planned |
-| R63 | decidable | `macf/tests/test_amail_peer_link.py::test_peer_mail_must_be_signed` | planned |
-| R64 | decidable | `macf/tests/test_amail_peer_link.py::test_peer_mail_follows_the_contact_list` | planned |
-| R65 | decidable | `macf/tests/test_amail_peer_link.py::test_a_slow_sender_is_cut_off_at_its_deadline` | planned |
+| R56 | decidable | `macf/tests/test_amail_peer_link.py::test_the_receiver_takes_custody_at_its_own_listener` | passing |
+| R57 | decidable | `macf/tests/test_amail_peer_link.py::test_only_a_declared_link_is_used` | passing |
+| R58 | decidable | `macf/tests/test_amail_peer_link.py::test_the_listener_binds_only_the_declared_address` | passing |
+| R59 | decidable | `macf/tests/test_amail_peer_link.py::test_a_stranger_is_closed_unread` | passing |
+| R60 | decidable | `macf/tests/test_amail_peer_link.py::test_no_acknowledgement_before_the_write_is_durable` | passing |
+| R61 | decidable | `macf/tests/test_amail_peer_link.py::test_an_unacknowledged_send_is_kept_and_retried` | passing |
+| R62 | decidable | `macf/tests/test_amail_peer_link.py::test_a_request_is_read_only_up_to_its_bound` | passing |
+| R63 | decidable | `macf/tests/test_amail_peer_link.py::test_peer_mail_must_be_signed` | passing |
+| R64 | decidable | `macf/tests/test_amail_peer_link.py::test_peer_mail_follows_the_contact_list` | passing |
+| R65 | decidable | `macf/tests/test_amail_peer_link.py::test_a_slow_sender_is_cut_off_at_its_deadline` | passing |
 | R08 | decidable | `macf/tests/test_amail_routing.py::test_rung_from_declared_map` | planned |
 | R09 | decidable | `macf/tests/test_amail_routing.py::test_only_declared_peers` | passing |
 | R10 | decidable | `macf/tests/test_amail_handoff.py::test_next_holder_pulls` | planned |
@@ -527,6 +527,7 @@ The operator convened the deliberation on #850 on 2026-10-28 at 02:18Z, for 72 h
 - 2026-11-08: landing, signing area (host-side maintainer). R45 and R46 are passing: `macf/amail/attest.py` holds the two decisions the broker and the receiver share. `may_sign` lets a key sign only while it is valid and not retired. `registry_verdict` verifies against the keys valid at the receiving broker's own acceptance time (`acceptance_time`, read from its hand-off sidecar), or against the current signing keys when it has none, and it labels a verified message "attested on a shared login", naming the agents whose keys the same account holds. Each test was checked to fail with its defect planted. The broker calls `may_sign` with R43 and the receiver calls `registry_verdict` with R44. R45's rationale now says whose clock it trusts: the receiving broker's, not the time inside a message id, which a shared hand-off keeps from another system. The requirement text is unchanged; editorial (mis 8.1).
 - 2026-11-08: landing, signing area (head maintainer). R44 is passing: the broker and the recipient judge every agent message against the operator's registry with one rule (`attest.sender_verdict`), the broker resolving the sender's card once and writing it with its acceptance time into the hand-off sidecar, as the host-side maintainer proposed on the landing branch. A sender the registry doesn't declare stays unverified, so mail turns suspect only once its sender is declared, which keeps section 12.4's order sender by sender. amail policy 1.16.0 says so (§3.2.3). Editorial (mis 8.1).
 - 2026-11-21: a revision at the repo owner's request (MIS-0001-R52 (repo_owner_MAY_request_revision)), drafted by the host-side maintainer for the Secretary to carry under MIS-0001-R53 (revision_MUST_edit_MIS_in_place). Rung 2 of the delivery ladder, a broker-to-broker link over a private network, becomes a requirement. R10 says "take" where it said "pull", with the note linking its previous text; R56 to R65 are new (section 6.12; R65, a request deadline, was added at the container-management maintainer's review and the repo owner's word), with their rationale, a Security paragraph and Conformance rows, all planned.
+- 2026-11-21: landing, rung 2 (host-side maintainer). R56 to R65 are passing: `macf/amail/peer_link.py` holds the bounded, deadline-bound request reader, the listener bound to one declared private address that closes an undeclared address unread, and the client; `Broker.hand_off_peer`, `take_over_link` and `flush_outbox` send, take custody durably before acknowledging, and keep and retry an unacknowledged pair; `peer_links` and `peer_listen` are in the broker configuration, which refuses a name, an every-interface bind and a public address. Two defects found in the build's review are fixed and tested: a half-written pair that retried for good, and a name collision that was acknowledged without being stored. A pair a peer can never get accepted (a hash mismatch, a wrong origin) is answered refused and set aside, and a storage failure is retried. R63's test covers the unsigned case, and the verified case rests on R43 to R46's tests. Nothing runs until the operator declares `peer_listen` and a peer. Amail policy 2.1.2 says so.
 
 ## Wiki-Links
 
