@@ -743,6 +743,12 @@ in AUTO_MODE when the operator is away: USER_REMOTE, or USER_IDLE, which begins 
   keyboard).
 - **The state is derived.** There is no flag to arm or forget: the modes decide,
   and if they can't be read the dialog stays up.
+- **Don't keep a copy of this rule in a hook of your own.** The rule is
+  `macf.permission_watch.full_autonomy_denial`, applied by the framework's PermissionRequest
+  hook; a script that re-implements it keeps whatever the rule was on the day it was written.
+  One seat's local copy went on denying dialogs for a sprint after the framework stopped, and
+  refused a question with the operator at the keyboard. The reason's wording says which one
+  fired: "Denied at once: ..." is the framework's. Set the config key and delete the copy.
 - **The default permission mode is exempt**, because nearly every write prompts there
   and denying would block the agent's own work. A mode the client doesn't report is
   treated the same way.
