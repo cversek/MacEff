@@ -14,7 +14,7 @@ from typing import Optional
 #: How pydantic words a request whose ``op`` no member of the union names.
 _UNKNOWN_OP = re.compile(r"Input tag '([A-Za-z0-9_]+)' found using 'op' does not match any of the expected tags")
 
-#: What to do about it, said with the refusal (persistent_layer 6.2).
+#: What to do about it, said with the refusal (persistent_layer 5.1).
 UPDATE_HINT = ("to run this command's build, `macf_tools agent init --update` does what follows in one step. "
                "By hand, `macf_tools pd install --force` points the daemon's unit at "
                "this command's macf; a daemon pinned to its own checkout advances that checkout instead. Then "

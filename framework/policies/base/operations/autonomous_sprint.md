@@ -1,9 +1,10 @@
 # Autonomous Sprint Policy
 
+**Type**: Operations
+**Scope**: All agents (PA and SA)
+**Status**: ACTIVE
 **Version**: 2.0
 **Tier**: MANDATORY
-**Category**: Operations
-**Status**: ACTIVE
 **Related**: `autonomous_operation.md` (mode lifecycle), `mode_system.md` (mode system, Markov recommender), `play_time.md` (sibling — time-bounded autonomous play)
 
 **See also**: `maceff-sprint` skill (invocation wrapper for SPRINT) | `play_time.md` (sibling type for time-bounded work) | `maceff-play-time` skill (invocation wrapper for PLAY_TIME)
@@ -29,6 +30,7 @@ A 🏃 SPRINT is a **workload-defined autonomous work session**. The agent execu
 - What does SPRINT mode lock mean for the Markov recommender?
 - What is the agent's posture during a SPRINT?
 - How does the Stop hook behave in SPRINT mode?
+- What do I do while a long-running command (a test suite, a CI wait) runs?
 
 **3 Sprint Task Discipline**
 - How should the scoped task set be defined or curated?
@@ -137,6 +139,7 @@ During a SPRINT:
 - **Do not treat natural pauses as terminal events** — a paused task is not a sprint exit signal
 - **Capture ideas as task notes** (`💡` prefix) rather than creating formal idea CAs
 - **Commit frequently** as you complete each task — do not batch at sprint end
+- **Never block on a long-running command; start it in the background and work ahead.** A test suite, a CI wait, a build or a poll is started with `run_in_background` (or a monitor) and its result is read when it reports. While it runs, take the next ready scoped task, review, draft or note. A foreground wait loop (`sleep` and poll, or a suite run with the sprint's other work standing ready) spends the sprint's time on nothing and leaves the stop gate nagging; the wait is the last thing to do, after the ready work is exhausted, not the first. The operator's words, 2026-11-20: "keep working instead of blocking on long running commands - run them in background and go async and work ahead", and "Especially important on a sprint".
 
 ### 2.3 Stop Hook Behavior
 

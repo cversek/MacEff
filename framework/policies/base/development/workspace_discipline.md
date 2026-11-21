@@ -1,14 +1,49 @@
 # Workspace Discipline Policy
 
+**Type**: Development
+**Scope**: All agents (PA and SA) during development work
+**Status**: ACTIVE
 **Version**: 1.0
 **Tier**: CORE
-**Category**: Development
-**Status**: ACTIVE
 **Updated**: 2025-10-21
 
 ---
 
-## Policy Statement
+## CEP Navigation Guide
+
+**1 Policy Statement**
+- What does this policy require of development artifacts?
+
+**2 Repository Cleanliness**
+- What belongs in a package's source tree, and what is forbidden there?
+
+**3 Ad Hoc Development Scripts**
+- Where does a temporary script go, for a primary agent and for a subagent?
+- How is it named?
+
+**4 Execution Pattern**
+- How do I run a script from the workspace without changing directory?
+
+**5 What Goes Where**
+- Where does each kind of artifact live: code, tests, scripts, trails, docs?
+
+**6 Cleanup Discipline**
+- When is an ad hoc script deleted, and when is it kept?
+
+**7 Common Violations**
+- What do the usual mistakes look like, beside their corrections?
+
+**8 Rationale**
+- Why does the separation matter?
+
+**9 Enforcement**
+- What does a review check?
+
+=== CEP_NAV_BOUNDARY ===
+
+---
+
+## 1 Policy Statement
 
 All development artifacts must follow workspace organization standards to maintain clean repositories and enable forensic tracking of development activities.
 
@@ -18,7 +53,7 @@ Applies to Primary Agents (PA) and all Subagents (SA) during development work.
 
 ---
 
-## Repository Cleanliness
+## 2 Repository Cleanliness
 
 **CRITICAL**: Package source trees are for production code and unit tests ONLY.
 
@@ -37,7 +72,7 @@ Applies to Primary Agents (PA) and all Subagents (SA) during development work.
 
 ---
 
-## Ad Hoc Development Scripts
+## 3 Ad Hoc Development Scripts
 
 **Purpose**: Temporary scripts for validation, exploration, debugging, or one-time tasks.
 
@@ -95,7 +130,7 @@ agent/subagents/{role}/private/reflections/YYYY-MM-DD_HHMMSS_{task}_reflection.m
 
 ---
 
-## Execution Pattern
+## 4 Execution Pattern
 
 **Use absolute paths from project root**:
 ```bash
@@ -131,7 +166,7 @@ from mypackage.models import SomeModel
 
 ---
 
-## What Goes Where
+## 5 What Goes Where
 
 | Artifact Type | Location | Purpose |
 |--------------|----------|---------|
@@ -145,7 +180,7 @@ from mypackage.models import SomeModel
 
 ---
 
-## Cleanup Discipline
+## 6 Cleanup Discipline
 
 **When to delete ad hoc scripts**:
 - After validation complete and tests written
@@ -163,7 +198,7 @@ from mypackage.models import SomeModel
 
 ---
 
-## Common Violations
+## 7 Common Violations
 
 ### ❌ Violation: Script in package source
 ```
@@ -197,7 +232,7 @@ agent/subagents/DevOpsEng/public/delegation_trails/2025-10-21_112620_Phase1B1_Py
 
 ---
 
-## Rationale
+## 8 Rationale
 
 **Clean repositories**:
 - Professional presentation for framework users
@@ -216,7 +251,7 @@ agent/subagents/DevOpsEng/public/delegation_trails/2025-10-21_112620_Phase1B1_Py
 
 ---
 
-## Enforcement
+## 9 Enforcement
 
 **Code review checklist**:
 - [ ] No ad hoc scripts in package source directories

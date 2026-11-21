@@ -1,4 +1,4 @@
-"""The plan for moving a session onto its primal daemon (persistent_layer 6.3): read from the
+"""The plan for moving a session onto its primal daemon (persistent_layer 5.2): read from the
 host, never acting on it. Every case is played on stand-in probes."""
 import json
 from dataclasses import replace
@@ -71,6 +71,26 @@ def test_a_ready_host_gets_every_step_in_the_runbooks_order(tmp_path):
     # every tmux command names its server's socket: inside a tmux client TMUX outranks TMUX_TMPDIR
     assert all(" -S " in c for c in flat + rollback if c.startswith("tmux"))
     assert not any("TMUX_TMPDIR=" in c for c in flat + rollback)
+
+
+def test_a_staged_declaration_in_the_old_card_form_is_ready_and_says_it_is_rewritten(tmp_path):
+    """The move installs what it finds, and the cut-over rewrites it, so a staged file made before
+    the card revision is not refused at the plan (#919). The plan itself writes nothing."""
+    path = _stage(tmp_path)
+    old = path.read_text().replace(CARD, "Resident@1a2b3c")
+    path.write_text(old)
+    plan = build_plan(tmp_path, CARD, AGENT, _probes(), runtime=RUNTIME)
+    check = next(c for c in plan.checks if c.name == "staged declaration")
+    assert check.ok and "old card form" in check.detail and plan.ready
+    assert path.read_text() == old
+
+
+def test_a_staged_declaration_naming_another_agents_old_card_is_still_refused(tmp_path):
+    path = _stage(tmp_path)
+    path.write_text(path.read_text().replace(CARD, "Other@9f8e7d"))
+    plan = build_plan(tmp_path, CARD, AGENT, _probes(), runtime=RUNTIME)
+    check = next(c for c in plan.checks if c.name == "staged declaration")
+    assert not check.ok and not plan.ready
 
 
 def test_an_already_moved_session_has_nothing_to_do(tmp_path):
@@ -797,3 +817,52 @@ def test_with_a_daemon_installed_the_declarations_install_is_the_restart(tmp_pat
     install = next(i for i, s in enumerate(plan.steps, 1) if s.what.startswith("Install the declaration"))
     assert f"step {install} restarts the daemon" in footer, footer
     assert "ends the session you may be typing in" in footer, footer
+
+
+def _linger_check(plan):
+    return next(c for c in plan.checks if c.name == "linger")
+
+
+def test_a_host_where_linger_is_off_is_not_ready_and_the_plan_names_the_command(tmp_path):
+    """Without linger the daemon and its session stop at the last logout and don't start at boot, so a plan
+    that said Ready would leave an agent that is up only while someone is logged in (#860)."""
+    _stage(tmp_path)
+    plan = build_plan(tmp_path, CARD, AGENT, _probes(linger=lambda: False), runtime=RUNTIME)
+    check = _linger_check(plan)
+    assert not check.ok and not plan.ready
+    assert "loginctl enable-linger" in check.detail and "--accept-no-linger" in check.detail
+    assert "host operator's call" in check.detail
+    assert "NOT READY" in format_plan(plan)
+
+
+def test_accepting_the_missing_linger_lets_the_plan_go_and_says_so(tmp_path):
+    _stage(tmp_path)
+    plan = build_plan(tmp_path, CARD, AGENT, _probes(linger=lambda: False), runtime=RUNTIME, accept_no_linger=True)
+    assert plan.ready and _linger_check(plan).ok
+    assert "accepted without it" in _linger_check(plan).detail and "stops at the last logout" in _linger_check(plan).detail
+
+
+def test_linger_on_holds_and_an_unreadable_linger_is_said_not_failed(tmp_path):
+    _stage(tmp_path)
+    on = build_plan(tmp_path, CARD, AGENT, _probes(linger=lambda: True), runtime=RUNTIME)
+    assert on.ready and _linger_check(on).detail.startswith("on:")
+    unknown = build_plan(tmp_path, CARD, AGENT, _probes(linger=lambda: None), runtime=RUNTIME)
+    assert unknown.ready and "could not be read" in _linger_check(unknown).detail
+
+
+def test_linger_is_only_checked_where_systemd_runs_the_daemon(tmp_path):
+    """On launchd a LaunchAgent starts at login by design, so there is no linger to check."""
+    _stage(tmp_path)
+    plan = build_plan(tmp_path, CARD, AGENT, _probes(systemd=False, launchd=True, harness_label=lambda a: f"x.{a}",
+                                                     unit_active=lambda u: "active", linger=lambda: False),
+                      runtime=RUNTIME, uid=501, launch_agents=tmp_path / "LA")
+    assert not [c for c in plan.checks if c.name == "linger"]
+
+
+def test_the_armed_unit_carries_the_acceptance_into_the_plan_it_rebuilds(tmp_path):
+    """--run starts a transient unit that builds the plan again; without the flag there it would refuse the
+    move the operator just accepted."""
+    from macf.pd.cutover import arm_argv
+    plain = arm_argv(AGENT, tmp_path, tmp_path / "s", tmp_path / "log", "python3", environ={})
+    accepted = arm_argv(AGENT, tmp_path, tmp_path / "s", tmp_path / "log", "python3", environ={}, accept_no_linger=True)
+    assert "--accept-no-linger" not in plain and accepted[-1] == "--accept-no-linger"

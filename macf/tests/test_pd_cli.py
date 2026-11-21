@@ -124,6 +124,20 @@ def test_no_declaration_means_no_daemon(tmp_path, base):
     assert "no declaration" in report.why
 
 
+def test_a_staged_declaration_is_named_not_denied(tmp_path, base):
+    """Init beside a live session stages the declaration; the readout names the file and the command
+    that installs it, rather than saying the agent has no daemon (#860)."""
+    home = make_home(tmp_path, declared=False)
+    path = declaration_path(home)
+    path.parent.mkdir(parents=True)
+    staged = path.with_name(path.name + ".cutover")
+    staged.write_text("{}")
+    report = status(home, CARD, base=base)
+    assert report.source == "none"
+    assert str(staged) in report.why and "harness cutover" in report.why
+    assert "has no primal daemon" not in report.why
+
+
 def test_the_command_reports_its_source(tmp_path, monkeypatch, capsys):
     """``macf_tools pd status --json`` names the agent and where its answer came from."""
     monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(make_home(tmp_path)))
@@ -188,3 +202,40 @@ def test_pd_wake_shows_or_paces_and_a_pace_needs_its_reason(monkeypatch, capsys)
                         "asked_by": {"kind": "agent", "card": "Tester_abc123"}}
     assert run(declared=True, reason="done", asked_by="operator") == 0
     assert sent[-1]["refractory_s"] is None and sent[-1]["asked_by"] == {"kind": "operator"}
+
+
+def test_a_unit_that_cant_log_in_names_a_missing_user_as_the_probable_cause(tmp_path, base, monkeypatch, capsys):
+    """A session started without USER reads "Login expired" although the account is logged in (#1073)."""
+    import types
+
+    from macf.pd import cli, core
+    unit = types.SimpleNamespace(name="session", environment={"HOME": "/h", "PATH": "/bin"})
+    monkeypatch.setattr("macf.pd.login.sys.platform", "darwin")
+    monkeypatch.setattr(core, "load_declaration", lambda home, card: types.SimpleNamespace(units=[unit]))
+    monkeypatch.setattr("macf.pd.daemon.card_for_home", lambda home: CARD)
+    monkeypatch.setattr("macf.utils.paths.find_agent_home", lambda: tmp_path)
+    report = types.SimpleNamespace(source="daemon", why="ok", daemon_build="x", cli_build="x", schedules=[], runs=None,
+                                   units=[{"unit": "session", "state": "failed", "pid": 9, "since": 1.0,
+                                           "auth_failed": "Login expired"}])
+    monkeypatch.setattr("macf.pd.client.status", lambda home, card: report)
+    for name in ("_say_drafts", "_say_allowlist", "_say_receipts", "_say_tray"):
+        monkeypatch.setattr(cli, name, lambda *a, **k: None)
+    assert cli.cmd_pd_status(types.SimpleNamespace(json=False)) == 0
+    out = capsys.readouterr().out
+    assert "probable cause" in out and "lacks USER, LOGNAME" in out
+    unit.environment = {"USER": "a", "LOGNAME": "a"}
+    cli.cmd_pd_status(types.SimpleNamespace(json=False))
+    assert "probable cause" not in capsys.readouterr().out
+
+
+def test_the_missing_user_is_a_probable_cause_only_on_macos(monkeypatch):
+    """Off macOS the stored login is a file, not found by USER, so a genuine expiry must not be labelled
+    with a cause that isn't one (THM's review of #1084)."""
+    import types
+
+    from macf.pd import login
+    unit = types.SimpleNamespace(name="session", environment={"HOME": "/h"})
+    monkeypatch.setattr(login.sys, "platform", "darwin")
+    assert "macOS" in login.missing_login_env(unit)
+    monkeypatch.setattr(login.sys, "platform", "linux")
+    assert login.missing_login_env(unit) == ""

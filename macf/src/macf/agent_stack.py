@@ -16,7 +16,11 @@ The steps, each skippable by its flag:
    channels the declaration allows, the MacEff channel included;
 5. ``channel`` - the MacEff channel plugin from the marketplace packaged with macf;
 6. ``permissions`` - the mode-safety permission entries;
-7. ``daemon`` - the daemon under the platform's service manager (``pd install``).
+7. ``framework`` - whether the hooks and the ``/maceff`` skills and commands are installed, and the
+   command that installs them (``framework install``) when they are not;
+8. ``telegram-dir`` - for a declaration that names a Telegram channel, where the plugin keeps its poller
+   files, from what, and a flag on the account-wide default that agents on one login would share;
+9. ``daemon`` - the daemon under the platform's service manager (``pd install``).
 
 ``pd install`` comes last although it is the heart of the stack: the daemon starts the session
 unit as soon as it starts, and that session needs the child script, the channel plugin and its
@@ -58,11 +62,28 @@ STEPS: List[Tuple[str, str, str]] = [
     ("channel", "add the packaged maceff marketplace and install maceff-channel@maceff", "no_channel"),
     ("permissions", "add the mode-safety permission entries to the project's settings.local.json",
      "no_permissions"),
+    ("framework", ("check that the hooks and the /maceff skills and commands are installed, and "
+                   "name the command that installs them when they are not (framework install)"),
+     "no_framework"),
+    ("telegram-dir", ("say where the Telegram plugin keeps its poller files and from what, and flag the "
+                      "account-wide default that agents and sessions on one login would share (#1069)"),
+     "no_telegram_dir"),
     ("daemon", "put the primal daemon under the service manager (pd install)", "no_daemon"),
     ("registry", ("declare the agent's signing key in the operator's registry, the change shown "
                   "first; on a host the write is root's, printed as one step (MIS-0004 R42)"),
      "no_registry"),
 ]
+
+#: The steps that read the agent's calling card, which the calling-card step writes first.
+NEEDS_CARD = ("declaration", "harness", "daemon")
+#: What those steps say when the home has no card yet.
+NO_CARD_PHRASE = "names no agent"
+
+
+def _card_step_would_name(results: "List[Result]") -> bool:
+    """Whether the calling-card step, already run under --plan, found it would write the card."""
+    return any(r.step == "calling-card" and r.status == WOULD for r in results)
+
 
 #: The steps ``--update`` runs: the declaration only to report its drift, the channel and the
 #: daemon to bring them current. The rest belong to a first init.
@@ -292,8 +313,8 @@ def _clients_from_proc(proc: Path = Path("/proc")) -> List[Tuple[int, str]]:
             if not _is_claude(argv):
                 continue
             found.append((int(entry.name), os.readlink(entry / "cwd")))
-        except (OSError, ValueError):
-            continue  # it ended while we looked, or is not ours to read
+        except (OSError, ValueError):  # noqa: S112 - it ended while we looked, or is not ours to read
+            continue
     return found
 
 
@@ -313,7 +334,8 @@ def _clients_from_ps() -> List[Tuple[int, str]]:
         try:
             cwd = subprocess.run(["lsof", "-a", "-p", fields[0], "-d", "cwd", "-Fn"],
                                  capture_output=True, text=True, timeout=10, env=env).stdout
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, subprocess.SubprocessError) as e:
+            print(f"⚠️ MACF: lsof for client pid {fields[0]} failed (skipping it): {e}", file=sys.stderr)
             continue
         names = [ln[1:] for ln in cwd.splitlines() if ln.startswith("n")]
         if names:
@@ -360,7 +382,7 @@ def legacy_harness_live(ctx: Context) -> Optional[str]:
     """Why a session for this agent may already be running outside its daemon, or None: the
     legacy harness's systemd unit, its LaunchAgent on macOS, or any live client in the
     project directory, however it was started. A session unit started beside any of them
-    would be a second client on one conversation (persistent_layer 6.2, 6.3)."""
+    would be a second client on one conversation (persistent_layer 5.1, 5.2)."""
     return _systemd_harness_live(ctx) or _launchd_harness_live(ctx) or live_client_here(ctx)
 
 
@@ -404,7 +426,7 @@ def pd_unit_installed(card: str, home: Path) -> bool:
 
 def daemon_restart(card: str) -> None:
     """Restart the daemon under its service manager. Its units outlive it and the next daemon
-    adopts them (persistent_layer 12.6), so the session keeps running."""
+    adopts them (persistent_layer 1.6), so the session keeps running."""
     tier = _adapter()
     restart = getattr(tier, "restart", None)
     if restart is None:
@@ -743,7 +765,34 @@ def _plugin_state(login_home: Path) -> Tuple[set, set]:
     return known, installed
 
 
+def _channel_command_problem() -> Optional[str]:
+    """Why Claude Code can't start the channel plugin's server, or None when it can (#1051).
+
+    The plugin's ``.mcp.json`` runs ``maceff-channel`` by that bare name. With a virtual-environment
+    install the console script lives only in the environment's ``bin/``, so Claude Code reports
+    ``Executable not found in $PATH: stdio`` at every session start, naming neither the command nor the
+    plugin. The installer's own PATH stands in for Claude Code's, which is the closest it can see."""
+    from macf.channels.marketplace import CHANNEL_COMMAND
+    if shutil.which(CHANNEL_COMMAND):
+        return None
+    beside = Path(sys.executable).parent / CHANNEL_COMMAND
+    where = (f"this install has it at {beside}" if beside.exists()
+             else f"it is not beside this Python ({beside.parent}) either")
+    return (f"the {CHANNEL_COMMAND} command is not on PATH, so Claude Code can't start the plugin's server "
+            f"(it reports 'Executable not found in $PATH: stdio' at session start); {where}. Put it on the "
+            f"PATH Claude Code starts with, for example ln -s {beside} ~/.local/bin/{CHANNEL_COMMAND}")
+
+
 def step_channel(ctx: Context) -> Result:
+    result = _install_channel(ctx)
+    problem = _channel_command_problem()
+    if problem and result.status in (DONE, ALREADY, WOULD):
+        done = f"{result.detail}; but " if result.detail else ""
+        return Result("channel", REFUSED, f"{done}{problem}")
+    return result
+
+
+def _install_channel(ctx: Context) -> Result:
     from macf.channels.marketplace import CHANNEL_PLUGIN_ID, MARKETPLACE, packaged_marketplace
     known, installed = _plugin_state(ctx.login_home)
     update = getattr(ctx.args, "update", False)
@@ -810,6 +859,91 @@ def step_permissions(ctx: Context) -> Result:
     return Result("permissions", DONE, f"{added} entr{'y' if added == 1 else 'ies'} added to {where}")
 
 
+def step_framework(ctx: Context) -> Result:
+    """Whether the framework's hooks and ``/maceff`` skills or commands are installed (#1049).
+
+    ``agent init`` writes the daemon, the harness and the channel, but the hooks and the ``/maceff``
+    skills and commands come from ``framework install``, which works on the directory it is run in.
+    Without them the agent starts with no hooks bound and no commands, and nothing said so. This step
+    looks, and when something is missing it is reported found with drift, naming the command and where
+    to run it. It installs nothing, because that command writes settings in the directory it is run
+    from, and it never fails the run. Hooks count where either place binds them: the project's
+    ``settings.local.json`` (``framework install``'s mode) or the home's ``settings.json`` (the global
+    mode); the ``/maceff`` artifacts count as installed when either the skills or the commands
+    directory holds one, since the commands are pointers to skills."""
+    if ctx.in_container:
+        return Result("framework", SKIPPED, CONTAINER_OWNS)
+    from macf.cli import _count_hook_events_in_settings, _hooks_to_install_list
+    root = project_dir(ctx)
+    expected = len(_hooks_to_install_list())
+    places = (root / ".claude" / "settings.local.json", Path.home() / ".claude" / "settings.json")
+    bound = max(_count_hook_events_in_settings(p) for p in places)
+
+    def _has_maceff(folder: Path, prefix: str) -> bool:
+        return folder.is_dir() and any(e.name.startswith(prefix) for e in folder.iterdir())
+
+    has_artifacts = (_has_maceff(root / ".claude" / "skills", "maceff-")
+                     or _has_maceff(root / ".claude" / "commands", "maceff"))
+    if bound == expected and has_artifacts:
+        return Result("framework", ALREADY, f"{bound} hook events bound and the /maceff skills or commands "
+                                            f"installed (looked in {root / '.claude'} and {Path.home() / '.claude'})")
+    missing = ([f"hooks ({bound} of {expected} events bound)"] if bound != expected else []) + \
+              (["the /maceff skills and commands"] if not has_artifacts else [])
+    return Result("framework", DRIFT, f"{' and '.join(missing)} not installed (looked in {root / '.claude'} and "
+                                      f"{Path.home() / '.claude'}); run `cd {root} && macf_tools framework install` "
+                                      f"to install them. This step never fails the run")
+
+
+def step_telegram_dir(ctx: Context) -> Result:
+    """Where the Telegram plugin keeps its poller files for this seat, and from what (#1069).
+
+    Agents on one login are separated for Telegram only by ``TELEGRAM_STATE_DIR`` in each one's own
+    settings ``env``, which gives each its own state directory and so its own bot. An agent without it
+    uses the account-wide default, and the plugin ends an older poller when a newer one starts on the
+    same directory, so another agent on the login, or a session started from another directory, can take
+    the bot's polling from the agent that owns it. Which agents sit on the default is recorded nowhere
+    a check could read, so this step does not refuse it: it says where the files are and from what
+    (the same resolution the outside watch judges the poller by), and reports the default found with
+    drift, naming the setting. It writes nothing and never fails the run."""
+    if ctx.in_container:
+        return Result("telegram-dir", SKIPPED, CONTAINER_OWNS)
+    from pydantic import ValidationError
+
+    from macf.pd import interface, watch
+    try:
+        declaration = interface.Declaration.model_validate_json(interface.declaration_path(ctx.home).read_text())
+    except FileNotFoundError:
+        return Result("telegram-dir", SKIPPED, "no declaration yet, so no Telegram channel is declared")
+    except (OSError, ValidationError, ValueError) as e:
+        return Result("telegram-dir", SKIPPED, f"the declaration can't be read ({type(e).__name__}), so whether "
+                                               f"a Telegram channel is declared isn't known")
+    if not watch.declares_telegram(declaration):
+        return Result("telegram-dir", SKIPPED, "the declaration names no Telegram channel")
+    session = watch.session_places(declaration, ctx.home)
+    project = session.project_dir
+    where, source = watch.telegram_state_dir(ctx.home, project_dir=project, login_home=session.login_home,
+                                             unit_env=session.environment)
+    if source == watch.LOGIN_SETTINGS_SOURCE:
+        return Result("telegram-dir", DRIFT,
+                      f"the Telegram plugin keeps its poller files in {where}, named in the login's own "
+                      f"settings.json, which every agent on this login reads: they all share that one "
+                      f"directory, and so one bot, and a newer poller on it ends the older. For a seat of "
+                      f"its own, set TELEGRAM_STATE_DIR in the \"env\" of "
+                      f"{project / '.claude' / 'settings.local.json'}, which takes precedence. "
+                      f"This step never fails the run")
+    if source != "the default location":
+        return Result("telegram-dir", ALREADY, f"the Telegram plugin keeps its poller files in {where}, "
+                                               f"from {source}")
+    return Result("telegram-dir", DRIFT,
+                  f"the Telegram plugin will keep its poller files in {where}, the account-wide default. "
+                  f"A newer poller on a directory ends the older one, so another agent on this login, or a "
+                  f"session started from another directory, can take this bot's polling from it, and nothing "
+                  f"records who shares the default. For a seat of its own, set TELEGRAM_STATE_DIR in the "
+                  f"\"env\" of {project / '.claude' / 'settings.local.json'} to a directory that holds that "
+                  f"seat's own bot (the plugin's configure command writes its token and access there). "
+                  f"This step never fails the run")
+
+
 def _missing_permissions(root: Path) -> Optional[List[str]]:
     """The entries ensure_mode_safety_permissions would add, by its own lists, without writing."""
     from macf.utils import claude_settings as cs
@@ -830,7 +964,9 @@ def _declares_session(declaration: Optional[Dict]) -> bool:
 
 def daemon_session_pid(ctx: Context, declaration: Optional[Dict]) -> Optional[int]:
     """The pid of this agent's session unit, as its running daemon confirms it, or None: no
-    daemon answers, or it doesn't report the declared session unit up with a pid."""
+    daemon answers, or it doesn't report the declared session unit with a pid. In any state:
+    a unit whose session failed still runs the client beneath it, and a stale pid is never
+    an ancestor of a live client, so it can't claim one (#1072)."""
     names = [u.get("name") for u in (declaration or {}).get("units") or [] if u.get("kind") == "session"]
     if not names or not ctx.card:
         return None
@@ -843,8 +979,7 @@ def daemon_session_pid(ctx: Context, declaration: Optional[Dict]) -> Optional[in
     if report.source != "daemon":
         return None
     for unit in report.units:
-        if unit.get("unit") == names[0] and unit.get("state") in ("running", "waiting_on_a_person") \
-                and unit.get("pid"):
+        if unit.get("unit") == names[0] and unit.get("pid"):
             return int(unit["pid"])
     return None
 
@@ -984,6 +1119,8 @@ RUNNERS: Dict[str, Callable[[Context], Result]] = {
     "harness": step_harness,
     "channel": step_channel,
     "permissions": step_permissions,
+    "framework": step_framework,
+    "telegram-dir": step_telegram_dir,
     "daemon": step_daemon,
     "registry": step_registry,
 }
@@ -1042,6 +1179,13 @@ def run_stack(args: argparse.Namespace, home: Path, *, in_container: bool,
             result = preamble() if step == "preamble" else RUNNERS[step](ctx)
         except Exception as e:  # noqa: BLE001 - one step's defect is reported, the rest still run
             result = Result(step, REFUSED, f"{type(e).__name__}: {e}")
+        if plan and result.status == REFUSED and step in NEEDS_CARD and _card_step_would_name(results) \
+                and NO_CARD_PHRASE in result.detail:
+            # The calling-card step creates the file this step reads, so in a real run it proceeds.
+            # A plan that called it refused read, to a newcomer, as an init that fails at half its
+            # steps (#860 item 1).
+            result = Result(step, WOULD, "once the calling card is written, as the step before it does; "
+                                         "it can't be checked until then")
         if result.status == REFUSED:
             ctx.refused[step] = result.detail
         results.append(result)

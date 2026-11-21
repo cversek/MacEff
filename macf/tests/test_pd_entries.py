@@ -326,7 +326,9 @@ def _not_writable(monkeypatch, *writable):
     """The test's interpreter, which the runner's account can usually write, is treated as the
     operator's: only the paths given read as writable by the agent."""
     from macf.pd import scheduler as sc
-    monkeypatch.setattr(sc, "agent_can_write", lambda program: any(str(program).startswith(str(w)) for w in writable))
+    mine = lambda program: any(str(program).startswith(str(w)) for w in writable)  # noqa: E731
+    monkeypatch.setattr(sc, "agent_can_write", mine)
+    monkeypatch.setattr(sc, "link_swappable", mine)    # and the links on the way to it (#758)
 
 
 def _check_scheduler(tmp_path, log, now, templates, **options):
@@ -558,7 +560,7 @@ def test_the_list_and_agenda_show_when_an_entry_next_fires_not_when_it_first_did
 def test_pd_entry_add_starts_in_ask_and_an_operator_who_loosens_it_keeps_that(tmp_path, monkeypatch):
     """Installing the mode's permissions puts pd entry add in ask, so approving its prompt is the
     operator's consent. One the operator has moved to allow is left there, at every later install,
-    unlike the permanent lists (persistent_layer 10.6)."""
+    unlike the permanent lists (persistent_layer 8.1)."""
     import json
 
     from macf.utils import claude_settings as cs
@@ -830,3 +832,19 @@ def test_setting_the_mode_puts_pd_entry_add_in_ask_unless_the_operator_allowed_i
     assert mode_set() == 0
     after = json.loads(settings.read_text())["permissions"]
     assert rule not in after["ask"] and rule in after["allow"]
+
+
+def test_a_link_the_agent_can_repoint_is_refused(tmp_path):
+    """A template that names its program through a link in a folder the agent can write passes a
+    check of the file the link reaches today, and the agent can point the link elsewhere after
+    (#758). Each link on the way is checked: the file's and a folder's."""
+    import os
+    from pathlib import Path
+    from macf.pd.scheduler import link_swappable
+    real = Path("/bin/sh").resolve()
+    (tmp_path / "sh").symlink_to(real)                 # the file's own link, in an open folder
+    (tmp_path / "bin").symlink_to(real.parent)         # a folder's link, in an open folder
+    if os.geteuid() != 0:
+        assert link_swappable(tmp_path / "sh")
+        assert link_swappable(tmp_path / "bin" / real.name)
+    assert not link_swappable(real)

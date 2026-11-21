@@ -38,6 +38,7 @@ import math
 import os
 import random
 import re
+import sys
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -109,12 +110,14 @@ def build_snapshot(agent_home: Optional[Path] = None, exclude: Sequence[str] = (
             continue
         try:
             raw = path.read_text(errors="replace")
-        except OSError:
+        except OSError as e:
+            print(f"⚠️ MACF: reading {path} failed (skipping it): {e}", file=sys.stderr)
             continue
         if ca_type in ("tasks", "duties"):
             try:
                 rec = json.loads(raw)
-            except ValueError:
+            except ValueError as e:
+                print(f"⚠️ MACF: parsing {path} failed (skipping it): {e}", file=sys.stderr)
                 continue
             if ca_type == "tasks":
                 nid, text = f"tasks:#{rec.get('id')}", f"{rec.get('subject', '')}\n\n{rec.get('description') or ''}"
@@ -504,10 +507,21 @@ def evaluate(corpus: Corpus, rankers: Sequence[str], sources: Sequence[str] = LA
     labelled, split_ids = {}, {}
     for s in sources:
         rel, unresolved = labels_for(corpus, s, index_text)
+        # An artifact outside the web can't be a --like query and can't be a target, so it is left
+        # out as a query and counted, not raised on (#1059). The doctor's unreachable count is the same set.
+        orphans = [q for q in rel if q not in corpus.web_set]
+        # The ranked list is cut to the web before scoring, so a target outside it can never be returned:
+        # it is dropped from the relevant sets too, and a query left with no target is left out.
+        orphan_targets = sum(len(v - corpus.web_set) for q, v in rel.items() if q in corpus.web_set)
+        rel = {q: v & corpus.web_set for q, v in rel.items() if q in corpus.web_set}
+        no_target = [q for q, v in rel.items() if not v]
+        rel = {q: v for q, v in rel.items() if v}
         dev, held = split(rel, seed)
         labelled[s], split_ids[s] = rel, (dev, held)
         chart["sources"][s] = {"queries": len(rel), "pairs": sum(len(v) for v in rel.values()),
-                               "unresolved": unresolved, "dev": len(dev), "held": len(held)}
+                               "unresolved": unresolved, "dev": len(dev), "held": len(held),
+                               "orphan_queries": len(orphans), "orphan_targets": orphan_targets,
+                               "no_target_queries": len(no_target)}
         if s == "same_subject" and not index_text:
             chart["sources"][s]["note"] = "no learnings index in this snapshot"
     sealed, held_runs = seal_state(events(), seed)
@@ -581,8 +595,12 @@ def format_report(out: dict) -> str:
                                                       for s, n in by.items()))
     for s, info in c["sources"].items():
         extra = f", {info['note']}" if info.get("note") else ""
+        left_out = "".join(f", {info[k]} {what}" for k, what in (
+            ("orphan_queries", "queries left out as outside the web"),
+            ("orphan_targets", "targets left out as outside the web"),
+            ("no_target_queries", "queries left out with no target in the web")) if info.get(k))
         lines.append(f"   {s}: {info['queries']} queries, {info['pairs']} pairs, {info['unresolved']} unresolved, "
-                     f"{info['dev']} dev, {info['held']} held{extra}")
+                     f"{info['dev']} dev, {info['held']} held{left_out}{extra}")
     for s, by in out["results"].items():
         lines.append(f"\n{s}")
         lines.append(f"   {'ranker':<10} {'MRR':>22} {'nDCG@10':>22} {'R@50':>22} {'returned':>9}")

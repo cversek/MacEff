@@ -192,17 +192,22 @@ def test_rules_come_from_the_session_start_not_a_later_cd(tmp_path, monkeypatch)
 def test_the_cli_reads_only_the_log_and_writes_nothing(tmp_path):
     import time
     now = time.time()
-    log = tmp_path / "agent_events_log.jsonl"
+    # A directory of its own: tmp_path also holds the autouse fixtures' files, and the
+    # isolated event log is created there whenever this process appends, which a thread
+    # left by an earlier test can do while the CLI runs.
+    home = tmp_path / "home"
+    home.mkdir()
+    log = home / "agent_events_log.jsonl"
     old = request(now - 9 * 86400, SID_A, command="git push old")  # outside the default 7 days
     events = [old, completed(now - 9 * 86400 + 30, SID_A, command="git push old"),
               request(now - 600, SID_A), completed(now - 480, SID_A), plain("dev_drv_ended", now - 470, SID_A)]
     log.write_text("".join(json.dumps(e) + "\n" for e in events))
-    before = sorted(p.name for p in tmp_path.iterdir())
-    env = dict(os.environ, MACF_EVENTS_LOG_PATH=str(log), HOME=str(tmp_path))
+    before = sorted(p.name for p in home.iterdir())
+    env = dict(os.environ, MACF_EVENTS_LOG_PATH=str(log), HOME=str(home))
     out = subprocess.run([sys.executable, "-m", "macf.cli", "permissions", "history", "--json"],
                          capture_output=True, text=True, env=env, timeout=60)
     assert out.returncode == 0, out.stderr
     rows = json.loads(out.stdout)
     assert [(r["command"], r["outcome"]) for r in rows] == [("git push -u origin b", "ran")]
     assert rows[0]["waited_minutes"] == pytest.approx(2.0, abs=0.01)
-    assert sorted(p.name for p in tmp_path.iterdir()) == before  # no state file appeared
+    assert sorted(p.name for p in home.iterdir()) == before  # no state file appeared

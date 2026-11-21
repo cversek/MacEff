@@ -2,7 +2,7 @@
 
 ``harness attach`` used to take one exact tmux name, so the operator had to carry
 each seat's session name, account and socket directory in his head (persistent_layer
-4). The roster answers "who is here" from what each agent publishes, and the matcher
+9). The roster answers "who is here" from what each agent publishes, and the matcher
 turns a short name (``lumen``, ``Lumen2``, ``3f9a1c``) into one of those agents, or
 says plainly that it names several, or none.
 
@@ -14,11 +14,11 @@ every seat after that one agent. The sources, in the order they are believed:
 - a daemon record in this account's runtime directory, ``<id>.json``, whose name is the
   card through ``session_identifier``;
 - a home's published units summary (``agent/public/pd/units.json``, ``agent`` = card),
-  which peers already read (persistent_layer 8);
+  which peers already read (persistent_layer 14);
 - ``agent_card(home)`` for a home that has a card and no summary;
 - an installed legacy harness unit, ``cc-harness-<id>.service``.
 
-**What one seat may know of another's** (persistent_layer 8): its public summary and
+**What one seat may know of another's** (persistent_layer 14): its public summary and
 its card. Not its state: a peer's state lives with the peer's daemon, which answers only
 its own account. So a peer's ``state`` is ``unknown``, with that reason, rather than a
 guess made from a file that outlives its writer.
@@ -93,6 +93,9 @@ class RosterEntry(BaseModel):
     aliases: Tuple[str, ...] = ()
     reasons: Dict[str, str] = {}
     detail: str = ""
+    #: The daemon's recorded reading of the agent's Claude login when it is not fine
+    #: (expired, expiring, unjudgeable), else empty; judged against now (#883).
+    login: str = ""
 
     @model_validator(mode="after")
     def _unknown_is_never_empty(self) -> "RosterEntry":
@@ -190,7 +193,7 @@ def _agent_home_markers(home: Path) -> Tuple[Optional[bool], str]:
         try:
             os.stat(marker)
             return True, ""
-        except FileNotFoundError:
+        except FileNotFoundError:  # noqa: S112 - a home holds one marker, not both, so a missing one is normal
             continue
         except OSError as e:
             return None, f"{home} cannot be read by this account: {e.strerror or type(e).__name__}"
@@ -265,9 +268,38 @@ def _home_entry(home: Path, own_uid: int, probe: Optional["Probe"], legacy: Sequ
     else:
         state = "unknown"
         reasons["state"] = ("another account's agent: its state lives with its own daemon, "
-                            "which answers only that account (persistent_layer 8)")
+                            "which answers only that account (persistent_layer 14)")
     return _entry(card, account=account, home=str(home), session_kind=kind, state=state,
-                  reasons=reasons)
+                  reasons=reasons, login=_login_line(home, card) if uid == own_uid and card else "")
+
+
+def _login_line(home: Path, card: str, now: Optional[float] = None) -> str:
+    """What the daemon's login check recorded, as a line, when it is a problem; else empty.
+    Read from the agent's own event log and judged against now, by the declaration's warning
+    window, the way the watch and the daemon judge it (#1058): one window at every reader."""
+    import time
+    from ..pd.core import DeclarationRefused
+    from ..pd.login import EXPIRING_S, warn_seconds
+    from ..pd.watch import check_login, last_login_event
+    now = time.time() if now is None else now
+    window = EXPIRING_S
+    try:
+        from ..pd.core import load_declaration
+        window = warn_seconds(load_declaration(home, card))
+    except Exception as e:  # noqa: BLE001 - a home with no readable declaration is still listed, by the default window
+        if not (isinstance(e, DeclarationRefused) and "cannot read" in str(e)):
+            print(f"⚠️ MACF: harness list: {card}: declaration not read, so its login is judged by "
+                  f"the default window: {type(e).__name__}", file=sys.stderr)
+    try:
+        finding = check_login(card, last_login_event(home / ".maceff" / "agent_events_log.jsonl", card, now),
+                              now, window)
+    except FileNotFoundError:
+        return ""
+    except OSError as e:
+        return f"CHECK-FAILED: the event log cannot be read: {e.strerror}"
+    if finding is None or finding.verdict == "ALIVE":
+        return ""
+    return f"{finding.verdict}: {finding.detail}"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -298,7 +330,7 @@ def probe_local(ident: str, has_legacy_unit: bool,
     """This account's agent *ident*: which kind of session it has, and whether it runs.
 
     A session unit's server socket in the runtime directory makes it the daemon's session
-    unit (persistent_layer 6.2); otherwise an installed legacy unit makes it the legacy
+    unit (persistent_layer 5.1); otherwise an installed legacy unit makes it the legacy
     harness, asked on the default server. A name on the default server proves presence,
     not ownership; that is the start script's concern, not a listing's.
     """
@@ -845,7 +877,8 @@ _COLUMNS = ("CARD", "ENDPOINT", "ACCOUNT", "KIND", "STATE", "DISPLAY NAME")
 def render_table(entries: Sequence[RosterEntry], verbose: bool = False) -> str:
     """``harness list``'s table: one row per agent. Under a row whose card is unknown, why,
     since that row can't be attached to by name. ``verbose`` adds the reason for every field
-    left unknown, fields that share a reason on one line, and each row's detail."""
+    left unknown, fields that share a reason on one line, each row's detail, and, for each row
+    with a card, the exact command that attaches to it."""
     if not entries:
         return "No agents on this endpoint."
     rows = [_COLUMNS] + [(e.card or "?", e.endpoint, e.account or "?", e.session_kind or "?",
@@ -855,6 +888,8 @@ def render_table(entries: Sequence[RosterEntry], verbose: bool = False) -> str:
     quiet = 0
     for e, row in zip(entries, rows[1:], strict=True):
         lines.append("  ".join(c.ljust(w) for c, w in zip(row, widths, strict=True)).rstrip())
+        if e.login:
+            lines.append(f"    login: {e.login}")
         if not verbose:
             if e.card is None and e.reasons.get("card"):
                 lines.append(f"    card unknown: {e.reasons['card']}")
@@ -867,6 +902,10 @@ def render_table(entries: Sequence[RosterEntry], verbose: bool = False) -> str:
             lines.append(f"    {', '.join(fields)} unknown: {why}")
         if e.detail:
             lines.append(f"    {e.detail}")
+        if e.card:
+            # The exact command, so nobody has to reconstruct the socket or session name; the card
+            # resolves the same way on every endpoint the roster gathers.
+            lines.append(f"    attach: macf_tools harness attach {e.card}")
     if quiet:
         lines.append("(--verbose says why each unknown field is unknown)")
     return "\n".join(lines)

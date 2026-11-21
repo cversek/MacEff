@@ -604,7 +604,7 @@ def _monitors_from_proc(proc: Path) -> List[MonitorProcess]:
             if MONITOR_MODULE not in argv:
                 continue
             started = _stat_started((entry / "stat").read_text())
-        except (OSError, ValueError, IndexError):
+        except (OSError, ValueError, IndexError):  # noqa: S112 - a process that ends during the scan, or is not ours to read, is normal on a shared host; a warning for each would flood
             continue  # it ended while we looked, or is not ours to read
         monitor = _monitor_from_argv(int(entry.name), started, argv)
         if monitor is not None:
@@ -629,7 +629,8 @@ def _parse_ps(output: str) -> List[MonitorProcess]:
             continue
         try:
             started = _parse_lstart(" ".join(fields[1:6]))
-        except ValueError:
+        except ValueError as e:
+            print(f"⚠️ MACF: reading the start time of monitor {fields[0]} failed (skipping it): {e}", file=sys.stderr)
             continue
         monitor = _monitor_from_argv(int(fields[0]), started,
                                      head.split() + ["--transcript", transcript.rstrip()])
@@ -1109,7 +1110,8 @@ class TranscriptMonitor:
         return self._fwd_cached
 
     def _detect_rewind(self, current_size: int) -> None:
-        """Check if JSONL was truncated (context rewind)."""
+        """Check if the JSONL got smaller. A Claude Code rewind does not do this: it appends
+        a prompt that branches from an earlier entry, which RewindWatch reports (#1003)."""
         if self.last_file_size > 0 and current_size < self.last_file_size:
             self._emit("context_rewind_detected", {
                 "previous_size": self.last_file_size,
@@ -1193,7 +1195,7 @@ class TranscriptMonitor:
 
                         time.sleep(self.poll_interval)
 
-        except KeyboardInterrupt:
+        except KeyboardInterrupt:  # noqa: S110 - Ctrl-C is the ordinary way this loop ends, and the finally block reports the totals
             # Ordinary shutdown path: the finally block reports the totals.
             pass
         finally:
@@ -1358,6 +1360,19 @@ def _identity(me: int, owner: int, transcript: Path) -> dict:
             "owner": owner, "transcript": str(transcript)}
 
 
+def _own_card() -> Optional[str]:
+    """This agent's calling card, which the Remote Control events carry so the outside watch can
+    tell them from another agent's (#883); None, said on stderr, when the home has none to read."""
+    from ..pd.names import agent_card
+    from ..utils.paths import find_agent_home
+    try:
+        return agent_card(find_agent_home())
+    except Exception as e:  # noqa: BLE001 - no card must not stop the monitor that beats for the session
+        print(f"⚠️ MACF: transcript monitor: no calling card ({type(e).__name__}); Remote Control "
+              f"disconnects are recorded without one, and the outside watch won't match them", file=sys.stderr)
+        return None
+
+
 def _session_monitor(transcript: Path, poll_interval: float, owner: int, session_env,
                      extra_pass: Optional[Callable[[], None]] = None):
     """The monitor for one session's transcript, and the session unit's heartbeat it ticks.
@@ -1369,12 +1384,29 @@ def _session_monitor(transcript: Path, poll_interval: float, owner: int, session
     It also says when the session waits on a permission dialog (MIS-0002-R21), read from
     the event log for this transcript's session, since the client can't say so while it waits.
     And when it can't authenticate, read from the transcript as it arrives (MIS-0002-R19).
+    And when the session was rewound (#1003): the monitor reads from the end of the file,
+    so the rewind watch first remembers the transcript's tail, or a resume onto an earlier
+    point could not be told.
     *extra_pass* runs on every pass too: a follow-mode monitor's own unit beat and its check
     for a newly announced session.
     """
     from ..pd.liveness import session_heartbeat_from_env
     from ..permission_watch import SessionDialogs
+    from .rewind import RewindWatch
+    from .remote_control import RemoteControlWatch
     auth = AuthWatch()
+    remote_control = RemoteControlWatch(_own_card())
+    try:
+        remote_control.prime(transcript)
+    except OSError as e:
+        print(f"⚠️ MACF: could not read the transcript's tail, so a Remote Control disconnect already open "
+              f"will not have its remedy recorded: {e}", file=sys.stderr)
+    rewinds = RewindWatch()
+    try:
+        rewinds.prime(transcript)
+    except OSError as e:
+        print(f"⚠️ MACF: could not read the transcript's tail, so a rewind to before this "
+              f"monitor started will go unreported: {e}", file=sys.stderr)
     heartbeat = session_heartbeat_from_env(environ=session_env,
                                            waiting_on=SessionDialogs(transcript.stem),
                                            auth_failed=auth.state)
@@ -1386,7 +1418,7 @@ def _session_monitor(transcript: Path, poll_interval: float, owner: int, session
 
     monitor = TranscriptMonitor(transcript, poll_interval=poll_interval, owner=owner,
                                 on_pass=on_pass if passes else None,
-                                detectors=list(DEFAULT_DETECTORS) + [auth])
+                                detectors=list(DEFAULT_DETECTORS) + [auth, rewinds, remote_control])
     return monitor, heartbeat
 
 
@@ -1585,7 +1617,7 @@ class _AnnouncementTail:
                 continue
             try:
                 event = json.loads(line)
-            except ValueError:
+            except ValueError:  # noqa: S112 - a line cut short by an interrupted append; the scan reads on
                 continue
             if event.get("event") == EVENT_SESSION_ANNOUNCED:
                 newest = AnnouncedSession.from_event(event) or newest

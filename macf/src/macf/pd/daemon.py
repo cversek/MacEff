@@ -66,7 +66,7 @@ from macf import calling_card
 #: ask from inside, so no requesting process exists to record (MIS-0002-R52
 #: (control_act_MUST_name_who_asked)). A pace, which acts on no unit, names the agent or the
 #: operator (``PaceRequest``).
-SOCKET_ASKERS = ("operator", "wind_down")
+SOCKET_ASKERS = ("operator", "wind_down", "agent")
 
 #: How often the core makes its pass when nothing else wakes the loop.
 TICK_S = 0.25
@@ -162,7 +162,7 @@ class Daemon:
         from macf.agent_events_log import get_log_path
         from macf.pd.stream import Rules
         self.rules = Rules()
-        #: The event stream (persistent_layer 11.4): the daemon's own broker, its configuration
+        #: The event stream (persistent_layer 3.4): the daemon's own broker, its configuration
         #: rendered here, before units start, and its publisher run from the loop.
         self.export_link = None
         decl = self.core.declaration
@@ -193,6 +193,38 @@ class Daemon:
         self._channel_bound: Optional[tuple] = None     # (st_dev, st_ino) of the channel socket bound
         #: Each attached channel still owed its hello: (deadline, peer pid, bytes so far).
         self._hellos: dict = {}
+        #: Whether this daemon serves an agent. Only an agent's declaration adds the Agent Daemon's
+        #: components; a system or fleet daemon runs the base alone (MIS-0002-R183
+        #: (component_MUST_be_added_by_declaration), MIS-0002-R184 (base_MUST_stand_alone)).
+        self.agent = self.core.declaration.kind == "agent"
+        self.notifier: Optional[Notifier] = None
+        self.duties = None
+        self.login = None
+        self.dark_channel: Optional[DarkChannel] = None
+        self.unread_mail: Optional[UnreadMail] = None
+        self.receiver = None
+        #: Where the keystroke wake's window in force came from, for a status or a pace to say.
+        self._wake_from = "the declaration"
+        if self.agent:
+            self._build_agent_components()
+        #: The build this daemon started from, said in every status (MacEff #816). Read once:
+        #: the code it runs can't change under it, only the checkout beside it.
+        from macf.pd.build import build_id
+        self._build = build_id()
+        #: When the observation sweep last ran (monotonic); it runs on its first tick.
+        self._observe_swept = float("-inf")
+        self._sel: Optional[selectors.BaseSelector] = None
+        self._wake_r, self._wake_w = os.pipe()
+        os.set_blocking(self._wake_w, False)
+        self._stopping = False
+        self._stop_units = False
+        self._bound: Optional[tuple] = None             # (st_dev, st_ino) of the socket bound
+        self._record: Optional[DaemonRecord] = None     # the record this daemon wrote
+
+    def _build_agent_components(self) -> None:
+        """The Agent Daemon's components, built only for an agent's declaration: the notice path
+        and its keystroke wake, the agent's duties, its login check, the dark-channel watch, and its
+        mail. A daemon that has none records its own notices' facts in its log and owes no one."""
         # The stream's rules, read live at each delivery: _fold_rules folds them anew at start
         # and a stream rule changes them at runtime (MIS-0002-R152).
         self.notifier = Notifier(self.home, self.core.declaration.notice_routes,
@@ -207,8 +239,8 @@ class Daemon:
                                    lambda: read_events(reverse=False, scope="all", only=(DUTY_EVENT,)),
                                    self.notifier.raise_notice, time.monotonic)
         #: The agent's login, read from its stored credential's expiry dates, never by a model turn (#884).
-        from macf.pd.login import HostedLoginCheck
-        self.login = HostedLoginCheck(self.card, append_event)
+        from macf.pd.login import HostedLoginCheck, warn_seconds
+        self.login = HostedLoginCheck(self.card, append_event, expiring_s=warn_seconds(self.core.declaration))
         self.core.on_notice = self.notifier.raise_notice    # the core's own notices (R60)
         self.scheduler.on_notice = self.notifier.raise_notice   # a denied prompt run (R32)
         half = self.core.declaration.half_served_routes()
@@ -230,8 +262,6 @@ class Daemon:
         from macf.amail.store import maildir_for
         self.unread_mail = UnreadMail(self.card, threshold, maildir_for(self.home) / "new",
                                       self.notifier.raise_notice) if threshold else None
-        #: Where the keystroke wake's window in force came from, for a status or a pace to say.
-        self._wake_from = "the declaration"
         #: Where the agent's settings name its mail, the receiver ingests it (MIS-0004 R04).
         from macf.agent_events_log import append_event as _append
         from macf.pd.receiver import Receiver, receiver_settings
@@ -242,12 +272,6 @@ class Daemon:
         if mail is None and "amail" in self.core.declaration.notice_routes:
             print("⚠️ MACF: pd: mail notices are routed but the agent's amail settings name no agent, "
                   "so this daemon ingests no mail and a notice waits for `amail list`", file=sys.stderr)
-        #: The build this daemon started from, said in every status (MacEff #816). Read once:
-        #: the code it runs can't change under it, only the checkout beside it.
-        from macf.pd.build import build_id
-        self._build = build_id()
-        #: When the observation sweep last ran (monotonic); it runs on its first tick.
-        self._observe_swept = float("-inf")
         if any(u.kind == "session" for u in self.core.declaration.units):
             # The keystroke fallback types into the session unit's own pane (pd.session_unit),
             # recording each wake first so it never reads as the operator (MIS-0002-R105).
@@ -263,13 +287,6 @@ class Daemon:
                                         # MIS-0004 R29: positive evidence of an idle prompt, besides the screen.
                                         waiting_on=self.core.session_waiting_on,
                                         turn_ended=lambda: transcript_turn_ended(self.core.session_transcript()))
-        self._sel: Optional[selectors.BaseSelector] = None
-        self._wake_r, self._wake_w = os.pipe()
-        os.set_blocking(self._wake_w, False)
-        self._stopping = False
-        self._stop_units = False
-        self._bound: Optional[tuple] = None             # (st_dev, st_ino) of the socket bound
-        self._record: Optional[DaemonRecord] = None     # the record this daemon wrote
 
     # ------------------------------------------------------------------ life
 
@@ -286,28 +303,32 @@ class Daemon:
         listener.listen(8)
         listener.setblocking(False)
         self._listener = listener
-        self.channel_path.unlink(missing_ok=True)   # the slot is ours, so a socket left here is a dead daemon's
-        channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        channel.bind(str(self.channel_path))
-        st = os.stat(self.channel_path)
-        self._channel_bound = (st.st_dev, st.st_ino)
-        os.chmod(self.channel_path, 0o600)
-        channel.listen(4)
-        channel.setblocking(False)
-        self._channel_listener = channel
+        if self.agent:                  # the MacEff channel is an agent's session's
+            self.channel_path.unlink(missing_ok=True)   # the slot is ours, so a socket left here is a dead daemon's
+            channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            channel.bind(str(self.channel_path))
+            st = os.stat(self.channel_path)
+            self._channel_bound = (st.st_dev, st.st_ino)
+            os.chmod(self.channel_path, 0o600)
+            channel.listen(4)
+            channel.setblocking(False)
+            self._channel_listener = channel
         self._fold_rules()
         record = self._record = self._write_record()
         self.core.record_start(record.pid, record.proc_start)
-        self._compare_allowlist()
+        if self.agent:
+            self._compare_allowlist()
         self.core.boot()
         self._publish_units()
-        self.notifier.boot()
+        if self.notifier is not None:
+            self.notifier.boot()
         self._notice_denied_grants()
         self._reassert_pace()
         if self.unread_mail is not None:
             self.unread_mail.boot()
         self.scheduler.boot()
-        self.duties.boot()
+        if self.duties is not None:
+            self.duties.boot()
 
     def _fold_rules(self) -> None:
         """Fold the operator's rules from the log, and let the publisher learn this process's
@@ -395,8 +416,9 @@ class Daemon:
             for grant in sorted(g for g, v in verdicts.items() if v == "denied" and g in declared):
                 print(f"⚠️ MACF: pd: the declared grant {grant} was denied when pd install last "
                       f"tested it", file=sys.stderr)
-                self.notifier.raise_notice(GRANT_NOTICE_SOURCE,
-                                           f"pd_grant_denied:{re.sub(r'[^A-Za-z0-9._:-]', '-', grant)}:{stamp}")
+                if self.notifier is not None:
+                    self.notifier.raise_notice(GRANT_NOTICE_SOURCE,
+                                               f"pd_grant_denied:{re.sub(r'[^A-Za-z0-9._:-]', '-', grant)}:{stamp}")
             return                     # only the newest probe speaks for the grants now
 
     def _compare_allowlist(self) -> None:
@@ -409,7 +431,9 @@ class Daemon:
         from macf.pd.interface import EVENT_ALLOWLIST_MISMATCH
 
         try:
-            found = allowlist.findings(self.core.declaration, allowlist.managed_allowlist(self._managed))
+            managed = allowlist.managed_allowlist(self._managed)
+            found = (allowlist.findings(self.core.declaration, managed)
+                     + allowlist.unadmitted_without_allowlist(self.core.declaration, managed))
         except (OSError, ValueError) as e:
             found = [f"the managed settings can't be read, so the organization allowlist can't be "
                      f"compared with the declaration: {e}"]
@@ -424,9 +448,11 @@ class Daemon:
         the next daemon to adopt unless the stop asked for them too, so a restart through
         the outer tier restarts the daemon alone."""
         sel = self._sel = selectors.DefaultSelector()
-        self.notifier.on_detach = self._channel_gone
+        if self.notifier is not None:
+            self.notifier.on_detach = self._channel_gone
         sel.register(self._listener, selectors.EVENT_READ, "control")
-        sel.register(self._channel_listener, selectors.EVENT_READ, "channel")
+        if self._channel_listener is not None:
+            sel.register(self._channel_listener, selectors.EVENT_READ, "channel")
         sel.register(self._wake_r, selectors.EVENT_READ, "wake")
         for link in (self.broker_link, self.export_link):
             if link is not None:
@@ -447,22 +473,27 @@ class Daemon:
                 self._hellos_due()
                 if self.receiver is not None:
                     self.receiver.tick(time.monotonic())
-                self.notifier.poll()
-                self.notifier.flush()
-                self.notifier.wake()
+                if self.notifier is not None:
+                    self.notifier.poll()
+                    self.notifier.flush()
+                    self.notifier.wake()
                 if self.dark_channel is not None:
-                    self.dark_channel.tick(self.core.session_incarnation(), bool(self.notifier.channels))
+                    self.dark_channel.tick(self.core.session_incarnation(),
+                                           bool(self.notifier is not None and self.notifier.channels))
                 if self.unread_mail is not None:
                     self.unread_mail.tick(self.core.session_active_since())
-                self.duties.tick()
-                self.login.tick()
+                if self.duties is not None:
+                    self.duties.tick()
+                if self.login is not None:
+                    self.login.tick()
                 self._sweep_observations()
                 self._pump_stream()
                 self._keep_record()
         finally:
-            for conn in self.notifier.channels:
-                self.notifier.detach(conn)
-            self.notifier.on_detach = None
+            if self.notifier is not None:
+                for conn in self.notifier.channels:
+                    self.notifier.detach(conn)
+                self.notifier.on_detach = None
             for link in (self.broker_link, self.export_link):
                 if link is not None:
                     link.stop()
@@ -507,7 +538,7 @@ class Daemon:
         self._stopping = True
         try:
             os.write(self._wake_w, b"x")
-        except BlockingIOError:
+        except BlockingIOError:  # noqa: S110 - stop() runs from a signal handler, where printing is unsafe; a full wake pipe means the loop is already awake
             pass  # the pipe is full, so the loop is already awake
 
     # ------------------------------------------------------------------ the slot
@@ -582,7 +613,7 @@ class Daemon:
             try:
                 if still_mine():
                     path.unlink()
-            except FileNotFoundError:
+            except FileNotFoundError:  # noqa: S112 - a path already gone is what a release wants, not a failure
                 continue  # already gone, which is what a release wants
             except (OSError, ValidationError) as e:
                 print(f"⚠️ MACF: pd: could not release {path}: {e}", file=sys.stderr)
@@ -777,9 +808,23 @@ class Daemon:
         if isinstance(request, ActRequest):
             if request.asked_by.kind not in SOCKET_ASKERS:
                 return Response(ok=False, error=(
-                    f"a request over this socket is asked by the operator or the declared wind-down, "
-                    f"not {request.asked_by.kind!r}: that asker acts from inside and has no process "
-                    f"to record (MIS-0002-R52 (control_act_MUST_name_who_asked))"))
+                    f"a request over this socket is asked by the operator, the agent or the declared "
+                    f"wind-down, not {request.asked_by.kind!r}: that asker acts from inside and has "
+                    f"no process to record (MIS-0002-R52 (control_act_MUST_name_who_asked))"))
+            if request.asked_by.kind == "agent" and request.op in ("stop", "restart") \
+                    and self.core.is_session(request.unit):
+                # inject exit refuses while the client holds unsent feedback drafts or the session
+                # has scheduled jobs, because exiting past them loses the operator's drafts or drops
+                # the agent's schedules. A stop here is a SIGTERM that passes both and, being the
+                # operator's way to take a session back from a loop (R48), every Stop gate too. So
+                # the agent takes its own session through inject exit; the operator can still ask
+                # with --asked-by operator (#1007).
+                return Response(ok=False, error=(
+                    f"an agent ends or restarts its own session through `macf_tools inject exit`, "
+                    f"which refuses while the client holds unsent feedback drafts or the session has "
+                    f"scheduled jobs; a {request.op} of the session unit {request.unit!r} here would "
+                    f"pass both. The operator can still ask for it (--asked-by operator). "
+                    f"`macf_tools policy read persistent_layer --section 1.4`"))
             started = proc_start(creds.pid)
             if not started:
                 return Response(ok=False, error=(
@@ -893,6 +938,9 @@ class Daemon:
             if not append_event(EVENT_ENTRY_REMOVED, removed):
                 return Response(ok=False, error="the removal could not be recorded in the event log")
             self.scheduler.entries.pop(request.id, None)
+            # A removal revokes the entry (R135), so a check of it still running is stopped, and
+            # reads as stopped rather than failed.
+            self.scheduler.stop_run(request.id, "its entry was removed")
         if isinstance(request, EntryAddRequest):
             zone = self.core.declaration.timezone
             tz = ZoneInfo(zone) if zone else timezone.utc
@@ -933,7 +981,7 @@ class Daemon:
         ``pd_stream_rule`` event before it takes effect, so the next daemon folds it back, and
         takes effect at once. Where the declaration names the operator's own uid, as in a
         container, only that uid may set one; elsewhere the client's ask prompt on the command is
-        the operator's act (persistent_layer 11.4)."""
+        the operator's act (persistent_layer 3.4)."""
         operator_uid = self.core.declaration.operator_uid
         if operator_uid is not None and creds.uid != operator_uid:
             return Response(ok=False, error=(f"the event stream's rules are taken only from the operator's "
@@ -955,21 +1003,26 @@ class Daemon:
 
     # ------------------------------------------------------------------ the wake's pace
 
+    @property
+    def _waker(self):
+        """The keystroke waker, where an agent's session unit gives the daemon one."""
+        return self.notifier.waker if self.notifier is not None else None
+
     def _wake_window(self) -> dict:
         """The keystroke wake's window in force and where it came from, for a reply; nothing
         where no session unit is declared, since there is no keystroke wake."""
-        waker = self.notifier.waker
+        waker = self._waker
         if waker is None:
             return {}
         return {"wake_refractory_s": waker.refractory_s, "wake_window_from": self._wake_from}
 
     def _pace(self, request: PaceRequest, creds) -> Response:
         """The agent, or the operator, sets how long the keystroke wake rests (persistent_layer
-        1.9). The floor comes only from the declaration, never from this socket. The pace is
+        6.9). The floor comes only from the declaration, never from this socket. The pace is
         recorded like every act, and in ``pd_wake_paced``, which the next daemon re-asserts,
         before the waker changes and before it is answered."""
         from macf.pd.wake import EVENT_PACED, pace_refusal, pace_source
-        if self.notifier.waker is None:
+        if self._waker is None:
             return Response(ok=False, error="no session unit is declared, so there is no keystroke wake to pace")
         declaration = self.core.declaration
         refused = pace_refusal(request.refractory_s, declaration.wake_refractory_floor_s,
@@ -1003,7 +1056,7 @@ class Daemon:
         """A pace outlives the daemon that set it. At start, the newest ``pd_wake_paced`` of this
         agent is read back once and re-asserted, naming the event it came from; a floor declared
         above it since then wins, and the daemon says so."""
-        if self.notifier.waker is None:
+        if self._waker is None:
             return
         from macf.pd.wake import EVENT_PACED, window_at_boot
         # A lifetime read, scope "all": a pace holds until another replaces it, across compactions,

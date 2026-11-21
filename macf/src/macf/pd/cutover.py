@@ -2,7 +2,7 @@
 
 ``macf_tools harness cutover`` reads the host and prints what a move would do for one
 agent, step by step, with the rollback, and changes nothing. It is the runbook the host's
-first move followed (persistent_layer 6.3), generated for the agent at hand from what is
+first move followed (persistent_layer 5.2), generated for the agent at hand from what is
 actually installed, so no step names a unit that isn't there or misses one that is.
 
 The plan is built from probes passed in, so every case can be tested without systemd,
@@ -10,6 +10,7 @@ tmux or a daemon: ``build_plan(..., probes=Probes(...))``. ``host_probes`` are t
 """
 from __future__ import annotations
 
+import json
 import shlex
 import shutil
 import subprocess
@@ -121,6 +122,9 @@ class Probes:
     #: Whether the daemon is installed under the service manager at all. One that isn't is
     #: installed by the move, after the declaration (``pd install``, undone by ``pd uninstall``).
     daemon_installed: Callable[[], bool] = lambda: True
+    #: Whether this user's systemd instance outlives their logins (``loginctl`` Linger): True, False, or
+    #: None when it can't be read. Read on systemd hosts only (#860).
+    linger: Callable[[], Optional[bool]] = lambda: None
 
 
 def staged_path(home: Path) -> Path:
@@ -128,9 +132,25 @@ def staged_path(home: Path) -> Path:
     return path.with_name(path.name + STAGED_SUFFIX)
 
 
-def _staged_check(path: Path, card: str, runtime: Optional[str], init: str = "systemd") -> Check:
+def _current_form(text: str, card: str) -> Tuple[str, bool]:
+    """A declaration's text with this home's own card in the old ``Name@shortid`` form changed to
+    the new one, as the cut-over rewrites it (R165, R166), and whether it was: a staged file made
+    before the card revision still validates here, and the move leaves it rewritten (#919)."""
     try:
-        declaration = Declaration.model_validate_json(path.read_text())
+        old = json.loads(text).get("agent")
+    except (ValueError, AttributeError):
+        return text, False
+    if isinstance(old, str) and calling_card.from_history(old) != old \
+            and calling_card.same(calling_card.from_history(old), card):
+        return text.replace(json.dumps(old), json.dumps(card)), True
+    return text, False
+
+
+def _staged_check(path: Path, card: str, runtime: Optional[str], init: str = "systemd") -> Check:
+    old_form = False
+    try:
+        text, old_form = _current_form(path.read_text(), card)
+        declaration = Declaration.model_validate_json(text)
     except FileNotFoundError:
         return Check("staged declaration", False,
                      f"none at {path}: stage the declaration with the session unit there first")
@@ -148,9 +168,9 @@ def _staged_check(path: Path, card: str, runtime: Optional[str], init: str = "sy
     if session.stop_grace_s <= PANE_GRACE_S:
         return Check("staged declaration", False,
                      f"the session unit's stop_grace_s {session.stop_grace_s:g} must exceed the "
-                     f"wrapper's {PANE_GRACE_S:g} s pane grace (persistent_layer 6.2)")
+                     f"wrapper's {PANE_GRACE_S:g} s pane grace (persistent_layer 5.1)")
     # The unit's liveness variables need no check here: the daemon sets them from the unit
-    # (persistent_layer 11.2), and a declared value that disagrees is refused at load.
+    # (persistent_layer 3.2), and a declared value that disagrees is refused at load.
     # A unit gets only its declared environment, so without this its tmux server sits under
     # /tmp, where attach, harness status and the rollback look for it in vain.
     declared = session.environment.get("XDG_RUNTIME_DIR")
@@ -165,7 +185,8 @@ def _staged_check(path: Path, card: str, runtime: Optional[str], init: str = "sy
         return Check("staged declaration", False,
                      f"the session unit's environment must declare XDG_RUNTIME_DIR={runtime or '<yours>'} "
                      f"(it declares {declared or 'none'}), or its tmux server lands where nothing looks")
-    return Check("staged declaration", True, f"{path} validates, with session unit {session.name}")
+    note = ", in the old card form, which the move rewrites in place (R165)" if old_form else ""
+    return Check("staged declaration", True, f"{path} validates, with session unit {session.name}{note}")
 
 
 def default_socket(uid: Optional[int] = None) -> Path:
@@ -210,7 +231,7 @@ def _launchd_init(agent: str, card: str, harness_label: Optional[str], uid: int,
     """launchd's counterparts: a job is stopped with ``bootout`` and kept from starting at
     the next login with ``disable``, the pair systemd's ``disable --now`` is; it is started
     again with ``enable``, then ``bootstrap`` of its plist, since launchd refuses to load a
-    disabled job. The daemon restarts with ``kickstart -k`` (persistent_layer 3.1)."""
+    disabled job. The daemon restarts with ``kickstart -k`` (persistent_layer 13.1)."""
     from macf.platform import launchd
 
     def ctl(verb: str, label: str) -> Command:
@@ -229,10 +250,31 @@ def _launchd_init(agent: str, card: str, harness_label: Optional[str], uid: int,
                  restart_daemon=lambda: ctl("kickstart", daemon))
 
 
+def _linger_check(lingers: Optional[bool], accepted: bool) -> Check:
+    """Whether the daemon, and the session unit under it, outlive the user's last logout (#860).
+
+    Without linger the user's systemd instance stops at the last logout and doesn't start at boot, so a
+    move that reads "Ready" would leave an agent that is only up while someone is logged in, which
+    defeats an always-on one. Enabling it is the host operator's decision, so the plan names the command
+    and holds until it is on or the move is accepted without it."""
+    if lingers is True:
+        return Check("linger", True, "on: the user's systemd instance, and the daemon with it, outlives their logins")
+    if lingers is None:
+        return Check("linger", True, "could not be read; `loginctl show-user $USER -p Linger` says whether the "
+                                     "daemon outlives the last logout")
+    command = "loginctl enable-linger $USER"
+    if accepted:
+        return Check("linger", True, f"off, and the move is accepted without it (--accept-no-linger): the daemon "
+                                     f"stops at the last logout; `{command}` is the host operator's call")
+    return Check("linger", False, f"off: the user's systemd instance, and the daemon and session unit with it, stop "
+                                  f"at the last logout and don't start at boot; `{command}` keeps them up and is the "
+                                  f"host operator's call, or add --accept-no-linger to move without it")
+
+
 def build_plan(home: Path, card: str, agent: str, probes: Probes,
                staged: Optional[Path] = None, harness_unit: Optional[str] = None,
                runtime: Optional[str] = None, uid: Optional[int] = None,
-               launch_agents: Optional[Path] = None) -> Plan:
+               launch_agents: Optional[Path] = None, accept_no_linger: bool = False) -> Plan:
     """What moving *agent*'s session onto its daemon would do, and whether it can be done now.
 
     *agent* is the session identifier (``Name_uuid6``), *card* the calling card, *runtime*
@@ -266,9 +308,11 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
     else:
         checks.append(Check("init system", False,
                             "neither systemctl nor launchctl here: this plan covers systemd and "
-                            "launchd hosts (persistent_layer 6.3)"))
+                            "launchd hosts (persistent_layer 5.2)"))
         return Plan(agent, card, False, checks)
     checks.append(Check("init system", True, init.describe))
+    if init.name == "systemd":
+        checks.append(_linger_check(probes.linger(), accept_no_linger))
 
     checks.append(_staged_check(staged, card, runtime, init.name))
     why = probes.daemon_answers()
@@ -539,6 +583,7 @@ def host_probes(home: Path, card: str, platform: Optional[str] = None) -> Probes
         harness_label=harness_label,
         hand_started=hand_started,
         daemon_installed=daemon_installed,
+        linger=lambda: _own_linger(),
     )
 
 
@@ -626,8 +671,15 @@ def came_up_by_status(home: Path, card: str, unit: str, timeout_s: float = COME_
     return poll
 
 
+def _own_linger() -> Optional[bool]:
+    import os
+    import pwd
+    from macf.platform.systemd import linger_enabled
+    return linger_enabled(pwd.getpwuid(os.getuid()).pw_name)
+
+
 def arm_argv(agent: str, home: Path, staged: Path, log_path: Path, python: str,
-             environ: Optional[Dict[str, str]] = None) -> List[str]:
+             environ: Optional[Dict[str, str]] = None, accept_no_linger: bool = False) -> List[str]:
     """The transient unit that carries the plan out, outside the session it stops: the
     session's own process tree ends at step 2, so nothing of the move may live in it.
     A ``PYTHONPATH`` the caller runs under is passed on, so the unit imports the same macf
@@ -638,7 +690,8 @@ def arm_argv(agent: str, home: Path, staged: Path, log_path: Path, python: str,
     return ["systemd-run", "--user", "--unit", f"{RUN_UNIT_PREFIX}{agent}", "--collect",
             "--property", "Type=exec", *setenv, "--",
             python, "-m", "macf.cli", "harness", "cutover", "--agent", agent, "--home", str(home),
-            "--staged", str(staged), "--execute", "--log", str(log_path)]
+            "--staged", str(staged), "--execute", "--log", str(log_path),
+            *(["--accept-no-linger"] if accept_no_linger else [])]
 
 
 def job_paths(home: Path, card: str, stamp: str) -> "tuple[Path, Path]":
@@ -748,7 +801,7 @@ def _process_argv(pid: int) -> List[str]:
     try:
         raw = Path(f"/proc/{pid}/cmdline").read_bytes()
         return [a.decode(errors="replace") for a in raw.split(b"\0") if a]
-    except OSError:
+    except OSError:  # noqa: S110 - no procfs on macOS, where ps is asked next
         pass  # noqa: MACEFF003 - no procfs (macOS): ask ps
     try:
         out = subprocess.run(["ps", "-ww", "-o", "args=", "-p", str(pid)],
@@ -815,7 +868,7 @@ def end_stale_monitors(home: Path, find=None, alive=None, signal_pid=None,
     for pid in stale:
         try:
             signal_pid(pid)
-        except ProcessLookupError:
+        except ProcessLookupError:  # noqa: S110 - the process ended between the listing and the signal, as wanted
             pass  # noqa: MACEFF003 - ended between the listing and the signal, as wanted
     deadline = time.monotonic() + wait_s
     left = [p for p in stale if alive(p)]

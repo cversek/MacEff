@@ -23,7 +23,8 @@ from typing import Callable, Dict, Optional
 #: The event the daemon records.
 EVENT = "pd_login_state"
 #: A grant this close to its end reads ``expiring``: three days leaves a weekend to log in again.
-EXPIRING_S = 3 * 86400
+from macf.pd.interface import EXPIRING_DAYS  # noqa: E402 -- the declaration's default, kept as one number
+EXPIRING_S = EXPIRING_DAYS * 86400.0
 #: How often the daemon reads the credential.
 POLL_S = 3600.0
 #: The longest the daemon goes without recording the verdict, changed or not.
@@ -41,7 +42,8 @@ def _seconds(value) -> Optional[float]:
     return value / 1000.0
 
 
-def assess(raw: Optional[str], now: float, why_unread: str = "no credential reachable") -> Dict[str, object]:
+def assess(raw: Optional[str], now: float, why_unread: str = "no credential reachable",
+           expiring_s: float = EXPIRING_S) -> Dict[str, object]:
     """The login verdict from the stored credential's text: its state, the refresh grant's end in
     seconds since the epoch, the hours left (negative once past), and a line saying why. Only the two
     expiry dates are read."""
@@ -60,7 +62,7 @@ def assess(raw: Optional[str], now: float, why_unread: str = "no credential reac
     hours = round(left / 3600.0, 1)
     if left <= 0:
         state, detail = "expired", f"the login's refresh grant ended {-hours} h ago"
-    elif left <= EXPIRING_S:
+    elif left <= expiring_s:
         state, detail = "expiring", f"the login's refresh grant ends in {hours} h"
     else:
         state, detail = "ok", f"the login's refresh grant ends in {round(left / 86400.0, 1)} days"
@@ -68,28 +70,52 @@ def assess(raw: Optional[str], now: float, why_unread: str = "no credential reac
 
 
 def read_assessment(now: Optional[float] = None,
-                    reader: Optional[Callable[[], str]] = None) -> Dict[str, object]:
+                    reader: Optional[Callable[[], str]] = None,
+                    expiring_s: float = EXPIRING_S) -> Dict[str, object]:
     """Read the agent's own stored credential and assess it.
 
-    On macOS the credential is in the Keychain, one entry per login under one service. Where
-    several agents share one macOS login there are several entries, and nothing here says which
-    is this agent's, so the verdict is ``unknown`` rather than another agent's date."""
-    from macf.budget import BudgetError, keychain_accounts, read_credential
+    On macOS the credential is in the Keychain, under one service, and there can be more than one
+    entry: a session started without USER files its refreshed token under "unknown", and the
+    original entry is never written again (#852). ``read_credential`` takes the newest, which is
+    the login in use. Agents that share one macOS login share that one Claude login, so the newest
+    entry is every such agent's own (#936)."""
+    from macf.budget import BudgetError, read_credential
     now = time.time() if now is None else now
-    if reader is None and sys.platform == "darwin" and len(keychain_accounts()) > 1:
-        return assess(None, now, why_unread="several Keychain logins on this macOS account; "
-                                            "which one is this agent's can't be told")
     try:
         raw = (reader or read_credential)()
     except BudgetError as e:
-        return assess(None, now, why_unread=getattr(e, "short", None) or "no credential reachable")
-    return assess(raw, now)
+        return assess(None, now, why_unread=getattr(e, "short", None) or "no credential reachable",
+                      expiring_s=expiring_s)
+    return assess(raw, now, expiring_s=expiring_s)
 
 
-def daemon_assessment() -> Dict[str, object]:
+def warn_seconds(declaration) -> float:
+    """The login warning window in seconds: the declaration's ``reports.warn_days``, else the default. One
+    reading at every site that judges a login's expiry, so none of them can ignore the declaration (#1027)."""
+    reports = getattr(declaration, "reports", None)
+    return reports.warn_days * 86400.0 if reports else EXPIRING_S
+
+
+def missing_login_env(unit) -> str:
+    """Why a unit that can't log in probably can't: its declared environment lacks ``USER`` or ``LOGNAME``
+    (on macOS the stored login is looked up by them), and what to add; empty when both are declared (#1073).
+    *unit* is a declared unit, or None when no declaration read. Empty off macOS, where the stored login is a
+    file and not looked up by them, so naming them would label a genuine expiry with a cause that isn't one."""
+    from macf.pd.default_declaration import LOGIN_ENV_EFFECT, LOGIN_VARIABLES
+    if unit is None or sys.platform != "darwin":
+        return ""
+    declared = unit.environment or {}
+    lacking = [k for k in LOGIN_VARIABLES if k not in declared]
+    if not lacking:
+        return ""
+    return (f"its declared environment lacks {', '.join(lacking)}, and {LOGIN_ENV_EFFECT}: add them to every "
+            f"unit's environment, restart the daemon, then the unit (macf_tools policy read persistent_layer)")
+
+
+def daemon_assessment(expiring_s: float = EXPIRING_S) -> Dict[str, object]:
     """What the daemon's check reads: ``read_assessment``, behind a name a test suite can stand in
     for, so no test daemon reads the developer's own credential."""
-    return read_assessment()
+    return read_assessment(expiring_s=expiring_s)
 
 
 class HostedLoginCheck:
@@ -98,8 +124,9 @@ class HostedLoginCheck:
 
     def __init__(self, card: str, append: Callable[[str, dict], object],
                  assess_now: Optional[Callable[[], Dict[str, object]]] = None,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic, expiring_s: float = EXPIRING_S):
         self.card, self.append, self.assess_now, self.clock = card, append, assess_now, clock
+        self.expiring_s = expiring_s
         self.last_poll: Optional[float] = None
         self.last_record: Optional[float] = None
         self.last_state: Optional[str] = None
@@ -110,7 +137,12 @@ class HostedLoginCheck:
             return
         self.last_poll = now
         try:
-            verdict = (self.assess_now or daemon_assessment)()   # looked up here, so a test can stand in
+            if self.assess_now:
+                verdict = self.assess_now()
+            elif self.expiring_s == EXPIRING_S:
+                verdict = daemon_assessment()    # looked up here, with no argument, so a test can stand in
+            else:
+                verdict = daemon_assessment(self.expiring_s)   # looked up here, so a test can stand in
         except Exception as e:  # noqa: BLE001 - a credential that won't read must not end the daemon
             # "error", not "unknown": the check itself broke, which the watch reports. "unknown" is
             # a login with no date to judge (an API key, an older credential), which it doesn't.

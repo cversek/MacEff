@@ -67,17 +67,17 @@ def test_a_check_that_raises_records_unknown_and_the_daemon_goes_on(capsys):
     assert events[0]["state"] == "error"
 
 
-def test_several_keychain_logins_read_unknown_not_another_agents(monkeypatch):
-    """A shared macOS login holds one Keychain entry per agent under one service, and nothing
-    says which is this agent's: the verdict is unknown, never another agent's date."""
+def test_two_keychain_entries_judge_the_newest_not_silence(monkeypatch):
+    """#936: a Mac commonly holds two entries under the one service, a newer "unknown" in use
+    and the stale original (#852). Reading those as unknown made the check silent on every such
+    Mac, both maintainers' included. The verdict comes from the newest entry, the login in use,
+    which read_credential returns; agents sharing one macOS login share that one Claude login."""
     import macf.budget as budget
     monkeypatch.setattr(login.sys, "platform", "darwin")
-    monkeypatch.setattr(budget, "keychain_accounts", lambda: ["agent_a", "agent_b"])
+    monkeypatch.setattr(budget, "keychain_accounts", lambda: ["unknown", "operator"])
     monkeypatch.setattr(budget, "read_credential", lambda: _cred(NOW - DAY))
     verdict = login.read_assessment(now=NOW)
-    assert verdict["state"] == "unknown" and "several Keychain logins" in verdict["detail"]
-    monkeypatch.setattr(budget, "keychain_accounts", lambda: ["agent_a"])
-    assert login.read_assessment(now=NOW)["state"] == "expired", "one entry is this agent's own"
+    assert verdict["state"] == "expired", verdict["detail"]
 
 
 def _event(ends):
@@ -111,3 +111,36 @@ def test_the_watch_finds_the_newest_login_event_of_this_agent(tmp_path):
     log.write_text("".join(json.dumps(r) + "\n" for r in rows))
     found = watch.last_login_event(log, "Resident_1a2b3c", NOW)
     assert found["data"]["refresh_expires_at"] == NOW + 30 * DAY
+
+
+def test_the_warning_window_is_the_declarations_when_it_names_one():
+    """A login ending in 5 days is ok by the default three-day window and expiring by a week's (#1027)."""
+    raw = _cred(NOW + 5 * DAY)
+    assert login.assess(raw, NOW)["state"] == "ok"
+    assert login.assess(raw, NOW, expiring_s=7 * DAY)["state"] == "expiring"
+
+
+def test_the_watch_warns_by_the_declarations_window_too():
+    f = watch.check_login("Resident_1a2b3c", _event(NOW + 5 * DAY), NOW, expiring_s=7 * DAY)
+    assert f.verdict == "LOGIN-EXPIRING"
+    assert watch.check_login("Resident_1a2b3c", _event(NOW + 5 * DAY), NOW).verdict == "ALIVE"
+
+
+def test_a_stand_in_for_the_daemons_check_still_works_with_the_default_window(monkeypatch, capsys):
+    """Test suites replace login.daemon_assessment with a function taking nothing (#884), and the
+    default window must keep calling it that way (#1027)."""
+    monkeypatch.setattr(login, "daemon_assessment", lambda: {"state": "ok", "refresh_expires_at": None,
+                                                             "hours_left": None, "detail": "stood in"})
+    sent = []
+    check = login.HostedLoginCheck("Resident_1a2b3c", lambda event, data: sent.append(data))
+    check.tick()
+    assert [d["state"] for d in sent] == ["ok"] and "failed" not in capsys.readouterr().err
+
+
+def test_a_declared_window_reaches_the_daemons_check(monkeypatch):
+    seen = []
+    monkeypatch.setattr(login, "daemon_assessment", lambda expiring_s=login.EXPIRING_S:
+                        seen.append(expiring_s) or {"state": "ok", "refresh_expires_at": None,
+                                                    "hours_left": None, "detail": ""})
+    login.HostedLoginCheck("Resident_1a2b3c", lambda event, data: None, expiring_s=7 * DAY).tick()
+    assert seen == [7 * DAY]

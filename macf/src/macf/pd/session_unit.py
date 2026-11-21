@@ -83,7 +83,7 @@ def _group_alive(pgid: int) -> bool:
         for stat in proc.glob("[0-9]*/stat"):
             try:
                 fields = stat.read_text().rpartition(")")[2].split()
-            except OSError:
+            except OSError:  # noqa: S112 - a /proc entry that exits during the scan is routine
                 continue
             if len(fields) > 2 and fields[2] == str(pgid) and fields[0] != "Z":
                 return True
@@ -322,6 +322,16 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
     # sets its own title (its version), which said nothing about whose session it was,
     # so on this server, which holds only this session, it may not. Nor may a program
     # rename the window with tmux's own escape (allow-rename).
+    # Modified keys such as Shift-Tab reach the client only with extended keys on: with tmux's default
+    # (off) they are lost after the first presses (#1016). The baseline file carries these too, but a
+    # file written before they were added, or none, leaves them off, so the server is told here.
+    for args in (("-s", "extended-keys", "always"), ("-as", "terminal-features", "xterm*:extkeys")):
+        done = _tmux(tmux, env, "set-option", *args)
+        if done.returncode != 0:
+            # tmux before 3.2 has no extended-keys: Shift-Tab then depends on the terminal.
+            print(f"⚠️ MACF: session unit: this tmux refused {args[1]} "
+                  f"({(done.stderr or done.stdout).strip()[:120]}); Shift-Tab may be lost after a few presses",
+                  file=sys.stderr)
     card = window_title(agent)
     for option in (("set-titles", "on"), ("set-titles-string", card), ("allow-set-title", "off"),
                    ("automatic-rename", "off"), ("allow-rename", "off")):
@@ -428,8 +438,9 @@ def _remove_leftovers(tmux: str, env: Mapping[str, str], directory: Path) -> Non
     if socket.is_socket() and _tmux(tmux, env, "has-session").returncode != 0:
         try:
             socket.unlink()
-        except OSError:
-            pass
+        except OSError as e:
+            print(f"⚠️ MACF: session unit: removing the stale tmux socket {socket} failed "
+                  f"(leaving it in place): {e}", file=sys.stderr)
     for path in (socket.parent, directory):
         if not path.is_dir() or any(path.iterdir()):
             break                      # something else is in it: it stays

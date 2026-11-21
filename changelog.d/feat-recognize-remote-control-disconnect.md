@@ -1,0 +1,3 @@
+### Added
+
+- **The transcript monitor recognizes a Remote Control disconnect and records it as a `remote_control_disconnected` event** (`transcript_monitor/remote_control.py`, #883): Claude Code writes "Remote Control disconnected — <reason> — run /login" (or "— run /remote-control to reconnect") into the session transcript, and nothing in MacEff noticed, so a session could go quiet for anyone not at its terminal for hours. The event carries the reason, its kind (`login`, `network`, `ended` or `unknown`), the remedy the row names, and the row's time. This is the first slice: recognition only. The state in `pd status`, what clears it, the alert off the session and `harness list` showing an expired login follow in the same issue.

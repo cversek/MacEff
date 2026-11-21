@@ -274,8 +274,8 @@ def _resolve_roots(agent_home: Path) -> Tuple[List[Tuple[str, Path]], List[Tuple
             mis_dir = pol.parent / "mis"
             if mis_dir.is_dir():
                 roots.append(("mis", mis_dir))
-    except (OSError, ImportError):
-        pass
+    except (OSError, ImportError) as e:
+        print(f"⚠️ MACF: framework policies lookup failed (policy and MIS nodes left out of the web): {e}", file=sys.stderr)
     # The task store participates wherever it is configured to live. It sits
     # under the agent tree by default, but MACF_TASK_STORE_DIR or the
     # task_store config can move it, and a moved store must not silently drop
@@ -436,7 +436,7 @@ def _pointer_node(pointer: str, path_to_node: Dict[str, str], ca_nodes: Dict[str
                 t = TaskReader().read_task(tid)
                 if t:
                     title = re_mod.sub(r"\x1b\[[0-9;]*m", "", t.subject).strip()[:50]
-            except (OSError, ValueError, ImportError, AttributeError):
+            except (OSError, ValueError, ImportError, AttributeError):  # noqa: S110 - title is cosmetic; store may be absent by design
                 pass  # the store may be absent under a scan_dirs build; the id still names the task
             ca_nodes[node_id] = {"type": "tasks", "title": title, "path": f"task:{tid}",
                                  "node_class": node_class_for("tasks")}
@@ -445,7 +445,7 @@ def _pointer_node(pointer: str, path_to_node: Dict[str, str], ca_nodes: Dict[str
     try:
         from .utils.paths import find_agent_home
         candidates.append(find_agent_home() / ref)
-    except (OSError, ImportError):
+    except (OSError, ImportError):  # noqa: S110 - if the import fails only the relative candidate is tried, and a ref that matches neither gets no node, as before
         pass
     for c in candidates:
         try:
@@ -503,12 +503,14 @@ def build_knowledge_web(scan_dirs: Optional[List[Path]] = None) -> Dict[str, Any
     for ca_type, type_root, md_file in walk:
         try:
             content = md_file.read_text(errors='replace')
-        except OSError:
+        except OSError as e:
+            print(f"⚠️ MACF: could not read {md_file.name} (its links left out of the web): {e}", file=sys.stderr)
             continue
         if ca_type == "duties":
             try:
                 rec = json.loads(content)
-            except ValueError:
+            except ValueError as e:
+                print(f"⚠️ MACF: duty record {md_file} unreadable (skipped, its edges are missing from the web): {e}", file=sys.stderr)
                 continue
             node_id = f"duties:{rec.get('id', md_file.stem)}"
             ca_nodes[node_id] = {"type": "duties", "title": str(rec.get("title", md_file.stem))[:50],
@@ -820,6 +822,22 @@ def _node_by_id(node: str, kg: Dict[str, Any]) -> Any:
     raise ValueError(f"--like {node!r} names no node in the knowledge web")
 
 
+_DATE_IN_NAME = re.compile(r"(?:^|[/:])(\d{4}-\d{2}-\d{2})(?=[_/.\-]|$)")
+
+
+def node_date(node_id: Any, idea: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """The date an artifact was made, as YYYY-MM-DD, from the date its name or its folder's name
+    carries; an idea's is its creation stamp. None when nothing dates it. The web keeps no path, and
+    an artifact's modified time moves with every curation edit, so a node whose name has no date is
+    undated here, not guessed (#1040)."""
+    if idea is not None:
+        # A real idea record keeps the stamp at provenance.created; a top-level key is the older shape.
+        created = str(idea.get("created") or (idea.get("provenance") or {}).get("created") or "")
+        return created[:10] if re.fullmatch(r"\d{4}-\d{2}-\d{2}.*", created) else None
+    m = _DATE_IN_NAME.search(str(node_id))
+    return m.group(1) if m else None
+
+
 def query_knowledge_web(term: Any = "", kg: Optional[Dict[str, Any]] = None, *, like: Optional[str] = None,
                         any_term: bool = False, min_idf: float = DEFAULT_MIN_IDF) -> Dict[str, Any]:
     """Query the knowledge web, and rank what it returns.
@@ -922,7 +940,7 @@ def query_knowledge_web(term: Any = "", kg: Optional[Dict[str, Any]] = None, *, 
                 "degree": len(edges.get(node_id, set())),
                 # An idea is prospective, but its claim is meant to outlive the
                 # moment; status carries the proposal-versus-finding weighting.
-                "node_class": "conceptual_authority", **extra,
+                "node_class": "conceptual_authority", "date": node_date(node_id, idea), **extra,
             }
         if node_id in ca_nodes:
             info = ca_nodes[node_id]
@@ -931,7 +949,8 @@ def query_knowledge_web(term: Any = "", kg: Optional[Dict[str, Any]] = None, *, 
                 "title": info.get("title", ""), "type": info.get("type", "ca"),
                 "status": "", "category": info.get("type", ""),
                 "degree": len(edges.get(node_id, set())),
-                "node_class": info.get("node_class", "conceptual_authority"), **extra,
+                "node_class": info.get("node_class", "conceptual_authority"),
+                "date": node_date(node_id), **extra,
             }
         return None
 
@@ -964,6 +983,11 @@ def format_query_result(result: Dict[str, Any]) -> str:
         f"with IDF ≥ {result.get('min_idf', DEFAULT_MIN_IDF)}",
         "",
     ]
+    if result.get("since"):
+        n = result.get("undated_left_out", 0)
+        lines.insert(2, f"   since {result['since']}: {n} undated result{'s' if n != 1 else ''} left out")
+    if result.get("ordered"):
+        lines.insert(2, f"   ordered {result['ordered']}, not by score")
 
     if result["nodes"]:
         lines.append("📌 Matched:")
@@ -971,7 +995,7 @@ def format_query_result(result: Dict[str, Any]) -> str:
             icon = STATUS_ICON.get(n.get("status", ""), "📄") if n["type"] == "idea" else (
                 "📝" if n["type"] == "learnings" else "🔭" if n["type"] == "observations" else "📄")
             cat = f"  [{n['category']}]" if n.get("category") else ""
-            lines.append(f"   {n['score']:6.2f}  {icon} {n['label']} {n['title'][:50]}{cat}{_via(n)}")
+            lines.append(f"   {n['score']:6.2f}  {n.get('date') or '          '}  {icon} {n['label']} {n['title'][:50]}{cat}{_via(n)}")
 
     if result["neighbors"]:
         lines.append("")
@@ -979,7 +1003,7 @@ def format_query_result(result: Dict[str, Any]) -> str:
         for n in result["neighbors"]:
             icon = STATUS_ICON.get(n.get("status", ""), "📄") if n["type"] == "idea" else (
                 "📝" if n["type"] == "learnings" else "🔭" if n["type"] == "observations" else "📄")
-            lines.append(f"   {n['score']:6.2f}  {icon} {n['label']} {n['title'][:50]}{_via(n)}")
+            lines.append(f"   {n['score']:6.2f}  {n.get('date') or '          '}  {icon} {n['label']} {n['title'][:50]}{_via(n)}")
 
     if result["concepts"]:
         lines.append("")
@@ -1160,7 +1184,8 @@ def suggest_concepts(kg: Optional[Dict[str, Any]] = None, min_members: int = 3) 
             continue
         try:
             content = path.read_text(errors="replace")
-        except OSError:
+        except OSError as e:
+            print(f"⚠️ MACF: could not read {path.name} (its declared keywords not counted): {e}", file=sys.stderr)
             continue
         for kw in declared_keywords(content):
             if len(kw) > 3 and kw not in covered:

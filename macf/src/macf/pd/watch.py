@@ -35,6 +35,7 @@ the watch cannot tell what to check. Unknown is never healthy.
 """
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -43,10 +44,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Literal, Optional, Sequence, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from macf.notify.session import proc_start_key, verify_incarnation
-from macf.pd import interface
+from macf.pd import interface, receipts
 from macf.pd.health import SCHEDULE_EVENTS, broker_health, read_liveness, schedule_health
 from macf.platform import container_limits
 from macf.utils.streaming import iter_lines_reverse
@@ -58,8 +59,10 @@ LOOKBACK_S = 7 * 86400
 #: How long an alert command may take before it counts as failed.
 SEND_TIMEOUT_S = 30
 
+_FINDING_FIELDS = {"agent", "subject", "verdict", "detail", "opened"}
 Verdict = Literal["ALIVE", "STALE", "GONE", "ABSENT", "UNREADABLE", "UNREACHABLE", "CHECK-FAILED", "DARK", "HELD", "UNREAD",
-                  "DRIFTED", "SWEEP-FAILED", "FAILED", "AUTH-FAILED", "LOGIN-EXPIRED", "LOGIN-EXPIRING"]
+                  "UNRECEIVED", "DRIFTED", "SWEEP-FAILED", "FAILED", "AUTH-FAILED", "LOGIN-EXPIRED", "LOGIN-EXPIRING",
+                  "RC-DISCONNECTED", "POLLER-DOWN"]
 
 #: Exit codes, worst wins (``service_supervision`` section 4.2): each state its own code.
 EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_UNREACHABLE, EXIT_CHECK_FAILED = 0, 1, 2, 3
@@ -67,9 +70,11 @@ EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_UNREACHABLE, EXIT_CHECK_FAILED = 0, 1, 2, 3
 #: alert was sent, on every pass while a channel was dark or a wake held.
 _EXIT_FOR = {"ALIVE": EXIT_HEALTHY, "STALE": EXIT_UNHEALTHY, "GONE": EXIT_UNHEALTHY,
              "ABSENT": EXIT_UNHEALTHY, "DARK": EXIT_UNHEALTHY, "HELD": EXIT_UNHEALTHY, "UNREAD": EXIT_UNHEALTHY,
+             "UNRECEIVED": EXIT_UNHEALTHY,
              "DRIFTED": EXIT_UNHEALTHY, "SWEEP-FAILED": EXIT_UNHEALTHY,
              "FAILED": EXIT_UNHEALTHY, "AUTH-FAILED": EXIT_UNHEALTHY,
              "LOGIN-EXPIRED": EXIT_UNHEALTHY, "LOGIN-EXPIRING": EXIT_UNHEALTHY,
+             "RC-DISCONNECTED": EXIT_UNHEALTHY, "POLLER-DOWN": EXIT_UNHEALTHY,
              "UNREACHABLE": EXIT_UNREACHABLE,
              "UNREADABLE": EXIT_CHECK_FAILED, "CHECK-FAILED": EXIT_CHECK_FAILED}
 
@@ -87,6 +92,9 @@ class Finding:
     subject: str    # "daemon", a unit's name, or "home"
     verdict: Verdict
     detail: str
+    #: When the bad state this finding reports began, where its record says: a newer start than
+    #: the stretch already alerted is a new occurrence and gets its own alert (#883).
+    opened: Optional[float] = None
 
     @property
     def key(self) -> str:
@@ -142,7 +150,7 @@ def last_liveness(log_path: Path, card: str, units: Sequence[str], now: float,
             break
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -174,7 +182,7 @@ def last_unit_state(log_path: Path, card: str, units: Sequence[str], now: float,
             break
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -239,7 +247,7 @@ def last_channel_event(log_path: Path, card: str, now: float,
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -262,7 +270,7 @@ def last_login_event(log_path: Path, card: str, now: float,
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -277,12 +285,14 @@ def last_login_event(log_path: Path, card: str, now: float,
     return None
 
 
-def check_login(card: str, event: Optional[dict], now: float) -> Optional[Finding]:
+def check_login(card: str, event: Optional[dict], now: float,
+                expiring_s: Optional[float] = None) -> Optional[Finding]:
     """The agent's login, from the daemon's own reading of its stored credential (#884), so an
     expired login is heard of before the session needs to work, not at its first failed turn.
     The verdict is re-judged against now from the recorded end date, so a login that ran out
     since the daemon last recorded reads expired. None when no daemon here records logins."""
     from macf.pd.login import EXPIRING_S
+    expiring_s = EXPIRING_S if expiring_s is None else expiring_s     # the declaration's warn_days (#1027)
     if event is None:
         return None
     data = event.get("data") or {}
@@ -299,10 +309,225 @@ def check_login(card: str, event: Optional[dict], now: float) -> Optional[Findin
     if left <= 0:
         return Finding(card, "login", "LOGIN-EXPIRED",
                        f"its refresh grant ended {_age(-left)} ago: run /login in its session{reach}")
-    if left <= EXPIRING_S:
+    if left <= expiring_s:
         return Finding(card, "login", "LOGIN-EXPIRING",
                        f"its refresh grant ends in {_age(left)}: run /login in its session before then{reach}")
     return Finding(card, "login", "ALIVE", f"its refresh grant ends in {_age(left)}")
+
+
+def last_remote_control_event(log_path: Path, card: str, now: float,
+                              lookback_s: float = LOOKBACK_S) -> Optional[dict]:
+    """The newest Remote Control disconnect or remedy of agent *card* within the lookback, or None.
+    The session's transcript monitor records both (``transcript_monitor.remote_control``)."""
+    from macf.transcript_monitor.remote_control import EVENT_DISCONNECTED, EVENT_REMEDIED
+    cutoff = now - lookback_s
+    for line in iter_lines_reverse(log_path):
+        try:
+            event = json.loads(line)
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
+            continue
+        if not isinstance(event, dict):
+            continue
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        if event.get("event") not in (EVENT_DISCONNECTED, EVENT_REMEDIED):
+            continue
+        data = event.get("data")
+        if isinstance(data, dict) and calling_card.is_agent(data.get("agent"), card):
+            return event
+    return None
+
+
+def check_remote_control(card: str, event: Optional[dict], now: float) -> Finding:
+    """The session's Remote Control, from its transcript as the monitor read it (#883). A
+    disconnect leaves the session unreachable from any other device while it stays open, and
+    the channel that broke is the one the operator would have used, so this watch says it.
+    The client records no reconnect: a remedy run in the session (a login that worked, or
+    /remote-control) is what closes the stretch."""
+    from macf.transcript_monitor.remote_control import EVENT_DISCONNECTED
+    if event is None or event.get("event") != EVENT_DISCONNECTED:
+        return Finding(card, "remote-control", "ALIVE", "no open Remote Control disconnect recorded")
+    data = event.get("data") or {}
+    stamp = event.get("timestamp")
+    age = f" {_age(now - stamp)} ago" if isinstance(stamp, (int, float)) else ""
+    remedy = data.get("remedy") if isinstance(data.get("remedy"), str) else "/login or /remote-control"
+    reason = data.get("reason") or "no reason recorded"
+    return Finding(card, "remote-control", "RC-DISCONNECTED",
+                   f"disconnected{age}: {reason}; run {remedy} in its session "
+                   f"(macf_tools harness attach --card {card})",
+                   opened=stamp if isinstance(stamp, (int, float)) else None)
+
+
+#: A Telegram poller writes a heartbeat to its ``diag.jsonl`` every 60 s; two missed ones
+#: and the poller reads silent. The plugin's own heartbeat is the evidence, nothing added to it.
+POLLER_SILENT_S = 120.0
+TELEGRAM_STATE_ENV = "TELEGRAM_STATE_DIR"
+#: The source named when the directory comes from the login's own ``.claude/settings.json``, which Claude Code
+#: reads for every agent on the login: the one place a directory is named and still shared.
+LOGIN_SETTINGS_SOURCE = "settings.json of the login (shared by every agent on it)"
+
+
+def declares_telegram(declaration: "interface.Declaration") -> bool:
+    """Whether the declaration names a Telegram plugin among the operator's channels."""
+    return any(isinstance(c, str) and c.startswith("plugin:telegram:")
+               for c in declaration.operator_channels or [])
+
+
+def _settings_state_dir(path: Path) -> Optional[str]:
+    """``env.TELEGRAM_STATE_DIR`` from one Claude Code settings file, or None. Only that key is
+    read out of the file, and one that can't be read is said and skipped, never guessed."""
+    try:
+        settings = json.loads(path.read_text())
+    except FileNotFoundError:
+        return None  # noqa: MACEFF003 - a home without this settings file simply has no override there
+    except (OSError, ValueError) as e:
+        print(f"⚠️ MACF: watch: {path} can't be read ({e}), so its Telegram state directory isn't used", file=sys.stderr)
+        return None
+    env = settings.get("env") if isinstance(settings, dict) else None
+    value = env.get(TELEGRAM_STATE_ENV) if isinstance(env, dict) else None
+    return value if isinstance(value, str) and value else None
+
+
+@dataclass(frozen=True, kw_only=True)
+class SessionPlaces:
+    """What the declared session unit fixes about where its plugins look: the directory it starts in,
+    its ``HOME`` where the unit declares one, and the environment the daemon starts it with."""
+
+    project_dir: Path
+    login_home: Optional[Path] = None
+    environment: Dict[str, str] = dataclasses.field(default_factory=dict)
+
+
+def session_places(declaration: "interface.Declaration", home: Path) -> SessionPlaces:
+    """Where the declared session unit starts, what its ``HOME`` is, and the environment it declares. Claude Code reads its settings, and so the plugin
+    its environment, from the project directory the session starts in; the plugin's default state
+    directory is under the session's own ``HOME``; and a daemon starts the session with the unit's
+    declared environment, not with the environment of any process that reads the declaration afterwards.
+    The project directory is the unit's ``--project-dir``, else the agent home; the login home is the
+    unit's ``HOME``, else None (the caller's own)."""
+    project, login, environment = Path(home), None, {}
+    for unit in declaration.units:
+        if unit.kind != "session":
+            continue
+        command = list(unit.command)
+        if "--project-dir" in command and command.index("--project-dir") + 1 < len(command):
+            project = Path(command[command.index("--project-dir") + 1].replace("{agent_home}", str(home)))
+        environment = dict(unit.environment or {})
+        if environment.get("HOME"):
+            login = Path(environment["HOME"].replace("{agent_home}", str(home)))
+        break
+    return SessionPlaces(project_dir=project, login_home=login, environment=environment)
+
+
+def telegram_state_dir(home: Optional[Path] = None, project_dir: Optional[Path] = None,
+                       login_home: Optional[Path] = None,
+                       unit_env: Optional[Dict[str, str]] = None) -> Tuple[Path, str]:
+    """Where the Telegram plugin keeps its poller files for the agent at *home*, and which source
+    said so (#1069). An isolated seat sets ``TELEGRAM_STATE_DIR`` for the plugin, and the process
+    running this check never sees it, so it is read where the session gets it: the settings of the
+    session's project directory (``.claude/settings.local.json``, then ``.claude/settings.json``), then
+    the agent home's where that is another directory, then the login's own ``.claude/settings.json``
+    (which every agent on the login reads, so it is named as shared), then the session unit's declared
+    environment, then ``<login home>/.claude/channels/telegram``, the plugin's default. This process's own
+    environment is not a source: a session started by the daemon doesn't inherit it."""
+    is_home = home is not None and project_dir is not None and Path(home).resolve() == Path(project_dir).resolve()
+    places = [(Path(project_dir), "the home" if is_home else "the session's project directory")] \
+        if project_dir is not None else []
+    if home is not None and not is_home:
+        places.append((Path(home), "the home"))
+    login_place = Path(login_home) if login_home is not None else Path.home()
+    for place, label in places:
+        for name in ("settings.local.json", "settings.json"):
+            found = _settings_state_dir(place / ".claude" / name)
+            if found:
+                # The login's own settings.json is read by every agent on the login, wherever it is found.
+                shared = name == "settings.json" and place.resolve() == login_place.resolve()
+                return Path(found).expanduser(), LOGIN_SETTINGS_SOURCE if shared else f"{name} of {label}"
+    if all(login_place.resolve() != place.resolve() for place, _label in places):
+        found = _settings_state_dir(login_place / ".claude" / "settings.json")
+        if found:
+            return Path(found).expanduser(), LOGIN_SETTINGS_SOURCE
+    declared = (unit_env or {}).get(TELEGRAM_STATE_ENV)
+    if declared:
+        if home is not None:
+            declared = declared.replace("{agent_home}", str(home))     # the daemon fills the placeholder in
+        return Path(declared).expanduser(), "the session unit's declared environment"
+    return (Path(login_home) if login_home is not None else Path.home()) / ".claude" / "channels" / "telegram", \
+        "the default location"
+
+
+def _pid_alive(pid: int) -> bool:
+    import os
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:   # a process of another user exists
+        return True
+    return True
+
+
+def _newest_heartbeat(diag: Path, pid: int) -> Optional[float]:
+    """The epoch seconds of the newest ``heartbeat`` that poller *pid* wrote, or None."""
+    from datetime import datetime
+    for line in iter_lines_reverse(diag):
+        try:
+            rec = json.loads(line)
+        except ValueError:  # noqa: S112 - a partial last line is expected while the poller writes
+            continue
+        if not isinstance(rec, dict) or rec.get("event") != "heartbeat" or rec.get("pid") != pid:
+            continue
+        try:
+            return datetime.fromisoformat(str(rec.get("ts")).replace("Z", "+00:00")).timestamp()
+        except ValueError:  # noqa: S112 - a record whose stamp can't be read proves nothing; the next older one is tried
+            continue
+    return None
+
+
+def check_telegram(card: str, state_dir: Path, now: float,
+                   alive: Callable[[int], bool] = _pid_alive, source: str = "") -> Finding:
+    """The finding of ``_check_telegram``, with the source of the state directory said in it, so an
+    operator reading CHECK-FAILED or POLLER-DOWN sees whose files were read."""
+    found = _check_telegram(card, state_dir, now, alive)
+    return dataclasses.replace(found, detail=f"{found.detail} [state dir from {source}]") if source else found
+
+
+def _check_telegram(card: str, state_dir: Path, now: float, alive: Callable[[int], bool]) -> Finding:
+    """The Telegram poller of a seat whose declaration names Telegram as an operator channel
+    (#1069). A poller can end with nothing said: the plugin exits when its parent ends or a
+    newer poller takes the bot, and the session carries on without its operator's phone. Read
+    from the plugin's own files: the poller named in ``bot.pid`` must be running and its newest
+    heartbeat in ``diag.jsonl`` recent. Without ``bot.pid`` the watch cannot tell, and unknown
+    is never healthy."""
+    fix = "run /mcp in the session to reconnect the plugin (macf_tools harness attach --card " + card + ")"
+    try:
+        raw = (state_dir / "bot.pid").read_text().strip()
+    except FileNotFoundError:
+        return Finding(card, "telegram", "CHECK-FAILED",
+                       f"no bot.pid in {state_dir}: no poller has been recorded there, or the plugin keeps "
+                       f"its files elsewhere for this seat")
+    except OSError as e:
+        return Finding(card, "telegram", "CHECK-FAILED", f"bot.pid cannot be read: {e.strerror}")
+    try:
+        pid = int(raw)
+    except ValueError:
+        return Finding(card, "telegram", "CHECK-FAILED", "bot.pid does not hold a pid")
+    if not alive(pid):
+        return Finding(card, "telegram", "POLLER-DOWN", f"the poller named in bot.pid (pid {pid}) is not running; {fix}")
+    try:
+        beat = _newest_heartbeat(state_dir / "diag.jsonl", pid)
+    except FileNotFoundError:
+        return Finding(card, "telegram", "ALIVE", f"poller pid {pid} runs; no diag.jsonl to read heartbeats from")
+    except OSError as e:
+        return Finding(card, "telegram", "CHECK-FAILED", f"diag.jsonl cannot be read: {e.strerror}")
+    if beat is None:
+        return Finding(card, "telegram", "POLLER-DOWN",
+                       f"poller pid {pid} runs but has written no heartbeat; {fix}")
+    if now - beat > POLLER_SILENT_S:
+        return Finding(card, "telegram", "POLLER-DOWN",
+                       f"poller pid {pid} runs but its last heartbeat was {_age(now - beat)} ago; {fix}")
+    return Finding(card, "telegram", "ALIVE", f"poller pid {pid} heartbeat {_age(now - beat)} ago")
 
 
 def check_channel(card: str, event: Optional[dict], now: float) -> Finding:
@@ -317,6 +542,40 @@ def check_channel(card: str, event: Optional[dict], now: float) -> Finding:
     return Finding(card, "channel", "DARK", f"{data.get('reason', 'dark')}{age}")
 
 
+def receipt_events(log_path: Path, now: float, lookback_s: float = LOOKBACK_S) -> List[dict]:
+    """The deliveries, receipts and turn starts in an agent's log within the lookback, oldest
+    first. None carries the agent: the log is the one agent's."""
+    cutoff, found = now - lookback_s, []
+    for line in iter_lines_reverse(log_path):
+        try:
+            event = json.loads(line)
+        except ValueError as e:
+            print(f"⚠️ MACF: parsing a line of {log_path.name} failed (skipping it): {e}", file=sys.stderr)
+            continue
+        if not isinstance(event, dict):
+            continue
+        stamp = event.get("timestamp")
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        if event.get("event") in receipts.EVENTS:
+            found.append(event)
+    return found[::-1]
+
+
+def check_receipts(card: str, events: Sequence[dict], now: float) -> Finding:
+    """Channel notices the session never took (cversek/MacEff#904). The daemon counts a notice
+    delivered when it writes it, so a client that won't admit the channel drops every notice
+    while the daemon reads healthy; only the session's receipts tell. Counted after the newest
+    receipt, so the stretch ends when one arrives."""
+    missing = receipts.after_last_receipt(events)
+    if not missing:
+        return Finding(card, "receipts", "ALIVE", "no channel notice went unreceived")
+    return Finding(card, "receipts", "UNRECEIVED",
+                   f"{len(missing)} channel notice(s) written and never received by the session, "
+                   f"the oldest {_age(now - missing[0].sent_at)} ago, though it took turns since: "
+                   f"is the channel admitted by Claude Code's allowlist?")
+
+
 def last_unread_mail_event(log_path: Path, card: str, now: float,
                            lookback_s: Optional[float] = None) -> Optional[dict]:
     """The newest ``pd_unread_mail`` or ``pd_unread_mail_cleared`` of agent *card*, or None.
@@ -327,7 +586,7 @@ def last_unread_mail_event(log_path: Path, card: str, now: float,
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -364,7 +623,7 @@ def mail_sweep_events(log_path: Path, card: str, schedule: str, now: float,
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -434,7 +693,7 @@ def _wake_events(log_path: Path, card: str, cutoff: float):
     for line in iter_lines_reverse(log_path):
         try:
             event = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - foreign or partial lines are expected in the shared event log
             continue
         if not isinstance(event, dict):
             continue
@@ -482,10 +741,16 @@ def check_unit(card: str, unit: interface.Unit, event: Optional[dict], now: floa
     return Finding(card, unit.name, "ALIVE", f"last liveness {_age(r.age)} ago")
 
 
+from macf.pd.login import warn_seconds  # noqa: E402 -- one reading of the declared login window (#1027)
+
+
 def check_home(home: Path, now: float, base: Optional[Path] = None,
-               probe: Optional[Probe] = verify_incarnation) -> List[Finding]:
+               probe: Optional[Probe] = verify_incarnation,
+               telegram_dir: Optional[Path] = None) -> List[Finding]:
     """Every finding for one agent home. ``probe`` None skips the process probes, for a
-    home whose processes run in a pid namespace this watch cannot see."""
+    home whose processes run in a pid namespace this watch cannot see; the Telegram poller's
+    pid is one of them, so it is checked only where the probes are. ``telegram_dir`` is where
+    that poller's files are, by default the plugin's own location for the user this runs as."""
     home = Path(home)
     if not home.is_dir():
         return [Finding(str(home), "home", "UNREACHABLE", "the agent home cannot be read; nothing was measured")]
@@ -527,12 +792,31 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
             findings.append(check_wake(card, last_wake_event(log_path, card, now), now))
         except FileNotFoundError:
             findings.append(check_wake(card, None, now))
+        # Not only where a channel is declared expected: a seat whose daemon writes to a
+        # channel without channel_connect_s set drops notices just the same (#904).
         try:
-            login = check_login(card, last_login_event(log_path, card, now), now)
+            findings.append(check_receipts(card, receipt_events(log_path, now), now))
+        except FileNotFoundError:
+            findings.append(check_receipts(card, [], now))
+        try:
+            login = check_login(card, last_login_event(log_path, card, now), now,
+                                warn_seconds(declaration))
         except FileNotFoundError:
             login = None
         if login is not None:
             findings.append(login)
+        try:
+            findings.append(check_remote_control(card, last_remote_control_event(log_path, card, now), now))
+        except FileNotFoundError:
+            findings.append(check_remote_control(card, None, now))
+    if probe is not None and declares_telegram(declaration):   # the operator's phone rides on a poller
+        if telegram_dir is not None:
+            where, source = telegram_dir, "the caller"
+        else:
+            session = session_places(declaration, home)
+            where, source = telegram_state_dir(home, project_dir=session.project_dir,
+                                               login_home=session.login_home, unit_env=session.environment)
+        findings.append(check_telegram(card, where, now, source=source))
     if declaration.channel_connect_s is not None:      # a channel is expected, so watch it
         try:
             findings.append(check_channel(card, last_channel_event(log_path, card, now), now))
@@ -555,6 +839,59 @@ def check_home(home: Path, now: float, base: Optional[Path] = None,
                                     f"the event log cannot be read: {e.strerror}"))
         if sweeps is not None:
             findings.append(check_mail_broker(card, declaration, sweeps, now))
+    return findings
+
+
+def home_check_argv(container: str, user: str, path: str, python: str, probe: bool) -> List[str]:
+    """The one command the watch runs in a container: the home check, which only reads."""
+    argv = ["docker", "exec", "-u", user, container, python, "-m", "macf.pd.watch", "--home-findings", path]
+    return argv if probe else argv + ["--no-probe"]
+
+
+def check_container_home(container: str, user: str, path: str, python: str = "/opt/maceff-venv/bin/python",
+                         probe: bool = True,
+                         run: container_limits.Runner = container_limits._run) -> List[Finding]:
+    """Every finding for a home inside *container*, made there by the same check, as *user*
+    (#979). The host's user can't read a container's volumes, so the check goes to the home
+    rather than the home's files to the host. A container that isn't running is UNREACHABLE,
+    and an answer the watch can't read is CHECK-FAILED: unknown is never healthy."""
+    where = f"{container}:{path}"
+    try:
+        out = run(home_check_argv(container, user, path, python, probe))
+    except subprocess.CalledProcessError as e:
+        said = (e.stderr or "").strip()
+        if "is not running" in said or "No such container" in said:
+            return [Finding(where, "home", "UNREACHABLE", f"container {container} is not running; nothing was measured")]
+        # An older MacEff's argparse refuses the unknown option, or, since --config was required
+        # there, asks for it first: "the following arguments are required: --config".
+        if ("unrecognized arguments" in said or "--home-findings" in said
+                or "required: --config" in said):
+            return [Finding(where, "home", "CHECK-FAILED",
+                            f"the MacEff in {container} has no home check yet (#979): rebuild it on a MacEff that does")]
+        last = said.splitlines()[-1] if said else f"exit {e.returncode}"
+        return [Finding(where, "home", "CHECK-FAILED", f"the check in {container} failed: {last}")]
+    except (OSError, subprocess.SubprocessError) as e:     # no docker here, or the check hung
+        return [Finding(where, "home", "CHECK-FAILED", f"docker exec into {container} did not run: {type(e).__name__}")]
+    try:
+        rows = json.loads(out)
+        # Four string fields, and optionally when a bad state began (#883), a number a seat on an
+        # older MacEff doesn't send.
+        if not isinstance(rows, list) or not all(
+                isinstance(row, dict) and {"agent", "subject", "verdict", "detail"} <= set(row) <= _FINDING_FIELDS
+                and all(isinstance(row[k], str) for k in ("agent", "subject", "verdict", "detail"))
+                and (row.get("opened") is None or (isinstance(row["opened"], (int, float))
+                                                   and not isinstance(row["opened"], bool)))
+                for row in rows):
+            raise TypeError("not a list of findings with four string fields")
+        findings = [Finding(**row) for row in rows]
+    except (ValueError, TypeError) as e:
+        # Anything a seat could answer, a list for a verdict included, ends here: one seat's
+        # answer must never raise out of the pass that checks every other seat.
+        return [Finding(where, "home", "CHECK-FAILED", f"the check in {container} did not answer in JSON: {type(e).__name__}")]
+    unknown = sorted({f.verdict for f in findings} - set(_EXIT_FOR))
+    if unknown:
+        return [Finding(where, "home", "CHECK-FAILED",
+                        f"the check in {container} answered verdict(s) this watch doesn't know: {', '.join(unknown)}")]
     return findings
 
 
@@ -585,7 +922,9 @@ def transitions(findings: Sequence[Finding], open_stretches: Dict[str, dict],
             if was is not None:
                 lines.append(f"recovered: {f.line()} (after {_age(now - was['since'])})")
             continue
-        if was is None:
+        if was is None or (f.opened is not None and f.opened > was["since"]):
+            # A new stretch, or a new occurrence that began after the one already alerted:
+            # a Remote Control disconnect after an unrecorded reconnect (#883).
             lines.append(f"ALERT: {f.line()}")
             after[f.key] = {"since": now, "verdict": f.verdict}
         else:
@@ -689,10 +1028,43 @@ def _write_kept(path: Path, kept: Dict[str, dict]) -> None:
 # The config the outer tier renders, and the alert path
 # ============================================================================
 
+#: Docker's own rule for a container name; it can't begin with '-', so it can't read as an option.
+_CONTAINER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+#: A seat's account name: a name, never a numeric uid (``0`` is root by number).
+_SEAT_USER = re.compile(r"[a-z_][a-z0-9_-]*")
+
+
 class WatchedHome(BaseModel):
+    """One agent home. With ``container`` set, the home is inside that container, where the
+    host's user can't read it: the watch runs the check there, as ``user``, through
+    ``docker exec`` (#979), and reads back its findings. ``path`` is then the home's path
+    inside the container, and ``python`` the interpreter there that has MacEff."""
+
     model_config = ConfigDict(extra="forbid")
     path: str = Field(min_length=1)
     probe: bool = True
+    container: Optional[str] = None
+    user: Optional[str] = None
+    python: str = "/opt/maceff-venv/bin/python"
+
+    @model_validator(mode="after")
+    def _container_names_its_user(self) -> "WatchedHome":
+        """``docker exec`` is root-equivalent on the host, so an entry may name only what a home
+        check needs: a container name that can't read as an option, a seat that isn't root, and
+        an interpreter and home given as absolute paths."""
+        if self.container is None:
+            return self
+        if not self.user:
+            raise ValueError("a home in a container names the user to check it as")
+        if not _CONTAINER_NAME.fullmatch(self.container):
+            raise ValueError(f"container {self.container!r} is not a container name "
+                             "(letters, digits, '_', '.', '-', not starting with '-')")
+        if not _SEAT_USER.fullmatch(self.user) or self.user == "root":
+            raise ValueError(f"user {self.user!r}: a home check runs as the seat, never root or a uid")
+        for field, value in (("python", self.python), ("path", self.path)):
+            if not value.startswith("/") or "\n" in value:
+                raise ValueError(f"{field} {value!r} must be an absolute path")
+        return self
 
 
 class WatchConfig(BaseModel):
@@ -797,11 +1169,11 @@ def open_stretches(durable_log: Path) -> Dict[str, dict]:
         for line in iter_lines_reverse(durable_log):
             try:
                 record = json.loads(line)
-            except ValueError:
+            except ValueError:  # noqa: S112 - a torn or partial line in the durable alert log is skipped
                 continue
             if isinstance(record, dict) and record.get("delivered") and "open_after" in record:
                 return dict(record["open_after"])
-    except FileNotFoundError:
+    except FileNotFoundError:  # noqa: S110 - no alert log exists before the first alert is sent
         pass
     return {}
 
@@ -814,7 +1186,11 @@ def run_pass(config: WatchConfig, now: Optional[float] = None,
     durable_log = Path(config.state_dir) / "alerts.jsonl"
     findings: List[Finding] = []
     for home in config.homes:
-        findings += check_home(Path(home.path), now, base, probe if home.probe else None)
+        if home.container is not None:
+            findings += check_container_home(home.container, home.user, home.path, home.python,
+                                             home.probe, run)
+        else:
+            findings += check_home(Path(home.path), now, base, probe if home.probe else None)
     if config.containers:
         kept_path = Path(config.state_dir) / LIMITS_STATE
         kept, now_kept = _read_kept(kept_path), {}
@@ -834,8 +1210,21 @@ def run_pass(config: WatchConfig, now: Optional[float] = None,
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m macf.pd.watch",
                                      description="One pass of the outside watch over the primal daemons.")
-    parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--home-findings", type=Path, metavar="HOME",
+                        help="check one home and print its findings as JSON, sending nothing: "
+                             "what a watch outside a container runs inside it (#979)")
+    parser.add_argument("--no-probe", action="store_true",
+                        help="with --home-findings: skip the process probes")
     args = parser.parse_args(argv)
+    if args.home_findings is not None:
+        found = check_home(args.home_findings, time.time(), None,
+                           None if args.no_probe else verify_incarnation)
+        print(json.dumps([{k: v for k, v in dataclasses.asdict(f).items() if k != "opened" or v is not None}
+                          for f in found]))
+        return EXIT_HEALTHY      # the findings are the answer; the watch outside judges them
+    if args.config is None:
+        parser.error("--config is required, unless --home-findings is given")
     try:
         config = WatchConfig.model_validate_json(args.config.read_text())
     except (OSError, ValidationError, ValueError) as e:

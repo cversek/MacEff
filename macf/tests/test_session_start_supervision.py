@@ -1,5 +1,5 @@
 """A session that isn't its primal daemon's session unit says so at its start
-(persistent_layer 6.2). It is also the check for moving sessions onto their daemons:
+(persistent_layer 5.1). It is also the check for moving sessions onto their daemons:
 after the move, no session says it."""
 import json
 from types import SimpleNamespace
