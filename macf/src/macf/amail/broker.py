@@ -1346,13 +1346,18 @@ class Broker:
                 except peer_link.Deferred as e:
                     entry.update(state="deferred", reason=str(e))
                 except DeliveryError as e:
-                    aside = box / "refused"
-                    aside.mkdir(mode=0o700, exist_ok=True)
-                    sidecar["refused"] = {"reason": str(e), "at": _now_iso()}
-                    (aside / amsg.name).write_bytes(payload)
-                    (aside / sidecar_path.name).write_text(json.dumps(sidecar, indent=1))
-                    amsg.unlink()
-                    sidecar_path.unlink(missing_ok=True)
+                    try:
+                        aside = box / "refused"
+                        aside.mkdir(mode=0o700, exist_ok=True)
+                        sidecar["refused"] = {"reason": str(e), "at": _now_iso()}
+                        (aside / amsg.name).write_bytes(payload)
+                        (aside / sidecar_path.name).write_text(json.dumps(sidecar, indent=1))
+                        amsg.unlink()
+                        sidecar_path.unlink(missing_ok=True)
+                    except OSError as move_error:
+                        # One pair that cannot be set aside must not stop the pass for every peer after it.
+                        print(f"⚠️ MACF: amail peer link: a refused pair {amsg.name} could not be set aside "
+                              f"({move_error}); it stays in the outbox", file=sys.stderr)
                     if self.audit:
                         self.audit.error(context="peer-link", detail=f"{domain}/{amsg.name}: {e}")
                     entry.update(state="refused", reason=str(e))
@@ -1387,9 +1392,25 @@ class Broker:
         intake = peer_intake(Path(root), domain)
         intake.mkdir(parents=True, mode=0o700, exist_ok=True)
         held = intake / f"{stem}.amsg"
+        half = intake / f"{stem}.json"
         if held.exists() and hashlib.sha256(held.read_bytes()).hexdigest() == digest:
             return {"message_id": sidecar.get("message_id"), "held": True}
-        self._write_pair(intake, stem, sidecar, payload, gid=None)
+        if half.exists() and not held.exists():
+            # A take interrupted between the sidecar and the message leaves the sidecar alone. With
+            # the same hash it is this pair half-written: finish it. With another it is stale: remove
+            # it, so a retry is not refused for good by a name it can never write.
+            try:
+                same = json.loads(half.read_text()).get("raw_sha256") == digest
+            except (OSError, ValueError):
+                same = False
+            if same:
+                with open(held, "xb") as f:
+                    f.write(payload)
+                held.chmod(0o640)
+            else:
+                half.unlink()
+        if not held.exists():
+            self._write_pair(intake, stem, sidecar, payload, gid=None)
         for name in (f"{stem}.amsg", f"{stem}.json"):
             fd = os.open(intake / name, os.O_RDONLY)
             try:

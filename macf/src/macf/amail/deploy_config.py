@@ -515,6 +515,19 @@ class PeerAgent(BaseModel):
     zone_token: Optional[str] = None
 
 
+def _require_private(addr, shown: str) -> None:
+    """A peer link is a private-network link (MIS-0004 R56, R58): private, loopback or tailnet
+    (100.64.0.0/10) addresses only, so a public address is a typo or a mistake, not a peer."""
+    import ipaddress
+    if addr.is_unspecified or addr.is_multicast:
+        raise ValueError(f"{shown!r} is not an address a peer can be reached at")
+    tailnet = ipaddress.ip_network("100.64.0.0/10")
+    if not (addr.is_private or addr.is_loopback or (addr.version == 4 and addr in tailnet)):
+        raise ValueError(f"{shown!r} is not a private address: a peer link is for a private network "
+                         f"(private, loopback or tailnet 100.64.0.0/10), never the public Internet "
+                         f"(MIS-0004 R56, R58)")
+
+
 class PeerLinkDecl(BaseModel):
     """One peer broker reachable over a private network (rung 2, MIS-0004 R56).
 
@@ -536,8 +549,7 @@ class PeerLinkDecl(BaseModel):
             addr = ipaddress.ip_address(v.strip())
         except ValueError as e:
             raise ValueError(f"{v!r} is not an IP address; a peer link names an address, not a name") from e
-        if addr.is_unspecified or addr.is_multicast:
-            raise ValueError(f"{v!r} is not an address a peer can be reached at")
+        _require_private(addr, v)
         return str(addr)
 
 
@@ -559,6 +571,7 @@ class PeerListenDecl(BaseModel):
             raise ValueError(f"{v!r} is not an IP address") from e
         if addr.is_unspecified:
             raise ValueError("a peer listener never binds every interface (MIS-0004 R58)")
+        _require_private(addr, v)
         return str(addr)
 
 

@@ -196,7 +196,7 @@ class PeerListener:
             return _reply(False, refused=True, reason=f"unknown request; this broker speaks version {PROTOCOL_VERSION}")
         if str(request.get("from", "")).lower() != domain.lower():
             return _reply(False, refused=True,
-                          reason=f"the request says it is from another domain than the declared peer at this address")
+                          reason="the request says it is from another domain than the declared peer at this address")
         try:
             payload = base64.b64decode(request.get("payload_b64", ""), validate=True)
         except (binascii.Error, ValueError):

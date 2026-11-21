@@ -311,3 +311,72 @@ def test_two_brokers_exchange_a_message_both_ways(tmp_path):
     finally:
         on_beta.stop()
         on_alpha.stop()
+
+
+def test_a_half_written_pair_is_finished_not_stuck(pair):
+    """THM's review of #1095: a take interrupted between the sidecar and the message left a sidecar
+    alone in the intake, and every retry then failed for good. A sidecar with the same hash and no
+    message is finished, and acknowledged."""
+    alpha, beta, _ = pair
+    msg = _msg(f"ira@{A_DOM}", f"sparrow@{B_DOM}")
+    seen = []
+    real = beta.take_over_link
+
+    def spy(domain, stem, sidecar, payload):
+        if not seen:                               # plant the half pair before the first take
+            seen.append(stem)
+            intake = peer_intake(beta.config.inbound_handoff, domain)
+            intake.mkdir(parents=True, mode=0o700, exist_ok=True)
+            (intake / f"{stem}.json").write_text(json.dumps(sidecar))
+        return real(domain, stem, sidecar, payload)
+
+    beta.take_over_link = spy
+    result = alpha.submit("ira", msg)
+    assert result["delivered"][0]["state"] == "delivered", result
+    beta.sweep_shared()
+    assert len(_sparrow_box(beta)) == 1
+
+
+def test_a_stale_sidecar_with_other_bytes_is_replaced(pair):
+    alpha, beta, _ = pair
+    real = beta.take_over_link
+    planted = []
+
+    def spy(domain, stem, sidecar, payload):
+        if not planted:
+            planted.append(1)
+            intake = peer_intake(beta.config.inbound_handoff, domain)
+            intake.mkdir(parents=True, mode=0o700, exist_ok=True)
+            (intake / f"{stem}.json").write_text(json.dumps({**sidecar, "raw_sha256": "0" * 64}))
+        return real(domain, stem, sidecar, payload)
+
+    beta.take_over_link = spy
+    assert alpha.submit("ira", _msg(f"ira@{A_DOM}", f"sparrow@{B_DOM}"))["delivered"][0]["state"] == "delivered"
+
+
+def test_a_public_address_is_refused_for_a_peer_or_a_listener():
+    from pydantic import ValidationError
+
+    from macf.amail.deploy_config import PeerLinkDecl, PeerListenDecl
+    for bad in ("8.8.8.8", "93.184.216.34"):
+        with pytest.raises(ValidationError, match="private"):
+            PeerLinkDecl(host=bad, port=8030)
+        with pytest.raises(ValidationError, match="private"):
+            PeerListenDecl(host=bad, port=8030)
+    for good in ("100.105.225.84", "10.0.0.5", "192.168.1.9", "127.0.0.1"):
+        assert PeerLinkDecl(host=good, port=8030).host == good
+        assert PeerListenDecl(host=good, port=8030).host == good
+
+
+def test_the_deadline_check_itself_ends_a_dribbling_read(monkeypatch):
+    """The slow-sender test passes through the socket's own timeout as well; this one drives the
+    deadline check alone, with a clock that moves half a second per read."""
+    ticks = iter(range(1000))
+    monkeypatch.setattr(peer_link.time, "monotonic", lambda: next(ticks) * 0.5)
+
+    class Dribble:
+        def recv(self, n):
+            return b"A"
+
+    with pytest.raises(peer_link.RequestTimedOut):
+        read_request_line(Dribble(), limit=10_000, deadline_s=1.0)
