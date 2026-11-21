@@ -159,7 +159,6 @@ __all__ = [
     "list_policy_files",
     "load_merged_manifest",
     "parse_breadcrumb",
-    "read_json_safely",
     "record_delegation_complete",
     "record_delegation_start",
     "set_terminal_title",
