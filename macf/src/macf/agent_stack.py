@@ -923,6 +923,14 @@ def step_telegram_dir(ctx: Context) -> Result:
     project = session.project_dir
     where, source = watch.telegram_state_dir(ctx.home, project_dir=project, login_home=session.login_home,
                                              unit_env=session.environment)
+    if source == watch.LOGIN_SETTINGS_SOURCE:
+        return Result("telegram-dir", DRIFT,
+                      f"the Telegram plugin keeps its poller files in {where}, named in the login's own "
+                      f"settings.json, which every agent on this login reads: they all share that one "
+                      f"directory, and so one bot, and a newer poller on it ends the older. For a seat of "
+                      f"its own, set TELEGRAM_STATE_DIR in the \"env\" of "
+                      f"{project / '.claude' / 'settings.local.json'}, which takes precedence. "
+                      f"This step never fails the run")
     if source != "the default location":
         return Result("telegram-dir", ALREADY, f"the Telegram plugin keeps its poller files in {where}, "
                                                f"from {source}")
