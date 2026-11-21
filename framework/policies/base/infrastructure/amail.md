@@ -340,7 +340,7 @@ address no declared peer holds before it reads from it (R58, R59). It reads a re
 bound, and only for a deadline (R62, R65). It writes what it takes into its own peer intake, `<handoff>/_peers/<peer domain>/`, and
 that intake is swept as a rung 1s intake is: the receiver's contacts, keys, quarantine, audit and
 hand-off decide what reaches an agent (R63, R64), so a connection says which machine sent a message
-and only the signature says which agent. A peer's domain is reached by one rung: declaring it in both
+and only the signature says which agent. A peer link also declares the peer's agents (`agents`: the address local part to the agent's calling card), which is how the receiving broker knows which card a sender's address names and so which registry key its signature is judged against; a peer that declares none has all its mail read unverified. A peer's domain is reached by one rung: declaring it in both
 `shared_handoffs` and `peer_links` is refused. Internet mail is never sent over this link (R53).
 
 ### 2.2 Local delivery is an optimization, not a special case

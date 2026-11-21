@@ -540,6 +540,19 @@ class PeerLinkDecl(BaseModel):
     host: str = Field(description="the peer's private IP address (a tailnet address, for example)")
     port: int = Field(ge=1, le=65535, description="the port the peer's listener answers on")
     note: str = Field(default="", description="free text for the operator")
+    agents: Dict[str, str] = Field(
+        default_factory=dict,
+        description="the peer's agents: the address local part -> the agent's calling card. A peer "
+                    "message's signature is judged against the registry key of the card its sender "
+                    "names (MIS-0004 R44); a peer that declares none has all its mail read unverified.")
+
+    @field_validator("agents")
+    @classmethod
+    def _cards_are_cards(cls, v: Dict[str, str]) -> Dict[str, str]:
+        from .zone import local_part_from_card
+        for box, card in v.items():
+            local_part_from_card(card)          # ValueError names the bad card
+        return v
 
     @field_validator("host")
     @classmethod
@@ -827,7 +840,7 @@ class BrokerDeployConfig(BaseModel):
             if key in shared:
                 raise ConfigError(f"'{dom}' is declared in both shared_handoffs and peer_links; a peer is "
                                   f"reached by one rung, and the filesystem would win silently")
-            peers[key] = PeerLink(host=decl.host, port=decl.port, note=decl.note)
+            peers[key] = PeerLink(host=decl.host, port=decl.port, note=decl.note, agents=dict(decl.agents))
         if addressing.zone:
             _require_zone_cards(addressing)
             _require_own_login(addressing)

@@ -264,6 +264,11 @@ class PeerLink:
     host: str
     port: int
     note: str = ""
+    #: The peer's agents: box name (the address local part) -> calling card. The receiving broker
+    #: judges a peer message's signature against the registry key of the card its sender's address
+    #: names (MIS-0004 R44), and a peer with no agents declared names none, so its mail reads
+    #: unverified whatever it carries.
+    agents: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -1895,7 +1900,8 @@ class Broker:
         from .zone import card_for_address
         return card_for_address(message.sender, domain=self.config.domain, zone=self.config.zone,
                                 agent_cards=self.config.agent_cards,
-                                peers={d: h.agents for d, h in self.config.shared_handoffs.items()})
+                                peers={**{d: h.agents for d, h in self.config.shared_handoffs.items()},
+                                       **{d: link.agents for d, link in self.config.peer_links.items()}})
 
     def classify_inbound(self, message: Message, agent: str,
                          domain_authenticated: bool = False,
