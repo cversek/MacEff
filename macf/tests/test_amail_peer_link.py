@@ -501,3 +501,31 @@ def test_a_peers_declared_agents_must_be_cards():
         PeerLinkDecl(host="100.64.0.7", port=8030, agents={"ira": "not a card"})
     ok = PeerLinkDecl(host="100.64.0.7", port=8030, agents={"ira": "Ira_0a1b2c"})
     assert ok.agents == {"ira": "Ira_0a1b2c"}
+
+
+def test_a_signed_peer_message_is_unverified_when_the_peer_declares_no_card_for_the_sender(tmp_path):
+    """The registry holds the key, and the message is signed with it, but the receiver's peer link names
+    no card for the sender's address, so there is nothing to judge the signature against."""
+    import os
+
+    from macf.amail.crypto import generate_keypair, load_private_key, public_key_line, sign
+    from macf.amail.registry import Registry
+    generate_keypair(tmp_path / "ira_key")
+    reg_file = tmp_path / "registry.yaml"
+    reg_file.write_text("agents:\n  Ira_0a1b2c:\n    account: ira\n    keys: ['"
+                        + public_key_line(load_private_key(tmp_path / "ira_key")) + "']\n")
+    os.chmod(reg_file, 0o644)
+    beta = _deployment(tmp_path, "beta", B_DOM, {"sparrow": [f"ira@{A_DOM}"]}, {A_DOM: PeerLink(host=LOOP, port=1)})
+    beta.registry = Registry(reg_file, root_uid=os.getuid())
+    listener = PeerListener(beta, host=LOOP, port=0).start()
+    try:
+        alpha = _deployment(tmp_path, "alpha", A_DOM, {"ira": [f"sparrow@{B_DOM}"]},
+                            {B_DOM: PeerLink(host=LOOP, port=listener.port)})
+        m = _msg(f"ira@{A_DOM}", f"sparrow@{B_DOM}")
+        m.signature = sign(m, load_private_key(tmp_path / "ira_key"))
+        assert alpha.submit("ira", m)["ok"]
+        beta.sweep_shared()
+        (amsg,) = _sparrow_box(beta)
+        assert json.loads(amsg.with_suffix(".json").read_text()).get("broker_trust") == "unverified"
+    finally:
+        listener.stop()
