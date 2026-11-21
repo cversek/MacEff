@@ -451,3 +451,53 @@ def test_every_spelling_of_every_interface_is_refused_for_the_listener(pair):
     for every in ("::0", "0::", "0:0:0:0:0:0:0:0", "0.0.0.0", "::"):
         with pytest.raises(ValueError, match="every interface"):
             PeerListener(beta, host=every, port=0)
+
+
+def test_a_signed_peer_message_from_a_declared_agent_is_attested(tmp_path):
+    """The first end-to-end test of the verified case found it unreachable: the receiver resolves a
+    sender's card from the peer's declared agents, and a peer link declared none, so every peer
+    message read unverified whatever its signature. With the peer's agents declared, a message signed
+    with the key the registry holds for that card is attested, and one signed with another key is not."""
+    import os
+
+    from macf.amail.crypto import generate_keypair, load_private_key, public_key_line, sign
+    from macf.amail.registry import Registry
+    generate_keypair(tmp_path / "ira_key")
+    generate_keypair(tmp_path / "other_key")
+    registry_dir = tmp_path / "etc"
+    registry_dir.mkdir()
+    reg_file = registry_dir / "registry.yaml"
+    reg_file.write_text("agents:\n  Ira_0a1b2c:\n    account: ira\n    keys: ['"
+                        + public_key_line(load_private_key(tmp_path / "ira_key")) + "']\n")
+    os.chmod(reg_file, 0o644)
+    beta = _deployment(tmp_path, "beta", B_DOM, {"sparrow": [f"ira@{A_DOM}"]},
+                       {A_DOM: PeerLink(host=LOOP, port=1, agents={"ira": "Ira_0a1b2c"})})
+    beta.registry = Registry(reg_file, root_uid=os.getuid())
+    listener = PeerListener(beta, host=LOOP, port=0).start()
+    try:
+        alpha = _deployment(tmp_path, "alpha", A_DOM, {"ira": [f"sparrow@{B_DOM}"]},
+                            {B_DOM: PeerLink(host=LOOP, port=listener.port)})
+        trusts = []
+        for key in ("ira_key", "other_key"):
+            m = _msg(f"ira@{A_DOM}", f"sparrow@{B_DOM}", body=f"signed with {key}")
+            m.signature = sign(m, load_private_key(tmp_path / key))
+            sent = alpha.submit("ira", m)
+            assert sent["ok"], sent
+            beta.sweep_shared()
+            mine = [p for p in _sparrow_box(beta) if sent["message_id"] in p.name]
+            assert len(mine) == 1, "one pair for the message just sent"
+            trusts.append(json.loads(mine[0].with_suffix(".json").read_text()).get("broker_trust"))
+        assert trusts[0] == "attested", trusts
+        assert trusts[1] != "attested", trusts
+    finally:
+        listener.stop()
+
+
+def test_a_peers_declared_agents_must_be_cards():
+    from pydantic import ValidationError
+
+    from macf.amail.deploy_config import PeerLinkDecl
+    with pytest.raises(ValidationError):
+        PeerLinkDecl(host="100.64.0.7", port=8030, agents={"ira": "not a card"})
+    ok = PeerLinkDecl(host="100.64.0.7", port=8030, agents={"ira": "Ira_0a1b2c"})
+    assert ok.agents == {"ira": "Ira_0a1b2c"}
