@@ -293,3 +293,21 @@ def test_a_slow_sender_is_cut_off_at_its_deadline(pair, monkeypatch):
                 break
             time.sleep(0.3)
     assert cut_off is not None and cut_off < 5, "the listener ended a connection that never finished its request"
+
+
+def test_two_brokers_exchange_a_message_both_ways(tmp_path):
+    beta = _deployment(tmp_path, "beta", B_DOM, {"sparrow": [f"ira@{A_DOM}"]}, {A_DOM: PeerLink(host=LOOP, port=1)})
+    alpha = _deployment(tmp_path, "alpha", A_DOM, {"ira": [f"sparrow@{B_DOM}"]}, {B_DOM: PeerLink(host=LOOP, port=1)})
+    on_beta, on_alpha = PeerListener(beta, host=LOOP, port=0).start(), PeerListener(alpha, host=LOOP, port=0).start()
+    try:
+        alpha.config.peer_links[B_DOM] = PeerLink(host=LOOP, port=on_beta.port)
+        beta.config.peer_links[A_DOM] = PeerLink(host=LOOP, port=on_alpha.port)
+        assert alpha.submit("ira", _msg(f"ira@{A_DOM}", f"sparrow@{B_DOM}"))["ok"]
+        assert beta.submit("sparrow", _msg(f"sparrow@{B_DOM}", f"ira@{A_DOM}"))["ok"]
+        beta.sweep_shared()
+        alpha.sweep_shared()
+        assert len(_sparrow_box(beta)) == 1
+        assert len(sorted((alpha.config.inbound_handoff / "ira").glob("*.amsg"))) == 1
+    finally:
+        on_beta.stop()
+        on_alpha.stop()
