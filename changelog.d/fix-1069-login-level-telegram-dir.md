@@ -1,0 +1,3 @@
+### Fixed
+
+- **A Telegram state directory named in the login's own `settings.json` is read and reported as shared** (`pd.watch.telegram_state_dir`, `agent init` `telegram-dir` step, #1069): Claude Code reads the user-level `.claude/settings.json` for every agent on the login, so a `TELEGRAM_STATE_DIR` there reaches them all, but the resolution didn't consult it, and such a seat read as being on the default directory. It is now read after the seat's own settings, named as shared by every agent on the login, and the init step reports it found with drift, since one directory shared is one bot shared. Where the agent's home is the login's home, that `settings.json` is the shared one and the same directory's `settings.local.json` stays the project's own.
