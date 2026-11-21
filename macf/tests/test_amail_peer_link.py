@@ -557,3 +557,19 @@ def test_a_signed_peer_message_is_not_attested_when_its_key_is_not_in_the_regist
         assert json.loads(amsg.with_suffix(".json").read_text()).get("broker_trust") != "attested"
     finally:
         listener.stop()
+
+
+def test_the_cards_of_a_peers_declared_agents_reach_the_peer_link_through_the_loader(tmp_path):
+    """CTB's review of #1097: the tests built PeerLink directly, so a loader that dropped `agents` left
+    them all green. The operator's file is what a broker actually runs on: its agents map must arrive."""
+    from macf.amail.deploy_config import BrokerDeployConfig
+    addressing = tmp_path / "addressing.yaml"
+    addressing.write_text(_addressing({"ira": []}, domain=A_DOM))
+    cfg = BrokerDeployConfig.model_validate({
+        "addressing_path": str(addressing),
+        "peer_links": {B_DOM: {"host": "100.64.0.7", "port": 8030, "agents": {"sparrow": "Sparrow_3d4e5f"}}},
+    }).to_broker_config()
+    assert cfg.peer_links[B_DOM].agents == {"sparrow": "Sparrow_3d4e5f"}
+    from macf.amail.zone import card_for_address
+    assert card_for_address(f"sparrow@{B_DOM}", domain=cfg.domain, zone=cfg.zone, agent_cards=cfg.agent_cards,
+                            peers={d: link.agents for d, link in cfg.peer_links.items()}) == "Sparrow_3d4e5f"
