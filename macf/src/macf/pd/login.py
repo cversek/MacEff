@@ -76,9 +76,10 @@ def read_assessment(now: Optional[float] = None,
 
     On macOS the credential is in the Keychain, under one service, and there can be more than one
     entry: a session started without USER files its refreshed token under "unknown", and the
-    original entry is never written again (#852). ``read_credential`` takes the newest, which is
-    the login in use. Agents that share one macOS login share that one Claude login, so the newest
-    entry is every such agent's own (#936)."""
+    original entry is never written again (#852). ``read_credential`` takes the newest entry that
+    holds a token, which is the login in use; the "unknown" entry can be newer and empty, so newest
+    alone is not enough (#1090). Agents that share one macOS login share that one Claude login, so
+    that entry is every such agent's own (#936)."""
     from macf.budget import BudgetError, read_credential
     now = time.time() if now is None else now
     try:
