@@ -451,3 +451,125 @@ def test_every_spelling_of_every_interface_is_refused_for_the_listener(pair):
     for every in ("::0", "0::", "0:0:0:0:0:0:0:0", "0.0.0.0", "::"):
         with pytest.raises(ValueError, match="every interface"):
             PeerListener(beta, host=every, port=0)
+
+
+def test_a_signed_peer_message_from_a_declared_agent_is_attested(tmp_path):
+    """The first end-to-end test of the verified case found it unreachable: the receiver resolves a
+    sender's card from the peer's declared agents, and a peer link declared none, so every peer
+    message read unverified whatever its signature. With the peer's agents declared, a message signed
+    with the key the registry holds for that card is attested, and one signed with another key is not."""
+    import os
+
+    from macf.amail.crypto import generate_keypair, load_private_key, public_key_line, sign
+    from macf.amail.registry import Registry
+    generate_keypair(tmp_path / "ira_key")
+    generate_keypair(tmp_path / "other_key")
+    registry_dir = tmp_path / "etc"
+    registry_dir.mkdir()
+    reg_file = registry_dir / "registry.yaml"
+    reg_file.write_text("agents:\n  Ira_0a1b2c:\n    account: ira\n    keys: ['"
+                        + public_key_line(load_private_key(tmp_path / "ira_key")) + "']\n")
+    os.chmod(reg_file, 0o644)
+    beta = _deployment(tmp_path, "beta", B_DOM, {"sparrow": [f"ira@{A_DOM}"]},
+                       {A_DOM: PeerLink(host=LOOP, port=1, agents={"ira": "Ira_0a1b2c"})})
+    beta.registry = Registry(reg_file, root_uid=os.getuid())
+    listener = PeerListener(beta, host=LOOP, port=0).start()
+    try:
+        alpha = _deployment(tmp_path, "alpha", A_DOM, {"ira": [f"sparrow@{B_DOM}"]},
+                            {B_DOM: PeerLink(host=LOOP, port=listener.port)})
+        trusts = []
+        for key in ("ira_key", "other_key"):
+            m = _msg(f"ira@{A_DOM}", f"sparrow@{B_DOM}", body=f"signed with {key}")
+            m.signature = sign(m, load_private_key(tmp_path / key))
+            sent = alpha.submit("ira", m)
+            assert sent["ok"], sent
+            beta.sweep_shared()
+            mine = [p for p in _sparrow_box(beta) if sent["message_id"] in p.name]
+            assert len(mine) == 1, "one pair for the message just sent"
+            trusts.append(json.loads(mine[0].with_suffix(".json").read_text()).get("broker_trust"))
+        assert trusts[0] == "attested", trusts
+        assert trusts[1] != "attested", trusts
+    finally:
+        listener.stop()
+
+
+def test_a_peers_declared_agents_must_be_cards():
+    from pydantic import ValidationError
+
+    from macf.amail.deploy_config import PeerLinkDecl
+    with pytest.raises(ValidationError):
+        PeerLinkDecl(host="100.64.0.7", port=8030, agents={"ira": "not a card"})
+    ok = PeerLinkDecl(host="100.64.0.7", port=8030, agents={"ira": "Ira_0a1b2c"})
+    assert ok.agents == {"ira": "Ira_0a1b2c"}
+
+
+def test_a_signed_peer_message_is_unverified_when_the_peer_declares_no_card_for_the_sender(tmp_path):
+    """The registry holds the key, and the message is signed with it, but the receiver's peer link names
+    no card for the sender's address, so there is nothing to judge the signature against."""
+    import os
+
+    from macf.amail.crypto import generate_keypair, load_private_key, public_key_line, sign
+    from macf.amail.registry import Registry
+    generate_keypair(tmp_path / "ira_key")
+    reg_file = tmp_path / "registry.yaml"
+    reg_file.write_text("agents:\n  Ira_0a1b2c:\n    account: ira\n    keys: ['"
+                        + public_key_line(load_private_key(tmp_path / "ira_key")) + "']\n")
+    os.chmod(reg_file, 0o644)
+    beta = _deployment(tmp_path, "beta", B_DOM, {"sparrow": [f"ira@{A_DOM}"]}, {A_DOM: PeerLink(host=LOOP, port=1)})
+    beta.registry = Registry(reg_file, root_uid=os.getuid())
+    listener = PeerListener(beta, host=LOOP, port=0).start()
+    try:
+        alpha = _deployment(tmp_path, "alpha", A_DOM, {"ira": [f"sparrow@{B_DOM}"]},
+                            {B_DOM: PeerLink(host=LOOP, port=listener.port)})
+        m = _msg(f"ira@{A_DOM}", f"sparrow@{B_DOM}")
+        m.signature = sign(m, load_private_key(tmp_path / "ira_key"))
+        assert alpha.submit("ira", m)["ok"]
+        beta.sweep_shared()
+        (amsg,) = _sparrow_box(beta)
+        assert json.loads(amsg.with_suffix(".json").read_text()).get("broker_trust") == "unverified"
+    finally:
+        listener.stop()
+
+
+def test_a_signed_peer_message_is_not_attested_when_its_key_is_not_in_the_registry(tmp_path):
+    """The card is declared, but the registry holds no key for it: nothing to verify against, so the
+    message is not attested."""
+    import os
+
+    from macf.amail.crypto import generate_keypair, load_private_key, sign
+    from macf.amail.registry import Registry
+    generate_keypair(tmp_path / "ira_key")
+    reg_file = tmp_path / "registry.yaml"
+    reg_file.write_text("agents: {}\n")
+    os.chmod(reg_file, 0o644)
+    beta = _deployment(tmp_path, "beta", B_DOM, {"sparrow": [f"ira@{A_DOM}"]},
+                       {A_DOM: PeerLink(host=LOOP, port=1, agents={"ira": "Ira_0a1b2c"})})
+    beta.registry = Registry(reg_file, root_uid=os.getuid())
+    listener = PeerListener(beta, host=LOOP, port=0).start()
+    try:
+        alpha = _deployment(tmp_path, "alpha", A_DOM, {"ira": [f"sparrow@{B_DOM}"]},
+                            {B_DOM: PeerLink(host=LOOP, port=listener.port)})
+        m = _msg(f"ira@{A_DOM}", f"sparrow@{B_DOM}")
+        m.signature = sign(m, load_private_key(tmp_path / "ira_key"))
+        assert alpha.submit("ira", m)["ok"]
+        beta.sweep_shared()
+        (amsg,) = _sparrow_box(beta)
+        assert json.loads(amsg.with_suffix(".json").read_text()).get("broker_trust") != "attested"
+    finally:
+        listener.stop()
+
+
+def test_the_cards_of_a_peers_declared_agents_reach_the_peer_link_through_the_loader(tmp_path):
+    """CTB's review of #1097: the tests built PeerLink directly, so a loader that dropped `agents` left
+    them all green. The operator's file is what a broker actually runs on: its agents map must arrive."""
+    from macf.amail.deploy_config import BrokerDeployConfig
+    addressing = tmp_path / "addressing.yaml"
+    addressing.write_text(_addressing({"ira": []}, domain=A_DOM))
+    cfg = BrokerDeployConfig.model_validate({
+        "addressing_path": str(addressing),
+        "peer_links": {B_DOM: {"host": "100.64.0.7", "port": 8030, "agents": {"sparrow": "Sparrow_3d4e5f"}}},
+    }).to_broker_config()
+    assert cfg.peer_links[B_DOM].agents == {"sparrow": "Sparrow_3d4e5f"}
+    from macf.amail.zone import card_for_address
+    assert card_for_address(f"sparrow@{B_DOM}", domain=cfg.domain, zone=cfg.zone, agent_cards=cfg.agent_cards,
+                            peers={d: link.agents for d, link in cfg.peer_links.items()}) == "Sparrow_3d4e5f"
