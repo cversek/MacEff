@@ -106,12 +106,24 @@ def read_token() -> str:
     return tok
 
 
+def _holds_token(raw: str) -> bool:
+    """Whether a stored credential's text holds a non-empty OAuth access token. Nothing of it is kept."""
+    try:
+        return bool((json.loads(raw).get("claudeAiOauth") or {}).get("accessToken"))
+    except (json.JSONDecodeError, AttributeError):
+        return False
+
+
 def read_credential() -> str:
     """The CLI's stored credential, as text: the Keychain on macOS, else its file. Raises BudgetError
     when none is reachable. Callers take what they need from it and keep nothing else; the login
     check (``macf.pd.login``) reads only its expiry dates."""
     raw = None
     if sys.platform == "darwin":
+        # Newest first, but the newest item is not always the login in use: a session started
+        # without USER writes an item under "unknown" that can hold no token at all, beside the
+        # real one. So the newest item that holds a token is taken, and an empty one only when
+        # no item holds any.
         for acct in keychain_accounts() or [None]:
             try:
                 r = subprocess.run(["security", "find-generic-password", "-s", KEYCHAIN_SERVICE]
@@ -120,9 +132,13 @@ def read_credential() -> str:
             except (OSError, subprocess.TimeoutExpired) as e:
                 raise BudgetError(f"Keychain read failed ({type(e).__name__}); use `budget sample --manual`",
                                   short="credential unreadable")
-            if r.returncode == 0:
+            if r.returncode != 0:
+                continue
+            if _holds_token(r.stdout):
                 raw = r.stdout
                 break
+            if raw is None:
+                raw = r.stdout
     if raw is None and CREDENTIAL_FILE.exists():
         try:
             raw = CREDENTIAL_FILE.read_text()
