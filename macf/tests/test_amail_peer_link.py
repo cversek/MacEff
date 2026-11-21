@@ -380,3 +380,27 @@ def test_the_deadline_check_itself_ends_a_dribbling_read(monkeypatch):
 
     with pytest.raises(peer_link.RequestTimedOut):
         read_request_line(Dribble(), limit=10_000, deadline_s=1.0)
+
+
+def test_a_held_message_with_other_bytes_is_a_collision_not_an_acknowledgement(pair):
+    """THM's second review of #1095: a message already in the intake under the same name with other
+    bytes was acknowledged without being stored, so the sender dropped the only copy. It must raise,
+    the sender must keep its copy, and the held bytes must stay as they are."""
+    alpha, beta, _ = pair
+    real = beta.take_over_link
+    held = {}
+
+    def spy(domain, stem, sidecar, payload):
+        if not held:
+            intake = peer_intake(beta.config.inbound_handoff, domain)
+            intake.mkdir(parents=True, mode=0o700, exist_ok=True)
+            (intake / f"{stem}.amsg").write_bytes(b"older, other bytes")
+            (intake / f"{stem}.json").write_text(json.dumps({"raw_sha256": "f" * 64}))
+            held.update(path=intake / f"{stem}.amsg")
+        return real(domain, stem, sidecar, payload)
+
+    beta.take_over_link = spy
+    result = alpha.submit("ira", _msg(f"ira@{A_DOM}", f"sparrow@{B_DOM}"))
+    assert result["delivered"][0]["state"] == "deferred", result
+    assert held["path"].read_bytes() == b"older, other bytes"
+    assert len(list((alpha.config.inbound_handoff / "_outbox" / B_DOM).glob("*.amsg"))) == 1

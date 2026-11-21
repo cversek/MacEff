@@ -1396,21 +1396,13 @@ class Broker:
         if held.exists() and hashlib.sha256(held.read_bytes()).hexdigest() == digest:
             return {"message_id": sidecar.get("message_id"), "held": True}
         if half.exists() and not held.exists():
-            # A take interrupted between the sidecar and the message leaves the sidecar alone. With
-            # the same hash it is this pair half-written: finish it. With another it is stale: remove
-            # it, so a retry is not refused for good by a name it can never write.
-            try:
-                same = json.loads(half.read_text()).get("raw_sha256") == digest
-            except (OSError, ValueError):
-                same = False
-            if same:
-                with open(held, "xb") as f:
-                    f.write(payload)
-                held.chmod(0o640)
-            else:
-                half.unlink()
-        if not held.exists():
-            self._write_pair(intake, stem, sidecar, payload, gid=None)
+            # A take interrupted between the sidecar and the message leaves the sidecar alone. Whatever
+            # it holds, it is not a message, so it is removed and the pair is written afresh: a retry is
+            # then never refused for good by a name it can never write.
+            half.unlink()
+        # Written exclusively: a message already held under this name with OTHER bytes is a collision,
+        # and raises rather than being acknowledged, so the sender keeps its copy.
+        self._write_pair(intake, stem, sidecar, payload, gid=None)
         for name in (f"{stem}.amsg", f"{stem}.json"):
             fd = os.open(intake / name, os.O_RDONLY)
             try:
