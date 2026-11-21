@@ -127,3 +127,36 @@ def test_the_process_environment_of_agent_init_is_not_the_sessions(tmp_path, mon
     """The step once read it, and in a test environment that set it, said the seat had a directory of its own."""
     monkeypatch.setenv(watch.TELEGRAM_STATE_ENV, str(tmp_path / "shell"))
     assert step_telegram_dir(_ctx(_declare(tmp_path / "seat"))).status == DRIFT
+
+
+def test_a_directory_in_the_logins_own_settings_is_named_as_shared(tmp_path):
+    """Claude Code reads the user-level settings.json for every agent on the login, so a directory named
+    there reaches them all: it is a directory, and it is the sharing the step exists to flag."""
+    login, seat = tmp_path / "login", tmp_path / "seat"
+    seat.mkdir()
+    _settings(login, {"env": {watch.TELEGRAM_STATE_ENV: str(tmp_path / "everyones")}}, name="settings.json")
+    where, source = watch.telegram_state_dir(seat, seat, login_home=login)
+    assert (where, source) == (tmp_path / "everyones", watch.LOGIN_SETTINGS_SOURCE)
+    # The seat's own settings come first, and the unit's declared environment after the login's.
+    _settings(seat, {"env": {watch.TELEGRAM_STATE_ENV: str(tmp_path / "own")}})
+    assert watch.telegram_state_dir(seat, seat, login_home=login)[0] == tmp_path / "own"
+    (seat / ".claude" / "settings.local.json").unlink()
+    unit_env = {watch.TELEGRAM_STATE_ENV: str(tmp_path / "unit")}
+    assert watch.telegram_state_dir(seat, seat, login_home=login, unit_env=unit_env)[1] == watch.LOGIN_SETTINGS_SOURCE
+
+
+def test_where_the_agent_home_is_the_login_its_settings_json_is_the_shared_one(tmp_path):
+    """On a host the agent's home is often the login's home: that settings.json is every agent's, while the
+    same directory's settings.local.json is this project's own."""
+    home = tmp_path / "both"
+    _settings(home, {"env": {watch.TELEGRAM_STATE_ENV: str(tmp_path / "a")}}, name="settings.json")
+    assert watch.telegram_state_dir(home, home, login_home=home)[1] == watch.LOGIN_SETTINGS_SOURCE
+    _settings(home, {"env": {watch.TELEGRAM_STATE_ENV: str(tmp_path / "b")}})
+    assert watch.telegram_state_dir(home, home, login_home=home) == (tmp_path / "b", "settings.local.json of the home")
+
+
+def test_the_step_flags_a_shared_directory_even_though_one_is_named(tmp_path):
+    login = tmp_path / "login"
+    _settings(login, {"env": {watch.TELEGRAM_STATE_ENV: str(tmp_path / "everyones")}}, name="settings.json")
+    r = step_telegram_dir(_ctx(_declare(tmp_path / "seat", session_home=str(login))))
+    assert r.status == DRIFT and "every agent on this login" in r.detail and str(tmp_path / "everyones") in r.detail
