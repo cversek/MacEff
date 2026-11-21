@@ -404,3 +404,50 @@ def test_a_held_message_with_other_bytes_is_a_collision_not_an_acknowledgement(p
     assert result["delivered"][0]["state"] == "deferred", result
     assert held["path"].read_bytes() == b"older, other bytes"
     assert len(list((alpha.config.inbound_handoff / "_outbox" / B_DOM).glob("*.amsg"))) == 1
+
+
+def _raw_request(listener, broker_domain_from, sidecar_overrides=None, payload=b"hello", stem="1-msg-x-sparrow",
+                 request_overrides=None):
+    """A hand-made request, as a hostile or broken peer would send it."""
+    import base64
+    import hashlib
+    sidecar = {"kind": "bundle", "message_id": "msg-1", "sender": f"ira@{A_DOM}", "recipient": f"sparrow@{B_DOM}",
+               "raw_sha256": hashlib.sha256(payload).hexdigest(), "origin_domain": A_DOM, "rung": "peer",
+               **(sidecar_overrides or {})}
+    request = {"op": "hand_off", "from": broker_domain_from, "stem": stem, "sidecar": sidecar,
+               "payload_b64": base64.b64encode(payload).decode("ascii"), **(request_overrides or {})}
+    return peer_link.send_request(LOOP, listener.port, request)
+
+
+def _nothing_taken(beta):
+    intake = peer_intake(beta.config.inbound_handoff, A_DOM)
+    return not intake.exists() or not list(intake.iterdir())
+
+
+def test_a_payload_that_does_not_match_its_hash_is_refused_and_nothing_is_stored(pair):
+    """CTB's review of #1095: take_over_link's hash check had no test of its own."""
+    _, beta, listener = pair
+    reply = _raw_request(listener, A_DOM, sidecar_overrides={"raw_sha256": "0" * 64})
+    assert reply["ok"] is False and reply.get("refused") is True, reply
+    assert _nothing_taken(beta)
+
+
+def test_a_sidecar_naming_another_origin_than_the_declared_peer_is_refused(pair):
+    _, beta, listener = pair
+    reply = _raw_request(listener, A_DOM, sidecar_overrides={"origin_domain": "elsewhere.example"})
+    assert reply["ok"] is False and reply.get("refused") is True, reply
+    assert _nothing_taken(beta)
+
+
+def test_a_request_saying_it_is_from_another_domain_than_the_peer_at_its_address_is_refused(pair):
+    _, beta, listener = pair
+    reply = _raw_request(listener, "elsewhere.example")
+    assert reply["ok"] is False and reply.get("refused") is True, reply
+    assert _nothing_taken(beta)
+
+
+def test_every_spelling_of_every_interface_is_refused_for_the_listener(pair):
+    _, beta, _ = pair
+    for every in ("::0", "0::", "0:0:0:0:0:0:0:0", "0.0.0.0", "::"):
+        with pytest.raises(ValueError, match="every interface"):
+            PeerListener(beta, host=every, port=0)

@@ -194,6 +194,12 @@ class DeliveryError(RuntimeError):
     """Transport could not deliver. Never swallowed into a success."""
 
 
+class PairRefused(DeliveryError):
+    """A peer's pair that this broker will never take, however often it is sent: an unusable name or
+    sidecar, a payload that does not match its hash, or an origin that is not the declared peer. The
+    peer is told it was refused, so its copy is set aside and not retried for good (MIS-0004 R60)."""
+
+
 #: The peer-intake subtree of a hand-off root. One directory per PEER DOMAIN,
 #: provisioned by the broker that owns the root, written by the peer's broker
 #: across the mount, swept by the owner. Kept beside the agents' boxes so one
@@ -1383,12 +1389,12 @@ class Broker:
         if root is None:
             raise DeliveryError("this broker has no hand-off root to take custody into")
         if not isinstance(sidecar, dict) or not re.fullmatch(r"[A-Za-z0-9._-]{1,200}", stem or ""):
-            raise DeliveryError("the pair has no usable name or sidecar")
+            raise PairRefused("the pair has no usable name or sidecar")
         digest = hashlib.sha256(payload).hexdigest()
         if sidecar.get("raw_sha256") != digest:
-            raise DeliveryError("the payload does not match the hash its sidecar carries")
+            raise PairRefused("the payload does not match the hash its sidecar carries")
         if str(sidecar.get("origin_domain", "")).lower() != domain.lower():
-            raise DeliveryError("the sidecar names another origin than the declared peer")
+            raise PairRefused("the sidecar names another origin than the declared peer")
         intake = peer_intake(Path(root), domain)
         intake.mkdir(parents=True, mode=0o700, exist_ok=True)
         held = intake / f"{stem}.amsg"

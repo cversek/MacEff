@@ -24,6 +24,8 @@ import socket
 import sys
 import threading
 import time
+
+from .broker import PairRefused
 from typing import Any, Dict, Optional, Tuple
 
 PROTOCOL_VERSION = 1
@@ -101,9 +103,12 @@ class PeerListener:
             raise ValueError("a peer listener binds the one private address the operator declares, "
                              "never every interface (MIS-0004 R58)")
         try:
-            ipaddress.ip_address(host)
+            address = ipaddress.ip_address(host)
         except ValueError as e:
             raise ValueError(f"a peer listener binds an address, not a name: {host!r}") from e
+        if address.is_unspecified:           # every spelling of "every interface", not only the usual ones
+            raise ValueError("a peer listener binds the one private address the operator declares, "
+                             "never every interface (MIS-0004 R58)")
         self.broker = broker
         self.host, self.requested_port = host, port
         self.port: int = port
@@ -204,6 +209,9 @@ class PeerListener:
         try:
             result = self.broker.take_over_link(domain, str(request.get("stem", "")),
                                                 request.get("sidecar"), payload)
+        except PairRefused as e:
+            self._audit(f"{domain}: refused a pair: {e}")
+            return _reply(False, refused=True, reason=str(e))
         except Exception as e:  # noqa: BLE001 - whatever failed, the sender keeps its copy and the reason goes in the audit
             self._audit(f"{domain}: could not store a pair: {type(e).__name__}: {e}")
             return _reply(False, reason=f"the peer could not store it ({type(e).__name__})")
