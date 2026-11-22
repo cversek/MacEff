@@ -230,7 +230,9 @@ def test_the_mode_is_reasserted_without_changing_what_it_says(reads):
     second = budget.mode_state(now + 5, reassert=True)
     assert second == first and first[0]["mode"] == "conserve" and first[0]["set_at"] == pytest.approx(now - 3 * DAY)
     assert "reasserted" not in first[0]
-    assert YIELDED.count("budget_mode_set") == 1  # the reasserted copy, not the walk to the original
+    copies = [e for e in _events_of("budget_mode_set") if e["data"].get("reasserted")]
+    assert len(copies) == 1  # written once; the second read found it and wrote nothing
+    assert copies[0]["data"]["set_at"] == pytest.approx(now - 3 * DAY)
 
 
 def test_a_reasserted_mode_still_lapses_by_its_original_time(reads):
