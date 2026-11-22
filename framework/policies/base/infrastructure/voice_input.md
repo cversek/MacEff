@@ -63,6 +63,10 @@ A wake model is a small classifier that scores a stream of audio for one phrase.
 - Why does a declared hotkey still record while listening is off?
 - What does the capture unit never wake on?
 
+**5.1 Presence by Voice and HANDS_FREE**
+- Does an operator talking by voice count as present?
+- What is HANDS_FREE, and when does it replace USER_IDLE?
+
 **6 Building a Wake Model**
 - What order do I follow, from phrase to declared model?
 - Which phrases are refused?
@@ -241,6 +245,14 @@ Mid-sentence, as in "send the report" or "don't abort the build", neither word e
 **A declared hotkey still opens one recording while listening is off.** That is a deliberate press on a declared device (MIS-0008 R17), and the indicator shows it (R21). Listening off is about the always-open ear, not about the operator's own keys. When that recording ends, the microphone closes again. If you want no recording at all, the operator removes the key from the declaration; no command or socket can open the microphone (R18), and none will be added.
 
 **What it never wakes on.** The capture unit takes no wake while the agent's own speech is playing, and for three seconds after, so an alert containing the phrase cannot call itself (MIS-0008 R27). A held or toggle key is a deliberate press and is not blocked by this. Instead, the agent's speech gives way: the sentence playing stops the moment the recording opens, the rest of that message is dropped, and nothing more plays until the recording ends (R29). An operator who presses a key while the agent talks is heard, not talked over.
+
+### 5.1 Presence by Voice and HANDS_FREE
+
+**An utterance delivered on a channel the declaration lists among its `operator_channels` is the operator's activity** (MIS-0008 Q01, ruled by the operator on 2026-11-18). It resets USER_IDLE as typing does, whether a key or the wake phrase started it. Where the Voice Input Channel is not listed, a delivered utterance proves nothing about presence and changes nothing.
+
+**HANDS_FREE 🗣️ replaces USER_IDLE while the operator's latest activity is voice the wake phrase started** (or continual voice), with no keyboard input since, and only inside the idle window: after it, USER_IDLE applies as for any input. A key-started utterance is never hands-free, and a hold or toggle ends it (Q09, ruled), as does the next typed input.
+
+**How an agent is told to behave while the operator is hands-free is left open** (MIS-0008 Q09): the state and its mark are derived and shown, and nothing here prescribes a posture.
 
 **The command waits for the unit to agree.** After switching, `voice listen` waits a few seconds for the capture unit's status to match and says so if it doesn't. A mismatch means the unit may not have read the switch yet, or isn't running. Read the printed status; do not assume the switch took.
 

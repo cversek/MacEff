@@ -23,6 +23,9 @@ CHANNEL_FLAG = f"plugin:{CHANNEL_PLUGIN_ID}"
 VOICE_PLUGIN = "maceff-voice-input-channel"
 VOICE_PLUGIN_ID = f"{VOICE_PLUGIN}@{MARKETPLACE}"
 VOICE_FLAG = f"plugin:{VOICE_PLUGIN_ID}"
+#: The Voice Input Channel's name as a session sees it (``plugin:<plugin>:<server>``), the form a
+#: declaration's ``operator_channels`` lists it in.
+VOICE_CHANNEL_NAME = f"plugin:{VOICE_PLUGIN}:maceff"
 
 
 def packaged_marketplace() -> Path:
