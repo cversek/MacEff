@@ -8822,6 +8822,13 @@ def cmd_task_pause(args: argparse.Namespace) -> int:
     print(f"   Breadcrumb: {breadcrumb}")
     if cleared_policies:
         print(f"   Cleared policies: {cleared_policies}")
+    try:
+        from .task.scope import get_scope_state
+        if get_scope_state().get(str(task_id)) == "active":
+            print(f"⚠️  #{task_id} is still active in scope, so the Stop hook's scope gate keeps counting it. "
+                  f"To quiet the gate: macf_tools task scope pause {task_id} --justification <reason>")
+    except (ImportError, OSError, ValueError) as e:
+        print(f"⚠️  could not check whether #{task_id} is scoped ({e})", file=sys.stderr)
     return 0
 
 
@@ -11976,7 +11983,9 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
     # agent may start one, so where the piece knows, the broker line says what it found.
     supervision = next((p for p in setup if p.name == "broker supervision"), None)
     if supervision is not None:
-        info["broker_kind"] = supervision.detail
+        # A short value a script can compare; the sentence goes in its own key (review of #1104).
+        info["broker_kind"] = supervision.kind or info["broker_kind"]
+        info["broker_supervision"] = supervision.detail
     if args.json:
         print(json.dumps(info, indent=2))
         return 0 if reachable else 1
@@ -11987,7 +11996,7 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
     print(f"address:  {info['address'] or '(unconfigured)'}")
     print(f"maildir:  {info['maildir'] or '(unknown)'}  [{_local_str}]")
     print(f"broker:   {'✅ reachable' if reachable else '❌ unreachable'} at {sock}"
-          + (f"  [{info['broker_kind']}]" if info["broker_kind"] != "deployment" else ""))
+          + (f"  [{info.get('broker_supervision') or info['broker_kind']}]" if info["broker_kind"] != "deployment" else ""))
     # The pickup box is how a recipient learns it has mail awaiting custody
     # transfer — the one count that calls for an action, so it gets its own
     # line rather than a slot in the summary.
