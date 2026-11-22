@@ -764,5 +764,5 @@ def test_the_tmux_baseline_passes_modified_keys_to_the_client():
     """Shift-Tab cycles Claude Code's modes; without extended keys tmux never delivers it."""
     from macf.utils.harness import render_tmux_conf
     conf = render_tmux_conf(SYNTH)
-    assert "set -s extended-keys on" in conf
+    assert "set -s extended-keys always" in conf
     assert "extkeys" in conf

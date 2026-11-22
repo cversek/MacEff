@@ -1,0 +1,3 @@
+### Added
+
+- **The daemon runs the declared report** (GH#1027, persistent_layer 4): each time in a declaration's `reports.times` becomes a `report-HHMM` schedule that runs `macf_tools pd report` into the agent's own session with `wake_when: stdout`, under the declared missed-run policy and the install check like any schedule. `pd report` prints the login line: good until its date, the remedy and how to reach the session when it is expiring or expired, or why it can't be judged; an agent whose `reporter` is another card names that card instead. A new `{python}` placeholder names the daemon's own interpreter. A report due with no session running waits for the session.

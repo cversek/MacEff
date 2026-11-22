@@ -1,0 +1,3 @@
+### Changed
+
+- **The autonomous-operation policy says not to keep a local copy of the dialog denial** (`autonomous_operation` 5.5): the rule is `permission_watch.full_autonomy_denial`, applied by the framework's PermissionRequest hook when `permissions.deny_under_full_autonomy` is true, and a hook that re-implements it drifts from it. One seat's local copy kept denying dialogs for a sprint after #964 stopped the framework doing so, and refused an `AskUserQuestion` with the operator present; the policy now names the symptom (the framework's reason reads "Denied at once") and the remedy, which is to set the config key and delete the copy.

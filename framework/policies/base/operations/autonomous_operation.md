@@ -743,6 +743,12 @@ in AUTO_MODE when the operator is away: USER_REMOTE, or USER_IDLE, which begins 
   keyboard).
 - **The state is derived.** There is no flag to arm or forget: the modes decide,
   and if they can't be read the dialog stays up.
+- **Don't keep a copy of this rule in a hook of your own.** The rule is
+  `macf.permission_watch.full_autonomy_denial`, applied by the framework's PermissionRequest
+  hook; a script that re-implements it keeps whatever the rule was on the day it was written.
+  One seat's local copy went on denying dialogs for a sprint after the framework stopped, and
+  refused a question with the operator at the keyboard. The reason's wording says which one
+  fired: "Denied at once: ..." is the framework's. Set the config key and delete the copy.
 - **The default permission mode is exempt**, because nearly every write prompts there
   and denying would block the agent's own work. A mode the client doesn't report is
   treated the same way.
@@ -772,6 +778,22 @@ block: a system timer, a cron job, a supervisor.
   (default 10), and again every `--repeat` minutes (default 60). When a wait it
   reminded about ends, it sends one all-clear. A reminder that fails to send is
   tried again on the next pass. `--dry-run` prints instead of sending.
+- `macf_tools permissions how` answers "how was each of my calls approved?"
+  over the last `--days` (default 1, newest `--last` 30), derived from the event
+  log and nothing recorded for it (#1060): **at a dialog**, approved if the call
+  then ran and denied if not; else **by an allow rule** of today's settings that
+  covers the whole call (for a chain, every part), named with its file; else, by
+  elimination, **by the permission mode**, in auto mode its classifier. It is how
+  an agent tells whether a call went through on a rule or because the operator
+  answered, when the operator's presence is in doubt. Two limits: the rules are
+  today's, so a rule changed since the call isn't seen, and an answer at the
+  terminal and one over Remote Control look the same in the log.
+  **The one exception is said without asking:** at the start of each call, when
+  the session's previous call ran because the operator approved it at a dialog,
+  the agent is told so in one line (the operator's status line isn't). It is
+  read from the log back to the previous call only, so it costs milliseconds and
+  says each approval once; a call a rule or the mode let through says nothing,
+  and a denial the client already reports.
 - `macf_tools permissions history` answers "which dialogs has this agent met?"
   over the last `--days` (default 7), from the same event log and nothing else:
   when each opened, how long it waited, whether the command then ran, and the

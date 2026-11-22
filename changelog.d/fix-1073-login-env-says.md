@@ -1,0 +1,3 @@
+### Changed
+
+- **A session that can't log in names a missing `USER` as the probable cause, and the drift report says what the absence does** (`pd status`, `agent init --update`, #1073): a session unit declared without `USER` and `LOGNAME` reads "Login expired" although the account is logged in, because on macOS the stored login is looked up by them. `macf_tools pd status` now adds a `probable cause:` line under a unit held failed for its login whose declared environment lacks either, naming the fix (add them to every unit, restart the daemon, then the unit); the `agent init --update` drift line for the same absence says what it does and gives the lines to add, instead of only that they are missing.

@@ -104,6 +104,11 @@ def tree(tmp_path):
     outside.mkdir()
     (outside / "secret.txt").write_text("z")
     (root / "pa_a" / "link").symlink_to(outside)
+    # On BSD and macOS a new file takes its directory's group, not the process's, so under a
+    # temp base owned by another group the tree would not carry MY_GID (#1000). Say which group.
+    for base in (root, outside):
+        for path in [base, *base.rglob("*")]:
+            os.lchown(path, -1, MY_GID)
     return root, outside
 
 

@@ -2015,8 +2015,10 @@ macf_tools knowledge graph [--format tree|cluster]
 Query subgraph by concept, node ID, or keyword.
 
 ```bash
-macf_tools knowledge query "concept or keyword"
+macf_tools knowledge query "concept or keyword" [--since DATE|Nd] [--recent]
 ```
+
+Each result shows the date its artifact was made, taken from the date in its name or its folder's name (an idea's is its creation stamp). `--since 7d` (or `2026-09-01`) keeps only results dated on or after that, and says how many undated ones it left out. `--recent` orders the results newest first instead of by match score, with undated ones last; the default ranking is unchanged.
 
 ### knowledge gaps
 

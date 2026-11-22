@@ -279,8 +279,7 @@ def test_a_delivered_queued_copy_counts_only_by_its_declared_server(monkeypatch,
 ACTIVITY_DETECTORS = {"detect_user_activity", "detect_permission_denial",
                       "detect_dialog_answer", "detect_mid_turn_enqueue"}
 OTHER_DETECTORS = {"detect_compact_boundary", "detect_api_error", "detect_context_collapse",
-                   "detect_harness_compaction", "detect_compaction_ask",
-                   "detect_remote_control_disconnect"}  # a client notice, not the operator's activity
+                   "detect_harness_compaction", "detect_compaction_ask"}
 
 
 def test_the_audit_reaches_every_detector():
@@ -421,3 +420,12 @@ def test_channels_told_apart_by_name(isolated_events_log, capsys):
     _declare("{not a declaration")
     assert counted(DISCORD) == no
     assert "can't be read" in capsys.readouterr().err
+
+
+def test_a_compact_the_framework_typed_is_known_across_the_compaction(isolated_events_log):
+    """`inject compact` records /compact before the compaction; the client writes its row after,
+    in the next cycle. The record must still be found, or the row reads as the operator (#653)."""
+    from macf.agent_events_log import CYCLE_BOUNDARY_EVENT
+    append_event(KEYS_SENT_EVENT, {"text": "/compact", "kind": "inject", "tmux_session": "s"})
+    append_event(CYCLE_BOUNDARY_EVENT, {"session_id": "s", "cycle": 2})
+    assert typed_by_framework("/compact", consumer="t") == "inject"
