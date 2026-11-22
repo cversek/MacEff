@@ -171,8 +171,10 @@ def test_a_broker_declared_in_an_agents_own_daemon_reads_supervised(tmp_path):
     cfg = {"agent": "ira", "domain": "alpha.test", "broker_config": str(cfg_path)}
     sup = _by(readiness.pieces(cfg, daemon_installed=lambda card, h: card == "Ira_0a1b2c"))["broker supervision"]
     assert sup.ok is True and "amail-broker" in sup.detail and "Ira_0a1b2c" in sup.detail
+    assert sup.kind == "supervised"
     sup = _by(readiness.pieces(cfg))["broker supervision"]
     assert sup.ok is False and "pd install" in sup.fix and "broker-unit" not in sup.fix
+    assert sup.kind == "declared, daemon not installed"
 
 
 def test_a_different_key_declared_for_the_card_is_not_this_agents(tmp_path):
@@ -282,3 +284,17 @@ def test_status_json_keeps_broker_kind_short_and_the_sentence_beside_it(tmp_path
     out = json.loads(capsys.readouterr().out)
     assert out["broker_kind"] == "supervised"
     assert out["broker_supervision"] == "unit 'broker' of AmailBroker_x's primal daemon"
+
+
+def test_status_text_names_the_supervision_in_words_on_the_broker_line(tmp_path, monkeypatch, capsys):
+    import argparse
+    from macf import cli
+    monkeypatch.setattr(cli, "_amail_config", lambda: {
+        "agent": "ira", "domain": "alpha.test", "socket": str(tmp_path / "b.sock"), "handoff": str(tmp_path / "h"),
+        "home": "", "contacts": "", "autostart": False, "broker_config": "", "signing_key": ""})
+    monkeypatch.setattr(cli, "_ensure_host_broker", lambda cfg: "")
+    monkeypatch.setattr(cli, "_amail_setup_pieces", lambda cfg: [readiness.Piece(
+        name="broker supervision", ok=True, kind="supervised", detail="unit 'broker' of AmailBroker_x's primal daemon")])
+    cli.cmd_amail_status(argparse.Namespace(json=False))
+    line = next(x for x in capsys.readouterr().out.splitlines() if x.startswith("broker:"))
+    assert "[unit 'broker' of AmailBroker_x's primal daemon]" in line
