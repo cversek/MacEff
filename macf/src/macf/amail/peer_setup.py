@@ -149,7 +149,7 @@ def parse_card(text: str) -> Dict:
     if extra:
         raise CardError(f"the card carries keys no card has: {', '.join(sorted(extra))}")
     agents = card.get("agents")
-    if not isinstance(agents, dict) or not isinstance(card.get("domain"), str) or not card["domain"]:
+    if not isinstance(agents, dict) or not agents or not isinstance(card.get("domain"), str) or not card["domain"]:
         raise CardError("the card names no domain or no agents")
     try:
         PeerLinkDecl(host=card.get("host", ""), port=card.get("port", 0),
@@ -167,19 +167,44 @@ def parse_card(text: str) -> Dict:
     return card
 
 
+def fingerprint(key: str) -> str:
+    """A short fingerprint of a public key line, to read aloud or compare on a second channel: a key
+    that arrives on a card is a claim (amail policy 6b.5) until its operator confirms it."""
+    import base64
+    import hashlib
+    raw = base64.b64decode(key.split(":", 1)[-1])
+    digest = hashlib.sha256(raw).hexdigest()[:20]
+    return ":".join(digest[i:i + 4] for i in range(0, 20, 4))
+
+
+def registry_steps(card: Dict) -> List[str]:
+    """The registry declarations the receiving operator runs, one at a time: each stages the change
+    and prints its own root install step, and a second declare staged before the first is installed
+    would overwrite it. Each key's fingerprint is to be confirmed with the card's operator first."""
+    keyed = [(box, held) for box, held in sorted(card["agents"].items()) if held.get("key")]
+    if not keyed:
+        return []
+    lines = ["Confirm each key's fingerprint with this card's operator on another channel before declaring it.",
+             ("Then, one at a time: run the line, run the install step it prints, run "
+              "`macf_tools amail registry check`, then the next line.")]
+    for _box, held in keyed:
+        lines.append(f"  # {held['card']}: fingerprint {fingerprint(held['key'])}")
+        lines.append(f"  macf_tools amail registry declare --card {held['card']} --key {held['key']} "
+                     f"--account {held.get('account') or '<account>'}")
+    return lines
+
+
 def describe(card: Dict) -> List[str]:
     """The card for a person: what it says, what the peer's operator runs, and its notes."""
     lines = [f"amail peer card for {card['domain']}, listening on {card['host']}:{card['port']}"]
     for box, held in sorted(card["agents"].items()):
-        lines.append(f"  {box}@{card['domain']}  card {held['card']}  key {held.get('key') or '(none declared)'}")
+        key = held.get("key")
+        lines.append(f"  {box}@{card['domain']}  card {held['card']}  "
+                     + (f"key {key}  fingerprint {fingerprint(key)}" if key else "key (none declared)"))
     lines.append("")
     lines.append("For the peer's operator, on the peer's host:")
     lines.append("  macf_tools amail peer add '<this card>'      # the peer link and contact entries, shown first")
-    for _box, held in sorted(card["agents"].items()):
-        if held.get("key"):
-            account = held.get("account") or "<account>"
-            lines.append(f"  sudo macf_tools amail registry declare --card {held['card']} "
-                         f"--key {held['key']} --account {account}")
+    lines.extend(registry_steps(card))
     for note in card.get("notes", []):
         lines.append(f"⚠️ {note}")
     lines.append("")
@@ -230,8 +255,8 @@ def _block(lines: List[str], start: int) -> int:
     return last
 
 
-def _key_line(lines: List[str], key: str, indent: int, lo: int, hi: int) -> Optional[int]:
-    pattern = re.compile(r"^ {%d}[\"']?%s[\"']?\s*:" % (indent, re.escape(key)))
+def _key_line(lines: List[str], key: str, indent: int, lo: int, hi: int, *, fold: bool = False) -> Optional[int]:
+    pattern = re.compile(r"^ {%d}[\"']?%s[\"']?\s*:" % (indent, re.escape(key)), re.IGNORECASE if fold else 0)
     for i in range(lo, hi):
         if pattern.match(lines[i]):
             return i
@@ -268,7 +293,7 @@ def set_mapping_entry(text: str, top: str, key: str, value) -> str:
         return "".join(lines)
     end = _block(lines, at)
     ind = _child_indent(lines, at + 1, end, 2)
-    found = _key_line(lines, key, ind, at + 1, end)
+    found = _key_line(lines, key, ind, at + 1, end, fold=True)    # a domain is one peer whatever its case
     if found is not None:
         lines[found:_block(lines, found)] = [" " * ind + entry]
     else:
@@ -389,8 +414,11 @@ def plan_add(broker_config: Path, card: Dict, *, local_agents: Iterable[str], no
     def _link(d):
         if not d.get("peer_links"):
             d["peer_links"] = {}
+        for k in [k for k in d["peer_links"] if str(k).strip().lower() == dom]:
+            del d["peer_links"][k]
         d["peer_links"][dom] = link
-    _expect(broker_now, broker_new, _link, broker_config)
+    if broker_new != broker_now:
+        _expect(broker_now, broker_new, _link, broker_config)
 
     addressing_now = addressing_path.read_text()
     addressing_new = addressing_now
@@ -427,10 +455,9 @@ def plan_add(broker_config: Path, card: Dict, *, local_agents: Iterable[str], no
 
 
 def registry_lines(card: Dict) -> List[str]:
-    """The registry declarations the receiving operator runs as root, one per keyed agent on *card*."""
-    return [f"sudo macf_tools amail registry declare --card {held['card']} --key {held['key']} "
-            f"--account {held.get('account') or '<account>'}"
-            for _box, held in sorted(card["agents"].items()) if held.get("key")]
+    """The registry declarations the receiving operator runs, with the fingerprints to confirm and the
+    order to run them in (``registry_steps``)."""
+    return registry_steps(card)
 
 
 # ---- checking a peer link, station by station --------------------------------------------------------
@@ -492,8 +519,9 @@ def check_peer(broker_config: Path, domain: str, *, registry=None, send=None) ->
         out.append(Station(name="our registry", ok=not missing,
                            detail=(f"no key declared here for {', '.join(missing)}, so their mail reads "
                                    f"unverified here") if missing else "a key is declared for each of its agents",
-                           fix=("the operator runs the registry lines from the peer's card: "
-                                "sudo macf_tools amail registry declare ...") if missing else ""))
+                           fix=("this host's operator declares them from the peer's card, one at a time, "
+                                "after confirming each fingerprint (macf_tools amail registry declare ...)")
+                           if missing else ""))
 
     try:
         reply = peer_link.send_request(link.host, link.port, {"op": "ping", "from": addressing.domain})

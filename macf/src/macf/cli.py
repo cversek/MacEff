@@ -11247,9 +11247,9 @@ def cmd_amail_peer_add(args: argparse.Namespace) -> int:
                 print(f"✅ wrote {path} (the old one kept beside it, .bak-peer-add-{stamp})")
             print("The broker reads its config at start: restart it for the link to take effect.")
     if plan.registry_lines:
-        print("\nThe registry is root's to write. On this host, the operator runs:")
+        print("\nThe registry is the operator's: each declaration stages its change and prints the root step.")
         for line in plan.registry_lines:
-            print(f"  {line}")
+            print(line)
     return 0
 
 

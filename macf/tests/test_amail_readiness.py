@@ -83,3 +83,24 @@ def test_a_peer_with_mail_waiting_or_refused_or_no_agents_points_at_the_check(tm
     peer = _by(readiness.pieces(cfg))["peer beta.test"]
     assert peer.ok is False and "1 waiting, 1 refused" in peer.detail and "no agents declared" in peer.detail
     assert peer.fix == "macf_tools amail peer check beta.test"
+
+
+def test_a_broker_declared_in_an_agents_own_daemon_reads_supervised(tmp_path):
+    """THM's review of #1104: his broker is a unit of his own primal daemon, and status called it
+    agent-launched, pointing at broker-unit, which would have written a second daemon. Supervision is
+    read from whichever daemon declares the broker."""
+    import json
+    import sys
+    cfg_path = _host(tmp_path)
+    home = tmp_path / "ira"
+    (home / ".maceff" / "pd").mkdir(parents=True)
+    (home / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": "Ira"}}))
+    (home / ".maceff_primary_agent.id").write_text("0a1b2c3d-0000-0000-0000-000000000000\n")
+    (home / ".maceff" / "pd" / "declaration.json").write_text(json.dumps({"version": 1, "agent": "Ira_0a1b2c", "units": [
+        {"name": "amail-broker", "command": [sys.executable, "-m", "macf.amail.daemons.broker"],
+         "environment": {"AMAIL_BROKER_CONFIG": str(cfg_path)}}]}))
+    cfg = {"agent": "ira", "domain": "alpha.test", "broker_config": str(cfg_path)}
+    sup = _by(readiness.pieces(cfg, daemon_installed=lambda card, h: card == "Ira_0a1b2c"))["broker supervision"]
+    assert sup.ok is True and "amail-broker" in sup.detail and "Ira_0a1b2c" in sup.detail
+    sup = _by(readiness.pieces(cfg))["broker supervision"]
+    assert sup.ok is False and "pd install" in sup.fix and "broker-unit" not in sup.fix

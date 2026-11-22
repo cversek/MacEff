@@ -72,7 +72,7 @@ def pieces(cfg: dict, *, registry=None, daemon_installed: Callable[[str, Path], 
                              detail=f"{card}'s key is declared" if mine else
                              f"{card}'s key is {'another one' if declared else 'not declared'} in the registry, "
                              f"so peers read this agent's mail as unverified",
-                             fix="" if mine else f"sudo macf_tools amail registry declare --card {card} "
+                             fix="" if mine else f"macf_tools amail registry declare --card {card} "
                                                  f"--key {custody['public']} --account {account or '<account>'}"))
 
     if broker_config is not None and deploy is not None:
@@ -80,9 +80,18 @@ def pieces(cfg: dict, *, registry=None, daemon_installed: Callable[[str, Path], 
         broker_card = host_daemon.card_for(addressing.domain)
         home = broker_config.resolve().parent
         interim = interim_jobs()
-        if daemon_installed(broker_card, home):
+        declared = host_daemon.declared_broker(broker_config, [home] + [b.home for b in addressing.agents.values()
+                                                                        if b.home])
+        if declared is not None and daemon_installed(declared.card, declared.home):
+            out.append(Piece(name="broker supervision", ok=True,
+                             detail=f"unit {declared.unit!r} of {declared.card}'s primal daemon"))
+        elif declared is None and daemon_installed(broker_card, home):
             out.append(Piece(name="broker supervision", ok=True,
                              detail=f"a declared unit of {broker_card}'s primal daemon"))
+        elif declared is not None:
+            out.append(Piece(name="broker supervision", ok=False,
+                             detail=f"declared as unit {declared.unit!r} of {declared.card}'s daemon, which isn't "
+                                    f"installed", fix=f"MACEFF_AGENT_HOME_DIR={declared.home} macf_tools pd install"))
         elif interim:
             out.append(Piece(name="broker supervision", ok=None,
                              detail=f"a launchd job of its own ({', '.join(p.stem for p in interim)}), outside any "
