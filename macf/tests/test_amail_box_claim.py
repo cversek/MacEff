@@ -221,3 +221,74 @@ def test_amail_list_on_a_claim_being_written_warns_and_still_lists(tmp_path, box
     code = cli.cmd_amail_list(argparse.Namespace(all=False, thread=None, json=False))
     out = capsys.readouterr()
     assert code == 0 and "no unread messages" in out.out and "being written" in out.err
+
+
+# ---- the fallback's file, and what the receiver does after a refusal ---------------------------------
+
+def _no_hard_links(monkeypatch):
+    import errno
+
+    def link(src, dst):
+        raise OSError(errno.EPERM, "Operation not permitted")
+    monkeypatch.setattr(client.os, "link", link)
+
+
+def test_the_fallback_never_writes_through_a_link_planted_at_the_claim(tmp_path, box, monkeypatch):
+    _no_hard_links(monkeypatch)
+    victim = tmp_path / "victim.txt"
+    (box / INGEST_CLAIM).symlink_to(victim)
+    try:
+        client.ingest(tmp_path / "ira_home", box, wait=False)
+    except (BoxClaimed, client.IngestBusy):  # whichever way it refuses, nothing is written through the link
+        pass
+    assert not victim.exists()
+
+
+def test_the_fallback_creates_the_claim_readable_by_the_group_and_not_writable(tmp_path, box, monkeypatch):
+    import os
+    _no_hard_links(monkeypatch)
+    old = os.umask(0)
+    try:
+        client.ingest(tmp_path / "ira_home", box, wait=False)
+    finally:
+        os.umask(old)
+    assert (box / INGEST_CLAIM).stat().st_mode & 0o777 == 0o640
+
+
+def _two_refusals(tmp_path, box, monkeypatch, times):
+    """A receiver whose box another store claims mid-run, twice, the claim removed in between."""
+    from macf.pd import receiver
+    from macf.pd.receiver import RECHECK_S, Receiver
+    clock = [0.0]
+    monkeypatch.setattr(receiver.time, "time", lambda: clock[0])
+    notices = []
+    home, rival = tmp_path / "copied_home", str((tmp_path / "ira_home").resolve()) + "\n"
+    (box / INGEST_CLAIM).write_text(rival)
+    r = Receiver("Copy_abc123", home, box, "ira", tmp_path / "contacts",
+                 lambda name, data: None, lambda src, key: notices.append(key))
+    r.tick(0.0)                                           # refused at the first look: the re-check is set ahead
+    (box / INGEST_CLAIM).unlink()
+    r._next = float("-inf")
+    r.tick(RECHECK_S + 5)                                 # looks again, finds it clear, ingests, claims it
+    assert r.refused is None and (box / INGEST_CLAIM).read_text().strip() == str(home.resolve())
+    for i, t in enumerate(times):
+        clock[0] = t
+        (box / INGEST_CLAIM).write_text(rival)           # another store takes the claim
+        r._next = float("-inf")
+        r.tick(RECHECK_S + 10 + i * 10)
+        assert r.refused and "claimed" in r.refused
+        (box / INGEST_CLAIM).unlink()                     # and gives it up
+        r._next = float("-inf")
+        r.tick(RECHECK_S + 15 + i * 10)                   # the next pass looks again, with no wait
+        assert r.refused is None, "the receiver did not look again once the claim was removed"
+    return notices
+
+
+def test_the_receiver_ingests_again_the_pass_after_the_claim_is_removed(tmp_path, box, monkeypatch):
+    _two_refusals(tmp_path, box, monkeypatch, [1000])
+
+
+def test_each_refusal_raises_its_own_notice(tmp_path, box, monkeypatch):
+    keys = _two_refusals(tmp_path, box, monkeypatch, [1000, 2000])
+    mid_run = [k for k in keys if k.endswith((":1000", ":2000"))]
+    assert mid_run == ["pd_grant_denied:amail-receiver:1000", "pd_grant_denied:amail-receiver:2000"]
