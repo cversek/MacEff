@@ -132,3 +132,34 @@ def test_the_table_says_how_often_and_when_last_each_mis_was_revised(capsys):
     assert cli.cmd_mis_index(argparse.Namespace(paths=[str(MIS_DIR)], json=False, open=False)) == 0
     out = capsys.readouterr().out
     assert "revised" in out and "last 2026-11-21" in out
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("wording, counted", [
+    ("a revision at the repo owner's request", True),
+    ("the single revision under MIS-0001-R48", True),
+    ("the synthesis revision", True),
+    ("revision of section 6", True),
+    ("an amendment by MIS-0005", True),
+    ("amended in place by MIS-0005", True),
+    ("A Revision at the repo owner's request", True),
+    ("revisions to the glossary were discussed", False),
+    ("every maintainer commented on the revision", False),
+    ("R7 is passing, conformance, editorial", False),
+])
+def test_each_record_wording_is_read_as_the_comment_names_it(wording, counted):
+    assert mis.revision_dates([f"- 2026-11-02: {wording}."]) == (["2026-11-02"] if counted else [])
+
+
+def test_the_table_line_counts_one_revision_and_several(tmp_path):
+    def mis_file(n, dates):
+        path = tmp_path / f"MIS-00{n}-x.md"
+        record = "".join(f"- {d}: a revision at the repo owner's request.\n" for d in dates)
+        path.write_text(f"# MIS-00{n}: X\n\n**Number**: 00{n}\n**Status**: Accepted\n\n---\n\n"
+                        f"## 14 Deliberation Record\n\n{record}")
+        return path
+    one, two = mis_file(41, ["2026-11-01"]), mis_file(42, ["2026-11-01", "2026-11-05"])
+    out = mis.format_index(mis.index([one, two]))
+    assert "revised 1 time, last 2026-11-01" in out and "revised 2 times, last 2026-11-05" in out
