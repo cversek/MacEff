@@ -113,6 +113,21 @@ def test_report_says_when_the_login_cannot_be_judged(report):
     assert code == 0 and out.strip() == "login: can't be judged: no credential reachable"
 
 
+def test_an_unreadable_declaration_fails_the_run_and_says_why(monkeypatch, tmp_path, capsys):
+    """The run's exit is what the scheduler records, so a report that can't be made must fail."""
+    from macf.pd import cli as pd_cli
+    from macf.pd import core
+
+    def refuse(home, card):
+        raise core.DeclarationRefused("not JSON")
+    monkeypatch.setattr(pd_cli, "_this_agent", lambda: (tmp_path, CARD))
+    monkeypatch.setattr(core, "load_declaration", refuse)
+    code = pd_cli.cmd_pd_report(argparse.Namespace())
+    out = capsys.readouterr()
+    assert code == 1 and out.out == ""
+    assert "the declaration can't be read" in out.err and "not JSON" in out.err
+
+
 def test_another_reporter_carries_the_login_line(report):
     code, out = report({"state": "expired", "refresh_expires_at": 1.0, "detail": "ended"}, reporter=OTHER)
     assert code == 0 and out.strip() == f"login: reported by {OTHER}"
