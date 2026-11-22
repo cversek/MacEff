@@ -104,3 +104,16 @@ def test_the_command_prints_each_correspondent_and_filters_by_text(monkeypatch, 
     assert f"carol@{DOMAIN}" in only and f"beta@{DOMAIN}" not in only
     as_json = json.loads(_run(monkeypatch, capsys, deployment, json=True))
     assert len(as_json["contacts"]) == 4 and as_json["contact_list"] is True
+
+
+def test_an_agent_with_no_provisioned_mailbox_is_refused_by_the_broker(deployment):
+    with pytest.raises(PermissionError, match="no provisioned mailbox"):
+        deployment["broker"].contact_entries("gamma")
+
+
+def test_the_command_against_a_broker_with_no_contact_list_says_so_in_text_and_json(monkeypatch, capsys, deployment):
+    deployment["broker"].contacts = None
+    text = _run(monkeypatch, capsys, deployment)
+    assert "no contact list" in text and "alpha" not in text
+    as_json = json.loads(_run(monkeypatch, capsys, deployment, json=True))
+    assert as_json == {"contacts": [], "contact_list": False}
