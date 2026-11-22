@@ -88,3 +88,53 @@ def test_the_read_stops_at_the_previous_calls_start(monkeypatch):
     monkeypatch.setattr(log, "read_events", read_events)
     assert "git push" in (pw.read_previous_call_note(SID) or "")
     assert len(taken) == 4
+
+
+# ---- through a real (isolated) event log -------------------------------------------------------
+
+def _log(name, sid, command, tool="Bash"):
+    from macf.agent_events_log import append_event
+    append_event(name, {"session_id": sid, "tool": tool, "tool_name": tool},
+                 hook_input={"session_id": sid, "tool_name": tool, "tool_input": {"command": command},
+                             "cwd": "/w", "permission_mode": "auto"})
+
+
+def test_the_note_reads_a_real_log_with_another_session_interleaved():
+    other = "bbbb2222-0000"
+    _log("tool_call_started", SID, "git push")
+    _log("tool_call_started", other, "make")                 # another session's start, between ours
+    _log("permission_requested", SID, "git push")
+    _log("tool_call_completed", other, "make")
+    _log("tool_call_completed", SID, "git push")
+    _log("tool_call_started", other, "make test")
+    _log("tool_call_started", SID, "ls")                    # this call
+    note = pw.read_previous_call_note(SID)
+    assert note and "git push" in note and "permissions how" in note
+
+
+def test_a_first_call_in_a_long_log_reads_no_further_than_the_cap(monkeypatch):
+    """A session's first call has no previous start to stop at; the cap keeps it from walking the log."""
+    import macf.agent_events_log as log
+    for i in range(500):
+        _log("tool_call_completed", "bbbb2222-0000", f"old {i}")
+    _log("tool_call_started", SID, "ls")
+    real, taken = log.read_events, []
+
+    def counting(**kw):
+        for e in real(**kw):
+            taken.append(e)
+            yield e
+    monkeypatch.setattr(log, "read_events", counting)
+    assert pw.read_previous_call_note(SID, limit=400) is None
+    assert len(taken) == 400
+
+
+def test_a_failed_read_leaves_the_hook_output_and_warns(monkeypatch):
+    from unittest.mock import patch
+    import macf.hooks.handle_pre_tool_use as hook
+    warned = []
+    monkeypatch.setattr(hook, "emit_warning", lambda w: warned.append(w))
+    with patch("macf.permission_watch.read_previous_call_note", side_effect=OSError("log gone")):
+        out = _hook_out()
+    assert out.get("continue") is True and "hookSpecificOutput" in out
+    assert any(getattr(w, "kind", "") == "approval_note_failed" for w in warned)
