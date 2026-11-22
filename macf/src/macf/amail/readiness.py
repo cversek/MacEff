@@ -20,6 +20,12 @@ class Piece:
     fix: str = ""
 
 
+def outbox_dir(handoff: Path, domain: str) -> Path:
+    """Where the broker keeps what waits for *domain*: named by the lowercased domain, as
+    ``Broker._outbox`` names it, whatever case the operator declared the peer in."""
+    return Path(handoff) / "_outbox" / domain.strip().lower()
+
+
 def _count(directory: Path) -> int:
     return len(list(directory.glob("*.amsg"))) if directory.is_dir() else 0
 
@@ -106,8 +112,9 @@ def pieces(cfg: dict, *, registry=None, daemon_installed: Callable[[str, Path], 
                                     f"boundary (MIS-0007 R47)"))
         handoff = deploy.inbound_handoff
         for dom, link in sorted(deploy.peer_links.items()):
-            waiting = _count(handoff / "_outbox" / dom) if handoff else 0
-            refused = _count(handoff / "_outbox" / dom / "refused") if handoff else 0
+            box = outbox_dir(handoff, dom) if handoff else None
+            waiting = _count(box) if box else 0
+            refused = _count(box / "refused") if box else 0
             agents = ", ".join(f"{b}={c}" for b, c in sorted(link.agents.items())) or "no agents declared"
             out.append(Piece(name=f"peer {dom}", ok=False if (refused or not link.agents) else (None if waiting else True),
                              detail=f"{link.host}:{link.port}, {agents}; {waiting} waiting, {refused} refused",
@@ -147,7 +154,7 @@ def outbox(broker_config: Path, *, sender: Optional[str] = None) -> List[Held]:
     now = datetime.datetime.now(datetime.timezone.utc)
     held: List[Held] = []
     for dom in sorted(deploy.peer_links):
-        for state, box in (("waiting", root / "_outbox" / dom), ("refused", root / "_outbox" / dom / "refused")):
+        for state, box in (("waiting", outbox_dir(root, dom)), ("refused", outbox_dir(root, dom) / "refused")):
             if not box.is_dir():
                 continue
             for amsg in sorted(box.glob("*.amsg")):
