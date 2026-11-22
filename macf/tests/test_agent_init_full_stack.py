@@ -140,7 +140,9 @@ def test_plan_lists_every_step_and_changes_nothing(stack, capsys):
     assert results[0].status == PLANNED
     # Each checked, none acted. The fixture's home is already named, so that step finds it so.
     assert _by_step(results)["calling-card"].status == ALREADY, results
-    assert {r.status for r in results[1:] if r.step not in ("calling-card", "registry", "framework", "telegram-dir")} == {WOULD}, results
+    assert {r.status for r in results[1:] if r.step not in ("calling-card", "mail", "registry", "framework", "telegram-dir")} == {WOULD}, results
+    # The fixture's agent has no mail address, so the mail step has nothing to set up.
+    assert _by_step(results)["mail"].status == SKIPPED and "no mail address" in _by_step(results)["mail"].detail
     # The framework step only looks, under a plan as in a run: this home has no hooks bound.
     assert _by_step(results)["framework"].status == DRIFT
     # The fixture's home has no signing key yet, so there is nothing to declare (MIS-0004 R42).
@@ -224,11 +226,12 @@ def test_a_second_run_reports_everything_already_done(stack):
     claude_before, installs_before = len(stack.claude), len(stack.installs)
     rc2, results = _run(stack, preamble_status=ALREADY)
     assert rc1 == rc2 == 0
-    # Every step already done, except the registry, which has no signing key to declare yet, and the
+    # Every step already done, except the mail step (no address here), the registry, which has no signing key to declare yet, and the
     # framework step, which reports the hooks and commands this home doesn't have (#1049), and the
     # telegram-dir step, which has nothing to say where no Telegram channel is declared (#1069).
-    assert [r.status for r in results if r.step not in ("registry", "framework", "telegram-dir")] == \
-        [ALREADY] * (len(STEPS) - 3), results
+    assert [r.status for r in results if r.step not in ("mail", "registry", "framework", "telegram-dir")] == \
+        [ALREADY] * (len(STEPS) - 4), results
+    assert _by_step(results)["mail"].status == SKIPPED
     assert _by_step(results)["registry"].status == SKIPPED
     assert _by_step(results)["framework"].status == DRIFT
     assert _by_step(results)["telegram-dir"].status == SKIPPED

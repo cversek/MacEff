@@ -20,7 +20,10 @@ The steps, each skippable by its flag:
    command that installs them (``framework install``) when they are not;
 8. ``telegram-dir`` - for a declaration that names a Telegram channel, where the plugin keeps its poller
    files, from what, and a flag on the account-wide default that agents on one login would share;
-9. ``daemon`` - the daemon under the platform's service manager (``pd install``).
+9. ``daemon`` - the daemon under the platform's service manager (``pd install``);
+10. ``mail`` - for an agent with an address: its signing key, signing every message, a peer from
+    ``--peer CARD``, and on a host the broker as a declared unit of its own daemon;
+11. ``registry`` - the agent's key in the operator's registry, the root step printed.
 
 ``pd install`` comes last although it is the heart of the stack: the daemon starts the session
 unit as soon as it starts, and that session needs the child script, the channel plugin and its
@@ -69,6 +72,9 @@ STEPS: List[Tuple[str, str, str]] = [
                       "account-wide default that agents and sessions on one login would share (#1069)"),
      "no_telegram_dir"),
     ("daemon", "put the primal daemon under the service manager (pd install)", "no_daemon"),
+    ("mail", ("for an agent with an address (.maceff/amail.json): make its signing key if absent, declare "
+              "signing every message, declare a peer from --peer CARD, and on a host give the broker a "
+              "declared unit of its own daemon; the operator's steps printed"), "no_mail"),
     ("registry", ("declare the agent's signing key in the operator's registry, the change shown "
                   "first; on a host the write is root's, printed as one step (MIS-0004 R42)"),
      "no_registry"),
@@ -114,6 +120,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
                              "harness's recorded choice, else MACEFF_PROJECT_DIR, else the agent home)")
     parser.add_argument("--telegram", action=argparse.BooleanOptionalAction, default=None,
                         help="declare the Telegram channel (default: when this login already uses it)")
+    parser.add_argument("--peer", default=None, metavar="CARD",
+                        help="with the mail step: a peer broker's card (its JSON, or a file holding it) to "
+                             "declare, as `amail peer add` does")
     parser.add_argument("--update", action="store_true",
                         help="bring the persistent-layer stack current and nothing else: reinstall the "
                              "daemon's unit as rendered now, restart the daemon onto this macf (its units, "
@@ -1071,6 +1080,105 @@ def signing_key_path(home: Path, environ=os.environ) -> Path:
     return legacy if legacy.exists() else home / ".maceff" / "keys" / "amail_signing_key.pem"
 
 
+def step_mail(ctx: Context) -> Result:
+    """The agent's mail, for an agent that has an address (``.maceff/amail.json``): its signing key,
+    made if absent; signing every message declared (MIS-0004 R41); with ``--peer CARD``, that peer's
+    link and contact (amail policy 2.1.2); and on a host, the broker as a declared unit of its own
+    primal daemon (MIS-0002 R53, MIS-0007 R81). What only the operator may do is printed."""
+    try:
+        from macf.amail import host_daemon, peer_setup
+        from macf.amail.crypto import generate_keypair
+    except ImportError as e:
+        return Result("mail", SKIPPED, f"the amail extra isn't installed ({e})")
+    if ctx.in_container:
+        return Result("mail", SKIPPED, CONTAINER_OWNS)
+    conf_path = ctx.home / ".maceff" / "amail.json"
+    if not conf_path.exists():
+        return Result("mail", SKIPPED, f"this agent has no mail address yet ({conf_path} is absent; it names "
+                                       f"the agent, its domain and its broker)")
+    try:
+        conf = json.loads(conf_path.read_text())
+    except (OSError, ValueError) as e:
+        return Result("mail", REFUSED, f"{conf_path} can't be read: {e}")
+    lines: List[str] = []
+    acted = would = False
+    operator: List[str] = []
+
+    key = signing_key_path(ctx.home)
+    if not key.exists():
+        if ctx.dry_run:
+            lines.append(f"make a signing key at {key}")
+            would = True
+        else:
+            try:
+                lines.append(f"made a signing key at {key}: {generate_keypair(key)}")
+            except (ValueError, OSError) as e:
+                return Result("mail", REFUSED, f"could not make a signing key at {key}: {e}")
+            acted = True
+    if not conf.get("signing_required"):
+        if ctx.dry_run:
+            lines.append(f"declare signing every message (signing_required in {conf_path})")
+            would = True
+        else:
+            conf["signing_required"] = True
+            mode = conf_path.stat().st_mode & 0o777
+            beside = conf_path.with_name(f".{conf_path.name}.new")
+            beside.write_text(json.dumps(conf, indent=2) + "\n")
+            os.chmod(beside, mode)
+            os.replace(beside, conf_path)
+            lines.append(f"declared signing every message in {conf_path}")
+            acted = True
+
+    broker_config = Path(conf["broker_config"]) if conf.get("broker_config") else None
+    peer = getattr(ctx.args, "peer", None)
+    if peer:
+        if broker_config is None:
+            return Result("mail", REFUSED, f"--peer needs a broker, and {conf_path} names no broker_config")
+        try:
+            text = Path(peer).read_text() if not peer.lstrip().startswith("{") else peer
+            added = peer_setup.plan_add(broker_config, peer_setup.parse_card(text), local_agents=[conf["agent"]])
+        except (peer_setup.CardError, OSError, KeyError) as e:
+            return Result("mail", REFUSED, f"--peer: {e}")
+        if added.changed:
+            if ctx.dry_run:
+                lines.append(f"declare the peer link and contact:\n{added.diff()}")
+                would = True
+            else:
+                added.write(backup_suffix=".bak-agent-init")
+                lines.append("declared the peer link and contact; the broker reads them at its next start")
+                acted = True
+        operator.extend(added.registry_lines)
+
+    if broker_config is not None:
+        interim = host_daemon.interim_jobs(ctx.login_home / "Library" / "LaunchAgents") \
+            if sys.platform == "darwin" else []
+        try:
+            unit = host_daemon.plan(broker_config, python=unit_python(), account=pwd.getpwuid(os.getuid()).pw_name,
+                                    path_dirs=os.environ.get("PATH", "").split(":"),
+                                    pythonpath=os.environ.get("PYTHONPATH") or None, interim_plists=interim)
+        except host_daemon.HostDaemonError as e:
+            return Result("mail", REFUSED, f"the broker's daemon: {e}")
+        if unit.files:
+            if ctx.dry_run:
+                lines.append(f"write the broker daemon {unit.card}'s identity and declaration in {unit.home}")
+                would = True
+            else:
+                unit.write()
+                lines.append(f"wrote the broker daemon {unit.card}'s identity and declaration in {unit.home}")
+                acted = True
+        if unit.files or interim or not pd_unit_installed(unit.card, unit.home):
+            operator.extend(unit.steps)
+
+    if operator:
+        lines.append("For the operator:\n" + "\n".join(f"  {s}" for s in operator))
+    detail = "\n".join(lines) or "the key, signing and the broker's daemon are as they should be"
+    if ctx.dry_run and (would or operator):
+        return Result("mail", WOULD, detail)
+    if operator:
+        return Result("mail", PLANNED, detail)
+    return Result("mail", DONE if acted else ALREADY, detail)
+
+
 def step_registry(ctx: Context) -> Result:
     """Declare the agent's signing key in the operator's registry (MIS-0004 R42), as the operator
     ruled on #927: transparently, the change shown and, on a host, the exact root step printed for
@@ -1122,6 +1230,7 @@ RUNNERS: Dict[str, Callable[[Context], Result]] = {
     "framework": step_framework,
     "telegram-dir": step_telegram_dir,
     "daemon": step_daemon,
+    "mail": step_mail,
     "registry": step_registry,
 }
 
