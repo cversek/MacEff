@@ -46,7 +46,7 @@ def _write(rows):
 
 def _metered(t, tokens):
     return {"timestamp": t, "event": usage_meter.EVENT,
-            "data": {"by_model": {"m": {"input_tokens": tokens, "calls": 1}}, "calls": 1, "cause": "operator"}}
+            "data": {"by_model": {"m": {"input_tokens": tokens, "calls": 1}}, "calls": 5, "cause": "operator"}}
 
 
 def _sample(t, pct):
@@ -470,3 +470,28 @@ def test_the_rate_band_is_ten_times_either_way(factor, fits):
     assert (a.fit is not None) is fits
     if not fits:
         assert "degenerate" in a.reason and "10x" in a.reason and "provisional" in a.reason
+
+
+def test_hook_suffix_marks_a_window_shorter_than_an_hour():
+    now = time.time()
+    ev = _metered(now - 300, 2e6)
+    ev["data"]["metering_since"] = now - 600               # metering is ten minutes old
+    _write([ev])
+    assert usage_share.hook_suffix(now).endswith(usage_share.PARTIAL_MARK)
+
+
+def test_hook_suffix_leaves_a_fully_metered_busy_hour_unmarked():
+    now = time.time()
+    ev = _metered(now - 300, 2e6)
+    ev["data"]["metering_since"] = now - 4 * 3600
+    _write([ev])
+    assert not usage_share.hook_suffix(now).endswith(usage_share.PARTIAL_MARK)
+
+
+def test_hook_suffix_marks_a_one_call_hour():
+    now = time.time()
+    ev = _metered(now - 300, 2e6)
+    ev["data"]["metering_since"] = now - 4 * 3600
+    ev["data"]["calls"] = 1
+    _write([ev])
+    assert usage_share.hook_suffix(now).endswith(usage_share.PARTIAL_MARK)

@@ -331,6 +331,12 @@ class HourPoints:
     calls: int
     rate: float
     fitted: bool
+    partial: bool = False  # metering is under an hour old, or the hour holds under THIN_CALLS calls
+
+
+#: An hour with fewer metered calls than this is a sample, not a rate.
+THIN_CALLS = 3
+PARTIAL_MARK = " part"
 
 
 def _hour_points(now: float) -> HourPoints:
@@ -338,6 +344,7 @@ def _hour_points(now: float) -> HourPoints:
     fit event; never regresses. With no fit in that hour the provisional rate is used."""
     wt = 0.0
     calls = 0
+    began: Optional[float] = None
     fit, fit_seen = None, False
     for ev in read_events(reverse=True, scope="all", only=(usage_meter.EVENT, FIT_EVENT), since=now - HOUR):
         if ev.get("event") == FIT_EVENT:
@@ -346,8 +353,12 @@ def _hour_points(now: float) -> HourPoints:
         else:
             wt += _event_weighted(ev)
             calls += int((ev.get("data") or {}).get("calls") or 0)
+            ms = (ev.get("data") or {}).get("metering_since")
+            if isinstance(ms, (int, float)) and (began is None or ms < began):
+                began = ms
+    partial = (began is not None and now - began < HOUR) or calls < THIN_CALLS
     rate = fit.rate if fit is not None else usage_meter.POINTS_PER_WEIGHTED_TOKEN
-    return HourPoints(points=wt * rate, calls=calls, rate=rate, fitted=fit is not None)
+    return HourPoints(points=wt * rate, calls=calls, rate=rate, fitted=fit is not None, partial=partial)
 
 
 def roll(now: Optional[float] = None) -> bool:
@@ -358,7 +369,7 @@ def roll(now: Optional[float] = None) -> bool:
         return False
     h = _hour_points(now)
     append_event(ROLLED_EVENT, {"points_1h": h.points, "calls_1h": h.calls, "rate": h.rate,
-                                "fitted": h.fitted, "at": now})
+                                "fitted": h.fitted, "partial": h.partial, "at": now})
     return True
 
 
@@ -368,7 +379,7 @@ def _newest_rolled(now: float) -> Optional[HourPoints]:
         d = ev.get("data") or {}
         try:
             return HourPoints(points=float(d["points_1h"]), calls=int(d["calls_1h"]), rate=float(d["rate"]),
-                              fitted=bool(d["fitted"]))
+                              fitted=bool(d["fitted"]), partial=bool(d.get("partial", False)))
         except (KeyError, TypeError, ValueError) as e:
             print(f"⚠️ MACF: usage share: unreadable rolled event ({e}); computing the hour instead",
                   file=sys.stderr)
@@ -381,11 +392,12 @@ def hook_suffix(now: Optional[float] = None) -> Optional[str]:
 
     Reads the newest rolled event of the last 15 minutes and stops there. With none that recent
     (ticks are sparse) it computes the hour itself, as ``roll`` does, so the figure stays right.
-    A provisional rate is marked ``~``.
+    A provisional rate is marked ``~``; an hour that is not fully metered (metering under an hour
+    old) or is thin (under ``THIN_CALLS`` calls) ends with ``part``, since the figure is then a sample.
     """
     now = now or time.time()
     h = _newest_rolled(now) or _hour_points(now)
     if h.points <= 0:
         return None
     from macf.budget import format_rate
-    return f"· me {'' if h.fitted else '~'}{format_rate(h.points)}%/h"
+    return f"· me {'' if h.fitted else '~'}{format_rate(h.points)}%/h{PARTIAL_MARK if h.partial else ''}"

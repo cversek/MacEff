@@ -37,6 +37,7 @@ from typing import Dict, List, Optional
 EVENT = "usage_metered"
 TURN_CAUSE_EVENT = "turn_cause"
 GATE_HELD_EVENT = "scope_gate_held"
+SKIPPED_EVENT = "usage_meter_skipped"
 FAULT_EVENT = "usage_meter_fault"
 CHECKED_EVENT = "usage_meter_checked"
 TOOL_EVENT = "tool_call_completed"
@@ -78,17 +79,23 @@ def classify_prompt(text: str) -> str:
     return "operator"
 
 
-def current_cause() -> str:
+def current_cause(since: Optional[float] = None) -> str:
     """The cause of the interval being metered now, from the newest of the latest
     ``turn_cause`` and ``scope_gate_held`` events; a held gate newer than the turn cause
-    means a blocked Stop forced the turn. Defaults to ``operator`` with neither."""
+    means a blocked Stop forced the turn.
+
+    The lookup stops at ``since`` (the transcript's ``metering_since``): an event from before
+    metering began says nothing about these calls. With nothing newer, the cause is ``unknown``
+    (not in ``CAUSES``, so it is never counted as a real one). Without ``since`` the walk is
+    bounded by the cycle and the default is ``operator``.
+    """
     from macf.agent_events_log import read_events
-    for ev in read_events(reverse=True, scope="all", only=(TURN_CAUSE_EVENT, GATE_HELD_EVENT)):
+    for ev in read_events(reverse=True, scope="all", only=(TURN_CAUSE_EVENT, GATE_HELD_EVENT), since=since):
         if ev.get("event") == GATE_HELD_EVENT:
             return "gate"
         cause = (ev.get("data") or {}).get("cause")
         return cause if cause in CAUSES else "operator"
-    return "operator"
+    return "operator" if since is None else "unknown"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -184,6 +191,8 @@ class _Resume:
 
 _BASELINE_TAIL_BYTES = 64 * 1024
 _BOUND_SLACK_S = 60.0
+#: A subagent file untouched this long before metering began is finished history: it gets no event.
+_DORMANT_S = 600.0
 
 
 _START_SCAN_LINES = 50
@@ -313,6 +322,17 @@ def _resume_points(main: str, others: List[str]) -> _Lookup:
     return _Lookup(points=points, quiet=frozenset(quiet), lost=frozenset(lost))
 
 
+def _skipped_offsets(since: float) -> Dict[str, int]:
+    """The files a first tick left unmetered (``usage_meter_skipped``), path to the size they had.
+    Bounded by ``since``, the moment metering began: no such event is older."""
+    from macf.agent_events_log import read_events
+    out: Dict[str, int] = {}
+    for ev in read_events(reverse=True, scope="all", only=SKIPPED_EVENT, since=since - _BOUND_SLACK_S):
+        for p, size in ((ev.get("data") or {}).get("files") or {}).items():
+            out.setdefault(p, int(size))
+    return out
+
+
 def _baseline(path: str) -> _Resume:
     """Where metering of a file never seen before starts: the end of its last complete line, with
     the id of the last call in its final 64 KB so a call split across that point is not counted
@@ -386,6 +406,16 @@ def _check_main_silent(main: str, now: float, since: float) -> None:
                                     f"no calls", now)
 
 
+def _emit(session_id: str, path: str, point: "_Resume", res: ScanResult, cause: Optional[str],
+          since: float) -> None:
+    from macf.agent_events_log import append_event
+    append_event(EVENT, {
+        "session_id": session_id, "path": path, "offset": point.offset, "new_offset": res.new_offset,
+        "first_ts": res.first_ts, "last_ts": res.last_ts, "by_model": res.by_model,
+        "calls": res.calls, "cause": cause, "tail_id": res.tail_id, "metering_since": since,
+    })
+
+
 def meter_tick(session_id: str, transcript_path: str, now: Optional[float] = None) -> Optional[dict]:
     """Meter the new calls of a session's transcript and its subagents' transcripts.
 
@@ -414,6 +444,8 @@ def meter_tick(session_id: str, transcript_path: str, now: Optional[float] = Non
     resume = lookup.points
     cause = None
     events = calls = 0
+    skipped: Optional[Dict[str, int]] = None
+    skipped_now: Dict[str, int] = {}
     main_point = resume.get(str(main))
     since = (main_point.metering_since if main_point else None) or time.time()
     for path in sorted(lookup.lost):
@@ -423,7 +455,16 @@ def meter_tick(session_id: str, transcript_path: str, now: Optional[float] = Non
         if path in lookup.quiet:
             continue
         try:
-            if path not in resume and (path == str(main) or _file_start(path) < since):
+            point = resume.get(path)
+            if point is None and fixed_cause and _file_start(path) < since:
+                if os.stat(path).st_mtime < since - _DORMANT_S:
+                    skipped_now[path] = os.stat(path).st_size  # finished before metering: no event of its own
+                    continue
+                if skipped is None:
+                    skipped = _skipped_offsets(since)
+                if path in skipped:  # it dozed through the first tick and has grown since
+                    point = _Resume(offset=skipped[path])
+            if point is None and (path == str(main) or _file_start(path) < since):
                 base = _baseline(path)
                 append_event(EVENT, {
                     "session_id": session_id, "path": path, "offset": base.offset, "new_offset": base.offset,
@@ -432,7 +473,7 @@ def meter_tick(session_id: str, transcript_path: str, now: Optional[float] = Non
                 })
                 events += 1
                 continue
-            point = resume.get(path, _Resume())
+            point = point or _Resume()
             res = scan(path, point.offset, point.tail_id)
         except OSError as e:
             print(f"⚠️ MACF: usage meter: cannot read {path}: {e}; skipped this tick", file=sys.stderr)
@@ -440,15 +481,12 @@ def meter_tick(session_id: str, transcript_path: str, now: Optional[float] = Non
         if not res.calls:
             continue
         if fixed_cause is None:
-            cause = cause or current_cause()
-        append_event(EVENT, {
-            "session_id": session_id, "path": path, "offset": point.offset, "new_offset": res.new_offset,
-            "first_ts": res.first_ts, "last_ts": res.last_ts, "by_model": res.by_model,
-            "calls": res.calls, "cause": fixed_cause or cause, "tail_id": res.tail_id,
-            "metering_since": since,
-        })
+            cause = cause or current_cause(since)
+        _emit(session_id, path, point, res, fixed_cause or cause, since)
         events += 1
         calls += res.calls
+    if skipped_now:  # one event stands for every old file left unmetered, with the end each stopped at
+        append_event(SKIPPED_EVENT, {"session_id": session_id, "metering_since": since, "files": skipped_now})
     if calls:
         from macf.usage_share import roll
         roll(now)
