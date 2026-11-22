@@ -82,3 +82,22 @@ def test_the_operators_steps_retire_the_interim_job_before_installing_the_daemon
     assert len(p.steps) == 2
     assert "launchctl bootout" in p.steps[0] and "maceff_amail_broker.alpha" in p.steps[0]
     assert p.steps[1] == f"MACEFF_AGENT_HOME_DIR={cfg.parent.resolve()} macf_tools pd install"
+
+
+def test_a_broker_already_a_unit_of_an_agents_own_daemon_gets_no_second_daemon(tmp_path):
+    """THM's review of #1102: a host set up by hand may run the broker as a unit of an agent's own primal
+    daemon. A second daemon for it would contend for its socket and listener, so the plan refuses,
+    naming the daemon that already runs it, and writes nothing."""
+    cfg = _broker_config(tmp_path)
+    home = tmp_path / "ira"
+    (home / ".maceff" / "pd").mkdir(parents=True)
+    (home / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": "Ira"}}))
+    (home / ".maceff_primary_agent.id").write_text("0a1b2c3d-0000-0000-0000-000000000000\n")
+    (home / ".maceff" / "pd" / "declaration.json").write_text(json.dumps({"version": 1, "agent": "Ira_0a1b2c", "units": [
+        {"name": "amail-broker", "command": [sys.executable, "-m", "macf.amail.daemons.broker"],
+         "environment": {"AMAIL_BROKER_CONFIG": str(cfg)}}]}))
+    with pytest.raises(host_daemon.HostDaemonError, match="already unit 'amail-broker' of Ira_0a1b2c"):
+        _plan(cfg)
+    assert not (cfg.parent / ".maceff").exists()
+    found = host_daemon.declared_broker(cfg, [home])
+    assert (found.card, found.unit) == ("Ira_0a1b2c", "amail-broker")
