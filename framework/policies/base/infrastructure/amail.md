@@ -374,7 +374,11 @@ manager and anything else root's are printed for the operator, never run.
 5. **`macf_tools amail broker-unit`, on a host.** The broker as a declared unit of a primal daemon of its
    own (7.5), replacing a launchd job that ran it directly. The install, `MACEFF_AGENT_HOME_DIR=<home>
    macf_tools pd install`, is the operator's. Where a daemon already declares the broker, an agent's own
-   included, it refuses and names that daemon: one broker per system (MIS-0004 R01).
+   included, it refuses and names that daemon: one broker per system (MIS-0004 R01). On macOS this is a
+   per-user job: a peer on the LAN may need the Local Network grant for its listener, and the link stops
+   while the operator is logged out. The listener does a door's job for now (MIS-0007 R47 to R49); when
+   the host has a door, the link becomes a declared route through it and the broker stops listening on
+   the boundary itself.
 6. **`macf_tools amail peer check <domain>`.** The link station by station, in the order a message
    meets them: the declaration here, this side's agents map and registry keys for the peer, the peer's
    listener, the address the peer knows this host by, its build, and the cards and keys the peer declares
