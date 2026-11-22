@@ -153,14 +153,15 @@ def test_a_budget_failure_does_not_block_sprint_create(monkeypatch, capsys):
     assert "sprint budget start not recorded for #91" in cap.err and "log unreadable" in cap.err
 
 
-def _complete(tmp_path, notes):
+def _complete(tmp_path, notes, task_type="SPRINT", note_ok=True):
     from contextlib import ExitStack
     from unittest.mock import patch
     from macf.cli import cmd_task_complete
     from test_task_complete_smart import _make_args, _make_fake_task, _make_reader, _std_patches
-    sprint = _make_fake_task(42, task_type="SPRINT", custom={"goal": "g"})
+    sprint = _make_fake_task(42, task_type=task_type, custom={"goal": "g"})
     patches = _std_patches(_make_reader(sprint, [], tmp_path))
-    patches.append(patch("macf.task.reader.add_task_note", lambda *a, **kw: notes.append(a) or True))
+    patches.append(patch("macf.task.reader.add_task_note",
+                          lambda *a, **kw: notes.append({"args": a, "kw": kw}) or note_ok))
     with ExitStack() as stack:
         for p in patches:
             stack.enter_context(p)
@@ -178,7 +179,10 @@ def test_task_complete_records_prints_and_notes_the_sprint_budget(tmp_path, caps
     assert "sprint budget: account +2" in out
     end = _events(budget_digest.END_EVENT)[0]["data"]
     assert end["task_id"] == "42" and end["account_points_delta"] == pytest.approx(2.0)
-    assert notes and "sprint budget: account +2" in notes[0][1]
+    assert len(notes) == 1 and notes[0]["kw"]["agent"] == "PA"
+    assert notes[0]["args"][0] == "42"
+    assert notes[0]["args"][1].startswith("sprint budget: account +2 points, me +")
+    assert notes[0]["args"][1].endswith("points metered") and "💳" not in notes[0]["args"][1]
 
 
 def test_a_budget_failure_does_not_block_sprint_complete(tmp_path, monkeypatch, capsys):
@@ -254,3 +258,124 @@ def test_the_lapse_lookup_is_bounded_by_two_weekly_windows(monkeypatch):
              "data": {"mode": "conserve", "target": None, "by": None, "scope": None}}])
     assert budget.lapsed_mode(now) is None  # too old to announce
     assert seen and all(s is not None and s >= now - 2 * budget.HISTORY.total_seconds() - 1 for s in seen)
+
+
+def test_completing_a_task_that_is_not_a_sprint_records_nothing(tmp_path, capsys):
+    notes = []
+    assert _complete(tmp_path, notes, task_type="TASK") == 0
+    assert _events(budget_digest.END_EVENT) == [] and notes == []
+    assert "sprint budget" not in capsys.readouterr().out
+
+
+def test_a_refused_note_warns_and_the_event_stands(tmp_path, capsys):
+    now = time.time()
+    _write([_sample(now - 60, 50)])
+    assert _complete(tmp_path, [], note_ok=False) == 0
+    assert "sprint budget note not added to #42" in capsys.readouterr().err
+    assert len(_events(budget_digest.END_EVENT)) == 1
+
+
+def test_the_json_output_of_sprint_create_stays_json(monkeypatch, capsys):
+    from macf.cli import cmd_task_create_sprint
+    _fake_created(monkeypatch)
+    args = _sprint_args()
+    args.json = True
+    assert cmd_task_create_sprint(args) == 0
+    assert json.loads(capsys.readouterr().out)["task_id"] == 91
+    assert len(_events(budget_digest.START_EVENT)) == 1
+
+
+def test_the_digest_numbers_are_exact():
+    now = time.time()
+    _write([_metered(now - 600, calls=4, cause="operator", input_tokens=1000, cache_read_input_tokens=200_000,
+                     output_tokens=100, cache_write_1h_tokens=500),
+            _metered(now - 300, calls=6, cause="cron", cache_read_input_tokens=3_000_000, output_tokens=12_000,
+                     cache_write_5m_tokens=1000)])
+    # weighted: operator 1000 + 20000 + 500 + 1000 = 22500; cron 300000 + 60000 + 1250 = 361250
+    # cache read is 320000 of 383750 (83%) over 10 calls; the newest call averages 500k read,
+    # 2000 out and 166.7 written
+    assert budget_digest.digest(now).splitlines() == [
+        f"💳 spend, last hour: {budget.format_rate(383750 * P)} points, 10 calls",
+        f"  by cause: cron {budget.format_rate(361250 * P)}, operator {budget.format_rate(22500 * P)}",
+        "  driver: context × turns, 320k × 10 (83% of points)",
+        "  share: account movement unknown",
+        f"  one more turn at 500k context: ~{budget.format_rate((50000 + 10000 + 1000 / 6 * 1.25) * P)}",
+    ]
+    ev = _events(budget_digest.DIGEST_EVENT)[0]["data"]
+    assert ev["points"] == pytest.approx(383750 * P) and ev["calls"] == 10
+
+
+def test_the_prompt_notice_without_samples_is_the_digest_alone():
+    now = time.time()
+    assert budget.prompt_notice(now) is None
+    _write([_metered(now - 600)])
+    text = budget.prompt_notice(now)
+    assert text.startswith("💳 spend") and "budget:" not in text
+
+
+def test_the_prompt_notice_joins_the_line_before_the_digest():
+    now = time.time()
+    _write([_sample(now - 60, 60)])
+    only_line = budget.prompt_notice(now)
+    assert only_line.startswith("💳 budget:") and "spend" not in only_line
+    _write([_sample(now - 30, 75), _metered(now - 600)])
+    both = budget.prompt_notice(now)
+    first, rest = both.split("\n", 1)
+    assert first.startswith("💳 budget:") and rest.startswith("💳 spend, last hour")
+    _write([_sample(now - 10, 75)])
+    assert budget.prompt_notice(now + 60) is None  # the band was shown and the digest sent
+
+
+def test_a_failing_digest_leaves_the_notice_and_warns(monkeypatch, capsys):
+    now = time.time()
+    _write([_sample(now - 60, 60)])
+    monkeypatch.setattr(budget_digest, "digest", lambda n: (_ for _ in ()).throw(OSError("log unreadable")))
+    text = budget.prompt_notice(now)
+    assert text.startswith("💳 budget:") and "\n" not in text
+    assert "spend digest skipped" in capsys.readouterr().err
+
+
+def _start(t, task, pct, reset=RESET):
+    return {"timestamp": t, "event": budget_digest.START_EVENT,
+            "data": {"task_id": task, "percent": pct, "resets_at": reset, "agent_points": 0.0}}
+
+
+def test_a_missing_start_records_the_end_without_deltas(capsys):
+    now = time.time()
+    _write([_sample(now - 60, 50), _start(now - 600, "8", 10)])  # another task's start does not count
+    line = budget_digest.sprint_ended("9", now)
+    end = _events(budget_digest.END_EVENT)[0]["data"]
+    assert end["account_points_delta"] is None and end["agent_points_delta"] is None
+    assert "no start record for #9" in capsys.readouterr().err
+    assert "account unknown" in line and "me unknown" in line
+
+
+def test_the_newest_start_within_thirty_days_is_the_one_used(capsys):
+    now = time.time()
+    _write([_start(now - 2 * HOUR, "9", 40), _start(now - HOUR, "9", 50), _sample(now - 60, 53)])
+    budget_digest.sprint_ended("9", now)
+    assert _events(budget_digest.END_EVENT)[0]["data"]["account_points_delta"] == pytest.approx(3.0)
+    old = now + 40 * 86400  # a start 40 days back is past the lookup
+    budget_digest.sprint_ended("9", old)
+    assert _events(budget_digest.END_EVENT)[1]["data"]["account_points_delta"] is None
+    assert "no start record" in capsys.readouterr().err
+
+
+def test_an_unknown_counter_at_either_end_gives_no_account_delta():
+    now = time.time()
+    _write([_start(now - 600, "9", None)])  # the start had no reading
+    budget_digest.sprint_ended("9", now)  # and the end has no sample
+    assert _events(budget_digest.END_EVENT)[0]["data"]["account_points_delta"] is None
+    _write([_sample(now - 30, 53)])
+    budget_digest.sprint_ended("9", now)  # a reading at the end only
+    assert _events(budget_digest.END_EVENT)[1]["data"]["account_points_delta"] is None
+
+
+def test_a_recorded_no_fit_attempt_is_quiet_and_leaves_the_provisional_rate(capsys):
+    now = time.time()
+    _write([{"timestamp": now - 300, "event": "usage_rate_fitted",
+             "data": {"rate": None, "reason": "too few hours", "window_h": 48}}, _metered(now - 200)])
+    rate = budget_digest.hour_rate(now)
+    assert not rate.fitted and rate.value == P
+    assert budget_digest.digest(now)
+    assert capsys.readouterr().err == ""

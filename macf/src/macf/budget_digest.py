@@ -45,13 +45,11 @@ class Rate:
 
 def hour_rate(now: float) -> Rate:
     """The newest ``usage_rate_fitted`` event of the last hour, else the provisional constant."""
-    from macf.usage_share import FIT_EVENT
+    from macf.usage_share import FIT_EVENT, _fit_from
     for ev in read_events(reverse=True, scope="all", only=FIT_EVENT, since=now - HOUR):
-        d = ev.get("data") or {}
-        try:
-            return Rate(value=float(d["rate"]), low=float(d["low"]), high=float(d["high"]), fitted=True)
-        except (KeyError, TypeError, ValueError) as e:
-            print(f"⚠️ MACF: digest: unreadable fit event ({e}); using the provisional rate", file=sys.stderr)
+        fit = _fit_from(ev)  # the one reader of the event: an attempt that found no fit reads as None, quietly
+        if fit is not None:
+            return Rate(value=fit.rate, low=fit.low, high=fit.high, fitted=True)
         break
     p = usage_meter.POINTS_PER_WEIGHTED_TOKEN
     return Rate(value=p, low=p, high=p, fitted=False)
