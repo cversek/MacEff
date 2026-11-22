@@ -524,3 +524,31 @@ def test_first_tick_writes_no_baseline_per_old_subagent_file(tmp_path):
     p = sub / "old7.jsonl"
     _write(p, _line("woke"))                               # a finished file that grows is still metered
     assert um.meter_tick("sid", str(t)) == {"events": 1, "calls": 1}
+
+
+def test_skipped_offsets_ignore_events_older_than_metering_start():
+    now = time.time()
+    _emit_at(now - 500, um.SKIPPED_EVENT, {"files": {"/old": 5}})
+    _emit_at(now - 50, um.SKIPPED_EVENT, {"files": {"/new": 7}})
+    assert um._skipped_offsets(now - 100) == {"/new": 7}
+
+
+def test_skipped_offsets_newest_event_wins():
+    now = time.time()
+    _emit_at(now - 80, um.SKIPPED_EVENT, {"files": {"/f": 10}})
+    _emit_at(now - 40, um.SKIPPED_EVENT, {"files": {"/f": 20}})
+    assert um._skipped_offsets(now - 100) == {"/f": 20}
+
+
+def test_skipped_event_is_written_once_across_ticks(tmp_path):
+    t = tmp_path / "s.jsonl"
+    _write(t, _line("m0"))
+    sub = tmp_path / "sid" / "subagents"
+    sub.mkdir(parents=True)
+    p = sub / "old.jsonl"
+    _write(p, _line("o"))
+    os.utime(p, (T0, T0))
+    for i in range(4):
+        um.meter_tick("sid", str(t))
+        _write(t, _line(f"m{i + 1}"))
+    assert len(list(read_events(reverse=False, scope="all", only=um.SKIPPED_EVENT))) == 1
