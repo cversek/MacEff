@@ -457,6 +457,18 @@ privacy grants are not the terminal's, and a container's daemon whose supplement
 were cleared loses a box it reached through one, so the box's group should be the agent's
 primary group. Neither failure may read as an empty box.
 
+**One store ingests a box** (#872). A settings file copied into a second agent's home names
+the same box, and each store's lock is its own, so two stores would share one agent's mail
+between them with nothing said. The first ingest writes its store's home, resolved, into
+`.ingest.claim` in the box (written whole and linked into place, so two first ingests can't
+both win), and an ingest from any other store is refused, naming both homes and the file. The
+receiver treats that refusal as a box it can't use: one notice (MIS-0002-R65), the slow
+re-check, and no clearing while the claim stands; `amail list` says so and lists what its
+store holds. Every reader of the box takes only `*.amsg` and `*.eml`, so the claim is no
+entry and no aged one. When the claiming store no longer ingests the box (a home moved or
+retired), the operator removes the file; where provisioning makes boxes, it may write the
+claim for the seat's own store at the start.
+
 **Why this is a policy statement and not an implementation note.** The obvious
 design has the broker write each recipient's mailbox directly. That requires a
 process that can write across uid boundaries, which means privilege on the mail

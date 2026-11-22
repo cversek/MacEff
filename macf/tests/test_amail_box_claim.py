@@ -1,0 +1,90 @@
+"""One store claims a pickup box (#872). A copied amail settings file names the same box in a second
+agent's home; both stores' locks are their own, so they would split one agent's mail between them with
+nothing said. The first store to ingest claims the box, and any other store is refused, naming both."""
+import pytest
+
+from macf.amail import client
+from macf.amail.client import INGEST_CLAIM, BoxClaimed
+
+
+@pytest.fixture
+def box(tmp_path):
+    b = tmp_path / "handoff" / "ira"
+    b.mkdir(parents=True)
+    return b
+
+
+def test_the_first_ingest_claims_the_box_for_its_store(tmp_path, box):
+    home = tmp_path / "ira_home"
+    client.ingest(home, box, wait=False)
+    assert (box / INGEST_CLAIM).read_text().strip() == str(home.resolve())
+
+
+def test_another_store_is_refused_and_both_homes_are_named(tmp_path, box):
+    first, second = tmp_path / "ira_home", tmp_path / "copied_home"
+    client.ingest(first, box, wait=False)
+    (box / "1.eml").write_text("Subject: x\n\nbody\n")
+    with pytest.raises(BoxClaimed) as e:
+        client.ingest(second, box, wait=False)
+    said = str(e.value)
+    assert str(first.resolve()) in said and str(second.resolve()) in said and INGEST_CLAIM in said
+    assert (box / "1.eml").exists()                      # nothing taken into the wrong store
+
+
+def test_the_claiming_store_ingests_again_without_a_refusal(tmp_path, box):
+    home = tmp_path / "ira_home"
+    client.ingest(home, box, wait=False)
+    client.ingest(home, box, wait=False)
+    assert client.box_claim_conflict(home, box) is None
+
+
+def test_the_claim_is_not_mistaken_for_mail(tmp_path, box):
+    home = tmp_path / "ira_home"
+    client.ingest(home, box, wait=False)
+    assert client.ingest(home, box, wait=False) == []     # the claim file is no entry
+
+
+def test_the_receiver_refuses_a_box_another_store_claims_and_raises_the_notice(tmp_path, box):
+    from macf.pd.receiver import Receiver
+    client.ingest(tmp_path / "ira_home", box, wait=False)
+    notices = []
+    r = Receiver("Copy_abc123", tmp_path / "copied_home", box, "ira", tmp_path / "contacts",
+                 lambda name, data: None, lambda src, key: notices.append(src))
+    r.tick(0.0)
+    assert r.refused and "claimed" in r.refused and str((tmp_path / "ira_home").resolve()) in r.refused
+    assert notices == ["pd_grant_denied"]
+
+
+def test_a_claim_made_after_the_receivers_first_check_refuses_it_without_raising(tmp_path, box):
+    from macf.pd.receiver import Receiver
+    notices = []
+    r = Receiver("Copy_abc123", tmp_path / "copied_home", box, "ira", tmp_path / "contacts",
+                 lambda name, data: None, lambda src, key: notices.append(src))
+    r.tick(0.0)                                             # its first pass claims the box for this store
+    assert r.refused is None
+    (box / INGEST_CLAIM).write_text(str((tmp_path / "ira_home").resolve()) + "\n")   # then another store's claim
+    r._next = float("-inf")
+    r.tick(5.0)
+    assert r.refused and "claimed" in r.refused and notices == ["pd_grant_denied"]
+
+
+def test_a_claimed_box_is_not_read_as_fixed_when_the_receiver_looks_again(tmp_path, box):
+    """The slow re-check asks _access; a box still claimed by another store stays refused, nothing cleared."""
+    from macf.pd.receiver import EVENT_REFUSAL_CLEARED, RECHECK_S, Receiver
+    client.ingest(tmp_path / "ira_home", box, wait=False)
+    events = []
+    r = Receiver("Copy_abc123", tmp_path / "copied_home", box, "ira", tmp_path / "contacts",
+                 lambda name, data: events.append(name), lambda src, key: None)
+    r.tick(0.0)
+    r.tick(RECHECK_S + 5)
+    assert r.refused and "claimed" in r.refused and EVENT_REFUSAL_CLEARED not in events
+
+
+def test_one_home_reached_by_two_paths_is_one_store(tmp_path, box):
+    real = tmp_path / "ira_home"
+    real.mkdir()
+    link = tmp_path / "ira_link"
+    link.symlink_to(real)
+    client.ingest(link, box, wait=False)
+    client.ingest(real, box, wait=False)                     # the same store: no refusal
+    assert (box / INGEST_CLAIM).read_text().strip() == str(real.resolve())

@@ -275,6 +275,58 @@ def _ingest_lock(home: Path, wait: bool) -> int:
     return fd
 
 
+#: The file in a pickup box naming the one store that ingests it (#872). Every reader of the box takes only
+#: ``*.amsg`` and ``*.eml`` (ingest, the broker's counts and its aged-entry alarm), so a dotfile is no entry.
+INGEST_CLAIM = ".ingest.claim"
+
+
+class BoxClaimed(Exception):
+    """Another store claims this pickup box; ingesting it here would split one agent's mail across two."""
+
+
+def _claim_holder(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return ""
+
+
+def box_claim_conflict(home: Path, pickup_box: Path) -> Optional[str]:
+    """Why *home*'s store must not ingest *pickup_box*, or None when no other store claims it."""
+    mine = str(Path(home).resolve())
+    path = Path(pickup_box) / INGEST_CLAIM
+    holder = _claim_holder(path)
+    if not holder or holder == mine:
+        return None
+    return (f"the pickup box {pickup_box} is claimed by the store under {holder}, not {mine}: two stores "
+            f"ingesting one box would split this agent's mail between them (a copied amail settings file "
+            f"does this), so this one doesn't. If {holder} no longer ingests it, remove {path}")
+
+
+def _claim_box(home: Path, pickup_box: Path) -> None:
+    """Claim the box for *home*'s store unless one already does, or raise BoxClaimed.
+
+    The claim is written whole under another name and linked into place, so a reader never sees it half
+    written and two first ingests can't both win: ``link`` fails when the name exists."""
+    said = box_claim_conflict(home, pickup_box)
+    if said:
+        raise BoxClaimed(said)
+    path = Path(pickup_box) / INGEST_CLAIM
+    if path.exists():
+        return
+    temp = path.with_name(f"{INGEST_CLAIM}.{os.getpid()}")
+    temp.write_text(str(Path(home).resolve()) + "\n", encoding="utf-8")
+    try:
+        os.link(temp, path)
+    except FileExistsError:
+        pass  # noqa: S110 - another first ingest won the race; the check below reads its claim
+    finally:
+        temp.unlink(missing_ok=True)
+    said = box_claim_conflict(home, pickup_box)
+    if said:
+        raise BoxClaimed(said)
+
+
 def ingest(home: Path, pickup_box: Path, contacts_path: Optional[Path] = None,
            agent: str = "", *, wait: bool = True, domain: str = "",
            registry: Optional[Registry] = None) -> list:
@@ -312,6 +364,7 @@ def ingest(home: Path, pickup_box: Path, contacts_path: Optional[Path] = None,
         registry = Registry(registry_path())
     lock = _ingest_lock(home, wait)
     try:
+        _claim_box(home, pickup_box)     # one store per box (#872): raises BoxClaimed for any other
         return _ingest_locked(home, pickup_box, contacts_path, agent, domain, registry)
     finally:
         os.close(lock)

@@ -114,10 +114,18 @@ class Receiver:
         self._append(EVENT_REFUSAL_CLEARED, {"agent": self.card, "box": str(self.box)})
 
     def ingest(self) -> None:
-        from macf.amail.client import IngestBusy, ingest
+        from macf.amail.client import BoxClaimed, IngestBusy, ingest
         try:
             results = ingest(self.home, self.box, contacts_path=self.contacts,
                              agent=self.agent, wait=False, domain=self.domain)
+        except BoxClaimed as e:
+            # Claimed by another store since the first check: refused like any box this daemon can't use.
+            self.refused = str(e)
+            print(f"⚠️ MACF: pd: the receiver can't ingest {self.agent}'s mail, so none is ingested by this "
+                  f"daemon: {self.refused}", file=sys.stderr)
+            self._notice(GRANT_SOURCE, f"pd_grant_denied:amail-receiver:claimed")
+            self._recheck_at = float("-inf")
+            return
         except IngestBusy:
             return  # noqa: MACEFF003 - `amail list` holds the lock and takes what is waiting; this pass tries again
         except OSError as e:
@@ -159,7 +167,8 @@ class Receiver:
             return f"the store under {self.home} can't be made ({e})"
         if not os.access(new, os.W_OK):
             return f"the store's {new} isn't writable by this daemon"
-        return None
+        from macf.amail.client import box_claim_conflict
+        return box_claim_conflict(self.home, self.box)     # another store's box (#872)
 
     def _group_hint(self) -> str:
         """Name the case a container meets: the box's group reachable only as a supplementary

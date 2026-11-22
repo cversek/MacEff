@@ -15,6 +15,11 @@ from macf.amail import client, store
 from macf.amail.models import Message
 
 
+
+def _entries(box):
+    """What is in the box besides the store's claim on it (#872)."""
+    return sorted(p.name for p in box.iterdir() if p.name != ".ingest.claim")
+
 def _pair(box, stem, subject="hello"):
     m = Message(sender="b@proto.local", to=["a@proto.local"], subject=subject, body="body")
     payload = m.serialize().encode()
@@ -39,7 +44,7 @@ def _ids(home):
 def test_a_genuine_pair_is_ingested(tmp_path, box):
     m = _pair(box, "1-genuine")
     [r] = client.ingest(tmp_path / "home", box, agent="a")
-    assert r["ingested"] and m.message_id in _ids(tmp_path / "home") and not list(box.iterdir())
+    assert r["ingested"] and m.message_id in _ids(tmp_path / "home") and not _entries(box)
 
 
 def test_a_symlinked_pair_is_refused_and_set_aside(tmp_path, box):
@@ -51,7 +56,7 @@ def test_a_symlinked_pair_is_refused_and_set_aside(tmp_path, box):
     [r] = client.ingest(tmp_path / "home", box, agent="a")
     assert r["refused"] and "symbolic link" in r["reason"]
     assert m.message_id not in _ids(tmp_path / "home")
-    assert sorted(p.name for p in box.iterdir()) == ["2-link.amsg.refused", "2-link.json.refused"]
+    assert _entries(box) == ["2-link.amsg.refused", "2-link.json.refused"]
     assert client.ingest(tmp_path / "home", box, agent="a") == []  # reported once, not every pass
 
 
@@ -89,7 +94,7 @@ def test_ingest_takes_the_broker_uid_from_the_box_owner_not_the_reader(tmp_path,
     [r] = client.ingest(tmp_path / "home", box, agent="a")
     assert r["refused"] and "not the broker's" in r["reason"]
     assert m.message_id not in _ids(tmp_path / "home")
-    assert sorted(p.name for p in box.iterdir()) == ["6-planted.amsg.refused", "6-planted.json.refused"]
+    assert _entries(box) == ["6-planted.amsg.refused", "6-planted.json.refused"]
 
 
 def test_a_box_that_is_a_symlink_is_refused_not_raised(tmp_path, box):
