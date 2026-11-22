@@ -701,6 +701,20 @@ def cmd_permissions_history(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_permissions_how(args: argparse.Namespace) -> int:
+    """How each recent tool call was approved, derived from the event log and today's rules (#1060)."""
+    from dataclasses import asdict
+    from pathlib import Path
+    from macf import permission_watch as pw
+    project = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    if args.last < 1:     # rows[-0:] would be every row, the opposite of what was asked
+        print("❌ --last takes a count of 1 or more", file=sys.stderr)
+        return 2
+    rows = pw.read_approvals(args.days, home=Path.home(), project_dir=project)[-args.last:]
+    print(json.dumps([asdict(a) for a in rows], indent=2) if args.json else pw.approvals_text(rows))
+    return 0
+
+
 def _session_rules():
     """The rules in force for this session: its starting directory is the project, as the client reads it."""
     from pathlib import Path
@@ -11171,6 +11185,203 @@ def cmd_amail_key_status(args: argparse.Namespace) -> int:
     return 1 if (report["required"] and not report["exists"]) else 0
 
 
+def cmd_amail_peer_card(args: argparse.Namespace) -> int:
+    """Print this broker's peer card (MIS-0004 R56 to R65), read from the operator's files."""
+    from macf.amail import peer_setup
+    from macf.amail.registry import Registry, registry_path
+
+    cfg = _amail_config()
+    if not cfg.get("broker_config"):
+        print("❌ no broker config is named; set broker_config in amail.json (or MACF_AMAIL_BROKER_CONFIG)")
+        return 1
+    try:
+        if args.all:
+            from macf.amail.deploy_config import BrokerDeployConfig, load_declarative_config
+            deploy = BrokerDeployConfig.model_validate(load_declarative_config(Path(cfg["broker_config"])))
+            agents = sorted(deploy.load_addressing().agents)
+        else:
+            agents = args.agent or [cfg["agent"]]
+        card = peer_setup.build_card(Path(cfg["broker_config"]), agents=agents, registry=Registry(registry_path()),
+                                     own_agent=cfg["agent"], own_key=cfg.get("signing_key") or None)
+    except (peer_setup.CardError, ValueError, OSError) as e:
+        print(f"❌ {e}")
+        return 1
+    print(peer_setup.render_card(card) if args.json else "\n".join(peer_setup.describe(card)))
+    return 0
+
+
+def cmd_amail_peer_add(args: argparse.Namespace) -> int:
+    """Declare a peer broker from its card (MIS-0004 R56 to R65): shown first, written on a yes."""
+    import datetime as _dt
+
+    from macf.amail import peer_setup
+
+    cfg = _amail_config()
+    if not cfg.get("broker_config"):
+        print("❌ no broker config is named; set broker_config in amail.json (or MACF_AMAIL_BROKER_CONFIG)")
+        return 1
+    try:
+        if args.card == "-":
+            text = sys.stdin.read()
+        elif args.card.lstrip().startswith("{"):
+            text = args.card
+        else:
+            text = Path(args.card).read_text()
+        card = peer_setup.parse_card(text)
+        plan = peer_setup.plan_add(Path(cfg["broker_config"]), card,
+                                   local_agents=args.for_agents or [cfg["agent"]], note=args.note)
+    except (peer_setup.CardError, OSError) as e:
+        print(f"❌ {e}")
+        return 1
+    if not plan.changed:
+        print(f"✅ {card['domain']} is already declared as this card says; nothing to write")
+    else:
+        print(plan.diff().rstrip("\n"))
+        if args.dry_run:
+            print("dry run: nothing written")
+        else:
+            if not args.yes:
+                if not sys.stdin.isatty() or args.card == "-":
+                    print("Not written. Run again with --yes to write it.")
+                    return 0
+                if input("Write this? [y/N] ").strip().lower() not in ("y", "yes"):
+                    print("Not written.")
+                    return 0
+            for path in (plan.broker_path, plan.addressing_path):
+                if not os.access(path, os.W_OK):
+                    print(f"❌ {path} is not this account's to write; its owner applies the change above")
+                    return 1
+            stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+            try:
+                written = plan.write(backup_suffix=f".bak-peer-add-{stamp}")
+            except (peer_setup.CardError, OSError) as e:
+                print(f"❌ {e}")
+                return 1
+            for path in written:
+                print(f"✅ wrote {path} (the old one kept beside it, .bak-peer-add-{stamp})")
+            print("The broker reads its config at start: restart it for the link to take effect.")
+    if plan.registry_lines:
+        print("\nThe registry is the operator's: each declaration stages its change and prints the root step.")
+        for line in plan.registry_lines:
+            print(line)
+    return 0
+
+
+def cmd_amail_peer_check(args: argparse.Namespace) -> int:
+    """Check a rung-2 peer link station by station (MIS-0004 R56 to R65); 1 when any station fails."""
+    from macf.amail import BrokerUnavailable, Message, SigningError, peer_setup, sign_for_submission, submit
+    from macf.amail.registry import Registry, registry_path
+
+    cfg = _amail_config()
+    if not cfg.get("broker_config"):
+        print("❌ no broker config is named; set broker_config in amail.json (or MACF_AMAIL_BROKER_CONFIG)")
+        return 1
+
+    def _send():
+        to = args.to
+        if not to:
+            from macf.amail.deploy_config import BrokerDeployConfig, load_declarative_config
+            deploy = BrokerDeployConfig.model_validate(load_declarative_config(Path(cfg["broker_config"])))
+            link = {k.lower(): v for k, v in deploy.peer_links.items()}.get(args.domain.lower())
+            to = f"{sorted(link.agents)[0]}@{args.domain}" if link and link.agents else ""
+        if not to:
+            return {"ok": False, "refused": ["no recipient: pass --to"]}
+        msg = Message(sender=f"{cfg['agent']}@{cfg['domain']}", to=[to], subject="amail peer check",
+                      body="A test message from `macf_tools amail peer check --send`. No reply is needed.")
+        try:
+            msg.signature = sign_for_submission(msg, Path(cfg["signing_key"]) if cfg.get("signing_key") else None,
+                                                required=bool(cfg.get("signing_required")))
+            note = _ensure_host_broker(cfg)
+            if note:
+                print(note, file=sys.stderr)
+            return submit(cfg["agent"], msg, Path(cfg["socket"]))
+        except (SigningError, BrokerUnavailable) as e:
+            return {"ok": False, "refused": [str(e)]}
+
+    stations = peer_setup.check_peer(Path(cfg["broker_config"]), args.domain, registry=Registry(registry_path()),
+                                     send=_send if args.send else None)
+    marks = {True: "✅", False: "❌", None: "➖"}
+    for s in stations:
+        print(f"{marks[s.ok]} {s.name}: {s.detail}")
+        if s.fix and s.ok is not True:
+            print(f"     fix: {s.fix}")
+    return 1 if any(s.ok is False for s in stations) else 0
+
+
+def cmd_amail_outbox(args: argparse.Namespace) -> int:
+    """What the broker holds for its peers: waiting for a retry, or refused with the peer's reason."""
+    from macf.amail import readiness
+    from macf.amail.peer_setup import CardError
+
+    cfg = _amail_config()
+    if not cfg.get("broker_config"):
+        print("❌ no broker config is named; set broker_config in amail.json (or MACF_AMAIL_BROKER_CONFIG)")
+        return 1
+    me = f"{cfg['agent']}@{cfg['domain']}" if cfg.get("agent") and cfg.get("domain") else None
+    try:
+        held = readiness.outbox(Path(cfg["broker_config"]), sender=None if args.all else me)
+    except CardError as e:
+        print(f"❌ {e}")
+        return 1
+    if args.json:
+        print(json.dumps([h.__dict__ for h in held], indent=2))
+        return 0
+    if not held:
+        print("✅ nothing held for a peer" + ("" if args.all else f" from {me}"))
+        return 0
+    for h in held:
+        age = f"{h.age_s / 60:.0f} min" if h.age_s is not None else "age unknown"
+        mark = "⏳" if h.state == "waiting" else "❌"
+        print(f"{mark} {h.state}  {h.recipient}  {h.message_id}  from {h.sender}, handed off {age} ago")
+        if h.reason:
+            print(f"     {h.reason}")
+    for peer in sorted({h.peer for h in held if h.state == "waiting"}):
+        print(f"The broker retries waiting mail on each sweep; `macf_tools amail peer check {peer}` says why "
+              f"it is not taken yet.")
+    return 0
+
+
+def cmd_amail_broker_unit(args: argparse.Namespace) -> int:
+    """The host broker as a declared unit of its own primal daemon: shown, written on --write."""
+    import pwd as _pwd
+
+    from macf.amail import host_daemon
+
+    cfg = _amail_config()
+    if not cfg.get("broker_config"):
+        print("❌ no broker config is named; set broker_config in amail.json (or MACF_AMAIL_BROKER_CONFIG)")
+        return 1
+    interim = host_daemon.interim_jobs(Path.home() / "Library" / "LaunchAgents") if sys.platform == "darwin" else []
+    try:
+        plan = host_daemon.plan(Path(cfg["broker_config"]), python=Path(sys.executable),
+                                account=_pwd.getpwuid(os.getuid()).pw_name,
+                                path_dirs=os.environ.get("PATH", "").split(":"),
+                                home=Path(args.home) if args.home else None,
+                                pythonpath=os.environ.get("PYTHONPATH") or None, interim_plists=interim)
+    except (host_daemon.HostDaemonError, ValueError, OSError) as e:
+        print(f"❌ {e}")
+        return 1
+    print(f"broker daemon {plan.card}, home {plan.home}")
+    print(f"   its unit runs {sys.executable} with this shell's PATH"
+          + (" and PYTHONPATH" if os.environ.get("PYTHONPATH") else "")
+          + ": run this from the environment the broker should run in")
+    for path in plan.unchanged:
+        print(f"   {path}: already as it should be")
+    for path, text in plan.files.items():
+        print(f"   {path}: {'would write' if not args.write else 'writing'}")
+        if path.name == "declaration.json":
+            print("\n".join("      " + line for line in text.rstrip("\n").splitlines()))
+    if args.write and plan.files:
+        plan.write()
+        print("✅ written")
+    elif plan.files:
+        print("Not written; run again with --write.")
+    print("\nThen, as the operator (the service manager is yours to change):")
+    for step in plan.steps:
+        print(f"  {step}")
+    return 0
+
+
 def cmd_amail_registry_check(args: argparse.Namespace) -> int:
     """Check the operator's registry (MIS-0004 R42): who can write it, and what it declares."""
     from macf.amail.registry import Registry, RegistryError, registry_path
@@ -11513,6 +11724,19 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
             print("(no unread messages" + (f"; {read_count} read, `amail list --all` shows them)"
                                            if read_count else ")"))
         return 0
+    if getattr(args, "compact", False):
+        # `amail inbox`: the same messages, newest first, one line each, the trust mark first.
+        for m in sorted(msgs, key=lambda m: m.date or "", reverse=True):
+            print(f"{_trust_badge(m)}  {_term_safe(m.date)}  {_term_safe(m.sender)}  "
+                  f"{_term_safe(m.subject)}  ({_term_safe(m.message_id)})")
+        for item in sorted(internet, key=lambda i: str(i.get("sidecar", {}).get("received_at", "")), reverse=True):
+            sc, obs = item.get("sidecar", {}), item.get("sidecar", {}).get("observed", {})
+            print(f"🌐  {_term_safe(str(sc.get('received_at', '?')))}  {_term_safe(str(obs.get('envelope_from', '?')))}  "
+                  f"{_term_safe(str(obs.get('subject', '(no subject)')))}")
+        msgs, internet_shown = [], len(internet)
+        internet = []
+    else:
+        internet_shown = None
     for m in msgs:
         print(f"{_term_safe(m.date)}  {_term_safe(m.sender)}  {_trust_badge(m)}")
         print(f"    {_term_safe(m.subject)}")
@@ -11531,6 +11755,9 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
         print(f"    {_term_safe(str(obs.get('subject', '(no subject)')))}")
         print(f"    sha={_term_safe(str(sc.get('raw_sha256', '?'))[:16])} "
               f"class={_term_safe(str(authz.get('outcome', '?')))}")
+    if internet_shown is not None:
+        print(f"\n{read_count} read, not shown (`amail list --all`)" if read_count else "")
+        return 0
     print(f"\n{len(msgs)} bundle message(s), {len(internet)} internet message(s)"
           + (f"; and {read_count} read, not shown (`amail list --all`)" if read_count and not every else ""))
     return 0
@@ -11614,6 +11841,59 @@ def cmd_amail_read(args: argparse.Namespace) -> int:
     return 0
 
 
+def _amail_setup_pieces(cfg: dict) -> list:
+    """The setup pieces `amail status` lists (amail/readiness.py), or none when they can't be read."""
+    try:
+        from macf.agent_stack import pd_unit_installed
+        from macf.amail import host_daemon, readiness
+        from macf.amail.registry import Registry, registry_path
+    except ImportError as e:
+        print(f"⚠️ MACF: setup pieces unavailable (not listed): {e}", file=sys.stderr)
+        return []
+    launch_agents = Path.home() / "Library" / "LaunchAgents"
+    return readiness.pieces(cfg, registry=Registry(registry_path()), daemon_installed=pd_unit_installed,
+                            interim_jobs=lambda: host_daemon.interim_jobs(launch_agents)
+                            if sys.platform == "darwin" else [])
+
+
+def cmd_amail_contacts(args: argparse.Namespace) -> int:
+    """The correspondents the broker checks for this agent: address and direction, read-only.
+
+    The broker answers over its socket, so the list is what it enforces now. It shows identity and
+    direction and never a route, a key or a push grant; a change is a deployment change (amail
+    policy 4.1), not something this command can make."""
+    import json
+    from macf.amail.client import BrokerUnavailable, contacts as _contacts
+
+    cfg = _amail_config()
+    started = _ensure_host_broker(cfg)
+    if started:
+        print(started, file=sys.stderr)
+    try:
+        reply = _contacts(Path(cfg["socket"]), sender=cfg.get("agent") or None)
+    except BrokerUnavailable as e:
+        print(f"❌ {e}")
+        return 1
+    entries = list(reply.get("contacts") or [])
+    needle = (args.filter or "").strip().lower()
+    if needle:
+        entries = [e for e in entries if needle in str(e.get("address", "")).lower()]
+    if args.json:
+        print(json.dumps({"contacts": entries, "contact_list": reply.get("contact_list", True)}, indent=2))
+        return 0
+    if not reply.get("contact_list", True):
+        print("this broker has no contact list, so it checks no correspondents")
+        return 0
+    if not entries:
+        print("no correspondent matches" if needle else "no correspondents are declared for this agent")
+        return 0
+    wide = max(len(str(e["address"])) for e in entries)
+    marks = {"both": "↔", "outbound": "→", "inbound": "←", "neither": "✖ withdrawn"}
+    for e in entries:
+        print(f"{str(e['address']).ljust(wide)}  {marks.get(e['direction'], '?')}  {e['direction']}")
+    return 0
+
+
 def cmd_amail_status(args: argparse.Namespace) -> int:
     """Report whether amail is usable, and say precisely what is missing if not."""
     import socket as _socket
@@ -11686,6 +11966,13 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
         # inbox with three refusals must be distinguishable states.
         "broker_counts": counts,
     }
+    setup = _amail_setup_pieces(cfg)
+    info["setup"] = [{"name": p.name, "ok": p.ok, "detail": p.detail, "fix": p.fix} for p in setup]
+    # The supervision piece reads how the broker is actually run; the autostart flag only says an
+    # agent may start one, so where the piece knows, the broker line says what it found.
+    supervision = next((p for p in setup if p.name == "broker supervision"), None)
+    if supervision is not None:
+        info["broker_kind"] = supervision.detail
     if args.json:
         print(json.dumps(info, indent=2))
         return 0 if reachable else 1
@@ -11721,6 +12008,13 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
     if counts is not None and counts["quarantined"]:
         print(f"⚠️  {counts['quarantined']} message(s) in quarantine — refused "
               f"with reasons attached; the operator can list them broker-side.")
+    if setup:
+        print("setup:")
+        marks = {True: "✅", False: "❌", None: "➖"}
+        for p in setup:
+            print(f"  {marks[p.ok]} {p.name}: {p.detail}")
+            if p.fix and p.ok is not True:
+                print(f"       fix: {p.fix}")
     if not reachable:
         print("\n   Without the broker: sending is impossible (no fallback")
         print("   transport by design — the broker enforces the contact list),")
@@ -12882,6 +13176,15 @@ def _build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--include-questions", action="store_true", help="also list question dialogs (AskUserQuestion, ExitPlanMode)")
     pp.add_argument("--json", action="store_true")
     pp.set_defaults(func=cmd_permissions_history)
+    pp = perm_sub.add_parser(
+        "how",
+        help="how each recent tool call was approved, derived from the event log: at a dialog (approved or "
+             "denied), by an allow rule of today's settings, or by the permission mode (#1060)",
+    )
+    pp.add_argument("--days", type=float, default=1.0, metavar="N", help="how far back to read (default 1)")
+    pp.add_argument("--last", type=int, default=30, metavar="N", help="show the newest N calls (default 30)")
+    pp.add_argument("--json", action="store_true")
+    pp.set_defaults(func=cmd_permissions_how)
     pp = perm_sub.add_parser(
         "list", aliases=["rules"],
         help="the permission rules in force for this session, deny, ask and allow, each with its settings "
@@ -14146,6 +14449,68 @@ def _build_parser() -> argparse.ArgumentParser:
     amail_status = amail_sub.add_parser("status", help="is amail usable? what is missing?")
     amail_status.add_argument("--json", action="store_true", help="machine-readable output")
     amail_status.set_defaults(func=cmd_amail_status)
+    amail_contacts = amail_sub.add_parser(
+        "contacts", help="the correspondents the broker checks for this agent: address and direction "
+                         "(read-only; the broker answers, so it is what is enforced now)")
+    amail_contacts.add_argument("filter", nargs="?", default=None,
+                                help="show only addresses containing this text")
+    amail_contacts.add_argument("--json", action="store_true", help="machine-readable output")
+    amail_contacts.set_defaults(func=cmd_amail_contacts)
+
+    amail_peer = amail_sub.add_parser(
+        "peer", help="rung-2 peer links between brokers (MIS-0004 R56 to R65): cards, not hand-written config")
+    amail_peer_sub = amail_peer.add_subparsers(dest="peer_cmd")
+    amail_peer_card = amail_peer_sub.add_parser(
+        "card", help="print what a peer's operator needs to declare this broker: domain, listener, "
+                     "agents, cards and public keys; never a secret, and it changes nothing")
+    amail_peer_card.add_argument("--agent", action="append", default=None,
+                                 help="an agent to put on the card (repeatable; default: this agent)")
+    amail_peer_card.add_argument("--all", action="store_true", help="every agent in the addressing file")
+    amail_peer_card.add_argument("--json", action="store_true", help="the card alone, one line of JSON")
+    amail_peer_card.set_defaults(func=cmd_amail_peer_card)
+    amail_peer_add = amail_peer_sub.add_parser(
+        "add", help="declare a peer from its card: its link with its agents map, and a contact for each "
+                    "agent named; shown first, written on a yes, and a no-op when already declared")
+    amail_peer_add.add_argument("card", help="the peer's card: its JSON, a file holding it, or - for stdin")
+    amail_peer_add.add_argument("--for", dest="for_agents", action="append", default=None,
+                                help="a local agent who may write to the peer's agents (repeatable; "
+                                     "default: this agent)")
+    amail_peer_add.add_argument("--note", default="", help="the operator's note on the link (kept if omitted)")
+    amail_peer_add.add_argument("--yes", action="store_true", help="write without asking")
+    amail_peer_add.add_argument("--dry-run", action="store_true", help="show the change and write nothing")
+    amail_peer_add.set_defaults(func=cmd_amail_peer_add)
+    amail_peer_check = amail_peer_sub.add_parser(
+        "check", help="check a peer link station by station: the declaration here, the peer's listener, "
+                      "the address it knows this host by, its build, the cards and keys each side declares "
+                      "for the other; with --send, one signed test message the peer must acknowledge")
+    amail_peer_check.add_argument("domain", help="the peer's mail domain")
+    amail_peer_check.add_argument("--send", action="store_true",
+                                  help="also send one signed test message through this broker")
+    amail_peer_check.add_argument("--to", default=None,
+                                  help="the test message's recipient (default: the first agent the link declares)")
+    amail_peer_check.set_defaults(func=cmd_amail_peer_check)
+
+    amail_broker_unit = amail_sub.add_parser(
+        "broker-unit", help="give a host's broker a primal daemon of its own whose one unit runs it "
+                            "(MIS-0002 R53, MIS-0007 R81): the identity and declaration, shown first; "
+                            "installing the daemon is the operator's step, printed")
+    amail_broker_unit.add_argument("--home", default=None,
+                                   help="the broker daemon's home (default: the broker config's directory)")
+    amail_broker_unit.add_argument("--write", action="store_true", help="write the identity and declaration")
+    amail_broker_unit.set_defaults(func=cmd_amail_broker_unit)
+
+    amail_outbox = amail_sub.add_parser(
+        "outbox", help="what the broker holds for its peers: this agent's mail waiting for a retry, and "
+                       "what a peer refused, with its reason")
+    amail_outbox.add_argument("--all", action="store_true", help="every agent's held mail, not only this agent's")
+    amail_outbox.add_argument("--json", action="store_true", help="machine-readable output")
+    amail_outbox.set_defaults(func=cmd_amail_outbox)
+
+    amail_inbox = amail_sub.add_parser(
+        "inbox", help="unread mail, newest first, one line each with its trust mark (what `amail list` "
+                      "shows, compact)")
+    amail_inbox.add_argument("--json", action="store_true", help="machine-readable output, as `amail list --json`")
+    amail_inbox.set_defaults(func=cmd_amail_list, compact=True, all=False, thread=None)
 
     # ── gmail ────────────────────────────────────────────────────────────
     gmail_parser = sub.add_parser(

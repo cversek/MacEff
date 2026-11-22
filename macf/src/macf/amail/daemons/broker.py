@@ -125,7 +125,24 @@ def main() -> int:
         print(f"  shared:  {dom} -> {decl.handoff} (uid {decl.uid}, gid "
               f"{decl.gid}){' ' + decl.note if decl.note else ''}", flush=True)
 
-    if cfg.shared_handoffs:
+    listener = None
+    if cfg.peer_listen is not None:
+        # RUNG 2, RECEIVING SIDE (MIS-0004 R56 to R64): one listener on the one declared private
+        # address. A start that cannot bind refuses, said, rather than run without its peers.
+        from macf.amail.peer_link import PeerListener
+        try:
+            listener = PeerListener(broker_obj, host=cfg.peer_listen[0], port=cfg.peer_listen[1]).start()
+        except (OSError, ValueError) as e:
+            print(f"refusing to start: the peer listener on {cfg.peer_listen[0]}:{cfg.peer_listen[1]} "
+                  f"could not start: {e}", file=sys.stderr)
+            server.shutdown()
+            return 1
+        print(f"  peer link: listening on {listener.host}:{listener.port}, "
+              f"peers {', '.join(sorted(cfg.peer_links)) or 'none'}", flush=True)
+    for dom, link in sorted(cfg.peer_links.items()):
+        print(f"  peer:    {dom} -> {link.host}:{link.port}{' ' + link.note if link.note else ''}", flush=True)
+
+    if cfg.shared_handoffs or cfg.peer_links:
         # RUNG 1s, RECEIVING SIDE. Peer brokers write into this broker's
         # intake across the mount; nothing consumes it unless this thread
         # runs. Kept in the broker process rather than a separate daemon so
@@ -144,6 +161,13 @@ def main() -> int:
                 except Exception as e:  # noqa: BLE001 - the sweeper must outlive one bad sweep
                     print(f"⚠️ MACF: peer-intake sweep failed: {type(e).__name__}: {e}",
                           file=sys.stderr, flush=True)
+                try:
+                    for r in broker_obj.flush_outbox():
+                        print(f"  outbox {r['peer']}/{r['name']}: {r['state']}"
+                              f"{': ' + r['reason'] if r.get('reason') else ''}", flush=True)
+                except Exception as e:  # noqa: BLE001 - a bad retry must not end the sweeper either
+                    print(f"⚠️ MACF: peer-link retry failed: {type(e).__name__}: {e}",
+                          file=sys.stderr, flush=True)
                 _time.sleep(cfg.shared_sweep_seconds)
 
         threading.Thread(target=_sweeper, name="amail-peer-intake", daemon=True).start()
@@ -151,6 +175,8 @@ def main() -> int:
 
     stop = signal.sigwait({signal.SIGTERM, signal.SIGINT})
     print(f"shutting down on {signal.Signals(stop).name}", flush=True)
+    if listener is not None:
+        listener.stop()
     server.shutdown()
     return 0
 

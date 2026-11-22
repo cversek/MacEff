@@ -1,0 +1,3 @@
+### Changed
+
+- **The restart skill asks the persistent layer how to restart a session** (GH#1052; `framework/skills/maceff-restart-session`, `persistent_layer` 5.1): the skill described only the pre-daemon auto-restart supervisor, so an agent whose session is its daemon's unit was told to look for a supervisor it doesn't have. `persistent_layer` 5.1 now says how an agent restarts its own session (`inject exit`: the unit ends with the client and the daemon starts it again at once, without waiting on a liveness reading), how the operator does (`pd unit restart session --asked-by operator`), and what restarts a session that isn't its daemon's unit; the skill points there with questions instead of embedding steps.
