@@ -105,7 +105,7 @@ def test_the_mode_line_says_who_set_it_and_when(monkeypatch):
     budget.set_mode("conserve")
     st = budget.status(now + 5)
     text = budget.mode_text(st["mode"])
-    assert text.startswith("conserve, set ") and text.endswith("by Card@abc123")
+    assert text.startswith("conserve, set by Card@abc123 at ") and len(text.rsplit(" ", 1)[1]) == 5
     assert text in budget.format_status(st, brief=True)
     assert f"budget mode: {text}" in budget.format_status(st)
 
@@ -118,3 +118,72 @@ def test_a_lapsed_mode_is_shown_with_its_date():
     st = budget.status(now, detail=True)
     assert st["lapsed"]["mode"] == "conserve"
     assert "conserve lapsed (set " in budget.format_status(st, brief=True)
+
+
+# ── the CLI paths ─────────────────────────────────────────────────────────────
+
+def _sprint_args():
+    import argparse
+    return argparse.Namespace(title="t", goal=None, scoped=None, children=None, parent=None, repo=None,
+                              no_auto_start=False, json=False, timer=None)
+
+
+def _fake_created(monkeypatch):
+    monkeypatch.setattr("macf.task.create.create_sprint", lambda **kw: {
+        "task_id": 91, "ca_path": "x.md", "scope": [], "auto_start_completed": True})
+
+
+def test_task_create_sprint_records_and_prints_the_budget_line(monkeypatch, capsys):
+    from macf.cli import cmd_task_create_sprint
+    _write([_sample(time.time() - 60, 44)])
+    _fake_created(monkeypatch)
+    assert cmd_task_create_sprint(_sprint_args()) == 0
+    out = capsys.readouterr().out
+    assert "budget at start: week 44%" in out
+    assert _events(budget_digest.START_EVENT)[0]["data"]["task_id"] == "91"
+
+
+def test_a_budget_failure_does_not_block_sprint_create(monkeypatch, capsys):
+    from macf.cli import cmd_task_create_sprint
+    _fake_created(monkeypatch)
+    monkeypatch.setattr("macf.budget.samples", lambda **kw: (_ for _ in ()).throw(OSError("log unreadable")))
+    assert cmd_task_create_sprint(_sprint_args()) == 0
+    cap = capsys.readouterr()
+    assert "Created SPRINT task #91" in cap.out
+    assert "sprint budget start not recorded for #91" in cap.err and "log unreadable" in cap.err
+
+
+def _complete(tmp_path, notes):
+    from contextlib import ExitStack
+    from unittest.mock import patch
+    from macf.cli import cmd_task_complete
+    from test_task_complete_smart import _make_args, _make_fake_task, _make_reader, _std_patches
+    sprint = _make_fake_task(42, task_type="SPRINT", custom={"goal": "g"})
+    patches = _std_patches(_make_reader(sprint, [], tmp_path))
+    patches.append(patch("macf.task.reader.add_task_note", lambda *a, **kw: notes.append(a) or True))
+    with ExitStack() as stack:
+        for p in patches:
+            stack.enter_context(p)
+        return cmd_task_complete(_make_args(42, report="done"))
+
+
+def test_task_complete_records_prints_and_notes_the_sprint_budget(tmp_path, capsys):
+    now = time.time()
+    _write([_sample(now - 60, 50)])
+    budget_digest.sprint_started("42", now)
+    _write([_sample(now + 1, 52), _metered(now + 2, calls=10)])
+    notes = []
+    assert _complete(tmp_path, notes) == 0
+    out = capsys.readouterr().out
+    assert "sprint budget: account +2" in out
+    end = _events(budget_digest.END_EVENT)[0]["data"]
+    assert end["task_id"] == "42" and end["account_points_delta"] == pytest.approx(2.0)
+    assert notes and "sprint budget: account +2" in notes[0][1]
+
+
+def test_a_budget_failure_does_not_block_sprint_complete(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("macf.budget.samples", lambda **kw: (_ for _ in ()).throw(OSError("log unreadable")))
+    assert _complete(tmp_path, []) == 0
+    cap = capsys.readouterr()
+    assert "marked complete" in cap.out
+    assert "sprint budget end not recorded for #42" in cap.err

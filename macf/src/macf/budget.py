@@ -352,13 +352,15 @@ def lapsed_mode(now: Optional[float] = None) -> Optional[dict]:
 
 
 def mode_text(mode: dict) -> str:
-    """``conserve, set 11-22 09:12 by Card@abc123``: the intent with who set it and when. A mode with no
-    ``set_at`` (the default) is just its name; an event from before the name was recorded omits the "by"."""
+    """conserve, set by Card@abc123 at 09:12: the intent, which agent ran the command and when (the date
+    too when it was not today). set_by is the agent that ran budget mode set, not the operator's own
+    entry. A mode with no set_at (the default) is just its name; an event from before the agent was
+    recorded reads set at 09:12."""
     out = mode["mode"]
     if mode.get("set_at") is not None:
-        out += f", set {dt.datetime.fromtimestamp(mode['set_at']):%m-%d %H:%M}"
-        if mode.get("set_by"):
-            out += f" by {mode['set_by']}"
+        when = dt.datetime.fromtimestamp(mode["set_at"])
+        clock = f"{when:%H:%M}" if when.date() == dt.date.today() else f"{when:%m-%d %H:%M}"
+        out += ", set" + (f" by {mode['set_by']}" if mode.get("set_by") else "") + f" at {clock}"
     return out
 
 
