@@ -144,3 +144,50 @@ def test_the_receiver_says_a_mid_run_claim_on_stderr(tmp_path, box, capsys):
     r.tick(5.0)
     err = capsys.readouterr().err
     assert "can't ingest ira's mail" in err and "claimed" in err
+
+
+def test_the_fallback_create_is_exclusive_and_leaves_a_rival_claim_untouched(tmp_path, box, monkeypatch):
+    """No hard links, and another store creates its claim between this store's check and its create."""
+    import errno
+    rival = str((tmp_path / "rival_home").resolve()) + "\n"
+
+    def link(src, dst):
+        open(dst, "w").write(rival)
+        raise OSError(errno.EPERM, "Operation not permitted")
+    monkeypatch.setattr(client.os, "link", link)
+    with pytest.raises(BoxClaimed):
+        client.ingest(tmp_path / "ira_home", box, wait=False)
+    assert (box / INGEST_CLAIM).read_text() == rival
+
+
+def test_the_fallback_records_the_resolved_home(tmp_path, box, monkeypatch):
+    import errno
+
+    def link(src, dst):
+        raise OSError(errno.EPERM, "Operation not permitted")
+    monkeypatch.setattr(client.os, "link", link)
+    real = tmp_path / "ira_home"
+    real.mkdir()
+    (tmp_path / "ira_link").symlink_to(real)
+    client.ingest(tmp_path / "ira_link", box, wait=False)
+    client.ingest(real, box, wait=False)                     # the same store through its real path
+    assert (box / INGEST_CLAIM).read_text().strip() == str(real.resolve())
+
+
+def test_an_empty_claim_being_written_holds_the_pass(tmp_path, box):
+    (box / INGEST_CLAIM).write_text("")
+    (box / "1.eml").write_text("Subject: x\n\nbody\n")
+    with pytest.raises(client.IngestBusy):
+        client.ingest(tmp_path / "copied_home", box, wait=False)
+    assert (box / "1.eml").exists()
+
+
+def test_an_empty_claim_left_standing_is_refused_by_name(tmp_path, box):
+    import os
+    claim = box / INGEST_CLAIM
+    claim.write_text("")
+    old = claim.stat().st_mtime - client.EMPTY_CLAIM_STALE_S - 5
+    os.utime(claim, (old, old))
+    with pytest.raises(BoxClaimed) as e:
+        client.ingest(tmp_path / "copied_home", box, wait=False)
+    assert str(claim) in str(e.value) and "never finished" in str(e.value)

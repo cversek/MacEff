@@ -460,8 +460,11 @@ primary group. Neither failure may read as an empty box.
 **One store ingests a box** (#872). A settings file copied into a second agent's home names
 the same box, and each store's lock is its own, so two stores would share one agent's mail
 between them with nothing said. The first ingest writes its store's home, resolved, into
-`.ingest.claim` in the box (written whole and linked into place, so two first ingests can't
-both win), and an ingest from any other store is refused, naming both homes and the file. The
+`.ingest.claim` in the box: written whole and linked into place, or, on a filesystem with no
+hard links, created exclusively; either way two first ingests can't both win. An ingest from any
+other store is refused, naming both homes and the file. An empty claim is one being written, so
+that pass waits for the next; one left empty for over a minute was never finished and is refused
+by name, with the file to remove. The
 receiver treats that refusal as a box it can't use: one notice (MIS-0002-R65), the slow
 re-check, and no clearing while the claim stands; `amail list` says so and lists what its
 store holds. Every reader of the box takes only `*.amsg` and `*.eml`, so the claim is no

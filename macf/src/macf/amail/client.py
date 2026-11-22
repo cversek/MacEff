@@ -16,6 +16,7 @@ import json
 import os
 import socket
 import stat
+import time
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
@@ -278,6 +279,8 @@ def _ingest_lock(home: Path, wait: bool) -> int:
 #: The file in a pickup box naming the one store that ingests it (#872). Every reader of the box takes only
 #: ``*.amsg`` and ``*.eml`` (ingest, the broker's counts and its aged-entry alarm), so a dotfile is no entry.
 INGEST_CLAIM = ".ingest.claim"
+#: An empty claim older than this was left by a write that never finished; younger, it is being written.
+EMPTY_CLAIM_STALE_S = 60.0
 
 
 class BoxClaimed(Exception):
@@ -303,6 +306,21 @@ def box_claim_conflict(home: Path, pickup_box: Path) -> Optional[str]:
             f"does this), so this one doesn't. If {holder} no longer ingests it, remove {path}")
 
 
+def _refuse_an_empty_claim(path: Path) -> None:
+    """An empty claim is one being written (the exclusive-create fallback writes after it creates), so
+    this pass waits (IngestBusy); one empty for over a minute was never finished, and is refused by name."""
+    if _claim_holder(path):
+        return
+    try:
+        age = time.time() - path.stat().st_mtime
+    except FileNotFoundError:
+        return  # noqa: MACEFF003 - removed since it was seen; the next pass claims afresh
+    if age > EMPTY_CLAIM_STALE_S:
+        raise BoxClaimed(f"the pickup box's claim {path} has been empty for {int(age)} s, so no store holds "
+                         f"it: a claim that was never finished. Remove it and the next ingest claims the box")
+    raise IngestBusy(f"the pickup box's claim {path} is being written; ingest waits for the next pass")
+
+
 def _claim_box(home: Path, pickup_box: Path) -> None:
     """Claim the box for *home*'s store unless one already does, or raise BoxClaimed.
 
@@ -313,6 +331,7 @@ def _claim_box(home: Path, pickup_box: Path) -> None:
         raise BoxClaimed(said)
     path = Path(pickup_box) / INGEST_CLAIM
     if path.exists():
+        _refuse_an_empty_claim(path)
         return
     temp = path.with_name(f"{INGEST_CLAIM}.{os.getpid()}")
     temp.write_text(str(Path(home).resolve()) + "\n", encoding="utf-8")
@@ -335,6 +354,7 @@ def _claim_box(home: Path, pickup_box: Path) -> None:
     said = box_claim_conflict(home, pickup_box)
     if said:
         raise BoxClaimed(said)
+    _refuse_an_empty_claim(path)
 
 
 def ingest(home: Path, pickup_box: Path, contacts_path: Optional[Path] = None,
