@@ -201,10 +201,10 @@ def test_a_fit_needs_min_rows_rows_with_metered_tokens():
 
 
 def test_a_fit_with_most_rows_unmetered_is_refused():
-    ticks = _chain(12)
-    late = [_flow(9.5 * HOUR, 12 * HOUR)]  # the meter starts late: only the last 2 of 11 rows carry tokens
+    ticks = _chain(16)  # fifteen rows
+    late = [_flow(9.5 * HOUR, 16 * HOUR)]  # the meter starts late: 6 rows carry tokens, enough in count but under half
     assert usage_ticks.fit_joint(ticks, late, 0.1, usage_ticks.MODEL_PRIORS) is None
-    half = [_flow(4.5 * HOUR, 12 * HOUR)]  # 6 of 11 rows: past the fraction, so it fits
+    half = [_flow(7.5 * HOUR, 16 * HOUR)]  # 8 of 15 rows: past the fraction, so it fits
     assert usage_ticks.fit_joint(ticks, half, 0.1, usage_ticks.MODEL_PRIORS) is not None
 
 
