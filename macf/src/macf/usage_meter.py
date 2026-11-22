@@ -304,7 +304,9 @@ def _resume_points(main: str, others: List[str]) -> _Lookup:
             quiet.add(p)
     if busy:
         points.update(_walk(busy))
-        missed = [p for p in busy if p not in points]
+        since = points[main].metering_since or time.time()
+        # only a file that began before metering did should have an event; a new one has none to find
+        missed = [p for p in busy if p not in points and _file_start(p) < since]
         again = _earlier_events(missed) if missed else {}
         points.update(again)
         lost.update(again)

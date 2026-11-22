@@ -130,3 +130,71 @@ def test_main_silent_ignores_tool_activity_older_than_an_hour(tmp_path):
     append_event(um.TOOL_EVENT, {"tool": "Bash"})
     um.meter_tick("sid", str(t), now=time.time() + 4000)
     assert _faults("main_silent") == []
+
+
+def test_a_new_subagent_file_does_not_walk_the_cycle(tmp_path, monkeypatch):
+    t = _baselined(tmp_path)
+    sub = tmp_path / "sid" / "subagents"
+    sub.mkdir(parents=True)
+    _write(sub / "a.jsonl", _line("w"))
+    from macf import agent_events_log as ael
+    real = ael.read_events
+    scopes = []
+
+    def counting(*a, **k):
+        scopes.append(k.get("scope"))
+        return real(*a, **k)
+
+    monkeypatch.setattr(ael, "read_events", counting)
+    monkeypatch.setattr(um, "_file_start", lambda p: time.time() + 5)  # born after metering began
+    um.meter_tick("sid", str(t))
+    assert "cycle" not in scopes
+
+
+def test_main_silent_fires_when_only_a_subagent_is_metered(tmp_path):
+    t = tmp_path / "s.jsonl"
+    _write(t, _line("z"))
+    sub = tmp_path / "sid" / "subagents"
+    sub.mkdir(parents=True)
+    sa = sub / "a.jsonl"
+    _write(sa, _line("w"))
+    um.meter_tick("sid", str(t))  # baselines both
+    _write(sa, _line("x"), _line("y"))
+    assert um.meter_tick("sid", str(t))["calls"] == 2
+    append_event(um.TOOL_EVENT, {"tool": "Bash"})
+    um.meter_tick("sid", str(t), now=time.time() + 700)
+    assert len(_faults("main_silent")) == 1
+
+
+def test_a_fault_repeats_after_its_hour_and_not_before():
+    now = time.time()
+    assert um._raise_fault("k", "d", now) is True
+    assert um._raise_fault("k", "d", now + 100) is False
+    assert um._raise_fault("k", "d", now + 3700) is True
+    assert len(_faults("k")) == 2
+
+
+def test_the_main_check_runs_at_most_every_ten_minutes(tmp_path):
+    t = _baselined(tmp_path)
+    now = time.time()
+    um.meter_tick("sid", str(t), now=now + 10)
+    um.meter_tick("sid", str(t), now=now + 70)
+    assert len(_events(um.CHECKED_EVENT)) == 1
+    um.meter_tick("sid", str(t), now=now + 700)
+    assert len(_events(um.CHECKED_EVENT)) == 2
+
+
+def test_the_fallback_stops_at_the_cycle_boundary(tmp_path, monkeypatch):
+    t = _baselined(tmp_path)
+    append_event("compaction_detected", {})
+    monkeypatch.setattr(um, "_file_start", lambda p: time.time() + 10_000)
+    _write(t, _line("a"))
+    um.meter_tick("sid", str(t))
+    assert _faults("rebaselined") == []
+    assert [d.get("baseline") for d in _events(um.EVENT)] == [True, True]
+
+
+def test_a_tick_without_new_calls_does_not_roll(tmp_path):
+    t = _baselined(tmp_path)
+    um.meter_tick("sid", str(t))
+    assert _events(us.ROLLED_EVENT) == []
