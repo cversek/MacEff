@@ -201,6 +201,38 @@ def _visible(line: str) -> str:
 _NO_BOX = "no_box"
 
 
+def _is_prompt(line: str) -> bool:
+    """Whether *line* opens with the input prompt; the client follows it with a no-break space."""
+    return line.lstrip(" \u00a0").startswith(("❯", ">"))
+
+
+@dataclass(frozen=True, kw_only=True)
+class _Box:
+    """Where the input box sits on a screen: its rules' line numbers and its non-blank rows."""
+    top: int
+    bottom: int
+    rows: list
+
+
+def _locate_box(plain: list, rules: list) -> Optional[_Box]:
+    """The input box's place (its two rules and its rows), or None. The box is the LAST prompt line that
+    has a rule above and a rule below it, found afresh on every screen: the background-task
+    panel the client draws under the box (and its rules) moves the box's distance from the
+    bottom as tasks come and go, and prompt lines in the conversation above are never later."""
+    for i in range(len(plain) - 1, -1, -1):
+        if not _is_prompt(plain[i]):
+            continue
+        above = [r for r in rules if r < i]
+        under = [r for r in rules if r > i]
+        if not above or not under:
+            continue
+        top, bottom = above[-1], under[0]
+        if any(plain[j].strip() for j in range(top + 1, i)):
+            continue                                       # text between the rule and the prompt
+        return _Box(top=top, bottom=bottom, rows=[j for j in range(top + 1, bottom) if plain[j].strip()])
+    return None
+
+
 def _box(screen: str):
     """``(state, text)``: None and the box's text (empty for an empty box) for an idle
     session; RUNNING and the box's text while a turn runs; DIALOG and None for a box with a
@@ -209,12 +241,10 @@ def _box(screen: str):
     plain = [_ANSI.sub("", line) for line in raw]
     rules = [i for i, line in enumerate(plain)
              if _RULE.match(line) and line.count("─") >= _RULE_MIN]
-    if len(rules) < 2:
+    found = _locate_box(plain, rules)
+    if found is None:
         return _NO_BOX, None                               # no input box on screen
-    top, bottom = rules[-2], rules[-1]
-    box = [i for i in range(top + 1, bottom) if plain[i].strip()]
-    if not box or not plain[box[0]].lstrip().startswith(("❯", ">")):
-        return _NO_BOX, None
+    top, bottom, box = found.top, found.bottom, found.rows
     below = [line for line in plain[bottom + 1:] if line.strip()]
     if len(below) > 8 or any(m in line.lower() for line in below for m in _DIALOG_MARKERS):
         return DIALOG, None
