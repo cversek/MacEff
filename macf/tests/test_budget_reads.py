@@ -37,9 +37,9 @@ def reads(monkeypatch, isolated_events_log):
 YIELDED = []
 
 
-def _mode(t, mode):
+def _mode(t, mode, target=None):
     return {"timestamp": t, "event": "budget_mode_set",
-            "data": {"mode": mode, "target": None, "by": None, "scope": None}}
+            "data": {"mode": mode, "target": target, "by": None, "scope": None}}
 
 
 def test_the_newest_sample_is_found_without_reading_the_week(reads):
@@ -129,3 +129,68 @@ def test_a_sample_fetch_looks_back_only_as_far_as_its_interval(reads):
     floor = now - budget.MIN_FETCH_INTERVAL
     sample_reads = [since for only, since in reads if only == ("budget_sampled",)]
     assert sample_reads and all(since is not None and since >= floor - 1 for since in sample_reads)
+
+
+# ── each hook uses the bounds ─────────────────────────────────────────────────
+
+def _old_and_new_samples(now):
+    """Three samples a day or more old and the newest ten minutes ago: a hook that uses its horizon consumes the
+    newest only (and one more to learn there is a budget); a read of the history window consumes all four."""
+    return [_sample(now - 5 * DAY, 10), _sample(now - 2 * DAY, 20), _sample(now - DAY, 30), _sample(now - 600, 41)]
+
+
+def _sample_reads():
+    return YIELDED.count("budget_sampled")
+
+
+def test_the_prompt_notice_uses_its_horizon(reads):
+    now = time.time()
+    _write(_old_and_new_samples(now))
+    budget.prompt_notice(now)
+    assert _sample_reads() <= 2
+
+
+def test_the_wall_line_uses_its_horizon(reads):
+    now = time.time()
+    _write(_old_and_new_samples(now))
+    budget.wall_warning(now)
+    assert _sample_reads() <= 2
+
+
+def test_the_burn_gate_uses_its_horizon_and_the_mode_it_already_read(reads, monkeypatch):
+    now = time.time()
+    monkeypatch.setattr(budget, "open_work", lambda: [{"id": "1", "type": "TASK", "status": "pending",
+                                                       "scoped": True, "subject": "x"}])
+    _write(_old_and_new_samples(now) + [_mode(now - 3600, "burn", 95)])
+    budget.burn_gate(True, now)
+    assert _sample_reads() <= 2
+    assert len([only for only, _ in reads if only == ("budget_mode_set",)]) == 1
+
+
+def test_without_samples_no_hook_reaches_for_the_status(reads, monkeypatch):
+    def refuse(*a, **kw):
+        raise AssertionError("status was called with no budget in use")
+    monkeypatch.setattr(budget, "status", refuse)
+    now = time.time()
+    assert budget.prompt_notice(now) is None
+    assert budget.wall_warning(now) is None
+    _write([_mode(now - 3600, "burn", 95)])
+    assert budget.burn_gate(True, now)["block"] is False
+
+
+def test_the_hook_horizon_is_four_time_constants():
+    assert budget.hook_horizon_h() == 4 * budget._tau_hours()
+
+
+def test_a_sample_inside_the_horizon_is_read_and_one_outside_is_not(reads):
+    now = time.time()
+    tau = budget._tau_hours()
+    _write([_sample(now - 5 * tau * HOUR, 10), _sample(now - 3 * tau * HOUR, 20), _sample(now - 600, 30)])
+    YIELDED.clear()
+    budget.status(now, horizon_h=budget.hook_horizon_h())
+    assert _sample_reads() == 2  # the one at 3 time constants and the newest, not the one at 5
+
+
+def test_a_hook_status_with_no_samples_says_what_to_do(reads):
+    with pytest.raises(budget.BudgetError):
+        budget.status(time.time(), horizon_h=budget.hook_horizon_h())
