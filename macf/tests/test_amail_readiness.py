@@ -104,3 +104,54 @@ def test_a_broker_declared_in_an_agents_own_daemon_reads_supervised(tmp_path):
     assert sup.ok is True and "amail-broker" in sup.detail and "Ira_0a1b2c" in sup.detail
     sup = _by(readiness.pieces(cfg))["broker supervision"]
     assert sup.ok is False and "pd install" in sup.fix and "broker-unit" not in sup.fix
+
+
+def test_a_different_key_declared_for_the_card_is_not_this_agents(tmp_path):
+    """CTB's review of #1104: a stale key declared for the card leaves this agent's mail unverified as
+    surely as none; the piece fails and prints the declaration for the key the agent holds."""
+    from macf.amail.crypto import generate_keypair
+    key = generate_keypair(tmp_path / "keys" / "ira.pem")
+    stale = generate_keypair(tmp_path / "keys" / "old.pem")
+    cfg = {"agent": "ira", "domain": "alpha.test", "signing_key": str(tmp_path / "keys" / "ira.pem"),
+           "signing_required": True, "broker_config": str(_host(tmp_path))}
+    reg = _by(readiness.pieces(cfg, registry=_registry(tmp_path, {"Ira_0a1b2c": {"account": "ira",
+                                                                                "keys": [stale]}})))["registry"]
+    assert reg.ok is False and "another one" in reg.detail and key in reg.fix
+
+
+def _peer_piece(tmp_path, *, agents, waiting=0, refused=0, declared_as="beta.test"):
+    link = {"host": "100.64.0.9", "port": 8030}
+    if agents:
+        link["agents"] = {"sparrow": "Sparrow_6a7b8c"}
+    cfg_path = _host(tmp_path, peers={declared_as: link})
+    out = tmp_path / "amail-host" / "handoff" / "_outbox" / "beta.test"      # the broker lowercases
+    (out / "refused").mkdir(parents=True)
+    for i in range(waiting):
+        (out / f"1-w{i}.amsg").write_text("x")
+    for i in range(refused):
+        (out / "refused" / f"1-r{i}.amsg").write_text("x")
+    cfg = {"agent": "ira", "domain": "alpha.test", "broker_config": str(cfg_path)}
+    return next(p for p in readiness.pieces(cfg) if p.name.startswith("peer "))
+
+
+def test_each_peer_condition_alone(tmp_path):
+    assert _peer_piece(tmp_path / "a", agents=True, waiting=1).ok is None
+    assert _peer_piece(tmp_path / "b", agents=True, refused=1).ok is False
+    assert _peer_piece(tmp_path / "c", agents=False).ok is False
+    assert _peer_piece(tmp_path / "d", agents=True).ok is True
+
+
+def test_a_peer_declared_in_another_case_counts_the_outbox_the_broker_writes(tmp_path):
+    """CTB's review: the broker names a peer's outbox by the lowercased domain, so a peer declared as
+    `Beta.Test` must be counted there, or it reads nothing waiting on a case-sensitive filesystem."""
+    p = _peer_piece(tmp_path, agents=True, waiting=2, declared_as="Beta.Test")
+    assert "2 waiting" in p.detail
+
+
+def test_the_outbox_directory_is_the_one_the_broker_names(tmp_path):
+    """The broker's own name for a peer's outbox, so the check holds on a case-sensitive filesystem too."""
+    from types import SimpleNamespace
+
+    from macf.amail.broker import Broker
+    broker = SimpleNamespace(config=SimpleNamespace(inbound_handoff=tmp_path))
+    assert readiness.outbox_dir(tmp_path, " Beta.Test ") == Broker._outbox(broker, " Beta.Test ")
