@@ -65,12 +65,7 @@ def run_disclaimed(argv: List[str]) -> int:
     child.append(pid)
     for sig in pending:
         os.kill(pid, sig)
-    while True:
-        try:
-            _, status = os.waitpid(pid, 0)
-            break
-        except InterruptedError:
-            continue
+    _, status = os.waitpid(pid, 0)  # PEP 475: a signal handled meanwhile resumes the wait, never raises EINTR
     if os.WIFSIGNALED(status):
         return 128 + os.WTERMSIG(status)
     return os.WEXITSTATUS(status)

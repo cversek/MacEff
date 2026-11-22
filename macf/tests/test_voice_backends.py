@@ -92,7 +92,7 @@ def test_a_microphone_this_process_may_not_use_is_refused_naming_the_grant(monke
     """Without access macOS hands PortAudio zeros; the unit must say so, not record silence as quiet."""
     from macf.voice.capture import macos
     opened = []
-    monkeypatch.setattr(macos, "_open_stream", lambda: opened.append(1))
+    monkeypatch.setattr(macos, "_open_stream", lambda frames: opened.append(1))
     monkeypatch.setattr(macos, "_microphone_access", lambda: macos.DENIED)
     with pytest.raises(AudioEnded, match="Privacy & Security, Microphone"):
         macos.MacAudioIn().open()

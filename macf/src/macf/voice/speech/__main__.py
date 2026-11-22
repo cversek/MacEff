@@ -48,14 +48,14 @@ def main(argv=None) -> int:
         from macf.voice.speech.macos import MlxKokoroEngine
         try:
             engine = MlxKokoroEngine()
-        except RuntimeError as e:
-            print(f"⚠️ MACF: voice: Kokoro on the GPU is unavailable ({e}); falling back to the CPU model",
-                  file=sys.stderr)
+        except Exception as e:  # noqa: BLE001 - offline first start raises hub/OS errors; any failure falls back, said with its reason
+            print(f"⚠️ MACF: voice: Kokoro on the GPU is unavailable ({type(e).__name__}: {e}); "
+                  f"falling back to the CPU model", file=sys.stderr)
     try:
         if engine is None:
             engine = KokoroEngine(models_dir(home) / "kokoro-v1.0.onnx", models_dir(home) / "voices-v1.0.bin")
-    except RuntimeError as e:
-        print(f"⚠️ MACF: voice: the speech worker can't start: {e}", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001 - a missing or unreadable model must exit with its reason, not a traceback
+        print(f"⚠️ MACF: voice: the speech worker can't start ({type(e).__name__}: {e})", file=sys.stderr)
         return EX_CONFIG
     from macf.voice.capture import platform
     read_lock = platform.lock_state()

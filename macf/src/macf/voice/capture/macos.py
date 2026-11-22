@@ -7,6 +7,7 @@ microphone and reads the screen as ``unknown``.
 """
 from __future__ import annotations
 
+import queue
 import sys
 import threading
 from typing import Any, Callable, List, Optional, Sequence
@@ -16,10 +17,25 @@ import numpy as np
 from macf.voice.capture.backends import FRAME, RATE, AudioEnded, AudioIn, KeyEvent, LockState, Screen, TriggerSource
 
 
-def _open_stream():
-    """The default input as a 16 kHz mono int16 stream, read one frame at a time; Core Audio resamples."""
+#: A frame is 32 ms; this long with none means the device is gone (unplugged, or taken by another app).
+READ_TIMEOUT_S = 2.0
+
+
+def _open_stream(frames):
+    """The default input as a 16 kHz mono int16 stream; Core Audio resamples. Each block lands in frames.
+
+    PortAudio is re-initialized first, so the default device is the one that exists now: the device list
+    it holds is a snapshot from its initialization, and a microphone plugged in or pulled since is not in it.
+    """
     import sounddevice
-    stream = sounddevice.RawInputStream(samplerate=RATE, channels=1, dtype="int16", blocksize=FRAME)
+    sounddevice._terminate()
+    sounddevice._initialize()
+
+    def arrived(indata, _frame_count, _time, status):
+        frames.put((bytes(indata), bool(status.input_overflow)))
+
+    stream = sounddevice.RawInputStream(samplerate=RATE, channels=1, dtype="int16", blocksize=FRAME,
+                                        callback=arrived)
     stream.start()
     return stream
 
@@ -60,6 +76,7 @@ class MacAudioIn(AudioIn):
 
     def __init__(self) -> None:
         self._stream: Optional[Any] = None
+        self._frames: "queue.Queue[tuple]" = queue.Queue()
         self.overflows = 0
 
     def open(self) -> None:
@@ -72,7 +89,8 @@ class MacAudioIn(AudioIn):
             raise AudioEnded(f"microphone access {why} for {own_executable()}; allow it in System Settings, "
                              f"Privacy & Security, Microphone, then restart the capture unit")
         try:
-            self._stream = _open_stream()
+            self._frames = queue.Queue()
+            self._stream = _open_stream(self._frames)
         except (OSError, ImportError) as e:   # sounddevice raises PortAudioError, an OSError subclass
             raise AudioEnded(f"the microphone can't be opened: {e}") from e
 
@@ -80,9 +98,9 @@ class MacAudioIn(AudioIn):
         if self._stream is None:
             raise AudioEnded("the microphone is closed")
         try:
-            raw, overflowed = self._stream.read(FRAME)
-        except OSError as e:
-            raise AudioEnded(f"the microphone's stream broke: {e}") from e
+            raw, overflowed = self._frames.get(timeout=READ_TIMEOUT_S)
+        except queue.Empty:
+            raise AudioEnded(f"the microphone sent nothing for {READ_TIMEOUT_S:.0f} s; the device may be gone") from None
         if overflowed:
             self.overflows += 1
             if self.overflows == 1:

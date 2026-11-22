@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 from typing import List
 
 import numpy as np
@@ -90,6 +91,8 @@ class _Output:
 
 
 _OUTPUT = _Output()
+#: seconds allowed past a sentence's length before the speaker counts as gone
+PLAY_MARGIN_S = 3.0
 
 
 class MacAudioOut(AudioOut):
@@ -107,8 +110,17 @@ class MacAudioOut(AudioOut):
         with _OUTPUT.lock:
             _OUTPUT.drained.clear()
             _OUTPUT.pending = np.concatenate([_OUTPUT.pending, samples])
+        #: the sentence's own length plus a margin: a stream that stops pulling (a device switched or pulled)
+        #: must not leave the worker waiting forever
+        deadline = time.monotonic() + samples.size / _OUTPUT.rate + PLAY_MARGIN_S
         while not _OUTPUT.drained.wait(BLOCK_S):
-            pass
+            stream = _OUTPUT.stream
+            if time.monotonic() > deadline or stream is None or not stream.active:
+                print("⚠️ MACF: voice: the speaker stopped taking audio (device changed or gone); "
+                      "reopening it, the rest of this sentence is dropped", file=sys.stderr)
+                self.stop()
+                _OUTPUT.close()
+                return
 
     def stop(self) -> None:
         with _OUTPUT.lock:
