@@ -14,6 +14,7 @@ putting the daemon under the service manager is the operator's step, printed, ne
 """
 import json
 import os
+import sys
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -85,6 +86,41 @@ class HostDaemonPlan:
         return written
 
 
+@dataclass(frozen=True, kw_only=True)
+class DeclaredBroker:
+    """A daemon declaration that already runs the broker on a given config: whose, and where."""
+    card: str
+    home: Path
+    unit: str
+
+
+def declared_broker(broker_config: Path, homes: Sequence[Path]) -> Optional[DeclaredBroker]:
+    """The first of *homes* whose daemon declaration has a unit running the broker on *broker_config*,
+    or None. A broker may already be a unit of an agent's own daemon, as on a host set up by hand; a
+    second daemon for it would contend for the same socket and listener (one broker per system)."""
+    from macf.pd.names import IdentityError, agent_card, declaration_path
+    target = Path(broker_config).resolve()
+    for home in homes:
+        path = declaration_path(Path(home))
+        try:
+            declared = json.loads(path.read_text())
+        except FileNotFoundError:   # noqa: S112 - a home with no declaration declares no broker
+            continue
+        except (OSError, ValueError) as e:
+            print(f"⚠️ MACF: amail: {path} can't be read (not counted as declaring the broker): {e}", file=sys.stderr)
+            continue
+        for unit in declared.get("units") or []:
+            command = [str(a) for a in unit.get("command") or []]
+            conf = (unit.get("environment") or {}).get("AMAIL_BROKER_CONFIG")
+            if "macf.amail.daemons.broker" in command and conf and Path(conf).resolve() == target:
+                try:
+                    card = agent_card(Path(home))
+                except IdentityError:
+                    card = str(declared.get("agent") or home)
+                return DeclaredBroker(card=card, home=Path(home), unit=str(unit.get("name")))
+    return None
+
+
 def _identity_conflict(home: Path, card: str) -> Optional[str]:
     """Why *home* can't be the broker daemon's home, or None: it names another agent."""
     from macf.pd.names import IdentityError, agent_card
@@ -113,6 +149,12 @@ def plan(broker_config: Path, *, python: Path, account: str, path_dirs: Sequence
         raise HostDaemonError(str(e)) from e
     home = Path(home).resolve() if home else broker_config.parent
     card = card_for(addressing.domain)
+    elsewhere = declared_broker(broker_config, [b.home for b in addressing.agents.values() if b.home
+                                                and Path(b.home).resolve() != home])
+    if elsewhere is not None:
+        raise HostDaemonError(f"the broker on {broker_config} is already unit {elsewhere.unit!r} of {elsewhere.card}'s "
+                              f"daemon ({elsewhere.home}); a second daemon would contend for its socket and "
+                              f"listener (one broker per system, MIS-0004 R01). Nothing to do here.")
     problem = _identity_conflict(home, card)
     if problem:
         raise HostDaemonError(problem)
