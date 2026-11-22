@@ -409,6 +409,17 @@ class ContactBook:
         return [a for a in parsed.by_agent.get(agent, [])
                 if parsed.direction_for(agent, a) in allowed]
 
+    def entries_for(self, agent: str) -> List[Dict[str, str]]:
+        """Every correspondent declared for *agent*, each with its declared direction, in file order.
+
+        The whole list, `neither` included: an agent that can see only the addresses it may use
+        cannot tell a withdrawn correspondent from one that was never declared. Identity only. An
+        entry carries no key, no push grant and no route (routes can't be declared at all, §4.2),
+        so the listing cannot leak what the file keeps from an agent."""
+        parsed = self._load_full()
+        return [{"address": a, "direction": parsed.direction_for(agent, a) or "neither"}
+                for a in parsed.by_agent.get(agent, [])]
+
     def declared_direction(self, agent: str, correspondent: str) -> Optional[str]:
         """The direction declared for this correspondent, or None if unlisted.
 
