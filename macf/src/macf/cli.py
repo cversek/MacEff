@@ -11315,6 +11315,9 @@ def cmd_amail_broker_unit(args: argparse.Namespace) -> int:
         print(f"❌ {e}")
         return 1
     print(f"broker daemon {plan.card}, home {plan.home}")
+    print(f"   its unit runs {sys.executable} with this shell's PATH"
+          + (" and PYTHONPATH" if os.environ.get("PYTHONPATH") else "")
+          + ": run this from the environment the broker should run in")
     for path in plan.unchanged:
         print(f"   {path}: already as it should be")
     for path, text in plan.files.items():

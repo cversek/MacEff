@@ -101,3 +101,16 @@ def test_a_broker_already_a_unit_of_an_agents_own_daemon_gets_no_second_daemon(t
     assert not (cfg.parent / ".maceff").exists()
     found = host_daemon.declared_broker(cfg, [home])
     assert (found.card, found.unit) == ("Ira_0a1b2c", "amail-broker")
+
+
+def test_a_broker_declared_for_another_config_is_not_this_one(tmp_path):
+    """CTB's review: the check is for THIS config's broker. A daemon running a broker on another
+    config (a second domain on the same host) doesn't stop this one getting its own daemon."""
+    cfg = _broker_config(tmp_path)
+    home = tmp_path / "ira"
+    (home / ".maceff" / "pd").mkdir(parents=True)
+    (home / ".maceff" / "pd" / "declaration.json").write_text(json.dumps({"version": 1, "agent": "Ira_0a1b2c", "units": [
+        {"name": "amail-broker", "command": [sys.executable, "-m", "macf.amail.daemons.broker"],
+         "environment": {"AMAIL_BROKER_CONFIG": str(tmp_path / "other" / "broker_config.yaml")}}]}))
+    assert host_daemon.declared_broker(cfg, [home]) is None
+    assert _plan(cfg).files
