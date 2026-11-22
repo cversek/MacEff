@@ -73,6 +73,7 @@ A system daemon and a fleet daemon are the base placed again, and MIS-0007 speci
 - How does my Claude Code session itself run as a unit of my primal daemon, and how do I attach to it?
 - How do I restart my own session, how does the operator restart it, and what restarts a session that isn't its daemon's unit?
 - What reports a session's liveness, given that an idle session has no work loop?
+- My session runs under its daemon but can't work: how do I get it working again?
 - How is a session moved from the legacy harness onto its daemon, and what shows the plan before anything changes?
 - How does the move run on macOS, where does its launchd job log, and what is left of the job when it ends?
 - Why do the transcript monitor and the search service run as units of a daemon, how are they declared, and what stops the old ad-hoc starts from doubling them?
@@ -615,6 +616,14 @@ An agent's session runs as a unit of its primal daemon, as do the transcript mon
 The session reads running again, as the same process, once a reply comes through. A daemon that starts while the session reads failed for its login adopts it like a live session, because it is still running. If its beat stops as well, the session has died, and it fails and restarts like any other.
 
 **The failed record is repeated once a day for as long as the failure lasts** (#896). The `failed` state is written once when the login fails, and a session that beats steadily writes no other state event. The outside watch reads state within a seven-day lookback, and liveness more often, so a failure rotated into an archive by `macf_tools events rotate`, or older than the lookback, would leave only fresh beats, and the watch would read the session healthy while it still can't work. So the core says it again each day, as the same state of the same process, with the reason `authentication failed: <what the client said> (still failed; first recorded <time>)` and a `since` that carries when the failure began, which the readout takes as how long the unit has been failed, so the repeat never makes an old failure look new. Nothing else changes: the session is not restarted, and a reader that takes the newest state reads the same thing.
+
+**A session that runs under its daemon but can't work is stranded, and the way out starts from `pd status`** (#1073):
+1. `macf_tools pd status` names the state. `failed` with a login reason is a login problem whether or not the account is logged in. Beneath it, a `probable cause:` line says when the session unit's declared environment lacks `USER` or `LOGNAME`: on macOS a session started without them can't find its stored login.
+2. Add both to the environment of every unit. `agent init --update` names the lines to add as drift and never overwrites a declaration, so the edit is by hand: validate the declaration before writing it, and keep a backup beside it.
+3. Restart the daemon so it rereads the declaration, which is the operator's step (an agent's permission layer refuses the service manager), then the session unit (`macf_tools pd unit restart session --asked-by operator --reason ...`), so its environment is rendered from the new declaration [MIS-0002-R13 (pd_MUST_render_env_at_start)].
+4. Only if it still reads expired: `macf_tools harness attach --card <card>` and `/login` in the session. The daemon records it running again at its next reply, and nothing else needs restarting.
+
+No verb yet adopts a live session that was started by hand into its unit; that one is ended, and the unit started.
 
 ### 5.2 Moving a session onto its daemon
 
