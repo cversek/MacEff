@@ -382,6 +382,13 @@ def _enough_metered(rows: List[_Row], coefs: int) -> bool:
             and len(rows) >= coefs + COEF_MARGIN)
 
 
+def _width_notes(scale: Estimate) -> List[str]:
+    """A note when the bootstrap interval has collapsed to a point, which must not read as confidence."""
+    if scale.high - scale.low <= 1e-9 * abs(scale.value):
+        return ["the interval has no width: too little data to say how sure the rates are"]
+    return []
+
+
 def fit_joint(ticks: Sequence[Tick], flows: List[_Flow], cr: float, priors: Dict[str, float],
               notes: Sequence[str] = ()) -> Optional[TickFit]:
     """The joint fit on one counter's ticks, or None with too few usable rows."""
@@ -408,8 +415,7 @@ def fit_joint(ticks: Sequence[Tick], flows: List[_Flow], cr: float, priors: Dict
 
     fnotes = list(notes)
     scale = _percentiles([b[0] for b in boots], c[0])
-    if scale.high - scale.low <= 1e-9 * abs(scale.value):
-        fnotes.append("the interval has no width: too little data to say how sure the rates are")
+    fnotes += _width_notes(scale)
     if c[0] <= 0:
         fnotes.append("the scale is not positive: the data does not support a rate")
     total_x = {m: sum(r.x.get(m, 0.0) for r in rows) for m in models}

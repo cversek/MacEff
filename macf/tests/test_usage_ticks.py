@@ -268,3 +268,14 @@ def test_a_scoped_fit_with_no_metered_tokens_is_refused_not_a_zero_rate():
     assert usage_ticks.fit_scoped(cross, other, 0.1, None) is None
     mine = [_flow(0, 10 * HOUR, model="claude-sonnet-4")]
     assert usage_ticks.fit_scoped(cross, mine, 0.1, None) is not None
+
+
+def test_enough_rows_by_fraction_and_margin_are_still_refused_when_the_metered_count_is_below_min_rows():
+    ticks = _chain(9)  # eight rows
+    four = [_flow(4.5 * HOUR, 9 * HOUR)]  # four of them carry tokens: all of half, past the coefficient margin
+    assert usage_ticks.fit_joint(ticks, four, 0.1, usage_ticks.MODEL_PRIORS) is None
+
+
+def test_a_collapsed_interval_is_noted_and_a_real_one_is_not():
+    assert any("no width" in n for n in usage_ticks._width_notes(usage_ticks.Estimate(value=2e-8, low=2e-8, high=2e-8)))
+    assert usage_ticks._width_notes(usage_ticks.Estimate(value=2e-8, low=1e-8, high=3e-8)) == []
