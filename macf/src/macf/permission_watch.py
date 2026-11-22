@@ -607,6 +607,39 @@ def approvals(events_oldest_first: Iterable[dict], rules: List[Tuple[str, str, P
     return out
 
 
+def previous_call_note(events_oldest_first: Iterable[dict], session_id: str) -> Optional[str]:
+    """One line when this session's previous call ran because the operator approved it at a dialog, else
+    None (#1060). Read at a call's start, it speaks of the call before, so it says each approval once,
+    with nothing recorded. Only the exception: a call a rule or the mode let through says nothing, and a
+    denial the client already reports to the agent itself."""
+    rows = [a for a in approvals(events_oldest_first, []) if a.session_id == session_id]
+    if len(rows) < 2:
+        return None
+    prev = rows[-2]
+    if prev.how != "dialog" or not prev.detail.startswith("approved"):
+        return None
+    return (f"Your previous call ({prev.tool}: {prev.command[:60]}) ran because the operator approved it at a "
+            f"permission dialog, not by a rule. See: macf_tools permissions how")
+
+
+def read_previous_call_note(session_id: str, limit: int = 400) -> Optional[str]:
+    """``previous_call_note`` over this agent's newest events, read back only as far as this session's
+    previous call started (bound by meaning; ``limit`` caps it). It runs at every call's start, so it
+    reads what that one answer needs and no more."""
+    from macf.agent_events_log import read_events
+    window, starts = [], 0
+    for event in read_events(reverse=True, scope="all", only=PROGRESS | {REQUEST}):
+        window.append(event)
+        if event.get("event") == "tool_call_started" and _session_of(event) == session_id:
+            starts += 1
+            if starts == 2:      # this call's start, then the previous call's: all that is needed
+                break
+        if len(window) >= limit:
+            break
+    window.reverse()
+    return previous_call_note(window, session_id)
+
+
 def read_approvals(days: float, *, home: Optional[Path] = None, project_dir: str = "",
                    environ=None) -> List[Approval]:
     """``approvals`` over the last ``days`` of this agent's log, against the rules in force now."""
