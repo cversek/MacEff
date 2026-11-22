@@ -431,3 +431,138 @@ def registry_lines(card: Dict) -> List[str]:
     return [f"sudo macf_tools amail registry declare --card {held['card']} --key {held['key']} "
             f"--account {held.get('account') or '<account>'}"
             for _box, held in sorted(card["agents"].items()) if held.get("key")]
+
+
+# ---- checking a peer link, station by station --------------------------------------------------------
+#
+# Each station is one place on the path a message takes from this broker's files to the peer's agent:
+# the declaration here, the peer's listener, the address it knows this broker by, its build, the cards
+# and keys each side declares for the other, and, when asked, one message the peer acknowledges. A
+# station that fails says what failed and the command that fixes it, and the stations that depend on it
+# are not run, so the first failure is the one to fix.
+
+@dataclass(frozen=True, kw_only=True)
+class Station:
+    """One station of a peer check: passed (True), failed (False) or not run or unknown (None)."""
+    name: str
+    ok: Optional[bool]
+    detail: str
+    fix: str = ""
+
+
+def check_peer(broker_config: Path, domain: str, *, registry=None, send=None) -> List[Station]:
+    """Check the rung-2 link from the broker *broker_config* declares to the peer *domain*.
+
+    *send*, when given, is called with no arguments to send one test message to the peer and returns
+    the broker's submit result; the last station passes only when the peer acknowledged it."""
+    from macf.amail import peer_link
+    from macf.amail.registry import RegistryError
+
+    out: List[Station] = []
+    try:
+        deploy, addressing = _load(broker_config)
+    except CardError as e:
+        return [Station(name="config", ok=False, detail=str(e), fix="fix the broker config, then check again")]
+    dom = domain.strip().lower()
+    links = {k.strip().lower(): v for k, v in deploy.peer_links.items()}
+    link = links.get(dom)
+    if link is None:
+        return [Station(name="config", ok=False, detail=f"{broker_config} declares no peer link to {domain}",
+                        fix=f"get {domain}'s card and run: macf_tools amail peer add '<its card>'")]
+    out.append(Station(name="config", ok=True, detail=f"{domain} is declared at {link.host}:{link.port}"))
+
+    if not link.agents:
+        out.append(Station(name="our agents map", ok=False,
+                           detail=f"the link to {domain} declares none of its agents, so none of its mail can "
+                                  f"read attested here (MIS-0004 R44)",
+                           fix=f"get {domain}'s card and run: macf_tools amail peer add '<its card>'"))
+    else:
+        out.append(Station(name="our agents map", ok=True,
+                           detail=", ".join(f"{b} = {c}" for b, c in sorted(link.agents.items()))))
+    missing = []
+    for card in sorted(set(link.agents.values())):
+        try:
+            if registry is None or not registry.signing_keys(card):
+                missing.append(card)
+        except RegistryError as e:
+            print(f"⚠️ MACF: peer check could not read the registry (counting {card} undeclared): {e}",
+                  file=sys.stderr)
+            missing.append(card)
+    if link.agents:
+        out.append(Station(name="our registry", ok=not missing,
+                           detail=(f"no key declared here for {', '.join(missing)}, so their mail reads "
+                                   f"unverified here") if missing else "a key is declared for each of its agents",
+                           fix=("the operator runs the registry lines from the peer's card: "
+                                "sudo macf_tools amail registry declare ...") if missing else ""))
+
+    try:
+        reply = peer_link.send_request(link.host, link.port, {"op": "ping", "from": addressing.domain})
+    except peer_link.ClosedUnread as e:
+        out.append(Station(name="address", ok=False,
+                           detail=f"{e}: the peer does not declare this host's address as {addressing.domain}",
+                           fix=f"send {domain}'s operator this broker's card: macf_tools amail peer card"))
+        return out
+    except ConnectionError as e:
+        out.append(Station(name="listener", ok=False, detail=str(e),
+                           fix=f"is {domain}'s broker running, with peer_listen on {link.host}:{link.port}, "
+                               f"and does its firewall admit this host?"))
+        return out
+    out.append(Station(name="listener", ok=True, detail=f"{link.host}:{link.port} answers"))
+    if not reply.get("ok"):
+        reason = str(reply.get("reason", ""))
+        if "unknown request" in reason:
+            out.append(Station(name="build", ok=None,
+                               detail=f"{domain}'s broker has no ping, an older build; the stations past this "
+                                      f"one can't be checked from here",
+                               fix=f"{domain}'s operator updates macf and restarts its broker"))
+        else:
+            out.append(Station(name="address", ok=False, detail=f"the peer refused the check: {reason}",
+                               fix=f"send {domain}'s operator this broker's card: macf_tools amail peer card"))
+        return out
+    out.append(Station(name="address", ok=True,
+                       detail=f"the peer knows this host as {reply.get('you_are')}"))
+    from macf import __version__
+    out.append(Station(name="build", ok=True,
+                       detail=f"peer {reply.get('build')}, here {__version__}, protocol {reply.get('protocol')}"))
+
+    declared = reply.get("your_agents") or {}
+    ours = {name: b.card for name, b in addressing.agents.items() if b.card}
+    wrong = sorted(b for b, c in declared.items() if b in ours and ours[b] != c)
+    absent = sorted(b for b in ours if b not in declared)
+    if wrong or not declared:
+        out.append(Station(name="their agents map", ok=False,
+                           detail=(f"the peer declares other cards for {', '.join(wrong)}" if wrong else
+                                   "the peer declares none of this broker's agents, so none of their mail can "
+                                   "read attested there"),
+                           fix=f"send {domain}'s operator this broker's card: macf_tools amail peer card --all"))
+    else:
+        out.append(Station(name="their agents map", ok=True,
+                           detail=", ".join(f"{b} = {c}" for b, c in sorted(declared.items()))
+                                  + (f"; not declared there: {', '.join(absent)}" if absent else "")))
+    keys = reply.get("your_keys_declared") or {}
+    undeclared = sorted(c for c, v in keys.items() if v is False)
+    unknown = sorted(c for c, v in keys.items() if v is None)
+    if declared:
+        out.append(Station(name="their registry", ok=False if undeclared else (None if unknown else True),
+                           detail=(f"no key declared there for {', '.join(undeclared)}" if undeclared else
+                                   f"the peer could not read its registry for {', '.join(unknown)}" if unknown else
+                                   "a key is declared there for each agent it declares"),
+                           fix=("the peer's operator runs the registry lines from this broker's card"
+                                if undeclared or unknown else "")))
+
+    if send is not None:
+        if any(s.ok is False for s in out):
+            out.append(Station(name="test message", ok=None, detail="not sent: fix the stations above first"))
+            return out
+        result = send()
+        states = [d for d in result.get("delivered", []) if d.get("rung") == "peer"]
+        if result.get("ok") and states and all(d.get("state") == "delivered" for d in states):
+            out.append(Station(name="test message", ok=True,
+                               detail=f"acknowledged by the peer ({result.get('message_id')}); it reads attested "
+                                      f"there when the two stations above pass"))
+        else:
+            why = ("; ".join(d.get("detail", "") for d in states) or "; ".join(map(str, result.get("refused", [])))
+                   or "; ".join(f.get("error", "") for f in result.get("failures", [])) or "no peer delivery")
+            out.append(Station(name="test message", ok=False, detail=f"not acknowledged: {why}",
+                               fix="the broker keeps it and retries; the peer's audit says why it was not stored"))
+    return out

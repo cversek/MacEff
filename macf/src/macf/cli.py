@@ -11253,6 +11253,47 @@ def cmd_amail_peer_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_amail_peer_check(args: argparse.Namespace) -> int:
+    """Check a rung-2 peer link station by station (MIS-0004 R56 to R65); 1 when any station fails."""
+    from macf.amail import BrokerUnavailable, Message, SigningError, peer_setup, sign_for_submission, submit
+    from macf.amail.registry import Registry, registry_path
+
+    cfg = _amail_config()
+    if not cfg.get("broker_config"):
+        print("❌ no broker config is named; set broker_config in amail.json (or MACF_AMAIL_BROKER_CONFIG)")
+        return 1
+
+    def _send():
+        to = args.to
+        if not to:
+            from macf.amail.deploy_config import BrokerDeployConfig, load_declarative_config
+            deploy = BrokerDeployConfig.model_validate(load_declarative_config(Path(cfg["broker_config"])))
+            link = {k.lower(): v for k, v in deploy.peer_links.items()}.get(args.domain.lower())
+            to = f"{sorted(link.agents)[0]}@{args.domain}" if link and link.agents else ""
+        if not to:
+            return {"ok": False, "refused": ["no recipient: pass --to"]}
+        msg = Message(sender=f"{cfg['agent']}@{cfg['domain']}", to=[to], subject="amail peer check",
+                      body="A test message from `macf_tools amail peer check --send`. No reply is needed.")
+        try:
+            msg.signature = sign_for_submission(msg, Path(cfg["signing_key"]) if cfg.get("signing_key") else None,
+                                                required=bool(cfg.get("signing_required")))
+            note = _ensure_host_broker(cfg)
+            if note:
+                print(note, file=sys.stderr)
+            return submit(cfg["agent"], msg, Path(cfg["socket"]))
+        except (SigningError, BrokerUnavailable) as e:
+            return {"ok": False, "refused": [str(e)]}
+
+    stations = peer_setup.check_peer(Path(cfg["broker_config"]), args.domain, registry=Registry(registry_path()),
+                                     send=_send if args.send else None)
+    marks = {True: "✅", False: "❌", None: "➖"}
+    for s in stations:
+        print(f"{marks[s.ok]} {s.name}: {s.detail}")
+        if s.fix and s.ok is not True:
+            print(f"     fix: {s.fix}")
+    return 1 if any(s.ok is False for s in stations) else 0
+
+
 def cmd_amail_registry_check(args: argparse.Namespace) -> int:
     """Check the operator's registry (MIS-0004 R42): who can write it, and what it declares."""
     from macf.amail.registry import Registry, RegistryError, registry_path
@@ -14251,6 +14292,16 @@ def _build_parser() -> argparse.ArgumentParser:
     amail_peer_add.add_argument("--yes", action="store_true", help="write without asking")
     amail_peer_add.add_argument("--dry-run", action="store_true", help="show the change and write nothing")
     amail_peer_add.set_defaults(func=cmd_amail_peer_add)
+    amail_peer_check = amail_peer_sub.add_parser(
+        "check", help="check a peer link station by station: the declaration here, the peer's listener, "
+                      "the address it knows this host by, its build, the cards and keys each side declares "
+                      "for the other; with --send, one signed test message the peer must acknowledge")
+    amail_peer_check.add_argument("domain", help="the peer's mail domain")
+    amail_peer_check.add_argument("--send", action="store_true",
+                                  help="also send one signed test message through this broker")
+    amail_peer_check.add_argument("--to", default=None,
+                                  help="the test message's recipient (default: the first agent the link declares)")
+    amail_peer_check.set_defaults(func=cmd_amail_peer_check)
 
     # ── gmail ────────────────────────────────────────────────────────────
     gmail_parser = sub.add_parser(
