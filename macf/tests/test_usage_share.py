@@ -387,3 +387,8 @@ def test_the_commands_wire_the_window_and_the_cached_fit(capsys):
     out = capsys.readouterr().out
     assert "share, last 10h (fitted rate)" in out and "\n\nshare" in out
     assert n() == before + 1  # budget me refreshes the cached fit
+
+
+@pytest.mark.parametrize("rate,want", [(50.0, (6, 96)), (0.0, (0.0, 96)), (200.0, (6, 200.0))])
+def test_the_interval_is_the_5th_to_95th_percentile_widened_to_the_rate(rate, want):
+    assert usage_share._interval(list(range(100, 0, -1)), rate) == want  # sorted 1..100: indexes 5 and 95
