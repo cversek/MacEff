@@ -18,6 +18,8 @@ class Piece:
     ok: Optional[bool]
     detail: str
     fix: str = ""
+    #: A short value a tool can compare, where the piece has one (the broker's supervision).
+    kind: str = ""
 
 
 def outbox_dir(handoff: Path, domain: str) -> Path:
@@ -89,27 +91,27 @@ def pieces(cfg: dict, *, registry=None, daemon_installed: Callable[[str, Path], 
         declared = host_daemon.declared_broker(broker_config, [home] + [b.home for b in addressing.agents.values()
                                                                         if b.home])
         if declared is not None and daemon_installed(declared.card, declared.home):
-            out.append(Piece(name="broker supervision", ok=True,
+            out.append(Piece(name="broker supervision", ok=True, kind="supervised",
                              detail=f"unit {declared.unit!r} of {declared.card}'s primal daemon"))
         elif declared is None and daemon_installed(broker_card, home):
-            out.append(Piece(name="broker supervision", ok=True,
+            out.append(Piece(name="broker supervision", ok=True, kind="supervised",
                              detail=f"a declared unit of {broker_card}'s primal daemon"))
         elif declared is not None:
-            out.append(Piece(name="broker supervision", ok=False,
+            out.append(Piece(name="broker supervision", ok=False, kind="declared, daemon not installed",
                              detail=f"declared as unit {declared.unit!r} of {declared.card}'s daemon, which isn't "
                                     f"installed", fix=f"MACEFF_AGENT_HOME_DIR={declared.home} macf_tools pd install"))
         elif interim:
-            out.append(Piece(name="broker supervision", ok=None,
+            out.append(Piece(name="broker supervision", ok=None, kind="launchd job",
                              detail=f"a launchd job of its own ({', '.join(p.stem for p in interim)}), outside any "
                                     f"declaration", fix="macf_tools amail broker-unit"))
         else:
-            out.append(Piece(name="broker supervision", ok=False,
+            out.append(Piece(name="broker supervision", ok=False, kind="agent-launched",
                              detail="agent-launched: the broker runs only while an agent starts it",
                              fix="macf_tools amail broker-unit"))
         if deploy.peer_listen is not None:
             out.append(Piece(name="listener", ok=True,
                              detail=f"{deploy.peer_listen.host}:{deploy.peer_listen.port}, a crossing of this system's "
-                                    f"boundary (MIS-0007 R47)"))
+                                    f"boundary (R47 of the MIS-0007 draft)"))
         handoff = deploy.inbound_handoff
         for dom, link in sorted(deploy.peer_links.items()):
             box = outbox_dir(handoff, dom) if handoff else None

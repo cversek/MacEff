@@ -840,6 +840,9 @@ class BrokerDeployConfig(BaseModel):
             if key in shared:
                 raise ConfigError(f"'{dom}' is declared in both shared_handoffs and peer_links; a peer is "
                                   f"reached by one rung, and the filesystem would win silently")
+            if key in peers:
+                raise ConfigError(f"peer_links has '{dom}' declared twice (domains are matched without regard to "
+                                  f"case); keep one entry")
             peers[key] = PeerLink(host=decl.host, port=decl.port, note=decl.note, agents=dict(decl.agents))
         if addressing.zone:
             _require_zone_cards(addressing)
