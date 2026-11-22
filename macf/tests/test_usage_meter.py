@@ -242,7 +242,7 @@ def test_the_newest_event_for_a_file_wins(tmp_path):
 
 @pytest.mark.parametrize("first_line_ts,event_at,found", [
     ("2026-11-22T10:00:00Z", T0 - 30, True),    # within the minute of slack before the file began
-    ("2026-11-22T10:00:00Z", T0 - 200, False),  # older than the file can be: the walk stops short of it
+    ("2026-11-22T10:00:00Z", T0 - 200, False),  # older than the file can be: the walk stops short of it, the fallback finds it
     (None, T0 - 30, True),                       # no first-line timestamp: the next line's stands in
 ])
 def test_the_lookup_floor_is_the_files_start_less_a_minute(tmp_path, first_line_ts, event_at, found):
@@ -253,8 +253,11 @@ def test_the_lookup_floor_is_the_files_start_less_a_minute(tmp_path, first_line_
     _emit_at(event_at, um.EVENT, {"path": str(t), "new_offset": len(first.encode()), "tail_id": "a",
                                   "metering_since": T0 - 1000})
     r = um.meter_tick("sid", str(t))
-    assert r == ({"events": 1, "calls": 1} if found else {"events": 1, "calls": 0})
-    assert bool(_metered()[-1].get("baseline")) is (not found)
+    # a miss by the floored walk is still resumed (and raises a rebaselined fault), never baselined
+    assert r == {"events": 1, "calls": 1}
+    assert not _metered()[-1].get("baseline")
+    faults = [e for e in read_events(reverse=False, scope="all", only=um.FAULT_EVENT)]
+    assert bool(faults) is (not found)
 
 
 def test_a_transcript_opening_without_a_timestamp_is_resumed_not_rebaselined(tmp_path):

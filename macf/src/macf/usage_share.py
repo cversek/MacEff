@@ -320,14 +320,24 @@ def me_lines(window_h: float) -> str:
 
 # ── hook line ─────────────────────────────────────────────────────────────────
 
-def hook_suffix(now: Optional[float] = None) -> Optional[str]:
-    """``· me 0.21%/h``: this agent's points over the last hour, or None with no metered events.
+ROLLED_EVENT = "usage_rolled"
+ROLL_EVERY_S = 60.0
+ROLLED_FRESH_S = 900.0
 
-    One read of the last hour, for the metered events and the newest fit event; never regresses.
-    With no fit in that hour the provisional rate is used and the figure carries a ``~``.
-    """
-    now = now or time.time()
+
+@dataclass(frozen=True, kw_only=True)
+class HourPoints:
+    points: float  # this agent's points over the last hour
+    calls: int
+    rate: float
+    fitted: bool
+
+
+def _hour_points(now: float) -> HourPoints:
+    """Points over the last hour: one read of the last hour for the metered events and the newest
+    fit event; never regresses. With no fit in that hour the provisional rate is used."""
     wt = 0.0
+    calls = 0
     fit, fit_seen = None, False
     for ev in read_events(reverse=True, scope="all", only=(usage_meter.EVENT, FIT_EVENT), since=now - HOUR):
         if ev.get("event") == FIT_EVENT:
@@ -335,9 +345,47 @@ def hook_suffix(now: Optional[float] = None) -> Optional[str]:
                 fit, fit_seen = _fit_from(ev), True
         else:
             wt += _event_weighted(ev)
-    if wt <= 0:
+            calls += int((ev.get("data") or {}).get("calls") or 0)
+    rate = fit.rate if fit is not None else usage_meter.POINTS_PER_WEIGHTED_TOKEN
+    return HourPoints(points=wt * rate, calls=calls, rate=rate, fitted=fit is not None)
+
+
+def roll(now: Optional[float] = None) -> bool:
+    """Record the last hour's points as a ``usage_rolled`` event, at most once a minute, so the hook
+    line reads one event instead of an hour. Returns whether it wrote."""
+    now = now or time.time()
+    for ev in read_events(reverse=True, scope="all", only=ROLLED_EVENT, since=now - ROLL_EVERY_S):
+        return False
+    h = _hour_points(now)
+    append_event(ROLLED_EVENT, {"points_1h": h.points, "calls_1h": h.calls, "rate": h.rate,
+                                "fitted": h.fitted, "at": now})
+    return True
+
+
+def _newest_rolled(now: float) -> Optional[HourPoints]:
+    """The newest ``usage_rolled`` event of the last ``ROLLED_FRESH_S``; stops at the first match."""
+    for ev in read_events(reverse=True, scope="all", only=ROLLED_EVENT, since=now - ROLLED_FRESH_S):
+        d = ev.get("data") or {}
+        try:
+            return HourPoints(points=float(d["points_1h"]), calls=int(d["calls_1h"]), rate=float(d["rate"]),
+                              fitted=bool(d["fitted"]))
+        except (KeyError, TypeError, ValueError) as e:
+            print(f"⚠️ MACF: usage share: unreadable rolled event ({e}); computing the hour instead",
+                  file=sys.stderr)
+            return None
+    return None
+
+
+def hook_suffix(now: Optional[float] = None) -> Optional[str]:
+    """``· me 0.21%/h``: this agent's points over the last hour, or None with no metered events.
+
+    Reads the newest rolled event of the last 15 minutes and stops there. With none that recent
+    (ticks are sparse) it computes the hour itself, as ``roll`` does, so the figure stays right.
+    A provisional rate is marked ``~``.
+    """
+    now = now or time.time()
+    h = _newest_rolled(now) or _hour_points(now)
+    if h.points <= 0:
         return None
     from macf.budget import format_rate
-    if fit is None:
-        return f"· me ~{format_rate(wt * usage_meter.POINTS_PER_WEIGHTED_TOKEN)}%/h"
-    return f"· me {format_rate(wt * fit.rate)}%/h"
+    return f"· me {'' if h.fitted else '~'}{format_rate(h.points)}%/h"
