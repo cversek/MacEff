@@ -165,14 +165,14 @@ def _thin_world():
     _world(24, metered_from=0.9, drift=0.0)  # the meter starts late, as it did on the real log
 
 
-def test_thin_metering_is_noted_on_the_fit():
+def test_thin_metering_refuses_the_fit_instead_of_printing_rates():
     _thin_world()
-    notes = " ".join(usage_ticks.analyse(24).fits[0.1].notes)
-    assert "only" in notes and "rows have metered tokens" in notes
-    assert "scale is not positive" in notes
+    rep = usage_ticks.analyse(24)
+    assert rep.fits == {} and rep.refusal
+    assert "rows have metered tokens" in rep.refusal
 
 
-def test_the_cli_prints_the_thin_data_notes(capsys):
+def test_the_cli_prints_the_refusal_and_no_rates_on_thin_data(capsys):
     _thin_world()
     from macf.cli import main
     try:
@@ -180,7 +180,66 @@ def test_the_cli_prints_the_thin_data_notes(capsys):
     except SystemExit as e:
         assert e.code in (0, None)
     out = " ".join(capsys.readouterr().out.split())
-    assert "rows have metered tokens" in out and "scale is not positive" in out
+    assert "no fit:" in out and "rows have metered tokens" in out
+    assert "blended" not in out and "scale " not in out
+
+
+def _chain(n, level0=10, gap=STEP):
+    return [usage_ticks.Tick(series="weekly_all", level=level0 + i, t_lo=i * HOUR, t_hi=i * HOUR + gap, segment=0,
+                             weight=1.0, quality="ok") for i in range(n)]
+
+
+def _flow(t0, t1, model="claude-sonnet-4", tokens=1e6):
+    return usage_ticks._Flow(model=model, t0=t0, t1=t1, rows={"input_tokens": int(tokens), "calls": 1})
+
+
+def test_a_fit_needs_min_rows_rows_with_metered_tokens():
+    flows = [_flow(0, 2.5 * HOUR)]  # covers the first three crossings only
+    two = usage_ticks.fit_joint(_chain(3), flows, 0.1, usage_ticks.MODEL_PRIORS)
+    assert two is None  # two rows, below MIN_ROWS
+    enough = usage_ticks.fit_joint(_chain(5), [_flow(0, 5 * HOUR)], 0.1, usage_ticks.MODEL_PRIORS)
+    assert enough is not None and enough.ticks == 4
+
+
+def test_a_fit_with_most_rows_unmetered_is_refused():
+    ticks = _chain(12)
+    late = [_flow(9.5 * HOUR, 12 * HOUR)]  # the meter starts late: only the last 2 of 11 rows carry tokens
+    assert usage_ticks.fit_joint(ticks, late, 0.1, usage_ticks.MODEL_PRIORS) is None
+    half = [_flow(4.5 * HOUR, 12 * HOUR)]  # 6 of 11 rows: past the fraction, so it fits
+    assert usage_ticks.fit_joint(ticks, half, 0.1, usage_ticks.MODEL_PRIORS) is not None
+
+
+def test_a_wide_bracket_weighs_the_inverse_square_of_its_width():
+    pts = [{"t": 0.0, "pct": 1.0}, {"t": 3600.0, "pct": 2.0}]  # an hour wide, twice the narrow limit
+    (tk,) = usage_ticks.extract_ticks(pts, "weekly_all").ticks
+    assert tk.quality == "wide" and tk.weight == 0.25
+
+
+def test_a_flow_is_spread_evenly_over_its_span():
+    f = _flow(100.0, 200.0)
+    got = usage_ticks._cumulative([(f, 1000.0)], 125.0)
+    assert math.isclose(got["claude-sonnet-4"], 250.0)
+    assert usage_ticks._cumulative([(f, 1000.0)], 50.0) == {}
+    assert usage_ticks._cumulative([(f, 1000.0)], 300.0)["claude-sonnet-4"] == 1000.0
+
+
+def test_the_longest_matching_prefix_sets_the_prior():
+    priors = {"claude-opus": 5.0, "claude-opus-5": 7.0}
+    assert usage_ticks.prior_ratio("claude-opus-5-5", priors, set()) == 7.0
+    assert usage_ticks.prior_ratio("claude-opus-4", priors, set()) == 5.0
+
+
+def test_the_bootstrap_resamples_runs_of_neighbours_not_single_rows():
+    idx = usage_ticks._resample(100, random.Random(0))
+    assert len(idx) == 100
+    neighbours = sum(1 for a, b in zip(idx, idx[1:]) if b == (a + 1) % 100)
+    assert neighbours >= 80  # blocks of ten leave about nine in ten steps contiguous; single rows about one in a hundred
+
+
+def test_the_interval_is_the_fifth_to_ninety_fifth_percentile_widened_to_hold_the_point():
+    e = usage_ticks._percentiles([float(v) for v in range(1, 101)], 50.0)
+    assert (e.low, e.high) == (6.0, 96.0)
+    assert usage_ticks._percentiles([1.0, 2.0, 3.0], 10.0).high == 10.0
 
 
 def test_a_crossing_too_wide_or_spanning_several_levels_is_dropped_and_noted():

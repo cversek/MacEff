@@ -54,6 +54,7 @@ from macf.agent_events_log import read_events
 NARROW_S = 1800.0
 MAX_BRACKET_S = 6 * 3600.0
 MIN_ROWS = 3
+MIN_METERED_FRACTION = 0.5  # of the rows, those with metered tokens in them
 RIDGE = 0.3
 BOOTSTRAPS = 300
 CACHE_READ_WEIGHTS = (0.1, 0.0)
@@ -372,12 +373,18 @@ def _joint_pred(rows: List[_Row], models: List[str], ratios: Dict[str, float], c
             + sum(c[1 + i] * r.x.get(m, 0.0) for i, m in enumerate(models)) + c[-1] * r.hours for r in rows]
 
 
+def _enough_metered(rows: List[_Row]) -> bool:
+    """A fit needs ``MIN_ROWS`` rows with metered tokens, and at least ``MIN_METERED_FRACTION`` of all rows."""
+    metered = sum(1 for r in rows if sum(r.x.values()) > 0)
+    return metered >= MIN_ROWS and metered >= MIN_METERED_FRACTION * len(rows)
+
+
 def fit_joint(ticks: Sequence[Tick], flows: List[_Flow], cr: float, priors: Dict[str, float],
               notes: Sequence[str] = ()) -> Optional[TickFit]:
     """The joint fit on one counter's ticks, or None with too few usable rows."""
     rows = _rows(ticks, flows, cr)
     models = sorted({m for r in rows for m, v in r.x.items() if v > 0})
-    if len(rows) < MIN_ROWS or not models:
+    if len(rows) < MIN_ROWS or not models or not _enough_metered(rows):
         return None
     warned: set = set()
     ratios = {m: prior_ratio(m, priors, warned) for m in models}
@@ -397,9 +404,9 @@ def fit_joint(ticks: Sequence[Tick], flows: List[_Flow], cr: float, priors: Dict
         return coefs[0] * ratios[models[i]] + coefs[1 + i]
 
     fnotes = list(notes)
-    metered = sum(1 for r in rows if sum(r.x.values()) > 0)
-    if metered < len(rows) / 2:
-        fnotes.append(f"only {metered} of {len(rows)} rows have metered tokens; the rates are unreliable")
+    scale = _percentiles([b[0] for b in boots], c[0])
+    if scale.high - scale.low <= 1e-9 * abs(scale.value):
+        fnotes.append("the interval has no width: too little data to say how sure the rates are")
     if c[0] <= 0:
         fnotes.append("the scale is not positive: the data does not support a rate")
     total_x = {m: sum(r.x.get(m, 0.0) for r in rows) for m in models}
@@ -407,7 +414,7 @@ def fit_joint(ticks: Sequence[Tick], flows: List[_Flow], cr: float, priors: Dict
     fitted = sum(rate(i, c) * total_x[m] for i, m in enumerate(models))
     return TickFit(
         cache_read_weight=cr,
-        scale=_percentiles([b[0] for b in boots], c[0]),
+        scale=scale,
         rates={m: _percentiles([rate(i, b) for b in boots], rate(i, c)) for i, m in enumerate(models)},
         drift=_percentiles([b[-1] for b in boots], c[-1]),
         blended_rate=fitted / tot if tot > 0 else 0.0,
@@ -419,7 +426,7 @@ def fit_scoped(cross: Crossings, flows: List[_Flow], cr: float, joint: Optional[
     pool = cross.series
     mine = [f for f in flows if pool.lower() in f.model.lower()]
     rows = _rows(cross.ticks, mine, cr)
-    if len(rows) < MIN_ROWS:
+    if len(rows) < MIN_ROWS or not _enough_metered(rows):
         return None
 
     cols = [[sum(r.x.values()) for r in rows], [r.hours for r in rows]]
@@ -476,8 +483,13 @@ def analyse(window_h: float = 48.0, now: Optional[float] = None, priors: Optiona
                                for c in scoped_cross) if s is not None)
     refusal = None
     if not fits:
+        rows = _rows(cross.ticks, flows, CACHE_READ_WEIGHTS[0])
+        metered = sum(1 for r in rows if sum(r.x.values()) > 0)
         refusal = (f"{len(cross.ticks)} crossings in the last {window_h:g}h; need at least {MIN_ROWS + 1} in a "
                    "segment with metered tokens between them")
+        if rows and metered < len(rows):
+            refusal += (f"; {metered} of {len(rows)} rows have metered tokens, and a fit needs {MIN_ROWS} and "
+                        f"{MIN_METERED_FRACTION:.0%}")
     return TickReport(window_h=window_h, crossings=cross, fits=fits, scoped=scoped, scoped_crossings=scoped_cross,
                       refusal=refusal)
 
