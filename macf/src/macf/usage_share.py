@@ -22,11 +22,18 @@ Method:
 - Through the origin means other agents' use that is steady across hours (a positive mean, not
   tied to this agent's tokens) pushes the slope up a little; the interval does not cover that
   bias, only sampling scatter.
-- Fewer than ``MIN_HOURS`` usable hours is no fit, and the reason is returned with it. No
-  constant is substituted silently; ``share`` labels the provisional one when it has to use it.
+- Only hours with metered tokens count toward ``MIN_HOURS``: an hour with none carries no
+  information about the rate. Fewer than that is no fit, and the reason is returned with it.
+- A degenerate fit is refused too: a zero-width interval, an r² below zero, or a rate more than
+  ``SANE_FACTOR`` (10) times away from the provisional constant either way. The band is wide on
+  purpose, since the constant is itself provisional; it only catches a fit resting on one or two
+  odd hours. No constant is substituted silently; ``share`` labels the provisional one when it
+  has to use it.
 
-The fitted rate is cached as a ``usage_rate_fitted`` event so the hooks never regress: they
-read the newest one. Nothing else is stored.
+The hooks never regress. The Stop hook refreshes the fit at most once an hour (``refresh_fit``),
+writing a ``usage_rate_fitted`` event, with ``rate`` null and a reason when there is no fit so the
+attempt is not repeated. The hook line reads the last hour of events once, for both kinds, and
+uses the provisional rate (marked ``~``) when no fit is in it. Nothing else is stored.
 """
 
 import math
@@ -44,7 +51,7 @@ FIT_EVENT = "usage_rate_fitted"
 MIN_HOURS = 6
 DEFAULT_WINDOW_H = 48.0
 BOOTSTRAPS = 400
-CACHE_MAX_AGE_S = 7 * 86400
+SANE_FACTOR = 10.0
 HOUR = 3600.0
 PROVISIONAL = "provisional"
 FITTED = "fit"
@@ -151,8 +158,10 @@ def try_fit(window_h: float = DEFAULT_WINDOW_H, now: Optional[float] = None) -> 
     data = _hourly_data(window_h, now)
     xs, ys = data["x"], data["y"]
     n = len(xs)
-    if n < MIN_HOURS:
-        return FitAttempt(fit=None, reason=f"{n} usable hours in the last {window_h:g}h, need {MIN_HOURS}")
+    with_tokens = sum(1 for x in xs if x > 0)
+    if with_tokens < MIN_HOURS:
+        return FitAttempt(fit=None, reason=f"{with_tokens} hours with metered tokens ({n} usable) in the "
+                                           f"last {window_h:g}h, need {MIN_HOURS}")
     rate = _slope(xs, ys)
     if rate is None:
         return FitAttempt(fit=None, reason=f"no metered tokens in the {n} usable hours")
@@ -169,7 +178,16 @@ def try_fit(window_h: float = DEFAULT_WINDOW_H, now: Optional[float] = None) -> 
     sse = sum((y - rate * x) ** 2 for x, y in zip(xs, ys))
     sst = sum((y - mean_y) ** 2 for y in ys)
     r2 = 1 - sse / sst if sst > 0 else 0.0
-    return FitAttempt(fit=RateFit(rate=rate, low=min(low, rate), high=max(high, rate), hours=n, r2=r2))
+    low, high = min(low, rate), max(high, rate)
+    prov = usage_meter.POINTS_PER_WEIGHTED_TOKEN
+    if high <= low:
+        return FitAttempt(fit=None, reason=f"degenerate fit: zero-width interval over {with_tokens} token hours")
+    if r2 < 0:
+        return FitAttempt(fit=None, reason=f"degenerate fit: r2 {r2:.2f} is below zero")
+    if not prov / SANE_FACTOR <= rate <= prov * SANE_FACTOR:
+        return FitAttempt(fit=None, reason=f"degenerate fit: rate {rate:.3g} is over {SANE_FACTOR:g}x "
+                                           f"from the provisional {prov:.3g}")
+    return FitAttempt(fit=RateFit(rate=rate, low=low, high=high, hours=n, r2=r2))
 
 
 def fit_rate(window_h: float = DEFAULT_WINDOW_H, now: Optional[float] = None) -> Optional[RateFit]:
@@ -183,19 +201,30 @@ def record_fit(fit: RateFit, window_h: float) -> None:
                              "r2": fit.r2, "window_h": window_h})
 
 
-def cached_fit(now: Optional[float] = None) -> Optional[RateFit]:
-    """The newest ``usage_rate_fitted`` event under a week old."""
-    now = now or time.time()
-    for ev in read_events(reverse=True, scope="all", only=FIT_EVENT, since=now - CACHE_MAX_AGE_S):
-        d = ev.get("data") or {}
-        try:
-            return RateFit(rate=float(d["rate"]), low=float(d["low"]), high=float(d["high"]),
-                           hours=int(d["hours"]), r2=float(d["r2"]))
-        except (KeyError, TypeError, ValueError) as e:
-            print(f"⚠️ MACF: usage share: unreadable cached fit ({e}); using the provisional rate",
-                  file=sys.stderr)
+def _fit_from(ev: dict) -> Optional[RateFit]:
+    d = ev.get("data") or {}
+    if d.get("rate") is None:
+        return None  # an attempt that found no fit
+    try:
+        return RateFit(rate=float(d["rate"]), low=float(d["low"]), high=float(d["high"]),
+                       hours=int(d["hours"]), r2=float(d["r2"]))
+    except (KeyError, TypeError, ValueError) as e:
+        print(f"⚠️ MACF: usage share: unreadable cached fit ({e}); using the provisional rate", file=sys.stderr)
         return None
-    return None
+
+
+def refresh_fit(now: Optional[float] = None) -> bool:
+    """Refit and record, unless an attempt was recorded in the last hour. For the Stop hook: the
+    check reads only the last hour of fit events. Returns whether it refitted."""
+    now = now or time.time()
+    for _ in read_events(reverse=True, scope="all", only=FIT_EVENT, since=now - HOUR):
+        return False
+    att = try_fit(now=now)
+    if att.fit is not None:
+        record_fit(att.fit, DEFAULT_WINDOW_H)
+    else:
+        append_event(FIT_EVENT, {"rate": None, "reason": att.reason, "window_h": DEFAULT_WINDOW_H})
+    return True
 
 
 def _account_movement(window_h: float, now: float) -> Optional[float]:
@@ -288,17 +317,21 @@ def me_lines(window_h: float) -> str:
 def hook_suffix(now: Optional[float] = None) -> Optional[str]:
     """``· me 0.21%/h``: this agent's points over the last hour, or None with no metered events.
 
-    Reads the events of the last hour and the newest cached fit; never regresses.
+    One read of the last hour, for the metered events and the newest fit event; never regresses.
+    With no fit in that hour the provisional rate is used and the figure carries a ``~``.
     """
     now = now or time.time()
     wt = 0.0
-    seen = False
-    for ev in read_events(reverse=True, scope="all", only=usage_meter.EVENT, since=now - HOUR):
-        seen = True
-        wt += _event_weighted(ev)
-    if not seen or wt <= 0:
+    fit, fit_seen = None, False
+    for ev in read_events(reverse=True, scope="all", only=(usage_meter.EVENT, FIT_EVENT), since=now - HOUR):
+        if ev.get("event") == FIT_EVENT:
+            if not fit_seen:  # newest first
+                fit, fit_seen = _fit_from(ev), True
+        else:
+            wt += _event_weighted(ev)
+    if wt <= 0:
         return None
-    fit = cached_fit(now)
-    rate = fit.rate if fit is not None else usage_meter.POINTS_PER_WEIGHTED_TOKEN
     from macf.budget import format_rate
-    return f"· me {format_rate(wt * rate)}%/h"
+    if fit is None:
+        return f"· me ~{format_rate(wt * usage_meter.POINTS_PER_WEIGHTED_TOKEN)}%/h"
+    return f"· me {format_rate(wt * fit.rate)}%/h"

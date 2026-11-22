@@ -49,6 +49,8 @@ def _meter_usage(stdin_json: str) -> None:
             return
         from macf.usage_meter import meter_tick
         meter_tick(hook_input.get("session_id") or "", transcript_path)
+        from macf.usage_share import refresh_fit
+        refresh_fit()  # at most once an hour; reads only the last hour to decide
     except (OSError, ValueError, KeyError, TypeError, AttributeError, ImportError) as e:
         emit_warning(Warning(source="stop", kind="usage_meter_failed", detail=f"usage metering skipped: {e}"))
 
