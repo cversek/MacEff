@@ -69,7 +69,7 @@ def test_clean_fit_recovers_the_known_rate_within_its_interval():
 def test_too_few_hours_is_no_fit_with_a_reason():
     _history(4)
     att = usage_share.try_fit()
-    assert att.fit is None and "usable hours" in att.reason
+    assert att.fit is None and "hours with metered tokens" in att.reason
     assert usage_share.fit_rate() is None
 
 
@@ -98,7 +98,7 @@ def test_hook_suffix_shows_with_recent_events_and_ignores_old_ones():
     assert usage_share.hook_suffix(now) is None
     _write([_metered(now - 600, 5e6)])
     want = usage_share.hook_suffix(now)
-    assert want == f"· me {usage_share_fmt(5e6 * usage_meter.POINTS_PER_WEIGHTED_TOKEN)}%/h"
+    assert want == f"· me ~{usage_share_fmt(5e6 * usage_meter.POINTS_PER_WEIGHTED_TOKEN)}%/h"
 
 
 def usage_share_fmt(x):
@@ -106,7 +106,7 @@ def usage_share_fmt(x):
     return format_rate(x)
 
 
-def test_hook_suffix_uses_the_cached_fit():
+def test_hook_suffix_uses_a_fit_from_the_last_hour():
     now = time.time()
     _write([_metered(now - 600, 5e6)])
     usage_share.record_fit(usage_share.RateFit(rate=1e-7, low=9e-8, high=1.1e-7, hours=20, r2=0.9), 48)
@@ -126,4 +126,51 @@ def test_budget_rate_prints_a_fit_and_caches_it(capsys):
     assert cmd_budget_rate(argparse.Namespace(window=48.0)) == 0
     out = capsys.readouterr().out
     assert "points/weighted token" in out and "90%" in out and "30 hours" in out
-    assert usage_share.cached_fit() is not None
+    assert usage_share.refresh_fit() is False  # the fit just written is under an hour old
+
+
+def test_hook_path_reads_only_the_last_hour(monkeypatch):
+    """Thousands of old events and an old fit sit behind the window: the hook line must not walk them."""
+    now = time.time()
+    rows = [_metered(now - 5 * 86400 + i, 1e3) for i in range(3000)]
+    rows.append({"timestamp": now - 3 * 86400, "event": usage_share.FIT_EVENT,
+                 "data": {"rate": 1e-7, "low": 9e-8, "high": 1.1e-7, "hours": 20, "r2": 0.9}})
+    rows.append(_metered(now - 300, 5e6))
+    _write(rows)
+    seen = []
+    real = usage_share.read_events
+
+    def counting(*a, **kw):
+        for ev in real(*a, **kw):
+            seen.append(ev)
+            yield ev
+    monkeypatch.setattr(usage_share, "read_events", counting)
+    assert usage_share.hook_suffix(now).startswith("· me ~")  # the old fit is not used
+    assert len(seen) == 1
+
+
+def test_refresh_fit_runs_once_an_hour_even_when_there_is_no_fit():
+    _history(3)
+    assert usage_share.refresh_fit() is True
+    assert usage_share.refresh_fit() is False
+
+
+def test_one_token_hour_among_many_usable_hours_is_no_fit():
+    """21 usable hours, one with tokens: the shape that gave a zero-width interval and a negative r2."""
+    end, rows, pct = _hour_end(), [], 10.0
+    for k in range(21):
+        start = end - (21 - k) * HOUR
+        rows.append(_sample(start, pct))
+        if k == 20:
+            rows.append(_metered(start + 1800, 1.5e5))
+            pct += 1.0
+    rows.append(_sample(end, pct))
+    _write(rows)
+    att = usage_share.try_fit()
+    assert att.fit is None and "1 hours with metered tokens" in att.reason
+
+
+def test_a_rate_far_from_the_provisional_one_is_refused():
+    _history(30, rate=100 * TRUE_RATE)
+    att = usage_share.try_fit()
+    assert att.fit is None and "degenerate" in att.reason and "provisional" in att.reason
