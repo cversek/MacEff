@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Callable, Dict, Optional, Set
 
@@ -123,7 +124,7 @@ class Receiver:
             self.refused = str(e)
             print(f"⚠️ MACF: pd: the receiver can't ingest {self.agent}'s mail, so none is ingested by this "
                   f"daemon: {self.refused}", file=sys.stderr)
-            self._notice(GRANT_SOURCE, f"pd_grant_denied:amail-receiver:claimed")
+            self._notice(GRANT_SOURCE, f"pd_grant_denied:amail-receiver:{int(time.time())}")
             self._recheck_at = float("-inf")
             return
         except IngestBusy:

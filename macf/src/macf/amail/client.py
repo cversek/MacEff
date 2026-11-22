@@ -320,6 +320,16 @@ def _claim_box(home: Path, pickup_box: Path) -> None:
         os.link(temp, path)
     except FileExistsError:  # noqa: S110 - another first ingest won the race; the check below reads its claim
         pass
+    except OSError:
+        # A filesystem with no hard links: an exclusive create still lets only one store win, though a
+        # reader may meet the claim before its line is written, which reads as no claim yet (#872 review).
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o640)
+        except FileExistsError:  # noqa: S110 - another store created it first; the check below reads it
+            pass
+        else:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(str(Path(home).resolve()) + "\n")
     finally:
         temp.unlink(missing_ok=True)
     said = box_claim_conflict(home, pickup_box)

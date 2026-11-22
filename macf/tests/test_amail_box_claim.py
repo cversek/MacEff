@@ -88,3 +88,59 @@ def test_one_home_reached_by_two_paths_is_one_store(tmp_path, box):
     client.ingest(link, box, wait=False)
     client.ingest(real, box, wait=False)                     # the same store: no refusal
     assert (box / INGEST_CLAIM).read_text().strip() == str(real.resolve())
+
+
+def test_a_first_ingest_that_loses_the_race_is_refused(tmp_path, box, monkeypatch):
+    """Another store links its claim between this store's check and its own link."""
+    import os as real_os
+    rival = str((tmp_path / "rival_home").resolve())
+
+    def link(src, dst):
+        open(dst, "w").write(rival + "\n")
+        raise FileExistsError(dst)
+    monkeypatch.setattr(client.os, "link", link)
+    with pytest.raises(BoxClaimed) as e:
+        client.ingest(tmp_path / "ira_home", box, wait=False)
+    assert rival in str(e.value)
+    assert [p.name for p in box.iterdir()] == [INGEST_CLAIM]       # the temporary name is gone
+    monkeypatch.setattr(client.os, "link", real_os.link)
+
+
+def test_a_filesystem_with_no_hard_links_still_claims_the_box(tmp_path, box, monkeypatch):
+    import errno
+
+    def link(src, dst):
+        raise OSError(errno.EPERM, "Operation not permitted")
+    monkeypatch.setattr(client.os, "link", link)
+    home = tmp_path / "ira_home"
+    client.ingest(home, box, wait=False)
+    assert (box / INGEST_CLAIM).read_text().strip() == str(home.resolve())
+    with pytest.raises(BoxClaimed):
+        client.ingest(tmp_path / "copied_home", box, wait=False)
+
+
+def test_amail_list_on_a_box_another_store_claims_warns_and_still_lists(tmp_path, box, monkeypatch, capsys):
+    import argparse
+    from macf import cli
+    client.ingest(tmp_path / "ira_home", box, wait=False)
+    copied = tmp_path / "copied_home"
+    monkeypatch.setattr(cli, "_amail_config", lambda: {
+        "home": str(copied), "handoff": str(box.parent), "agent": "ira", "contacts": "", "domain": ""})
+    code = cli.cmd_amail_list(argparse.Namespace(all=False, thread=None, json=False))
+    out = capsys.readouterr()
+    assert code == 0 and "no unread messages" in out.out
+    assert "nothing ingested" in out.err and str(copied.resolve()) in out.err
+    assert str((tmp_path / "ira_home").resolve()) in out.err
+
+
+def test_the_receiver_says_a_mid_run_claim_on_stderr(tmp_path, box, capsys):
+    from macf.pd.receiver import Receiver
+    r = Receiver("Copy_abc123", tmp_path / "copied_home", box, "ira", tmp_path / "contacts",
+                 lambda name, data: None, lambda src, key: None)
+    r.tick(0.0)
+    capsys.readouterr()
+    (box / INGEST_CLAIM).write_text(str((tmp_path / "ira_home").resolve()) + "\n")
+    r._next = float("-inf")
+    r.tick(5.0)
+    err = capsys.readouterr().err
+    assert "can't ingest ira's mail" in err and "claimed" in err
