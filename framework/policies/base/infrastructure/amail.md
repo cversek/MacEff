@@ -377,9 +377,8 @@ manager and anything else root's are printed for the operator, never run.
    macf_tools pd install`, is the operator's. Where a daemon already declares the broker, an agent's own
    included, it refuses and names that daemon: one broker per system (MIS-0004 R01). On macOS this is a
    per-user job: a peer on the LAN may need the Local Network grant for its listener, and the link stops
-   while the operator is logged out. The listener does a door's job for now (MIS-0007 R47 to R49); when
-   the host has a door, the link becomes a declared route through it and the broker stops listening on
-   the boundary itself.
+   while the operator is logged out. The listener is a crossing of the system's boundary; MIS-0007
+   (a draft, #855) proposes a door for such crossings, and how a rung-2 link would use one is still open.
 6. **`macf_tools amail peer check <domain>`.** The link station by station, in the order a message
    meets them: the declaration here, this side's agents map and registry keys for the peer, the peer's
    listener, the address the peer knows this host by, its build, and the cards and keys the peer declares
@@ -1360,9 +1359,10 @@ a tier justified by supervision cannot be declared alongside its own absence.
   supervision, and every audit line carries the tier, so a log read on another day
   says what boundary it was written under.
 - *A supervised host broker* is a declared unit of a primal daemon of its own, on the operator's
-  login since the host has no broker account (MIS-0002 R53, MIS-0007 R81): `amail broker-unit` writes
-  its service identity and declaration (2.1.3, step 5). Its exports to a system daemon are claimed
-  (MIS-0007 R33), and joining one is an `export` section the member adds (R71).
+  login since the host has no broker account (MIS-0002 R53; the MIS-0007 draft, #855, proposes the same
+  as its R81): `amail broker-unit` writes its service identity and declaration (2.1.3, step 5). Under
+  that draft, a system daemon would label its exports claimed (R33), and it would join one by an
+  `export` section the member adds (R71).
 - *Refusals move to where the declaration can be wrong.* A host-tier file refuses to
   run inside a container; a shared uid refuses without the tier; an agent-launched
   broker refuses without the tier; the tier refuses without a named supervision.

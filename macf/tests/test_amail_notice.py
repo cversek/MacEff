@@ -507,3 +507,16 @@ def test_the_inbox_lists_unread_mail_newest_first_one_line_each_with_the_mark_li
     assert lines[0].startswith(cli._trust_badge(stored["newer one"])) and "newer one" in lines[0]
     assert "older one" in lines[1] and "already read" not in "\n".join(lines)
     assert lines[2] == "1 read, not shown (`amail list --all`)"
+
+
+def test_the_inbox_neutralises_a_subject_another_sender_wrote(home, box, monkeypatch, capsys):
+    """CTB's review of #1106: a subject is text another sender wrote, so its compact line passes it
+    through _term_safe like the long listing does; no escape sequence reaches the terminal."""
+    from macf import cli
+    m = _msg("\x1b[2Jcleared ‮evil")
+    _put(box, "1", m)
+    client.ingest(home, box, agent="a")
+    monkeypatch.setattr(cli, "_amail_config", lambda: {"home": str(home), "handoff": "", "agent": ""})
+    cli.cmd_amail_list(cli._build_parser().parse_args(["amail", "inbox"]))
+    out = capsys.readouterr().out
+    assert "\x1b" not in out and "‮" not in out and "cleared" in out
