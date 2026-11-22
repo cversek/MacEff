@@ -231,9 +231,9 @@ def parse_manual(text: str, now: Optional[dt.datetime] = None) -> list[dict]:
 
 # ── samples ──────────────────────────────────────────────────────────────────
 
-def _recent(event: str, now: float) -> Iterable[dict]:
-    """Events of one type, newest first, no older than HISTORY."""
-    floor = now - HISTORY.total_seconds()
+def _recent(event: str, now: float, since: Optional[float] = None) -> Iterable[dict]:
+    """Events of one type, newest first, no older than HISTORY, nor than ``since`` when given."""
+    floor = max(now - HISTORY.total_seconds(), since or 0.0)
     # The floor bounds the walk to the history window whatever the type, so the type filter can
     # skip every other event's parse without walking back for a rare one (#881).
     for e in read_events(reverse=True, scope="all", only=(event,), since=floor):
@@ -246,8 +246,18 @@ def samples(since: Optional[float] = None, now: Optional[float] = None) -> list[
     """Samples, oldest first: ``{t, source, limits}``."""
     now = now or time.time()
     out = [{"t": e["timestamp"], "source": e["data"].get("source"), "limits": e["data"].get("limits", [])}
-           for e in _recent("budget_sampled", now) if since is None or e["timestamp"] >= since]
+           for e in _recent("budget_sampled", now, since) if since is None or e["timestamp"] >= since]
     return list(reversed(out))
+
+
+def latest_sample(now: Optional[float] = None) -> Optional[dict]:
+    """The newest sample, ``{t, source, limits}``, or None. Stops at the first one it meets, so a caller
+    that needs only whether there is one, or when it was taken, doesn't read a week of events (#1127)."""
+    now = now or time.time()
+    e = next(iter(_recent("budget_sampled", now)), None)
+    if e is None:
+        return None
+    return {"t": e["timestamp"], "source": e["data"].get("source"), "limits": e["data"].get("limits", [])}
 
 
 def sample(fresh: bool = False, manual: Optional[str] = None,
@@ -258,7 +268,8 @@ def sample(fresh: bool = False, manual: Optional[str] = None,
     if manual is not None:
         lim, source = parse_manual(manual), "manual"
     else:
-        last = next(iter(s for s in reversed(samples(now=now)) if s["source"] == "endpoint"), None)
+        last = next(iter(s for s in reversed(samples(since=now - MIN_FETCH_INTERVAL, now=now))
+                         if s["source"] == "endpoint"), None)
         if last and not fresh and now - last["t"] < MIN_FETCH_INTERVAL:
             return dict(last, reused=True)
         try:
@@ -300,13 +311,13 @@ def next_autosample(now: Optional[float] = None) -> Optional[float]:
     reply that said how long to wait is waited out even past the cap.
     """
     now = now or time.time()
-    hist = samples(now=now)
-    if not hist:
+    newest = latest_sample(now)
+    if newest is None:
         return None
     base = 60 * _env_float("MACEFF_BUDGET_AUTOSAMPLE_MIN", 10)
-    fails = list(failures_since(hist[-1]["t"], now))
+    fails = list(failures_since(newest["t"], now))
     if not fails:
-        return hist[-1]["t"] + base
+        return newest["t"] + base
     wait = min(60 * _env_float("MACEFF_BUDGET_BACKOFF_CAP_MIN", BACKOFF_CAP_MIN), base * 2 ** min(len(fails) - 1, 16))
     if fails[0].get("retry_after"):
         wait = max(wait, float(fails[0]["retry_after"]))
@@ -333,25 +344,36 @@ def set_mode(mode: str, target: Optional[float] = None, by: Optional[str] = None
     return rec
 
 
+_NO_MODE = {"mode": "normal", "target": None, "by": None, "scope": None}
+
+
+def mode_state(now: Optional[float] = None) -> tuple[dict, Optional[dict]]:
+    """``(current, lapsed)`` from one read of the mode events, so a hook that needs both walks the log once (#1127).
+
+    The newest ``budget_mode_set`` within two weekly windows decides. Within one window it is the operator's intent;
+    older, it has lapsed to normal, and when it was not itself normal the lapse is what the prompt notice announces
+    once. A lapse older than two windows is not worth announcing, and a walk for an event that does not exist reads
+    as far back as it is allowed to, so this one is bounded."""
+    now = now or time.time()
+    e = next(iter(read_events(reverse=True, scope="all", only=("budget_mode_set",),
+                              since=now - 2 * HISTORY.total_seconds())), None)
+    if e is None:
+        return dict(_NO_MODE), None
+    mode = dict(e["data"], set_at=e["timestamp"])
+    if now - e["timestamp"] <= HISTORY.total_seconds():
+        return mode, None
+    return dict(_NO_MODE), (None if mode.get("mode") == "normal" else mode)
+
+
 def current_mode(now: Optional[float] = None) -> dict:
     """The operator's latest intent; a mode older than the weekly window has lapsed to normal."""
-    e = next(iter(_recent("budget_mode_set", now or time.time())), None)
-    return dict(e["data"], set_at=e["timestamp"]) if e else {"mode": "normal", "target": None, "by": None, "scope": None}
+    return mode_state(now)[0]
 
 
 def lapsed_mode(now: Optional[float] = None) -> Optional[dict]:
     """The operator's last non-normal mode when it has aged out of the weekly window, else None. A lapse is
     silent in ``current_mode``; this lets the prompt notice say so once, since the intent may still hold."""
-    now = now or time.time()
-    if current_mode(now)["mode"] != "normal":
-        return None
-    # A lapse older than two weekly windows is not worth announcing, and an unbounded walk for an event that
-    # does not exist reads the whole log on every prompt (#1127).
-    floor = now - 2 * HISTORY.total_seconds()
-    e = next(iter(read_events(reverse=True, scope="all", only=("budget_mode_set",), since=floor)), None)
-    if not e or e["data"].get("mode") == "normal":
-        return None
-    return dict(e["data"], set_at=e["timestamp"])
+    return mode_state(now)[1]
 
 
 def mode_text(mode: dict) -> str:
@@ -455,15 +477,32 @@ def format_rate(rate: float) -> str:
     return f"{v:.{max(0, digits(v))}f}" if v > 0 else "0"
 
 
-def status(now: Optional[float] = None, detail: bool = False) -> dict:
+def hook_horizon_h() -> float:
+    """How far back a hook reads samples: four time constants of the smoothed rate, past which older ones weigh under 2%."""
+    return 4 * _tau_hours()
+
+
+def status(now: Optional[float] = None, detail: bool = False, horizon_h: Optional[float] = None,
+           mode: Optional[dict] = None, need_mode: bool = True) -> dict:
     """The current readings. ``detail`` adds the last failed refresh and the next try, which only `budget status`
-    shows: each walks the event log again, and the hooks call this on every tool call."""
+    shows: each walks the event log again, and the hooks call this on every tool call.
+
+    ``horizon_h`` reads the samples of that many hours back and no further, plus the newest sample whatever its age;
+    the hooks pass ``hook_horizon_h()``, so they pay for hours of the log and not the week's (#1127). Without it the
+    window rate is the whole week's, as ``budget status`` shows it; with it, the window is the horizon.
+
+    ``mode`` is the caller's reading of the mode when it already has one; ``need_mode=False`` leaves it out (None) for
+    a caller that never reads it, which skips the walk for the mode events."""
     now = now or time.time()
-    hist = samples(now=now)
+    hist = samples(since=None if horizon_h is None else now - horizon_h * 3600, now=now)
+    if not hist and horizon_h is not None:
+        newest = latest_sample(now)
+        hist = [newest] if newest else []
     if not hist:
         raise BudgetError("no samples yet; run `budget sample` (or `budget sample --manual`)")
     latest = hist[-1]
-    mode = current_mode(now)
+    if mode is None and need_mode:
+        mode = current_mode(now)
     rows = []
     for l in latest["limits"]:
         key = _window(l)  # one window: same limit, same reset (within RESET_GRAIN; see _reset_key)
@@ -488,7 +527,7 @@ def status(now: Optional[float] = None, detail: bool = False) -> dict:
                # the even pace: the rate that lands exactly on 100% at the reset
                "pace_even": (round(max(0.0, 100.0 - l["percent"]) / left, 2)
                              if left and left > 0 and l["percent"] is not None else None)}
-        burn_here = mode["mode"] == "burn" and (mode.get("scope") or "week") in (row["label"], l["scope"])
+        burn_here = mode is not None and mode["mode"] == "burn" and (mode.get("scope") or "week") in (row["label"], l["scope"])
         if burn_here and left and left > 0 and l["percent"] is not None:
             by_h = _hours_to(mode["by"], now) if mode.get("by") else left
             if by_h and by_h > 0:
@@ -655,9 +694,10 @@ def prompt_notice(now: Optional[float] = None) -> Optional[str]:
     still needed moves by more than a point. None otherwise. Records what it showed so it does not repeat."""
     now = now or time.time()
     block = _digest_block(now)
-    if not samples(now=now):
+    if latest_sample(now) is None:
         return block  # no budget in use here: the spend digest, if any, is all there is
-    st = status(now)
+    mode, lapsed = mode_state(now)  # one read for both
+    st = status(now, horizon_h=hook_horizon_h(), mode=mode)
     seen = _last_notices(now)
     out = []
     for r in st["limits"]:
@@ -675,7 +715,6 @@ def prompt_notice(now: Optional[float] = None) -> Optional[str]:
                 append_event("budget_notice", {"key": k, "value": r["pace_needed"]})
                 obs = r["rate_last_hour"] if r["rate_last_hour"] is not None else r["rate_window"]
                 out.append(f"burn {r['label']}: needs {r['pace_needed']:+g}%/h" + (f", running {obs:+g}%/h" if obs is not None else ""))
-    lapsed = lapsed_mode(now)
     if lapsed:
         k = f"mode_lapse:{lapsed['set_at']:.0f}"
         if not seen.get(k):
@@ -708,9 +747,9 @@ def wall_warning(now: Optional[float] = None) -> Optional[str]:
     """Once per session window, when it reaches MACEFF_BUDGET_WALL percent (default 90): the window's exhaustion is a
     forced pause with no SessionStart after it, so the remedy is a checkpoint before the wall."""
     now = now or time.time()
-    if not samples(now=now):
+    if latest_sample(now) is None:
         return None  # no budget in use here: nothing to report, not a failure
-    st = status(now)
+    st = status(now, horizon_h=hook_horizon_h(), need_mode=False)  # the wall line never reads the mode
     wall = _env_float("MACEFF_BUDGET_WALL", 90)
     for r in st["limits"]:
         if r["kind"] != "session" or r["percent"] is None or r["percent"] < wall or r.get("reset_since_sample"):
@@ -813,9 +852,9 @@ def burn_gate(auto_mode: bool, now: Optional[float] = None) -> dict:
     if not auto_mode:
         return off
     mode = current_mode(now)
-    if mode.get("mode") != "burn" or not samples(now=now):
+    if mode.get("mode") != "burn" or latest_sample(now) is None:
         return off
-    st = status(now)
+    st = status(now, horizon_h=hook_horizon_h(), mode=mode)
     want = (mode.get("scope") or "week").lower()
     row = next((r for r in st["limits"] if r["label"].lower() == want or (r["kind"] == "weekly_all" and want == "week")), None)
     if row is None or row["percent"] is None:
