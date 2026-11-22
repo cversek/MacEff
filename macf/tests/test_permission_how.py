@@ -75,6 +75,33 @@ def test_one_dialog_answers_one_call_even_when_two_identical_calls_wait_on_it():
     assert first.how == "dialog" and second.how != "dialog"
 
 
+def test_a_dialog_that_opened_before_a_call_does_not_answer_it():
+    """A dialog left from a call outside the window (or one never started) is not this call's."""
+    events = [request(90, "git push"), turn_end(95), started(100, "git push"), completed(101, "git push")]
+    (a,) = pw.approvals(events, RULES)
+    assert a.how != "dialog"
+
+
+def _run_how(monkeypatch, capsys, last, rows=3):
+    import argparse
+    from macf import cli
+    made = [pw.Approval(SID, 100.0 + i, "Bash", f"echo {i}", "mode", "mode") for i in range(rows)]
+    monkeypatch.setattr(pw, "read_approvals", lambda *a, **k: made)
+    code = cli.cmd_permissions_how(argparse.Namespace(days=1.0, last=last, json=True))
+    return code, capsys.readouterr()
+
+
+def test_the_command_shows_the_newest_n(monkeypatch, capsys):
+    import json
+    code, out = _run_how(monkeypatch, capsys, last=2)
+    assert code == 0 and [r["command"] for r in json.loads(out.out)] == ["echo 1", "echo 2"]
+
+
+def test_a_last_of_zero_is_refused_not_read_as_all(monkeypatch, capsys):
+    code, out = _run_how(monkeypatch, capsys, last=0)
+    assert code == 2 and out.out == "" and "--last" in out.err
+
+
 def test_the_text_says_the_rules_are_todays():
     events = [started(100, "git status"), completed(101, "git status")]
     text = pw.approvals_text(pw.approvals(events, RULES))

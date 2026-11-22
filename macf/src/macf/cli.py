@@ -707,7 +707,10 @@ def cmd_permissions_how(args: argparse.Namespace) -> int:
     from pathlib import Path
     from macf import permission_watch as pw
     project = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-    rows = pw.read_approvals(args.days, home=Path.home(), project_dir=project)[-max(args.last, 0):]
+    if args.last < 1:     # rows[-0:] would be every row, the opposite of what was asked
+        print("❌ --last takes a count of 1 or more", file=sys.stderr)
+        return 2
+    rows = pw.read_approvals(args.days, home=Path.home(), project_dir=project)[-args.last:]
     print(json.dumps([asdict(a) for a in rows], indent=2) if args.json else pw.approvals_text(rows))
     return 0
 
