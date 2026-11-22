@@ -1328,6 +1328,16 @@ a tier justified by supervision cannot be declared alongside its own absence.
   supervision covers. The daemon and `amail status` name the tier and the
   supervision, and every audit line carries the tier, so a log read on another day
   says what boundary it was written under.
+- *A supervised host broker* has the shape a container's broker account has: a
+  primal daemon of its own whose one declared unit runs the broker (MIS-0002 R53,
+  MIS-0007 R81), on the operator's login, since the host has no broker account. Its
+  home holds a service identity, `AmailBroker_` with an id derived from the mail
+  domain, and its declaration; `macf_tools amail broker-unit` writes both from the
+  broker configuration, by default into that configuration's directory, and prints
+  the operator's steps: retiring a launchd job that ran the broker directly, then
+  installing the daemon. Because the login is shared, what the daemon exports to a
+  system daemon is claimed (MIS-0007 R33), and joining one is an `export` section in
+  this same declaration, made by the member (R71).
 - *Refusals move to where the declaration can be wrong.* A host-tier file refuses to
   run inside a container; a shared uid refuses without the tier; an agent-launched
   broker refuses without the tier; the tier refuses without a named supervision.

@@ -11294,6 +11294,47 @@ def cmd_amail_peer_check(args: argparse.Namespace) -> int:
     return 1 if any(s.ok is False for s in stations) else 0
 
 
+def cmd_amail_broker_unit(args: argparse.Namespace) -> int:
+    """The host broker as a declared unit of its own primal daemon: shown, written on --write."""
+    import pwd as _pwd
+
+    from macf.amail import host_daemon
+
+    cfg = _amail_config()
+    if not cfg.get("broker_config"):
+        print("❌ no broker config is named; set broker_config in amail.json (or MACF_AMAIL_BROKER_CONFIG)")
+        return 1
+    interim = host_daemon.interim_jobs(Path.home() / "Library" / "LaunchAgents") if sys.platform == "darwin" else []
+    try:
+        plan = host_daemon.plan(Path(cfg["broker_config"]), python=Path(sys.executable),
+                                account=_pwd.getpwuid(os.getuid()).pw_name,
+                                path_dirs=os.environ.get("PATH", "").split(":"),
+                                home=Path(args.home) if args.home else None,
+                                pythonpath=os.environ.get("PYTHONPATH") or None, interim_plists=interim)
+    except (host_daemon.HostDaemonError, ValueError, OSError) as e:
+        print(f"❌ {e}")
+        return 1
+    print(f"broker daemon {plan.card}, home {plan.home}")
+    print(f"   its unit runs {sys.executable} with this shell's PATH"
+          + (" and PYTHONPATH" if os.environ.get("PYTHONPATH") else "")
+          + ": run this from the environment the broker should run in")
+    for path in plan.unchanged:
+        print(f"   {path}: already as it should be")
+    for path, text in plan.files.items():
+        print(f"   {path}: {'would write' if not args.write else 'writing'}")
+        if path.name == "declaration.json":
+            print("\n".join("      " + line for line in text.rstrip("\n").splitlines()))
+    if args.write and plan.files:
+        plan.write()
+        print("✅ written")
+    elif plan.files:
+        print("Not written; run again with --write.")
+    print("\nThen, as the operator (the service manager is yours to change):")
+    for step in plan.steps:
+        print(f"  {step}")
+    return 0
+
+
 def cmd_amail_registry_check(args: argparse.Namespace) -> int:
     """Check the operator's registry (MIS-0004 R42): who can write it, and what it declares."""
     from macf.amail.registry import Registry, RegistryError, registry_path
@@ -14302,6 +14343,15 @@ def _build_parser() -> argparse.ArgumentParser:
     amail_peer_check.add_argument("--to", default=None,
                                   help="the test message's recipient (default: the first agent the link declares)")
     amail_peer_check.set_defaults(func=cmd_amail_peer_check)
+
+    amail_broker_unit = amail_sub.add_parser(
+        "broker-unit", help="give a host's broker a primal daemon of its own whose one unit runs it "
+                            "(MIS-0002 R53, MIS-0007 R81): the identity and declaration, shown first; "
+                            "installing the daemon is the operator's step, printed")
+    amail_broker_unit.add_argument("--home", default=None,
+                                   help="the broker daemon's home (default: the broker config's directory)")
+    amail_broker_unit.add_argument("--write", action="store_true", help="write the identity and declaration")
+    amail_broker_unit.set_defaults(func=cmd_amail_broker_unit)
 
     # ── gmail ────────────────────────────────────────────────────────────
     gmail_parser = sub.add_parser(
