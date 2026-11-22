@@ -377,6 +377,12 @@ macf build and protocol version, the cards it declares for the caller's agents, 
 registry holds a key for each of those cards. The build tells a peer which fixes this broker has;
 nothing else in the reply is beyond what the two operators already exchanged on their cards.
 
+`macf_tools amail status` lists the agent's mail setup piece by piece, each read where the client and the
+broker read it, and each missing piece with the command that supplies it: the address, the signing key,
+signing every message, the agent's key in the registry, how the broker is supervised (a declared unit, a
+launchd job of its own, or launched by an agent), the listener as a declared crossing, and each peer link
+with the mail waiting for it and refused by it.
+
 ### 2.2 Local delivery is an optimization, not a special case
 
 Rung 1 exists because same-host delivery is faster, more private, and cannot fail
