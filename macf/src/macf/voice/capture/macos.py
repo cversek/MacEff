@@ -8,6 +8,7 @@ microphone and reads the screen as ``unknown``.
 from __future__ import annotations
 
 import queue
+from dataclasses import dataclass
 import sys
 import threading
 from typing import Any, Callable, List, Optional, Sequence
@@ -193,10 +194,18 @@ def hid_key_name(usage_page: int, usage: int) -> Optional[str]:
     return HID_KEY_NAMES.get(usage, f"KEY_HID_{usage:02X}")
 
 
+@dataclass(frozen=True, kw_only=True)
+class HidIdentity:
+    """Which HID device a key event came from, as a declaration can name it."""
+    product: str
+    vendor_id: int
+    product_id: int
+
+
 def declared(device: str, product: str, vendor_id: int, product_id: int) -> bool:
     """Whether a HID device is the one a declaration names: ``vvvv:pppp`` in hex, or its product name."""
     if ":" in device:
-        vendor, _, prod = device.partition(":")
+        vendor, prod = device.split(":", 1)
         try:
             return int(vendor, 16) == vendor_id and int(prod, 16) == product_id
         except ValueError:
@@ -319,7 +328,7 @@ class MacTriggers(TriggerSource):
             ref = self._iokit.IOHIDDeviceGetProperty(device, self._prop[prop])
             value = ctypes.c_int32(0)
             return value.value if ref and self._cf.CFNumberGetValue(ref, 3, ctypes.byref(value)) else -1
-        return text("Product"), integer("VendorID"), integer("ProductID")
+        return HidIdentity(product=text("Product"), vendor_id=integer("VendorID"), product_id=integer("ProductID"))
 
     def _on_value(self, _context, _result, _sender, value) -> None:
         try:
@@ -327,8 +336,8 @@ class MacTriggers(TriggerSource):
             name = hid_key_name(self._iokit.IOHIDElementGetUsagePage(element), self._iokit.IOHIDElementGetUsage(element))
             if name is None:
                 return
-            product, vendor_id, product_id = self._device_identity(self._iokit.IOHIDElementGetDevice(element))
-            if not any(declared(d, product, vendor_id, product_id) for d in self._devices):
+            identity = self._device_identity(self._iokit.IOHIDElementGetDevice(element))
+            if not any(declared(d, identity.product, identity.vendor_id, identity.product_id) for d in self._devices):
                 return
             self._events.put(KeyEvent(name, self._iokit.IOHIDValueGetIntegerValue(value) != 0))
         except Exception as e:  # noqa: BLE001 - a callback from C must not raise; say it and drop this report
