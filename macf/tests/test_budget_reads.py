@@ -198,11 +198,11 @@ def test_a_hook_status_with_no_samples_says_what_to_do(reads):
 
 # ── the notice and the mode are read within the window that can hold them, then reasserted ─────────────────
 
-def _weekly_sample(t, pct, resets_in_days):
+def _weekly_sample(t, pct, resets_in_days, kind="weekly_all"):
     reset = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(t + resets_in_days * DAY))
     return {"timestamp": t, "event": "budget_sampled",
             "data": {"source": "endpoint",
-                     "limits": [{"kind": "weekly_all", "percent": pct, "resets_at": reset,
+                     "limits": [{"kind": kind, "percent": pct, "resets_at": reset,
                                  "scope": None, "severity": "normal"}]}}
 
 
@@ -257,3 +257,42 @@ def test_no_mode_is_remembered_so_the_next_read_stops(reads):
 def _events_of(name):
     from macf.agent_events_log import read_events
     return list(read_events(reverse=False, scope="all", only=name))
+
+
+def test_an_expired_mode_is_replaced_by_the_marker_not_copied_again(reads):
+    now = time.time()
+    _write([_mode(now - 3600 * 3, "conserve") | {"data": {"mode": "conserve", "target": None, "by": None, "scope": None,
+                                                           "set_at": now - 20 * DAY, "reasserted": True}}])
+    assert budget.mode_state(now, reassert=True) == (budget._NO_MODE, None)
+    written = [e for e in _events_of("budget_mode_set") if e["timestamp"] > now - 60]
+    assert [e["data"].get("absent") for e in written] == [True]  # the marker, not a fresh copy of the dead mode
+    assert budget.mode_state(now + 10, reassert=True) == (budget._NO_MODE, None)
+    assert len([e for e in _events_of("budget_mode_set") if e["timestamp"] > now - 60]) == 1  # nothing more within the hour
+
+
+def test_the_read_only_callers_never_write(reads):
+    now = time.time()
+    _write([_weekly_sample(now - 60, 95, 0.1, "session"), _mode(now - 3 * DAY, "conserve"), _mode(now - 9 * DAY, "burn")])
+    key = budget._key(budget.status(now, need_mode=False)["limits"][0], "wall")
+    _write([{"timestamp": now - 3 * HOUR, "event": "budget_notice", "data": {"key": key, "value": 95}}])
+    before = len(_events_of(None))  # the stale mode, the stale notice and the sample, all over an hour old
+    budget.current_mode(now), budget.lapsed_mode(now), budget.status(now), budget.status(now, horizon_h=budget.hook_horizon_h())
+    budget.wall_warning(now)
+    budget.mode_state(now)
+    assert len(_events_of(None)) == before
+
+
+def test_the_prompt_notice_asks_for_the_mode_to_be_reasserted(reads):
+    now = time.time()
+    _write([_sample(now - 60, 10), _mode(now - 3 * DAY, "conserve")])
+    budget.prompt_notice(now)
+    assert [e for e in _events_of("budget_mode_set") if e["data"].get("reasserted")]
+
+
+def test_the_lapse_is_announced_once(reads):
+    now = time.time()
+    _write([_weekly_sample(now - 60, 10, 2), _mode(now - 10 * DAY, "conserve")])
+    first = budget.prompt_notice(now)
+    assert "lapsed" in first
+    assert budget.prompt_notice(now + 60) is None
+    assert "lapsed" not in (budget.prompt_notice(now + 2 * HOUR) or "")  # still once, after the reassertions

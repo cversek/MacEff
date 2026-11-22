@@ -366,15 +366,16 @@ def mode_state(now: Optional[float] = None, reassert: bool = False) -> tuple[dic
     now = now or time.time()
     e = next(iter(read_events(reverse=True, scope="all", only=("budget_mode_set",),
                               since=now - 2 * HISTORY.total_seconds())), None)
-    if e is not None and now - e["timestamp"] > REASSERT_AFTER and reassert:
-        append_event("budget_mode_set", {**e["data"], "set_at": e["data"].get("set_at", e["timestamp"]), "reasserted": True})
-    elif e is None and reassert:
-        append_event("budget_mode_set", {"absent": True, "reasserted": True})
-    if e is None or e["data"].get("absent"):
+    expired = e is not None and now - e["data"].get("set_at", e["timestamp"]) > 2 * HISTORY.total_seconds()
+    dead = e is None or bool(e["data"].get("absent")) or expired  # no mode that still counts
+    if reassert and (e is None or now - e["timestamp"] > REASSERT_AFTER):
+        if dead:  # a mode past two windows answers normal: remember that, not the mode
+            append_event("budget_mode_set", {"absent": True, "reasserted": True})
+        else:
+            append_event("budget_mode_set", {**e["data"], "set_at": e["data"].get("set_at", e["timestamp"]), "reasserted": True})
+    if dead:
         return dict(_NO_MODE), None
     set_at = e["data"].get("set_at", e["timestamp"])
-    if now - set_at > 2 * HISTORY.total_seconds():
-        return dict(_NO_MODE), None
     mode = {k: v for k, v in e["data"].items() if k not in ("reasserted", "set_at")}
     mode["set_at"] = set_at
     if now - set_at <= HISTORY.total_seconds():
