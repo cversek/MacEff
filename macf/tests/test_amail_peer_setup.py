@@ -89,7 +89,9 @@ def test_a_card_reads_back_as_written_and_a_bad_one_is_refused_by_the_declaratio
     assert peer_setup.parse_card(peer_setup.render_card(card)) == card
     for bad in ({**card, "host": "8.8.8.8"}, {**card, "agents": {"ira": {"card": "not a card"}}},
                 {**card, "amail_peer_card": 99}, {**card, "secret": "x"},
-                {**card, "agents": {"ira": {"card": "Ira_0a1b2c", "key": "ed25519:not-a-key"}}}):
+                {**card, "agents": {"ira": {"card": "Ira_0a1b2c", "key": "ed25519:not-a-key"}}},
+                {**card, "agents": {}},
+                {**card, "agents": {"ira": {**card["agents"]["ira"], "secret": "x"}}}):
         with pytest.raises(peer_setup.CardError):
             peer_setup.parse_card(json.dumps(bad))
 
@@ -101,5 +103,15 @@ def test_the_operators_steps_are_printed_never_run(tmp_path):
     card = peer_setup.build_card(_files(tmp_path), agents=["ira"],
                                  registry=_registry(tmp_path, {"Ira_0a1b2c": {"account": "ira", "keys": [ira_key]}}))
     text = "\n".join(peer_setup.describe(card))
-    assert f"amail registry declare --card Ira_0a1b2c --key {ira_key} --account ira" in text
-    assert f"amail peer add" in text
+    assert f"  macf_tools amail registry declare --card Ira_0a1b2c --key {ira_key} --account ira" in text
+    assert "sudo" not in text, "declare stages the change and prints its own root step"
+    assert peer_setup.fingerprint(ira_key) in text and "another channel" in text
+    assert "one at a time" in text and "amail peer add" in text
+
+
+def test_an_agent_with_no_calling_card_is_refused(tmp_path):
+    """A peer judges an agent's signatures by its card (MIS-0004 R44), so an agent with none can't be on
+    a card at all: refused, naming the missing card."""
+    agents = {"ira": {"uid": os.getuid(), "home": str(tmp_path / "ira"), "shared_uid": True, "contacts": []}}
+    with pytest.raises(peer_setup.CardError, match="no calling card"):
+        peer_setup.build_card(_files(tmp_path, agents=agents), agents=["ira"], registry=_registry(tmp_path, {}))
