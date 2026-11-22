@@ -89,7 +89,9 @@ def test_a_card_reads_back_as_written_and_a_bad_one_is_refused_by_the_declaratio
     assert peer_setup.parse_card(peer_setup.render_card(card)) == card
     for bad in ({**card, "host": "8.8.8.8"}, {**card, "agents": {"ira": {"card": "not a card"}}},
                 {**card, "amail_peer_card": 99}, {**card, "secret": "x"},
-                {**card, "agents": {"ira": {"card": "Ira_0a1b2c", "key": "ed25519:not-a-key"}}}):
+                {**card, "agents": {"ira": {"card": "Ira_0a1b2c", "key": "ed25519:not-a-key"}}},
+                {**card, "agents": {}},
+                {**card, "agents": {"ira": {**card["agents"]["ira"], "secret": "x"}}}):
         with pytest.raises(peer_setup.CardError):
             peer_setup.parse_card(json.dumps(bad))
 
@@ -101,8 +103,10 @@ def test_the_operators_steps_are_printed_never_run(tmp_path):
     card = peer_setup.build_card(_files(tmp_path), agents=["ira"],
                                  registry=_registry(tmp_path, {"Ira_0a1b2c": {"account": "ira", "keys": [ira_key]}}))
     text = "\n".join(peer_setup.describe(card))
-    assert f"amail registry declare --card Ira_0a1b2c --key {ira_key} --account ira" in text
-    assert f"amail peer add" in text
+    assert f"  macf_tools amail registry declare --card Ira_0a1b2c --key {ira_key} --account ira" in text
+    assert "sudo" not in text, "declare stages the change and prints its own root step"
+    assert peer_setup.fingerprint(ira_key) in text and "another channel" in text
+    assert "one at a time" in text and "amail peer add" in text
 
 
 # ---- phase 2: peer add ---------------------------------------------------------------------------
@@ -279,3 +283,33 @@ def test_two_brokers_set_up_from_each_others_cards_exchange_mail_both_ways(tmp_p
     finally:
         on_alpha.stop()
         on_beta.stop()
+
+
+def test_an_agent_with_no_calling_card_is_refused(tmp_path):
+    """A peer judges an agent's signatures by its card (MIS-0004 R44), so an agent with none can't be on
+    a card at all: refused, naming the missing card."""
+    agents = {"ira": {"uid": os.getuid(), "home": str(tmp_path / "ira"), "shared_uid": True, "contacts": []}}
+    with pytest.raises(peer_setup.CardError, match="no calling card"):
+        peer_setup.build_card(_files(tmp_path, agents=agents), agents=["ira"], registry=_registry(tmp_path, {}))
+
+
+def test_a_peer_declared_by_hand_in_another_case_is_replaced_not_doubled(tmp_path):
+    """CTB's review of #1100: a link written by hand as `Beta.Test` is the same peer as `beta.test`. A new
+    card replaces it (one link, not two that the loader folds by file order), and an unchanged card is
+    already declared."""
+    broker, _ = _alpha(tmp_path)
+    broker.write_text(broker.read_text() + "peer_links:\n  Beta.Test: {host: 100.64.0.9, port: 8030, agents: {sparrow: "
+                      "Sparrow_6a7b8c}}\n")
+    assert not peer_setup.plan_add(broker, _beta_card(tmp_path), local_agents=[]).changed
+    peer_setup.plan_add(broker, {**_beta_card(tmp_path), "host": "100.64.0.11"}, local_agents=[]).write()
+    links = yaml.safe_load(broker.read_text())["peer_links"]
+    assert list(links) == [B_DOM] and links[B_DOM]["host"] == "100.64.0.11"
+
+
+def test_a_write_keeps_the_old_file_beside_the_new_one_and_its_mode(tmp_path):
+    broker, addressing = _alpha(tmp_path)
+    os.chmod(broker, 0o640)
+    before = broker.read_text()
+    written = peer_setup.plan_add(broker, _beta_card(tmp_path), local_agents=["ira"]).write(backup_suffix=".bak-x")
+    assert broker in written and broker.with_name(broker.name + ".bak-x").read_text() == before
+    assert (broker.stat().st_mode & 0o777) == 0o640

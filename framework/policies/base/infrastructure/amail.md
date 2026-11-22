@@ -346,8 +346,10 @@ and only the signature says which agent. A peer link also declares the peer's ag
 A broker's peer card is what the other side's operator needs to declare it: the mail domain, the
 declared listener's address and port, and for each agent on the card its calling card, its public
 signing key and the account that holds it. `macf_tools amail peer card` prints it from the broker's
-own configuration, through the same loader the broker runs on, with the registry line the peer's
-operator runs as root; it carries no secret and changes nothing. A broker with no `peer_listen` has
+own configuration, through the same loader the broker runs on, with each key's fingerprint and the
+registry declarations the peer's operator runs one at a time (each stages its change and prints its own
+root step); it carries no secret and changes nothing. A key on a card is a claim (6b.5) until the two
+operators compare its fingerprint on another channel. A broker with no `peer_listen` has
 no card, since no peer can reach it.
 
 `macf_tools amail peer add <card>` declares a peer from its card: the link, with its agents map, in
