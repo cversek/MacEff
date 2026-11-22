@@ -557,7 +557,7 @@ def check_peer(broker_config: Path, domain: str, *, registry=None, send=None) ->
     ours = {name: b.card for name, b in addressing.agents.items() if b.card}
     wrong = sorted(b for b, c in declared.items() if b in ours and ours[b] != c)
     absent = sorted(b for b in ours if b not in declared)
-    if wrong or not declared:
+    if wrong or not (set(declared) & set(ours)):
         out.append(Station(name="their agents map", ok=False,
                            detail=(f"the peer declares other cards for {', '.join(wrong)}" if wrong else
                                    "the peer declares none of this broker's agents, so none of their mail can "
