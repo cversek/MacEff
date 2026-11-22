@@ -40,7 +40,7 @@ def _cache(k):
     return 4e7 * (1 + math.sin(k * 0.71 + 1))
 
 
-def _world(hours=72, drift=0.0, cache_read=False, scoped=False, gaps=(), ratios=None, now=None):
+def _world(hours=72, drift=0.0, cache_read=False, scoped=False, gaps=(), ratios=None, now=None, metered_from=0.0):
     """Write the events and samples; the true points rise by the metered flow plus ``drift`` an hour.
 
     ``gaps`` is a list of dicts with ``start`` and ``stop`` in steps: no samples inside them.
@@ -57,9 +57,12 @@ def _world(hours=72, drift=0.0, cache_read=False, scoped=False, gaps=(), ratios=
         sonnet = {"input_tokens": int(_sonnet(k)), "calls": 1}
         if cache_read:
             sonnet["cache_read_input_tokens"] = int(_cache(k))
-        rows.append({"timestamp": t, "event": usage_meter.EVENT,
-                     "data": {"by_model": {"claude-opus-4": opus, "claude-sonnet-4": sonnet}, "calls": 2,
-                              "first_ts": _iso(t - STEP), "last_ts": _iso(t)}})
+        if k <= metered_from * n:  # the meter was not running yet; the account still spends
+            pass
+        else:
+            rows.append({"timestamp": t, "event": usage_meter.EVENT,
+                         "data": {"by_model": {"claude-opus-4": opus, "claude-sonnet-4": sonnet}, "calls": 2,
+                                  "first_ts": _iso(t - STEP), "last_ts": _iso(t)}})
         points += SCALE * (ratios["claude-opus-4"] * usage_meter.weighted(opus)
                            + ratios["claude-sonnet-4"] * usage_meter.weighted(sonnet, 0.1)) + drift * STEP / HOUR + rng.uniform(0, 0.12)
         pool += 2 * SCALE * usage_meter.weighted(sonnet, 0.1) + rng.uniform(0, 0.12)
@@ -156,3 +159,25 @@ def test_the_cli_prints_the_crossings_the_fit_and_both_variants(capsys):
     assert "cache read x0.1" in out and "cache read x0:" in out
     assert "drift" in out and "opus-4" in out and "sonnet-4" in out
     assert max(len(line) for line in out.splitlines()) <= 60
+
+
+def _thin_world():
+    _world(24, metered_from=0.9, drift=0.0)  # the meter starts late, as it did on the real log
+
+
+def test_thin_metering_is_noted_on_the_fit():
+    _thin_world()
+    notes = " ".join(usage_ticks.analyse(24).fits[0.1].notes)
+    assert "only" in notes and "rows have metered tokens" in notes
+    assert "scale is not positive" in notes
+
+
+def test_the_cli_prints_the_thin_data_notes(capsys):
+    _thin_world()
+    from macf.cli import main
+    try:
+        main(["budget", "ticks", "--since", "24h"])
+    except SystemExit as e:
+        assert e.code in (0, None)
+    out = " ".join(capsys.readouterr().out.split())
+    assert "rows have metered tokens" in out and "scale is not positive" in out
