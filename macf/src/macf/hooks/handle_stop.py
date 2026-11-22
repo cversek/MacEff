@@ -40,6 +40,19 @@ STOP_VOLATILE = ("Current Time:", "Breadcrumb:", "Tokens Used:", "CL Level:", "R
                  "- This Drive:", "- Weekly usage:", "- Prompt:", "- Total Drives:", "- Total Duration:")
 
 
+def _meter_usage(stdin_json: str) -> None:
+    """Meter the transcript's new API calls; never fails or blocks the Stop."""
+    try:
+        hook_input = json.loads(stdin_json) if stdin_json else {}
+        transcript_path = hook_input.get("transcript_path")
+        if not transcript_path:
+            return
+        from macf.usage_meter import meter_tick
+        meter_tick(hook_input.get("session_id") or "", transcript_path)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, ImportError) as e:
+        emit_warning(Warning(source="stop", kind="usage_meter_failed", detail=f"usage metering skipped: {e}"))
+
+
 @shared_event_reads
 def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     """
@@ -58,6 +71,7 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
     Returns:
         Dict with DEV_DRV completion message
     """
+    _meter_usage(stdin_json)
     try:
         # Get current session
         session_id = get_current_session_id()

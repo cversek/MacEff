@@ -812,6 +812,16 @@ def cmd_budget_log(args: argparse.Namespace) -> int:
     return _budget_run(go)
 
 
+def cmd_budget_me(args: argparse.Namespace) -> int:
+    from macf import usage_meter
+    try:
+        print(usage_meter.run_me(args.since))
+    except ValueError as e:
+        print(f"budget me: {e}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def cmd_budget_mode_set(args: argparse.Namespace) -> int:
     from macf import budget
     def go() -> int:
@@ -13148,6 +13158,9 @@ def _build_parser() -> argparse.ArgumentParser:
     b = budget_sub.add_parser("log", help="samples of the last week as a table")
     b.add_argument("--since", metavar="HOURS", type=float, help="only the last N hours")
     b.set_defaults(func=cmd_budget_log)
+    b = budget_sub.add_parser("me", help="this agent's own usage from its transcripts: tokens, models, causes, points")
+    b.add_argument("--since", default="1d", metavar="AGE", help="window: 1h, 1d, 7d, or a date (default 1d)")
+    b.set_defaults(func=cmd_budget_me)
     b = budget_sub.add_parser("mode", help="the operator's intent for the allowance")
     mode_sub = b.add_subparsers(dest="budget_mode_cmd", required=True)
     m = mode_sub.add_parser("set", help="conserve | normal | burn")
