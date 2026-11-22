@@ -392,3 +392,14 @@ def test_the_commands_wire_the_window_and_the_cached_fit(capsys):
 @pytest.mark.parametrize("rate,want", [(50.0, (6, 96)), (0.0, (0.0, 96)), (200.0, (6, 200.0))])
 def test_the_interval_is_the_5th_to_95th_percentile_widened_to_the_rate(rate, want):
     assert usage_share._interval(list(range(100, 0, -1)), rate) == want  # sorted 1..100: indexes 5 and 95
+
+
+@pytest.mark.parametrize("specs,words", [
+    ([([2e6], 0.08)] * 7, "zero-width"),  # identical hours: every resampled slope is the same
+    ([([x * 1e6], y) for x, y in zip(range(1, 7), (0.30, 0.25, 0.20, 0.15, 0.10, 0.05))], "below zero"),
+])
+def test_a_degenerate_fit_is_refused_with_its_reason(specs, words):
+    end = _hour_end() - 86400
+    _write(_shaped(specs, end))
+    a = usage_share.try_fit(now=end + 10)
+    assert a.fit is None and "degenerate" in a.reason and words in a.reason
