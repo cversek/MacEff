@@ -191,3 +191,33 @@ def test_an_empty_claim_left_standing_is_refused_by_name(tmp_path, box):
     with pytest.raises(BoxClaimed) as e:
         client.ingest(tmp_path / "copied_home", box, wait=False)
     assert str(claim) in str(e.value) and "never finished" in str(e.value)
+
+
+def test_the_loser_of_the_fallback_race_waits_on_the_winners_empty_claim(tmp_path, box, monkeypatch):
+    """No hard links; the rival's exclusive create lands first and hasn't written its line yet."""
+    import errno
+    real_open = client.os.open
+
+    def link(src, dst):
+        raise OSError(errno.EPERM, "Operation not permitted")
+
+    def open_(path, flags, *a):
+        if str(path).endswith(INGEST_CLAIM) and flags & client.os.O_EXCL:
+            open(path, "w").close()                         # the winner's create, still empty
+            raise FileExistsError(path)
+        return real_open(path, flags, *a)
+    monkeypatch.setattr(client.os, "link", link)
+    monkeypatch.setattr(client.os, "open", open_)
+    with pytest.raises(client.IngestBusy):
+        client._claim_box(tmp_path / "ira_home", box)
+
+
+def test_amail_list_on_a_claim_being_written_warns_and_still_lists(tmp_path, box, monkeypatch, capsys):
+    import argparse
+    from macf import cli
+    (box / INGEST_CLAIM).write_text("")
+    monkeypatch.setattr(cli, "_amail_config", lambda: {
+        "home": str(tmp_path / "ira_home"), "handoff": str(box.parent), "agent": "ira", "contacts": "", "domain": ""})
+    code = cli.cmd_amail_list(argparse.Namespace(all=False, thread=None, json=False))
+    out = capsys.readouterr()
+    assert code == 0 and "no unread messages" in out.out and "being written" in out.err
