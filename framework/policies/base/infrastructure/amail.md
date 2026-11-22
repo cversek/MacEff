@@ -359,7 +359,8 @@ manager and anything else root's are printed for the operator, never run.
    domain, the declared listener's address and port, and each agent's calling card, public key and
    account, with each key's fingerprint, as one line of JSON. It carries no secret. A key on a card is a
    claim (6b.5) until the two operators compare its fingerprint on another channel. A broker with no
-   `peer_listen` has no card.
+   `peer_listen` has no card, and an agent with no `card` in the addressing file can't be on one, since
+   a peer judges its signatures by its card.
 3. **`macf_tools amail peer add '<the other side's card>'`, on each side.** Writes the link with its
    agents map into `peer_links`, and a contact for each local agent named (`--for`, default the agent
    running it). The operator's two files are edited one entry at a time, so comments and every other
