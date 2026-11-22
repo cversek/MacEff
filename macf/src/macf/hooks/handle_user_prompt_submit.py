@@ -319,6 +319,13 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # staleness from the event log, so this render and the ones after it
         # agree with the event that produced them (#181).
         recorded = record_user_activity_from_payload(prompt, transcript_path)
+        try:
+            from macf.agent_events_log import append_event as _append_cause
+            from macf.usage_meter import classify_prompt
+            _append_cause("turn_cause", {"cause": classify_prompt(prompt or "")})
+        except (ImportError, OSError, ValueError, TypeError) as _ce:
+            emit_warning(Warning(source="user_prompt_submit", kind="turn_cause_failed",
+                                 detail=f"turn cause not recorded ({_ce}); usage metering will read the previous cause"))
         record_channel_receipt(prompt)
 
         # USER_REMOTE auto-restore: a prompt the operator typed at the keyboard means
