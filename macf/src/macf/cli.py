@@ -822,6 +822,16 @@ def cmd_budget_me(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_budget_ticks(args: argparse.Namespace) -> int:
+    from macf import usage_ticks
+    try:
+        print(usage_ticks.run_ticks(args.since))
+    except ValueError as e:
+        print(f"budget ticks: {e}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def cmd_budget_rate(args: argparse.Namespace) -> int:
     from macf import usage_share
     print(usage_share.run_rate(args.window))
@@ -13188,6 +13198,9 @@ def _build_parser() -> argparse.ArgumentParser:
     b = budget_sub.add_parser("rate", help="fit this agent's points per weighted token against the account's counter")
     b.add_argument("--window", type=float, default=48.0, metavar="HOURS", help="hours to fit over (default 48)")
     b.set_defaults(func=cmd_budget_rate)
+    b = budget_sub.add_parser("ticks", help="fit points per weighted token from the counter's whole-percent crossings")
+    b.add_argument("--since", default="48h", metavar="AGE", help="window: 12h, 2d, or a date (default 48h)")
+    b.set_defaults(func=cmd_budget_ticks)
     b = budget_sub.add_parser("mode", help="the operator's intent for the allowance")
     mode_sub = b.add_subparsers(dest="budget_mode_cmd", required=True)
     m = mode_sub.add_parser("set", help="conserve | normal | burn")

@@ -1,0 +1,3 @@
+### Added
+
+- **`budget ticks`: the token-to-percent rate fitted at the counter's crossings** (`usage_ticks.py`, `macf_tools budget ticks [--since 48h]`): each whole-percent crossing of the weekly counter is bracketed by the samples either side, and the cumulative points are regressed on the cumulative weighted tokens per model, with a drift term for unmetered spend and per-model deviations from prior cost ratios (`MODEL_PRIORS`, overridable in `.maceff/usage_priors.json`) shrunk towards zero. Intervals come from a block bootstrap. The fit is reported with the cache-read weight at 0.1 and at 0, and a scoped counter's crossings give its pool's rate as a cross-check. Read-only; nothing in the hooks uses it yet.
