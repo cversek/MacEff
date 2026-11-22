@@ -11710,6 +11710,19 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
             print("(no unread messages" + (f"; {read_count} read, `amail list --all` shows them)"
                                            if read_count else ")"))
         return 0
+    if getattr(args, "compact", False):
+        # `amail inbox`: the same messages, newest first, one line each, the trust mark first.
+        for m in sorted(msgs, key=lambda m: m.date or "", reverse=True):
+            print(f"{_trust_badge(m)}  {_term_safe(m.date)}  {_term_safe(m.sender)}  "
+                  f"{_term_safe(m.subject)}  ({_term_safe(m.message_id)})")
+        for item in sorted(internet, key=lambda i: str(i.get("sidecar", {}).get("received_at", "")), reverse=True):
+            sc, obs = item.get("sidecar", {}), item.get("sidecar", {}).get("observed", {})
+            print(f"🌐  {_term_safe(str(sc.get('received_at', '?')))}  {_term_safe(str(obs.get('envelope_from', '?')))}  "
+                  f"{_term_safe(str(obs.get('subject', '(no subject)')))}")
+        msgs, internet_shown = [], len(internet)
+        internet = []
+    else:
+        internet_shown = None
     for m in msgs:
         print(f"{_term_safe(m.date)}  {_term_safe(m.sender)}  {_trust_badge(m)}")
         print(f"    {_term_safe(m.subject)}")
@@ -11728,6 +11741,9 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
         print(f"    {_term_safe(str(obs.get('subject', '(no subject)')))}")
         print(f"    sha={_term_safe(str(sc.get('raw_sha256', '?'))[:16])} "
               f"class={_term_safe(str(authz.get('outcome', '?')))}")
+    if internet_shown is not None:
+        print(f"\n{read_count} read, not shown (`amail list --all`)" if read_count else "")
+        return 0
     print(f"\n{len(msgs)} bundle message(s), {len(internet)} internet message(s)"
           + (f"; and {read_count} read, not shown (`amail list --all`)" if read_count and not every else ""))
     return 0
@@ -14421,6 +14437,12 @@ def _build_parser() -> argparse.ArgumentParser:
     amail_outbox.add_argument("--all", action="store_true", help="every agent's held mail, not only this agent's")
     amail_outbox.add_argument("--json", action="store_true", help="machine-readable output")
     amail_outbox.set_defaults(func=cmd_amail_outbox)
+
+    amail_inbox = amail_sub.add_parser(
+        "inbox", help="unread mail, newest first, one line each with its trust mark (what `amail list` "
+                      "shows, compact)")
+    amail_inbox.add_argument("--json", action="store_true", help="machine-readable output, as `amail list --json`")
+    amail_inbox.set_defaults(func=cmd_amail_list, compact=True, all=False, thread=None)
 
     # ── gmail ────────────────────────────────────────────────────────────
     gmail_parser = sub.add_parser(
