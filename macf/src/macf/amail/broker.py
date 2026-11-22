@@ -2395,6 +2395,26 @@ class Broker:
         return {"ok": True, **counts, "budget": budget,
                 "oldest_pending_s": None if oldest_pending_s is None else round(oldest_pending_s)}
 
+    def contact_entries(self, agent: str) -> Dict[str, Any]:
+        """The correspondents this broker would check for *agent*: address and direction, nothing else.
+
+        The broker answers, not the file, so an agent sees exactly what is enforced, including a
+        change made since it last asked (amail policy 4.1). Scoped to the caller by the kernel-
+        established identity, as `status_counts` is: the request names no agent. An unmapped agent
+        is refused, and a broker with no contact list answers an empty list and says so, since an
+        empty answer there is a fact about the deployment and not a refusal."""
+        if agent not in self.config.agent_homes:
+            raise PermissionError(
+                f"'{agent}' has no provisioned mailbox; refusing the read. "
+                "Reaching the socket is not authorization."
+            )
+        if self.contacts is None:
+            return {"ok": True, "contacts": [], "contact_list": False}
+        entries = self.contacts.entries_for(agent)
+        if self.audit:
+            self.audit.read(agent=agent, operation="contacts", count=len(entries))
+        return {"ok": True, "contacts": entries, "contact_list": True}
+
     def identify(self, conn: socket.socket) -> "Identity":
         """Authenticate the connecting process from kernel-supplied credentials.
 
@@ -2766,6 +2786,8 @@ class _Handler(socketserver.StreamRequestHandler):
                 resp = broker.submit(sender, msg)
             elif op == "status":
                 resp = broker.status_counts(sender)
+            elif op == "contacts":
+                resp = broker.contact_entries(sender)
             else:
                 # Named rather than ignored: a client asking for an operation
                 # this broker does not have is a version skew or an intention,
