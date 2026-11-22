@@ -147,6 +147,7 @@ def test_hook_path_reads_only_the_last_hour(monkeypatch):
     rows.append({"timestamp": now - 3 * 86400, "event": usage_share.FIT_EVENT,
                  "data": {"rate": 1e-7, "low": 9e-8, "high": 1.1e-7, "hours": 20, "r2": 0.9}})
     rows.append(_metered(now - 300, 5e6))
+    rows.append(_metered(now - 5400, 5e6))  # 90 minutes old: outside the hour
     _write(rows)
     seen = []
     real = usage_share.read_events
@@ -392,3 +393,80 @@ def test_the_commands_wire_the_window_and_the_cached_fit(capsys):
 @pytest.mark.parametrize("rate,want", [(50.0, (6, 96)), (0.0, (0.0, 96)), (200.0, (6, 200.0))])
 def test_the_interval_is_the_5th_to_95th_percentile_widened_to_the_rate(rate, want):
     assert usage_share._interval(list(range(100, 0, -1)), rate) == want  # sorted 1..100: indexes 5 and 95
+
+
+@pytest.mark.parametrize("specs,words", [
+    ([([2e6], 0.08)] * 7, "zero-width"),  # identical hours: every resampled slope is the same
+    ([([x * 1e6], y) for x, y in zip(range(1, 7), (0.30, 0.25, 0.20, 0.15, 0.10, 0.05))], "below zero"),
+])
+def test_a_degenerate_fit_is_refused_with_its_reason(specs, words):
+    end = _hour_end() - 86400
+    _write(_shaped(specs, end))
+    a = usage_share.try_fit(now=end + 10)
+    assert a.fit is None and "degenerate" in a.reason and words in a.reason
+
+
+def _fit_events():
+    return [e["data"] for e in usage_share.read_events(reverse=False, scope="all", only=usage_share.FIT_EVENT)]
+
+
+def test_refresh_fit_records_a_fit_once_an_hour_and_a_no_fit_attempt_too():
+    _history(30)
+    now = time.time()
+    assert usage_share.refresh_fit(now) is True
+    [d] = _fit_events()
+    assert d["window_h"] == usage_share.DEFAULT_WINDOW_H and d["hours"] == 30 and 0 < d["r2"] <= 1
+    assert d["low"] < d["rate"] < d["high"]
+    assert usage_share.refresh_fit(now + 60) is False and len(_fit_events()) == 1
+    assert usage_share.refresh_fit(now + 3700) is True and len(_fit_events()) == 2  # an hour on
+
+
+def test_refresh_fit_ignores_a_fit_older_than_an_hour_but_not_one_just_under():
+    _history(30)
+    now = time.time()
+    _write([{"timestamp": now - 5400, "event": usage_share.FIT_EVENT,
+             "data": {"rate": 1e-8, "low": 1e-8, "high": 1e-8, "hours": 9, "r2": 0.5}}])
+    assert usage_share.refresh_fit(now) is True  # 90 minutes old counts as stale
+    _write([{"timestamp": now + 3000, "event": usage_share.FIT_EVENT,
+             "data": {"rate": 1e-8, "low": 1e-8, "high": 1e-8, "hours": 9, "r2": 0.5}}])
+    assert usage_share.refresh_fit(now + 3400) is False
+
+
+def test_a_no_fit_attempt_records_a_null_rate_and_its_reason():
+    _history(3)
+    assert usage_share.refresh_fit() is True
+    [d] = _fit_events()
+    assert d["rate"] is None and d["reason"].startswith("3 hours with metered tokens")
+    assert d["window_h"] == usage_share.DEFAULT_WINDOW_H and set(d) == {"rate", "reason", "window_h"}
+
+
+def test_the_stop_hook_refreshes_the_fit(tmp_path):
+    from unittest.mock import patch
+    from macf.hooks.handle_stop import run
+    _history(30)
+    t = tmp_path / "s.jsonl"
+    t.write_text("")
+    stdin = json.dumps({"stop_reason": "end_turn", "session_id": "sid", "transcript_path": str(t)})
+    with patch("macf.hooks.handle_stop.detect_auto_mode", return_value=(False, "test")):
+        run(stdin)
+        run(stdin)
+    [d] = _fit_events()  # the second Stop is inside the hour
+    assert d["rate"] is not None and d["hours"] == 30
+
+
+def test_the_hook_line_ignores_a_metered_event_ninety_minutes_old():
+    now = time.time()
+    _write([_metered(now - 5400, 5e6)])
+    assert usage_share.hook_suffix(now) is None
+
+
+@pytest.mark.parametrize("factor,fits", [(1 / 20, False), (1 / 5, True), (5, True), (20, False)])
+def test_the_rate_band_is_ten_times_either_way(factor, fits):
+    end = _hour_end() - 86400
+    rate = usage_meter.POINTS_PER_WEIGHTED_TOKEN * factor
+    specs = [([_x(k)], rate * _x(k) * (1 + 0.2 * (((k * 53) % 7) - 3) / 3)) for k in range(9)]
+    _write(_shaped(specs, end))
+    a = usage_share.try_fit(now=end + 10)
+    assert (a.fit is not None) is fits
+    if not fits:
+        assert "degenerate" in a.reason and "10x" in a.reason and "provisional" in a.reason
