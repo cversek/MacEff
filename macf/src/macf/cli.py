@@ -701,6 +701,20 @@ def cmd_permissions_history(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_permissions_how(args: argparse.Namespace) -> int:
+    """How each recent tool call was approved, derived from the event log and today's rules (#1060)."""
+    from dataclasses import asdict
+    from pathlib import Path
+    from macf import permission_watch as pw
+    project = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    if args.last < 1:     # rows[-0:] would be every row, the opposite of what was asked
+        print("❌ --last takes a count of 1 or more", file=sys.stderr)
+        return 2
+    rows = pw.read_approvals(args.days, home=Path.home(), project_dir=project)[-args.last:]
+    print(json.dumps([asdict(a) for a in rows], indent=2) if args.json else pw.approvals_text(rows))
+    return 0
+
+
 def _session_rules():
     """The rules in force for this session: its starting directory is the project, as the client reads it."""
     from pathlib import Path
@@ -13164,6 +13178,15 @@ def _build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--include-questions", action="store_true", help="also list question dialogs (AskUserQuestion, ExitPlanMode)")
     pp.add_argument("--json", action="store_true")
     pp.set_defaults(func=cmd_permissions_history)
+    pp = perm_sub.add_parser(
+        "how",
+        help="how each recent tool call was approved, derived from the event log: at a dialog (approved or "
+             "denied), by an allow rule of today's settings, or by the permission mode (#1060)",
+    )
+    pp.add_argument("--days", type=float, default=1.0, metavar="N", help="how far back to read (default 1)")
+    pp.add_argument("--last", type=int, default=30, metavar="N", help="show the newest N calls (default 30)")
+    pp.add_argument("--json", action="store_true")
+    pp.set_defaults(func=cmd_permissions_how)
     pp = perm_sub.add_parser(
         "list", aliases=["rules"],
         help="the permission rules in force for this session, deny, ask and allow, each with its settings "
