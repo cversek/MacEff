@@ -46,6 +46,7 @@ class TestEmitScopeNag:
         assert "#101: Phase A" in msg
         assert "#102: Phase B" in msg
         assert "macf_tools task complete" in msg
+        assert "task scope pause" in msg, "the nag names the verb that quiets the gate"
 
     def test_no_goal_omits_quoted_section(self):
         sprint = _make_task(100, {})
