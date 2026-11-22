@@ -11793,6 +11793,44 @@ def _amail_setup_pieces(cfg: dict) -> list:
                             if sys.platform == "darwin" else [])
 
 
+def cmd_amail_contacts(args: argparse.Namespace) -> int:
+    """The correspondents the broker checks for this agent: address and direction, read-only.
+
+    The broker answers over its socket, so the list is what it enforces now. It shows identity and
+    direction and never a route, a key or a push grant; a change is a deployment change (amail
+    policy 4.1), not something this command can make."""
+    import json
+    from macf.amail.client import BrokerUnavailable, contacts as _contacts
+
+    cfg = _amail_config()
+    started = _ensure_host_broker(cfg)
+    if started:
+        print(started, file=sys.stderr)
+    try:
+        reply = _contacts(Path(cfg["socket"]), sender=cfg.get("agent") or None)
+    except BrokerUnavailable as e:
+        print(f"❌ {e}")
+        return 1
+    entries = list(reply.get("contacts") or [])
+    needle = (args.filter or "").strip().lower()
+    if needle:
+        entries = [e for e in entries if needle in str(e.get("address", "")).lower()]
+    if args.json:
+        print(json.dumps({"contacts": entries, "contact_list": reply.get("contact_list", True)}, indent=2))
+        return 0
+    if not reply.get("contact_list", True):
+        print("this broker has no contact list, so it checks no correspondents")
+        return 0
+    if not entries:
+        print("no correspondent matches" if needle else "no correspondents are declared for this agent")
+        return 0
+    wide = max(len(str(e["address"])) for e in entries)
+    marks = {"both": "↔", "outbound": "→", "inbound": "←", "neither": "✖ withdrawn"}
+    for e in entries:
+        print(f"{str(e['address']).ljust(wide)}  {marks.get(e['direction'], '?')}  {e['direction']}")
+    return 0
+
+
 def cmd_amail_status(args: argparse.Namespace) -> int:
     """Report whether amail is usable, and say precisely what is missing if not."""
     import socket as _socket
@@ -14339,6 +14377,13 @@ def _build_parser() -> argparse.ArgumentParser:
     amail_status = amail_sub.add_parser("status", help="is amail usable? what is missing?")
     amail_status.add_argument("--json", action="store_true", help="machine-readable output")
     amail_status.set_defaults(func=cmd_amail_status)
+    amail_contacts = amail_sub.add_parser(
+        "contacts", help="the correspondents the broker checks for this agent: address and direction "
+                         "(read-only; the broker answers, so it is what is enforced now)")
+    amail_contacts.add_argument("filter", nargs="?", default=None,
+                                help="show only addresses containing this text")
+    amail_contacts.add_argument("--json", action="store_true", help="machine-readable output")
+    amail_contacts.set_defaults(func=cmd_amail_contacts)
 
     amail_peer = amail_sub.add_parser(
         "peer", help="rung-2 peer links between brokers (MIS-0004 R56 to R65): cards, not hand-written config")

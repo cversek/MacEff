@@ -737,3 +737,16 @@ def status(socket_path: Path, timeout: float = 10.0,
     if sender:
         req["sender"] = sender
     return _roundtrip(req, socket_path, timeout, "No status was returned.")
+
+
+def contacts(socket_path: Path, timeout: float = 10.0,
+             sender: Optional[str] = None) -> Dict[str, Any]:
+    """The correspondents the broker checks for the caller: address and direction each.
+
+    The broker answers, not the contact file, which an agent can't read from its side by design;
+    so the list is what is enforced now. `sender` is the claim, as for `status`. An older broker
+    refuses the operation by name, and `_roundtrip` raises that refusal as it does any other."""
+    req: Dict[str, Any] = {"op": "contacts"}
+    if sender:
+        req["sender"] = sender
+    return _roundtrip(req, socket_path, timeout, "No contact list was returned.")
