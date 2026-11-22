@@ -677,61 +677,88 @@ def restore_user_remote_deny_if_active(project_root: Optional[Path] = None) -> O
     return toggle_user_remote_deny_permissions(False, project_root=project_root)
 
 
+#: What MANUAL_MODE asks about in place of a bare ``Write`` (#876): the agent's real work, its home and the
+#: system's /opt. Claude Code's ``Edit`` rule covers every tool that edits files, ``~/`` is the user's home
+#: and ``//`` an absolute path.
+MANUAL_ASK_RULES = ("Edit(~/**)", "Edit(//opt/**)")
+#: What it lets through without asking: the session scratchpad Claude Code keeps under /tmp/claude-<uid>/. An ask
+#: rule outranks an allow rule, so nothing here may sit under a path asked about above.
+MANUAL_ALLOW_RULES = ("Edit(//tmp/claude-*/**)",)
+_MANUAL_RECORD = "maceff_manual_mode_rules.json"
+
+
+def _rules_added(settings_path: Path) -> dict:
+    """The rules this file got on the last switch to MANUAL_MODE: only these come out on the way back."""
+    try:
+        return json.loads((settings_path.parent / _MANUAL_RECORD).read_text())
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"⚠️ MACF: {settings_path.parent / _MANUAL_RECORD} is unreadable ({e}); no MANUAL_MODE rules will be removed",
+              file=sys.stderr)
+        return {}
+
+
+def _apply_manual_rules(settings: dict, settings_path: Path, enable_auto: bool) -> None:
+    """Switch one settings file's write rules. AUTO_MODE takes the bare ``Write`` ask out and exactly the rules
+    MANUAL_MODE added (an identical rule the operator already had is theirs and stays); MANUAL_MODE adds the
+    scoped ones and records which of them were new, so the operator's own rules survive both ways."""
+    permissions = settings.setdefault('permissions', {})
+    ask, allow = permissions.setdefault('ask', []), permissions.setdefault('allow', [])
+    record_path = settings_path.parent / _MANUAL_RECORD
+    if enable_auto:
+        if 'Write' in ask:
+            ask.remove('Write')
+        added = _rules_added(settings_path)
+        for rule in added.get('ask', []):
+            if rule in ask:
+                ask.remove(rule)
+        for rule in added.get('allow', []):
+            if rule in allow:
+                allow.remove(rule)
+        record_path.unlink(missing_ok=True)
+        return
+    # A second switch to MANUAL finds its own rules already there; they stay recorded as added.
+    before = _rules_added(settings_path)
+    added = {'ask': before.get('ask', []) + [r for r in MANUAL_ASK_RULES if r not in ask],
+             'allow': before.get('allow', []) + [r for r in MANUAL_ALLOW_RULES if r not in allow]}
+    ask.extend(r for r in added['ask'] if r not in ask)
+    allow.extend(r for r in added['allow'] if r not in allow)
+    record_path.write_text(json.dumps(added))
+
+
 def toggle_write_ask_for_auto_mode(enable_auto: bool, project_root: Optional[Path] = None) -> bool:
     """
-    Toggle Write tool between 'ask' and implicit bypass for AUTO_MODE.
+    Switch the write rules between AUTO_MODE and MANUAL_MODE.
 
-    CC's permission resolution: deny > ask > allow > defaultMode.
-    Write in 'ask' always prompts regardless of defaultMode.
-    For AUTO_MODE to work autonomously, Write must be removed from 'ask'
-    so it falls through to defaultMode (bypassPermissions).
+    CC's permission resolution: deny > ask > allow > defaultMode. A bare Write in 'ask' always prompts, so
+    AUTO_MODE takes it out and MANUAL_MODE no longer puts it back: that prompted for every write, the session
+    scratchpad's included, and a phone operator who can't see the dialogs stalled the agent (#876). MANUAL_MODE
+    asks about the agent's real work instead (``MANUAL_ASK_RULES``) and lets the scratchpad through
+    (``MANUAL_ALLOW_RULES``); the way back removes exactly the rules it added.
 
-    CC merges global (~/.claude/settings.json) and local (settings.local.json)
-    permissions. Write in EITHER ask list triggers prompts. Both must be cleaned
-    for AUTO_MODE to work correctly.
+    CC merges global (~/.claude/settings.json) and local (settings.local.json) permissions, so both are switched.
 
     Args:
-        enable_auto: True = remove Write from ask (AUTO_MODE entry),
-                     False = restore Write to ask (MANUAL_MODE return)
+        enable_auto: True = AUTO_MODE entry, False = MANUAL_MODE return
         project_root: Project root path. If None, attempts auto-detection.
 
     Returns:
         True if successfully updated, False on error
     """
     try:
-        # Update local settings.local.json
         settings, settings_path = _read_settings(project_root)
-        permissions = settings.setdefault('permissions', {})
-        ask_list = permissions.setdefault('ask', [])
-
-        if enable_auto:
-            if 'Write' in ask_list:
-                ask_list.remove('Write')
-        else:
-            if 'Write' not in ask_list:
-                ask_list.append('Write')
-
+        _apply_manual_rules(settings, settings_path, enable_auto)
         _write_settings(settings, settings_path)
 
-        # Also update global ~/.claude/settings.json (CC merges both)
+        # Also the global ~/.claude/settings.json (CC merges both)
         global_settings_path = Path.home() / ".claude" / "settings.json"
         if global_settings_path.exists():
             try:
                 with open(global_settings_path, 'r') as f:
                     global_settings = json.load(f)
-                global_perms = global_settings.get('permissions', {})
-                global_ask = global_perms.get('ask', [])
-
-                if enable_auto and 'Write' in global_ask:
-                    global_ask.remove('Write')
-                    global_perms['ask'] = global_ask
-                    global_settings['permissions'] = global_perms
-                    _write_settings(global_settings, global_settings_path)
-                elif not enable_auto and 'Write' not in global_ask:
-                    global_ask.append('Write')
-                    global_perms['ask'] = global_ask
-                    global_settings['permissions'] = global_perms
-                    _write_settings(global_settings, global_settings_path)
+                _apply_manual_rules(global_settings, global_settings_path, enable_auto)
+                _write_settings(global_settings, global_settings_path)
             except (OSError, json.JSONDecodeError) as e:
                 print(f"⚠️ MACF: Global settings update failed (non-blocking): {e}", file=sys.stderr)
 
