@@ -701,6 +701,20 @@ def cmd_permissions_history(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_permissions_how(args: argparse.Namespace) -> int:
+    """How each recent tool call was approved, derived from the event log and today's rules (#1060)."""
+    from dataclasses import asdict
+    from pathlib import Path
+    from macf import permission_watch as pw
+    project = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    if args.last < 1:     # rows[-0:] would be every row, the opposite of what was asked
+        print("❌ --last takes a count of 1 or more", file=sys.stderr)
+        return 2
+    rows = pw.read_approvals(args.days, home=Path.home(), project_dir=project)[-args.last:]
+    print(json.dumps([asdict(a) for a in rows], indent=2) if args.json else pw.approvals_text(rows))
+    return 0
+
+
 def _session_rules():
     """The rules in force for this session: its starting directory is the project, as the client reads it."""
     from pathlib import Path
@@ -8808,6 +8822,13 @@ def cmd_task_pause(args: argparse.Namespace) -> int:
     print(f"   Breadcrumb: {breadcrumb}")
     if cleared_policies:
         print(f"   Cleared policies: {cleared_policies}")
+    try:
+        from .task.scope import get_scope_state
+        if get_scope_state().get(str(task_id)) == "active":
+            print(f"⚠️  #{task_id} is still active in scope, so the Stop hook's scope gate keeps counting it. "
+                  f"To quiet the gate: macf_tools task scope pause {task_id} --justification <reason>")
+    except (ImportError, OSError, ValueError) as e:
+        print(f"⚠️  could not check whether #{task_id} is scoped ({e})", file=sys.stderr)
     return 0
 
 
@@ -11958,7 +11979,9 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
     # agent may start one, so where the piece knows, the broker line says what it found.
     supervision = next((p for p in setup if p.name == "broker supervision"), None)
     if supervision is not None:
-        info["broker_kind"] = supervision.detail
+        # A short value a script can compare; the sentence goes in its own key (review of #1104).
+        info["broker_kind"] = supervision.kind or info["broker_kind"]
+        info["broker_supervision"] = supervision.detail
     if args.json:
         print(json.dumps(info, indent=2))
         return 0 if reachable else 1
@@ -11969,7 +11992,7 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
     print(f"address:  {info['address'] or '(unconfigured)'}")
     print(f"maildir:  {info['maildir'] or '(unknown)'}  [{_local_str}]")
     print(f"broker:   {'✅ reachable' if reachable else '❌ unreachable'} at {sock}"
-          + (f"  [{info['broker_kind']}]" if info["broker_kind"] != "deployment" else ""))
+          + (f"  [{info.get('broker_supervision') or info['broker_kind']}]" if info["broker_kind"] != "deployment" else ""))
     # The pickup box is how a recipient learns it has mail awaiting custody
     # transfer — the one count that calls for an action, so it gets its own
     # line rather than a slot in the summary.
@@ -13162,6 +13185,15 @@ def _build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--include-questions", action="store_true", help="also list question dialogs (AskUserQuestion, ExitPlanMode)")
     pp.add_argument("--json", action="store_true")
     pp.set_defaults(func=cmd_permissions_history)
+    pp = perm_sub.add_parser(
+        "how",
+        help="how each recent tool call was approved, derived from the event log: at a dialog (approved or "
+             "denied), by an allow rule of today's settings, or by the permission mode (#1060)",
+    )
+    pp.add_argument("--days", type=float, default=1.0, metavar="N", help="how far back to read (default 1)")
+    pp.add_argument("--last", type=int, default=30, metavar="N", help="show the newest N calls (default 30)")
+    pp.add_argument("--json", action="store_true")
+    pp.set_defaults(func=cmd_permissions_how)
     pp = perm_sub.add_parser(
         "list", aliases=["rules"],
         help="the permission rules in force for this session, deny, ask and allow, each with its settings "

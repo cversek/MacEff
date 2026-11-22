@@ -778,6 +778,16 @@ block: a system timer, a cron job, a supervisor.
   (default 10), and again every `--repeat` minutes (default 60). When a wait it
   reminded about ends, it sends one all-clear. A reminder that fails to send is
   tried again on the next pass. `--dry-run` prints instead of sending.
+- `macf_tools permissions how` answers "how was each of my calls approved?"
+  over the last `--days` (default 1, newest `--last` 30), derived from the event
+  log and nothing recorded for it (#1060): **at a dialog**, approved if the call
+  then ran and denied if not; else **by an allow rule** of today's settings that
+  covers the whole call (for a chain, every part), named with its file; else, by
+  elimination, **by the permission mode**, in auto mode its classifier. It is how
+  an agent tells whether a call went through on a rule or because the operator
+  answered, when the operator's presence is in doubt. Two limits: the rules are
+  today's, so a rule changed since the call isn't seen, and an answer at the
+  terminal and one over Remote Control look the same in the log.
 - `macf_tools permissions history` answers "which dialogs has this agent met?"
   over the last `--days` (default 7), from the same event log and nothing else:
   when each opened, how long it waited, whether the command then ran, and the

@@ -899,8 +899,9 @@ sees is what is enforced now, and a change made since it last looked shows. The 
 the kernel-established identity (on a shared login, the claim `status` also takes) selects whose list
 comes back, so an agent never sees another's. It is read-only and carries identity and direction only,
 never a key, a push grant or a route (4.2); the read is audited with its count. A list is changed in
-deployment configuration, never by this command. A broker with no contact list says so instead of
-answering an empty list, and an older broker refuses the operation by name.
+deployment configuration, never by this command. A broker with no contact list answers an empty list marked `contact_list: false`, so that
+an empty answer is not read as an agent with no correspondents (the read is audited with a count of zero), and an
+older broker refuses the operation by name.
 
 ### 4.2 Contact entries record identity, never reachability
 

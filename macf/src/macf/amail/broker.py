@@ -2408,12 +2408,10 @@ class Broker:
                 f"'{agent}' has no provisioned mailbox; refusing the read. "
                 "Reaching the socket is not authorization."
             )
-        if self.contacts is None:
-            return {"ok": True, "contacts": [], "contact_list": False}
-        entries = self.contacts.entries_for(agent)
+        entries = [] if self.contacts is None else self.contacts.entries_for(agent)
         if self.audit:
             self.audit.read(agent=agent, operation="contacts", count=len(entries))
-        return {"ok": True, "contacts": entries, "contact_list": True}
+        return {"ok": True, "contacts": entries, "contact_list": self.contacts is not None}
 
     def identify(self, conn: socket.socket) -> "Identity":
         """Authenticate the connecting process from kernel-supplied credentials.

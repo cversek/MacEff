@@ -141,13 +141,9 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         Dict with tool awareness message
     """
     try:
-        # Reset scope-gate failsafe counter on any tool invocation (agent doing
-        # useful work re-engages the gate). BUG #1022.
-        try:
-            from macf.task.scope_gate_failsafe import reset as _reset_failsafe
-            _reset_failsafe()
-        except (ImportError, OSError) as _e:
-            emit_warning(Warning(source="pre_tool_use", kind="scope_gate_failed", detail=f"scope_gate_failsafe reset failed (non-blocking): {_e}"))
+        # The idle-stop failsafe no longer resets here: a tool call is not progress
+        # by itself. The Stop hook reads the tool_call_completed events instead and
+        # counts a call only when its call or its result is new (scope_gate_failsafe).
 
         # Parse hook input
         data = json.loads(stdin_json) if stdin_json else {}

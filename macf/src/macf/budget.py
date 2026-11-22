@@ -333,6 +333,18 @@ def current_mode(now: Optional[float] = None) -> dict:
     return dict(e["data"], set_at=e["timestamp"]) if e else {"mode": "normal", "target": None, "by": None, "scope": None}
 
 
+def lapsed_mode(now: Optional[float] = None) -> Optional[dict]:
+    """The operator's last non-normal mode when it has aged out of the weekly window, else None. A lapse is
+    silent in ``current_mode``; this lets the prompt notice say so once, since the intent may still hold."""
+    now = now or time.time()
+    if current_mode(now)["mode"] != "normal":
+        return None
+    e = next(iter(read_events(reverse=True, scope="all", only=("budget_mode_set",))), None)
+    if not e or e["data"].get("mode") == "normal":
+        return None
+    return dict(e["data"], set_at=e["timestamp"])
+
+
 # ── status ───────────────────────────────────────────────────────────────────
 
 def _reset_key(iso: Optional[str]) -> Optional[str]:
@@ -631,6 +643,13 @@ def prompt_notice(now: Optional[float] = None) -> Optional[str]:
                 append_event("budget_notice", {"key": k, "value": r["pace_needed"]})
                 obs = r["rate_last_hour"] if r["rate_last_hour"] is not None else r["rate_window"]
                 out.append(f"burn {r['label']}: needs {r['pace_needed']:+g}%/h" + (f", running {obs:+g}%/h" if obs is not None else ""))
+    lapsed = lapsed_mode(now)
+    if lapsed:
+        k = f"mode_lapse:{lapsed['set_at']:.0f}"
+        if not seen.get(k):
+            append_event("budget_notice", {"key": k, "value": lapsed["mode"]})
+            out.append(f"mode {lapsed['mode']} (set {dt.datetime.fromtimestamp(lapsed['set_at']):%b %d %H:%M}) has lapsed to normal; "
+                       f"re-set it if that intent still holds")
     if not out:
         return None
     return ("💳 budget: " + "; ".join(out) + f" [{st['model']['display']}, {st['mode']['mode']}{_stale(st)}]"
