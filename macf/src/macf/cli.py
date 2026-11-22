@@ -11171,6 +11171,31 @@ def cmd_amail_key_status(args: argparse.Namespace) -> int:
     return 1 if (report["required"] and not report["exists"]) else 0
 
 
+def cmd_amail_peer_card(args: argparse.Namespace) -> int:
+    """Print this broker's peer card (MIS-0004 R56 to R65), read from the operator's files."""
+    from macf.amail import peer_setup
+    from macf.amail.registry import Registry, registry_path
+
+    cfg = _amail_config()
+    if not cfg.get("broker_config"):
+        print("❌ no broker config is named; set broker_config in amail.json (or MACF_AMAIL_BROKER_CONFIG)")
+        return 1
+    try:
+        if args.all:
+            from macf.amail.deploy_config import BrokerDeployConfig, load_declarative_config
+            deploy = BrokerDeployConfig.model_validate(load_declarative_config(Path(cfg["broker_config"])))
+            agents = sorted(deploy.load_addressing().agents)
+        else:
+            agents = args.agent or [cfg["agent"]]
+        card = peer_setup.build_card(Path(cfg["broker_config"]), agents=agents, registry=Registry(registry_path()),
+                                     own_agent=cfg["agent"], own_key=cfg.get("signing_key") or None)
+    except (peer_setup.CardError, ValueError, OSError) as e:
+        print(f"❌ {e}")
+        return 1
+    print(peer_setup.render_card(card) if args.json else "\n".join(peer_setup.describe(card)))
+    return 0
+
+
 def cmd_amail_registry_check(args: argparse.Namespace) -> int:
     """Check the operator's registry (MIS-0004 R42): who can write it, and what it declares."""
     from macf.amail.registry import Registry, RegistryError, registry_path
@@ -14146,6 +14171,18 @@ def _build_parser() -> argparse.ArgumentParser:
     amail_status = amail_sub.add_parser("status", help="is amail usable? what is missing?")
     amail_status.add_argument("--json", action="store_true", help="machine-readable output")
     amail_status.set_defaults(func=cmd_amail_status)
+
+    amail_peer = amail_sub.add_parser(
+        "peer", help="rung-2 peer links between brokers (MIS-0004 R56 to R65): cards, not hand-written config")
+    amail_peer_sub = amail_peer.add_subparsers(dest="peer_cmd")
+    amail_peer_card = amail_peer_sub.add_parser(
+        "card", help="print what a peer's operator needs to declare this broker: domain, listener, "
+                     "agents, cards and public keys; never a secret, and it changes nothing")
+    amail_peer_card.add_argument("--agent", action="append", default=None,
+                                 help="an agent to put on the card (repeatable; default: this agent)")
+    amail_peer_card.add_argument("--all", action="store_true", help="every agent in the addressing file")
+    amail_peer_card.add_argument("--json", action="store_true", help="the card alone, one line of JSON")
+    amail_peer_card.set_defaults(func=cmd_amail_peer_card)
 
     # ── gmail ────────────────────────────────────────────────────────────
     gmail_parser = sub.add_parser(

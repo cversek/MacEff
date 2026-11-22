@@ -343,6 +343,13 @@ hand-off decide what reaches an agent (R63, R64), so a connection says which mac
 and only the signature says which agent. A peer link also declares the peer's agents (`agents`: the address local part to the agent's calling card), which is how the receiving broker knows which card a sender's address names and so which registry key its signature is judged against; a peer that declares none has all its mail read unverified. A peer's domain is reached by one rung: declaring it in both
 `shared_handoffs` and `peer_links` is refused. Internet mail is never sent over this link (R53).
 
+A broker's peer card is what the other side's operator needs to declare it: the mail domain, the
+declared listener's address and port, and for each agent on the card its calling card, its public
+signing key and the account that holds it. `macf_tools amail peer card` prints it from the broker's
+own configuration, through the same loader the broker runs on, with the registry line the peer's
+operator runs as root; it carries no secret and changes nothing. A broker with no `peer_listen` has
+no card, since no peer can reach it.
+
 ### 2.2 Local delivery is an optimization, not a special case
 
 Rung 1 exists because same-host delivery is faster, more private, and cannot fail
