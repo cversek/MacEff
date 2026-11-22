@@ -54,7 +54,9 @@ UNIT_STATES = get_args(State)
 #: The placeholders the daemon fills in when it renders a unit's command and environment
 #: at start (MIS-0002-R13 (pd_MUST_render_env_at_start)). The same agent has a different
 #: home on a host and in a container, so a declaration names it this way, never as a path.
-PLACEHOLDERS = ("agent_home", "card", "runtime_dir")
+#: ``python`` is the daemon's own interpreter, which a declaration can't know when it is
+#: validated (a unit's comes from ``pd install``); the report schedules run with it (#1027).
+PLACEHOLDERS = ("agent_home", "card", "runtime_dir", "python")
 _PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 #: macOS privacy grants a unit may declare (MIS-0002-R63 (unit_MUST_declare_privacy_grants)).
@@ -259,6 +261,18 @@ class Reports(_Closed):
         if len(set(v)) != len(v):
             raise ValueError("a report time is listed once")
         return v
+
+
+#: What each report schedule runs: ``pd report`` under the daemon's own interpreter, printing what
+#: the session is woken with (#1027).
+REPORT_COMMAND = ("{python}", "-m", "macf.cli", "pd", "report")
+#: A report reads a credential and prints a line; a minute is ample.
+REPORT_TIMEOUT_S = 60.0
+
+
+def report_schedule_name(time_of_day: str) -> str:
+    """The schedule a report time becomes: ``report-HHMM``."""
+    return "report-" + time_of_day.replace(":", "")
 
 
 class PromptRun(_Closed):
@@ -653,6 +667,31 @@ class Declaration(_Closed):
             raise ValueError(f"an isolated prompt run is declared, so notice_routes must route "
                              f"{RUN_FAILED_SOURCE!r} to 'agent' or 'both', the routes its notice is "
                              f"delivered on")
+        return self
+
+    @model_validator(mode="after")
+    def _reports_run_as_schedules(self) -> "Declaration":
+        # Each report time is a schedule the scheduler already runs (#1027), so the missed-run
+        # policy, the install check and every reader of ``schedules`` apply with no code of their
+        # own. A name the declaration already uses is its own schedule and is kept, which also
+        # keeps a declaration read back from its own dump from doubling them.
+        if self.reports is None:
+            return self
+        have = {s.name for s in self.schedules}
+        env = {"MACEFF_AGENT_HOME_DIR": "{agent_home}"}
+        session = next((u for u in self.units if u.kind == "session"), None)
+        for key in ("USER", "LOGNAME"):    # how macOS finds the stored login (#852, #1073)
+            if session is not None and key in session.environment:
+                env[key] = session.environment[key]
+        for t in self.reports.times:
+            name = report_schedule_name(t)
+            if name in have:
+                continue
+            hour, minute = t.split(":")
+            self.schedules.append(Schedule(
+                name=name, cron=f"{int(minute)} {int(hour)} * * *", missed_run=self.reports.missed,
+                target=self.agent, timeout_s=REPORT_TIMEOUT_S,
+                run=CommandRun(command=list(REPORT_COMMAND), wake_when="stdout", environment=dict(env))))
         return self
 
     @model_validator(mode="after")
