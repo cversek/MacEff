@@ -138,3 +138,47 @@ def test_a_failed_read_leaves_the_hook_output_and_warns(monkeypatch):
         out = _hook_out()
     assert out.get("continue") is True and "hookSpecificOutput" in out
     assert any(getattr(w, "kind", "") == "approval_note_failed" for w in warned)
+
+
+# ---- what reaches the agent ----------------------------------------------------------------------
+
+def test_the_hook_adds_nothing_without_a_note_and_places_one_inside_the_block():
+    from unittest.mock import patch
+    with patch("macf.permission_watch.read_previous_call_note", return_value=None):
+        bare = _hook_out()["hookSpecificOutput"]["additionalContext"]
+    with patch("macf.permission_watch.read_previous_call_note", return_value=""):
+        assert _hook_out()["hookSpecificOutput"]["additionalContext"] == bare
+    with patch("macf.permission_watch.read_previous_call_note", return_value="NOTE-LINE"):
+        said = _hook_out()["hookSpecificOutput"]["additionalContext"]
+    tail = "\n</system-reminder>"
+    assert bare.endswith(tail) and said.endswith(tail)
+    assert said == bare[:-len(tail)] + "\nNOTE-LINE" + tail
+
+
+def test_the_hook_asks_for_the_note_of_its_own_session():
+    from unittest.mock import patch
+    with patch("macf.permission_watch.read_previous_call_note", return_value=None) as read:
+        _hook_out()
+    assert read.call_args.args[0] == "s-note"
+
+
+def test_a_long_command_is_cut_and_the_note_names_the_tool():
+    long_cmd = "git push origin " + "x" * 200
+    events = [ev("tool_call_started", 100, long_cmd), ev("permission_requested", 101, long_cmd),
+              ev("tool_call_completed", 120, long_cmd), ev("tool_call_started", 130, "ls")]
+    note = pw.previous_call_note(events, SID)
+    assert note.startswith("Your previous call (Bash: git push origin ")
+    assert long_cmd[:60] in note and long_cmd[:61] not in note
+    assert len(note) < 260
+
+
+def test_the_read_reaches_back_across_a_compaction():
+    """The previous call may have started in the cycle before the one the new call runs in."""
+    _log("tool_call_started", SID, "git push")
+    _log("permission_requested", SID, "git push")
+    _log("tool_call_completed", SID, "git push")
+    from macf.agent_events_log import append_event
+    append_event("compaction_detected", {"session_id": SID})
+    _log("tool_call_started", SID, "ls")
+    note = pw.read_previous_call_note(SID)
+    assert note and "git push" in note
