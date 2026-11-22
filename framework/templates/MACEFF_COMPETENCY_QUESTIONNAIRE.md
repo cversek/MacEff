@@ -62,7 +62,7 @@ What is the breadcrumb format and what does each component represent?
 
 ## Section 3: Delegation Patterns (3 questions)
 
-**Reference**: `delegation_guidelines.md`, `team_structure.md`
+**Reference**: `delegation_guidelines.md`
 
 ### Q3.1: Delegation Signals
 What signals indicate a task SHOULD be delegated vs handled directly?
