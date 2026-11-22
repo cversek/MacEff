@@ -83,3 +83,72 @@ def test_a_peer_with_mail_waiting_or_refused_or_no_agents_points_at_the_check(tm
     peer = _by(readiness.pieces(cfg))["peer beta.test"]
     assert peer.ok is False and "1 waiting, 1 refused" in peer.detail and "no agents declared" in peer.detail
     assert peer.fix == "macf_tools amail peer check beta.test"
+
+
+def _held(box, name, sender, refused=None):
+    import json
+    box.mkdir(parents=True, exist_ok=True)
+    (box / f"{name}.amsg").write_text("x")
+    side = {"message_id": f"msg-{name}", "sender": sender, "recipient": "sparrow@beta.test",
+            "handed_off_at": "2026-11-21T00:00:00+00:00"}
+    if refused:
+        side["refused"] = {"reason": refused, "at": "2026-11-21T00:01:00+00:00"}
+    (box / f"{name}.json").write_text(json.dumps(side))
+
+
+def test_the_outbox_shows_this_agents_waiting_and_refused_mail_with_the_peers_reason(tmp_path):
+    """Waiting mail with its age, refused mail with the reason the peer gave, and by default only the
+    asking agent's own: the outbox is the broker's, and holds every agent's mail."""
+    cfg = _host(tmp_path, peers={"beta.test": {"host": "100.64.0.9", "port": 8030}})
+    out = tmp_path / "amail-host" / "handoff" / "_outbox" / "beta.test"
+    _held(out, "1-a", "ira@alpha.test")
+    _held(out, "1-b", "bez@alpha.test")
+    _held(out / "refused", "1-c", "ira@alpha.test", refused="the peer's contact list refuses it")
+    mine = readiness.outbox(cfg, sender="ira@alpha.test")
+    assert [(h.message_id, h.state) for h in mine] == [("msg-1-a", "waiting"), ("msg-1-c", "refused")]
+    assert mine[1].reason == "the peer's contact list refuses it" and mine[0].age_s > 0
+    assert len(readiness.outbox(cfg)) == 3
+
+
+def test_a_message_a_real_peer_refused_shows_in_the_outbox_with_its_reason(tmp_path, monkeypatch):
+    """Built from a real flush against a listener that refuses: the broker sets the pair aside with
+    the peer's reason, and the outbox view reads it back."""
+    import socket
+    import threading
+
+    from macf.amail.broker import Broker
+    from macf.amail.deploy_config import BrokerDeployConfig, load_declarative_config
+    from macf.amail.models import Message
+    from macf.amail.peer_link import read_request_line
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(4)
+    port = srv.getsockname()[1]
+
+    def refuse():
+        for _ in range(2):
+            try:
+                conn, _a = srv.accept()
+            except OSError:
+                return  # noqa: MACEFF003 - the test closes the listening socket to end this thread
+            with conn:
+                read_request_line(conn)
+                conn.sendall(b'{"v": 1, "ok": false, "refused": true, "reason": "no such mailbox"}\n')
+    t = threading.Thread(target=refuse, daemon=True)
+    t.start()
+    cfg = _host(tmp_path, peers={"beta.test": {"host": "127.0.0.1", "port": port}})
+    raw = yaml.safe_load(cfg.read_text())
+    raw["dispositions_dir"] = str(tmp_path / "disp")
+    raw["audit_path"] = str(tmp_path / "audit.jsonl")
+    addressing = yaml.safe_load((tmp_path / "amail-host" / "addressing.yaml").read_text())
+    addressing["agents"]["ira"]["contacts"] = [{"address": "sparrow@beta.test", "direction": "both"}]
+    (tmp_path / "amail-host" / "addressing.yaml").write_text(yaml.safe_dump(addressing))
+    cfg.write_text(yaml.safe_dump(raw))
+    broker = Broker(BrokerDeployConfig.model_validate(load_declarative_config(cfg)).to_broker_config())
+    (tmp_path / "ira").mkdir(exist_ok=True)
+    out = tmp_path / "amail-host" / "handoff" / "_outbox" / "beta.test"
+    _held(out, "1-x", "ira@alpha.test")
+    broker.flush_outbox()
+    srv.close()
+    (h,) = readiness.outbox(cfg, sender="ira@alpha.test")
+    assert h.state == "refused" and "no such mailbox" in h.reason

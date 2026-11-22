@@ -11294,6 +11294,39 @@ def cmd_amail_peer_check(args: argparse.Namespace) -> int:
     return 1 if any(s.ok is False for s in stations) else 0
 
 
+def cmd_amail_outbox(args: argparse.Namespace) -> int:
+    """What the broker holds for its peers: waiting for a retry, or refused with the peer's reason."""
+    from macf.amail import readiness
+    from macf.amail.peer_setup import CardError
+
+    cfg = _amail_config()
+    if not cfg.get("broker_config"):
+        print("❌ no broker config is named; set broker_config in amail.json (or MACF_AMAIL_BROKER_CONFIG)")
+        return 1
+    me = f"{cfg['agent']}@{cfg['domain']}" if cfg.get("agent") and cfg.get("domain") else None
+    try:
+        held = readiness.outbox(Path(cfg["broker_config"]), sender=None if args.all else me)
+    except CardError as e:
+        print(f"❌ {e}")
+        return 1
+    if args.json:
+        print(json.dumps([h.__dict__ for h in held], indent=2))
+        return 0
+    if not held:
+        print("✅ nothing held for a peer" + ("" if args.all else f" from {me}"))
+        return 0
+    for h in held:
+        age = f"{h.age_s / 60:.0f} min" if h.age_s is not None else "age unknown"
+        mark = "⏳" if h.state == "waiting" else "❌"
+        print(f"{mark} {h.state}  {h.recipient}  {h.message_id}  from {h.sender}, handed off {age} ago")
+        if h.reason:
+            print(f"     {h.reason}")
+    for peer in sorted({h.peer for h in held if h.state == "waiting"}):
+        print(f"The broker retries waiting mail on each sweep; `macf_tools amail peer check {peer}` says why "
+              f"it is not taken yet.")
+    return 0
+
+
 def cmd_amail_broker_unit(args: argparse.Namespace) -> int:
     """The host broker as a declared unit of its own primal daemon: shown, written on --write."""
     import pwd as _pwd
@@ -14378,6 +14411,13 @@ def _build_parser() -> argparse.ArgumentParser:
                                    help="the broker daemon's home (default: the broker config's directory)")
     amail_broker_unit.add_argument("--write", action="store_true", help="write the identity and declaration")
     amail_broker_unit.set_defaults(func=cmd_amail_broker_unit)
+
+    amail_outbox = amail_sub.add_parser(
+        "outbox", help="what the broker holds for its peers: this agent's mail waiting for a retry, and "
+                       "what a peer refused, with its reason")
+    amail_outbox.add_argument("--all", action="store_true", help="every agent's held mail, not only this agent's")
+    amail_outbox.add_argument("--json", action="store_true", help="machine-readable output")
+    amail_outbox.set_defaults(func=cmd_amail_outbox)
 
     # ── gmail ────────────────────────────────────────────────────────────
     gmail_parser = sub.add_parser(
