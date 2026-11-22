@@ -23,13 +23,13 @@ MIS-0002 is edited in place, and each changed or added requirement there carries
 The slug is unchanged. The test gains `macf/tests/test_primal_daemon.py::test_no_loopback_listener`.
 
 **New requirements, R202 to R204.** They have no old text.
-> R202: Except the broker of R170, a service that reads an agent's data or acts for the agent MUST NOT listen on a TCP port, loopback included. (data_service_MUST-NOT_listen_on_tcp)
+> R202: Except R170's broker and, while Q17 is open, the API proxy, a service reading an agent's data or acting for it MUST NOT listen on TCP, loopback included. (data_service_MUST-NOT_listen_on_tcp)
 >
 > R203: A service that R202 covers MUST listen on a Unix socket in a directory that only the service's account can enter. (data_service_socket_MUST_sit_in_private_directory)
 >
 > R204: When a connection arrives, a service that R202 covers MUST read the caller's account from the kernel's peer credentials and refuse any account but its own. (data_service_MUST_check_peer_account)
 
-**What R202 leaves out, and why.** The issue also named a third kind of service, one that receives the agent's credential, which today is the API proxy. R202 does not cover it. Claude Code's documentation gives `ANTHROPIC_BASE_URL` as an endpoint, shows only `https://` values, and documents no setting that sends API requests over a Unix socket (sources in section 2). A requirement that the proxy's client cannot meet would only be broken, so the proxy is MIS-0002's open question Q17 (proxy_credential_to_loopback_port), with the options laid out there. The answer adds a requirement for the proxy in a later amendment or revision.
+**What R202 leaves out, and why.** R202 names the proxy as an exception in its own text, so the requirement does not bind what it means to leave out. The issue also named a third kind of service, one that receives the agent's credential, which today is the API proxy. R202 does not cover it. Claude Code's documentation gives `ANTHROPIC_BASE_URL` as an endpoint, shows only `https://` values, and documents no setting that sends API requests over a Unix socket (sources in section 2). A requirement that the proxy's client cannot meet would only be broken, so the proxy is MIS-0002's open question Q17 (proxy_credential_to_loopback_port), with the options laid out there. The answer adds a requirement for the proxy in a later amendment or revision.
 
 **Around them, in the same pull request:**
 - MIS-0002's rationale, security note, conformance rows (R80 moves to `planned` for its new clause; R202 to R204 are `planned`), landing plan (a step 11), open questions (Q17) and revision history.
