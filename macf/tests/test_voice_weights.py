@@ -23,6 +23,8 @@ class FakeHub:
         self.api_error = None
 
     def try_to_load_from_cache(self, repo, name):
+        if name in getattr(self, "noexist", ()):
+            return object()  # the hub's marker for a file it has recorded as absent from the repository
         return f"/cache/{name}" if name in self.cache else None
 
     def HfApi(self):
@@ -55,6 +57,13 @@ def hub(monkeypatch):
 
 def _args(**kw):
     return argparse.Namespace(**{"voice": [], "approve": [], **kw})
+
+
+def test_a_file_the_hub_has_recorded_as_absent_is_not_cached(hub):
+    hub.noexist = {"config.json"}
+    assert weights.is_cached("config.json") is False
+    hub.cache = {"kokoro-v1_0.safetensors"}
+    assert weights.is_cached("kokoro-v1_0.safetensors") is True and weights.is_cached("voices/x.safetensors") is False
 
 
 def test_a_blend_names_each_voice_and_the_wanted_files_are_core_plus_one_per_voice():
