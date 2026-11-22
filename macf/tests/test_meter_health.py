@@ -123,3 +123,10 @@ def test_hook_suffix_falls_back_when_the_rolled_event_is_stale():
     out = us.hook_suffix(now=later)
     assert out.startswith("· me ~") and "9.0" not in out
     assert f"{expect:.2f}" in out or f"{expect:.3f}" in out
+
+
+def test_main_silent_ignores_tool_activity_older_than_an_hour(tmp_path):
+    t = _baselined(tmp_path)
+    append_event(um.TOOL_EVENT, {"tool": "Bash"})
+    um.meter_tick("sid", str(t), now=time.time() + 4000)
+    assert _faults("main_silent") == []
