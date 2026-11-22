@@ -298,3 +298,17 @@ def test_status_text_names_the_supervision_in_words_on_the_broker_line(tmp_path,
     cli.cmd_amail_status(argparse.Namespace(json=False))
     line = next(x for x in capsys.readouterr().out.splitlines() if x.startswith("broker:"))
     assert "[unit 'broker' of AmailBroker_x's primal daemon]" in line
+
+
+def test_status_text_with_no_supervision_piece_prints_the_default_kind_not_none(tmp_path, monkeypatch, capsys):
+    import argparse
+    from macf import cli
+    monkeypatch.setattr(cli, "_amail_config", lambda: {
+        "agent": "ira", "domain": "alpha.test", "socket": str(tmp_path / "b.sock"), "handoff": str(tmp_path / "h"),
+        "home": "", "contacts": "", "autostart": True, "broker_config": str(tmp_path / "broker.yaml"),
+        "signing_key": ""})
+    monkeypatch.setattr(cli, "_ensure_host_broker", lambda cfg: "")
+    monkeypatch.setattr(cli, "_amail_setup_pieces", lambda cfg: [])
+    cli.cmd_amail_status(argparse.Namespace(json=False))
+    line = next(x for x in capsys.readouterr().out.splitlines() if x.startswith("broker:"))
+    assert "agent-launched" in line and "None" not in line
