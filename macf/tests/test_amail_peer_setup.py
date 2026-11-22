@@ -444,3 +444,28 @@ def test_a_write_keeps_the_old_file_beside_the_new_one_and_its_mode(tmp_path):
     written = peer_setup.plan_add(broker, _beta_card(tmp_path), local_agents=["ira"]).write(backup_suffix=".bak-x")
     assert broker in written and broker.with_name(broker.name + ".bak-x").read_text() == before
     assert (broker.stat().st_mode & 0o777) == 0o640
+
+
+def _set_beta_agents_for_alpha(linked, agents):
+    raw = yaml.safe_load(linked.beta_cfg.read_text())
+    raw["peer_links"][A_DOM]["agents"] = agents
+    linked.beta_cfg.write_text(yaml.safe_dump(raw))
+    linked.rebuild()
+
+
+def test_a_peer_declaring_another_card_or_none_of_ours_fails_their_agents_map(linked):
+    """CTB's review of #1101: the peer declaring a different card for our agent, or declaring only
+    agents that aren't ours, leaves our mail unverified there just as declaring none does."""
+    _set_beta_agents_for_alpha(linked, {"ira": "Ira_999999"})
+    st = linked.check()["their agents map"]
+    assert st.ok is False and "other cards for ira" in st.detail
+    _set_beta_agents_for_alpha(linked, {"someone": "Someone_123456"})
+    assert linked.check()["their agents map"].ok is False
+
+
+def test_no_test_message_is_sent_while_a_station_fails(linked):
+    sent = []
+    linked.drop_agents(linked.beta_cfg)
+    linked.rebuild()
+    stations = linked.check(send=lambda: sent.append(1) or {"ok": True})
+    assert stations["test message"].ok is None and not sent
