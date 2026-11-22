@@ -83,6 +83,9 @@ becomes tractable once the address stops encoding how the message travels.
 - Two brokers share a filesystem (a host and a container on it): which rung, and where does the write land?
 - How is locality visible to a broker when the address must not record it?
 - What must a deployment declare to reach a peer through a shared filesystem, and who provisions what?
+- What is rung 2, and how does a peer over a private network acknowledge custody?
+- What are the commands that set up a link, in what order, and which steps stay the operator's?
+- How do I tell why a link doesn't work, or why mail reads unverified?
 - How does delivery actually complete, and who performs the final write?
 - What must a deployment provision before mail can be delivered at all?
 - Where is the authoritative mail store?
@@ -343,48 +346,62 @@ hand-off decide what reaches an agent (R63, R64), so a connection says which mac
 and only the signature says which agent. A peer link also declares the peer's agents (`agents`: the address local part to the agent's calling card), which is how the receiving broker knows which card a sender's address names and so which registry key its signature is judged against; a peer that declares none has all its mail read unverified. A peer's domain is reached by one rung: declaring it in both
 `shared_handoffs` and `peer_links` is refused. Internet mail is never sent over this link (R53).
 
-A broker's peer card is what the other side's operator needs to declare it: the mail domain, the
-declared listener's address and port, and for each agent on the card its calling card, its public
-signing key and the account that holds it. `macf_tools amail peer card` prints it from the broker's
-own configuration, through the same loader the broker runs on, with each key's fingerprint and the
-registry declarations the peer's operator runs one at a time (each stages its change and prints its own
-root step); it carries no secret and changes nothing. A key on a card is a claim (6b.5) until the two
-operators compare its fingerprint on another channel. A broker with no `peer_listen` has
-no card, since no peer can reach it.
+### 2.1.3 Setting up a link, in order
 
-`macf_tools amail peer add <card>` declares a peer from its card: the link, with its agents map, in
-`peer_links`, and a contact for each local agent named (`--for`, default the agent running it). It
-edits the operator's two files one entry at a time, so their comments and every other line are kept,
-and refuses any edit whose parsed result is not the old data with exactly that entry changed. The
-candidate files are loaded by the broker's own loader before the change is shown, so a card the broker
-would refuse (its own domain, a domain already shared, a public address) is refused before anything is
-written. It writes on a yes, keeps each old file beside the new one, and writes nothing when the peer is
-already declared as the card says. A link's note survives a new card. The registry stays root's: it
-prints the declarations and runs none.
+Every step reads the operator's files through the loader the broker runs on, shows what it would
+change before changing it, and is a no-op when the change is already made. The registry, the service
+manager and anything else root's are printed for the operator, never run.
 
-`macf_tools amail peer check <domain>` checks a link station by station, in the order a message meets
-them: the declaration here, this side's agents map and registry keys for the peer, the peer's
-listener, the address the peer knows this host by, its build, and the cards and keys the peer declares
-for this broker's agents. A message reads attested at the receiver exactly when its sender's card is
-declared there and that card's key is in the receiver's registry (R44, R63), so those two stations
-predict attestation before any mail is sent. With `--send` it sends one signed test message through
-the broker and passes only when the peer acknowledges it. The first failing station names the command
-that fixes it, and the stations that depend on it don't run. The remote stations use the `ping`
-request, which a listener answers only to a declared peer, with nothing secret in the reply; a peer
-whose build has no ping is reported as an older build, not as a failure. What a ping discloses, and
-only to a declared peer: the receiver's mail domain, the domain it sees at the caller's address, its
-macf build and protocol version, the cards it declares for the caller's agents, and whether its
-registry holds a key for each of those cards. The build tells a peer which fixes this broker has;
-nothing else in the reply is beyond what the two operators already exchanged on their cards.
+1. **`macf_tools agent init`.** For an agent with an address (`.maceff/amail.json`), its mail step makes
+   the signing key if there is none, declares signing every message, and on a host writes the broker's
+   own daemon (step 5). It prints the registry line for the agent's key.
+2. **`macf_tools amail peer card`, on each side.** The card is what the other operator needs: the mail
+   domain, the declared listener's address and port, and each agent's calling card, public key and
+   account, with each key's fingerprint, as one line of JSON. It carries no secret. A key on a card is a
+   claim (6b.5) until the two operators compare its fingerprint on another channel. A broker with no
+   `peer_listen` has no card.
+3. **`macf_tools amail peer add '<the other side's card>'`, on each side.** Writes the link with its
+   agents map into `peer_links`, and a contact for each local agent named (`--for`, default the agent
+   running it). The operator's two files are edited one entry at a time, so comments and every other
+   line stay, and an edit whose parsed result is anything but the old data with that one entry changed
+   is refused. A card the broker would refuse to start on (its own domain, a domain already shared, a
+   public address) is refused before anything is written. Each old file is kept beside the new one, and
+   a link's note survives a new card. It prints the other side's registry lines.
+4. **The registry declarations, by each operator, one at a time**, once the fingerprint is confirmed:
+   each `macf_tools amail registry declare ...` stages its change and prints the root step that installs
+   it; run that step and `macf_tools amail registry check` before the next, since a second declaration
+   staged before the first is installed replaces it. Then restart each broker so it reads its new config.
+5. **`macf_tools amail broker-unit`, on a host.** The broker as a declared unit of a primal daemon of its
+   own (7.5), replacing a launchd job that ran it directly. The install, `MACEFF_AGENT_HOME_DIR=<home>
+   macf_tools pd install`, is the operator's. Where a daemon already declares the broker, an agent's own
+   included, it refuses and names that daemon: one broker per system (MIS-0004 R01).
+6. **`macf_tools amail peer check <domain>`.** The link station by station, in the order a message
+   meets them: the declaration here, this side's agents map and registry keys for the peer, the peer's
+   listener, the address the peer knows this host by, its build, and the cards and keys the peer declares
+   for this broker's agents. A message reads attested at the receiver exactly when its sender's card is
+   declared there and that card's key is in the receiver's registry (R44, R63), so those stations predict
+   attestation before any mail is sent; `--send` sends one signed test message and passes only on the
+   peer's acknowledgement. The first failing station names its fix. The remote stations use a `ping`
+   request a listener answers only to a declared peer; a peer whose build has none reads as an older build.
+   A ping discloses, to that peer only, the receiver's domain, the domain it sees at the caller's address,
+   its macf build and protocol, the cards it declares for the caller's agents, and whether its registry
+   holds a key for each; nothing beyond what the two cards already exchanged, except the build.
 
-`macf_tools amail status` lists the agent's mail setup piece by piece, each read where the client and the
-broker read it, and each missing piece with the command that supplies it: the address, the signing key,
-signing every message, the agent's key in the registry, how the broker is supervised (a declared unit, a
-launchd job of its own, or launched by an agent), the listener as a declared crossing, and each peer link
-with the mail waiting for it and refused by it. `macf_tools amail outbox` lists that mail: each message waiting for a retry with
-its age, and each one a peer refused with the reason the peer gave, by default only the asking agent's
-own, since the outbox is the broker's and holds every agent's mail (`--all` for all of it). A waiting
-message keeps no reason; the next attempt meets the current one, and `amail peer check` shows it.
+After that, `macf_tools amail status` lists the setup piece by piece with the fix for anything missing
+(the address, the key, signing, the registry, how the broker is supervised, the listener as a declared
+crossing, each peer with the mail waiting for it and refused by it); `macf_tools amail outbox` lists
+that mail, the refused with the peer's reason, by default only the asking agent's own; `macf_tools amail
+inbox` is the unread mail, newest first, with its trust marks.
+
+**Example.** Two hosts, `alpha.example` and `beta.example`, on one tailnet. Each operator runs
+`peer card` and sends the line to the other; each runs `peer add` with the line received, then the two
+registry declarations it printed one at a time after comparing fingerprints, then restarts the broker. `peer check
+beta.example` on alpha then passes every station, and `peer check beta.example --send` puts one
+attested message in the recipient's box.
+
+**What goes wrong without it** is what the first link met by hand: a link that declared no agents, so
+nothing could read attested; a key missing from one registry; a broker running code older than its
+config. Each is now a named station of `peer check`, or a line of `amail status`.
 
 ### 2.2 Local delivery is an optimization, not a special case
 
@@ -1337,16 +1354,10 @@ a tier justified by supervision cannot be declared alongside its own absence.
   supervision covers. The daemon and `amail status` name the tier and the
   supervision, and every audit line carries the tier, so a log read on another day
   says what boundary it was written under.
-- *A supervised host broker* has the shape a container's broker account has: a
-  primal daemon of its own whose one declared unit runs the broker (MIS-0002 R53,
-  MIS-0007 R81), on the operator's login, since the host has no broker account. Its
-  home holds a service identity, `AmailBroker_` with an id derived from the mail
-  domain, and its declaration; `macf_tools amail broker-unit` writes both from the
-  broker configuration, by default into that configuration's directory, and prints
-  the operator's steps: retiring a launchd job that ran the broker directly, then
-  installing the daemon. Because the login is shared, what the daemon exports to a
-  system daemon is claimed (MIS-0007 R33), and joining one is an `export` section in
-  this same declaration, made by the member (R71).
+- *A supervised host broker* is a declared unit of a primal daemon of its own, on the operator's
+  login since the host has no broker account (MIS-0002 R53, MIS-0007 R81): `amail broker-unit` writes
+  its service identity and declaration (2.1.3, step 5). Its exports to a system daemon are claimed
+  (MIS-0007 R33), and joining one is an `export` section the member adds (R71).
 - *Refusals move to where the declaration can be wrong.* A host-tier file refuses to
   run inside a container; a shared uid refuses without the tier; an agent-launched
   broker refuses without the tier; the tier refuses without a named supervision.
