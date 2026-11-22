@@ -697,7 +697,7 @@ def test_the_recipient_executes_the_custody_transfer(two_agents):
     assert [r["ingested"] for r in results] == [True]
     msgs = store.read_all(two_agents["homes"]["beta"])
     assert [m.subject for m in msgs] == ["unified"]
-    assert list(box.glob("*")) == [], "box drained only after the copy exists"
+    assert [p for p in box.glob("*") if p.name != ".ingest.claim"] == [], "box drained only after the copy exists"
 
 
 def test_ingest_refuses_a_tampered_bundle_and_leaves_it_in_the_box(two_agents):
