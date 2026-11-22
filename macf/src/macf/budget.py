@@ -323,7 +323,13 @@ def set_mode(mode: str, target: Optional[float] = None, by: Optional[str] = None
         raise BudgetError("--target and --by belong to burn")
     rec = {"mode": mode, "target": (target if target is not None else 100.0) if mode == "burn" else None,
            "by": by, "scope": scope}
-    append_event("budget_mode_set", rec)
+    try:
+        from macf.utils.identity import get_agent_identity
+        who = get_agent_identity()
+    except Exception as e:  # noqa: BLE001 - GUARD: the mode is set without a name
+        print(f"⚠️ MACF: budget mode: could not name who set it ({type(e).__name__}: {e}); recorded without", file=sys.stderr)
+        who = None
+    append_event("budget_mode_set", {**rec, "set_by": who})
     return rec
 
 
@@ -343,6 +349,21 @@ def lapsed_mode(now: Optional[float] = None) -> Optional[dict]:
     if not e or e["data"].get("mode") == "normal":
         return None
     return dict(e["data"], set_at=e["timestamp"])
+
+
+def mode_text(mode: dict) -> str:
+    """``conserve, set 11-22 09:12 by Card@abc123``: the intent with who set it and when. A mode with no
+    ``set_at`` (the default) is just its name; an event from before the name was recorded omits the "by"."""
+    out = mode["mode"]
+    if mode.get("set_at") is not None:
+        out += f", set {dt.datetime.fromtimestamp(mode['set_at']):%m-%d %H:%M}"
+        if mode.get("set_by"):
+            out += f" by {mode['set_by']}"
+    return out
+
+
+def lapsed_text(lapsed: dict) -> str:
+    return f"{lapsed['mode']} lapsed (set {dt.datetime.fromtimestamp(lapsed['set_at']):%m-%d %H:%M})"
 
 
 # ── status ───────────────────────────────────────────────────────────────────
@@ -478,6 +499,7 @@ def status(now: Optional[float] = None, detail: bool = False) -> dict:
     if detail:
         st["last_failure"] = next(iter(failures_since(latest["t"], now)), None)
         st["next_try"] = next_autosample(now)
+        st["lapsed"] = lapsed_mode(now)
     return st
 
 
@@ -495,12 +517,16 @@ def format_status(st: dict, brief: bool = False) -> str:
         return s
     if brief:
         model = (st.get("model") or {}).get("display", "unknown")
-        return " · ".join(one(r) for r in st["limits"]) + f"  [{model}, {st['mode']['mode']}, sample {st['age_min']:g} min old]"
+        lapse = f", {lapsed_text(st['lapsed'])}" if st.get("lapsed") else ""
+        return (" · ".join(one(r) for r in st["limits"])
+                + f"  [{model}, {mode_text(st['mode'])}{lapse}, sample {st['age_min']:g} min old]")
     m = st.get("model") or {}
     lines = [f"running on: {m.get('display', 'unknown')} ({m.get('id', '?')}, from {m.get('source', '?')})",
-             f"budget mode: {st['mode']['mode']}" + (f" (target {st['mode']['target']:g}% of {st['mode'].get('scope') or 'week'}"
+             f"budget mode: {mode_text(st['mode'])}" + (f" (target {st['mode']['target']:g}% of {st['mode'].get('scope') or 'week'}"
              f"{' by ' + st['mode']['by'] if st['mode'].get('by') else ' by its reset'})" if st['mode']['mode'] == 'burn' else ""),
              f"latest sample: {st['age_min']:g} min old ({st['source']})"]
+    if st.get("lapsed"):
+        lines.insert(2, f"lapsed mode: {lapsed_text(st['lapsed'])}; re-set it if that intent still holds")
     fail = st.get("last_failure")
     if fail:
         lines.append(f"last refresh failed at {_clock(fail['t'])}: {fail.get('reason')}"
@@ -623,8 +649,9 @@ def prompt_notice(now: Optional[float] = None) -> Optional[str]:
     """One line when a limit this model is spending enters a new band since the last line, or, in burn, when the pace
     still needed moves by more than a point. None otherwise. Records what it showed so it does not repeat."""
     now = now or time.time()
+    block = _digest_block(now)
     if not samples(now=now):
-        return None  # no budget in use here: nothing to report, not a failure
+        return block  # no budget in use here: the spend digest, if any, is all there is
     st = status(now)
     seen = _last_notices(now)
     out = []
@@ -651,9 +678,20 @@ def prompt_notice(now: Optional[float] = None) -> Optional[str]:
             out.append(f"mode {lapsed['mode']} (set {dt.datetime.fromtimestamp(lapsed['set_at']):%b %d %H:%M}) has lapsed to normal; "
                        f"re-set it if that intent still holds")
     if not out:
-        return None
-    return ("💳 budget: " + "; ".join(out) + f" [{st['model']['display']}, {st['mode']['mode']}{_stale(st)}]"
+        return block
+    line = ("💳 budget: " + "; ".join(out) + f" [{st['model']['display']}, {st['mode']['mode']}{_stale(st)}]"
             " (details: macf_tools budget status)")
+    return f"{line}\n{block}" if block else line
+
+
+def _digest_block(now: float) -> Optional[str]:
+    """The hourly spend digest. A GUARD: a failure here must not take the budget line down with it."""
+    try:
+        from macf.budget_digest import digest
+        return digest(now)
+    except Exception as e:  # noqa: BLE001 - GUARD: the notice goes out without the digest
+        print(f"⚠️ MACF: spend digest skipped: {type(e).__name__}: {e}", file=sys.stderr)
+        return None
 
 
 def _stale(st: dict) -> str:
