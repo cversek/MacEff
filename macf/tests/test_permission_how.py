@@ -136,3 +136,20 @@ def test_a_tool_other_than_bash_is_judged_by_its_own_rules_not_split_as_a_comman
               _event("tool_call_completed", 101, SID, "Edit", {"file_path": "/w/a.py"})]
     (a,) = pw.approvals(events, rules)
     assert a.how == "rule" and "Edit" in a.detail
+
+
+def test_a_dialog_for_another_command_does_not_answer_this_call():
+    events = [started(100, "git status"), started(100.5, "git push"), request(101, "git push"),
+              completed(110, "git status"), completed(120, "git push"), turn_end(125)]
+    status, push = pw.approvals(events, RULES)
+    assert status.how == "rule" and push.how == "dialog"
+
+
+def test_a_dialog_for_another_tool_does_not_answer_this_call():
+    events = [_event("tool_call_started", 100, SID, "Write", {"file_path": "/w/x"}),
+              _event("tool_call_started", 100.5, SID, "Edit", {"file_path": "/w/x"}),
+              _event("permission_requested", 101, SID, "Edit", {"file_path": "/w/x"}),
+              _event("tool_call_completed", 110, SID, "Write", {"file_path": "/w/x"}),
+              _event("tool_call_completed", 120, SID, "Edit", {"file_path": "/w/x"}), turn_end(125)]
+    write, edit = pw.approvals(events, RULES)
+    assert write.how != "dialog" and edit.how == "dialog"
