@@ -345,7 +345,10 @@ def lapsed_mode(now: Optional[float] = None) -> Optional[dict]:
     now = now or time.time()
     if current_mode(now)["mode"] != "normal":
         return None
-    e = next(iter(read_events(reverse=True, scope="all", only=("budget_mode_set",))), None)
+    # A lapse older than two weekly windows is not worth announcing, and an unbounded walk for an event that
+    # does not exist reads the whole log on every prompt (#1127).
+    floor = now - 2 * HISTORY.total_seconds()
+    e = next(iter(read_events(reverse=True, scope="all", only=("budget_mode_set",), since=floor)), None)
     if not e or e["data"].get("mode") == "normal":
         return None
     return dict(e["data"], set_at=e["timestamp"])

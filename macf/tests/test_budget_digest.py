@@ -187,3 +187,70 @@ def test_a_budget_failure_does_not_block_sprint_complete(tmp_path, monkeypatch, 
     cap = capsys.readouterr()
     assert "marked complete" in cap.out
     assert "sprint budget end not recorded for #42" in cap.err
+
+
+# ── wiring, bounds and edges ──────────────────────────────────────────────────
+
+def test_the_prompt_notice_carries_the_digest_once():
+    now = time.time()
+    _write([_sample(now - 60, 40), _metered(now - 600)])
+    text = budget.prompt_notice(now)
+    assert text and "spend, last hour" in text
+    assert budget.prompt_notice(now + 60) is None
+
+
+def test_the_end_delta_across_a_weekly_reset_is_unknown_not_negative():
+    now = time.time()
+    _write([_sample(now - 60, 90)])
+    budget_digest.sprint_started("5", now)
+    later = now + 1800
+    sample = _sample(later - 60, 3)
+    sample["data"]["limits"][0]["resets_at"] = "2099-02-01T00:00:00+00:00"
+    _write([sample, _metered(now + 900, calls=10)])
+    budget_digest.sprint_ended("5", later)
+    end = _events(budget_digest.END_EVENT)[0]["data"]
+    assert end["account_points_delta"] is None
+    assert end["agent_points_delta"] == pytest.approx(40_000 * P, rel=1e-6)
+
+
+def test_the_snapshot_counts_only_this_weeks_metered_points():
+    import datetime as dt
+    now = time.time()
+    reset = dt.datetime.fromtimestamp(now + 5 * 86400, tz=dt.timezone.utc).isoformat()  # the week began 2 days ago
+    s = _sample(now - 60, 40)
+    s["data"]["limits"][0]["resets_at"] = reset
+    _write([s, _metered(now - 3 * 86400), _metered(now - 86400)])
+    snap = budget_digest._snapshot(now)
+    assert snap["agent_points"] == pytest.approx(40_000 * P, rel=1e-6)
+
+
+def test_hour_rate_uses_only_a_fit_from_the_last_hour():
+    now = time.time()
+    fit = {"rate": 1e-6, "low": 5e-7, "high": 2e-6, "hours": 20, "r2": 0.9}
+    _write([{"timestamp": now - 2 * HOUR, "event": "usage_rate_fitted", "data": fit}])
+    old = budget_digest.hour_rate(now)
+    assert not old.fitted and old.value == P
+    _write([{"timestamp": now - 1800, "event": "usage_rate_fitted", "data": fit}])
+    fresh = budget_digest.hour_rate(now)
+    assert fresh.fitted and fresh.value == 1e-6
+
+
+def test_the_digest_names_exactly_the_top_three_causes():
+    now = time.time()
+    _write([_metered(now - 500, cause="operator", cache_read_input_tokens=400_000),
+            _metered(now - 400, cause="cron", cache_read_input_tokens=300_000),
+            _metered(now - 300, cause="peer", cache_read_input_tokens=200_000),
+            _metered(now - 200, cause="notice", cache_read_input_tokens=100_000)])
+    line = next(l for l in budget_digest.digest(now).splitlines() if "by cause" in l)
+    assert all(c in line for c in ("operator", "cron", "peer")) and "notice" not in line
+
+
+def test_the_lapse_lookup_is_bounded_by_two_weekly_windows(monkeypatch):
+    seen = []
+    real = budget.read_events
+    monkeypatch.setattr(budget, "read_events", lambda *a, **kw: seen.append(kw.get("since")) or real(*a, **kw))
+    now = time.time()
+    _write([{"timestamp": now - 20 * 86400, "event": "budget_mode_set",
+             "data": {"mode": "conserve", "target": None, "by": None, "scope": None}}])
+    assert budget.lapsed_mode(now) is None  # too old to announce
+    assert seen and all(s is not None and s >= now - 2 * budget.HISTORY.total_seconds() - 1 for s in seen)
