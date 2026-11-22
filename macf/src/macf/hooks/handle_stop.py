@@ -330,10 +330,26 @@ Development Drive Stats:
                 if _fail_open:
                     # NOISY fail-open: stderr (existing) + systemMessage so
                     # agent SEES it (BUG #1067).
+                    # Churn guard: the forced turns repeated themselves, so the
+                    # scope is paused with a record of why, and stops stay free
+                    # until someone unpauses it (`task scope unpause`).
+                    _churn_ids = [str(t["id"]) for t in scope["active"]]
+                    _churn_note = ""
+                    try:
+                        from macf.task.scope import pause_scoped_tasks
+                        pause_scoped_tasks(_churn_ids, justification=(
+                            f"churn: {COUNT_INIT} forced turns in a row made no new tool call "
+                            f"and got no new result; paused by the idle-stop failsafe"))
+                        _churn_note = (f"Paused the scope ({', '.join('#' + i for i in _churn_ids)}) "
+                                       f"with a churn record; `macf_tools task scope unpause --all` resumes it.\n\n")
+                    except (ImportError, OSError, ValueError, KeyError) as _pe:
+                        emit_warning(Warning(source="stop", kind="scope_gate_failed",
+                                             detail=f"churn pause failed ({_pe}); the stop passes anyway"))
                     fail_open_msg = (
                         f"⚠️ MACF SCOPE GATE FAILSAFE — {scope['active_count']} scoped "
-                        f"task(s) still active but no useful work in last {COUNT_INIT} "
-                        f"stops. Allowing stop to break deadlock.\n\n"
+                        f"task(s) still active but the last {COUNT_INIT} forced turns "
+                        f"repeated earlier checks with the same results. Allowing stop.\n\n"
+                        f"{_churn_note}"
                         f"This is the Idle-Loop Shrinking anti-pattern "
                         f"(autonomous_sprint.md §5). The agent failed to either "
                         f"(a) find substantive work, (b) pause genuinely-blocked "
@@ -358,9 +374,10 @@ Development Drive Stats:
                         _countdown_suffix = (
                             f"\n\n🚨 IDLE-LOOP SHRINKING WARNING 🚨\n"
                             f"   Idle-stop counter: {_idle_remaining} of {COUNT_INIT} remaining.\n"
-                            f"   You have produced {COUNT_INIT - _idle_remaining} consecutive "
-                            f"responses without tool calls while scope is open. This is the "
-                            f"Idle-Loop Shrinking anti-pattern (autonomous_sprint.md §5).\n"
+                            f"   {COUNT_INIT - _idle_remaining} forced turns in a row made no new "
+                            f"tool call and got no new result. Re-running a check whose answer "
+                            f"has not changed is not progress, and each forced turn re-reads "
+                            f"the whole context.\n"
                             f"   In {_idle_remaining} more idle stops, the failsafe will "
                             f"fail-open and let the stop succeed — leaving scoped work in an "
                             f"undocumented incomplete state.\n"
@@ -379,8 +396,9 @@ Development Drive Stats:
                         # Soft countdown: just the count
                         _countdown_suffix = (
                             f"\n\n⚠️ Idle-stop counter: {_idle_remaining} of {COUNT_INIT} "
-                            f"remaining (failsafe will trigger at 0). Invoke any tool to "
-                            f"reset, OR pause blocked items, OR de-escalate."
+                            f"remaining (failsafe will trigger at 0). Only a new call or a "
+                            f"new result resets it. Waiting on others or on compute? "
+                            f"`macf_tools task scope pause <ids> --justification <reason>`."
                         )
                 # ── END countdown surfacing ──
 

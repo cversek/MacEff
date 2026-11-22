@@ -682,3 +682,15 @@ def test_without_a_listing_the_first_match_is_read(monkeypatch):
     asked = keychain(monkeypatch, dump=None)
     assert budget.keychain_accounts() == []
     assert budget.read_token() == "sk-ant-oat01-STALE" and asked == ["x"]
+
+
+def test_a_lapsed_mode_is_reported_not_silent(log):
+    """`conserve` older than the weekly window reads as normal; lapsed_mode says which intent lapsed."""
+    import time
+    budget.set_mode("conserve")
+    assert budget.lapsed_mode() is None, "still in force"
+    later = time.time() + budget.HISTORY.total_seconds() + 3600
+    assert budget.current_mode(later)["mode"] == "normal"
+    assert budget.lapsed_mode(later)["mode"] == "conserve"
+    budget.set_mode("normal")
+    assert budget.lapsed_mode(later) is None, "an explicit normal is not a lapse"
