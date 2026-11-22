@@ -86,6 +86,9 @@ def test_a_broker_with_no_contact_list_says_so_instead_of_listing_nobody(deploym
     broker = deployment["broker"]
     broker.contacts = None
     assert broker.contact_entries("alpha") == {"ok": True, "contacts": [], "contact_list": False}
+    lines = [json.loads(l) for l in deployment["audit"].read_text().splitlines() if l.strip()]
+    reads = [r for r in lines if r.get("operation") == "contacts"]
+    assert reads and reads[-1]["count"] == 0, lines[-3:]
 
 
 def _run(monkeypatch, capsys, deployment, **ns):
