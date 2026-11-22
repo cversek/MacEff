@@ -188,3 +188,39 @@ def test_the_mail_step_leaves_a_broker_already_declared_in_an_agents_daemon_alon
     r = agent_stack.step_mail(ctx())
     assert r.status == agent_stack.DONE and "already unit 'amail-broker'" in r.detail, r
     assert not (cfg.parent / ".maceff").exists() and "pd install" not in r.detail
+
+
+def test_a_broker_declared_for_another_config_is_not_this_one(tmp_path):
+    """CTB's review: the check is for THIS config's broker. A daemon running a broker on another
+    config (a second domain on the same host) doesn't stop this one getting its own daemon."""
+    cfg = _broker_config(tmp_path)
+    home = tmp_path / "ira"
+    (home / ".maceff" / "pd").mkdir(parents=True)
+    (home / ".maceff" / "pd" / "declaration.json").write_text(json.dumps({"version": 1, "agent": "Ira_0a1b2c", "units": [
+        {"name": "amail-broker", "command": [sys.executable, "-m", "macf.amail.daemons.broker"],
+         "environment": {"AMAIL_BROKER_CONFIG": str(tmp_path / "other" / "broker_config.yaml")}}]}))
+    assert host_daemon.declared_broker(cfg, [home]) is None
+    assert _plan(cfg).files
+
+
+def test_the_mail_step_in_a_container_changes_nothing(tmp_path, monkeypatch):
+    """CTB's review: in a container the start step owns mail, so the step makes no key and writes no
+    host broker daemon."""
+    from macf import agent_stack
+    m = _mail_home(tmp_path, monkeypatch)
+    ctx = m.ctx()
+    ctx.in_container = True
+    r = agent_stack.step_mail(ctx)
+    assert r.status == agent_stack.SKIPPED and not agent_stack.signing_key_path(m.home).exists()
+    assert not (m.cfg.parent / ".maceff").exists()
+
+
+def test_a_peer_with_no_broker_named_is_refused(tmp_path, monkeypatch):
+    from macf import agent_stack
+    card = json.dumps({"amail_peer_card": 1, "domain": "beta.test", "host": "100.64.0.9", "port": 8030,
+                       "agents": {"sparrow": {"card": "Sparrow_6a7b8c", "key": None, "account": "sparrow"}}})
+    m = _mail_home(tmp_path, monkeypatch, card_json=card)
+    conf = m.home / ".maceff" / "amail.json"
+    conf.write_text(json.dumps({"agent": "ira", "domain": "alpha.test"}))
+    r = agent_stack.step_mail(m.ctx())
+    assert r.status == agent_stack.REFUSED and "names no broker_config" in r.detail
