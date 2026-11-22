@@ -585,7 +585,16 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         wall = hook_lines("wall")  # once per 5-hour window, at the wall threshold
         if wall:
             user_message = f"{user_message}\n{wall}"
-        base_context = f"<system-reminder>\n{user_message}\n</system-reminder>"
+        # The one approval the agent can't tell from a rule: its previous call ran because the operator
+        # answered a dialog (#1060). Said to the agent only, once, at this call's start.
+        approved = ""
+        try:
+            from macf.permission_watch import read_previous_call_note
+            approved = read_previous_call_note(session_id) or ""
+        except Exception as e:  # noqa: BLE001 - a note that can't be read leaves the call's output as it was
+            emit_warning(Warning(source="pre_tool_use", kind="approval_note_failed", detail=str(e)))
+        agent_note = f"\n{approved}" if approved else ""
+        base_context = f"<system-reminder>\n{user_message}{agent_note}\n</system-reminder>"
         full_context = injection_content + base_context if injection_content else base_context
 
         return {
