@@ -556,6 +556,82 @@ def read_history(days: float, *, include_questions: bool = False, home: Optional
     return dialogs
 
 
+@dataclass
+class Approval:
+    """How one tool call was let through (#1060): ``how`` is dialog, rule or mode."""
+    session_id: str
+    at: float
+    tool: str
+    command: str
+    how: str
+    detail: str
+
+
+def approvals(events_oldest_first: Iterable[dict], rules: List[Tuple[str, str, Path]]) -> List[Approval]:
+    """Each tool call in ``events_oldest_first`` with how it was approved, derived and never recorded.
+
+    A dialog for the call means the operator answered it: approved if the call ran, denied if not.
+    With no dialog, an allow rule in ``rules`` that matches it is the answer; failing that, by
+    elimination, the session's permission mode let it through (in auto mode, its classifier). The
+    rules are the ones in force now, so a rule changed since the call is not seen; and an answer at
+    the terminal and one over Remote Control look the same in the log."""
+    events = list(events_oldest_first)
+    unclaimed = list(history(events, include_questions=True))
+    out: List[Approval] = []
+    for event in events:
+        if event.get("event") != "tool_call_started":
+            continue
+        hook_input = event.get("hook_input") or {}
+        sid = _session_of(event) or ""
+        tool = str(hook_input.get("tool_name") or (event.get("data") or {}).get("tool") or "unknown")
+        tool_input = hook_input.get("tool_input")
+        command = _identity(tool_input)
+        at = float(event.get("timestamp") or 0.0)
+        dialog = next((d for d in unclaimed if d.session_id == sid and d.tool == tool
+                       and d.command == command and d.opened >= at), None)
+        if dialog is not None:
+            unclaimed.remove(dialog)
+            said = {"ran": "approved at the dialog", "not run": "denied at the dialog"}
+            out.append(Approval(sid, at, tool, command, "dialog", said.get(dialog.outcome, f"dialog {dialog.outcome}")))
+            continue
+        # A rule lets a call through only when it covers the whole call: for a chain, every part.
+        # ``decide`` answers "any part matches", which is right for ask and deny and too generous here.
+        parts = segment_decisions(command, rules) if tool == "Bash" else [(command, decide(tool, tool_input, rules))]
+        if parts and all(v.kind == "allow" for _, v in parts):
+            named = sorted({f"{v.rule} ({v.source})" for _, v in parts})
+            out.append(Approval(sid, at, tool, command, "rule", f"allow rule {', '.join(named)}"))
+            continue
+        mode = str(hook_input.get("permission_mode") or "unreported")
+        by = f"the {mode} mode" + ("'s classifier" if mode == "auto" else "")
+        out.append(Approval(sid, at, tool, command, "mode", f"no dialog and no allow rule: {by} let it through"))
+    return out
+
+
+def read_approvals(days: float, *, home: Optional[Path] = None, project_dir: str = "",
+                   environ=None) -> List[Approval]:
+    """``approvals`` over the last ``days`` of this agent's log, against the rules in force now."""
+    from macf.agent_events_log import read_events
+    cutoff = time.time() - days * 86400.0
+    window = []
+    for event in read_events(reverse=True, scope="all", only=PROGRESS | {REQUEST}):
+        if float(event.get("timestamp") or 0.0) < cutoff:
+            break
+        window.append(event)
+    window.reverse()
+    return approvals(window, rules_in_force(project_dir or os.getcwd(), home or Path.home(), environ))
+
+
+def approvals_text(rows: List[Approval]) -> str:
+    """One line per call, newest last, under a line saying what the answer rests on."""
+    lines = ["How each call was approved (judged against today's rules; a rule changed since a call isn't seen):"]
+    for a in rows:
+        when = time.strftime("%m-%d %H:%M:%S", time.localtime(a.at))
+        lines.append(f"  {when}  {a.tool}  {a.command[:70]}  ->  {a.detail}")
+    if not rows:
+        lines.append("  (no tool calls in the window)")
+    return "\n".join(lines)
+
+
 def _unmatched_group(d: Dialog) -> str:
     """Where a dialog no ask rule explains goes, so the group says what to allow."""
     if d.offered and "*" in d.offered:  # an exact offered rule is one command, not a group
