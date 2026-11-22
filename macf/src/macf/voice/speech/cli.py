@@ -39,6 +39,17 @@ def add_parsers(voice_sub) -> None:
     choose = sel_sub.add_parser("choose", help="record the candidate the operator chose, with its traits")
     choose.add_argument("number", type=int)
     choose.set_defaults(func=cmd_choose)
+    models = voice_sub.add_parser("models", help="the speech weights the MLX engine needs: what is cached, and fetching them")
+    models_sub = models.add_subparsers(dest="voice_models_cmd")
+    for verb, func, text in (("status", cmd_models_status, "which weight files the engine needs and which are cached"),
+                             ("fetch", cmd_models_fetch, "fetch the missing weight files you approve, one by one")):
+        p = models_sub.add_parser(verb, help=text)
+        p.add_argument("--voice", action="append", default=[], metavar="NAME",
+                       help="a voice to have the weights for; repeat for several (default: the agent's own)")
+        p.set_defaults(func=func)
+        if verb == "fetch":
+            p.add_argument("--approve", action="append", default=[], metavar="FILE",
+                           help="a file from the list, fetched; with none and no terminal, nothing is fetched")
 
 
 def _home() -> Path:
@@ -130,4 +141,70 @@ def cmd_choose(args) -> int:
         return 1
     print(f"recorded in the voice section: voice {chosen['voice']}, speed {chosen['speed']}, "
           f"traits {', '.join(chosen['traits'])}")
+    return 0
+
+
+def _voices(args):
+    """The voices to have weights for: those named, else the agent's own, else the one the engine starts with."""
+    from macf.voice.speech import weights
+    if args.voice:
+        return args.voice
+    try:
+        from macf.voice.speech.__main__ import settings_for
+        return weights.voice_names(settings_for(_home()).voice)
+    except Exception as e:  # noqa: BLE001 - an unreadable declaration shouldn't stop a fetch; say it and take the default
+        print(f"⚠️ MACF: voice: the agent's voice couldn't be read ({type(e).__name__}: {e}); "
+              f"listing the weights for {weights.WARMUP_VOICE}", file=sys.stderr)
+        return [weights.WARMUP_VOICE]
+
+
+def _print_files(files) -> None:
+    from macf.voice.speech import weights
+    for f in files:
+        print(f"  {'cached ' if f.cached else 'missing'}  {f.name}  ({weights.megabytes(f.size)})")
+
+
+def cmd_models_status(args) -> int:
+    from macf.voice.speech import weights
+    try:
+        files = weights.listing(weights.wanted(_voices(args)))
+    except weights.WeightsMissing as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    print(f"speech weights from {weights.REPO}:")
+    _print_files(files)
+    return 0 if all(f.cached for f in files) else 1
+
+
+def cmd_models_fetch(args) -> int:
+    from macf.voice.speech import weights
+    try:
+        files = weights.listing(weights.wanted(_voices(args)))
+    except weights.WeightsMissing as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    missing = [f for f in files if not f.cached]
+    print(f"speech weights from {weights.REPO}:")
+    _print_files(files)
+    if not missing:
+        print("everything the engine needs is cached")
+        return 0
+    names = {f.name for f in missing}
+    unknown = [a for a in args.approve if a not in names]
+    if unknown:
+        print(f"not a file to fetch: {', '.join(unknown)}; the missing ones are listed above", file=sys.stderr)
+        return 2
+    approved = list(args.approve)
+    if not approved and sys.stdin.isatty():
+        approved = weights.approve_interactively(missing)
+    if not approved:
+        print("nothing fetched: approve each file you want with --approve FILE (the operator's yes, file by file)",
+              file=sys.stderr)
+        return 3
+    for path in weights.fetch(approved):
+        print(f"fetched {path}")
+    left = [n for n in names if n not in approved]
+    if left:
+        print(f"still missing: {', '.join(sorted(left))}", file=sys.stderr)
+        return 3
     return 0

@@ -12,6 +12,7 @@ from typing import List
 
 import numpy as np
 
+from macf.voice.speech import weights
 from macf.voice.speech.backends import AudioOut, SpeechEngine, Spoken, soften
 
 #: How often play() checks for the end of the sentence.
@@ -128,8 +129,9 @@ class MacAudioOut(AudioOut):
         _OUTPUT.drained.set()
 
 
-#: Kokoro's MLX weights on Hugging Face; fetched once into its cache, then run locally.
-MLX_KOKORO = "prince-canuma/Kokoro-82M"
+#: Kokoro's MLX weights on Hugging Face. The operator fetches them (``macf_tools voice models fetch``); the engine
+#: reads the local cache only (#1124).
+MLX_KOKORO = weights.REPO
 #: The language codes the worker uses, as Kokoro's MLX port names them.
 MLX_LANG = {"en-us": "a", "en-gb": "b"}
 
@@ -146,7 +148,11 @@ class MlxKokoroEngine(SpeechEngine):
         except ImportError as e:
             raise RuntimeError("the MLX Kokoro engine needs mlx-audio and misaki, which macf's voice extra "
                                "installs on Apple Silicon") from e
+        if model == weights.REPO:  # a path or another repository named by a caller is its own business
+            weights.require(weights.wanted([weights.WARMUP_VOICE]), model)
+            weights.go_offline()
         self._model = load_model(model)
+        self._have = {weights.WARMUP_VOICE}
         self._blend_said = False
         self.say("Ready.", "am_michael", 1.0, "en-us")   # the first call compiles; take that cost at start
 
@@ -162,7 +168,11 @@ class MlxKokoroEngine(SpeechEngine):
         return name
 
     def say(self, sentence, voice, speed, lang) -> Spoken:
-        parts = list(self._model.generate(text=sentence, voice=self._voice(voice), speed=speed,
+        name = self._voice(voice)
+        if name not in self._have:  # the cache only: a voice not fetched is said, not downloaded
+            weights.require([f"voices/{name}.safetensors"], MLX_KOKORO)
+            self._have.add(name)
+        parts = list(self._model.generate(text=sentence, voice=name, speed=speed,
                                           lang_code=MLX_LANG.get(lang, "a")))
         samples = np.concatenate([np.asarray(p.audio, dtype=np.float32) for p in parts]) if parts else np.zeros(0, np.float32)
         rate = int(getattr(self._model, "sample_rate", 24000))
