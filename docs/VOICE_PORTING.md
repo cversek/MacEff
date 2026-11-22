@@ -78,7 +78,17 @@ Every one of these passed its tests and still failed with the operator at the mi
 - **A busy machine makes misses that aren't the model's.** Training on the same machine during a trial starved the listener of audio. Keep the machine quiet while measuring.
 - **Count the calls.** The trial counts wakes; only the speaker knows how many tries it took. Agree a number before starting.
 
-## 6. macOS: suggestions, untested
+## 6. macOS
+
+Brought up on an M3 Max with macOS 15.5. The backends are in `capture/macos.py` and `speech/macos.py`. Three things the first port had to find out:
+
+- **The microphone is granted to the responsible process.** Under a primal daemon that is the daemon's Python, and a bundle without `NSMicrophoneUsageDescription` is killed on its first request, not asked. Run the capture unit from a small app bundle that carries the usage description (an ad-hoc signed copy of the interpreter's launcher, with its own bundle identifier), and let `capture/disclaim.py` re-spawn it with responsibility disclaimed. Give that bundle Input Monitoring for the trigger keys, and pass `__PYVENV_LAUNCHER__` on so the child starts in the same venv.
+- **openWakeWord's models are downloaded separately.** Without `openwakeword.utils.download_models()` the speech gate can't find `silero_vad.onnx`.
+- **The speech text cleaner strips misaki's phoneme markup**, so an exact pronunciation can't yet be passed through the worker; respell the word instead (`voice speak --say-as`).
+
+The suggestions below were written before the port and are kept for comparison.
+
+### Suggestions written before the port
 
 None of this has been run. It records where the Linux bring-up would look first on a Mac.
 

@@ -32,26 +32,40 @@ def models_dir(home: Path) -> Path:
     return state.voice_dir(home) / "models"
 
 
+def choose_engine(home, darwin: bool = sys.platform == "darwin"):
+    """Kokoro on the GPU on a Mac, else (or if that fails to load, offline included) the ONNX model on the CPU."""
+    from macf.voice.speech.backends import KokoroEngine
+    if darwin:
+        from macf.voice.speech.macos import MlxKokoroEngine
+        try:
+            return MlxKokoroEngine()
+        except Exception as e:  # noqa: BLE001 - offline first start raises hub/OS errors; any failure falls back, said with its reason
+            print(f"⚠️ MACF: voice: Kokoro on the GPU is unavailable ({type(e).__name__}: {e}); "
+                  f"falling back to the CPU model", file=sys.stderr)
+    return KokoroEngine(models_dir(home) / "kokoro-v1.0.onnx", models_dir(home) / "voices-v1.0.bin")
+
+
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     home = Path(argv[0] if argv else os.environ.get("MACEFF_AGENT_HOME_DIR", "")).expanduser()
     if not str(home) or not home.is_dir():
         print("usage: python -m macf.voice.speech <agent home>", file=sys.stderr)
         return EX_CONFIG
-    from macf.voice.speech.backends import KokoroEngine, PipeWireOut
+    if sys.platform == "darwin":
+        from macf.voice.speech.macos import MacAudioOut as Out
+    else:
+        from macf.voice.speech.backends import PipeWireOut as Out
     try:
-        engine = KokoroEngine(models_dir(home) / "kokoro-v1.0.onnx", models_dir(home) / "voices-v1.0.bin")
-    except RuntimeError as e:
-        print(f"⚠️ MACF: voice: the speech worker can't start: {e}", file=sys.stderr)
+        engine = choose_engine(home)
+    except Exception as e:  # noqa: BLE001 - a missing or unreadable model must exit with its reason, not a traceback
+        print(f"⚠️ MACF: voice: the speech worker can't start ({type(e).__name__}: {e})", file=sys.stderr)
         return EX_CONFIG
-    lock_state = None
-    if sys.platform.startswith("linux"):
-        from macf.voice.capture.linux import LinuxLockState
-        lock_state = LinuxLockState()
+    from macf.voice.capture import platform
+    read_lock = platform.lock_state()
     worker = speech.SpeechWorker(
-        home, engine, PipeWireOut(), settings=lambda: settings_for(home),
+        home, engine, Out(), settings=lambda: settings_for(home),
         recording=lambda: state.recording(home),
-        screen_locked=lambda: lock_state is None or lock_state.state() != "unlocked")
+        screen_locked=lambda: read_lock is None or read_lock() != "unlocked")
     stopping = []
     signal.signal(signal.SIGTERM, lambda *_: stopping.append(True))
     beat = lambda: None  # noqa: E731 - replaced below when the daemon asks for liveness

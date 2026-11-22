@@ -246,6 +246,13 @@ def test_grants_declared():
         _declaration(units=[dict(_unit("bot"), privacy_grants=["local-network"])])
 
 
+def test_a_capture_unit_on_a_mac_declares_the_microphone_and_input_monitoring():
+    """MIS-0008 on macOS: the capture unit holds the microphone and reads the keyboards, each a grant
+    macOS gives the process that runs it, so both must be declarable like any other."""
+    capture = dict(_unit("capture"), privacy_grants=["microphone", "input_monitoring"])
+    assert _declaration(units=[capture]).units[0].privacy_grants == ["microphone", "input_monitoring"]
+
+
 class _Fake:
     def __init__(self, platform):
         self.platform = platform
