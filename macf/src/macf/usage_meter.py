@@ -37,6 +37,11 @@ from typing import Dict, List, Optional
 EVENT = "usage_metered"
 TURN_CAUSE_EVENT = "turn_cause"
 GATE_HELD_EVENT = "scope_gate_held"
+FAULT_EVENT = "usage_meter_fault"
+CHECKED_EVENT = "usage_meter_checked"
+TOOL_EVENT = "tool_call_completed"
+FAULT_REPEAT_S = 3600.0
+MAIN_CHECK_EVERY_S = 600.0
 
 #: Weights relative to one uncached input token, and the fitted points per weighted token.
 RATE_LABEL = "provisional (fitted 2026-11-22)"
@@ -241,10 +246,31 @@ def _walk(paths: List[str]) -> Dict[str, _Resume]:
     return found
 
 
+def _earlier_events(paths: List[str]) -> Dict[str, _Resume]:
+    """The latest event of each path anywhere in the current cycle, without the file-age floor.
+
+    Run only for files the floored walk did not find. A file with an event here has been metered
+    before, so baselining it again would drop every call since: the lookup missed it, which is a
+    fault. Bounded by the cycle, which holds finitely many events.
+    """
+    from macf.agent_events_log import read_events
+    found: Dict[str, _Resume] = {}
+    for ev in read_events(reverse=True, scope="cycle", only=EVENT):
+        d = ev.get("data") or {}
+        p = d.get("path")
+        if p in paths and p not in found:
+            found[p] = _Resume(offset=int(d.get("new_offset") or 0), tail_id=d.get("tail_id"),
+                               metering_since=d.get("metering_since"), at=ev.get("timestamp"))
+            if len(found) == len(paths):
+                break
+    return found
+
+
 @dataclass(frozen=True, kw_only=True)
 class _Lookup:
     points: Dict[str, _Resume]
     quiet: frozenset  # files not touched since their last tick: nothing to meter, nothing to look up
+    lost: frozenset = frozenset()  # files whose earlier event the floored walk missed, found by the fallback
 
 
 def _resume_points(main: str, others: List[str]) -> _Lookup:
@@ -257,8 +283,13 @@ def _resume_points(main: str, others: List[str]) -> _Lookup:
     more is walked.
     """
     points = _walk([main])
+    lost = set()
     if main not in points:
-        return _Lookup(points={}, quiet=frozenset())
+        again = _earlier_events([main])
+        if not again:
+            return _Lookup(points={}, quiet=frozenset())
+        points.update(again)
+        lost.add(main)
     last_tick = points[main].at or 0.0
     busy, quiet = [], set()
     for p in others:
@@ -273,7 +304,11 @@ def _resume_points(main: str, others: List[str]) -> _Lookup:
             quiet.add(p)
     if busy:
         points.update(_walk(busy))
-    return _Lookup(points=points, quiet=frozenset(quiet))
+        missed = [p for p in busy if p not in points]
+        again = _earlier_events(missed) if missed else {}
+        points.update(again)
+        lost.update(again)
+    return _Lookup(points=points, quiet=frozenset(quiet), lost=frozenset(lost))
 
 
 def _baseline(path: str) -> _Resume:
@@ -305,7 +340,51 @@ def _baseline(path: str) -> _Resume:
     return _Resume(offset=start + end, tail_id=tail)
 
 
-def meter_tick(session_id: str, transcript_path: str) -> Optional[dict]:
+def _fault_due(kind: str, now: float) -> bool:
+    """True unless a ``usage_meter_fault`` of this kind was recorded in the last hour."""
+    from macf.agent_events_log import read_events
+    for ev in read_events(reverse=True, scope="all", only=FAULT_EVENT, since=now - FAULT_REPEAT_S):
+        if (ev.get("data") or {}).get("kind") == kind:
+            return False
+    return True
+
+
+def _raise_fault(kind: str, detail: str, now: float) -> bool:
+    """Warn and record a fault, at most once an hour per kind. Returns whether it fired."""
+    from macf.agent_events_log import append_event
+    from macf.observability import Warning, emit_warning
+    if not _fault_due(kind, now):
+        return False
+    emit_warning(Warning(source="usage_meter", kind=kind, detail=detail))
+    append_event(FAULT_EVENT, {"kind": kind, "detail": detail})
+    return True
+
+
+def _check_main_silent(main: str, now: float, since: float) -> None:
+    """Warn when tools ran in the last hour but the main transcript counted no calls.
+
+    Runs at most once every ``MAIN_CHECK_EVERY_S``, found from the last ``usage_meter_checked``
+    event. Both reads stop at the last hour or when metering began, whichever is later; the
+    metered read stops at the first healthy event.
+    """
+    from macf.agent_events_log import append_event, read_events
+    for ev in read_events(reverse=True, scope="all", only=CHECKED_EVENT, since=now - MAIN_CHECK_EVERY_S):
+        return
+    append_event(CHECKED_EVENT, {})
+    tools = 0
+    for ev in read_events(reverse=True, scope="all", only=(EVENT, TOOL_EVENT), since=max(now - 3600.0, since)):
+        if ev.get("event") == TOOL_EVENT:
+            tools += 1
+            continue
+        d = ev.get("data") or {}
+        if d.get("path") == main and (d.get("calls") or 0) > 0:
+            return
+    if tools:
+        _raise_fault("main_silent", f"{tools} tool calls in the last hour but the main transcript counted "
+                                    f"no calls", now)
+
+
+def meter_tick(session_id: str, transcript_path: str, now: Optional[float] = None) -> Optional[dict]:
     """Meter the new calls of a session's transcript and its subagents' transcripts.
 
     Emits one ``usage_metered`` event per file with new calls. A file with no earlier event gets
@@ -315,8 +394,14 @@ def meter_tick(session_id: str, transcript_path: str) -> Optional[dict]:
     event and copied into every later event); a file that began after it, such as a subagent
     that ran and ended within a turn, is scanned from offset 0. Returns a summary
     (``{"events": n, "calls": n}``), or None when nothing was recorded.
+
+    Two faults are raised (``_raise_fault``): a file whose earlier event the lookup missed
+    (``rebaselined``; it resumes from that event instead of baselining) and a main transcript
+    that counted nothing while tools ran (``main_silent``). A tick that counted calls also
+    records the rolling summary the hook line reads (``usage_share.roll``).
     """
     from macf.agent_events_log import append_event
+    now = now or time.time()
     main = Path(transcript_path)
     files = [(str(main), None)]
     if session_id:
@@ -329,6 +414,9 @@ def meter_tick(session_id: str, transcript_path: str) -> Optional[dict]:
     events = calls = 0
     main_point = resume.get(str(main))
     since = (main_point.metering_since if main_point else None) or time.time()
+    for path in sorted(lookup.lost):
+        _raise_fault("rebaselined", f"{Path(path).name} had an earlier metering event the lookup missed; "
+                                    f"resuming from it instead of baselining", now)
     for path, fixed_cause in live:
         if path in lookup.quiet:
             continue
@@ -359,6 +447,13 @@ def meter_tick(session_id: str, transcript_path: str) -> Optional[dict]:
         })
         events += 1
         calls += res.calls
+    if calls:
+        from macf.usage_share import roll
+        roll(now)
+    try:
+        _check_main_silent(str(main), now, since)
+    except OSError as e:
+        print(f"⚠️ MACF: usage meter: main-silent check skipped: {e}", file=sys.stderr)
     return {"events": events, "calls": calls} if events else None
 
 
