@@ -681,31 +681,33 @@ def restore_user_remote_deny_if_active(project_root: Optional[Path] = None) -> O
 #: system's /opt. Claude Code's ``Edit`` rule covers every tool that edits files, ``~/`` is the user's home
 #: and ``//`` an absolute path.
 MANUAL_ASK_RULES = ("Edit(~/**)", "Edit(//opt/**)")
-#: What it lets through without asking: the session scratchpad Claude Code keeps under /tmp/claude-<uid>/. An ask
-#: rule outranks an allow rule, so nothing here may sit under a path asked about above.
-MANUAL_ALLOW_RULES = ("Edit(//tmp/claude-*/**)",)
-_MANUAL_RECORD = "maceff_manual_mode_rules.json"
+#: What it lets through without asking: the session scratchpad Claude Code keeps under /tmp/claude-<uid>/ (on
+#: macOS /tmp is a link to /private/tmp and the scratchpad's real path is the second form). An ask rule
+#: outranks an allow rule, so nothing here may sit under a path asked about above.
+MANUAL_ALLOW_RULES = ("Edit(//tmp/claude-*/**)", "Edit(//private/tmp/claude-*/**)")
+RULES_EVENT = "manual_mode_rules"
 
 
 def _rules_added(settings_path: Path) -> dict:
-    """The rules this file got on the last switch to MANUAL_MODE: only these come out on the way back."""
-    try:
-        return json.loads((settings_path.parent / _MANUAL_RECORD).read_text())
-    except FileNotFoundError:
-        return {}
-    except (OSError, json.JSONDecodeError) as e:
-        print(f"⚠️ MACF: {settings_path.parent / _MANUAL_RECORD} is unreadable ({e}); no MANUAL_MODE rules will be removed",
-              file=sys.stderr)
-        return {}
+    """The rules the last switch to MANUAL_MODE added to this file, read from the agent's event log (nothing is
+    stored beside it): only these come out on the way back."""
+    from macf.agent_events_log import read_events
+    for ev in read_events(reverse=True, scope="all", only=RULES_EVENT):
+        data = ev.get("data") or {}
+        if data.get("path") == str(settings_path):
+            return data.get("added") or {}
+    return {}
 
 
-def _apply_manual_rules(settings: dict, settings_path: Path, enable_auto: bool) -> None:
+def _apply_manual_rules(settings: dict, settings_path: Path, enable_auto: bool, scoped: bool = True) -> None:
     """Switch one settings file's write rules. AUTO_MODE takes the bare ``Write`` ask out and exactly the rules
     MANUAL_MODE added (an identical rule the operator already had is theirs and stays); MANUAL_MODE adds the
-    scoped ones and records which of them were new, so the operator's own rules survive both ways."""
+    scoped ones and records which were new as an event, so the operator's own rules survive both ways.
+    ``scoped`` False is the user-level file, shared by every agent on the login: one agent's MANUAL switch must
+    not ask about writes for the others, so there only the bare ``Write`` comes out."""
+    from macf.agent_events_log import append_event
     permissions = settings.setdefault('permissions', {})
     ask, allow = permissions.setdefault('ask', []), permissions.setdefault('allow', [])
-    record_path = settings_path.parent / _MANUAL_RECORD
     if enable_auto:
         if 'Write' in ask:
             ask.remove('Write')
@@ -716,7 +718,10 @@ def _apply_manual_rules(settings: dict, settings_path: Path, enable_auto: bool) 
         for rule in added.get('allow', []):
             if rule in allow:
                 allow.remove(rule)
-        record_path.unlink(missing_ok=True)
+        if added:
+            append_event(RULES_EVENT, {"path": str(settings_path), "added": {}})
+        return
+    if not scoped:
         return
     # A second switch to MANUAL finds its own rules already there; they stay recorded as added.
     before = _rules_added(settings_path)
@@ -724,7 +729,7 @@ def _apply_manual_rules(settings: dict, settings_path: Path, enable_auto: bool) 
              'allow': before.get('allow', []) + [r for r in MANUAL_ALLOW_RULES if r not in allow]}
     ask.extend(r for r in added['ask'] if r not in ask)
     allow.extend(r for r in added['allow'] if r not in allow)
-    record_path.write_text(json.dumps(added))
+    append_event(RULES_EVENT, {"path": str(settings_path), "added": added})
 
 
 def toggle_write_ask_for_auto_mode(enable_auto: bool, project_root: Optional[Path] = None) -> bool:
@@ -737,7 +742,8 @@ def toggle_write_ask_for_auto_mode(enable_auto: bool, project_root: Optional[Pat
     asks about the agent's real work instead (``MANUAL_ASK_RULES``) and lets the scratchpad through
     (``MANUAL_ALLOW_RULES``); the way back removes exactly the rules it added.
 
-    CC merges global (~/.claude/settings.json) and local (settings.local.json) permissions, so both are switched.
+    CC merges global (~/.claude/settings.json) and local (settings.local.json) permissions. The scoped rules go in
+    the local file only; the global one is shared by every agent on the login, so a MANUAL switch there adds nothing.
 
     Args:
         enable_auto: True = AUTO_MODE entry, False = MANUAL_MODE return
@@ -751,13 +757,13 @@ def toggle_write_ask_for_auto_mode(enable_auto: bool, project_root: Optional[Pat
         _apply_manual_rules(settings, settings_path, enable_auto)
         _write_settings(settings, settings_path)
 
-        # Also the global ~/.claude/settings.json (CC merges both)
+        # Also the global ~/.claude/settings.json (CC merges both): only its bare Write comes out
         global_settings_path = Path.home() / ".claude" / "settings.json"
         if global_settings_path.exists():
             try:
                 with open(global_settings_path, 'r') as f:
                     global_settings = json.load(f)
-                _apply_manual_rules(global_settings, global_settings_path, enable_auto)
+                _apply_manual_rules(global_settings, global_settings_path, enable_auto, scoped=False)
                 _write_settings(global_settings, global_settings_path)
             except (OSError, json.JSONDecodeError) as e:
                 print(f"⚠️ MACF: Global settings update failed (non-blocking): {e}", file=sys.stderr)
