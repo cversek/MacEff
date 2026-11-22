@@ -1149,7 +1149,16 @@ def step_mail(ctx: Context) -> Result:
                 acted = True
         operator.extend(added.registry_lines)
 
+    elsewhere = None
     if broker_config is not None:
+        try:
+            homes = [b.home for b in peer_setup._load(broker_config)[1].agents.values() if b.home]
+        except peer_setup.CardError as e:
+            return Result("mail", REFUSED, f"the broker config: {e}")
+        elsewhere = host_daemon.declared_broker(broker_config, homes)
+        if elsewhere is not None:
+            lines.append(f"the broker is already unit {elsewhere.unit!r} of {elsewhere.card}'s daemon")
+    if broker_config is not None and elsewhere is None:
         interim = host_daemon.interim_jobs(ctx.login_home / "Library" / "LaunchAgents") \
             if sys.platform == "darwin" else []
         try:

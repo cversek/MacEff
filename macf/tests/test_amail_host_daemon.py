@@ -156,3 +156,35 @@ def test_an_agent_with_no_address_is_skipped_by_the_mail_step(tmp_path, monkeypa
     (home / ".maceff" / "amail.json").unlink()
     r = agent_stack.step_mail(ctx())
     assert r.status == agent_stack.SKIPPED and not agent_stack.signing_key_path(home).exists()
+
+
+def test_a_broker_already_a_unit_of_an_agents_own_daemon_gets_no_second_daemon(tmp_path):
+    """THM's review of #1102: a host set up by hand may run the broker as a unit of an agent's own primal
+    daemon. A second daemon for it would contend for its socket and listener, so the plan refuses,
+    naming the daemon that already runs it, and writes nothing."""
+    cfg = _broker_config(tmp_path)
+    home = tmp_path / "ira"
+    (home / ".maceff" / "pd").mkdir(parents=True)
+    (home / ".maceff" / "config.json").write_text(json.dumps({"agent_identity": {"calling_card": "Ira"}}))
+    (home / ".maceff_primary_agent.id").write_text("0a1b2c3d-0000-0000-0000-000000000000\n")
+    (home / ".maceff" / "pd" / "declaration.json").write_text(json.dumps({"version": 1, "agent": "Ira_0a1b2c", "units": [
+        {"name": "amail-broker", "command": [sys.executable, "-m", "macf.amail.daemons.broker"],
+         "environment": {"AMAIL_BROKER_CONFIG": str(cfg)}}]}))
+    with pytest.raises(host_daemon.HostDaemonError, match="already unit 'amail-broker' of Ira_0a1b2c"):
+        _plan(cfg)
+    assert not (cfg.parent / ".maceff").exists()
+    found = host_daemon.declared_broker(cfg, [home])
+    assert (found.card, found.unit) == ("Ira_0a1b2c", "amail-broker")
+
+
+def test_the_mail_step_leaves_a_broker_already_declared_in_an_agents_daemon_alone(tmp_path, monkeypatch):
+    from macf import agent_stack
+    m = _mail_home(tmp_path, monkeypatch)
+    home, cfg, ctx = m.home, m.cfg, m.ctx
+    (home / ".maceff" / "pd").mkdir(parents=True)
+    (home / ".maceff" / "pd" / "declaration.json").write_text(json.dumps({"version": 1, "agent": "Ira_0a1b2c", "units": [
+        {"name": "amail-broker", "command": [sys.executable, "-m", "macf.amail.daemons.broker"],
+         "environment": {"AMAIL_BROKER_CONFIG": str(cfg)}}]}))
+    r = agent_stack.step_mail(ctx())
+    assert r.status == agent_stack.DONE and "already unit 'amail-broker'" in r.detail, r
+    assert not (cfg.parent / ".maceff").exists() and "pd install" not in r.detail
