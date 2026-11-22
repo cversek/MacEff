@@ -362,6 +362,21 @@ written. It writes on a yes, keeps each old file beside the new one, and writes 
 already declared as the card says. A link's note survives a new card. The registry stays root's: it
 prints the declarations and runs none.
 
+`macf_tools amail peer check <domain>` checks a link station by station, in the order a message meets
+them: the declaration here, this side's agents map and registry keys for the peer, the peer's
+listener, the address the peer knows this host by, its build, and the cards and keys the peer declares
+for this broker's agents. A message reads attested at the receiver exactly when its sender's card is
+declared there and that card's key is in the receiver's registry (R44, R63), so those two stations
+predict attestation before any mail is sent. With `--send` it sends one signed test message through
+the broker and passes only when the peer acknowledges it. The first failing station names the command
+that fixes it, and the stations that depend on it don't run. The remote stations use the `ping`
+request, which a listener answers only to a declared peer, with nothing secret in the reply; a peer
+whose build has no ping is reported as an older build, not as a failure. What a ping discloses, and
+only to a declared peer: the receiver's mail domain, the domain it sees at the caller's address, its
+macf build and protocol version, the cards it declares for the caller's agents, and whether its
+registry holds a key for each of those cards. The build tells a peer which fixes this broker has;
+nothing else in the reply is beyond what the two operators already exchanged on their cards.
+
 ### 2.2 Local delivery is an optimization, not a special case
 
 Rung 1 exists because same-host delivery is faster, more private, and cannot fail

@@ -285,6 +285,137 @@ def test_two_brokers_set_up_from_each_others_cards_exchange_mail_both_ways(tmp_p
         on_beta.stop()
 
 
+# ---- phase 3: peer check -------------------------------------------------------------------------------
+
+class _Linked:
+    """Two brokers set up from each other's cards on disk, each holding the other's key in its own
+    registry, both listening. Rebuild a side after editing its files with ``rebuild``."""
+
+    def __init__(self, tmp_path, *, alpha_knows_beta=True, beta_knows_alpha=True):
+        from macf.amail.crypto import generate_keypair
+        self.tmp = tmp_path
+        self.a_port, self.b_port = _free_port(), _free_port()
+        self.alpha_cfg = _deployment_on_disk(tmp_path, "alpha", A_DOM, "ira", "Ira_0a1b2c", self.a_port)
+        self.beta_cfg = _deployment_on_disk(tmp_path, "beta", B_DOM, "sparrow", "Sparrow_6a7b8c", self.b_port)
+        keys = tmp_path / "keys"
+        self.ira_key = generate_keypair(keys / "ira")
+        self.sparrow_key = generate_keypair(keys / "sparrow")
+        self.alpha_reg = _registry(tmp_path / "alpha", {"Sparrow_6a7b8c": {"account": "sparrow",
+                                                                           "keys": [self.sparrow_key]}}
+                                   if alpha_knows_beta else {})
+        self.beta_reg = _registry(tmp_path / "beta", {"Ira_0a1b2c": {"account": "ira", "keys": [self.ira_key]}}
+                                  if beta_knows_alpha else {})
+        peer_setup.plan_add(self.alpha_cfg, peer_setup.build_card(self.beta_cfg, agents=["sparrow"]),
+                            local_agents=["ira"]).write()
+        peer_setup.plan_add(self.beta_cfg, peer_setup.build_card(self.alpha_cfg, agents=["ira"]),
+                            local_agents=["sparrow"]).write()
+        self.alpha = self.beta = self.on_beta = None
+        self.rebuild()
+
+    def _broker(self, path, reg):
+        from macf.amail.broker import Broker
+        from macf.amail.deploy_config import BrokerDeployConfig, load_declarative_config
+        b = Broker(BrokerDeployConfig.model_validate(load_declarative_config(path)).to_broker_config())
+        b.registry = reg
+        return b
+
+    def rebuild(self):
+        from macf.amail.peer_link import PeerListener
+        if self.on_beta:
+            self.on_beta.stop()
+        self.alpha = self._broker(self.alpha_cfg, self.alpha_reg)
+        self.beta = self._broker(self.beta_cfg, self.beta_reg)
+        self.on_beta = PeerListener(self.beta, host="127.0.0.1", port=self.b_port).start()
+
+    def check(self, **kw):
+        return {s.name: s for s in peer_setup.check_peer(self.alpha_cfg, B_DOM, registry=self.alpha_reg, **kw)}
+
+    def send(self):
+        from macf.amail.crypto import load_private_key, sign
+        from macf.amail.models import Message
+        m = Message(sender=f"ira@{A_DOM}", to=[f"sparrow@{B_DOM}"], subject="amail peer check", body="test")
+        m.signature = sign(m, load_private_key(self.tmp / "keys" / "ira"))
+        return self.alpha.submit("ira", m)
+
+    def drop_agents(self, path):
+        raw = yaml.safe_load(path.read_text())
+        for link in raw["peer_links"].values():
+            link.pop("agents", None)
+        path.write_text(yaml.safe_dump(raw))
+
+
+@pytest.fixture
+def linked(tmp_path):
+    pair = _Linked(tmp_path)
+    yield pair
+    pair.on_beta.stop()
+
+
+def test_a_healthy_link_passes_every_station_and_its_test_message_reads_attested(linked):
+    stations = linked.check(send=linked.send)
+    assert {n: s.ok for n, s in stations.items()} == {
+        "config": True, "our agents map": True, "our registry": True, "listener": True, "address": True,
+        "build": True, "their agents map": True, "their registry": True, "test message": True}, stations
+    linked.beta.sweep_shared()
+    (amsg,) = (linked.tmp / "beta" / "handoff" / "sparrow").glob("*.amsg")
+    assert json.loads(amsg.with_suffix(".json").read_text())["broker_trust"] == "attested"
+
+
+def test_a_peer_that_is_down_fails_at_its_listener_and_nothing_past_it_runs(linked):
+    linked.on_beta.stop()
+    stations = linked.check()
+    assert stations["listener"].ok is False and "their agents map" not in stations
+    assert "peer_listen" in stations["listener"].fix
+
+
+def test_a_peer_that_does_not_declare_this_host_fails_at_the_address(linked):
+    """The listener closes an undeclared address unread (R59); the check names that, not an outage."""
+    raw = yaml.safe_load(linked.beta_cfg.read_text())
+    raw["peer_links"] = {"gamma.test": {"host": "127.0.0.2", "port": 8030}}
+    linked.beta_cfg.write_text(yaml.safe_dump(raw))
+    linked.rebuild()
+    stations = linked.check()
+    assert stations["address"].ok is False and "peer card" in stations["address"].fix
+
+
+def test_a_missing_agents_map_on_either_side_is_named_where_it_is(linked):
+    """The defect the first live run found by hand: a link that declares no agents, so nothing can
+    read attested. Missing on the peer's side and on this side, each fails its own station."""
+    linked.drop_agents(linked.beta_cfg)
+    linked.rebuild()
+    assert linked.check()["their agents map"].ok is False
+    linked.drop_agents(linked.alpha_cfg)
+    assert linked.check()["our agents map"].ok is False
+
+
+def test_a_key_missing_from_either_registry_is_named_where_it_is(tmp_path):
+    pair = _Linked(tmp_path, alpha_knows_beta=False, beta_knows_alpha=False)
+    try:
+        stations = pair.check()
+        assert stations["our registry"].ok is False and stations["their registry"].ok is False
+        assert "registry" in stations["their registry"].fix
+    finally:
+        pair.on_beta.stop()
+
+
+def test_a_peer_on_an_older_build_is_reported_not_failed(linked, monkeypatch):
+    from macf.amail import peer_link
+    monkeypatch.setattr(peer_link, "OPS", ("hand_off",))
+    stations = linked.check()
+    assert stations["build"].ok is None and "older build" in stations["build"].detail
+    assert "their agents map" not in stations
+
+
+def test_a_test_message_the_peer_cannot_store_fails_with_the_peers_reason(linked, monkeypatch):
+    """The class the half-written pair belonged to: the peer is reachable and declared, and still
+    cannot store the message. The last station fails and carries the peer's reason."""
+    def cannot(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(linked.beta, "take_over_link", cannot)
+    stations = linked.check(send=linked.send)
+    assert stations["test message"].ok is False and "could not store" in stations["test message"].detail
+
+
 def test_an_agent_with_no_calling_card_is_refused(tmp_path):
     """A peer judges an agent's signatures by its card (MIS-0004 R44), so an agent with none can't be on
     a card at all: refused, naming the missing card."""
@@ -313,3 +444,28 @@ def test_a_write_keeps_the_old_file_beside_the_new_one_and_its_mode(tmp_path):
     written = peer_setup.plan_add(broker, _beta_card(tmp_path), local_agents=["ira"]).write(backup_suffix=".bak-x")
     assert broker in written and broker.with_name(broker.name + ".bak-x").read_text() == before
     assert (broker.stat().st_mode & 0o777) == 0o640
+
+
+def _set_beta_agents_for_alpha(linked, agents):
+    raw = yaml.safe_load(linked.beta_cfg.read_text())
+    raw["peer_links"][A_DOM]["agents"] = agents
+    linked.beta_cfg.write_text(yaml.safe_dump(raw))
+    linked.rebuild()
+
+
+def test_a_peer_declaring_another_card_or_none_of_ours_fails_their_agents_map(linked):
+    """CTB's review of #1101: the peer declaring a different card for our agent, or declaring only
+    agents that aren't ours, leaves our mail unverified there just as declaring none does."""
+    _set_beta_agents_for_alpha(linked, {"ira": "Ira_999999"})
+    st = linked.check()["their agents map"]
+    assert st.ok is False and "other cards for ira" in st.detail
+    _set_beta_agents_for_alpha(linked, {"someone": "Someone_123456"})
+    assert linked.check()["their agents map"].ok is False
+
+
+def test_no_test_message_is_sent_while_a_station_fails(linked):
+    sent = []
+    linked.drop_agents(linked.beta_cfg)
+    linked.rebuild()
+    stations = linked.check(send=lambda: sent.append(1) or {"ok": True})
+    assert stations["test message"].ok is None and not sent

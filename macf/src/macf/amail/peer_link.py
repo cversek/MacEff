@@ -10,7 +10,10 @@ The protocol is one JSON line each way:
 
     request  {"v": 1, "op": "hand_off", "from": <sender's domain>, "stem": ..., "sidecar": {...},
               "payload_b64": ...}
+             {"v": 1, "op": "ping", "from": <sender's domain>}
     reply    {"v": 1, "ok": true, "message_id": ...}
+             {"v": 1, "ok": true, "op": "ping", "domain": ..., "you_are": ..., "build": ...,
+              "protocol": 1, "your_agents": {...}, "your_keys_declared": {card: true|false|null}}
              {"v": 1, "ok": false, "refused": true, "reason": ...}     the peer will not take it
              {"v": 1, "ok": false, "reason": ...}                      it could not be stored; retry
 """
@@ -29,6 +32,9 @@ from .broker import PairRefused
 from typing import Any, Dict, Optional, Tuple
 
 PROTOCOL_VERSION = 1
+#: The requests a listener answers. ``ping`` is additive within version 1: a peer whose build has
+#: no ping refuses it as unknown, which `amail peer check` reports as an older build.
+OPS = ("hand_off", "ping")
 #: The most one request line may hold. Reading stops here, before anything is parsed, so no
 #: caller can make the broker hold more however long it keeps sending (R62).
 MAX_REQUEST_BYTES = 16 * 1024 * 1024
@@ -50,6 +56,11 @@ class RequestTooLarge(Exception):
 
 class RequestTimedOut(Exception):
     """A request did not arrive in full within its deadline."""
+
+
+class ClosedUnread(ConnectionError):
+    """The peer accepted the connection and closed it with no reply, which is what a listener does
+    to an address it does not declare (R59); a ConnectionError, so a sender keeps its copy."""
 
 
 class Deferred(Exception):
@@ -197,11 +208,13 @@ class PeerListener:
             request = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, ValueError):
             return _reply(False, refused=True, reason="the request is not JSON")
-        if not isinstance(request, dict) or request.get("v") != PROTOCOL_VERSION or request.get("op") != "hand_off":
+        if not isinstance(request, dict) or request.get("v") != PROTOCOL_VERSION or request.get("op") not in OPS:
             return _reply(False, refused=True, reason=f"unknown request; this broker speaks version {PROTOCOL_VERSION}")
         if str(request.get("from", "")).lower() != domain.lower():
             return _reply(False, refused=True,
                           reason="the request says it is from another domain than the declared peer at this address")
+        if request["op"] == "ping":
+            return _reply(True, **self._ping(domain))
         try:
             payload = base64.b64decode(request.get("payload_b64", ""), validate=True)
         except (binascii.Error, ValueError):
@@ -217,6 +230,27 @@ class PeerListener:
             return _reply(False, reason=f"the peer could not store it ({type(e).__name__})")
         return _reply(True, **result)
 
+    def _ping(self, domain: str) -> Dict[str, Any]:
+        """What a declared peer needs to check its link to this broker: who this broker is, which
+        domain it sees at the caller's address, its build, the agents it declares for the caller, and
+        whether its registry holds a key for each of their cards. A message from one of those agents
+        reads attested here exactly when its card is declared and its key is (MIS-0004 R44, R63).
+        Nothing in it is a secret, and only a declared peer is ever answered."""
+        from macf import __version__
+        from .registry import RegistryError
+        link = self.broker.config.peer_links[domain]
+        keys: Dict[str, Any] = {}
+        registry = getattr(self.broker, "registry", None)
+        for card in sorted(set(link.agents.values())):
+            try:
+                keys[card] = bool(registry.signing_keys(card)) if registry is not None else None
+            except RegistryError as e:
+                print(f"⚠️ MACF: amail peer link: ping could not read the registry (reporting unknown): {e}",
+                      file=sys.stderr)
+                keys[card] = None
+        return {"op": "ping", "domain": self.broker.config.domain, "you_are": domain, "build": __version__,
+                "protocol": PROTOCOL_VERSION, "your_agents": dict(link.agents), "your_keys_declared": keys}
+
     def _audit(self, detail: str) -> None:
         audit = getattr(self.broker, "audit", None)
         if audit:
@@ -230,14 +264,24 @@ def send_request(host: str, port: int, request: Dict[str, Any],
     Raises ConnectionError for anything that is not a well-formed reply, so a caller treats a
     peer that is down, slow or speaking nonsense the same way: the message is kept."""
     try:
-        with socket.create_connection((host, port), timeout=timeout) as sock:
+        sock = socket.create_connection((host, port), timeout=timeout)
+    except OSError as e:
+        raise ConnectionError(f"the peer at {host}:{port} could not be reached: {e}") from e
+    try:
+        with sock:
             sock.settimeout(timeout)
             sock.sendall(json.dumps({"v": PROTOCOL_VERSION, **request}).encode("utf-8") + b"\n")
             raw = read_request_line(sock)
     except (RequestTooLarge, RequestTimedOut) as e:
         raise ConnectionError(f"the peer's reply was not usable: {e}") from e
+    except (ConnectionResetError, BrokenPipeError) as e:
+        # Connected, then closed before any reply: a listener closing an undeclared address unread
+        # (R59) is seen as a reset or as an empty read, depending on timing.
+        raise ClosedUnread(f"the peer at {host}:{port} closed the connection without a reply ({e})") from e
     except OSError as e:
-        raise ConnectionError(f"the peer at {host}:{port} could not be reached: {e}") from e
+        raise ConnectionError(f"the connection to the peer at {host}:{port} failed: {e}") from e
+    if not raw:
+        raise ClosedUnread(f"the peer at {host}:{port} closed the connection without a reply")
     try:
         reply = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as e:

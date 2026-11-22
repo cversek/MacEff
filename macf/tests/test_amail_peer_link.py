@@ -573,3 +573,40 @@ def test_the_cards_of_a_peers_declared_agents_reach_the_peer_link_through_the_lo
     from macf.amail.zone import card_for_address
     assert card_for_address(f"sparrow@{B_DOM}", domain=cfg.domain, zone=cfg.zone, agent_cards=cfg.agent_cards,
                             peers={d: link.agents for d, link in cfg.peer_links.items()}) == "Sparrow_3d4e5f"
+
+
+def test_a_ping_is_answered_only_to_a_declared_peer_and_says_what_it_declares_for_it(pair):
+    """The check op adds no way in: a stranger's ping is closed unread like any request (R59), and a
+    declared peer's ping gets this broker's domain, the domain it sees at the caller's address, and
+    the cards and key status it declares for the caller, nothing more."""
+    _, beta, listener = pair
+    beta.config.peer_links = {A_DOM: PeerLink(host=LOOP, port=1, agents={"ira": "Ira_0a1b2c"})}
+    reply = peer_link.send_request(LOOP, listener.port, {"op": "ping", "from": A_DOM})
+    assert reply["ok"] and reply["domain"] == B_DOM and reply["you_are"] == A_DOM
+    assert reply["your_agents"] == {"ira": "Ira_0a1b2c"} and set(reply["your_keys_declared"]) == {"Ira_0a1b2c"}
+    assert peer_link.send_request(LOOP, listener.port, {"op": "ping", "from": "other.example"})["refused"]
+    beta.config.peer_links = {A_DOM: PeerLink(host="10.9.9.9", port=1)}
+    with pytest.raises(peer_link.ClosedUnread):
+        peer_link.send_request(LOOP, listener.port, {"op": "ping", "from": A_DOM})
+
+
+def test_a_peer_that_reads_and_closes_without_a_reply_is_closed_unread_not_down():
+    """The other way a close looks from the sender: the request was read, then the socket ended with
+    nothing. It is ClosedUnread (a ConnectionError, so a message is kept), not an outage."""
+    import threading
+    srv = socket.socket()
+    srv.bind((LOOP, 0))
+    srv.listen(1)
+
+    def serve():
+        conn, _ = srv.accept()
+        with conn:
+            read_request_line(conn)
+    t = threading.Thread(target=serve, daemon=True)
+    t.start()
+    try:
+        with pytest.raises(peer_link.ClosedUnread):
+            peer_link.send_request(LOOP, srv.getsockname()[1], {"op": "ping", "from": A_DOM})
+    finally:
+        t.join(timeout=5)
+        srv.close()
