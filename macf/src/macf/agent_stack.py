@@ -25,9 +25,11 @@ The steps, each skippable by its flag:
     ``--peer CARD``, and on a host the broker as a declared unit of its own daemon;
 11. ``registry`` - the agent's key in the operator's registry, the root step printed.
 
-``pd install`` comes last although it is the heart of the stack: the daemon starts the session
-unit as soon as it starts, and that session needs the child script, the channel plugin and its
-permissions already in place.
+``pd install`` comes last of the steps the session needs, although it is the heart of the stack: the
+daemon starts the session unit as soon as it starts, and that session needs the child script, the
+channel plugin and its permissions already in place. ``mail`` and ``registry`` follow it because the
+session needs nothing they write at its start (mail is read when it arrives), and the registry
+step declares the key the mail step may have just made.
 """
 import argparse
 import contextlib
