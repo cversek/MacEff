@@ -334,20 +334,23 @@ Development Drive Stats:
                     # scope is paused with a record of why, and stops stay free
                     # until someone unpauses it (`task scope unpause`).
                     _churn_ids = [str(t["id"]) for t in scope["active"]]
+                    from macf.task.scope_gate_failsafe import idle_streak
+                    _idle_n = idle_streak()
                     _churn_note = ""
                     try:
                         from macf.task.scope import pause_scoped_tasks
                         pause_scoped_tasks(_churn_ids, justification=(
-                            f"churn: {COUNT_INIT} forced turns in a row made no new tool call "
+                            f"churn: {_idle_n} forced turn(s) in a row made no new tool call "
                             f"and got no new result; paused by the idle-stop failsafe"))
                         _churn_note = (f"Paused the scope ({', '.join('#' + i for i in _churn_ids)}) "
-                                       f"with a churn record; `macf_tools task scope unpause --all` resumes it.\n\n")
+                                       f"with a churn record; `macf_tools task scope unpause "
+                                       f"{' '.join(_churn_ids)}` resumes it.\n\n")
                     except (ImportError, OSError, ValueError, KeyError) as _pe:
                         emit_warning(Warning(source="stop", kind="scope_gate_failed",
                                              detail=f"churn pause failed ({_pe}); the stop passes anyway"))
                     fail_open_msg = (
                         f"⚠️ MACF SCOPE GATE FAILSAFE — {scope['active_count']} scoped "
-                        f"task(s) still active but the last {COUNT_INIT} forced turns "
+                        f"task(s) still active but the last {_idle_n} forced turn(s) "
                         f"repeated earlier checks with the same results. Allowing stop.\n\n"
                         f"{_churn_note}"
                         f"This is the Idle-Loop Shrinking anti-pattern "

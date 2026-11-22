@@ -31,11 +31,16 @@ from typing import Iterable, Optional
 COUNT_INIT = 5
 HELD = "scope_gate_held"
 RESET = "scope_gate_reset"
-_EPISODE_START = ("user_prompt_submit_hook", RESET)
+# The operator's prompt is recorded as user_activity_detected with this detector.
+_PROMPT_EVENT, _PROMPT_DETECTOR = "user_activity_detected", "user_prompt_submit_hook"
 _MAX_SEEN = 100
 
-# Clock times and epoch seconds change on every run without the answer changing.
-_VOLATILE = re.compile(r"\b\d{1,2}:\d{2}(:\d{2})?( ?[AP]M)?\b|\b1[6-9]\d{8}(\.\d+)?\b")
+# Clock times, epoch seconds (bare or inside a breadcrumb's t_<epoch>) and run
+# durations change on every run without the answer changing.
+_VOLATILE = re.compile(
+    r"(?<!\d)\d{1,2}:\d{2}(:\d{2})?( ?[AP]M)?(?!\d)"
+    r"|(?<!\d)1[6-9]\d{8}(\.\d+)?(?!\d)"
+    r"|(?<![\w.])\d+(\.\d+)?\s?(ms|s)\b")
 
 
 def _fingerprint(hook_input: dict) -> str:
@@ -66,11 +71,12 @@ def _episode(events: Optional[Iterable[dict]] = None) -> Episode:
     calls made after it, and every fingerprint the episode had seen before it."""
     if events is None:
         from macf.agent_events_log import read_events
-        events = read_events(reverse=True, only=(HELD, "tool_call_completed") + _EPISODE_START)
+        events = read_events(reverse=True, only=(HELD, "tool_call_completed", _PROMPT_EVENT, RESET))
     last_held, since = None, []
     for e in events:
         name = e.get("event")
-        if name in _EPISODE_START:
+        if name == RESET or (name == _PROMPT_EVENT
+                             and (e.get("data") or {}).get("detector") == _PROMPT_DETECTOR):
             break
         if name == HELD:
             last_held = e
@@ -89,6 +95,12 @@ def _conserving() -> bool:
     except (ImportError, OSError, ValueError) as e:
         print(f"⚠️ scope_gate_failsafe: budget mode unreadable ({e}); treating as normal", file=sys.stderr)
         return False
+
+
+def idle_streak() -> int:
+    """Consecutive blocked Stops in this episode that made no progress."""
+    held = _episode().last_held
+    return int(held["data"].get("idle", 0)) if held else 0
 
 
 def current() -> int:
@@ -124,8 +136,10 @@ def decrement_and_check() -> tuple[int, bool]:
         if f not in known:
             known.add(f)
             seen.append(f)
+    prior_idle = int(ep.last_held["data"].get("idle", 0)) if ep.last_held else 0
     append_event(HELD, {
         "remaining": remaining,
+        "idle": 0 if progressed else prior_idle + 1,
         "progressed": progressed,
         "calls": len(since),
         "repeated": len(since) - len(new),

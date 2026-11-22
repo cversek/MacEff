@@ -42,10 +42,22 @@ def test_repeating_the_same_check_with_the_same_answer_is_churn():
 
 
 def test_a_clock_reading_in_the_output_does_not_make_a_check_new():
+    """Clock times, ISO stamps, a breadcrumb's t_<epoch> and run durations all vary between
+    two runs of the same check with the same answer."""
     sgf.reset()
-    _call("status", "11:21:04 AM wk 75%")
+    _call("status", "11:21:04 AM wk 75% at 2026-11-22T16:21:04Z s_ab/c_1/t_1795364464 171 passed in 20.00s")
     sgf.decrement_and_check()
-    _call("status", "11:26:40 AM wk 75%")
+    _call("status", "11:26:40 AM wk 75% at 2026-11-22T16:26:40Z s_ab/c_1/t_1795364800 171 passed in 18.31s")
+    assert sgf.decrement_and_check()[0] == sgf.COUNT_INIT - 1
+
+
+def test_a_monitor_seeing_activity_does_not_start_an_episode():
+    """Only the operator's prompt starts an episode, not another detector's sighting."""
+    sgf.reset()
+    _call("a", "1")
+    sgf.decrement_and_check()
+    append_event("user_activity_detected", {"source": "direct", "detector": "transcript_monitor"})
+    _call("a", "1")
     assert sgf.decrement_and_check()[0] == sgf.COUNT_INIT - 1
 
 
@@ -62,7 +74,7 @@ def test_the_operators_prompt_starts_a_fresh_episode():
     _call("watch.sh 1116", "same")
     sgf.decrement_and_check()
     sgf.decrement_and_check()
-    append_event("user_prompt_submit_hook", {})
+    append_event("user_activity_detected", {"source": "direct", "detector": "user_prompt_submit_hook"})
     _call("watch.sh 1116", "same")
     assert sgf.decrement_and_check() == (sgf.COUNT_INIT, False)
     assert sgf.current() == sgf.COUNT_INIT
@@ -72,6 +84,7 @@ def test_conserve_yields_on_the_first_idle_stop():
     sgf.reset()
     with patch("macf.budget.current_mode", return_value={"mode": "conserve"}):
         assert sgf.decrement_and_check() == (0, True)
+    assert sgf.idle_streak() == 1, "the churn record counts one forced turn, not five"
 
 
 def test_the_held_event_records_what_was_repeated():
@@ -99,5 +112,6 @@ def test_the_scope_gate_fail_open_pauses_the_scope_with_a_churn_record():
     assert all(r.get("decision") == "block" for r in results[:-1])
     last = results[-1]
     assert last.get("decision") != "block" and "Paused the scope (#4242)" in last["systemMessage"]
+    assert "task scope unpause 4242" in last["systemMessage"], "the hint must be a command that exists"
     check = get_scope_check()
     assert check["active_count"] == 0 and check["paused_count"] == 1
