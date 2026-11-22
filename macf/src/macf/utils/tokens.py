@@ -93,6 +93,15 @@ def get_total_context() -> int:
     Returns:
         Total context window in tokens
     """
+    return get_total_context_and_source()[0]
+
+
+def get_total_context_and_source() -> Tuple[int, str]:
+    """The total context window and where it came from: ``env``, ``config`` or ``default``.
+
+    ``default`` means nothing set or detected the window, so 200k is an assumption, not a
+    measurement: an account whose window is larger sees CL levels and boundary warnings fire against
+    the wrong number (#1050). Callers that show the value say so when the source is ``default``."""
     global _1M_WARNING_SHOWN
     from macf.config import resolve_setting
     value, source = resolve_setting(
@@ -102,7 +111,7 @@ def get_total_context() -> int:
         coerce=int,
     )
     if source != "default":
-        return value
+        return value, source
 
     if not _1M_WARNING_SHOWN:
         _1M_WARNING_SHOWN = True
@@ -118,7 +127,12 @@ def get_total_context() -> int:
         except (ImportError, OSError) as e:
             print(f"⚠️ MACF: model detection failed during context window check: {e}", file=sys.stderr)
 
-    return _DEFAULT_CONTEXT
+    return _DEFAULT_CONTEXT, "default"
+
+
+#: What to say beside a context window that is the fallback, not a setting.
+UNVERIFIED_CONTEXT_NOTE = ("an assumed default, not read from your account: if its window is larger, set "
+                           "context.window in .maceff/config.json or MACF_CONTEXT_WINDOW")
 
 
 # Backward compatibility alias
@@ -479,9 +493,11 @@ def format_token_context_full(token_info: Dict[str, Any]) -> str:
     """
     cluac = token_info['cl_level']
     weather = get_cluac_weather(cluac)
+    total, source = get_total_context_and_source()
+    assumed = " (assumed default: not read from your account)" if source == "default" else ""
     return f"""📊 TOKEN/CONTEXT AWARENESS
 {weather}
-Tokens Used: {token_info['tokens_used']:,} / {get_total_context():,}
+Tokens Used: {token_info['tokens_used']:,} / {total:,}{assumed}
 CL Level: {cluac} ({token_info['percentage_used']:.1f}% used)
 Remaining: {token_info['tokens_remaining']:,} tokens"""
 

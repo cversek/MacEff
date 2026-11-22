@@ -517,3 +517,24 @@ def test_a_pane_already_gone_has_no_group(monkeypatch):
 def test_attached_clients_is_zero_when_no_server_answers(tmp_path):
     """A missing server has no client to end (#1055)."""
     assert su.attached_clients("Resident_1a2b3c", base=tmp_path) == 0
+
+
+@needs_tmux
+def test_the_server_has_extended_keys_whatever_the_baseline_file_says(tmp_path, short_base, restore_signals):
+    """Shift-Tab and other modified keys reach the client only with extended keys on, and a baseline file
+    written before they were added (or none at all) leaves them off, so after the first presses the key
+    is lost (#1016). The wrapper sets them on its own server, so a stale file can't leave them off."""
+    out = tmp_path / "keys.txt"
+    child = _child(tmp_path, f"""
+tmux show-options -sv extended-keys > {out}
+tmux show-options -s terminal-features >> {out}
+exit 0
+""")
+    stale = tmp_path / "stale.conf"
+    stale.write_text("set -g mouse on\n")           # a baseline from before the keys were added
+    rc = su.run("Resident_1a2b3c", child, conf=stale, environ=_unit_env(tmp_path), base=short_base,
+                ready_timeout=10)
+    assert rc == 0
+    seen = out.read_text()
+    assert seen.splitlines()[0] == "always"
+    assert "extkeys" in seen

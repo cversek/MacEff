@@ -621,3 +621,102 @@ def default_glossary(paths: list[Path]) -> Optional[Path]:
         if candidate.is_file():
             return candidate
     return None
+
+
+#: A dated record line that is itself a revision or an amendment, as the Deliberation Records word them:
+#: "a revision at the repo owner's request", "the single revision", "revision", "an amendment",
+#: "amended in place by". A line that only mentions one ("every maintainer commented on the revision") isn't.
+REVISION_LINE = re.compile(r"^- (\d{4}-\d{2}-\d{2}): (?:(?:a|an|the|the single|the synthesis) )?"
+                           r"(?:revision|amendment)\b|^- (\d{4}-\d{2}-\d{2}): amended in place\b", re.I)
+
+
+def revision_dates(lines: list[str]) -> list[str]:
+    """The distinct dates an MIS was revised or amended, read from its own record lines (#1066)."""
+    found = {m.group(1) or m.group(2) for m in map(REVISION_LINE.match, lines) if m}
+    return sorted(found)
+
+
+def index(paths: Iterable[Path]) -> list[dict]:
+    """The registry of MIS files: one row per file, read from its own header (#1066).
+
+    Number, title, status, type, secretary, deliberation, created, what it updates, where it lands and how
+    it was resolved, each as the file states it, blank where it doesn't. The template is not a row.
+    Nothing here is stored: a row is the header the file already carries, so the index can't drift."""
+    rows = []
+    for path in mis_files(paths):
+        text, problem = read_utf8(path)
+        if text is None:
+            continue
+        lines = text.splitlines()
+        fields = {k: v[0].strip() for k, v in read_header(lines).items()}
+        title = next((m.group(1).strip() for m in (re.match(r"^# MIS-\d+: (.+)$", line) for line in lines) if m), "")
+        number = fields.get("Number", "")
+        if number == "0000":
+            continue
+        rows.append({"number": number, "title": title, "status": fields.get("Status", ""),
+                     "type": fields.get("Type", ""), "secretary": fields.get("Secretary", ""),
+                     "deliberation": fields.get("Deliberation", ""), "created": fields.get("Created", ""),
+                     "updates": fields.get("Updates", ""), "lands_in": fields.get("Lands-in", ""),
+                     "resolution": fields.get("Resolution", "")[:160], "revisions": revision_dates(lines),
+                     "file": str(path)})
+    return sorted(rows, key=lambda r: (r["number"], r["file"]))
+
+
+def format_index(rows: list[dict]) -> str:
+    """The rows as a table a person can read in a terminal."""
+    lines = [f"{'MIS':<9}{'STATUS':<10}TITLE", "-" * 72]
+    for r in rows:
+        lines.append(f"MIS-{r['number']:<5}{r['status']:<10}{r['title']}")
+        if r["deliberation"]:
+            lines.append(f"{'':<19}deliberation: {r['deliberation']}")
+        if r["lands_in"]:
+            lines.append(f"{'':<19}lands in: {r['lands_in'][:140]}")
+        if r.get("revisions"):
+            n = len(r["revisions"])
+            lines.append(f"{'':<19}revised {n} time{'s' if n != 1 else ''}, last {r['revisions'][-1]}")
+    return "\n".join(lines)
+
+
+MIS_TITLE = re.compile(r"^MIS-(\d{4})\b", re.I)
+
+
+def gh_runner(repo: str = "cversek/MacEff"):
+    """A function running ``gh`` and returning its output, for ``open_index``; a refusal is raised."""
+    import subprocess
+
+    def run(args: list) -> str:
+        done = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=60)
+        if done.returncode != 0:
+            raise RuntimeError(f"gh {' '.join(args[:2])} failed: {(done.stderr or done.stdout).strip()[:200]}")
+        return done.stdout
+    run.repo = repo
+    return run
+
+
+def open_index(run, repo: str = "cversek/MacEff") -> list[dict]:
+    """The MIS drafts, one row per open pull request whose title begins ``MIS-NNNN``, read from the
+    header of the MIS file at the pull request's head (#1066). A network step, kept apart from ``index``,
+    which is read from the tree and reproducible; these rows are drafts and are never mixed into the landed ones."""
+    import base64
+    import json
+    listed = json.loads(run(["pr", "list", "-R", repo, "--state", "open", "--limit", "200",
+                             "--json", "number,title,headRefOid,url,isDraft"]))
+    rows = []
+    for pr in listed:
+        m = MIS_TITLE.match(pr.get("title", ""))
+        if not m:
+            continue
+        files = json.loads(run(["pr", "view", str(pr["number"]), "-R", repo, "--json", "files"]))["files"]
+        path = next((f["path"] for f in files if re.search(r"framework/mis/MIS-\d{4}[^/]*\.md$", f["path"])), None)
+        fields, title = {}, ""
+        if path:
+            raw = json.loads(run(["api", f"repos/{repo}/contents/{path}?ref={pr['headRefOid']}"]))["content"]
+            lines = base64.b64decode(raw).decode("utf-8", "replace").splitlines()
+            fields = {k: v[0].strip() for k, v in read_header(lines).items()}
+            title = next((mm.group(1).strip() for mm in (re.match(r"^# MIS-\d+: (.+)$", ln) for ln in lines) if mm), "")
+        rows.append({"number": fields.get("Number", m.group(1)), "title": title or pr["title"],
+                     "status": fields.get("Status", ""), "secretary": fields.get("Secretary", ""),
+                     "deliberation": fields.get("Deliberation", ""), "lands_in": fields.get("Lands-in", ""),
+                     "pr": pr["number"], "url": pr.get("url", ""), "draft": bool(pr.get("isDraft"))})
+    return sorted(rows, key=lambda r: (r["number"], r["pr"]))
+

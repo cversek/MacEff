@@ -1,0 +1,3 @@
+### Changed
+
+- **The README says how to use a virtual-environment install from any shell, and that `framework install` is a separate command** (`README.md`, #860 items 2 and 4): the install block gave no way to run `macf_tools` without activating the environment in every shell, and nothing said the channel plugin needs `maceff-channel` on the PATH Claude Code starts with, or that the hooks, commands and skills come from `macf_tools framework install`, which `agent init` only checks. The install section now has the one loop that links the five console scripts onto the PATH and says why to do it before `agent init`; the hooks section names `framework install` and the `framework` step.

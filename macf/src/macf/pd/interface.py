@@ -54,7 +54,9 @@ UNIT_STATES = get_args(State)
 #: The placeholders the daemon fills in when it renders a unit's command and environment
 #: at start (MIS-0002-R13 (pd_MUST_render_env_at_start)). The same agent has a different
 #: home on a host and in a container, so a declaration names it this way, never as a path.
-PLACEHOLDERS = ("agent_home", "card", "runtime_dir")
+#: ``python`` is the daemon's own interpreter, which a declaration can't know when it is
+#: validated (a unit's comes from ``pd install``); the report schedules run with it (#1027).
+PLACEHOLDERS = ("agent_home", "card", "runtime_dir", "python")
 _PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 #: macOS privacy grants a unit may declare (MIS-0002-R63 (unit_MUST_declare_privacy_grants)).
@@ -208,6 +210,10 @@ class Unit(_Closed):
         return self
 
 
+#: The days before a login's refresh grant ends that it reads expiring, unless a declaration says otherwise.
+EXPIRING_DAYS = 3.0
+
+
 class Window(_Closed):
     start: str = Field(pattern=r"^\d{2}:\d{2}$")
     end: str = Field(pattern=r"^\d{2}:\d{2}$")
@@ -225,6 +231,48 @@ class MissedRunPolicy(_Closed):
         if (self.kind == "run_once_in_window") != (self.window is not None):
             raise ValueError("a window is given exactly when the policy is run_once_in_window")
         return self
+
+
+class Reports(_Closed):
+    """The twice-daily report the daemon owns, and the warning window a login's expiry is
+    judged by (#1027). Absent from a declaration means no report is declared and the window is
+    the three days the watch has always used.
+
+    - ``times``: the hours of the day the report runs, read in the declaration's ``timezone``.
+    - ``warn_days``: how many days before a login's refresh grant ends the verdict reads
+      ``expiring``, for the daemon's record, ``pd login`` and the outside watch alike.
+    - ``reporter``: the one agent card whose report carries the login line. Agents that share
+      one macOS account share one login, so the others say who reports it instead of
+      repeating the warning. None: this agent reports it.
+    - ``missed``: what a report does when the daemon was down at its hour. Required, with no
+      default, as for any schedule (MIS-0002-R25, R109)."""
+
+    times: List[str] = Field(min_length=1)
+    warn_days: float = Field(default=EXPIRING_DAYS, gt=0, le=30, allow_inf_nan=False)
+    reporter: Optional[str] = Field(default=None, min_length=1)
+    missed: MissedRunPolicy
+
+    @field_validator("times")
+    @classmethod
+    def _times_of_day(cls, v: List[str]) -> List[str]:
+        for t in v:
+            if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", t):
+                raise ValueError(f"{t!r} is not an HH:MM time of day")
+        if len(set(v)) != len(v):
+            raise ValueError("a report time is listed once")
+        return v
+
+
+#: What each report schedule runs: ``pd report`` under the daemon's own interpreter, printing what
+#: the session is woken with (#1027).
+REPORT_COMMAND = ("{python}", "-m", "macf.cli", "pd", "report")
+#: A report reads a credential and prints a line; a minute is ample.
+REPORT_TIMEOUT_S = 60.0
+
+
+def report_schedule_name(time_of_day: str) -> str:
+    """The schedule a report time becomes: ``report-HHMM``."""
+    return "report-" + time_of_day.replace(":", "")
 
 
 class PromptRun(_Closed):
@@ -497,6 +545,8 @@ class Declaration(_Closed):
     keep_harness_idle_compaction: bool = False
     wind_down: Optional[WindDown] = None
     timezone: Optional[str] = None
+    #: The report the daemon owns and the login warning window (#1027). None: no report declared.
+    reports: Optional[Reports] = None
     #: Commands the agent's ``check`` entries may run, by name (the scheduler design, 4.2).
     check_templates: Dict[str, CheckTemplate] = Field(default_factory=dict)
     stream_grants: List[StreamGrant] = Field(default_factory=list)
@@ -620,10 +670,35 @@ class Declaration(_Closed):
         return self
 
     @model_validator(mode="after")
+    def _reports_run_as_schedules(self) -> "Declaration":
+        # Each report time is a schedule the scheduler already runs (#1027), so the missed-run
+        # policy, the install check and every reader of ``schedules`` apply with no code of their
+        # own. A name the declaration already uses is its own schedule and is kept, which also
+        # keeps a declaration read back from its own dump from doubling them.
+        if self.reports is None:
+            return self
+        have = {s.name for s in self.schedules}
+        env = {"MACEFF_AGENT_HOME_DIR": "{agent_home}"}
+        session = next((u for u in self.units if u.kind == "session"), None)
+        for key in ("USER", "LOGNAME"):    # how macOS finds the stored login (#852, #1073)
+            if session is not None and key in session.environment:
+                env[key] = session.environment[key]
+        for t in self.reports.times:
+            name = report_schedule_name(t)
+            if name in have:
+                continue
+            hour, minute = t.split(":")
+            self.schedules.append(Schedule(
+                name=name, cron=f"{int(minute)} {int(hour)} * * *", missed_run=self.reports.missed,
+                target=self.agent, timeout_s=REPORT_TIMEOUT_S,
+                run=CommandRun(command=list(REPORT_COMMAND), wake_when="stdout", environment=dict(env))))
+        return self
+
+    @model_validator(mode="after")
     def _crons_and_windows_name_their_timezone(self) -> "Declaration":
-        if (self.schedules or self.quiet_windows) and not self.timezone:
-            raise ValueError("a declaration with schedules or quiet windows names the timezone "
-                             "its crons and windows are read in, as an IANA name such as 'UTC' "
+        if (self.schedules or self.quiet_windows or self.reports) and not self.timezone:
+            raise ValueError("a declaration with schedules, quiet windows or reports names the timezone "
+                             "its crons, windows and report times are read in, as an IANA name such as 'UTC' "
                              "or 'America/New_York'")
         if self.timezone:
             try:

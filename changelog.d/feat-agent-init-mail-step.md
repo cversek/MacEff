@@ -1,0 +1,3 @@
+### Added
+
+- **A mail step in `agent init`** (`agent_stack.step_mail`, persistent_layer 5.4): for an agent with an address (`.maceff/amail.json`), makes its signing key if absent, declares signing every message, declares a peer from `--peer CARD` as `amail peer add` does, and on a host writes the broker's own primal daemon identity and declaration as `amail broker-unit` does. The operator's steps (installing that daemon, retiring a launchd job that ran the broker directly, the peer's registry lines) are printed. Listed under `--plan`, which changes nothing; skippable with `--no-mail`; skipped for an agent with no address and in a container. The policy's list of steps now also names the existing registry step.

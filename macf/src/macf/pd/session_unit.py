@@ -405,6 +405,16 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
     # sets its own title (its version), which said nothing about whose session it was,
     # so on this server, which holds only this session, it may not. Nor may a program
     # rename the window with tmux's own escape (allow-rename).
+    # Modified keys such as Shift-Tab reach the client only with extended keys on: with tmux's default
+    # (off) they are lost after the first presses (#1016). The baseline file carries these too, but a
+    # file written before they were added, or none, leaves them off, so the server is told here.
+    for args in (("-s", "extended-keys", "always"), ("-as", "terminal-features", "xterm*:extkeys")):
+        done = _tmux(tmux, env, "set-option", *args)
+        if done.returncode != 0:
+            # tmux before 3.2 has no extended-keys: Shift-Tab then depends on the terminal.
+            print(f"⚠️ MACF: session unit: this tmux refused {args[1]} "
+                  f"({(done.stderr or done.stdout).strip()[:120]}); Shift-Tab may be lost after a few presses",
+                  file=sys.stderr)
     card = window_title(agent)
     for option in (("set-titles", "on"), ("set-titles-string", card), ("allow-set-title", "off"),
                    ("automatic-rename", "off"), ("allow-rename", "off")):

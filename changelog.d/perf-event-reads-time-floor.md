@@ -1,0 +1,3 @@
+### Changed
+
+- **A hook's budget reads cost a third of what they did on a long log** (`agent_events_log.py`, `budget.py`, #881). The budget's readers ask for a few events of one type within eight days, five or six times per hook call, and the shared read parsed every line in that window to answer them: 1.35 s per tool call on a seat with a 772 MB log. `read_events` takes a time floor, `since=`, and a reverse read stops at the first line older than it, judged by the line's leading timestamp before any parse. The shared window now keeps raw lines, reads each line's leading time and event name once, and parses only the lines a reader's `only=` asks for, each at most once. The budget's `_recent` passes both, and the same three reads take 0.42 s with the same answers.

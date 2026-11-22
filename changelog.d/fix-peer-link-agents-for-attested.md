@@ -1,0 +1,3 @@
+### Fixed
+
+- **A peer link declares its peer's agents, so a signed peer message can read attested** (`peer_links.<domain>.agents`, `Broker.sender_card`, MIS-0004 R63, amail policy 2.1.2): the receiving broker judges a signature against the registry key of the card its sender's address names, and takes that card from the peer's declared agents; a rung-2 peer link declared none, so every message over it read unverified whatever it carried, which the first end-to-end test between two brokers showed. The link now declares the address local part to the calling card for each of the peer's agents; with the card named, a message signed with the registry's key reads attested and one signed with another key does not.
