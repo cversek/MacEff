@@ -194,11 +194,10 @@ def _flow(t0, t1, model="claude-sonnet-4", tokens=1e6):
 
 
 def test_a_fit_needs_min_rows_rows_with_metered_tokens():
-    flows = [_flow(0, 2.5 * HOUR)]  # covers the first three crossings only
-    two = usage_ticks.fit_joint(_chain(3), flows, 0.1, usage_ticks.MODEL_PRIORS)
-    assert two is None  # two rows, below MIN_ROWS
-    enough = usage_ticks.fit_joint(_chain(7), [_flow(0, 7 * HOUR)], 0.1, usage_ticks.MODEL_PRIORS)
-    assert enough is not None and enough.ticks == 6
+    five = usage_ticks.fit_joint(_chain(6), [_flow(0, 6 * HOUR)], 0.1, usage_ticks.MODEL_PRIORS)
+    assert five is None  # five rows, below MIN_ROWS though above the coefficient count
+    six = usage_ticks.fit_joint(_chain(7), [_flow(0, 7 * HOUR)], 0.1, usage_ticks.MODEL_PRIORS)
+    assert six is not None and six.ticks == 6
 
 
 def test_a_fit_with_most_rows_unmetered_is_refused():
@@ -255,10 +254,11 @@ def test_a_crossing_too_wide_or_spanning_several_levels_is_dropped_and_noted():
 
 
 def test_a_fit_needs_more_rows_than_coefficients():
-    # one model: scale, one deviation and drift make three coefficients; four metered rows is one short of the margin
-    flows = [_flow(0, 5 * HOUR)]
-    assert usage_ticks.fit_joint(_chain(5), flows, 0.1, usage_ticks.MODEL_PRIORS) is None
-    assert usage_ticks.fit_joint(_chain(6), [_flow(0, 6 * HOUR)], 0.1, usage_ticks.MODEL_PRIORS) is not None
+    # three models make five coefficients, so six rows are one short of the margin
+    def flows(n):
+        return [_flow(0, n * HOUR, model=m) for m in ("claude-sonnet-4", "claude-opus-4", "claude-haiku-4")]
+    assert usage_ticks.fit_joint(_chain(7), flows(7), 0.1, usage_ticks.MODEL_PRIORS) is None
+    assert usage_ticks.fit_joint(_chain(8), flows(8), 0.1, usage_ticks.MODEL_PRIORS) is not None
 
 
 def test_a_scoped_fit_with_no_metered_tokens_is_refused_not_a_zero_rate():

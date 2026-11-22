@@ -53,7 +53,7 @@ from macf.agent_events_log import read_events
 
 NARROW_S = 1800.0
 MAX_BRACKET_S = 6 * 3600.0
-MIN_ROWS = 3
+MIN_ROWS = 6
 MIN_METERED_FRACTION = 0.5  # of the rows, those with metered tokens in them
 COEF_MARGIN = 2  # rows a fit needs beyond its number of coefficients
 RIDGE = 0.3
