@@ -116,6 +116,12 @@ def card_for_home(agent_home: Path) -> str:
         raise DeclarationRefused(str(e)) from e
 
 
+def placeholder_context(agent_home: Path, card: str, base: Path) -> dict:
+    """What the daemon fills a declaration's placeholders with at start (MIS-0002-R13): one value
+    for each name ``interface.PLACEHOLDERS`` admits, ``python`` being this daemon's interpreter."""
+    return {"agent_home": str(agent_home), "card": card, "runtime_dir": str(base), "python": sys.executable}
+
+
 class Daemon:
     """One agent's primal daemon: ``start``, then ``serve`` until ``stop``."""
 
@@ -137,7 +143,7 @@ class Daemon:
         self.channel_path = channel_socket(self.card, self.base)
         check_socket_path(self.control_path)
         check_socket_path(self.channel_path)
-        placeholders = {"agent_home": str(self.home), "card": self.card, "runtime_dir": str(self.base)}
+        placeholders = placeholder_context(self.home, self.card, self.base)
         cutover_declaration(self.home, self.card)    # once, before the old form is refused (R165)
         # Every daemon's stream is its own broker (MIS-0002 R150 to R156): a declaration that names
         # none gets the daemon's own, with its own authority, and a broker unit when none is declared.
