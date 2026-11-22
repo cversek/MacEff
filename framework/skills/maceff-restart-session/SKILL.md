@@ -1,54 +1,50 @@
 ---
 name: maceff-restart-session
-description: Trigger a session resume by restarting the current session via the auto-restart supervisor. The process restarts; the conversation continues. Use when user requests a session resume, restart, session refresh, or reload of settings/permissions (also recognizes the deprecated term "μC").
+description: Restart the agent's own Claude Code session so it reloads what loads at start (settings, permissions, channels, plugins); the conversation continues. Use when the operator asks for a session restart, resume, refresh, or a reload of settings or permissions (also recognizes the deprecated term "μC").
 ---
 
-# Restart Session via Auto-Restart Supervisor
+Restart the agent's own session the way the persistent layer says, whatever runs it.
 
-Trigger a graceful session restart. The auto-restart supervisor catches the exit and relaunches with `claude -c`, preserving the session.
+---
 
-## Prerequisite
+## Policy Engagement Protocol
 
-Session must be running under `macf_tools auto-restart` supervisor.
-
-## Steps
-
-1. **Verify supervisor is running**:
 ```bash
-macf_tools auto-restart list
-```
-If no supervisor is running, inform the user:
-> No auto-restart supervisor detected. Start one with:
-> `macf_tools auto-restart launch --name <NAME> -- <your claude command>`
-
-2. **Get supervisor PID** from the list output (first column of running entry)
-
-3. **Send restart signal**:
-```bash
-macf_tools auto-restart restart <PID>
+macf_tools policy navigate persistent_layer
+macf_tools policy read persistent_layer --section <CEP_MATCH>
+macf_tools policy navigate capability_boundaries
+macf_tools policy read capability_boundaries --section <CEP_MATCH>
 ```
 
-4. **Notify Telegram** (if channel available) that a session resume was triggered
+`<CEP_MATCH>` is the section whose navigation questions ask how a session is restarted (persistent_layer) and when
+`inject exit` refuses (capability_boundaries). For a session that is not its daemon's unit, `agent_harness` says what
+supervises it.
 
-## What Happens
+---
 
-- Supervisor sends SIGINT to the current CC process (graceful exit)
-- Countdown runs (default 5s) in the supervisor terminal
-- CC relaunches with same command + args via `claude -c`
-- SessionStart hook fires on resume
-- Cycle number does NOT increment (a session resume is not a compaction)
-- Session ID remains the same (CC resume)
+## Questions to Extract from Policy Reading
 
-## What a Session Resume Is NOT
+1. **What runs this session** - How do I tell whether my session is its daemon's unit, and what confirms it?
+2. **My own restart** - How does an agent restart its own session, and who starts it again?
+3. **Refusals** - When does that act refuse or stop short, and what does it report instead of an exit?
+4. **The operator's route** - How does the operator restart the session, and what happens if I use that route for my
+   own session?
+5. **No supervisor** - What restarts a session that is not its daemon's unit, and what do I tell the operator when
+   nothing does?
+6. **After** - Is a restart a resume or a compaction, and what recovery does it call for?
 
-A session resume is **not** a context loss. The conversation continues via
-`claude -c` — the process restarted, the context did not. This is a rejoin, not a
-rebirth.
+---
 
-So no recovery ritual applies: do not re-read consciousness artifacts, do not
-re-orient the work stack, and do not report to the user as though returning from a
-mind-wipe. Pick up where you left off.
+## Execution
 
-The orientation rituals belong to the events that actually destroy context —
-compaction, a cleared session, or work resumed from an earlier cycle — not to a
-process that restarted underneath a continuous conversation.
+1. Answer question 1 from `macf_tools env` and the session's own start line, not from memory.
+2. Restart by the route the answers give; act on a refusal as it says, never by typing into a dialog.
+3. If a channel is attached and the operator is away, tell them a restart was asked and why.
+4. Afterwards, carry on as question 6 answers.
+
+---
+
+## Critical Meta-Pattern
+
+**Policy as API**: how a session restarts, what refuses and who starts it again live in the persistent layer and
+capability boundaries policies; this skill asks for them.
