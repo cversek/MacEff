@@ -1,0 +1,3 @@
+### Added
+
+- **Voice claims across one login's agents** (MIS-0008 R26, for per-agent capture units before the shared unit of R46). Each agent's own capture unit claims its keys and wake phrase in a registry in the daemon runtime directory (`voice-claims.json`) before it listens; a key or phrase another live agent already holds refuses the start with R26's message. A claim is bound to its unit's process start time, so it lapses when the unit dies even if the pid is later reused, and a stopping unit releases its own claim. An unreadable registry refuses the start and names the file. The runtime directory is per account, so this covers every agent on a host only where they share one login, as on a Mac (`macf.voice.capture.claims`).

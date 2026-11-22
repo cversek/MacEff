@@ -149,6 +149,9 @@ def build(home: Path):
     if unit_name and unit_name != voice.capture_unit:
         raise RuntimeError(f"this unit is {unit_name!r}, but the voice section names "
                          f"{voice.capture_unit!r} as its capture unit")
+    # another agent's own unit under this login may already answer a key or phrase this one declares (R26)
+    from macf.voice.capture import claims, disclaim
+    claims.HostClaims().claim(card, voice, pid=disclaim.unit_pid() or os.getpid())
     from macf.voice.capture import platform
     here = platform.backends(voice.trigger_devices)
     detector = None
@@ -286,6 +289,12 @@ def main(argv=None) -> int:
         if heartbeat is not None:
             heartbeat.stop()
         unit.shutdown()
+        from macf.voice.capture import claims, disclaim
+        try:
+            claims.HostClaims().release(card, pid=disclaim.unit_pid() or os.getpid())
+        except (OSError, claims.ClaimsUnreadable) as e:
+            print(f"⚠️ MACF: voice: the capture unit's claim on its keys wasn't released "
+                  f"(it lapses when this process is gone): {e}", file=sys.stderr)
     return 0
 
 
