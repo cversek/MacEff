@@ -371,6 +371,12 @@ that fixes it, and the stations that depend on it don't run. The remote stations
 request, which a listener answers only to a declared peer, with nothing secret in the reply; a peer
 whose build has no ping is reported as an older build, not as a failure.
 
+`macf_tools amail status` lists the agent's mail setup piece by piece, each read where the client and the
+broker read it, and each missing piece with the command that supplies it: the address, the signing key,
+signing every message, the agent's key in the registry, how the broker is supervised (a declared unit, a
+launchd job of its own, or launched by an agent), the listener as a declared crossing, and each peer link
+with the mail waiting for it and refused by it.
+
 ### 2.2 Local delivery is an optimization, not a special case
 
 Rung 1 exists because same-host delivery is faster, more private, and cannot fail

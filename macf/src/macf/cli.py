@@ -11775,6 +11775,21 @@ def cmd_amail_read(args: argparse.Namespace) -> int:
     return 0
 
 
+def _amail_setup_pieces(cfg: dict) -> list:
+    """The setup pieces `amail status` lists (amail/readiness.py), or none when they can't be read."""
+    try:
+        from macf.agent_stack import pd_unit_installed
+        from macf.amail import host_daemon, readiness
+        from macf.amail.registry import Registry, registry_path
+    except ImportError as e:
+        print(f"⚠️ MACF: setup pieces unavailable (not listed): {e}", file=sys.stderr)
+        return []
+    launch_agents = Path.home() / "Library" / "LaunchAgents"
+    return readiness.pieces(cfg, registry=Registry(registry_path()), daemon_installed=pd_unit_installed,
+                            interim_jobs=lambda: host_daemon.interim_jobs(launch_agents)
+                            if sys.platform == "darwin" else [])
+
+
 def cmd_amail_status(args: argparse.Namespace) -> int:
     """Report whether amail is usable, and say precisely what is missing if not."""
     import socket as _socket
@@ -11847,6 +11862,13 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
         # inbox with three refusals must be distinguishable states.
         "broker_counts": counts,
     }
+    setup = _amail_setup_pieces(cfg)
+    info["setup"] = [{"name": p.name, "ok": p.ok, "detail": p.detail, "fix": p.fix} for p in setup]
+    # The supervision piece reads how the broker is actually run; the autostart flag only says an
+    # agent may start one, so where the piece knows, the broker line says what it found.
+    supervision = next((p for p in setup if p.name == "broker supervision"), None)
+    if supervision is not None:
+        info["broker_kind"] = supervision.detail
     if args.json:
         print(json.dumps(info, indent=2))
         return 0 if reachable else 1
@@ -11882,6 +11904,13 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
     if counts is not None and counts["quarantined"]:
         print(f"⚠️  {counts['quarantined']} message(s) in quarantine — refused "
               f"with reasons attached; the operator can list them broker-side.")
+    if setup:
+        print("setup:")
+        marks = {True: "✅", False: "❌", None: "➖"}
+        for p in setup:
+            print(f"  {marks[p.ok]} {p.name}: {p.detail}")
+            if p.fix and p.ok is not True:
+                print(f"       fix: {p.fix}")
     if not reachable:
         print("\n   Without the broker: sending is impossible (no fallback")
         print("   transport by design — the broker enforces the contact list),")
