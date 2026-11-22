@@ -224,3 +224,37 @@ def test_a_selection_line_under_a_question_is_not_taken_for_the_box():
     plain = [RULE, f"❯{NB}draft", RULE, RULE, "Do you want to proceed?", "❯ 1. Yes", "  2. No", RULE]
     box = wake._locate_box(plain, [i for i, line in enumerate(plain) if line == RULE])
     assert (box.top, box.bottom, box.rows) == (0, 2, [1])
+
+
+def _rules(plain):
+    return [i for i, line in enumerate(plain) if line == RULE]
+
+
+def test_a_line_that_begins_with_a_no_break_space_before_the_prompt_is_a_prompt():
+    from macf.pd import wake
+    assert wake._is_prompt(f"{NB}❯{NB}text")
+
+
+def test_the_fallback_prompt_glyph_is_found():
+    from macf.pd import wake
+    plain = [RULE, "> draft", RULE]
+    box = wake._locate_box(plain, _rules(plain))
+    assert (box.top, box.bottom, box.rows) == (0, 2, [1])
+
+
+def test_a_prompt_with_a_rule_only_below_is_no_box():
+    from macf.pd import wake
+    plain = ["❯ draft", RULE]
+    assert wake._locate_box(plain, _rules(plain)) is None
+
+
+def test_a_prompt_with_a_rule_only_above_is_no_box():
+    from macf.pd import wake
+    plain = [RULE, "❯ draft"]
+    assert wake._locate_box(plain, _rules(plain)) is None
+
+
+def test_blank_lines_inside_the_box_are_not_rows():
+    from macf.pd import wake
+    plain = [RULE, f"❯{NB}first", "", "  second", RULE]
+    assert wake._locate_box(plain, _rules(plain)).rows == [1, 3]
