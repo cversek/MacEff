@@ -65,6 +65,10 @@ def add_pd_parser(sub) -> None:
                       "exit 0 ok, 1 expiring or expired, 2 unknown (#884)")
     login.add_argument("--json", action="store_true", help="print the verdict as JSON")
     login.set_defaults(func=cmd_pd_login)
+    report = pd_sub.add_parser(
+        "report", help="the report a declared report time wakes the session with: today, the login line "
+                       "(#1027; persistent_layer)")
+    report.set_defaults(func=cmd_pd_report)
     entry = pd_sub.add_parser(
         "entry", help="your own timed entries, made from your live session (policy: persistent_layer)")
     entry_sub = entry.add_subparsers(dest="entry_cmd")
@@ -190,6 +194,41 @@ def cmd_pd_login(args: argparse.Namespace) -> int:
     else:
         print(f"login: {verdict['state']}, {verdict['detail']}")
     return {"ok": 0, "expiring": 1, "expired": 1}.get(str(verdict["state"]), 2)
+
+
+def cmd_pd_report(args: argparse.Namespace) -> int:
+    """The report a declared report time runs (#1027): what it prints is what the session is woken
+    with. Today that is the login line, from the reporter's own stored credential. Exit 0 once it has
+    printed; a declaration that can't be read is the one failure, said on stderr."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from macf.pd import core, login
+    home, card = _this_agent()
+    try:
+        declaration = core.load_declaration(home, card)
+    except Exception as e:  # noqa: BLE001 - said, and the run's exit records it
+        print(f"⚠️ MACF: pd report: the declaration can't be read, so there is no report: {e}", file=sys.stderr)
+        return 1
+    reports = declaration.reports
+    reporter = reports.reporter if reports and reports.reporter else card
+    if reporter != card:
+        # Agents on one account share one login, so one of them reports it and the rest say who.
+        print(f"login: reported by {reporter}")
+        return 0
+    verdict = login.read_assessment(expiring_s=login.warn_seconds(declaration))
+    state, detail, ends = verdict.get("state"), verdict.get("detail"), verdict.get("refresh_expires_at")
+    reach = f"(macf_tools harness attach --card {card})"
+    if state == "ok" and isinstance(ends, (int, float)):
+        when = datetime.fromtimestamp(ends, ZoneInfo(declaration.timezone or "UTC"))
+        print(f"login: good until {when.strftime('%a %Y-%m-%d')}")
+    elif state == "expiring":
+        print(f"login: {detail}: run /login in the session before then {reach}")
+    elif state == "expired":
+        print(f"login: {detail}: run /login in the session {reach}")
+    else:
+        print(f"login: can't be judged: {detail}")
+    return 0
 
 
 def cmd_pd_alive(args: argparse.Namespace) -> int:
