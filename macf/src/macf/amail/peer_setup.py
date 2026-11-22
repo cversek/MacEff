@@ -9,12 +9,20 @@ The card is read from the operator's own files, through the same loader the brok
 cannot describe a broker the files don't declare. The registry is root's to write; the card prints
 the line its operator runs and never runs it.
 """
+import copy
+import difflib
 import json
+import os
 import pwd
+import re
+import shutil
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
+
+import yaml
 
 #: The card's format version. A reader refuses one it does not know rather than guessing.
 CARD_VERSION = 1
@@ -202,3 +210,251 @@ def describe(card: Dict) -> List[str]:
     lines.append("")
     lines.append(render_card(card))
     return lines
+
+
+# ---- adding a peer from its card -------------------------------------------------------------------
+#
+# The operator's files are edited as text, one entry at a time, so their comments and every line the
+# change does not own survive. Each edit is then held to two checks before it is shown: parsed, the new
+# text must equal the old data with exactly the intended change made, and the pair of candidate files
+# must load through the broker's own loader. An edit that can't meet the first is refused with the
+# entry to write by hand, never approximated.
+
+_PLAIN_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _yaml_key(key: str) -> str:
+    return key if _PLAIN_KEY.fullmatch(key) else json.dumps(key)
+
+
+def _flow(value) -> str:
+    return yaml.safe_dump(value, default_flow_style=True, sort_keys=False, width=10 ** 6).strip()
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _is_content(line: str) -> bool:
+    s = line.strip()
+    return bool(s) and not s.startswith("#")
+
+
+def _block(lines: List[str], start: int) -> int:
+    """The index one past the block that the key on *start* opens: every following line that is blank,
+    a comment, or indented deeper than it."""
+    base = _indent(lines[start])
+    end = start + 1
+    last = start + 1
+    while end < len(lines):
+        if _is_content(lines[end]):
+            if _indent(lines[end]) <= base:
+                break
+            last = end + 1
+        end += 1
+    return last
+
+
+def _key_line(lines: List[str], key: str, indent: int, lo: int, hi: int, *, fold: bool = False) -> Optional[int]:
+    pattern = re.compile(r"^ {%d}[\"']?%s[\"']?\s*:" % (indent, re.escape(key)), re.IGNORECASE if fold else 0)
+    for i in range(lo, hi):
+        if pattern.match(lines[i]):
+            return i
+    return None
+
+
+def _child_indent(lines: List[str], lo: int, hi: int, default: int) -> int:
+    for i in range(lo, hi):
+        if _is_content(lines[i]):
+            return _indent(lines[i])
+    return default
+
+
+def _hand(entry: str, where: str) -> CardError:
+    return CardError(f"{where} is written in a shape this command can't change one line at a time; "
+                     f"write this by hand, then run the command again to check it:\n  {entry}")
+
+
+def set_mapping_entry(text: str, top: str, key: str, value) -> str:
+    """*text* with ``top.key`` set to *value* on one line, every other line untouched."""
+    lines = text.splitlines(True)
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    entry = f"{_yaml_key(key)}: {_flow(value)}\n"
+    at = _key_line(lines, top, 0, 0, len(lines))
+    if at is None:
+        return "".join(lines) + f"{top}:\n  {entry}"
+    inline = lines[at].split(":", 1)[1].split("#", 1)[0].strip()
+    if inline:
+        if yaml.safe_load(inline) not in ({}, None):
+            raise _hand(f"{top}: {{{entry.strip()}}}", f"{top}")
+        lines[at] = f"{top}:\n"
+        lines.insert(at + 1, f"  {entry}")
+        return "".join(lines)
+    end = _block(lines, at)
+    ind = _child_indent(lines, at + 1, end, 2)
+    found = _key_line(lines, key, ind, at + 1, end, fold=True)    # a domain is one peer whatever its case
+    if found is not None:
+        lines[found:_block(lines, found)] = [" " * ind + entry]
+    else:
+        lines.insert(end, " " * ind + entry)
+    return "".join(lines)
+
+
+def add_list_item(text: str, path: List[str], item) -> str:
+    """*text* with *item* appended to the block list at the mapping *path*, every other line untouched."""
+    lines = text.splitlines(True)
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    lo, hi, ind = 0, len(lines), 0
+    for depth, key in enumerate(path):
+        at = _key_line(lines, key, ind, lo, hi)
+        where = ".".join(path[:depth + 1])
+        if at is None:
+            if depth != len(path) - 1:
+                raise _hand(f"{where}: ...", where)
+            ins = hi
+            while ins > lo and not _is_content(lines[ins - 1]):
+                ins -= 1
+            lines[ins:ins] = [" " * ind + f"{key}:\n", " " * (ind + 2) + f"- {_flow(item)}\n"]
+            return "".join(lines)
+        inline = lines[at].split(":", 1)[1].split("#", 1)[0].strip()
+        if depth == len(path) - 1:
+            if inline:
+                if yaml.safe_load(inline) not in ([], None):
+                    raise _hand(f"- {_flow(item)}", where)
+                lines[at] = " " * ind + f"{key}:\n"
+                lines.insert(at + 1, " " * (ind + 2) + f"- {_flow(item)}\n")
+                return "".join(lines)
+            end = _block(lines, at)
+            item_ind = _child_indent(lines, at + 1, end, ind + 2)
+            lines.insert(end, " " * item_ind + f"- {_flow(item)}\n")
+            return "".join(lines)
+        if inline:
+            raise _hand(f"{where}: ...", where)
+        lo, hi = at + 1, _block(lines, at)
+        ind = _child_indent(lines, lo, hi, ind + 2)
+    return "".join(lines)
+
+
+@dataclass
+class AddPlan:
+    """The two files' current and new texts, and the operator's root steps, for one card."""
+    broker_path: Path
+    broker_now: str
+    broker_new: str
+    addressing_path: Path
+    addressing_now: str
+    addressing_new: str
+    registry_lines: List[str]
+
+    @property
+    def changed(self) -> bool:
+        return self.broker_new != self.broker_now or self.addressing_new != self.addressing_now
+
+    def diff(self) -> str:
+        out = []
+        for path, now, new in ((self.broker_path, self.broker_now, self.broker_new),
+                               (self.addressing_path, self.addressing_now, self.addressing_new)):
+            out.extend(difflib.unified_diff(now.splitlines(True), new.splitlines(True),
+                                            fromfile=f"{path} (now)", tofile=f"{path} (after)"))
+        return "".join(out)
+
+    def write(self, backup_suffix: Optional[str] = None) -> List[Path]:
+        """Write each changed file beside itself and rename it into place, keeping its mode; with
+        *backup_suffix*, the old text is kept beside it first. Returns the files written."""
+        written = []
+        for path, now, new in ((self.broker_path, self.broker_now, self.broker_new),
+                               (self.addressing_path, self.addressing_now, self.addressing_new)):
+            if new == now:
+                continue
+            if path.read_text() != now:
+                raise CardError(f"{path} changed since the plan was made; run the command again")
+            if backup_suffix:
+                shutil.copy2(path, path.with_name(path.name + backup_suffix))
+            beside = path.with_name(f".{path.name}.new")
+            beside.write_text(new)
+            shutil.copymode(path, beside)
+            os.replace(beside, path)
+            written.append(path)
+        return written
+
+
+def _expect(now_text: str, new_text: str, change, where: Path) -> None:
+    """Refuse *new_text* unless, parsed, it is *now_text* parsed with exactly *change* made."""
+    expected = copy.deepcopy(yaml.safe_load(now_text) or {})
+    change(expected)
+    if yaml.safe_load(new_text) != expected:
+        raise CardError(f"the edit to {where} would change more than the entry it means to; "
+                        f"nothing was written. Write the entry by hand.")
+
+
+def plan_add(broker_config: Path, card: Dict, *, local_agents: Iterable[str], note: str = "") -> AddPlan:
+    """What adding the peer on *card* would make of the operator's broker config and addressing file:
+    its peer link with its agents map, and a contact for each of *local_agents*. Checked through the
+    broker's own loader on the candidate files before it is returned; nothing is written."""
+    from pydantic import ValidationError
+
+    from macf.amail.deploy_config import BrokerDeployConfig, ConfigError
+    card = parse_card(render_card(card))
+    broker_config = Path(broker_config)
+    deploy, addressing = _load(broker_config)
+    addressing_path = Path(deploy.addressing_path)
+    dom = card["domain"].strip().lower()
+    declared = (yaml.safe_load(broker_config.read_text()) or {}).get("peer_links") or {}
+    existing = next((v for k, v in declared.items() if str(k).strip().lower() == dom), None) or {}
+    link = {"host": card["host"], "port": card["port"]}
+    note = note or existing.get("note", "")         # the operator's note survives a new card
+    if note:
+        link["note"] = note
+    link["agents"] = {box: held["card"] for box, held in sorted(card["agents"].items())}
+
+    broker_now = broker_config.read_text()
+    broker_new = broker_now if existing == link else set_mapping_entry(broker_now, "peer_links", dom, link)
+    def _link(d):
+        if not d.get("peer_links"):
+            d["peer_links"] = {}
+        for k in [k for k in d["peer_links"] if str(k).strip().lower() == dom]:
+            del d["peer_links"][k]
+        d["peer_links"][dom] = link
+    if broker_new != broker_now:
+        _expect(broker_now, broker_new, _link, broker_config)
+
+    addressing_now = addressing_path.read_text()
+    addressing_new = addressing_now
+    wanted = []
+    for name in local_agents:
+        if name not in addressing.agents:
+            raise CardError(f"{name} is not an agent in {addressing_path}")
+        have = {(c.get("address") if isinstance(c, dict) else c) for c in addressing.agents[name].contacts}
+        for box in sorted(card["agents"]):
+            address = f"{box}@{card['domain']}"
+            if address not in have:
+                entry = {"address": address, "direction": "both"}
+                addressing_new = add_list_item(addressing_new, ["agents", name, "contacts"], entry)
+                wanted.append((name, entry))
+
+    def _contacts(d):
+        for name, entry in wanted:
+            agent = d["agents"][name]
+            agent["contacts"] = (agent.get("contacts") or []) + [entry]
+    _expect(addressing_now, addressing_new, _contacts, addressing_path)
+
+    with tempfile.TemporaryDirectory(prefix="amail-peer-add.") as tmp:
+        cand_addressing = Path(tmp) / "addressing.yaml"
+        cand_addressing.write_text(addressing_new)
+        raw = yaml.safe_load(broker_new)
+        raw["addressing_path"] = str(cand_addressing)
+        try:
+            BrokerDeployConfig.model_validate(raw).to_broker_config()
+        except (ConfigError, ValidationError, ValueError) as e:
+            raise CardError(f"with this card the broker would not start: {e}") from e
+
+    return AddPlan(broker_config, broker_now, broker_new, addressing_path, addressing_now, addressing_new,
+                   registry_lines(card))
+
+
+def registry_lines(card: Dict) -> List[str]:
+    """The registry declarations the receiving operator runs, with the fingerprints to confirm and the
+    order to run them in (``registry_steps``)."""
+    return registry_steps(card)

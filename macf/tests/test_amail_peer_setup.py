@@ -109,9 +109,207 @@ def test_the_operators_steps_are_printed_never_run(tmp_path):
     assert "one at a time" in text and "amail peer add" in text
 
 
+# ---- phase 2: peer add ---------------------------------------------------------------------------
+
+B_DOM = "beta.test"
+
+BROKER_WITH_COMMENTS = """\
+# operator's broker config, comments kept
+addressing_path: {addressing}
+peer_listen: {{host: 100.64.0.7, port: 8030}}   # tailnet only
+rate_limit_per_agent: 30
+"""
+
+
+def _beta_card(tmp_path, key=None):
+    """The card a peer broker at beta.test would send: one agent, sparrow."""
+    return {"amail_peer_card": peer_setup.CARD_VERSION, "domain": B_DOM, "host": "100.64.0.9", "port": 8030,
+            "agents": {"sparrow": {"card": "Sparrow_6a7b8c", "key": key, "account": "sparrow"}}}
+
+
+def _alpha(tmp_path):
+    path = _files(tmp_path)
+    path.write_text(BROKER_WITH_COMMENTS.format(addressing=tmp_path / "addressing.yaml"))
+    addressing = tmp_path / "addressing.yaml"
+    addressing.write_text("# who exists here\n" + addressing.read_text())
+    return path, addressing
+
+
+def test_adding_a_peer_writes_the_link_and_contacts_and_keeps_every_other_line(tmp_path):
+    """The link with its agents map, and a contact for each local agent named, and nothing else: the
+    operator's comments and every line the change does not own read the same after."""
+    broker, addressing = _alpha(tmp_path)
+    before_b, before_a = broker.read_text(), addressing.read_text()
+    plan = peer_setup.plan_add(broker, _beta_card(tmp_path), local_agents=["ira"])
+    plan.write()
+    after_b, after_a = broker.read_text(), addressing.read_text()
+    for line in before_b.splitlines():
+        assert line in after_b.splitlines()
+    for line in before_a.splitlines():
+        assert line in after_a.splitlines()
+    from macf.amail.deploy_config import BrokerDeployConfig, load_declarative_config
+    cfg = BrokerDeployConfig.model_validate(load_declarative_config(broker)).to_broker_config()
+    assert cfg.peer_links[B_DOM].agents == {"sparrow": "Sparrow_6a7b8c"}
+    assert (cfg.peer_links[B_DOM].host, cfg.peer_links[B_DOM].port) == ("100.64.0.9", 8030)
+    contacts = yaml.safe_load(after_a)["agents"]
+    assert {"address": f"sparrow@{B_DOM}", "direction": "both"} in contacts["ira"]["contacts"]
+    assert not contacts["bez"]["contacts"], "only the agents named get the contact"
+
+
+def test_adding_the_same_card_twice_changes_nothing(tmp_path):
+    broker, addressing = _alpha(tmp_path)
+    peer_setup.plan_add(broker, _beta_card(tmp_path), local_agents=["ira"]).write()
+    texts = broker.read_text(), addressing.read_text()
+    again = peer_setup.plan_add(broker, _beta_card(tmp_path), local_agents=["ira"])
+    assert not again.changed
+    assert (broker.read_text(), addressing.read_text()) == texts
+
+
+def test_a_card_for_our_own_domain_or_a_shared_one_is_refused_before_anything_is_written(tmp_path):
+    """The declaration's own rules, met through the loader on the candidate files: nothing is shown
+    that the broker would refuse to start on."""
+    broker, addressing = _alpha(tmp_path)
+    before = broker.read_text(), addressing.read_text()
+    own = {**_beta_card(tmp_path), "domain": A_DOM}
+    with pytest.raises(peer_setup.CardError, match="own domain"):
+        peer_setup.plan_add(broker, own, local_agents=["ira"])
+    assert (broker.read_text(), addressing.read_text()) == before
+
+
+def test_a_change_the_text_edit_cannot_make_exactly_is_refused_not_approximated(tmp_path):
+    """peer_links written inline with entries can't be edited line by line without touching lines the
+    change doesn't own, so the add is refused with the entry to write by hand."""
+    broker, _ = _alpha(tmp_path)
+    broker.write_text(broker.read_text() + "peer_links: {gamma.test: {host: 100.64.0.10, port: 8030}}\n")
+    with pytest.raises(peer_setup.CardError, match="by hand"):
+        peer_setup.plan_add(broker, _beta_card(tmp_path), local_agents=["ira"])
+
+
+def test_a_new_card_for_a_declared_peer_replaces_its_link(tmp_path):
+    """A peer that moved or added an agent sends a new card; its one link is replaced, not doubled."""
+    broker, _ = _alpha(tmp_path)
+    peer_setup.plan_add(broker, _beta_card(tmp_path), local_agents=["ira"], note="beta's broker").write()
+    moved = {**_beta_card(tmp_path), "host": "100.64.0.11"}
+    peer_setup.plan_add(broker, moved, local_agents=["ira"]).write()
+    links = yaml.safe_load(broker.read_text())["peer_links"]
+    assert list(links) == [B_DOM] and links[B_DOM]["host"] == "100.64.0.11"
+    assert links[B_DOM]["note"] == "beta's broker", "the operator's note survives a new card"
+    assert broker.read_text().count(B_DOM) == 1, "one line for the peer, replaced in place"
+
+
+def test_a_plan_refuses_to_write_over_a_file_that_changed_and_names_an_unknown_agent(tmp_path):
+    broker, _ = _alpha(tmp_path)
+    with pytest.raises(peer_setup.CardError, match="nobody"):
+        peer_setup.plan_add(broker, _beta_card(tmp_path), local_agents=["nobody"])
+    plan = peer_setup.plan_add(broker, _beta_card(tmp_path), local_agents=["ira"])
+    broker.write_text(broker.read_text() + "# the operator edited it meanwhile\n")
+    with pytest.raises(peer_setup.CardError, match="changed since"):
+        plan.write()
+    assert B_DOM not in broker.read_text()
+
+
+def test_the_text_edit_refuses_an_inline_map_it_cannot_extend_one_line_at_a_time():
+    with pytest.raises(peer_setup.CardError, match="by hand"):
+        peer_setup.set_mapping_entry("peer_links: {gamma.test: {host: 100.64.0.10, port: 8030}}\n",
+                                     "peer_links", B_DOM, {"host": "100.64.0.9", "port": 8030})
+
+
+def test_an_edit_that_changes_more_than_its_one_entry_is_refused(tmp_path):
+    """The second check on every edit: parsed, the new text is the old data with exactly the intended
+    change made, or nothing is shown."""
+    from pathlib import Path
+    with pytest.raises(peer_setup.CardError, match="more than"):
+        peer_setup._expect("a: 1\nb: 2\n", "a: 1\nb: 3\nc: 4\n", lambda d: d.__setitem__("c", 4), Path("x"))
+
+
+def _free_port():
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def _deployment_on_disk(tmp_path, name, domain, agent, card, port):
+    """A whole host deployment as an operator writes it: broker config and addressing file, every
+    store under tmp_path/<name>, the listener declared on loopback at *port*."""
+    root = tmp_path / name
+    (root / "handoff" / agent).mkdir(parents=True)
+    (root / "home" / agent).mkdir(parents=True)
+    addressing = root / "addressing.yaml"
+    addressing.write_text(yaml.safe_dump({"domain": domain, "tier": "host", "supervision": "operator-at-terminal",
+                                          "agents": {agent: {"uid": os.getuid(), "home": str(root / "home" / agent),
+                                                             "shared_uid": True, "card": card, "contacts": []}}}))
+    broker = root / "broker_config.yaml"
+    broker.write_text(yaml.safe_dump({
+        "addressing_path": str(addressing), "audit_path": str(root / "audit.jsonl"),
+        "socket_path": str(root / "broker.sock"), "inbound_quarantine": str(root / "quarantine"),
+        "inbound_handoff": str(root / "handoff"), "dispositions_dir": str(root / "dispositions"),
+        "ledger_dir": str(root / "ledger"), "rate_limit_dir": None,
+        "peer_listen": {"host": "127.0.0.1", "port": port}}))
+    return broker
+
+
+def test_two_brokers_set_up_from_each_others_cards_exchange_mail_both_ways(tmp_path):
+    """The whole setup with nothing typed by hand: each broker's card, added on the other, and the
+    brokers built from the resulting files by the loader they run on, pass a message each way."""
+    from macf.amail.broker import Broker
+    from macf.amail.deploy_config import BrokerDeployConfig, load_declarative_config
+    from macf.amail.models import Message
+    from macf.amail.peer_link import PeerListener
+    a_port, b_port = _free_port(), _free_port()
+    alpha_cfg = _deployment_on_disk(tmp_path, "alpha", A_DOM, "ira", "Ira_0a1b2c", a_port)
+    beta_cfg = _deployment_on_disk(tmp_path, "beta", B_DOM, "sparrow", "Sparrow_6a7b8c", b_port)
+    alpha_card = peer_setup.build_card(alpha_cfg, agents=["ira"])
+    beta_card = peer_setup.build_card(beta_cfg, agents=["sparrow"])
+    peer_setup.plan_add(alpha_cfg, beta_card, local_agents=["ira"]).write()
+    peer_setup.plan_add(beta_cfg, alpha_card, local_agents=["sparrow"]).write()
+
+    def _broker(path):
+        return Broker(BrokerDeployConfig.model_validate(load_declarative_config(path)).to_broker_config())
+    alpha, beta = _broker(alpha_cfg), _broker(beta_cfg)
+    on_alpha = PeerListener(alpha, host="127.0.0.1", port=a_port).start()
+    on_beta = PeerListener(beta, host="127.0.0.1", port=b_port).start()
+    try:
+        assert alpha.submit("ira", Message(sender=f"ira@{A_DOM}", to=[f"sparrow@{B_DOM}"], subject="s",
+                                           body="from alpha"))["ok"]
+        assert beta.submit("sparrow", Message(sender=f"sparrow@{B_DOM}", to=[f"ira@{A_DOM}"], subject="s",
+                                              body="from beta"))["ok"]
+        beta.sweep_shared()
+        alpha.sweep_shared()
+        assert len(list((tmp_path / "beta" / "handoff" / "sparrow").glob("*.amsg"))) == 1
+        assert len(list((tmp_path / "alpha" / "handoff" / "ira").glob("*.amsg"))) == 1
+    finally:
+        on_alpha.stop()
+        on_beta.stop()
+
+
 def test_an_agent_with_no_calling_card_is_refused(tmp_path):
     """A peer judges an agent's signatures by its card (MIS-0004 R44), so an agent with none can't be on
     a card at all: refused, naming the missing card."""
     agents = {"ira": {"uid": os.getuid(), "home": str(tmp_path / "ira"), "shared_uid": True, "contacts": []}}
     with pytest.raises(peer_setup.CardError, match="no calling card"):
         peer_setup.build_card(_files(tmp_path, agents=agents), agents=["ira"], registry=_registry(tmp_path, {}))
+
+
+def test_a_peer_declared_by_hand_in_another_case_is_replaced_not_doubled(tmp_path):
+    """CTB's review of #1100: a link written by hand as `Beta.Test` is the same peer as `beta.test`. A new
+    card replaces it (one link, not two that the loader folds by file order), and an unchanged card is
+    already declared."""
+    broker, _ = _alpha(tmp_path)
+    broker.write_text(broker.read_text() + "peer_links:\n  Beta.Test: {host: 100.64.0.9, port: 8030, agents: {sparrow: "
+                      "Sparrow_6a7b8c}}\n")
+    assert not peer_setup.plan_add(broker, _beta_card(tmp_path), local_agents=[]).changed
+    peer_setup.plan_add(broker, {**_beta_card(tmp_path), "host": "100.64.0.11"}, local_agents=[]).write()
+    links = yaml.safe_load(broker.read_text())["peer_links"]
+    assert list(links) == [B_DOM] and links[B_DOM]["host"] == "100.64.0.11"
+
+
+def test_a_write_keeps_the_old_file_beside_the_new_one_and_its_mode(tmp_path):
+    broker, addressing = _alpha(tmp_path)
+    os.chmod(broker, 0o640)
+    before = broker.read_text()
+    written = peer_setup.plan_add(broker, _beta_card(tmp_path), local_agents=["ira"]).write(backup_suffix=".bak-x")
+    assert broker in written and broker.with_name(broker.name + ".bak-x").read_text() == before
+    assert (broker.stat().st_mode & 0o777) == 0o640

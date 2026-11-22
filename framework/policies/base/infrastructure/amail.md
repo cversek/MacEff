@@ -352,6 +352,16 @@ root step); it carries no secret and changes nothing. A key on a card is a claim
 operators compare its fingerprint on another channel. A broker with no `peer_listen` has
 no card, since no peer can reach it.
 
+`macf_tools amail peer add <card>` declares a peer from its card: the link, with its agents map, in
+`peer_links`, and a contact for each local agent named (`--for`, default the agent running it). It
+edits the operator's two files one entry at a time, so their comments and every other line are kept,
+and refuses any edit whose parsed result is not the old data with exactly that entry changed. The
+candidate files are loaded by the broker's own loader before the change is shown, so a card the broker
+would refuse (its own domain, a domain already shared, a public address) is refused before anything is
+written. It writes on a yes, keeps each old file beside the new one, and writes nothing when the peer is
+already declared as the card says. A link's note survives a new card. The registry stays root's: it
+prints the declarations and runs none.
+
 ### 2.2 Local delivery is an optimization, not a special case
 
 Rung 1 exists because same-host delivery is faster, more private, and cannot fail
