@@ -913,6 +913,20 @@ def test_a_plan_without_an_allowlist_probe_or_a_channel_list_adds_no_check(tmp_p
                                        runtime=RUNTIME)) is None
 
 
-def test_the_hosts_probes_read_the_managed_allowlist(tmp_path):
+def test_the_hosts_probes_read_the_managed_allowlist(tmp_path, monkeypatch):
+    """The host's reader returns what the managed settings say: a set when one is set, None when none is."""
+    from macf.pd import allowlist
     from macf.pd.cutover import host_probes
-    assert host_probes(tmp_path, CARD).channel_allowlist is not None
+    monkeypatch.setattr(allowlist, "managed_allowlist", lambda *a, **k: {("maceff-channel", "maceff")})
+    assert host_probes(tmp_path, CARD).channel_allowlist() == {("maceff-channel", "maceff")}
+    monkeypatch.setattr(allowlist, "managed_allowlist", lambda *a, **k: None)
+    assert host_probes(tmp_path, CARD).channel_allowlist() is None
+
+
+def test_an_unreadable_staged_declaration_gives_no_allowlist_check_and_no_error(tmp_path):
+    """_staged_check says why the file can't be read; the allowlist note must not raise over it."""
+    _stage(tmp_path)
+    staged_path(tmp_path).write_text("{ this is not json")
+    plan = build_plan(tmp_path, CARD, AGENT, _probes(channel_allowlist=lambda: None), runtime=RUNTIME)
+    assert _allowlist_check(plan) is None
+    assert any(c.name == "staged declaration" and not c.ok for c in plan.checks)
