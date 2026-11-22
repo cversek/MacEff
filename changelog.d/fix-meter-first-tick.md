@@ -1,0 +1,3 @@
+### Fixed
+
+- **The usage meter's first tick on a long-lived seat** (`usage_meter`, `usage_share`): the cause lookup now stops at the transcript's `metering_since` and answers `unknown` when nothing newer exists, instead of reading a stale `scope_gate_held` from before metering began as `gate`. The first tick no longer writes one baseline event per finished subagent transcript (243 on one seat); it writes a single `usage_meter_skipped` event holding the end of each, and a skipped file that later grows is metered from that end. The hook line's `me X%/h` now ends with ` part` when metering is under an hour old or the hour holds fewer than three calls, since the figure is then a sample, not a rate.
