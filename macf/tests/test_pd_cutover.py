@@ -866,3 +866,53 @@ def test_the_armed_unit_carries_the_acceptance_into_the_plan_it_rebuilds(tmp_pat
     plain = arm_argv(AGENT, tmp_path, tmp_path / "s", tmp_path / "log", "python3", environ={})
     accepted = arm_argv(AGENT, tmp_path, tmp_path / "s", tmp_path / "log", "python3", environ={}, accept_no_linger=True)
     assert "--accept-no-linger" not in plain and accepted[-1] == "--accept-no-linger"
+
+
+def _allowlist_check(plan):
+    return next((c for c in plan.checks if c.name == "channel allowlist"), None)
+
+
+def _stage_channels(home, *channels):
+    """The staged declaration, listing these (plugin, marketplace) channels as the deployment's allowlist."""
+    from macf.pd.interface import ChannelPlugin
+    path = _stage(home)
+    declaration = Declaration.model_validate_json(path.read_text())
+    path.write_text(declaration.model_copy(update={"allowlisted_channels": [
+        ChannelPlugin(plugin=p, marketplace=m) for p, m in channels]}).model_dump_json())
+
+
+def test_a_channel_the_client_will_not_load_without_an_allowlist_is_named_by_the_plan(tmp_path):
+    """The session unit starts with --channels, and with no organization allowlist the client refuses a
+    plugin outside its default marketplaces: silently, so the daemon falls back to keystroke wakes (#860).
+    The plan says so before the move; it does not hold the move, because the managed settings are the
+    host operator's and the session works without a channel."""
+    _stage_channels(tmp_path, ("maceff-channel", "maceff"))
+    plan = build_plan(tmp_path, CARD, AGENT, _probes(channel_allowlist=lambda: None), runtime=RUNTIME)
+    check = _allowlist_check(plan)
+    assert check is not None and check.ok and plan.ready
+    assert "allowedChannelPlugins" in check.detail and "maceff-channel" in check.detail
+    assert "channel allowlist" in format_plan(plan)
+
+
+def test_the_plan_says_nothing_about_the_allowlist_when_the_client_will_load_every_channel(tmp_path):
+    from macf.pd.allowlist import DEFAULT_ADMITTED_MARKETPLACES
+    default = sorted(DEFAULT_ADMITTED_MARKETPLACES)[0]
+    _stage_channels(tmp_path, ("maceff-channel", default))     # a default marketplace: admitted without a list
+    assert _allowlist_check(build_plan(tmp_path, CARD, AGENT, _probes(channel_allowlist=lambda: None),
+                                       runtime=RUNTIME)) is None
+    _stage_channels(tmp_path, ("maceff-channel", "maceff"))     # an allowlist is set: `findings` compares it
+    assert _allowlist_check(build_plan(tmp_path, CARD, AGENT, _probes(channel_allowlist=lambda: {("x", "y")}),
+                                       runtime=RUNTIME)) is None
+
+
+def test_a_plan_without_an_allowlist_probe_or_a_channel_list_adds_no_check(tmp_path):
+    _stage_channels(tmp_path, ("maceff-channel", "maceff"))
+    assert _allowlist_check(build_plan(tmp_path, CARD, AGENT, _probes(), runtime=RUNTIME)) is None
+    _stage(tmp_path)    # a declaration listing no channels
+    assert _allowlist_check(build_plan(tmp_path, CARD, AGENT, _probes(channel_allowlist=lambda: None),
+                                       runtime=RUNTIME)) is None
+
+
+def test_the_hosts_probes_read_the_managed_allowlist(tmp_path):
+    from macf.pd.cutover import host_probes
+    assert host_probes(tmp_path, CARD).channel_allowlist is not None
