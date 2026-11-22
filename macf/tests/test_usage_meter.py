@@ -382,3 +382,50 @@ def test_hook_guards_for_the_meter_and_the_turn_cause(tmp_path):
             patch.object(ups, "detect_auto_mode", return_value=(False, "test")):
         ups.run(json.dumps({"session_id": "sid", "prompt": None}))
     assert any(c[0][0].kind == "turn_cause_failed" for c in warn.call_args_list)
+
+
+def _count_reads():
+    """Wrap read_events to count the usage_metered events a tick pulls and the walks it starts."""
+    from macf import agent_events_log as ael
+    real = ael.read_events
+    stats = {"walks": 0, "events": 0}
+
+    def counting(*a, **kw):
+        counted = kw.get("only") == um.EVENT
+        stats["walks"] += counted
+        for ev in real(*a, **kw):
+            stats["events"] += counted
+            yield ev
+    return patch.object(ael, "read_events", counting), stats
+
+
+def test_quiet_files_are_not_looked_up_and_a_grown_one_still_is(tmp_path):
+    t = tmp_path / "s.jsonl"
+    _write(t, _line("m0"))
+    sub = tmp_path / "sid" / "subagents"
+    sub.mkdir(parents=True)
+    quiet = [sub / f"q{i}.jsonl" for i in range(3)]
+    for q in quiet:
+        _write(q, _line(q.stem))
+        os.utime(q, (T0, T0))                    # untouched since long before any tick
+    grows = sub / "grows.jsonl"
+    _write(grows, _line("g0"))
+    os.utime(grows, (T0, T0))
+    um.meter_tick("sid", str(t))                 # baselines all five files
+    assert len(_metered()) == 5
+    for i in range(500):
+        append_event("noise", {"i": i})
+    _write(t, _line("m1"))
+    um.meter_tick("sid", str(t))                 # main's latest event is now recent
+    # one call in main, none in the quiet files: only the main transcript is walked for
+    _write(t, _line("m2"))
+    ctx, stats = _count_reads()
+    with ctx:
+        assert um.meter_tick("sid", str(t)) == {"events": 1, "calls": 1}
+    assert stats == {"walks": 1, "events": 1}    # the walk stopped at main's own latest event
+    # a baselined subagent file that then grows is found at its baseline and read from there
+    _write(grows, _line("g1"), _line("g2"))
+    r = um.meter_tick("sid", str(t))
+    assert r == {"events": 1, "calls": 2}
+    assert [e["calls"] for e in _metered() if e["path"] == str(grows)] == [0, 2]
+    assert not [e for e in _metered() if e["path"] in map(str, quiet) and e["calls"]]

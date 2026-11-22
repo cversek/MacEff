@@ -174,6 +174,7 @@ class _Resume:
     offset: int = 0
     tail_id: Optional[str] = None
     metering_since: Optional[float] = None
+    at: Optional[float] = None
 
 
 _BASELINE_TAIL_BYTES = 64 * 1024
@@ -199,7 +200,7 @@ def _file_start(path: str) -> float:
         return 0.0
 
 
-def _resume_points(paths: List[str]) -> Dict[str, _Resume]:
+def _walk(paths: List[str]) -> Dict[str, _Resume]:
     """Each path's resume point from its latest ``usage_metered`` event, in one reverse walk.
 
     No event about a file is older than the file, so the walk stops once it passes the oldest
@@ -213,13 +214,48 @@ def _resume_points(paths: List[str]) -> Dict[str, _Resume]:
         p = d.get("path")
         if p in floors and p not in found:
             found[p] = _Resume(offset=int(d.get("new_offset") or 0), tail_id=d.get("tail_id"),
-                               metering_since=d.get("metering_since"))
+                               metering_since=d.get("metering_since"), at=ev.get("timestamp"))
         pending = [floors[q] for q in floors if q not in found]
         if not pending:
             break
         if ev.get("timestamp", 0) < min(pending):
             break
     return found
+
+
+@dataclass(frozen=True, kw_only=True)
+class _Lookup:
+    points: Dict[str, _Resume]
+    quiet: frozenset  # files not touched since their last tick: nothing to meter, nothing to look up
+
+
+def _resume_points(main: str, others: List[str]) -> _Lookup:
+    """Resume points for the main transcript and the subagent files.
+
+    The main transcript is found first; its latest event is recent. A tick scans every file, so
+    a file not modified since a minute before that event had nothing new at that tick or since:
+    it is quiet and costs one ``stat``. Only the files touched since are looked up. Without a
+    main event no file has one either (a tick baselines the main transcript first), so nothing
+    more is walked.
+    """
+    points = _walk([main])
+    if main not in points:
+        return _Lookup(points={}, quiet=frozenset())
+    last_tick = points[main].at or 0.0
+    busy, quiet = [], set()
+    for p in others:
+        try:
+            touched = os.stat(p).st_mtime
+        except OSError as e:
+            print(f"⚠️ MACF: usage meter: cannot stat {p}: {e}; looking it up anyway", file=sys.stderr)
+            touched = float("inf")
+        if touched > last_tick - _BOUND_SLACK_S:
+            busy.append(p)
+        else:
+            quiet.add(p)
+    if busy:
+        points.update(_walk(busy))
+    return _Lookup(points=points, quiet=frozenset(quiet))
 
 
 def _baseline(path: str) -> _Resume:
@@ -269,12 +305,15 @@ def meter_tick(session_id: str, transcript_path: str) -> Optional[dict]:
         sub_dir = main.parent / session_id / "subagents"
         files += [(p, "subagent") for p in sorted(glob.glob(str(sub_dir / "*.jsonl")))]
     live = [(p, c) for p, c in files if os.path.exists(p)]
-    resume = _resume_points([p for p, _ in live])
+    lookup = _resume_points(str(main), [p for p, _ in live if p != str(main)])
+    resume = lookup.points
     cause = None
     events = calls = 0
     main_point = resume.get(str(main))
     since = (main_point.metering_since if main_point else None) or time.time()
     for path, fixed_cause in live:
+        if path in lookup.quiet:
+            continue
         try:
             if path not in resume and (path == str(main) or _file_start(path) < since):
                 base = _baseline(path)
