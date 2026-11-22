@@ -106,7 +106,7 @@ def select_tab(tabs: List[dict], hosts: List[str], index: Optional[int] = None,
         for t in scoped:
             if t["index"] == index:
                 return t
-        raise Refused(f"tab {index} is not on a host in scope {hosts} (MIS-0009-R05)")
+        raise Refused(f"tab {index} is not on a host in scope {hosts} (MIS-0009-R05); leave out --tab to open a tab of your own")
     candidates = [t for t in scoped if t.get("ours")] if interact else (
         [t for t in scoped if t.get("ours")] or scoped)
     return candidates[0] if candidates else None

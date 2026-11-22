@@ -205,13 +205,12 @@ def draft(backend, args):
     """Compose and leave the message in Drafts. Fields are set by value with fill(); nothing is typed."""
     page = _page(backend)
     enforce(PLUGIN, "draft", page.url, None)
-    # A compose form already open in this tab is closed first: the client keeps it in Drafts, never refilled.
-    for _ in range(3):
-        open_form = page.get_by_role("button", name=OPEN_DRAFT_TAB)
-        if open_form.count() == 0:
-            break
-        open_form.first.click()
-        backend.settle(page)
+    # A compose form already open is never closed or refilled by the plugin: on 2026-11-21 closing one to start the
+    # next draft lost the earlier draft from Drafts. The operator closes it (and sees what the client does with it).
+    open_form = page.get_by_role("button", name=OPEN_DRAFT_TAB)
+    if open_form.count():
+        raise guard.Refused(f"a compose form is open ({open_form.first.inner_text()!r}); close it in the mail client "
+                            f"and check Drafts before the next draft")
     leave_search = page.get_by_role("button", name="Exit search", exact=True)
     if leave_search.count() == 1 and leave_search.is_visible():  # the search ribbon hides New mail
         backend.click(page, "button", "Exit search", exact=True)

@@ -43,6 +43,42 @@ def test_draft_left_in_drafts():
     assert outlook.DRAFT_SAVED_PATTERN.search("Draft saved at 10:42 AM")
 
 
+class _Locator:
+    def __init__(self, page, name):
+        self.page, self.name = page, name
+        self.first = self
+
+    def count(self):
+        return 1 if self.name is outlook.OPEN_DRAFT_TAB else 0
+
+    def inner_text(self):
+        return "Editing Re: Workbook Close"
+
+    def click(self, *a, **k):
+        self.page.clicks.append(self.name)
+
+
+class _Page:
+    url = outlook.HOME_URL
+
+    def __init__(self):
+        self.clicks = []
+
+    def get_by_role(self, role, name=None, **k):
+        return _Locator(self, name)
+
+
+def test_draft_refuses_while_a_compose_form_is_open(monkeypatch):
+    """Closing an open compose form lost a draft from Drafts on 2026-11-21; the plugin now refuses and touches nothing."""
+    page = _Page()
+    monkeypatch.setattr(outlook, "_page", lambda backend: page)
+    monkeypatch.setattr(outlook, "enforce", lambda *a: None)
+    with pytest.raises(guard.Refused) as e:
+        outlook.draft(object(), object())
+    assert "compose form is open" in str(e.value) and "Re: Workbook" in str(e.value)
+    assert page.clicks == []
+
+
 def test_missing_control_named():
     nodes = [{"role": "button", "name": "New mail"}]
     assert outlook.find_control(nodes, "button", "New mail")
