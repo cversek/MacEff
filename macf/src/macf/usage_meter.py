@@ -181,23 +181,41 @@ _BASELINE_TAIL_BYTES = 64 * 1024
 _BOUND_SLACK_S = 60.0
 
 
+_START_SCAN_LINES = 50
+_START_SCAN_BYTES = 256 * 1024
+
+
 def _file_start(path: str) -> float:
-    """When a file began: its first line's timestamp, else its mtime."""
+    """When a file began: the first timestamp among its opening lines, else its birth time, else 0.
+
+    Never its mtime: a transcript being written has an mtime of now, so a floor taken from it
+    finds none of the file's own events, and every tick would baseline it again. A transcript
+    can open with records that carry no timestamp (a file-history snapshot), so several lines
+    are tried. 0 means "unknown", which costs one unbounded walk and is never wrong.
+    """
     from datetime import datetime
     try:
         with open(path, "rb") as f:
-            first = f.readline()
-        stamp = json.loads(first).get("timestamp") if first.strip() else None
-        if stamp:
-            return datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
-    except (OSError, ValueError, AttributeError) as e:
-        print(f"⚠️ MACF: usage meter: no usable first-line timestamp in {path} ({e}); using its mtime",
-              file=sys.stderr)
+            head = f.read(_START_SCAN_BYTES)
+    except OSError as e:
+        print(f"⚠️ MACF: usage meter: cannot read {path}: {e}; reading the whole log for it", file=sys.stderr)
+        return 0.0
+    for raw in head.split(b"\n")[:_START_SCAN_LINES]:
+        if b'"timestamp"' not in raw:
+            continue
+        try:
+            stamp = json.loads(raw).get("timestamp")
+            if stamp:
+                return datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
+        except (ValueError, AttributeError) as e:
+            print(f"⚠️ MACF: usage meter: an unreadable opening line in {path} ({e}); trying the next",
+                  file=sys.stderr)
     try:
-        return os.stat(path).st_mtime
+        born = getattr(os.stat(path), "st_birthtime", None)
     except OSError as e:
         print(f"⚠️ MACF: usage meter: cannot stat {path}: {e}; reading the whole log for it", file=sys.stderr)
-        return 0.0
+        born = None
+    return float(born) if born else 0.0
 
 
 def _walk(paths: List[str]) -> Dict[str, _Resume]:

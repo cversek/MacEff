@@ -243,7 +243,7 @@ def test_the_newest_event_for_a_file_wins(tmp_path):
 @pytest.mark.parametrize("first_line_ts,event_at,found", [
     ("2026-11-22T10:00:00Z", T0 - 30, True),    # within the minute of slack before the file began
     ("2026-11-22T10:00:00Z", T0 - 200, False),  # older than the file can be: the walk stops short of it
-    (None, T0 - 30, True),                       # no first-line timestamp: the file's mtime stands in
+    (None, T0 - 30, True),                       # no first-line timestamp: the next line's stands in
 ])
 def test_the_lookup_floor_is_the_files_start_less_a_minute(tmp_path, first_line_ts, event_at, found):
     t = tmp_path / "s.jsonl"
@@ -255,6 +255,46 @@ def test_the_lookup_floor_is_the_files_start_less_a_minute(tmp_path, first_line_
     r = um.meter_tick("sid", str(t))
     assert r == ({"events": 1, "calls": 1} if found else {"events": 1, "calls": 0})
     assert bool(_metered()[-1].get("baseline")) is (not found)
+
+
+def test_a_transcript_opening_without_a_timestamp_is_resumed_not_rebaselined(tmp_path):
+    """A live transcript can open with a record that has no timestamp (a file-history snapshot),
+    and its mtime is always now. A floor taken from the mtime finds none of its events, so every
+    tick baselined it again and its calls were never counted."""
+    t = tmp_path / "s.jsonl"
+    _write(t, json.dumps({"type": "file-history-snapshot", "snapshot": {}}) + "\n", _line("a", ts="2026-11-22T10:00:00Z"))
+    assert um.meter_tick("sid", str(t)) == {"events": 1, "calls": 0}   # first sight: baseline
+    _write(t, _line("b", ts="2026-11-22T10:05:00Z"))
+    future = time.time() + 3600
+    os.utime(t, (future, future))                                      # being written: mtime is now or later
+    assert um.meter_tick("sid", str(t)) == {"events": 1, "calls": 1}   # resumed, b counted
+    assert not _metered()[-1].get("baseline")
+
+
+def test_a_file_with_no_timestamp_and_no_birth_time_walks_the_whole_log(tmp_path, monkeypatch):
+    t = tmp_path / "s.jsonl"
+    _write(t, json.dumps({"type": "file-history-snapshot"}))
+    real = os.stat
+    monkeypatch.setattr(um.os, "stat", lambda p, *a, **k: type("S", (), {"st_size": real(p).st_size, "st_mtime": time.time()})())
+    assert um._file_start(str(t)) == 0.0
+
+
+def test_the_start_is_the_first_timestamp_among_the_opening_lines(tmp_path):
+    """Three opening records without a timestamp, then one with: that one is the start, not the
+    birth time (a fresh tmp file's birth time is now, which would pass a looser test)."""
+    t = tmp_path / "s.jsonl"
+    snap = json.dumps({"type": "file-history-snapshot"}) + "\n"
+    _write(t, snap, snap, snap, _line("a", ts="2025-01-02T03:04:05Z"))
+    assert um._file_start(str(t)) == datetime(2025, 1, 2, 3, 4, 5, tzinfo=timezone.utc).timestamp()
+
+
+def test_with_no_timestamp_the_birth_time_is_the_start(tmp_path, monkeypatch):
+    t = tmp_path / "s.jsonl"
+    _write(t, json.dumps({"type": "file-history-snapshot"}))
+    real = os.stat
+    monkeypatch.setattr(um.os, "stat", lambda p, *a, **k: type("S", (), {
+        "st_size": real(p).st_size, "st_mtime": time.time(), "st_birthtime": 1700000000.0})())
+    assert um._file_start(str(t)) == 1700000000.0
 
 
 def test_metering_since_is_read_back_and_copied_forward(tmp_path):
