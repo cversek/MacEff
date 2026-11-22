@@ -19,11 +19,15 @@ from macf.utils.paths import find_maceff_root, find_project_root, find_agent_hom
 
 @pytest.fixture(autouse=True)
 def clear_path_caches():
-    """Clear LRU caches before each test."""
+    """Clear LRU caches before each test, and after it: a root cached under a test's temporary
+    environment would otherwise be read by whatever test runs next in the same worker."""
     find_maceff_root.cache_clear()
     find_project_root.cache_clear()
     find_agent_home.cache_clear()
     yield
+    find_maceff_root.cache_clear()
+    find_project_root.cache_clear()
+    find_agent_home.cache_clear()
 
 
 class TestFindMaceffRoot:

@@ -11701,14 +11701,18 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
     # filesystem is the access path to the agent's store; the socket only
     # ever reaches the broker's.
     from macf.amail import store
-    from macf.amail.client import ingest, list_delivered_internet
+    from macf.amail.client import BoxClaimed, IngestBusy, ingest, list_delivered_internet
     box = Path(cfg["handoff"]) / (cfg.get("agent") or "")
     if cfg.get("agent") and box.is_dir():
         # The contacts path lets ingest verify signatures with the keys
         # THIS recipient holds — a filesystem read, so it still works
         # with the broker stopped, which R4 requires.
-        ingested = ingest(home, box, contacts_path=cfg.get("contacts"),
-                          agent=cfg.get("agent") or "", domain=cfg.get("domain") or "")
+        try:
+            ingested = ingest(home, box, contacts_path=cfg.get("contacts"),
+                              agent=cfg.get("agent") or "", domain=cfg.get("domain") or "")
+        except (BoxClaimed, IngestBusy) as e:     # another store's box, or its claim mid-write (#872)
+            print(f"⚠️ MACF: amail: nothing ingested: {e}", file=sys.stderr)
+            ingested = []
         ok = sum(1 for r in ingested if r.get("ingested"))
         # An entry another ingest took (the primal daemon's receiver) is in the store, not stuck.
         stuck = [r for r in ingested if not r.get("ingested") and not r.get("taken")]

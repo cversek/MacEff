@@ -1,0 +1,3 @@
+### Fixed
+
+- **A test of the path finders no longer leaves its temporary MacEff root cached for the next test in the same worker** (`macf/tests/test_paths.py`): the fixture cleared the three `lru_cache`d finders before each test and not after it, so the last of its tests left a root under a deleted temporary directory, and the next test in that xdist worker that read the base manifest warned "Failed to load base manifest" and got nothing. On the macOS job `test_task_start_surfaces_a_declared_policy_once_a_cycle` failed that way whenever a change shifted which tests shared a worker. The fixture clears the caches after each test too.

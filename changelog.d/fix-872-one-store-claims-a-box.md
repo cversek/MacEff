@@ -1,0 +1,3 @@
+### Fixed
+
+- **One store ingests a pickup box** (GH#872, amail policy 2.3): a settings file copied into a second agent's home made two stores ingest one box, splitting an agent's mail between them with nothing said. The first ingest claims the box for its store (`.ingest.claim`, holding its resolved home, written whole and linked into place, or created exclusively where the filesystem has no hard links; an empty claim holds the pass, and one empty for over a minute is refused by name); an ingest from any other store is refused, naming both homes. The primal daemon's receiver raises its access notice and keeps re-checking slowly without reading the box as fixed; `amail list` says so instead of ingesting.
