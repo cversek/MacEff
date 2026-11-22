@@ -84,6 +84,80 @@ def test_the_operators_steps_retire_the_interim_job_before_installing_the_daemon
     assert p.steps[1] == f"MACEFF_AGENT_HOME_DIR={cfg.parent.resolve()} macf_tools pd install"
 
 
+# ---- the agent init mail step ----------------------------------------------------------------------------
+
+def _mail_home(tmp_path, monkeypatch, *, card_json=None):
+    """An agent home with a mail address whose broker config is on disk, and an init context for it."""
+    from macf import agent_stack
+    from macf.cli import _build_parser
+    cfg = _broker_config(tmp_path)
+    home = tmp_path / "ira"
+    (home / ".maceff").mkdir(parents=True)
+    (home / ".maceff" / "amail.json").write_text(json.dumps(
+        {"agent": "ira", "domain": "alpha.test", "broker_config": str(cfg)}))
+    os.chmod(home / ".maceff" / "amail.json", 0o600)
+    monkeypatch.delenv("MACF_AMAIL_SIGNING_KEY", raising=False)
+    monkeypatch.setattr(agent_stack, "pd_unit_installed", lambda card, home: False)
+    flags = ["agent", "init", "-y"] + (["--peer", card_json] if card_json else [])
+
+    def ctx(plan=False):
+        return agent_stack.Context(home=home, login_home=tmp_path / "login", in_container=False,
+                                   args=_build_parser().parse_args(flags + (["--plan"] if plan else [])),
+                                   dry_run=plan)
+    from types import SimpleNamespace
+    return SimpleNamespace(home=home, cfg=cfg, ctx=ctx)
+
+
+def test_the_mail_step_makes_the_key_declares_signing_and_writes_the_brokers_daemon(tmp_path, monkeypatch):
+    """One step: the key made, signing every message declared (the file's mode kept), the broker
+    daemon's files written, and the operator's install printed, since the daemon isn't installed yet."""
+    from macf import agent_stack
+    m = _mail_home(tmp_path, monkeypatch)
+    home, cfg, ctx = m.home, m.cfg, m.ctx
+    r = agent_stack.step_mail(ctx())
+    assert r.status == agent_stack.PLANNED, r
+    assert agent_stack.signing_key_path(home).exists()
+    conf = home / ".maceff" / "amail.json"
+    assert json.loads(conf.read_text())["signing_required"] is True and (conf.stat().st_mode & 0o777) == 0o600
+    assert agent_card(cfg.parent.resolve()) == host_daemon.card_for("alpha.test")
+    assert f"MACEFF_AGENT_HOME_DIR={cfg.parent.resolve()} macf_tools pd install" in r.detail
+
+
+def test_the_mail_step_under_plan_changes_nothing_and_once_installed_reads_already_done(tmp_path, monkeypatch):
+    from macf import agent_stack
+    m = _mail_home(tmp_path, monkeypatch)
+    home, cfg, ctx = m.home, m.cfg, m.ctx
+    conf = home / ".maceff" / "amail.json"
+    before = sorted(p.name for p in tmp_path.rglob("*")), conf.read_text()
+    assert agent_stack.step_mail(ctx(plan=True)).status == agent_stack.WOULD
+    assert (sorted(p.name for p in tmp_path.rglob("*")), conf.read_text()) == before
+    agent_stack.step_mail(ctx())
+    monkeypatch.setattr(agent_stack, "pd_unit_installed", lambda card, home: True)
+    assert agent_stack.step_mail(ctx()).status == agent_stack.ALREADY
+
+
+def test_the_mail_step_declares_a_peer_from_its_card_and_prints_its_registry_line(tmp_path, monkeypatch):
+    from macf import agent_stack
+    from macf.amail.crypto import generate_keypair
+    key = generate_keypair(tmp_path / "keys" / "sparrow")
+    card = json.dumps({"amail_peer_card": 1, "domain": "beta.test", "host": "100.64.0.9", "port": 8030,
+                       "agents": {"sparrow": {"card": "Sparrow_6a7b8c", "key": key, "account": "sparrow"}}})
+    m = _mail_home(tmp_path, monkeypatch, card_json=card)
+    home, cfg, ctx = m.home, m.cfg, m.ctx
+    r = agent_stack.step_mail(ctx())
+    assert yaml.safe_load(cfg.read_text())["peer_links"]["beta.test"]["agents"] == {"sparrow": "Sparrow_6a7b8c"}
+    assert f"registry declare --card Sparrow_6a7b8c --key {key}" in r.detail
+
+
+def test_an_agent_with_no_address_is_skipped_by_the_mail_step(tmp_path, monkeypatch):
+    from macf import agent_stack
+    m = _mail_home(tmp_path, monkeypatch)
+    home, cfg, ctx = m.home, m.cfg, m.ctx
+    (home / ".maceff" / "amail.json").unlink()
+    r = agent_stack.step_mail(ctx())
+    assert r.status == agent_stack.SKIPPED and not agent_stack.signing_key_path(home).exists()
+
+
 def test_a_broker_already_a_unit_of_an_agents_own_daemon_gets_no_second_daemon(tmp_path):
     """THM's review of #1102: a host set up by hand may run the broker as a unit of an agent's own primal
     daemon. A second daemon for it would contend for its socket and listener, so the plan refuses,
@@ -103,6 +177,19 @@ def test_a_broker_already_a_unit_of_an_agents_own_daemon_gets_no_second_daemon(t
     assert (found.card, found.unit) == ("Ira_0a1b2c", "amail-broker")
 
 
+def test_the_mail_step_leaves_a_broker_already_declared_in_an_agents_daemon_alone(tmp_path, monkeypatch):
+    from macf import agent_stack
+    m = _mail_home(tmp_path, monkeypatch)
+    home, cfg, ctx = m.home, m.cfg, m.ctx
+    (home / ".maceff" / "pd").mkdir(parents=True)
+    (home / ".maceff" / "pd" / "declaration.json").write_text(json.dumps({"version": 1, "agent": "Ira_0a1b2c", "units": [
+        {"name": "amail-broker", "command": [sys.executable, "-m", "macf.amail.daemons.broker"],
+         "environment": {"AMAIL_BROKER_CONFIG": str(cfg)}}]}))
+    r = agent_stack.step_mail(ctx())
+    assert r.status == agent_stack.DONE and "already unit 'amail-broker'" in r.detail, r
+    assert not (cfg.parent / ".maceff").exists() and "pd install" not in r.detail
+
+
 def test_a_broker_declared_for_another_config_is_not_this_one(tmp_path):
     """CTB's review: the check is for THIS config's broker. A daemon running a broker on another
     config (a second domain on the same host) doesn't stop this one getting its own daemon."""
@@ -114,3 +201,26 @@ def test_a_broker_declared_for_another_config_is_not_this_one(tmp_path):
          "environment": {"AMAIL_BROKER_CONFIG": str(tmp_path / "other" / "broker_config.yaml")}}]}))
     assert host_daemon.declared_broker(cfg, [home]) is None
     assert _plan(cfg).files
+
+
+def test_the_mail_step_in_a_container_changes_nothing(tmp_path, monkeypatch):
+    """CTB's review: in a container the start step owns mail, so the step makes no key and writes no
+    host broker daemon."""
+    from macf import agent_stack
+    m = _mail_home(tmp_path, monkeypatch)
+    ctx = m.ctx()
+    ctx.in_container = True
+    r = agent_stack.step_mail(ctx)
+    assert r.status == agent_stack.SKIPPED and not agent_stack.signing_key_path(m.home).exists()
+    assert not (m.cfg.parent / ".maceff").exists()
+
+
+def test_a_peer_with_no_broker_named_is_refused(tmp_path, monkeypatch):
+    from macf import agent_stack
+    card = json.dumps({"amail_peer_card": 1, "domain": "beta.test", "host": "100.64.0.9", "port": 8030,
+                       "agents": {"sparrow": {"card": "Sparrow_6a7b8c", "key": None, "account": "sparrow"}}})
+    m = _mail_home(tmp_path, monkeypatch, card_json=card)
+    conf = m.home / ".maceff" / "amail.json"
+    conf.write_text(json.dumps({"agent": "ira", "domain": "alpha.test"}))
+    r = agent_stack.step_mail(m.ctx())
+    assert r.status == agent_stack.REFUSED and "names no broker_config" in r.detail
