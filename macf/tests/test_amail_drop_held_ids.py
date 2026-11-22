@@ -48,7 +48,7 @@ def test_a_copy_of_a_message_already_held_is_dropped_and_recorded(box, home, m):
     [again] = client.ingest(home, box, agent="a")
     assert again["duplicate"] and not again["ingested"]
     assert len(_held_copies(home, m.message_id)) == 1
-    assert not list(box.iterdir())                # the copy left the box
+    assert not [p for p in box.iterdir() if p.name != ".ingest.claim"]   # the copy left the box (the store's claim stays, #872)
     [sidecar] = store.bundle_sidecars_for(home).glob("*.json")
     assert json.loads(sidecar.read_text())["duplicates_dropped"][0]["entry"] == "2-again.amsg"
 
