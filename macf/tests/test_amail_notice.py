@@ -487,3 +487,23 @@ def test_the_core_names_the_session_waiting_and_its_transcript(tmp_path):
     assert core.session_transcript(claude_home=home) == folder / "bbbb.jsonl"
     sess.state = "waiting_on_a_person"
     assert core.session_waiting_on() == "a person"
+
+
+def test_the_inbox_lists_unread_mail_newest_first_one_line_each_with_the_mark_list_shows(home, box, monkeypatch,
+                                                                                        capsys):
+    """`amail inbox` is `amail list`'s unread view, compact: the same messages and the same trust
+    mark, newest first, one line each, and read mail counted, not shown."""
+    from macf import cli
+    old, new, seen = _msg("older one"), _msg("newer one"), _msg("already read")
+    old.date, new.date, seen.date = "2026-11-21T01:00:00+00:00", "2026-11-21T02:00:00+00:00", "2026-11-21T00:00:00+00:00"
+    for stem, m in (("1", old), ("2", new), ("3", seen)):
+        _put(box, stem, m)
+    client.ingest(home, box, agent="a")
+    store.mark_read(home, seen.message_id, "Reader_abc123")
+    monkeypatch.setattr(cli, "_amail_config", lambda: {"home": str(home), "handoff": "", "agent": ""})
+    cli.cmd_amail_list(cli._build_parser().parse_args(["amail", "inbox"]))
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+    stored = {m.subject: m for m in store.read_all(home)}
+    assert lines[0].startswith(cli._trust_badge(stored["newer one"])) and "newer one" in lines[0]
+    assert "older one" in lines[1] and "already read" not in "\n".join(lines)
+    assert lines[2] == "1 read, not shown (`amail list --all`)"
