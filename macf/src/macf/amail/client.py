@@ -318,8 +318,8 @@ def _claim_box(home: Path, pickup_box: Path) -> None:
     temp.write_text(str(Path(home).resolve()) + "\n", encoding="utf-8")
     try:
         os.link(temp, path)
-    except FileExistsError:
-        pass  # noqa: S110 - another first ingest won the race; the check below reads its claim
+    except FileExistsError:  # noqa: S110 - another first ingest won the race; the check below reads its claim
+        pass
     finally:
         temp.unlink(missing_ok=True)
     said = box_claim_conflict(home, pickup_box)
