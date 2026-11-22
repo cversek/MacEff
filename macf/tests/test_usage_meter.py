@@ -429,3 +429,29 @@ def test_quiet_files_are_not_looked_up_and_a_grown_one_still_is(tmp_path):
     assert r == {"events": 1, "calls": 2}
     assert [e["calls"] for e in _metered() if e["path"] == str(grows)] == [0, 2]
     assert not [e for e in _metered() if e["path"] in map(str, quiet) and e["calls"]]
+
+
+def test_busy_files_each_resume_from_their_newest_event(tmp_path):
+    t = tmp_path / "s.jsonl"
+    main_line = _line("m0")
+    _write(t, main_line)
+    sub = tmp_path / "sid" / "subagents"
+    sub.mkdir(parents=True)
+    paths, newest = {}, {}
+    # Their floors differ (the files began 1000 s apart) and every event of one file is older than the
+    # other's floor, so a walk bounded by the newest floor would lose the older file's events.
+    for name, first_ts, base in (("a", "2026-11-22T10:00:00Z", T0), ("b", "2026-11-22T10:16:40Z", T0 + 1000)):
+        lines = [_line(f"{name}{i}", ts=first_ts) for i in range(1, 4)]
+        p = sub / f"{name}.jsonl"
+        _write(p, *lines)
+        sizes = [len(x.encode()) for x in lines]
+        paths[name], newest[name] = p, sizes[0] + sizes[1]
+        common = {"path": str(p), "metering_since": T0 - 1000}
+        _emit_at(base + 10, um.EVENT, {**common, "new_offset": sizes[0], "tail_id": f"{name}1"})
+        _emit_at(base + 200, um.EVENT, {**common, "new_offset": newest[name], "tail_id": f"{name}2"})
+    # events are in time order: a-old, a-new, b-old, b-new; the main transcript's latest event is last
+    _emit_at(time.time(), um.EVENT, {"path": str(t), "new_offset": len(main_line.encode()), "tail_id": "m0",
+                                     "metering_since": T0 - 1000})
+    assert um.meter_tick("sid", str(t)) == {"events": 2, "calls": 2}
+    got = {os.path.basename(e["path"]): e["offset"] for e in _metered() if e.get("calls")}
+    assert got == {"a.jsonl": newest["a"], "b.jsonl": newest["b"]}
