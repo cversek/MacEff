@@ -623,6 +623,19 @@ def default_glossary(paths: list[Path]) -> Optional[Path]:
     return None
 
 
+#: A dated record line that is itself a revision or an amendment, as the Deliberation Records word them:
+#: "a revision at the repo owner's request", "the single revision", "revision", "an amendment",
+#: "amended in place by". A line that only mentions one ("every maintainer commented on the revision") isn't.
+REVISION_LINE = re.compile(r"^- (\d{4}-\d{2}-\d{2}): (?:(?:a|an|the|the single|the synthesis) )?"
+                           r"(?:revision|amendment)\b|^- (\d{4}-\d{2}-\d{2}): amended in place\b", re.I)
+
+
+def revision_dates(lines: list[str]) -> list[str]:
+    """The distinct dates an MIS was revised or amended, read from its own record lines (#1066)."""
+    found = {m.group(1) or m.group(2) for m in map(REVISION_LINE.match, lines) if m}
+    return sorted(found)
+
+
 def index(paths: Iterable[Path]) -> list[dict]:
     """The registry of MIS files: one row per file, read from its own header (#1066).
 
@@ -644,7 +657,8 @@ def index(paths: Iterable[Path]) -> list[dict]:
                      "type": fields.get("Type", ""), "secretary": fields.get("Secretary", ""),
                      "deliberation": fields.get("Deliberation", ""), "created": fields.get("Created", ""),
                      "updates": fields.get("Updates", ""), "lands_in": fields.get("Lands-in", ""),
-                     "resolution": fields.get("Resolution", "")[:160], "file": str(path)})
+                     "resolution": fields.get("Resolution", "")[:160], "revisions": revision_dates(lines),
+                     "file": str(path)})
     return sorted(rows, key=lambda r: (r["number"], r["file"]))
 
 
@@ -657,6 +671,9 @@ def format_index(rows: list[dict]) -> str:
             lines.append(f"{'':<19}deliberation: {r['deliberation']}")
         if r["lands_in"]:
             lines.append(f"{'':<19}lands in: {r['lands_in'][:140]}")
+        if r.get("revisions"):
+            n = len(r["revisions"])
+            lines.append(f"{'':<19}revised {n} time{'s' if n != 1 else ''}, last {r['revisions'][-1]}")
     return "\n".join(lines)
 
 

@@ -104,3 +104,31 @@ def test_the_default_index_makes_no_network_call_and_open_keeps_the_sections_apa
     assert cli.cmd_mis_index(argparse.Namespace(paths=[str(MIS_DIR)], json=True, open=True)) == 0
     both = json.loads(capsys.readouterr().out)
     assert {r["number"] for r in both["open"]} == {"0009"} and "0009" not in {r["number"] for r in both["landed"]}
+
+
+# ---- revisions: read from each file's own Deliberation Record, never stored -----------------------
+
+def test_each_row_lists_the_dates_its_mis_was_revised_or_amended():
+    by_number = {r["number"]: r for r in mis.index([MIS_DIR])}
+    assert {"2026-10-24", "2026-11-09"} <= set(by_number["0002"]["revisions"])
+    assert "2026-11-21" in by_number["0004"]["revisions"]
+    assert by_number["0001"]["revisions"] == ["2026-10-18"]      # "amended in place by MIS-0005"
+    assert all(r["revisions"] == sorted(set(r["revisions"])) for r in by_number.values())
+
+
+def test_a_line_that_only_mentions_a_revision_is_not_one(tmp_path):
+    path = tmp_path / "MIS-0042-example.md"
+    path.write_text("# MIS-0042: An example\n\n**Number**: 0042\n**Status**: Accepted\n\n---\n\n"
+                    "## 14 Deliberation Record\n\n"
+                    "- 2026-11-01: every maintainer commented on the revision.\n"
+                    "- 2026-11-02: a revision at the repo owner's request (MIS-0001-R52).\n"
+                    "- 2026-11-03: an amendment by MIS-0005.\n"
+                    "- 2026-11-04: R7 is passing, conformance, editorial.\n")
+    assert mis.index([path])[0]["revisions"] == ["2026-11-02", "2026-11-03"]
+
+
+def test_the_table_says_how_often_and_when_last_each_mis_was_revised(capsys):
+    import argparse
+    assert cli.cmd_mis_index(argparse.Namespace(paths=[str(MIS_DIR)], json=False, open=False)) == 0
+    out = capsys.readouterr().out
+    assert "revised" in out and "last 2026-11-21" in out
