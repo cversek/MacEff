@@ -8161,12 +8161,16 @@ def cmd_task_create_sprint(args: argparse.Namespace) -> int:
             no_auto_start=getattr(args, "no_auto_start", False),
         )
 
+        from .budget_digest import sprint_started
+        budget_line = sprint_started(result["task_id"])
         if getattr(args, "json", False):
             print(json.dumps(result, indent=2))
         else:
             print(f"✅ Created SPRINT task #{result['task_id']}")
             print(f"📄 Sprint log: {result['ca_path']}")
             print(f"📌 Scope ({len(result['scope'])} tasks): {result['scope']}")
+            if budget_line:
+                print(budget_line)
             if result["auto_start_completed"]:
                 print(f"🏃 Auto-started in SPRINT mode")
             elif not getattr(args, "no_auto_start", False):
@@ -10332,6 +10336,16 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
     })
 
     if success:
+        if task_type == "SPRINT":
+            from .budget_digest import sprint_ended
+            _budget_line = sprint_ended(task_id)
+            if _budget_line:
+                print(f"   {_budget_line}")
+                from .task.reader import add_task_note
+                if not add_task_note(str(task_id), _budget_line.removeprefix("💳 "), agent="PA",
+                                     note_type="note", breadcrumb=breadcrumb):
+                    print(f"⚠️ MACF: sprint budget note not added to #{task_id}; the event stands", file=sys.stderr)
+
         # Hide completed task file from CC's native scanner (dot-prefix).
         # hide_task_file guards this itself — it returns early for a non-CC
         # store — so the call is safe everywhere and only the report is gated.
