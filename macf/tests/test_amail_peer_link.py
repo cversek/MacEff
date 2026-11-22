@@ -610,3 +610,15 @@ def test_a_peer_that_reads_and_closes_without_a_reply_is_closed_unread_not_down(
     finally:
         t.join(timeout=5)
         srv.close()
+
+
+def test_two_peer_links_that_differ_only_in_case_are_refused(tmp_path):
+    """Domains are matched case-folded, so two such keys are one peer declared twice; the last used to win."""
+    from macf.amail.deploy_config import BrokerDeployConfig, ConfigError
+    addressing = tmp_path / "addressing.yaml"
+    addressing.write_text(_addressing({"ira": []}, domain=A_DOM))
+    twice = {"addressing_path": str(addressing),
+             "peer_links": {B_DOM: {"host": "100.64.0.7", "port": 8025},
+                            B_DOM.upper(): {"host": "100.64.0.8", "port": 8025}}}
+    with pytest.raises(ConfigError, match="declared twice"):
+        BrokerDeployConfig.model_validate(twice).to_broker_config()

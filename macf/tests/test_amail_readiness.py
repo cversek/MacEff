@@ -235,3 +235,50 @@ def test_the_outbox_view_reads_where_the_broker_writes(tmp_path, monkeypatch):
     monkeypatch.setattr(readiness, "outbox_dir", lambda root, dom: asked.append(dom) or real(root, dom))
     _held(real(tmp_path / "amail-host" / "handoff", "Beta.Test"), "1-a", "ira@alpha.test")
     assert [h.message_id for h in readiness.outbox(cfg)] == ["msg-1-a"] and "Beta.Test" in asked
+
+
+# ---- follow-ups from review of the series ---------------------------------------------------------
+
+def _complete(tmp_path):
+    from macf.amail.crypto import generate_keypair
+    key = generate_keypair(tmp_path / "keys" / "ira.pem")
+    cfg = {"agent": "ira", "domain": "alpha.test", "signing_key": str(tmp_path / "keys" / "ira.pem"),
+           "signing_required": True,
+           "broker_config": str(_host(tmp_path, peers={"beta.test": {"host": "100.64.0.9", "port": 8030,
+                                                                     "agents": {"sparrow": "Sparrow_6a7b8c"}}}))}
+    return cfg, _registry(tmp_path, {"Ira_0a1b2c": {"account": "ira", "keys": [key]}})
+
+
+def test_the_listener_cites_mis_0007_as_the_draft_it_is(tmp_path):
+    cfg, reg = _complete(tmp_path)
+    detail = _by(readiness.pieces(cfg, registry=reg, daemon_installed=lambda c, h: True))["listener"].detail
+    assert "MIS-0007" in detail and "draft" in detail
+
+
+def test_the_supervision_piece_carries_a_short_kind_beside_its_sentence(tmp_path):
+    cfg, reg = _complete(tmp_path)
+
+    def supervision(installed, jobs):
+        return _by(readiness.pieces(cfg, registry=reg, daemon_installed=lambda c, h: installed,
+                                    interim_jobs=lambda: jobs))["broker supervision"]
+    supervised = supervision(True, [])
+    assert supervised.kind == "supervised" and "primal daemon" in supervised.detail
+    launched = supervision(False, [])
+    assert launched.kind == "agent-launched" and "only while an agent starts it" in launched.detail
+    assert supervision(False, [tmp_path / "com.example.broker.plist"]).kind == "launchd job"
+
+
+def test_status_json_keeps_broker_kind_short_and_the_sentence_beside_it(tmp_path, monkeypatch, capsys):
+    import argparse
+    import json
+    from macf import cli
+    monkeypatch.setattr(cli, "_amail_config", lambda: {
+        "agent": "ira", "domain": "alpha.test", "socket": str(tmp_path / "b.sock"), "handoff": str(tmp_path / "h"),
+        "home": "", "contacts": "", "autostart": False, "broker_config": "", "signing_key": ""})
+    monkeypatch.setattr(cli, "_ensure_host_broker", lambda cfg: "")
+    monkeypatch.setattr(cli, "_amail_setup_pieces", lambda cfg: [readiness.Piece(
+        name="broker supervision", ok=True, kind="supervised", detail="unit 'broker' of AmailBroker_x's primal daemon")])
+    cli.cmd_amail_status(argparse.Namespace(json=True))
+    out = json.loads(capsys.readouterr().out)
+    assert out["broker_kind"] == "supervised"
+    assert out["broker_supervision"] == "unit 'broker' of AmailBroker_x's primal daemon"
