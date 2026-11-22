@@ -171,3 +171,214 @@ def test_subagent_born_after_metering_began_is_scanned_from_zero(tmp_path):
     assert r == {"events": 1, "calls": 3}
     assert got[0]["calls"] == 3 and got[0]["cause"] == "subagent" and not got[0].get("baseline")
     assert not [e for e in _metered() if e["path"] == str(old) and e["calls"]]
+
+
+# ── Branch-level pins ─────────────────────────────────────────────────────────
+
+import os
+import sys
+from datetime import datetime, timezone
+from unittest.mock import patch
+
+from macf.agent_events_log import get_log_path
+
+T0 = datetime(2026, 11, 22, 10, 0, 0, tzinfo=timezone.utc).timestamp()  # the default fixture timestamp
+
+
+def _emit_at(ts, event, data):
+    """An event with a chosen time, written the way append_event writes it."""
+    with open(get_log_path(), "a") as f:
+        f.write(json.dumps({"timestamp": ts, "event": event, "breadcrumb": "", "data": data, "hook_input": {}}) + "\n")
+
+
+def test_scan_counts_every_class_and_skips_what_is_not_a_call(tmp_path, capsys):
+    t = tmp_path / "s.jsonl"
+    odd = [
+        json.dumps({"type": "user", "message": {"id": "u", "usage": {"input_tokens": 99}}}) + "\n",
+        json.dumps({"type": "assistant", "message": ["usage"]}) + "\n",
+        json.dumps({"type": "assistant", "message": {"id": "q", "usage": "usage"}}) + "\n",
+        '{"type": "assistant", "usage": broken}\n',
+        json.dumps({"type": "assistant", "message": {"usage": {"input_tokens": 3}}}) + "\n",  # no id, no model
+        json.dumps({"type": "assistant", "message": {"usage": {"input_tokens": 4}}}) + "\n",  # a second one
+    ]
+    _write(t, _line("a", ts="2026-11-22T10:05:00Z", input_tokens=10, cache_read_input_tokens=1000, output_tokens=20),
+           _line("b", model="m-b", ts="2026-11-22T10:01:00Z", input_tokens=5, cache_read_input_tokens=300, output_tokens=2),
+           _line("c", ts="2026-11-22T10:09:00Z", input_tokens=1, cache_read_input_tokens=50, output_tokens=1), *odd)
+    r = um.scan(t, 0)
+    assert r.calls == 5 and r.new_offset == t.stat().st_size
+    assert r.by_model["m-a"] == {"input_tokens": 11, "cache_read_input_tokens": 1050, "output_tokens": 21,
+                                 "cache_write_5m_tokens": 0, "cache_write_1h_tokens": 0, "calls": 2}
+    assert r.by_model["m-b"]["cache_read_input_tokens"] == 300 and r.by_model["m-b"]["calls"] == 1
+    assert r.by_model["unknown"]["input_tokens"] == 7 and r.by_model["unknown"]["calls"] == 2
+    assert (r.first_ts, r.last_ts) == ("2026-11-22T10:01:00Z", "2026-11-22T10:09:00Z")
+    assert r.tail_id == "line@" + str(r.new_offset)
+    assert "malformed line" in capsys.readouterr().err
+    assert um.scan(t, r.new_offset).calls == 0
+
+
+def test_scan_from_an_offset_past_the_end_rescans_from_zero(tmp_path, capsys):
+    t = tmp_path / "s.jsonl"
+    _write(t, _line("a"), _line("b"))
+    r = um.scan(t, t.stat().st_size + 500)
+    assert r.calls == 2 and r.new_offset == t.stat().st_size
+    assert "shorter than offset" in capsys.readouterr().err
+
+
+def test_the_newest_event_for_a_file_wins(tmp_path):
+    t = tmp_path / "s.jsonl"
+    first = _line("a")
+    _write(t, first, _line("b"), _line("c"))
+    n1, n2 = len(first.encode()), len(first.encode()) + len(_line("b").encode())
+    common = {"path": str(t), "metering_since": T0 - 1000}
+    _emit_at(T0 + 1, um.EVENT, {**common, "new_offset": n1, "tail_id": "a"})
+    _emit_at(T0 + 2, um.EVENT, {**common, "new_offset": n2, "tail_id": "b"})
+    # a second, unseen file keeps the walk going past the newest event, to the older one
+    sub = tmp_path / "sid" / "subagents"
+    sub.mkdir(parents=True)
+    _write(sub / "x.jsonl", _line("x"))
+    assert um.meter_tick("sid", str(t)) == {"events": 2, "calls": 2}  # c, and x born after metering began
+    assert [e["offset"] for e in _metered() if e["path"] == str(t) and e.get("calls")][-1] == n2
+
+
+@pytest.mark.parametrize("first_line_ts,event_at,found", [
+    ("2026-11-22T10:00:00Z", T0 - 30, True),    # within the minute of slack before the file began
+    ("2026-11-22T10:00:00Z", T0 - 200, False),  # older than the file can be: the walk stops short of it
+    (None, T0 - 30, True),                       # no first-line timestamp: the file's mtime stands in
+])
+def test_the_lookup_floor_is_the_files_start_less_a_minute(tmp_path, first_line_ts, event_at, found):
+    t = tmp_path / "s.jsonl"
+    first = _line("a", ts=first_line_ts)
+    _write(t, first, _line("b"))
+    os.utime(t, (T0, T0))
+    _emit_at(event_at, um.EVENT, {"path": str(t), "new_offset": len(first.encode()), "tail_id": "a",
+                                  "metering_since": T0 - 1000})
+    r = um.meter_tick("sid", str(t))
+    assert r == ({"events": 1, "calls": 1} if found else {"events": 1, "calls": 0})
+    assert bool(_metered()[-1].get("baseline")) is (not found)
+
+
+def test_metering_since_is_read_back_and_copied_forward(tmp_path):
+    t = tmp_path / "s.jsonl"
+    first = _line("a")
+    _write(t, first)
+    sub = tmp_path / "sid" / "subagents"
+    sub.mkdir(parents=True)
+    _emit_at(T0 + 1, um.EVENT, {"path": str(t), "new_offset": len(first.encode()), "tail_id": "a",
+                                "metering_since": T0})
+    born_after = sub / "born_after.jsonl"
+    _write(born_after, _line("n", ts="2026-11-22T10:01:40Z"))   # T0 + 100 s: after metering began, before now
+    born_before = sub / "born_before.jsonl"
+    _write(born_before, _line("o", ts="2026-11-22T09:59:00Z"))  # before it
+    _write(t, _line("b"))
+    um.meter_tick("sid", str(t))
+    ev = {os.path.basename(e["path"]): e for e in _metered() if e["path"] != str(t) or e.get("calls")}
+    assert ev["born_after.jsonl"]["calls"] == 1 and not ev["born_after.jsonl"].get("baseline")
+    assert ev["born_before.jsonl"]["baseline"] is True and ev["born_before.jsonl"]["cause"] == "subagent"
+    assert {e["metering_since"] for e in ev.values()} == {T0}
+    assert ev["s.jsonl"]["by_model"]["m-a"]["input_tokens"] == 1
+
+
+def test_baseline_ignores_history_cut_lines_and_a_partial_tail(tmp_path):
+    t = tmp_path / "s.jsonl"
+    # One line whose last 64 KB is still valid JSON (leading spaces): a read that kept it would
+    # mistake it for the last call.
+    _write(t, " " * 70_000 + json.dumps({"message": {"id": "cut", "usage": {}}}) + "\n")
+    assert um._baseline(str(t)).tail_id is None
+    good = [_line(f"m{i}") for i in range(900)]  # well over 64 KB
+    bad = ['{"type": "assistant", "usage": nope}\n', json.dumps({"message": {"usage": {}}}) + "\n",
+           json.dumps({"type": "user", "text": "no counts here"}) + "\n"]
+    _write(t, *good, *bad, mode="w")
+    size = t.stat().st_size
+    _write(t, '{"type": "assistant", "mess')  # a call still being written
+    b = um._baseline(str(t))
+    assert b.tail_id == "m899" and b.offset == size
+
+
+def test_current_cause_reaches_across_a_compaction_and_ignores_a_bogus_cause():
+    append_event("turn_cause", {"cause": "channel"})
+    append_event("compaction_detected", {})
+    assert um.current_cause() == "channel"
+    append_event("scope_gate_held", {"remaining": 1})
+    append_event("compaction_detected", {})
+    assert um.current_cause() == "gate"
+    append_event("turn_cause", {"cause": "bogus"})
+    assert um.current_cause() == "operator"
+
+
+def test_an_unreadable_file_is_skipped_with_a_warning(tmp_path, capsys):
+    t = tmp_path / "s.jsonl"
+    _write(t, _line("a"))
+    with patch.object(um, "_baseline", side_effect=OSError("gone")):
+        assert um.meter_tick("sid", str(t)) is None
+    assert "gone" in capsys.readouterr().err and not _metered()
+
+
+def test_summary_text_totals_and_window():
+    big = {"input_tokens": 2_000_000, "cache_write_1h_tokens": 500_000, "cache_write_5m_tokens": 0,
+           "cache_read_input_tokens": 40_000_000, "output_tokens": 300_000, "calls": 120}
+    small = {"input_tokens": 100, "cache_write_1h_tokens": 0, "cache_write_5m_tokens": 400,
+             "cache_read_input_tokens": 1000, "output_tokens": 50, "calls": 3}
+    now = time.time()
+    _emit_at(now - 2 * 86400, um.EVENT, {"path": "p", "cause": "cron", "by_model": {"big-model": big}})
+    _emit_at(now - 60, um.EVENT, {"path": "p", "cause": "gate", "by_model": {"big-model": big}})
+    _emit_at(now - 30, um.EVENT, {"path": "q", "by_model": {"tiny": small}})  # no cause: operator
+    s = um.summarize(now - 3600)
+    assert s.calls == 123 and s.tokens["cache_read_input_tokens"] == 40_001_000 and s.tokens["input_tokens"] == 2_000_100
+    assert set(s.by_cause) == {"gate", "operator"} and s.by_model["big-model"]["calls"] == 120
+    expected = (
+        'usage, last 1h: 123 calls\n'
+        '\n'
+        'tokens\n'
+        '  input               2,000,100\n'
+        '  cache write 1h        500,000\n'
+        '  cache write 5m            400\n'
+        '  cache read         40,001,000\n'
+        '  output                300,050\n'
+        '\n'
+        'by model (calls, weighted)\n'
+        '  big-model                         120    8.50M\n'
+        '  tiny                                3      950\n'
+        '\n'
+        'by cause (weighted)\n'
+        '  gate                8.50M 100.0%\n'
+        '  operator              950   0.0%\n'
+        '\n'
+        'points 0.347  (low, reads 0: 0.184)\n'
+        'rate provisional (fitted 2026-11-22)'
+    )
+    assert um.format_summary(s, "1h") == expected
+
+
+def test_budget_me_command_default_window_and_bad_since(capsys):
+    from macf.cli import main
+    for argv, code in ((["budget", "me"], 0), (["budget", "me", "--since", "7d"], 0),
+                       (["budget", "me", "--since", "soon"], 2)):
+        with patch.object(sys, "argv", ["macf_tools", *argv]):
+            try:
+                rc = main()
+            except SystemExit as e:
+                rc = e.code
+        out = capsys.readouterr()
+        assert (rc or 0) == code
+        if code == 0:
+            assert f"usage, last {argv[-1] if len(argv) > 2 else '1d'}:" in out.out
+        else:
+            assert "--since takes" in out.err
+
+
+def test_hook_guards_for_the_meter_and_the_turn_cause(tmp_path):
+    from macf.hooks import handle_stop, handle_user_prompt_submit as ups
+    with patch("macf.usage_meter.meter_tick") as tick, patch.object(handle_stop, "emit_warning") as warn:
+        handle_stop._meter_usage(json.dumps({"session_id": "sid"}))          # no transcript: nothing to meter
+        handle_stop._meter_usage("")
+        assert not tick.called and not warn.called
+        handle_stop._meter_usage(json.dumps({"session_id": "sid", "transcript_path": "/x/t.jsonl"}))
+        tick.assert_called_once_with("sid", "/x/t.jsonl")
+        tick.side_effect = OSError("disk")
+        handle_stop._meter_usage(json.dumps({"session_id": "sid", "transcript_path": "/x/t.jsonl"}))
+        assert warn.call_args[0][0].kind == "usage_meter_failed" and "disk" in warn.call_args[0][0].detail
+    with patch("macf.usage_meter.classify_prompt", side_effect=TypeError("bad")), \
+            patch.object(ups, "emit_warning") as warn, \
+            patch.object(ups, "detect_auto_mode", return_value=(False, "test")):
+        ups.run(json.dumps({"session_id": "sid", "prompt": None}))
+    assert any(c[0][0].kind == "turn_cause_failed" for c in warn.call_args_list)
