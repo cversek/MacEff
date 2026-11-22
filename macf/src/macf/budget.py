@@ -743,7 +743,14 @@ def weekly_usage(now: Optional[float] = None) -> Optional[str]:
         notes = [f"{format_rate(rate)}%/hr"] if rate is not None else []
         if age:
             notes.append(age)
-        return f"{pct:g}%" + (f" ({', '.join(notes)})" if notes else "")
+        line = f"{pct:g}%" + (f" ({', '.join(notes)})" if notes else "")
+        try:
+            from macf.usage_share import hook_suffix
+            mine = hook_suffix(now)
+        except Exception as e:  # noqa: BLE001 - GUARD: the weekly line stands without the suffix
+            print(f"⚠️ MACF: own-rate suffix skipped: {type(e).__name__}: {e}", file=sys.stderr)
+            mine = None
+        return f"{line} {mine}" if mine else line
     except Exception as e:  # noqa: BLE001 - GUARD, not handler: see coding_standards
         # Deliberately broad: a GUARD, not a handler. The header goes out without it.
         print(f"⚠️ MACF: weekly usage skipped: {type(e).__name__}: {e}", file=sys.stderr)

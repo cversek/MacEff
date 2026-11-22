@@ -408,4 +408,6 @@ def format_summary(s: Summary, label: str) -> str:
 
 def run_me(since_spec: str) -> str:
     from macf.cli import _parse_since
-    return format_summary(summarize(_parse_since(since_spec)), since_spec)
+    from macf.usage_share import me_lines
+    since = _parse_since(since_spec)
+    return format_summary(summarize(since), since_spec) + "\n\n" + me_lines((time.time() - since) / 3600)
