@@ -181,3 +181,15 @@ def test_the_cli_prints_the_thin_data_notes(capsys):
         assert e.code in (0, None)
     out = " ".join(capsys.readouterr().out.split())
     assert "rows have metered tokens" in out and "scale is not positive" in out
+
+
+def test_a_crossing_too_wide_or_spanning_several_levels_is_dropped_and_noted():
+    pts = [{"t": 0.0, "pct": 10}, {"t": STEP, "pct": 11},  # a usable crossing
+           {"t": STEP + 7 * HOUR, "pct": 12},  # one level, but bracketed by seven hours
+           {"t": 2 * STEP + 7 * HOUR, "pct": 14}]  # two levels in one gap
+    c = usage_ticks.extract_ticks(pts, "weekly_all")
+    assert [t.level for t in c.ticks] == [11]
+    assert (c.dropped_wide, c.dropped_multi) == (1, 2)
+    notes = usage_ticks._notes(c)
+    assert any("1 crossings dropped, bracket over 6h" in n for n in notes)
+    assert any("2 crossings dropped, several levels" in n for n in notes)
