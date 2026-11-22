@@ -197,8 +197,8 @@ def test_a_fit_needs_min_rows_rows_with_metered_tokens():
     flows = [_flow(0, 2.5 * HOUR)]  # covers the first three crossings only
     two = usage_ticks.fit_joint(_chain(3), flows, 0.1, usage_ticks.MODEL_PRIORS)
     assert two is None  # two rows, below MIN_ROWS
-    enough = usage_ticks.fit_joint(_chain(5), [_flow(0, 5 * HOUR)], 0.1, usage_ticks.MODEL_PRIORS)
-    assert enough is not None and enough.ticks == 4
+    enough = usage_ticks.fit_joint(_chain(7), [_flow(0, 7 * HOUR)], 0.1, usage_ticks.MODEL_PRIORS)
+    assert enough is not None and enough.ticks == 6
 
 
 def test_a_fit_with_most_rows_unmetered_is_refused():
@@ -252,3 +252,19 @@ def test_a_crossing_too_wide_or_spanning_several_levels_is_dropped_and_noted():
     notes = usage_ticks._notes(c)
     assert any("1 crossings dropped, bracket over 6h" in n for n in notes)
     assert any("2 crossings dropped, several levels" in n for n in notes)
+
+
+def test_a_fit_needs_more_rows_than_coefficients():
+    # one model: scale, one deviation and drift make three coefficients; four metered rows is one short of the margin
+    flows = [_flow(0, 5 * HOUR)]
+    assert usage_ticks.fit_joint(_chain(5), flows, 0.1, usage_ticks.MODEL_PRIORS) is None
+    assert usage_ticks.fit_joint(_chain(6), [_flow(0, 6 * HOUR)], 0.1, usage_ticks.MODEL_PRIORS) is not None
+
+
+def test_a_scoped_fit_with_no_metered_tokens_is_refused_not_a_zero_rate():
+    cross = usage_ticks.Crossings(series="Sonnet", ticks=tuple(_chain(10)), segments=1, dropped_wide=0, dropped_multi=0)
+    assert usage_ticks.fit_scoped(cross, [], 0.1, None) is None
+    other = [_flow(0, 10 * HOUR, model="claude-opus-4")]  # nothing in the pool
+    assert usage_ticks.fit_scoped(cross, other, 0.1, None) is None
+    mine = [_flow(0, 10 * HOUR, model="claude-sonnet-4")]
+    assert usage_ticks.fit_scoped(cross, mine, 0.1, None) is not None

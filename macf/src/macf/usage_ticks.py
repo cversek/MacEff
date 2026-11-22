@@ -55,6 +55,7 @@ NARROW_S = 1800.0
 MAX_BRACKET_S = 6 * 3600.0
 MIN_ROWS = 3
 MIN_METERED_FRACTION = 0.5  # of the rows, those with metered tokens in them
+COEF_MARGIN = 2  # rows a fit needs beyond its number of coefficients
 RIDGE = 0.3
 BOOTSTRAPS = 300
 CACHE_READ_WEIGHTS = (0.1, 0.0)
@@ -373,10 +374,12 @@ def _joint_pred(rows: List[_Row], models: List[str], ratios: Dict[str, float], c
             + sum(c[1 + i] * r.x.get(m, 0.0) for i, m in enumerate(models)) + c[-1] * r.hours for r in rows]
 
 
-def _enough_metered(rows: List[_Row]) -> bool:
-    """A fit needs ``MIN_ROWS`` rows with metered tokens, and at least ``MIN_METERED_FRACTION`` of all rows."""
+def _enough_metered(rows: List[_Row], coefs: int) -> bool:
+    """A fit needs ``MIN_ROWS`` rows with metered tokens, at least ``MIN_METERED_FRACTION`` of all rows,
+    and ``COEF_MARGIN`` more rows than it has coefficients."""
     metered = sum(1 for r in rows if sum(r.x.values()) > 0)
-    return metered >= MIN_ROWS and metered >= MIN_METERED_FRACTION * len(rows)
+    return (metered >= MIN_ROWS and metered >= MIN_METERED_FRACTION * len(rows)
+            and len(rows) >= coefs + COEF_MARGIN)
 
 
 def fit_joint(ticks: Sequence[Tick], flows: List[_Flow], cr: float, priors: Dict[str, float],
@@ -384,7 +387,7 @@ def fit_joint(ticks: Sequence[Tick], flows: List[_Flow], cr: float, priors: Dict
     """The joint fit on one counter's ticks, or None with too few usable rows."""
     rows = _rows(ticks, flows, cr)
     models = sorted({m for r in rows for m, v in r.x.items() if v > 0})
-    if len(rows) < MIN_ROWS or not models or not _enough_metered(rows):
+    if len(rows) < MIN_ROWS or not models or not _enough_metered(rows, len(models) + 2):
         return None
     warned: set = set()
     ratios = {m: prior_ratio(m, priors, warned) for m in models}
@@ -426,7 +429,7 @@ def fit_scoped(cross: Crossings, flows: List[_Flow], cr: float, joint: Optional[
     pool = cross.series
     mine = [f for f in flows if pool.lower() in f.model.lower()]
     rows = _rows(cross.ticks, mine, cr)
-    if len(rows) < MIN_ROWS or not _enough_metered(rows):
+    if len(rows) < MIN_ROWS or not _enough_metered(rows, 2):
         return None
 
     cols = [[sum(r.x.values()) for r in rows], [r.hours for r in rows]]
@@ -490,6 +493,8 @@ def analyse(window_h: float = 48.0, now: Optional[float] = None, priors: Optiona
         if rows and metered < len(rows):
             refusal += (f"; {metered} of {len(rows)} rows have metered tokens, and a fit needs {MIN_ROWS} and "
                         f"{MIN_METERED_FRACTION:.0%}")
+        elif rows:
+            refusal += f"; {len(rows)} rows are too few for the coefficients ({COEF_MARGIN} more than they number)"
     return TickReport(window_h=window_h, crossings=cross, fits=fits, scoped=scoped, scoped_crossings=scoped_cross,
                       refusal=refusal)
 
