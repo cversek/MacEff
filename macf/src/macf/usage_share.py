@@ -152,6 +152,14 @@ def _hourly_data(window_h: float, now: float) -> Dict[str, List[float]]:
     return {"x": xs, "y": ys}
 
 
+def _interval(slopes: List[float], rate: float) -> tuple:
+    """The 5th and 95th percentile of the resampled slopes, widened to include the rate itself."""
+    ordered = sorted(slopes)
+    low = ordered[int(0.05 * len(ordered))]
+    high = ordered[min(len(ordered) - 1, int(0.95 * len(ordered)))]
+    return min(low, rate), max(high, rate)
+
+
 def try_fit(window_h: float = DEFAULT_WINDOW_H, now: Optional[float] = None) -> FitAttempt:
     """Fit points per weighted token over the last ``window_h`` hours, or say why not."""
     now = now or time.time()
@@ -172,13 +180,11 @@ def try_fit(window_h: float = DEFAULT_WINDOW_H, now: Optional[float] = None) -> 
         s = _slope([xs[i] for i in idx], [ys[i] for i in idx])
         if s is not None:
             slopes.append(s)
-    slopes.sort()
-    low, high = slopes[int(0.05 * len(slopes))], slopes[min(len(slopes) - 1, int(0.95 * len(slopes)))]
+    low, high = _interval(slopes, rate)
     mean_y = sum(ys) / n
     sse = sum((y - rate * x) ** 2 for x, y in zip(xs, ys))
     sst = sum((y - mean_y) ** 2 for y in ys)
     r2 = 1 - sse / sst if sst > 0 else 0.0
-    low, high = min(low, rate), max(high, rate)
     prov = usage_meter.POINTS_PER_WEIGHTED_TOKEN
     if high <= low:
         return FitAttempt(fit=None, reason=f"degenerate fit: zero-width interval over {with_tokens} token hours")
