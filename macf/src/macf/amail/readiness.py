@@ -124,3 +124,53 @@ def pieces(cfg: dict, *, registry=None, daemon_installed: Callable[[str, Path], 
 
 def as_json(found: List[Piece]) -> str:
     return json.dumps([{"name": p.name, "ok": p.ok, "detail": p.detail, "fix": p.fix} for p in found], indent=2)
+
+
+# ---- the outbox: what waits for a peer, and what a peer refused ----------------------------------------
+
+@dataclass(frozen=True, kw_only=True)
+class Held:
+    """One message the broker holds for a peer: waiting for a retry, or refused by the peer."""
+    peer: str
+    state: str
+    message_id: str
+    sender: str
+    recipient: str
+    handed_off_at: str
+    age_s: Optional[float]
+    reason: str = ""
+
+
+def outbox(broker_config: Path, *, sender: Optional[str] = None) -> List[Held]:
+    """The messages the broker *broker_config* declares holds for its peers, oldest first; only
+    *sender*'s when given. A waiting message keeps no reason (the next attempt finds the current one,
+    and `amail peer check` shows it); a refused one keeps the peer's."""
+    import datetime
+    from macf.amail.peer_setup import _load
+    deploy, _ = _load(Path(broker_config))
+    root = deploy.inbound_handoff
+    if root is None:
+        return []
+    now = datetime.datetime.now(datetime.timezone.utc)
+    held: List[Held] = []
+    for dom in sorted(deploy.peer_links):
+        for state, box in (("waiting", outbox_dir(root, dom)), ("refused", outbox_dir(root, dom) / "refused")):
+            if not box.is_dir():
+                continue
+            for amsg in sorted(box.glob("*.amsg")):
+                try:
+                    side = json.loads(amsg.with_suffix(".json").read_text())
+                except (OSError, ValueError) as e:
+                    side = {"message_id": amsg.stem, "unreadable": f"{type(e).__name__}: {e}"}
+                if sender and str(side.get("sender", "")).lower() != sender.lower():
+                    continue
+                at = str(side.get("handed_off_at", ""))
+                try:
+                    age = (now - datetime.datetime.fromisoformat(at.replace("Z", "+00:00"))).total_seconds()
+                except ValueError:
+                    age = None
+                reason = (side.get("refused") or {}).get("reason", "") if state == "refused" else ""
+                held.append(Held(peer=dom, state=state, message_id=str(side.get("message_id", amsg.stem)),
+                                 sender=str(side.get("sender", "")), recipient=str(side.get("recipient", "")),
+                                 handed_off_at=at, age_s=age, reason=reason or side.get("unreadable", "")))
+    return sorted(held, key=lambda h: h.handed_off_at)

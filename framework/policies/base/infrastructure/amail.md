@@ -381,7 +381,10 @@ nothing else in the reply is beyond what the two operators already exchanged on 
 broker read it, and each missing piece with the command that supplies it: the address, the signing key,
 signing every message, the agent's key in the registry, how the broker is supervised (a declared unit, a
 launchd job of its own, or launched by an agent), the listener as a declared crossing, and each peer link
-with the mail waiting for it and refused by it.
+with the mail waiting for it and refused by it. `macf_tools amail outbox` lists that mail: each message waiting for a retry with
+its age, and each one a peer refused with the reason the peer gave, by default only the asking agent's
+own, since the outbox is the broker's and holds every agent's mail (`--all` for all of it). A waiting
+message keeps no reason; the next attempt meets the current one, and `amail peer check` shows it.
 
 ### 2.2 Local delivery is an optimization, not a special case
 
