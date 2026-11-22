@@ -106,3 +106,33 @@ def test_the_text_says_the_rules_are_todays():
     events = [started(100, "git status"), completed(101, "git status")]
     text = pw.approvals_text(pw.approvals(events, RULES))
     assert "today's rules" in text and "Bash(git status:*)" in text
+
+
+def _event(name, t, sid, tool, tool_input):
+    return {"event": name, "timestamp": t, "data": {"session_id": sid, "tool": tool, "tool_name": tool},
+            "hook_input": {"session_id": sid, "tool_name": tool, "tool_input": tool_input,
+                           "cwd": "/w", "permission_mode": "auto"}}
+
+
+def test_a_call_with_no_command_parts_is_not_credited_to_a_rule():
+    """all([]) is true: a call the splitter finds nothing in must not read as rule-approved."""
+    events = [_event("tool_call_started", 100, SID, "Bash", {"command": ""}),
+              _event("tool_call_completed", 101, SID, "Bash", {"command": ""})]
+    (a,) = pw.approvals(events, RULES)
+    assert a.how == "mode"
+
+
+def test_another_sessions_dialog_does_not_answer_this_call():
+    other = "bbbb2222-0000"
+    events = [started(100, "git push"), _event("permission_requested", 101, other, "Bash", {"command": "git push"}),
+              completed(120, "git push")]
+    (a,) = pw.approvals(events, RULES)
+    assert a.how != "dialog"
+
+
+def test_a_tool_other_than_bash_is_judged_by_its_own_rules_not_split_as_a_command():
+    rules = [("allow", "Edit", SETTINGS)]
+    events = [_event("tool_call_started", 100, SID, "Edit", {"file_path": "/w/a.py"}),
+              _event("tool_call_completed", 101, SID, "Edit", {"file_path": "/w/a.py"})]
+    (a,) = pw.approvals(events, rules)
+    assert a.how == "rule" and "Edit" in a.detail
