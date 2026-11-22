@@ -758,6 +758,43 @@ def test_a_held_restart_is_the_operators_act_when_the_window_ends(script):
         core.shutdown("the test is over")
 
 
+def test_a_held_restart_that_asked_for_the_server_keeps_asking_for_it(script):
+    """The quiet-window hold re-calls restart() when the window ends, so it has to carry what the ask said, or
+    a --server restart would be refused for the attached client it was asked to end (CTB's review of #1068)."""
+    core, shift = _windowed(script)
+    try:
+        core.attached_clients = lambda card: 2
+        core.boot()
+        assert drive(core, lambda: core.state("worker") == "running")
+        first = core.pid("worker")
+        shift["s"] = 2 * 3600.0
+        core.restart("worker", OPERATOR, "a server-side change", peer=PEER, server=True)
+        shift["s"] = 0.0
+        assert drive(core, lambda: core.pid("worker") not in (None, first) and core.state("worker") == "running")
+    finally:
+        core.shutdown("the test is over")
+
+
+def test_a_held_restart_the_window_end_refuses_is_recorded_not_dropped(script):
+    """A restart held through a quiet window, asked without --server, is refused when the window ends if a client
+    is attached by then. The refusal is an event, so the asker can see the ask did not happen (#1068)."""
+    core, shift = _windowed(script)
+    try:
+        core.boot()
+        assert drive(core, lambda: core.state("worker") == "running")
+        first = core.pid("worker")
+        shift["s"] = 2 * 3600.0
+        core.restart("worker", OPERATOR, "asked during the window", peer=PEER)
+        core.attached_clients = lambda card: 1          # a client attached while it waited
+        shift["s"] = 0.0
+        assert not drive(core, lambda: core.pid("worker") not in (None, first), timeout=1.0)
+        refused = [d for d in events("pd_control", "worker") if d["act"] == "restart" and "refused" in d["reason"]]
+        assert refused and "--server" in refused[-1]["reason"] and refused[-1]["asked_by"]["kind"] == "operator"
+        assert core.pid("worker") == first
+    finally:
+        core.shutdown("the test is over")
+
+
 def test_a_stop_ends_a_held_restart(script):
     """A stop asked after a held restart wins: when the window ends the unit stays stopped
     (R48)."""

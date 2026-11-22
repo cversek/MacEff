@@ -514,6 +514,11 @@ def test_a_pane_already_gone_has_no_group(monkeypatch):
     assert su.pane_group(4242, 4000, timeout=0.05) is None
 
 
+def test_attached_clients_is_zero_when_no_server_answers(tmp_path):
+    """A missing server has no client to end (#1055)."""
+    assert su.attached_clients("Resident_1a2b3c", base=tmp_path) == 0
+
+
 @needs_tmux
 def test_the_server_has_extended_keys_whatever_the_baseline_file_says(tmp_path, short_base, restore_signals):
     """Shift-Tab and other modified keys reach the client only with extended keys on, and a baseline file

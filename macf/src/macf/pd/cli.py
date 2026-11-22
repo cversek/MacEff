@@ -126,6 +126,10 @@ def add_pd_parser(sub) -> None:
         p.add_argument("--wait", type=float, default=30.0, metavar="SECONDS",
                        help="how long to wait for the unit to reach the state the act asks for "
                             "(default 30)")
+        if act == "restart":
+            p.add_argument("--server", action="store_true",
+                           help="restart the session unit's tmux server even with a client attached, which "
+                                "ends the client (without it, such a restart refuses)")
         p.set_defaults(func=cmd_pd_unit)
     agenda = pd_sub.add_parser(
         "agenda", help="what is scheduled: the declared schedules' next runs and your own entries")
@@ -408,7 +412,10 @@ def cmd_pd_unit(args: argparse.Namespace) -> int:
             return 1
         asked_by = args.asked_by or ("agent" if os.environ.get("CLAUDE_PID") else "operator")
         asker = {"kind": asked_by, **({"card": card} if asked_by == "agent" else {})}
-        reply = ask(card, {"op": args.unit_act, "unit": args.name, "asked_by": asker, "reason": args.reason})
+        request = {"op": args.unit_act, "unit": args.name, "asked_by": asker, "reason": args.reason}
+        if getattr(args, "server", False):
+            request["server"] = True
+        reply = ask(card, request)
         if not reply.ok:
             print(f"maceff_pd: {card}: refused: {reply.error}", file=sys.stderr)
             return 1

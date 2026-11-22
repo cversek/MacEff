@@ -24,7 +24,8 @@ from pydantic import ValidationError
 
 from macf.agent_events_log import append_event, read_events
 from macf.notify.session import descends_from, proc_start, verify_incarnation
-from macf.pd.core import POLICY_POINTER, Core, DeclarationRefused, cutover_declaration, load_declaration
+from macf.pd.core import (POLICY_POINTER, Core, DeclarationRefused, RestartRefused, cutover_declaration,
+                          load_declaration)
 from macf.pd.interface import (
     EVENT_CHANNEL_DECLARED,
     EVENT_CONTROL,
@@ -840,9 +841,14 @@ class Daemon:
             act = {"start": self.core.start, "stop": self.core.stop,
                    "restart": self.core.restart}[request.op]
             try:
-                act(request.unit, request.asked_by, request.reason, peer=peer)
+                if request.op == "restart":
+                    act(request.unit, request.asked_by, request.reason, peer=peer, server=request.server)
+                else:
+                    act(request.unit, request.asked_by, request.reason, peer=peer)
             except KeyError as e:
                 return Response(ok=False, error=str(e.args[0]))
+            except RestartRefused as e:
+                return Response(ok=False, error=str(e))
             return Response(ok=True, units=self.core.statuses())
         return Response(ok=False, error="compaction is not available in step 1")
 
