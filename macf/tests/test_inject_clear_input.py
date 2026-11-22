@@ -217,3 +217,10 @@ def test_text_that_is_not_the_expected_text_stops_the_clearing(capsys):
     rc, presses = _clear_panes([_pane(MAIL), _pane("dear operator, one more thing")])
     assert rc == 1 and len(presses) == 1
     assert "gained text" in capsys.readouterr().err
+
+
+def test_a_selection_line_under_a_question_is_not_taken_for_the_box():
+    from macf.pd import wake
+    plain = [RULE, f"❯{NB}draft", RULE, RULE, "Do you want to proceed?", "❯ 1. Yes", "  2. No", RULE]
+    box = wake._locate_box(plain, [i for i, line in enumerate(plain) if line == RULE])
+    assert (box.top, box.bottom, box.rows) == (0, 2, [1])
