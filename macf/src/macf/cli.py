@@ -822,6 +822,12 @@ def cmd_budget_me(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_budget_rate(args: argparse.Namespace) -> int:
+    from macf import usage_share
+    print(usage_share.run_rate(args.window))
+    return 0
+
+
 def cmd_budget_mode_set(args: argparse.Namespace) -> int:
     from macf import budget
     def go() -> int:
@@ -13165,6 +13171,9 @@ def _build_parser() -> argparse.ArgumentParser:
     b = budget_sub.add_parser("me", help="this agent's own usage from its transcripts: tokens, models, causes, points")
     b.add_argument("--since", default="1d", metavar="AGE", help="window: 1h, 1d, 7d, or a date (default 1d)")
     b.set_defaults(func=cmd_budget_me)
+    b = budget_sub.add_parser("rate", help="fit this agent's points per weighted token against the account's counter")
+    b.add_argument("--window", type=float, default=48.0, metavar="HOURS", help="hours to fit over (default 48)")
+    b.set_defaults(func=cmd_budget_rate)
     b = budget_sub.add_parser("mode", help="the operator's intent for the allowance")
     mode_sub = b.add_subparsers(dest="budget_mode_cmd", required=True)
     m = mode_sub.add_parser("set", help="conserve | normal | burn")
