@@ -11196,6 +11196,63 @@ def cmd_amail_peer_card(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_amail_peer_add(args: argparse.Namespace) -> int:
+    """Declare a peer broker from its card (MIS-0004 R56 to R65): shown first, written on a yes."""
+    import datetime as _dt
+
+    from macf.amail import peer_setup
+
+    cfg = _amail_config()
+    if not cfg.get("broker_config"):
+        print("❌ no broker config is named; set broker_config in amail.json (or MACF_AMAIL_BROKER_CONFIG)")
+        return 1
+    try:
+        if args.card == "-":
+            text = sys.stdin.read()
+        elif args.card.lstrip().startswith("{"):
+            text = args.card
+        else:
+            text = Path(args.card).read_text()
+        card = peer_setup.parse_card(text)
+        plan = peer_setup.plan_add(Path(cfg["broker_config"]), card,
+                                   local_agents=args.for_agents or [cfg["agent"]], note=args.note)
+    except (peer_setup.CardError, OSError) as e:
+        print(f"❌ {e}")
+        return 1
+    if not plan.changed:
+        print(f"✅ {card['domain']} is already declared as this card says; nothing to write")
+    else:
+        print(plan.diff().rstrip("\n"))
+        if args.dry_run:
+            print("dry run: nothing written")
+        else:
+            if not args.yes:
+                if not sys.stdin.isatty() or args.card == "-":
+                    print("Not written. Run again with --yes to write it.")
+                    return 0
+                if input("Write this? [y/N] ").strip().lower() not in ("y", "yes"):
+                    print("Not written.")
+                    return 0
+            for path in (plan.broker_path, plan.addressing_path):
+                if not os.access(path, os.W_OK):
+                    print(f"❌ {path} is not this account's to write; its owner applies the change above")
+                    return 1
+            stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+            try:
+                written = plan.write(backup_suffix=f".bak-peer-add-{stamp}")
+            except (peer_setup.CardError, OSError) as e:
+                print(f"❌ {e}")
+                return 1
+            for path in written:
+                print(f"✅ wrote {path} (the old one kept beside it, .bak-peer-add-{stamp})")
+            print("The broker reads its config at start: restart it for the link to take effect.")
+    if plan.registry_lines:
+        print("\nThe registry is root's to write. On this host, the operator runs:")
+        for line in plan.registry_lines:
+            print(f"  {line}")
+    return 0
+
+
 def cmd_amail_registry_check(args: argparse.Namespace) -> int:
     """Check the operator's registry (MIS-0004 R42): who can write it, and what it declares."""
     from macf.amail.registry import Registry, RegistryError, registry_path
@@ -14183,6 +14240,17 @@ def _build_parser() -> argparse.ArgumentParser:
     amail_peer_card.add_argument("--all", action="store_true", help="every agent in the addressing file")
     amail_peer_card.add_argument("--json", action="store_true", help="the card alone, one line of JSON")
     amail_peer_card.set_defaults(func=cmd_amail_peer_card)
+    amail_peer_add = amail_peer_sub.add_parser(
+        "add", help="declare a peer from its card: its link with its agents map, and a contact for each "
+                    "agent named; shown first, written on a yes, and a no-op when already declared")
+    amail_peer_add.add_argument("card", help="the peer's card: its JSON, a file holding it, or - for stdin")
+    amail_peer_add.add_argument("--for", dest="for_agents", action="append", default=None,
+                                help="a local agent who may write to the peer's agents (repeatable; "
+                                     "default: this agent)")
+    amail_peer_add.add_argument("--note", default="", help="the operator's note on the link (kept if omitted)")
+    amail_peer_add.add_argument("--yes", action="store_true", help="write without asking")
+    amail_peer_add.add_argument("--dry-run", action="store_true", help="show the change and write nothing")
+    amail_peer_add.set_defaults(func=cmd_amail_peer_add)
 
     # ── gmail ────────────────────────────────────────────────────────────
     gmail_parser = sub.add_parser(
