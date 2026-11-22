@@ -8822,6 +8822,13 @@ def cmd_task_pause(args: argparse.Namespace) -> int:
     print(f"   Breadcrumb: {breadcrumb}")
     if cleared_policies:
         print(f"   Cleared policies: {cleared_policies}")
+    try:
+        from .task.scope import get_scope_state
+        if get_scope_state().get(str(task_id)) == "active":
+            print(f"⚠️  #{task_id} is still active in scope, so the Stop hook's scope gate keeps counting it. "
+                  f"To quiet the gate: macf_tools task scope pause {task_id} --justification <reason>")
+    except (ImportError, OSError, ValueError) as e:
+        print(f"⚠️  could not check whether #{task_id} is scoped ({e})", file=sys.stderr)
     return 0
 
 
