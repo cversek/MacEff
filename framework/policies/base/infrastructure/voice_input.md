@@ -58,6 +58,11 @@ A wake model is a small classifier that scores a stream of audio for one phrase.
 - What clips are kept, where, and for whom?
 - What consent do I need before recording?
 
+**4.1 Kept Audio**
+- When is audio kept, where, and what does the event log hold?
+- Whose recordings may a training set use?
+- How is a recording and everything made from it deleted?
+
 **5 Listening On and Off**
 - What does listening off do?
 - Why does a declared hotkey still record while listening is off?
@@ -230,6 +235,14 @@ Mid-sentence, as in "send the report" or "don't abort the build", neither word e
 - Describe conditions, not people. The conditions text is stored in the manifest and in the model's report; write "tired, fan on", not names.
 - No command deletes clips yet. The operator removes the phrase's folder, which removes its clips, manifest and model together; the model then has to be trained again. A retention period for kept clips is an open question in MIS-0008 (Q06); until it is decided, the operator decides what to keep.
 
+
+### 4.1 Kept Audio
+
+**Off unless the voice section names a `kept_audio` folder** (MIS-0008 R13 as amended, R61 to R64). With it, each delivered recording is kept whole as a WAV named by its SHA-256, readable by the unit's account alone, and each keep is a `voice_audio_kept` event holding the hash, trigger and time only. The folder must be on a local disk: never inside a synced or network folder, which would take the voice off the machine. The capture unit checks this when it starts and keeps nothing, saying so in its log, when it can't confirm it; `macf_tools voice kept list` warns too.
+
+**Who spoke is known only from a voice-lock match.** A recording kept without one is `unverified`, whatever the declared speaker, and no training set takes it until the operator confirms who spoke (`voice kept confirm <hash> <speaker>`). A training set takes only a known speaker whose consent is in the folder's consent record, which the operator writes (`voice kept consent <speaker> --by "<how it was given>"`); what an agent was told elsewhere doesn't reach it. Agents never run `consent` or `confirm`: both are the operator's judgment, and both refuse inside an agent session, and each leaves an event without content (`voice_consent_recorded`, `voice_speaker_confirmed`), so a consent written anyway can be found afterward.
+
+**Anything made from a recording is made through the store** (`KeptStore.derive`), which writes it inside the folder and registers it in the same step, so `voice kept delete <hash>` removes it with the recording.
 ---
 
 ## 5 Listening On and Off

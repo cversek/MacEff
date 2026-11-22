@@ -49,13 +49,20 @@ class VoiceLock:
     def matches(self, embedding: np.ndarray) -> bool:
         return self.score(embedding) >= self.threshold
 
-    def save(self, path: Path) -> None:
+    def to_bytes(self) -> bytes:
+        """The saved form, for a caller that writes it itself (a derived item of kept audio)."""
+        import io
         check_report(self.report)
+        meta = {"format": FORMAT, "threshold": self.threshold, "trained_at": self.trained_at, "report": self.report}
+        buffer = io.BytesIO()
+        np.savez(buffer, centroid=self.centroid.astype(np.float64), meta=np.array(json.dumps(meta)))
+        return buffer.getvalue()
+
+    def save(self, path: Path) -> None:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        meta = {"format": FORMAT, "threshold": self.threshold, "trained_at": self.trained_at, "report": self.report}
-        tmp = path.with_name(path.name + ".tmp.npz")
-        np.savez(tmp, centroid=self.centroid.astype(np.float64), meta=np.array(json.dumps(meta)))
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_bytes(self.to_bytes())
         tmp.replace(path)
 
     @classmethod
