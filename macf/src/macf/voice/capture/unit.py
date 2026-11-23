@@ -270,6 +270,8 @@ class CaptureUnit:
         self.recording: Optional[_Recording] = None
         #: The agent whose wake model fired, and when, while the phrase settles.
         self._pending: Optional[tuple] = None
+        #: The indicator shown at a fire, before the phrase is confirmed: the operator sees at once he was heard.
+        self._tentative = False
         #: A wake check in flight: (agent, future, the window it judges, the frames read since).
         self._checking: Optional[tuple] = None
         self._quiet_until = 0.0
@@ -328,6 +330,7 @@ class CaptureUnit:
             self._listen(frame, now)
 
     def _open(self, why: str) -> None:
+        self._withdraw_tentative()  #a strip left up with the microphone closed, the next wake under it
         self.audio.open()
         self._opened_at, self._frames_since_open, self._behind_said = self.clock(), 0, False
         self.ring.clear()
@@ -358,6 +361,7 @@ class CaptureUnit:
             self.log("capture has caught up with real time")
 
     def _close(self) -> None:
+        self._withdraw_tentative()  #a strip left up with the microphone closed, the next wake under it
         self.audio.close()
         self._opened_at = None
         self._checking = None
@@ -419,6 +423,7 @@ class CaptureUnit:
             self._judge_wake(now)
             return
         if self._speaking():                 # R27: never wake on an agent's own voice
+            self._withdraw_tentative()
             self._pending = None
             self._reset_detectors()
             return
@@ -440,6 +445,7 @@ class CaptureUnit:
         if self._pending is None:
             if fired is not None:
                 self._pending = (fired, now, fired_score)
+                self._show_tentative(fired)
             return
         agent, since, score = self._pending
         if fired is agent:
@@ -463,7 +469,20 @@ class CaptureUnit:
                           list(self.ring), [], chain)
         self._judge_wake(now)
 
+    def _show_tentative(self, agent: "_Agent") -> None:
+        """The indicator at the fire itself, not after the settle and the words check (about a second on a
+        Mac): withdrawn if the wake is rejected, kept as the recording's own if it is confirmed."""
+        if not self._tentative:
+            self._tentative = True
+            self.indicator.show(agent.b.agent, "wake_phrase")
+
+    def _withdraw_tentative(self) -> None:
+        if self._tentative:
+            self._tentative = False
+            self.indicator.hide()
+
     def _reject(self, line: str, now: float) -> None:
+        self._withdraw_tentative()
         self.log(line)
         self._quiet_until, self._quiet_why = now + REJECT_COOLDOWN_S, "just after a rejected wake"
 
@@ -510,11 +529,14 @@ class CaptureUnit:
             keep = int(KEY_PREROLL_S * RATE / FRAME)
             preroll = list(self.ring)[-keep:] if keep else []
         self._checking = None                # a key press overrides a wake still being checked
+        shown_already = self._tentative and mode == "wake_phrase"   # the tentative indicator becomes this one
+        self._tentative = False
         self.recording = _Recording(mode=mode, started=now, spoken_at=self.wall(), agent=agent,
                                     frames=list(preroll), last_speech=now, utterance_started=now)
         self.recording_since = self.wall()
         self.gate.reset()
-        self.indicator.show(agent.b.agent, mode)     # R21: which agent the microphone is open for
+        if not shown_already:
+            self.indicator.show(agent.b.agent, mode)  # R21: which agent the microphone is open for
 
     def _record(self, frame: np.ndarray, now: float) -> None:
         rec = self.recording

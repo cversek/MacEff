@@ -108,34 +108,100 @@ def detect_engine():
     return None
 
 
+#: Whisper skips a word that a silence this long surrounds (its hallucination_silence_threshold).
+MLX_SILENCE_S = 1.0
+#: A segment Whisper itself thinks is probably silence, decoded with little confidence, is dropped.
+NO_SPEECH_DROP = 0.5
+LOGPROB_DROP = -0.8
+#: A segment mostly outside the Latin script is a hallucination on an English seat.
+LATIN_SHARE_MIN = 0.6
+#: Whisper's own sign of a decoding loop; with the temperature fixed at 0 there is no fallback to escape it.
+COMPRESSION_DROP = 2.4
+#: A word or short phrase said this many times in a row is a loop ("Bumble, Bumble, ..."): kept once.
+REPEAT_RUN = 4
+
+
+def cut_repeats(text: str) -> str:
+    """Collapse a run of the same word or phrase (up to three words) repeated REPEAT_RUN or more times
+    in a row to a single copy."""
+    words = text.split()
+    norm = [w.strip(".,!?;:").lower() for w in words]
+    out, i = [], 0
+    while i < len(words):
+        for n in (1, 2, 3):
+            unit = norm[i:i + n]
+            if len(unit) < n or not any(unit):
+                continue
+            count = 1
+            while norm[i + count * n:i + (count + 1) * n] == unit:
+                count += 1
+            if count >= REPEAT_RUN:
+                out.extend(words[i:i + n])
+                i += count * n
+                break
+        else:
+            out.append(words[i])
+            i += 1
+    return " ".join(out)
+
+
+import threading
+
+_MLX_LOCK = threading.Lock()
+
+
+def segment_is_speech(seg: dict) -> bool:
+    """False for a segment that is Whisper's invention: likely silence decoded with low confidence, or
+    text mostly outside the Latin script."""
+    if seg.get("no_speech_prob", 0.0) > NO_SPEECH_DROP and seg.get("avg_logprob", 0.0) < LOGPROB_DROP:
+        return False
+    if seg.get("compression_ratio", 0.0) > COMPRESSION_DROP and len(set(cut_repeats(seg.get("text", "")).split())) < 4:
+        return False  #nothing but a loop
+    letters = [c for c in seg.get("text", "") if c.isalpha()]
+    if letters and sum(1 for c in letters if ord(c) < 0x250) / len(letters) < LATIN_SHARE_MIN:
+        return False
+    return True
+
+
 def transcribe_mlx(wav_path: str, model: str = "mlx-community/whisper-large-v3-turbo",
-                   language: str = "en", initial_prompt: Optional[str] = None) -> TranscriptResult:
+                   language: str = "en", initial_prompt: Optional[str] = None, light: bool = False) -> TranscriptResult:
     """Transcribe using mlx-whisper (Apple Silicon native)."""
     import mlx_whisper
 
+    #the Linux engine cuts silence before decoding (FULL_DECODE); mlx has no VAD, so it gets the bounded
+    #decode, Whisper's own skip of words found in long silences, and the segment filter below: without them
+    #it writes words, often in other scripts, into the quiet at an utterance's edges
     kwargs = {
         "path_or_hf_repo": model,
         "language": language,
         "word_timestamps": True,
+        "hallucination_silence_threshold": MLX_SILENCE_S,
+        **BOUNDED_DECODE,
     }
+    if light:  #a short check (the wake phrase) needs the words only: word timing roughly doubles its time
+        kwargs["word_timestamps"] = False
+        del kwargs["hallucination_silence_threshold"]
     if initial_prompt:
         kwargs["initial_prompt"] = initial_prompt
 
     t0 = time.time()
-    result = mlx_whisper.transcribe(wav_path, **kwargs)
+    with _MLX_LOCK:  #one at a time: the warm-up and a first wake must not load the model twice at once
+        result = mlx_whisper.transcribe(wav_path, **kwargs)
     elapsed = time.time() - t0
 
     segments = []
     for seg in result.get("segments", []):
+        if not segment_is_speech(seg):
+            continue
         segments.append(TranscriptSegment(
-            text=seg.get("text", "").strip(),
+            text=cut_repeats(seg.get("text", "").strip()),
             start=seg.get("start", 0.0),
             end=seg.get("end", 0.0),
             confidence=1.0 - seg.get("no_speech_prob", 0.0),
         ))
 
     return TranscriptResult(
-        text=result.get("text", "").strip(),
+        text=" ".join(s.text for s in segments if s.text).strip(),
         segments=segments,
         language=result.get("language", language),
         engine="mlx-whisper",
@@ -295,12 +361,13 @@ def transcribe_array(audio, engine: Optional[str] = None, model: Optional[str] =
     if engine == "faster-whisper":
         return transcribe_faster_whisper(samples, model=model, language=language, initial_prompt=initial_prompt,
                                          max_tokens=max_tokens)
+    if engine == "mlx":  #no token cap in mlx; a short check runs light instead
+        return transcribe_mlx(samples, model=model, language=language, initial_prompt=initial_prompt,
+                              light=bool(max_tokens))
     if max_tokens:
         import warnings
         warnings.warn(f"{engine} doesn't cap tokens yet: a short check can run as long as a full transcription",
                       RuntimeWarning, stacklevel=2)
-    if engine == "mlx":
-        return transcribe_mlx(samples, model=model, language=language, initial_prompt=initial_prompt)
     if engine == "whisper":
         return transcribe_whisper(samples, model=model, language=language, initial_prompt=initial_prompt)
     raise ValueError(f"Unknown engine: {engine}")

@@ -61,7 +61,29 @@ def transcription(vocabulary: Optional[str]) -> dict:
 
     def check(audio, phrase):
         return transcribe_array(audio, initial_prompt=whisper_prompt(phrase, vocabulary), max_tokens=CHECK_TOKENS).text
+
     return {"transcribe": transcribe, "check": check, "release": release_models}
+
+
+def _warmed(parts: dict) -> dict:
+    warm_in_background(parts["check"])
+    return parts
+
+
+def warm_in_background(check) -> None:
+    """Load the transcription model now, off the loop's thread: otherwise the first wake after a start waits
+    for it (about 8 s on an M3 Max), and that reads as a wake that didn't take."""
+    import threading
+
+    import numpy as np
+
+    def warm():
+        try:
+            check(np.zeros(8000, dtype=np.float32), None)
+        except Exception as e:  # noqa: BLE001 - a failed warm-up only means the first wake loads the model
+            print(f"⚠️ MACF: voice: warming the transcription model failed ({e}); the first wake will load it",
+                  file=sys.stderr)
+    threading.Thread(target=warm, name="whisper-warm", daemon=True).start()
 
 
 def whisper_prompt(phrase: Optional[str], vocabulary: Optional[str]) -> Optional[str]:
@@ -166,7 +188,7 @@ def build(home: Path):
     return card, CaptureUnit(
         config, audio=here["audio"], lock=here["lock"], indicator=here["indicator"],
         triggers=here["triggers"] or NoKeys(),
-        gate=SileroGate(), detector=detector, **transcription(voice.transcription_prompt),
+        gate=SileroGate(), detector=detector, **_warmed(transcription(voice.transcription_prompt)),
         deliver=lambda u: deliver(card, u), on_voice_event=lambda kind, data: voice_event(card, kind, data),
         guard_lowered=lambda: guard_lowered(card),
         listening_on=lambda: state.listening_on(home),
@@ -240,7 +262,7 @@ def _platform_backends(trigger_devices, vocabulary: Optional[str] = None) -> dic
 
     here = platform.backends(trigger_devices)
     here["triggers"] = here["triggers"] or NoKeys()
-    return dict(here, gate=SileroGate(), **transcription(vocabulary))
+    return dict(here, gate=SileroGate(), **_warmed(transcription(vocabulary)))
 
 
 def main(argv=None) -> int:
