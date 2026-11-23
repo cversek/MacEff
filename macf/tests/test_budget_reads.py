@@ -515,3 +515,23 @@ def test_a_late_sample_and_a_fresh_one_come_back_in_time_order(reads):
     assert [round(x["t"] - now) for x in got[-3:]] == [round(held[-1]["t"] - now), -300, -30]
     assert [x["t"] for x in got] == sorted(x["t"] for x in got)
     assert got == budget.samples(since=now - h * HOUR, now=now)
+
+
+def test_an_older_carry_after_a_quiet_gap_is_not_read_as_a_sample(reads):
+    now = time.time()
+    h = budget.hook_horizon_h()
+    _write([_sample(now - 8 * HOUR + i * 600, 30 + i * 0.1) for i in range(30)])  # the last one is three hours ago
+    held = budget.samples(since=now - h * HOUR, now=now)
+    through = held[-1]["t"]
+    _write([_carry_row(now - 2.5 * HOUR, held, through=through)])  # an idle night: newer than the last sample, which is the hour's gap
+    _write([_carry_row(now - 600, held, through=through)])
+    got = budget.horizon_samples(h, now)
+    assert got == held and all(x["limits"] for x in got)
+
+
+def test_a_horizon_just_over_the_cap_is_read_not_carried(reads):
+    now = time.time()
+    _write([_sample(now - 14 * HOUR + i * 600, 10 + i * 0.01) for i in range(80)])
+    assert budget.horizon_samples(12.5, now, carry=True)
+    assert _carried() == []
+    assert budget.horizon_samples(12.0, now, carry=True) and len(_carried()) == 1
