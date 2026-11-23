@@ -347,20 +347,38 @@ def set_mode(mode: str, target: Optional[float] = None, by: Optional[str] = None
 _NO_MODE = {"mode": "normal", "target": None, "by": None, "scope": None}
 
 
-def mode_state(now: Optional[float] = None) -> tuple[dict, Optional[dict]]:
-    """``(current, lapsed)`` from one read of the mode events, so a hook that needs both walks the log once (#1127).
+#: A hook that finds its state older than this writes it again, so the next read stops within this long of now
+#: whatever the state's age (the cycle carry's idea, applied to what only the budget hooks read, #1127).
+REASSERT_AFTER = 3600.0
 
-    The newest ``budget_mode_set`` within two weekly windows decides. Within one window it is the operator's intent;
+
+def mode_state(now: Optional[float] = None, reassert: bool = False) -> tuple[dict, Optional[dict]]:
+    """(current, lapsed) from one read of the mode events, so a hook that needs both walks the log once (#1127).
+
+    The newest budget_mode_set within two weekly windows decides. Within one window it is the operator's intent;
     older, it has lapsed to normal, and when it was not itself normal the lapse is what the prompt notice announces
     once. A lapse older than two windows is not worth announcing, and a walk for an event that does not exist reads
-    as far back as it is allowed to, so this one is bounded."""
+    as far back as it is allowed to, so this one is bounded.
+
+    reassert (the prompt hook asks for it) makes the next read short: when the newest event is over
+    REASSERT_AFTER old, or there is none, a copy that keeps the original set_at (or says there was no mode) is
+    written, and the next read stops at it. The answer is the same either way."""
     now = now or time.time()
     e = next(iter(read_events(reverse=True, scope="all", only=("budget_mode_set",),
                               since=now - 2 * HISTORY.total_seconds())), None)
-    if e is None:
+    expired = e is not None and now - e["data"].get("set_at", e["timestamp"]) > 2 * HISTORY.total_seconds()
+    dead = e is None or bool(e["data"].get("absent")) or expired  # no mode that still counts
+    if reassert and (e is None or now - e["timestamp"] > REASSERT_AFTER):
+        if dead:  # a mode past two windows answers normal: remember that, not the mode
+            append_event("budget_mode_set", {"absent": True, "reasserted": True})
+        else:
+            append_event("budget_mode_set", {**e["data"], "set_at": e["data"].get("set_at", e["timestamp"]), "reasserted": True})
+    if dead:
         return dict(_NO_MODE), None
-    mode = dict(e["data"], set_at=e["timestamp"])
-    if now - e["timestamp"] <= HISTORY.total_seconds():
+    set_at = e["data"].get("set_at", e["timestamp"])
+    mode = {k: v for k, v in e["data"].items() if k not in ("reasserted", "set_at")}
+    mode["set_at"] = set_at
+    if now - set_at <= HISTORY.total_seconds():
         return mode, None
     return dict(_NO_MODE), (None if mode.get("mode") == "normal" else mode)
 
@@ -678,10 +696,47 @@ def maybe_autosample(now: Optional[float] = None) -> Optional[dict]:
     return sample(now=now, fetch=lambda: fetch_reply(timeout=5))  # a hook may not wait 20 s
 
 
-def _last_notices(now: float) -> dict:
-    seen = {}
-    for e in _recent("budget_notice", now):
-        seen.setdefault(e["data"].get("key"), e["data"])
+#: Slack on a window's start: a key's reset time is rounded to RESET_GRAIN, and the clock of the writer may differ.
+_WINDOW_SLACK = 3600.0
+
+
+def _window_start(row: dict, now: float) -> float:
+    """The earliest moment a notice keyed on this limit's current window can exist: the window opened then. A
+    session window is five hours, every other one a week. Never earlier than the history window."""
+    floor = now - HISTORY.total_seconds()
+    try:
+        reset = dt.datetime.fromisoformat(row["resets_at"]).timestamp()
+    except (KeyError, TypeError, ValueError):
+        return floor  # no usable reset time: the whole history window, as before
+    length = 5 * 3600.0 if row["kind"] == "session" else 7 * 86400.0
+    start = reset - length - _WINDOW_SLACK
+    if start > now:
+        return floor  # a window cannot open in the future: the reset time is not what it claims, so trust no bound
+    return max(floor, start)
+
+
+def _last_notices(now: float, wanted: dict, reassert: bool = False) -> dict:
+    """The newest budget_notice data for each wanted key, {key: data}; a key never shown is absent.
+
+    wanted maps each key the caller will ask about to the earliest time a notice with that key can exist (a
+    key names its window, so none predates the window's opening). The read goes back no further than the oldest of
+    those, and stops as soon as every key has been found: the cost is the events since the oldest of them, not the
+    history window (#1127). reassert writes each key found over REASSERT_AFTER old again with the same value, so
+    the next read stops within that long of now; the value a reader sees does not change."""
+    if not wanted:
+        return {}
+    seen: dict = {}
+    when: dict = {}
+    for e in _recent("budget_notice", now, since=min(wanted.values())):
+        k = e["data"].get("key")
+        if k in wanted and k not in seen and e["timestamp"] >= wanted[k]:
+            seen[k], when[k] = e["data"], e["timestamp"]
+            if len(seen) == len(wanted):
+                break
+    if reassert:
+        for k, d in seen.items():
+            if now - when[k] > REASSERT_AFTER:
+                append_event("budget_notice", {"key": k, "value": d.get("value"), "reasserted": True})
     return seen
 
 
@@ -696,13 +751,22 @@ def prompt_notice(now: Optional[float] = None) -> Optional[str]:
     block = _digest_block(now)
     if latest_sample(now) is None:
         return block  # no budget in use here: the spend digest, if any, is all there is
-    mode, lapsed = mode_state(now)  # one read for both
+    mode, lapsed = mode_state(now, reassert=True)  # one read for both
     st = status(now, horizon_h=hook_horizon_h(), mode=mode)
-    seen = _last_notices(now)
+    live = [r for r in st["limits"] if r.get("spending", True) and r["percent"] is not None and not r.get("reset_since_sample")]
+    wanted = {}
+    for r in live:
+        start = _window_start(r, now)
+        if any(r["percent"] >= b for b in bands()):
+            wanted[_key(r, "band")] = start
+        if "pace_needed" in r:
+            wanted[_key(r, "pace")] = start
+    if lapsed:
+        # the lapse began HISTORY after the mode was set, and its notice cannot predate that
+        wanted[f"mode_lapse:{lapsed['set_at']:.0f}"] = max(now - HISTORY.total_seconds(), lapsed["set_at"] + HISTORY.total_seconds())
+    seen = _last_notices(now, wanted, reassert=True)
     out = []
-    for r in st["limits"]:
-        if not r.get("spending", True) or r["percent"] is None or r.get("reset_since_sample"):
-            continue
+    for r in live:
         band = max([b for b in bands() if r["percent"] >= b], default=None)
         k = _key(r, "band")
         if band is not None and (seen.get(k) or {}).get("value") != band:
@@ -755,7 +819,7 @@ def wall_warning(now: Optional[float] = None) -> Optional[str]:
         if r["kind"] != "session" or r["percent"] is None or r["percent"] < wall or r.get("reset_since_sample"):
             continue
         k = _key(r, "wall")
-        if k in _last_notices(now):
+        if k in _last_notices(now, {k: _window_start(r, now)}):
             return None
         append_event("budget_notice", {"key": k, "value": r["percent"]})
         return (f"💳 5-hour window at {r['percent']:g}% (resets in {r['hours_left']:g}h{_stale(st)}). Work stops at the "

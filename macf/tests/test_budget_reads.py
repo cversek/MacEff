@@ -194,3 +194,167 @@ def test_a_sample_inside_the_horizon_is_read_and_one_outside_is_not(reads):
 def test_a_hook_status_with_no_samples_says_what_to_do(reads):
     with pytest.raises(budget.BudgetError):
         budget.status(time.time(), horizon_h=budget.hook_horizon_h())
+
+
+# ── the notice and the mode are read within the window that can hold them, then reasserted ─────────────────
+
+def _weekly_sample(t, pct, resets_in_days, kind="weekly_all"):
+    reset = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(t + resets_in_days * DAY))
+    return {"timestamp": t, "event": "budget_sampled",
+            "data": {"source": "endpoint",
+                     "limits": [{"kind": kind, "percent": pct, "resets_at": reset,
+                                 "scope": None, "severity": "normal"}]}}
+
+
+def test_a_notice_is_read_within_its_window_and_an_old_one_is_reasserted(reads):
+    now = time.time()
+    _write([_weekly_sample(now - 60, 80, 2)])  # a week-long window that opened five days ago
+    key = budget._key(budget.status(now)["limits"][0], "band")
+    _write([{"timestamp": now - 4 * DAY, "event": "budget_notice", "data": {"key": key, "value": 75.0}},
+            {"timestamp": now - 7 * DAY, "event": "budget_notice", "data": {"key": "band:old:window", "value": 50.0}}])
+    assert budget.prompt_notice(now) is None  # the band 75 was shown in this window: nothing to say
+    floors = [since for only, since in reads if only == ("budget_notice",)]
+    assert floors and all(since >= now - 5 * DAY - 2 * HOUR for since in floors)  # not the 8-day history window
+    reasserted = [e for e in _events_of("budget_notice") if e["data"].get("reasserted")]
+    assert [e["data"]["key"] for e in reasserted] == [key] and reasserted[0]["data"]["value"] == 75.0
+    YIELDED.clear()
+    assert budget.prompt_notice(now + 60) is None  # same answer, and the read stops at the reasserted event
+    assert YIELDED.count("budget_notice") == 1
+
+
+def test_the_mode_is_reasserted_without_changing_what_it_says(reads):
+    now = time.time()
+    _write([_sample(now - 60, 50), _mode(now - 3 * DAY, "conserve")])
+    first = budget.mode_state(now, reassert=True)
+    YIELDED.clear()
+    second = budget.mode_state(now + 5, reassert=True)
+    assert second == first and first[0]["mode"] == "conserve" and first[0]["set_at"] == pytest.approx(now - 3 * DAY)
+    assert "reasserted" not in first[0]
+    copies = [e for e in _events_of("budget_mode_set") if e["data"].get("reasserted")]
+    assert len(copies) == 1  # written once; the second read found it and wrote nothing
+    assert copies[0]["data"]["set_at"] == pytest.approx(now - 3 * DAY)
+
+
+def test_a_reasserted_mode_still_lapses_by_its_original_time(reads):
+    now = time.time()
+    _write([_mode(now - 9 * DAY, "conserve")])
+    cur, lapsed = budget.mode_state(now, reassert=True)
+    assert cur["mode"] == "normal" and lapsed["mode"] == "conserve"
+    cur2, lapsed2 = budget.mode_state(now + 2 * HOUR, reassert=True)  # reads the reasserted copy
+    assert cur2["mode"] == "normal" and lapsed2["set_at"] == pytest.approx(now - 9 * DAY)
+    assert budget.mode_state(now + 8 * DAY, reassert=True) == (cur2, None)  # past two windows from the original set
+
+
+def test_no_mode_is_remembered_so_the_next_read_stops(reads):
+    now = time.time()
+    assert budget.mode_state(now, reassert=True)[0]["mode"] == "normal"
+    YIELDED.clear()
+    assert budget.mode_state(now + 5, reassert=True) == (budget.mode_state(now)[0], None)
+    assert YIELDED.count("budget_mode_set") >= 1
+    assert budget.current_mode(now + 5)["mode"] == "normal" and budget.current_mode(now + 5).get("set_at") is None
+
+
+def _events_of(name):
+    from macf.agent_events_log import read_events
+    return list(read_events(reverse=False, scope="all", only=name))
+
+
+def test_an_expired_mode_is_replaced_by_the_marker_not_copied_again(reads):
+    now = time.time()
+    _write([_mode(now - 3600 * 3, "conserve") | {"data": {"mode": "conserve", "target": None, "by": None, "scope": None,
+                                                           "set_at": now - 20 * DAY, "reasserted": True}}])
+    assert budget.mode_state(now, reassert=True) == (budget._NO_MODE, None)
+    written = [e for e in _events_of("budget_mode_set") if e["timestamp"] > now - 60]
+    assert [e["data"].get("absent") for e in written] == [True]  # the marker, not a fresh copy of the dead mode
+    assert budget.mode_state(now + 10, reassert=True) == (budget._NO_MODE, None)
+    assert len([e for e in _events_of("budget_mode_set") if e["timestamp"] > now - 60]) == 1  # nothing more within the hour
+
+
+def test_the_read_only_callers_never_write(reads):
+    now = time.time()
+    _write([_weekly_sample(now - 60, 95, 0.1, "session"), _mode(now - 3 * DAY, "conserve"), _mode(now - 9 * DAY, "burn")])
+    key = budget._key(budget.status(now, need_mode=False)["limits"][0], "wall")
+    _write([{"timestamp": now - 3 * HOUR, "event": "budget_notice", "data": {"key": key, "value": 95}}])
+    before = len(_events_of(None))  # the stale mode, the stale notice and the sample, all over an hour old
+    budget.current_mode(now), budget.lapsed_mode(now), budget.status(now), budget.status(now, horizon_h=budget.hook_horizon_h())
+    budget.wall_warning(now)
+    budget.mode_state(now)
+    assert len(_events_of(None)) == before
+
+
+def test_the_prompt_notice_asks_for_the_mode_to_be_reasserted(reads):
+    now = time.time()
+    _write([_sample(now - 60, 10), _mode(now - 3 * DAY, "conserve")])
+    budget.prompt_notice(now)
+    assert [e for e in _events_of("budget_mode_set") if e["data"].get("reasserted")]
+
+
+def test_the_lapse_is_announced_once(reads):
+    now = time.time()
+    _write([_weekly_sample(now - 60, 10, 2), _mode(now - 10 * DAY, "conserve")])
+    first = budget.prompt_notice(now)
+    assert "lapsed" in first
+    assert budget.prompt_notice(now + 60) is None
+    assert "lapsed" not in (budget.prompt_notice(now + 2 * HOUR) or "")  # still once, after the reassertions
+
+
+# ── the pieces of the notice bound ────────────────────────────────────────────
+
+def _iso(t):
+    return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(t))
+
+
+def _notice(t, key, value=75.0):
+    return {"timestamp": t, "event": "budget_notice", "data": {"key": key, "value": value}}
+
+
+def _copies():
+    return [e for e in _events_of("budget_notice") if e["data"].get("reasserted")]
+
+
+def test_a_notice_is_reasserted_only_when_over_an_hour_old(reads):
+    now = time.time()
+    _write([_notice(now - 600, "fresh"), _notice(now - 2 * HOUR, "stale")])
+    floor = now - DAY
+    budget._last_notices(now, {"fresh": floor}, reassert=True)
+    assert _copies() == []  # ten minutes old: the next read already stops there
+    budget._last_notices(now, {"stale": floor}, reassert=True)
+    assert [e["data"]["key"] for e in _copies()] == ["stale"]
+
+
+def test_a_session_window_opens_five_hours_before_its_reset_and_a_weekly_one_a_week(reads):
+    now = time.time()
+    slack = budget._WINDOW_SLACK
+    session = {"kind": "session", "resets_at": _iso(now + HOUR)}
+    weekly = {"kind": "weekly_all", "resets_at": _iso(now + DAY)}
+    assert budget._window_start(session, now) == pytest.approx(now + HOUR - 5 * HOUR - slack, abs=2)
+    assert budget._window_start(weekly, now) == pytest.approx(now + DAY - 7 * DAY - slack, abs=2)
+
+
+def test_a_window_start_is_never_before_the_history_window_or_after_now(reads):
+    now = time.time()
+    floor = now - budget.HISTORY.total_seconds()
+    assert budget._window_start({"kind": "weekly_all", "resets_at": _iso(now + 20 * DAY)}, now) == pytest.approx(floor)
+    assert budget._window_start({"kind": "weekly_all", "resets_at": _iso(now - 20 * DAY)}, now) == pytest.approx(floor)
+    assert budget._window_start({"kind": "weekly_all", "resets_at": "not a time"}, now) == pytest.approx(floor)
+
+
+def test_a_notice_from_the_previous_window_does_not_count(reads):
+    now = time.time()
+    start = now - 2 * DAY
+    _write([_notice(start - 60, "k"), _notice(now - 5 * DAY, "other")])
+    # "other" lowers the read's floor below the old "k", so only the per-key check keeps it out
+    assert budget._last_notices(now, {"k": start, "other": now - 6 * DAY}).keys() == {"other"}
+    _write([_notice(start + 60, "k", 90.0)])
+    assert budget._last_notices(now, {"k": start})["k"]["value"] == 90.0
+
+
+def test_the_lapse_notice_is_looked_up_from_when_the_lapse_began(reads, monkeypatch):
+    now = time.time()
+    _write([_weekly_sample(now - 60, 10, 2), _mode(now - 9 * DAY, "conserve")])
+    asked = []
+    real = budget._last_notices
+    monkeypatch.setattr(budget, "_last_notices", lambda n, wanted, **kw: asked.append(dict(wanted)) or real(n, wanted, **kw))
+    budget.prompt_notice(now)
+    lapse = [floor for wanted in asked for key, floor in wanted.items() if key.startswith("mode_lapse:")]
+    assert lapse == [pytest.approx(now - 9 * DAY + budget.HISTORY.total_seconds(), abs=2)]  # a day ago, not eight
