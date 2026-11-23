@@ -209,3 +209,43 @@ def test_a_stop_that_arrives_while_the_child_starts_is_passed_on_once_it_exists(
     finally:
         for sig, handler in saved.items():
             signal.signal(sig, handler)
+
+
+### which keyboards may start the microphone
+
+def _triggers_for(devices, identity, monkeypatch):
+    """A MacTriggers without the HID manager: _on_value reads one F9 press from a device with ``identity``."""
+    import queue
+    triggers = capture_macos.MacTriggers.__new__(capture_macos.MacTriggers)
+    triggers._devices = list(devices)
+    triggers._events = queue.SimpleQueue()
+    triggers._iokit = types.SimpleNamespace(
+        IOHIDValueGetElement=lambda value: "element",
+        IOHIDElementGetUsagePage=lambda element: 0x07,     # the keyboard page
+        IOHIDElementGetUsage=lambda element: 0x42,         # F9
+        IOHIDElementGetDevice=lambda element: "device",
+        IOHIDValueGetIntegerValue=lambda value: 1)
+    monkeypatch.setattr(triggers, "_device_identity", lambda device: identity, raising=False)
+    triggers._on_value(None, None, None, "value")
+    return [triggers._events.get_nowait() for _ in range(triggers._events.qsize())]
+
+
+FOOTPEDAL = capture_macos.HidIdentity(product="USB Footswitch", vendor_id=0x1C4F, product_id=0x5C44)
+STRANGER = capture_macos.HidIdentity(product="Someone Else's Keyboard", vendor_id=0x05AC, product_id=0x0250)
+
+
+@pytest.mark.parametrize("declaration", ["1c4f:5c44", "USB Footswitch", " usb footswitch "])
+def test_a_key_from_a_declared_keyboard_is_passed_on(monkeypatch, declaration):
+    events = _triggers_for([declaration], FOOTPEDAL, monkeypatch)
+    assert len(events) == 1 and events[0].down
+
+
+@pytest.mark.parametrize("declaration", ["1c4f:5c44", "USB Footswitch"])
+def test_a_key_from_an_undeclared_keyboard_never_reaches_the_microphone(monkeypatch, declaration):
+    assert _triggers_for([declaration], STRANGER, monkeypatch) == []
+
+
+def test_the_identity_record_names_its_fields():
+    assert (FOOTPEDAL.product, FOOTPEDAL.vendor_id, FOOTPEDAL.product_id) == ("USB Footswitch", 0x1C4F, 0x5C44)
+    with pytest.raises(TypeError):
+        capture_macos.HidIdentity("USB Footswitch", 0x1C4F, 0x5C44)   # keyword only: no positional order to swap
