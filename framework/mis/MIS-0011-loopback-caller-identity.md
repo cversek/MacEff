@@ -62,8 +62,8 @@ The slug is unchanged. The test gains `macf/tests/test_primal_daemon.py::test_no
 ## 3 Sign-off
 
 - **Asked of** MIS-0002's other maintainers: the container-management maintainer and the host-side maintainer.
-- **Sign-offs:** none yet.
-- **Changes requested, with each answer:** none yet.
+- **Sign-offs:** the container-management maintainer, at 71bfc1b3 (https://github.com/cversek/MacEff/pull/1144#pullrequestreview-6015208339); the host-side maintainer, at 71bfc1b3 (https://github.com/cversek/MacEff/pull/1144#pullrequestreview-6015253129).
+- **Changes requested, with each answer:** the container-management maintainer asked for four wording changes at 1144165b (cite the host-side and head maintainers for the agreement; say R204 is claimed between agents on a shared login; record that declared grantees are left out by decision; place development servers outside R202 and R80); all four were made at 71bfc1b3. The host-side maintainer suggested, without blocking, that the socket path be checked against the platform's limit and that the voice service's move wait for the MIS-0008 voice chain; both are in MIS-0002's landing plan, step 11.
 - **The repo owner's decision:** none yet.
 
 ## Wiki-Links
