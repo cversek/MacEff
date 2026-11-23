@@ -201,8 +201,12 @@ def cmd_models_fetch(args) -> int:
         print("nothing fetched: approve each file you want with --approve FILE (the operator's yes, file by file)",
               file=sys.stderr)
         return 3
-    for path in weights.fetch(approved):
-        print(f"fetched {path}")
+    try:
+        for path in weights.fetch([f for f in missing if f.name in approved]):
+            print(f"fetched {path}")
+    except weights.WeightsMissing as e:
+        print(str(e), file=sys.stderr)
+        return 4
     left = [n for n in names if n not in approved]
     if left:
         print(f"still missing: {', '.join(sorted(left))}", file=sys.stderr)

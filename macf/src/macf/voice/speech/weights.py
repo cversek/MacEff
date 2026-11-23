@@ -13,6 +13,7 @@ none of those is listed unless the agent uses it.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ class File:
     name: str
     size: Optional[int]
     cached: bool
+    sha256: Optional[str] = None  # the hub's checksum for a large file, which the download is checked against
 
 
 class WeightsMissing(RuntimeError):
@@ -62,9 +64,11 @@ def listing(names: Sequence[str], repo: str = REPO) -> List[File]:
     """Each wanted file with its size and whether it is cached. Asks the hub for the sizes (metadata only,
     nothing is downloaded); a file the repository does not have is an error, not a silent omission."""
     sizes: Dict[str, Optional[int]] = {}
+    sums: Dict[str, Optional[str]] = {}
     try:
         info = _hub().HfApi().model_info(repo, files_metadata=True)
         sizes = {s.rfilename: s.size for s in info.siblings}
+        sums = {s.rfilename: getattr(getattr(s, "lfs", None), "sha256", None) for s in info.siblings}
     except Exception as e:  # noqa: BLE001 - the hub is a network service: offline or refused, the list still names the files
         print(f"⚠️ MACF: voice: couldn't read the file sizes from {repo} ({type(e).__name__}: {e}); "
               f"listing the files without them", file=sys.stderr)
@@ -72,12 +76,29 @@ def listing(names: Sequence[str], repo: str = REPO) -> List[File]:
     absent = [n for n in names if n not in sizes]
     if absent:
         raise WeightsMissing(f"{repo} has no file named {', '.join(absent)}; the voice name may be wrong")
-    return [File(n, sizes[n], is_cached(n, repo)) for n in names]
+    return [File(n, sizes[n], is_cached(n, repo), sums.get(n)) for n in names]
 
 
-def fetch(names: Sequence[str], repo: str = REPO) -> List[str]:
-    """Download exactly these files into the hub's cache and return their paths."""
-    return [_hub().hf_hub_download(repo, n) for n in names]
+def sha256_of(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def fetch(files: Sequence[File], repo: str = REPO) -> List[str]:
+    """Download exactly these files into the hub's cache and return their paths. A file the hub gave a SHA-256 for
+    is checked against it after the download: the operator approved a name, a size and this checksum, so bytes that
+    differ are refused (and left for the operator to delete), not loaded."""
+    paths = []
+    for f in files:
+        path = _hub().hf_hub_download(repo, f.name)
+        if f.sha256 and sha256_of(path) != f.sha256:
+            raise WeightsMissing(f"{f.name} was fetched but its SHA-256 is not the hub's ({f.sha256[:12]}...); "
+                                 f"the file at {path} is not to be used, delete it")
+        paths.append(path)
+    return paths
 
 
 def go_offline() -> None:

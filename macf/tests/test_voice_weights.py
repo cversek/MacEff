@@ -3,6 +3,7 @@
 The hub is a fake: nothing is downloaded and no network is used.
 """
 import argparse
+import hashlib
 import os
 import sys
 import types
@@ -15,9 +16,12 @@ from macf.voice.speech import cli, weights
 class FakeHub:
     """The parts of huggingface_hub the weights module uses, over a repository of named files."""
 
-    def __init__(self, files, cached=()):
+    def __init__(self, files, cached=(), root=None):
         self.files = dict(files)
         self.cache = set(cached)
+        self.root = root
+        self.bytes = {}            # name -> the bytes a download writes (default: b"x" * size, capped)
+        self.lfs = set()           # names the hub gives a SHA-256 for
         self.downloads = []
         self.constants = types.SimpleNamespace(HF_HUB_OFFLINE=False)
         self.api_error = None
@@ -34,14 +38,26 @@ class FakeHub:
             def model_info(self, repo, files_metadata=False):
                 if hub.api_error:
                     raise hub.api_error
-                return types.SimpleNamespace(siblings=[types.SimpleNamespace(rfilename=n, size=s)
-                                                       for n, s in hub.files.items()])
+                return types.SimpleNamespace(siblings=[
+                    types.SimpleNamespace(rfilename=n, size=s, lfs=(types.SimpleNamespace(sha256=hub.sha(n))
+                                                                    if n in hub.lfs else None))
+                    for n, s in hub.files.items()])
         return Api()
+
+    def content(self, name):
+        return self.bytes.get(name, f"content of {name}".encode())
+
+    def sha(self, name):
+        return hashlib.sha256(self.content(name)).hexdigest()
 
     def hf_hub_download(self, repo, name):
         self.downloads.append(name)
         self.cache.add(name)
-        return f"/cache/{name}"
+        if self.root is None:
+            return f"/cache/{name}"
+        path = self.root / name.replace("/", "_")
+        path.write_bytes(self.bytes.get("DOWNLOADED:" + name, self.content(name)))
+        return str(path)
 
 
 FILES = {"config.json": 2_000, "kokoro-v1_0.safetensors": 327_000_000, "voices/am_michael.safetensors": 500_000,
@@ -49,8 +65,8 @@ FILES = {"config.json": 2_000, "kokoro-v1_0.safetensors": 327_000_000, "voices/a
 
 
 @pytest.fixture
-def hub(monkeypatch):
-    fake = FakeHub(FILES)
+def hub(monkeypatch, tmp_path):
+    fake = FakeHub(FILES, root=tmp_path)
     monkeypatch.setattr(weights, "_hub", lambda: fake)
     return fake
 
@@ -95,10 +111,31 @@ def test_an_unreachable_hub_lists_the_files_without_sizes_and_says_so(hub, capsy
     assert "couldn't read the file sizes" in capsys.readouterr().err
 
 
-def test_fetch_downloads_exactly_the_named_files(hub):
-    assert weights.fetch(["config.json", "voices/am_michael.safetensors"]) == [
-        "/cache/config.json", "/cache/voices/am_michael.safetensors"]
+def _files(*names):
+    return [weights.File(n, FILES[n], False) for n in names]
+
+
+def test_fetch_downloads_exactly_the_named_files(hub, tmp_path):
+    got = weights.fetch(_files("config.json", "voices/am_michael.safetensors"))
+    assert got == [str(tmp_path / "config.json"), str(tmp_path / "voices_am_michael.safetensors")]
     assert hub.downloads == ["config.json", "voices/am_michael.safetensors"]
+
+
+def test_a_downloaded_file_is_checked_against_the_hubs_sha256(hub):
+    hub.lfs = {"kokoro-v1_0.safetensors"}
+    listed = weights.listing(["kokoro-v1_0.safetensors"])
+    assert listed[0].sha256 == hub.sha("kokoro-v1_0.safetensors")
+    assert weights.fetch(listed)                                          # the bytes match: accepted
+    hub.bytes["DOWNLOADED:kokoro-v1_0.safetensors"] = b"not what the hub holds"
+    with pytest.raises(weights.WeightsMissing, match="SHA-256 is not the hub's"):
+        weights.fetch(listed)
+
+
+def test_a_small_file_with_no_checksum_from_the_hub_is_taken_as_downloaded(hub):
+    listed = weights.listing(["config.json"])
+    assert listed[0].sha256 is None
+    hub.bytes["DOWNLOADED:config.json"] = b"anything"
+    assert weights.fetch(listed)
 
 
 def test_require_names_what_is_missing_and_the_command_that_fetches_it(hub):
@@ -232,3 +269,48 @@ def test_a_voice_that_was_not_fetched_is_said_not_downloaded(hub, mlx):
     hub.cache.add("voices/af_heart.safetensors")                       # fetched by the operator since
     engine.say("hello", "af_heart", 1.0, "en-us")
     assert mlx.model.voices[-1] == "af_heart"
+
+
+def test_a_fetch_whose_bytes_are_not_the_hubs_is_refused_with_its_own_exit(hub, monkeypatch, capsys):
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    hub.lfs = {"kokoro-v1_0.safetensors"}
+    hub.bytes["DOWNLOADED:kokoro-v1_0.safetensors"] = b"tampered"
+    assert cli.cmd_models_fetch(_args(voice=["am_michael"], approve=["kokoro-v1_0.safetensors"])) == 4
+    assert "SHA-256 is not the hub's" in capsys.readouterr().err
+
+
+def test_the_repository_is_the_one_the_engine_names():
+    from macf.voice.speech.macos import MLX_KOKORO
+    assert weights.REPO == "prince-canuma/Kokoro-82M" and MLX_KOKORO == weights.REPO
+
+
+def test_a_blend_is_spoken_in_its_heaviest_voice_and_only_that_voice_must_be_fetched(hub, mlx):
+    from macf.voice.speech.macos import MlxKokoroEngine
+    hub.cache = set(weights.wanted([weights.WARMUP_VOICE, "bm_george"]))   # the blend's other voice is not fetched
+    engine = MlxKokoroEngine()
+    engine.say("hello", "bm_george:0.7,af_heart:0.3", 1.0, "en-us")
+    assert mlx.model.voices[-1] == "bm_george"
+    with pytest.raises(weights.WeightsMissing, match="--voice af_heart"):
+        engine.say("hello", "af_heart:0.7,bm_george:0.3", 1.0, "en-us")
+
+
+def test_without_a_voice_named_the_agents_own_voice_is_the_one_listed(hub, monkeypatch, capsys):
+    from macf.pd.interface import SpeechSettings
+    monkeypatch.setattr("macf.voice.speech.__main__.settings_for",
+                        lambda home: SpeechSettings(voice="bm_george:0.6,am_michael:0.4"))
+    monkeypatch.setattr(cli, "_home", lambda: None)
+    assert cli.cmd_models_status(_args()) == 1
+    out = capsys.readouterr().out
+    assert "voices/bm_george.safetensors" in out and "voices/am_michael.safetensors" in out
+    assert "af_heart" not in out
+
+
+def test_an_unreadable_declaration_lists_the_warm_up_voice_and_says_why(hub, monkeypatch, capsys):
+    def broken(home):
+        raise OSError("declaration gone")
+    monkeypatch.setattr("macf.voice.speech.__main__.settings_for", broken)
+    monkeypatch.setattr(cli, "_home", lambda: None)
+    cli.cmd_models_status(_args())
+    out = capsys.readouterr()
+    assert f"voices/{weights.WARMUP_VOICE}.safetensors" in out.out
+    assert "the agent's voice couldn't be read (OSError: declaration gone)" in out.err
