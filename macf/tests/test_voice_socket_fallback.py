@@ -79,3 +79,8 @@ def test_preferring_the_socket_skips_an_attached_channel(monkeypatch, tmp_path):
     assert carriage._send(_record()) == 1
     thread.join(2)
     assert "start the still minute" in got[0]
+
+
+def test_the_label_says_why_the_socket_was_used():
+    assert "because no voice channel is attached" in voice_carriage.dictation_text(_record())
+    assert "because the declaration prefers" in voice_carriage.dictation_text(_record(), "the declaration prefers the session socket")
