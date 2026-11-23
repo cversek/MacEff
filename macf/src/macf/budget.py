@@ -250,6 +250,36 @@ def samples(since: Optional[float] = None, now: Optional[float] = None) -> list[
     return list(reversed(out))
 
 
+#: The hooks' horizon of samples, written again hourly by the prompt hook so a read stops at it (#1146).
+SAMPLES_CARRIED_EVENT = "budget_samples_carried"
+
+
+def horizon_samples(horizon_h: float, now: Optional[float] = None, carry: bool = False) -> list[dict]:
+    """The samples of the last horizon_h hours, oldest first: what samples(since=...) gives, from a shorter read.
+
+    The read goes back to the newest budget_samples_carried event that holds at least this horizon, takes the
+    samples it carries, and adds the budget_sampled events after it. carry (the prompt hook asks for it) writes
+    that event when there is none within REASSERT_AFTER, holding the samples read, so the next read stops within the
+    hour whatever the horizon; a caller that only reads never writes. Without a usable event it reads the horizon, as
+    samples does."""
+    now = now or time.time()
+    floor = max(now - horizon_h * 3600, now - HISTORY.total_seconds())
+    fresh: list[dict] = []
+    base: list[dict] = []
+    carried_at = None
+    for e in read_events(reverse=True, scope="all", only=("budget_sampled", SAMPLES_CARRIED_EVENT), since=floor):
+        if e.get("event") == SAMPLES_CARRIED_EVENT:
+            if (e["data"].get("horizon_h") or 0) >= horizon_h:
+                base, carried_at = e["data"].get("samples", []), e["timestamp"]
+                break
+        elif e.get("timestamp", 0) >= floor:
+            fresh.append({"t": e["timestamp"], "source": e["data"].get("source"), "limits": e["data"].get("limits", [])})
+    out = [x for x in base if x["t"] >= floor] + fresh[::-1]
+    if carry and out and (carried_at is None or now - carried_at > REASSERT_AFTER):
+        append_event(SAMPLES_CARRIED_EVENT, {"horizon_h": horizon_h, "samples": out})
+    return out
+
+
 def latest_sample(now: Optional[float] = None) -> Optional[dict]:
     """The newest sample, ``{t, source, limits}``, or None. Stops at the first one it meets, so a caller
     that needs only whether there is one, or when it was taken, doesn't read a week of events (#1127)."""
@@ -501,7 +531,7 @@ def hook_horizon_h() -> float:
 
 
 def status(now: Optional[float] = None, detail: bool = False, horizon_h: Optional[float] = None,
-           mode: Optional[dict] = None, need_mode: bool = True) -> dict:
+           mode: Optional[dict] = None, need_mode: bool = True, carry: bool = False) -> dict:
     """The current readings. ``detail`` adds the last failed refresh and the next try, which only `budget status`
     shows: each walks the event log again, and the hooks call this on every tool call.
 
@@ -510,9 +540,10 @@ def status(now: Optional[float] = None, detail: bool = False, horizon_h: Optiona
     window rate is the whole week's, as ``budget status`` shows it; with it, the window is the horizon.
 
     ``mode`` is the caller's reading of the mode when it already has one; ``need_mode=False`` leaves it out (None) for
-    a caller that never reads it, which skips the walk for the mode events."""
+    a caller that never reads it, which skips the walk for the mode events. carry lets the prompt hook write the
+    horizon's samples once an hour (see horizon_samples); no other caller writes."""
     now = now or time.time()
-    hist = samples(since=None if horizon_h is None else now - horizon_h * 3600, now=now)
+    hist = samples(now=now) if horizon_h is None else horizon_samples(horizon_h, now, carry)
     if not hist and horizon_h is not None:
         newest = latest_sample(now)
         hist = [newest] if newest else []
@@ -752,7 +783,7 @@ def prompt_notice(now: Optional[float] = None) -> Optional[str]:
     if latest_sample(now) is None:
         return block  # no budget in use here: the spend digest, if any, is all there is
     mode, lapsed = mode_state(now, reassert=True)  # one read for both
-    st = status(now, horizon_h=hook_horizon_h(), mode=mode)
+    st = status(now, horizon_h=hook_horizon_h(), mode=mode, carry=True)
     live = [r for r in st["limits"] if r.get("spending", True) and r["percent"] is not None and not r.get("reset_since_sample")]
     wanted = {}
     for r in live:
