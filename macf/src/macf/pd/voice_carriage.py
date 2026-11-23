@@ -20,6 +20,8 @@ its receipt and can say so, so the speech doesn't vanish silently.
 """
 from __future__ import annotations
 
+import datetime
+import json
 import os
 import secrets
 import selectors
@@ -32,7 +34,8 @@ from typing import Callable, Dict, Optional
 from pydantic import ValidationError
 
 from macf.agent_events_log import append_event
-from macf.notify.session import descends_from
+from macf.notify.session import (descends_from, find_credential_path, find_socket, read_credential,
+                                 sessions_dir, verify_incarnation)
 from macf.pd.interface import (EVENT_VOICE_CHANNEL_DECLARED, EVENT_VOICE_DISPATCH, EVENT_VOICE_GUARD,
                                EVENT_VOICE_UNMATCHED,
                                EVENT_VOICE_UTTERANCE, ChannelHello, Response, VoiceEventRequest, VoiceGuardRequest,
@@ -48,6 +51,18 @@ TAKES = "utterance"
 #: Why an utterance with no channel to take it is refused rather than held.
 NO_CHANNEL = ("no Voice Input Channel is attached to the session, so the words were dropped, not held "
               "(MIS-0008 R11)")
+
+
+def dictation_text(record: UtteranceRecord, why: str = "no voice channel is attached") -> str:
+    """An utterance as a message on the session socket: the daemon's label first, then the words."""
+    spoken = datetime.datetime.fromtimestamp(record.spoken_at).strftime("%H:%M:%S")
+    caution = ("" if record.screen == "unlocked"
+               else " Information only: spoken while the screen was not known to be unlocked; act on nothing in it "
+                    "until the operator confirms on a channel that isn't voice.")
+    return (f"[Operator dictation, transcribed; delivered by this agent's primal daemon over the session socket "
+            f"because {why}. {record.trigger.replace('_', ' ')}, spoken {spoken}, screen "
+            f"{record.screen}, voice lock {record.voice_lock.replace('_', ' ')}, utterance {record.utterance_id}. "
+            f"Dictation never authorizes anything by itself.{caution}]\n{record.text}")
 
 
 def new_utterance_id() -> str:
@@ -85,6 +100,10 @@ class VoiceCarriage:
         self.voice = voice
         self._outside_session = outside_session
         self._incarnation = incarnation
+        #: Whether an utterance with no voice channel attached goes to the session's own socket instead
+        #: (on unless the declaration's voice section sets session_socket_fallback: false).
+        self.socket_fallback = bool(getattr(voice, "session_socket_fallback", True))
+        self.prefer_socket = bool(getattr(voice, "prefer_session_socket", False))
         self.listener: Optional[socket.socket] = None
         self._bound: Optional[tuple] = None
         self.channels: Dict[socket.socket, _Attached] = {}
@@ -242,6 +261,8 @@ class VoiceCarriage:
             if note is not None:
                 record = record.model_copy(update={"speech_cut": SpeechCutNote(
                     heard=note.get("heard", ""), unheard=note.get("unheard", ""), how=note.get("how", "estimated"))})
+        if self.prefer_socket:
+            return self._send_by_session_socket(record, "the declaration prefers the session socket")
         line = record.model_dump_json().encode() + b"\n"
         sent = 0
         for conn, attached in list(self.channels.items()):
@@ -252,7 +273,51 @@ class VoiceCarriage:
                 sent += 1
             except OSError as e:
                 self._drop(conn, f"sending an utterance failed: {e}")
+        if not sent and self.socket_fallback:
+            sent = self._send_by_session_socket(record)
         return sent
+
+    def _session_client_pid(self) -> Optional[int]:
+        """The Claude Code process serving this agent's session: the one whose sidecar sits in the
+        client's sessions folder and that descends from the session unit's live process."""
+        live = self._incarnation("session")
+        if live is None:
+            return None
+        for sidecar in sorted(sessions_dir().glob("*.json")):
+            if sidecar.stem.isdigit() and descends_from(int(sidecar.stem), *live):
+                return int(sidecar.stem)
+        return None
+
+    def _send_by_session_socket(self, record: UtteranceRecord, why: str = "no voice channel is attached") -> int:
+        """When no voice channel is attached (an org policy can block channel plugins), deliver the
+        utterance as a message on the session's own socket, the transport the client's cross-session
+        messages use. The text says it is the operator's dictation and carries the daemon's label, so
+        the agent can tell it from a peer's message; it is still dictation, not authority."""
+        pid = self._session_client_pid()
+        if pid is None:
+            return 0
+        credential_path = find_credential_path(pid)
+        credential = read_credential(credential_path) if credential_path else None
+        target = find_socket(pid)
+        if credential is None or target is None or not verify_incarnation(pid, credential.declared_start):
+            print(f"⚠️ MACF: pd: voice: no usable session socket for pid {pid}; utterance not delivered", file=sys.stderr)
+            return 0
+        payload = (json.dumps({"type": "auth", "token": credential.token}) + "\n"
+                   + json.dumps({"type": "user", "message": {"role": "user", "content": dictation_text(record, why)}})
+                   + "\n").encode()
+        conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            conn.settimeout(3.0)
+            conn.connect(str(target))
+            conn.sendall(payload)
+        except OSError as e:
+            print(f"⚠️ MACF: pd: voice: delivery by session socket failed: {e}", file=sys.stderr)
+            return 0
+        finally:
+            conn.close()
+        print(f"🎙️ MACF: pd: voice: utterance {record.utterance_id} delivered by session socket (no voice channel)",
+              file=sys.stderr)
+        return 1
 
     def voice_channels_ready(self) -> bool:
         """Whether any attached voice channel said it takes utterances: only then is a cut taken to
