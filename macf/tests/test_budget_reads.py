@@ -392,7 +392,8 @@ def test_a_read_stops_at_the_carried_samples(reads):
     _write([_sample(now + 20, 40.0)])
     YIELDED.clear()
     got = budget.horizon_samples(h, now + 30)
-    assert YIELDED.count("budget_sampled") == 1 and YIELDED.count(budget.SAMPLES_CARRIED_EVENT) == 1
+    # the new sample, and the one just before the carry that tells the read it has gone far enough: not the horizon
+    assert YIELDED.count("budget_sampled") == 2 and YIELDED.count(budget.SAMPLES_CARRIED_EVENT) == 1
     assert len(got) == len(budget.samples(since=now + 30 - h * HOUR, now=now + 30))
 
 
@@ -433,4 +434,45 @@ def test_only_the_prompt_notice_writes_the_carry_and_the_readers_do_not(reads, m
     budget.current_mode(now), budget.lapsed_mode(now)
     assert _carried() == []
     budget.prompt_notice(now)
+    assert len(_carried()) == 1
+
+
+# ── the carry's size, and a sample written while it was being carried (#1148) ──
+
+def test_a_sample_written_between_the_read_and_the_carry_is_found_by_the_next_read(reads, monkeypatch):
+    now = time.time()
+    h = budget.hook_horizon_h()
+    _write(_series(now))
+    real_append = budget.append_event
+
+    def racing_append(name, data, *a, **kw):
+        if name == budget.SAMPLES_CARRIED_EVENT:
+            _write([_sample(now - 120, 36.0), _sample(now - 60, 37.0)])  # another process's sample lands after the carrier read, before it wrote
+        return real_append(name, data, *a, **kw)
+    monkeypatch.setattr(budget, "append_event", racing_append)
+    budget.horizon_samples(h, now + 10, carry=True)
+    carried = _carried()[0]["data"]
+    assert carried["through"] < now - 120 and all(abs(x["t"] - (now - 60)) > 1 for x in carried["samples"])
+    got = budget.horizon_samples(h, now + 20)
+    assert [round(x["t"] - now) for x in got[-2:]] == [-120, -60]  # both, in order: in the log ahead of the carry, newer than `through`
+    assert got == budget.samples(since=now + 20 - h * HOUR, now=now + 20)
+
+
+def test_the_carried_event_records_the_newest_sample_it_holds(reads):
+    now = time.time()
+    _write(_series(now))
+    budget.horizon_samples(budget.hook_horizon_h(), now, carry=True)
+    data = _carried()[0]["data"]
+    assert data["through"] == max(x["t"] for x in data["samples"])
+
+
+def test_a_horizon_over_the_cap_is_read_not_carried_and_the_samples_are_the_same(reads):
+    now = time.time()
+    _write(_series(now))
+    over = budget.MAX_CARRY_HORIZON_H + 1
+    plain = budget.samples(since=now - over * HOUR, now=now)
+    assert budget.horizon_samples(over, now, carry=True) == plain
+    assert _carried() == []
+    at_cap = budget.MAX_CARRY_HORIZON_H
+    assert budget.horizon_samples(at_cap, now, carry=True) == budget.samples(since=now - at_cap * HOUR, now=now)
     assert len(_carried()) == 1
