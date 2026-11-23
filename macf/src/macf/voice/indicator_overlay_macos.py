@@ -23,7 +23,7 @@ import objc
 from AppKit import (NSApplication, NSApplicationActivationPolicyAccessory, NSBackingStoreBuffered, NSBezierPath,
                     NSColor, NSFont, NSFontAttributeName, NSForegroundColorAttributeName, NSMakeRect, NSPanel,
                     NSScreen, NSStatusWindowLevel, NSView, NSWindowCollectionBehaviorCanJoinAllSpaces,
-                    NSWindowCollectionBehaviorStationary, NSWindowStyleMaskBorderless,
+                    NSWindowCollectionBehaviorStationary, NSWindowCollectionBehaviorFullScreenAuxiliary, NSWindowStyleMaskBorderless,
                     NSWindowStyleMaskNonactivatingPanel)
 from Foundation import NSObject, NSString
 from PyObjCTools import AppHelper
@@ -81,11 +81,16 @@ class IndicatorView(NSView):
         NSBezierPath.fillRect_(NSMakeRect(10, h - 5, (w - 20) * max(0.0, min(1.0, self.left)), 3))
 
 
+def top_center():
+    """Where the strip goes: top center of the screen that holds the menu bar now."""
+    screen = NSScreen.mainScreen().frame()
+    return (screen.origin.x + (screen.size.width - WIDTH) / 2,
+            screen.origin.y + screen.size.height - HEIGHT - 34)
+
+
 class Controller(NSObject):
     def build(self):
-        screen = NSScreen.mainScreen().frame()
-        x = screen.origin.x + (screen.size.width - WIDTH) / 2
-        y = screen.origin.y + screen.size.height - HEIGHT - 34
+        x, y = top_center()
         style = NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
         self.panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
             NSMakeRect(x, y, WIDTH, HEIGHT), style, NSBackingStoreBuffered, False)
@@ -95,7 +100,8 @@ class Controller(NSObject):
         self.panel.setIgnoresMouseEvents_(True)
         self.panel.setHidesOnDeactivate_(False)
         self.panel.setCollectionBehavior_(NSWindowCollectionBehaviorCanJoinAllSpaces
-                                          | NSWindowCollectionBehaviorStationary)
+                                          | NSWindowCollectionBehaviorStationary
+                                          | NSWindowCollectionBehaviorFullScreenAuxiliary)
         self.view = IndicatorView.alloc().initWithFrame_(NSMakeRect(0, 0, WIDTH, HEIGHT))
         self.panel.setContentView_(self.view)
         return self
@@ -110,6 +116,9 @@ class Controller(NSObject):
         if "show" in message:
             v.agent, v.mode = message["show"].get("agent", ""), message["show"].get("mode", "")
             v.started, v.wave, v.levels, v.left, v.so_far, v.tentative = time.monotonic(), [], [], 1.0, "", ""
+            #placed at each show, not once at start: a display unplugged or rearranged since then would leave
+            #the strip at a place no screen shows (seen 2026-11-23, after two days running)
+            self.panel.setFrameOrigin_(top_center())
             self.panel.orderFrontRegardless()
         if "hide" in message:
             self.panel.orderOut_(None)
