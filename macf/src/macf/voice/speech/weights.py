@@ -87,6 +87,17 @@ def sha256_of(path: str) -> str:
     return h.hexdigest()
 
 
+def _discard(path: str) -> None:
+    """Remove a downloaded file from the cache: its snapshot entry, and the blob behind it when the entry is a link.
+    Left in place it would pass ``is_cached`` and be loaded by the next engine start, which nobody approved."""
+    real = os.path.realpath(path)
+    for p in {path, real}:
+        try:
+            os.remove(p)
+        except FileNotFoundError:  # noqa: S110 - already gone is the goal
+            pass
+
+
 def fetch(files: Sequence[File], repo: str = REPO) -> List[str]:
     """Download exactly these files into the hub's cache and return their paths. A file the hub gave a SHA-256 for
     is checked against it after the download: the operator approved a name, a size and this checksum, so bytes that
@@ -95,8 +106,9 @@ def fetch(files: Sequence[File], repo: str = REPO) -> List[str]:
     for f in files:
         path = _hub().hf_hub_download(repo, f.name)
         if f.sha256 and sha256_of(path) != f.sha256:
+            _discard(path)
             raise WeightsMissing(f"{f.name} was fetched but its SHA-256 is not the hub's ({f.sha256[:12]}...); "
-                                 f"the file at {path} is not to be used, delete it")
+                                 f"deleted it from the cache, so the engine will not load it")
         paths.append(path)
     return paths
 

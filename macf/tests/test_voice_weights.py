@@ -23,12 +23,16 @@ class FakeHub:
         self.bytes = {}            # name -> the bytes a download writes (default: b"x" * size, capped)
         self.lfs = set()           # names the hub gives a SHA-256 for
         self.downloads = []
+        self.downloaded = set()    # names a download wrote to disk under root
         self.constants = types.SimpleNamespace(HF_HUB_OFFLINE=False)
         self.api_error = None
 
     def try_to_load_from_cache(self, repo, name):
         if name in getattr(self, "noexist", ()):
             return object()  # the hub's marker for a file it has recorded as absent from the repository
+        if self.root is not None and name in self.downloaded:
+            path = self.root / name.replace("/", "_")
+            return str(path) if path.exists() else None      # a file deleted from the cache is no longer cached
         return f"/cache/{name}" if name in self.cache else None
 
     def HfApi(self):
@@ -53,10 +57,15 @@ class FakeHub:
     def hf_hub_download(self, repo, name):
         self.downloads.append(name)
         self.cache.add(name)
+        self.downloaded.add(name)
         if self.root is None:
             return f"/cache/{name}"
         path = self.root / name.replace("/", "_")
-        path.write_bytes(self.bytes.get("DOWNLOADED:" + name, self.content(name)))
+        blob = self.root / ("blob_" + name.replace("/", "_"))      # the hub's cache: a snapshot link to a blob
+        blob.write_bytes(self.bytes.get("DOWNLOADED:" + name, self.content(name)))
+        if path.is_symlink() or path.exists():
+            path.unlink()
+        path.symlink_to(blob)
         return str(path)
 
 
@@ -129,6 +138,19 @@ def test_a_downloaded_file_is_checked_against_the_hubs_sha256(hub):
     hub.bytes["DOWNLOADED:kokoro-v1_0.safetensors"] = b"not what the hub holds"
     with pytest.raises(weights.WeightsMissing, match="SHA-256 is not the hub's"):
         weights.fetch(listed)
+
+
+def test_a_file_refused_on_its_checksum_is_deleted_so_the_engine_cannot_load_it(hub, tmp_path):
+    hub.lfs = {"kokoro-v1_0.safetensors"}
+    listed = weights.listing(["kokoro-v1_0.safetensors"])
+    hub.bytes["DOWNLOADED:kokoro-v1_0.safetensors"] = b"not what the hub holds"
+    with pytest.raises(weights.WeightsMissing, match="deleted it from the cache"):
+        weights.fetch(listed)
+    assert not (tmp_path / "kokoro-v1_0.safetensors").is_symlink() and not (tmp_path / "kokoro-v1_0.safetensors").exists()
+    assert not (tmp_path / "blob_kokoro-v1_0.safetensors").exists()     # the blob behind the link too
+    assert weights.is_cached("kokoro-v1_0.safetensors") is False
+    with pytest.raises(weights.WeightsMissing, match="voice models fetch"):
+        weights.require(["kokoro-v1_0.safetensors"])             # an unattended restart refuses it, not loads it
 
 
 def test_a_small_file_with_no_checksum_from_the_hub_is_taken_as_downloaded(hub):
