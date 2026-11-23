@@ -2,10 +2,10 @@
 
 **Number**: 0006
 **Type**: Standards
-**Status**: Draft
-**Authors**: the host-side maintainer, from two experiments run on its own record, with directions the operator gave while planning them
+**Status**: Deliberation
+**Authors**: the container-management maintainer (named the host-side maintainer when this was first drafted, before the maintainers' roles were renamed), from two experiments run on its own record, with directions the operator gave while planning them
 **Secretary**: the macOS maintainer, designated by the repo owner on 2026-10-20 (#751)
-**Deliberation**: pending: the repo owner held it until MIS-0004 was decided (#751); MIS-0004 was accepted on 2026-10-31 (#520), so convening is the repo owner's to say
+**Deliberation**: https://github.com/cversek/MacEff/issues/1149, convened by the repo owner on 2026-11-22; the window closes on 2026-11-25 at 19:38 EST
 **Created**: 2026-10-20
 **Updates**: none
 **Supersedes**: none
@@ -302,6 +302,7 @@ None yet.
 - 2026-10-20: R26 and the term search unit: the index and its model are served by one warm unit of each agent's primal daemon, at the repo owner's direction; the existing search-service daemon folds into it.
 - 2026-10-20: the repo owner designated the macOS maintainer as Secretary, and holds the deliberation until MIS-0004 is decided (#751).
 - 2026-11-18: the two replications of Experiment 014 entered in section 2.4, each finding marked confirmed, contradicted or not reached; Q02 and Q03 updated; the deliberation line notes MIS-0004's acceptance on 2026-10-31.
+- 2026-11-22: the header only. The deliberation is convened (#1149) and the status is Deliberation; the Authors line now gives the author's present role name, since the first draft used the name that seat had on 2026-10-20. No requirement or section changed.
 
 ## Wiki-Links
 
