@@ -296,3 +296,65 @@ def test_the_lapse_is_announced_once(reads):
     assert "lapsed" in first
     assert budget.prompt_notice(now + 60) is None
     assert "lapsed" not in (budget.prompt_notice(now + 2 * HOUR) or "")  # still once, after the reassertions
+
+
+# ── the pieces of the notice bound ────────────────────────────────────────────
+
+def _iso(t):
+    return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(t))
+
+
+def _notice(t, key, value=75.0):
+    return {"timestamp": t, "event": "budget_notice", "data": {"key": key, "value": value}}
+
+
+def _copies():
+    return [e for e in _events_of("budget_notice") if e["data"].get("reasserted")]
+
+
+def test_a_notice_is_reasserted_only_when_over_an_hour_old(reads):
+    now = time.time()
+    _write([_notice(now - 600, "fresh"), _notice(now - 2 * HOUR, "stale")])
+    floor = now - DAY
+    budget._last_notices(now, {"fresh": floor}, reassert=True)
+    assert _copies() == []  # ten minutes old: the next read already stops there
+    budget._last_notices(now, {"stale": floor}, reassert=True)
+    assert [e["data"]["key"] for e in _copies()] == ["stale"]
+
+
+def test_a_session_window_opens_five_hours_before_its_reset_and_a_weekly_one_a_week(reads):
+    now = time.time()
+    slack = budget._WINDOW_SLACK
+    session = {"kind": "session", "resets_at": _iso(now + HOUR)}
+    weekly = {"kind": "weekly_all", "resets_at": _iso(now + DAY)}
+    assert budget._window_start(session, now) == pytest.approx(now + HOUR - 5 * HOUR - slack, abs=2)
+    assert budget._window_start(weekly, now) == pytest.approx(now + DAY - 7 * DAY - slack, abs=2)
+
+
+def test_a_window_start_is_never_before_the_history_window_or_after_now(reads):
+    now = time.time()
+    floor = now - budget.HISTORY.total_seconds()
+    assert budget._window_start({"kind": "weekly_all", "resets_at": _iso(now + 20 * DAY)}, now) == pytest.approx(floor)
+    assert budget._window_start({"kind": "weekly_all", "resets_at": _iso(now - 20 * DAY)}, now) == pytest.approx(floor)
+    assert budget._window_start({"kind": "weekly_all", "resets_at": "not a time"}, now) == pytest.approx(floor)
+
+
+def test_a_notice_from_the_previous_window_does_not_count(reads):
+    now = time.time()
+    start = now - 2 * DAY
+    _write([_notice(start - 60, "k"), _notice(now - 5 * DAY, "other")])
+    # "other" lowers the read's floor below the old "k", so only the per-key check keeps it out
+    assert budget._last_notices(now, {"k": start, "other": now - 6 * DAY}).keys() == {"other"}
+    _write([_notice(start + 60, "k", 90.0)])
+    assert budget._last_notices(now, {"k": start})["k"]["value"] == 90.0
+
+
+def test_the_lapse_notice_is_looked_up_from_when_the_lapse_began(reads, monkeypatch):
+    now = time.time()
+    _write([_weekly_sample(now - 60, 10, 2), _mode(now - 9 * DAY, "conserve")])
+    asked = []
+    real = budget._last_notices
+    monkeypatch.setattr(budget, "_last_notices", lambda n, wanted, **kw: asked.append(dict(wanted)) or real(n, wanted, **kw))
+    budget.prompt_notice(now)
+    lapse = [floor for wanted in asked for key, floor in wanted.items() if key.startswith("mode_lapse:")]
+    assert lapse == [pytest.approx(now - 9 * DAY + budget.HISTORY.total_seconds(), abs=2)]  # a day ago, not eight
