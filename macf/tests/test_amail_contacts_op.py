@@ -120,3 +120,28 @@ def test_the_command_against_a_broker_with_no_contact_list_says_so_in_text_and_j
     assert "no contact list" in text and "alpha" not in text
     as_json = json.loads(_run(monkeypatch, capsys, deployment, json=True))
     assert as_json == {"contacts": [], "contact_list": False}
+
+
+def _refused(monkeypatch, capsys, deployment, agent="alpha", **ns):
+    import macf.cli as cli
+    monkeypatch.setattr(cli, "_amail_config", lambda: {"socket": str(deployment["cfg"].socket_path), "agent": agent})
+    monkeypatch.setattr(cli, "_ensure_host_broker", lambda cfg: None)
+    rc = cli.cmd_amail_contacts(argparse.Namespace(filter=None, json=ns.get("json", False)))
+    return rc, capsys.readouterr().out
+
+
+def test_a_broker_that_predates_the_operation_is_reported_not_read_as_no_correspondents(monkeypatch, capsys, deployment):
+    def older(agent):
+        raise ValueError("unknown operation 'contacts'")
+    monkeypatch.setattr(deployment["broker"], "contact_entries", older)
+    rc, out = _refused(monkeypatch, capsys, deployment)
+    assert rc == 1 and "refused" in out and "unknown operation" in out and "restart" in out
+    assert "no correspondents" not in out
+    rc, out = _refused(monkeypatch, capsys, deployment, json=True)
+    as_json = json.loads(out)
+    assert rc == 1 and as_json["ok"] is False and "unknown operation" in as_json["error"] and "contacts" not in as_json
+
+
+def test_a_refusal_for_this_agent_is_shown_with_the_brokers_reason(monkeypatch, capsys, deployment):
+    rc, out = _refused(monkeypatch, capsys, deployment, agent="gamma")
+    assert rc == 1 and "claimed" in out and "gamma" in out and "restart" not in out
