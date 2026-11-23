@@ -5,6 +5,7 @@ stops only when it finds an event walks the whole window when the event is absen
 how far back it reads, not only for what it answers. Events are written straight into the isolated log.
 """
 
+import json
 import time
 
 import pytest
@@ -476,3 +477,12 @@ def test_a_horizon_over_the_cap_is_read_not_carried_and_the_samples_are_the_same
     at_cap = budget.MAX_CARRY_HORIZON_H
     assert budget.horizon_samples(at_cap, now, carry=True) == budget.samples(since=now - at_cap * HOUR, now=now)
     assert len(_carried()) == 1
+
+
+def test_the_cap_is_twelve_hours_and_the_largest_carried_event_is_small(reads):
+    now = time.time()
+    _write([_sample(now - 26 * HOUR + i * 600, 10 + i * 0.01) for i in range(150)])  # a day of ten-minute samples
+    assert budget.horizon_samples(24.0, now, carry=True) and _carried() == []  # 24 h: read, never carried
+    assert budget.horizon_samples(12.0, now, carry=True) and len(_carried()) == 1
+    size = len(json.dumps(_carried()[0]["data"]))
+    assert size < 25_000  # a day of this event is then under 0.6 MB, not the 13 MB of an 8-day horizon
