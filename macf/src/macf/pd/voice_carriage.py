@@ -103,6 +103,7 @@ class VoiceCarriage:
         #: Whether an utterance with no voice channel attached goes to the session's own socket instead
         #: (on unless the declaration's voice section sets session_socket_fallback: false).
         self.socket_fallback = bool(getattr(voice, "session_socket_fallback", True))
+        self.prefer_socket = bool(getattr(voice, "prefer_session_socket", False))
         self.listener: Optional[socket.socket] = None
         self._bound: Optional[tuple] = None
         self.channels: Dict[socket.socket, _Attached] = {}
@@ -260,6 +261,8 @@ class VoiceCarriage:
             if note is not None:
                 record = record.model_copy(update={"speech_cut": SpeechCutNote(
                     heard=note.get("heard", ""), unheard=note.get("unheard", ""), how=note.get("how", "estimated"))})
+        if self.prefer_socket:
+            return self._send_by_session_socket(record)
         line = record.model_dump_json().encode() + b"\n"
         sent = 0
         for conn, attached in list(self.channels.items()):

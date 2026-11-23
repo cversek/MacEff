@@ -511,6 +511,9 @@ class VoiceSection(_Closed):
     #: An utterance that finds no voice channel attached goes to the session's own socket as a message
     #: (an org policy can block channel plugins). Off: such an utterance is refused, as before.
     session_socket_fallback: bool = True
+    #: Deliver every utterance by the session socket, not to a channel: for a login whose org policy lets
+    #: the channel's plugin start but blocks it from reaching the session, so a channel looks attached.
+    prefer_session_socket: bool = False
     end_silence_s: float = Field(default=5.0, gt=0, le=30, allow_inf_nan=False)
     continual_close_s: float = Field(default=30.0, gt=0, le=3600, allow_inf_nan=False)
     #: Names and terms Whisper is primed with, so it spells them as written rather than as sound-alikes:

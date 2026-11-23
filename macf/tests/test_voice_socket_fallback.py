@@ -15,7 +15,7 @@ def _record(screen="unlocked"):
 
 def _carriage_for(monkeypatch, sock_path, pid=4242):
     carriage = voice_carriage.VoiceCarriage.__new__(voice_carriage.VoiceCarriage)
-    carriage.channels, carriage.socket_fallback = {}, True
+    carriage.channels, carriage.socket_fallback, carriage.prefer_socket = {}, True, False
     carriage._session_client_pid = lambda: pid
     monkeypatch.setattr(voice_carriage, "find_credential_path", lambda p: "cred")
     monkeypatch.setattr(voice_carriage, "read_credential",
@@ -65,3 +65,17 @@ def test_the_fallback_switched_off_or_no_session_delivers_nothing(monkeypatch, t
     carriage.socket_fallback = True
     carriage._session_client_pid = lambda: None
     assert carriage._send(_record()) == 0
+
+
+def test_preferring_the_socket_skips_an_attached_channel(monkeypatch, tmp_path):
+    """A channel whose plugin started but can't reach the session looks attached; the socket is used anyway."""
+    path = tmp_path / "s.sock"
+    got, thread = _serve_once(path)
+    carriage = _carriage_for(monkeypatch, path)
+    carriage.prefer_socket = True
+    carriage.channels = {"channel": types.SimpleNamespace(ready=True)}
+    carriage.voice_channels_ready = lambda: True
+    carriage._speech_cut = lambda: None
+    assert carriage._send(_record()) == 1
+    thread.join(2)
+    assert "start the still minute" in got[0]
