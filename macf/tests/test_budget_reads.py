@@ -486,3 +486,32 @@ def test_the_cap_is_twelve_hours_and_the_largest_carried_event_is_small(reads):
     assert budget.horizon_samples(12.0, now, carry=True) and len(_carried()) == 1
     size = len(json.dumps(_carried()[0]["data"]))
     assert size < 25_000  # a day of this event is then under 0.6 MB, not the 13 MB of an 8-day horizon
+
+
+def _carry_row(t, samples, **extra):
+    return {"timestamp": t, "event": budget.SAMPLES_CARRIED_EVENT,
+            "data": {"horizon_h": budget.hook_horizon_h(), "samples": samples, **extra}}
+
+
+def test_a_carry_in_the_old_format_reads_like_the_plain_read(reads):
+    now = time.time()
+    h = budget.hook_horizon_h()
+    _write(_series(now))
+    held = budget.samples(since=now - h * HOUR, now=now)
+    _write([_carry_row(now - 100, held)])  # as #1147 wrote it: no `through`
+    _write([_sample(now - 30, 38.0)])
+    assert budget.horizon_samples(h, now) == budget.samples(since=now - h * HOUR, now=now)
+
+
+def test_a_late_sample_and_a_fresh_one_come_back_in_time_order(reads):
+    now = time.time()
+    h = budget.hook_horizon_h()
+    _write(_series(now))
+    held = budget.samples(since=now - h * HOUR, now=now)
+    _write([_sample(now - 300, 36.0)])  # after the carrier read, ahead of its event in the log
+    _write([_carry_row(now - 100, held, through=held[-1]["t"])])
+    _write([_sample(now - 30, 38.0)])
+    got = budget.horizon_samples(h, now)
+    assert [round(x["t"] - now) for x in got[-3:]] == [round(held[-1]["t"] - now), -300, -30]
+    assert [x["t"] for x in got] == sorted(x["t"] for x in got)
+    assert got == budget.samples(since=now - h * HOUR, now=now)
