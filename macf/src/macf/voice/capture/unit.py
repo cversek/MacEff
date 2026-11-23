@@ -330,6 +330,7 @@ class CaptureUnit:
             self._listen(frame, now)
 
     def _open(self, why: str) -> None:
+        self._withdraw_tentative()  #a strip left up with the microphone closed, the next wake under it
         self.audio.open()
         self._opened_at, self._frames_since_open, self._behind_said = self.clock(), 0, False
         self.ring.clear()
@@ -360,6 +361,7 @@ class CaptureUnit:
             self.log("capture has caught up with real time")
 
     def _close(self) -> None:
+        self._withdraw_tentative()  #a strip left up with the microphone closed, the next wake under it
         self.audio.close()
         self._opened_at = None
         self._checking = None

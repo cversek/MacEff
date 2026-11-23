@@ -31,3 +31,20 @@ def test_a_fire_shows_at_once_and_a_reject_withdraws_it():
     assert unit.indicator.calls[-1] == ("hide",) and not unit._tentative
     unit._reject("another reject", now=1.0)  #nothing shown: nothing hidden
     assert unit.indicator.calls.count(("hide",)) == 1
+
+
+def test_listening_switched_off_between_the_fire_and_the_words_check_withdraws_the_indicator():
+    """From review: _close() left the strip up with the microphone closed (CTB's probe)."""
+    u = bare_unit()
+    u.audio = SimpleNamespace(close=lambda: None)
+    u._opened_at, u._checking, u.listening_since = 0, None, None
+    u._listening_on = lambda: True
+    u._show_tentative(SimpleNamespace(b=SimpleNamespace(agent="A")))
+    u._close()
+    assert ("hide",) in u.indicator.calls and not u._tentative
+
+
+def test_a_segment_loop_is_collapsed_in_the_transcript():
+    from macf.voice import transcribe as tr
+    seg = {"text": "Start the run. " + "Bumble, " * 20, "no_speech_prob": 0.1, "avg_logprob": -0.3, "compression_ratio": 1.5}
+    assert tr.segment_is_speech(seg) and tr.cut_repeats(seg["text"]).count("Bumble") == 1

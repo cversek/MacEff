@@ -145,6 +145,11 @@ def cut_repeats(text: str) -> str:
     return " ".join(out)
 
 
+import threading
+
+_MLX_LOCK = threading.Lock()
+
+
 def segment_is_speech(seg: dict) -> bool:
     """False for a segment that is Whisper's invention: likely silence decoded with low confidence, or
     text mostly outside the Latin script."""
@@ -180,7 +185,8 @@ def transcribe_mlx(wav_path: str, model: str = "mlx-community/whisper-large-v3-t
         kwargs["initial_prompt"] = initial_prompt
 
     t0 = time.time()
-    result = mlx_whisper.transcribe(wav_path, **kwargs)
+    with _MLX_LOCK:  #one at a time: the warm-up and a first wake must not load the model twice at once
+        result = mlx_whisper.transcribe(wav_path, **kwargs)
     elapsed = time.time() - t0
 
     segments = []

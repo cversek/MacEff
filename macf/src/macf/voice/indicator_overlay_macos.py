@@ -82,8 +82,10 @@ class IndicatorView(NSView):
 
 
 def top_center():
-    """Where the strip goes: top center of the screen that holds the menu bar now."""
-    screen = NSScreen.mainScreen().frame()
+    """Where the strip goes: top center of the screen that holds the menu bar now. That is screens()[0];
+    mainScreen() is the screen of the key window, which moves with the operator's focus."""
+    screens = NSScreen.screens()
+    screen = (screens[0] if screens else NSScreen.mainScreen()).frame()
     return (screen.origin.x + (screen.size.width - WIDTH) / 2,
             screen.origin.y + screen.size.height - HEIGHT - 34)
 
