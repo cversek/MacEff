@@ -253,30 +253,43 @@ def samples(since: Optional[float] = None, now: Optional[float] = None) -> list[
 #: The hooks' horizon of samples, written again hourly by the prompt hook so a read stops at it (#1146).
 SAMPLES_CARRIED_EVENT = "budget_samples_carried"
 
+#: The longest horizon carried, in hours. A carried event holds every sample of its horizon, about 1.2 KB an hour at one
+#: sample every ten minutes, written hourly: 12 hours is under 15 KB an event and 0.35 MB a day, where the history cap
+#: of 8 days would be 13 MB a day. It covers four time constants of up to three hours (the default is two, 8 hours); a
+#: longer horizon is read from the log as before, so the rate is the same and only the speed is not carried (#1148).
+MAX_CARRY_HORIZON_H = 12.0
+
 
 def horizon_samples(horizon_h: float, now: Optional[float] = None, carry: bool = False) -> list[dict]:
     """The samples of the last horizon_h hours, oldest first: what samples(since=...) gives, from a shorter read.
 
     The read goes back to the newest budget_samples_carried event that holds at least this horizon, takes the
-    samples it carries, and adds the budget_sampled events after it. carry (the prompt hook asks for it) writes
-    that event when there is none within REASSERT_AFTER, holding the samples read, so the next read stops within the
-    hour whatever the horizon; a caller that only reads never writes. Without a usable event it reads the horizon, as
-    samples does."""
+    samples it carries, and adds the budget_sampled events after it, and those before it that are newer than the
+    event's ``through`` (the newest sample time it holds): a sample another process appended while the carrier was
+    writing is in the log ahead of the event but not in it. carry (the prompt hook asks for it) writes that event when
+    there is none within REASSERT_AFTER, holding the samples read, so the next read stops within the hour whatever the
+    horizon; a caller that only reads never writes, and a horizon over MAX_CARRY_HORIZON_H is never carried. Without a
+    usable event it reads the horizon, as samples does."""
     now = now or time.time()
     floor = max(now - horizon_h * 3600, now - HISTORY.total_seconds())
     fresh: list[dict] = []
+    late: list[dict] = []
     base: list[dict] = []
-    carried_at = None
+    carried_at = through = None
     for e in read_events(reverse=True, scope="all", only=("budget_sampled", SAMPLES_CARRIED_EVENT), since=floor):
-        if e.get("event") == SAMPLES_CARRIED_EVENT:
+        if carried_at is not None:  # past the carry: only a sample it missed is still wanted
+            if e.get("event") != "budget_sampled" or e.get("timestamp", 0) <= through:
+                break
+            late.append({"t": e["timestamp"], "source": e["data"].get("source"), "limits": e["data"].get("limits", [])})
+        elif e.get("event") == SAMPLES_CARRIED_EVENT:
             if (e["data"].get("horizon_h") or 0) >= horizon_h:
                 base, carried_at = e["data"].get("samples", []), e["timestamp"]
-                break
+                through = e["data"].get("through", carried_at)
         elif e.get("timestamp", 0) >= floor:
             fresh.append({"t": e["timestamp"], "source": e["data"].get("source"), "limits": e["data"].get("limits", [])})
-    out = [x for x in base if x["t"] >= floor] + fresh[::-1]
-    if carry and out and (carried_at is None or now - carried_at > REASSERT_AFTER):
-        append_event(SAMPLES_CARRIED_EVENT, {"horizon_h": horizon_h, "samples": out})
+    out = [x for x in base if x["t"] >= floor] + late[::-1] + fresh[::-1]
+    if carry and out and horizon_h <= MAX_CARRY_HORIZON_H and (carried_at is None or now - carried_at > REASSERT_AFTER):
+        append_event(SAMPLES_CARRIED_EVENT, {"horizon_h": horizon_h, "samples": out, "through": out[-1]["t"]})
     return out
 
 
