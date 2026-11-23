@@ -57,7 +57,7 @@ def test_a_hook_reads_hours_of_samples_not_the_week(reads):
     st = budget.status(now, horizon_h=budget.hook_horizon_h())
     assert st["limits"][0]["percent"] == 41
     floor = now - budget.hook_horizon_h() * HOUR
-    sample_reads = [since for only, since in reads if only == ("budget_sampled",)]
+    sample_reads = [since for only, since in reads if "budget_sampled" in only]
     assert sample_reads and all(since is not None and since >= floor - 1 for since in sample_reads)
 
 
@@ -358,3 +358,79 @@ def test_the_lapse_notice_is_looked_up_from_when_the_lapse_began(reads, monkeypa
     budget.prompt_notice(now)
     lapse = [floor for wanted in asked for key, floor in wanted.items() if key.startswith("mode_lapse:")]
     assert lapse == [pytest.approx(now - 9 * DAY + budget.HISTORY.total_seconds(), abs=2)]  # a day ago, not eight
+
+
+# ── the horizon's samples are carried hourly (#1146) ───────────────────────────
+
+def _carried():
+    return _events_of(budget.SAMPLES_CARRIED_EVENT)
+
+
+def _series(now):
+    """Samples from five days back to a minute ago, ten minutes apart over the last nine hours."""
+    return [_sample(now - 5 * DAY, 10), _sample(now - 2 * DAY, 20)] + \
+           [_sample(now - 9 * HOUR + i * 600, 30 + i * 0.1) for i in range(53)]
+
+
+def test_the_horizon_samples_are_what_a_plain_read_gives_before_and_after_the_carry(reads):
+    now = time.time()
+    h = budget.hook_horizon_h()
+    _write(_series(now))
+    plain = budget.samples(since=now - h * HOUR, now=now)
+    assert plain and budget.horizon_samples(h, now) == plain
+    assert budget.horizon_samples(h, now, carry=True) == plain and len(_carried()) == 1
+    _write([_sample(now + 30, 36.0)])
+    later = budget.samples(since=now + 90 - h * HOUR, now=now + 90)
+    assert budget.horizon_samples(h, now + 90) == later  # the carried copy plus the newer sample
+
+
+def test_a_read_stops_at_the_carried_samples(reads):
+    now = time.time()
+    h = budget.hook_horizon_h()
+    _write(_series(now))
+    budget.horizon_samples(h, now, carry=True)
+    _write([_sample(now + 20, 40.0)])
+    YIELDED.clear()
+    got = budget.horizon_samples(h, now + 30)
+    assert YIELDED.count("budget_sampled") == 1 and YIELDED.count(budget.SAMPLES_CARRIED_EVENT) == 1
+    assert len(got) == len(budget.samples(since=now + 30 - h * HOUR, now=now + 30))
+
+
+def test_the_carry_is_written_once_an_hour_and_only_when_asked(reads):
+    now = time.time()
+    h = budget.hook_horizon_h()
+    _write(_series(now))
+    budget.horizon_samples(h, now)
+    assert _carried() == []  # a plain read writes nothing
+    budget.horizon_samples(h, now, carry=True)
+    budget.horizon_samples(h, now + 600, carry=True)
+    assert len(_carried()) == 1  # ten minutes later it is still current
+    budget.horizon_samples(h, now + 2 * HOUR, carry=True)
+    assert len(_carried()) == 2
+
+
+def test_a_carry_of_a_shorter_horizon_is_not_used(reads):
+    now = time.time()
+    _write(_series(now))
+    budget.horizon_samples(2.0, now, carry=True)
+    h = budget.hook_horizon_h()
+    assert budget.horizon_samples(h, now + 60) == budget.samples(since=now + 60 - h * HOUR, now=now + 60)
+
+
+def test_no_samples_no_carry(reads):
+    assert budget.horizon_samples(budget.hook_horizon_h(), time.time(), carry=True) == []
+    assert _carried() == []
+
+
+def test_only_the_prompt_notice_writes_the_carry_and_the_readers_do_not(reads, monkeypatch):
+    now = time.time()
+    _write(_series(now))
+    monkeypatch.setattr(budget, "open_work", lambda: [{"id": "1", "type": "TASK", "status": "pending",
+                                                       "scoped": True, "subject": "x"}])
+    _write([_mode(now - 3600, "burn", 95)])
+    h = budget.hook_horizon_h()
+    budget.status(now, horizon_h=h), budget.status(now), budget.wall_warning(now), budget.burn_gate(True, now)
+    budget.current_mode(now), budget.lapsed_mode(now)
+    assert _carried() == []
+    budget.prompt_notice(now)
+    assert len(_carried()) == 1
