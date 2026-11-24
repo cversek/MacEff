@@ -981,6 +981,11 @@ def weekly_usage(now: Optional[float] = None, kind: str = "weekly_all") -> Optio
             return "reset since the last sample" + (f" ({age})" if age else "")
         rate = ewma_rate([(t, p) for t, p, k in reversed(points) if k == key])
         notes = [f"{format_rate(rate)}%/hr"] if rate is not None else []
+        if rate and rate > 0 and pct < 100:
+            # when the limit is met at this pace, if before the window resets: the question the operator asks
+            full_at = t_new + (100.0 - pct) / rate * 3600
+            if left is None or (full_at - now) / 3600 < left:
+                notes.append("full ~" + dt.datetime.fromtimestamp(full_at).strftime("%H:%M"))
         if age:
             notes.append(age)
         line = f"{pct:g}%" + (f" ({', '.join(notes)})" if notes else "")
