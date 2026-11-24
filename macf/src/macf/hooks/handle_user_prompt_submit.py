@@ -380,9 +380,10 @@ Breadcrumb: {breadcrumb}"""
         # reports), read after hook_lines has had its chance to refresh it. It
         # moves on its own, so it is carried like the clock: at the end of the
         # one-line header, and as a line the diff never compares.
-        from macf.budget import usage_brief, usage_line
-        usage = usage_brief()  # "wk 38%", or "5h 4%" on a seat whose plan has no all-models week
-        usage_long = usage_line()
+        from macf.budget import _usage, usage_brief, usage_line
+        reading = _usage()  # one reading for both forms
+        usage = usage_brief(reading=reading)  # "wk 38%", or "5h 4%" on a seat whose plan has no all-models week
+        usage_long = usage_line(reading=reading)
         if usage_long:
             token_section = f"{token_section}\n{usage_long}"
 

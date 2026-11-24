@@ -167,8 +167,9 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # status` reports, shown after the drive length. It moves on its own, so
         # it is carried like the clock and never becomes a diff line.
         try:
-            from macf.budget import usage_brief, usage_line
-            _week, _week_long = usage_brief(), usage_line()
+            from macf.budget import _usage, usage_brief, usage_line
+            _reading = _usage()  # one reading for both forms
+            _week, _week_long = usage_brief(reading=_reading), usage_line(reading=_reading)
         except ImportError as e:
             emit_warning(Warning(source="stop", kind="weekly_usage_failed", detail=f"weekly usage skipped: {e}"))
             _week = None

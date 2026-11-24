@@ -911,25 +911,26 @@ def hook_lines(which: str, now: Optional[float] = None) -> Optional[str]:
 
 
 
-def usage_line(now: Optional[float] = None) -> Optional[str]:
-    """The long form for the hooks' blocks: "Weekly usage: 38%", or "Session usage (5h): 4%" on a seat with no
-    all-models week. None when neither has a sample. A GUARD."""
+def _usage(now: Optional[float] = None) -> tuple[Optional[str], Optional[str]]:
+    """("week" or "session", its figure) from one reading: the all-models week where the plan has one, else the
+    session limit (an organization seat reports the session and per-model weeks only). (None, None) when neither."""
     week = weekly_usage(now=now)
     if week:
-        return f"Weekly usage: {week}"
+        return "week", week
     session = weekly_usage(now=now, kind="session")
-    return f"Session usage (5h): {session}" if session else None
+    return ("session", session) if session else (None, None)
 
 
-def usage_brief(now: Optional[float] = None) -> Optional[str]:
-    """The dashboard's usage field: "wk 38%" from the weekly limit, or, on a seat whose plan reports no weekly
-    limit across models (an organization seat reports the session and per-model weeks only), "5h 4%" from the
-    session limit. None when neither has a sample. A GUARD, like weekly_usage."""
-    week = weekly_usage(now=now)
-    if week:
-        return f"wk {week}"
-    session = weekly_usage(now=now, kind="session")
-    return f"5h {session}" if session else None
+def usage_line(now: Optional[float] = None, reading: Optional[tuple] = None) -> Optional[str]:
+    """The long form for the hooks' blocks: "Weekly usage: 38%" or "Session usage (5h): 4%". A GUARD."""
+    kind, value = reading or _usage(now)
+    return None if value is None else (f"Weekly usage: {value}" if kind == "week" else f"Session usage (5h): {value}")
+
+
+def usage_brief(now: Optional[float] = None, reading: Optional[tuple] = None) -> Optional[str]:
+    """The dashboard's field: "wk 38%" or "5h 4%". A GUARD, like weekly_usage."""
+    kind, value = reading or _usage(now)
+    return None if value is None else (f"wk {value}" if kind == "week" else f"5h {value}")
 
 
 def weekly_usage(now: Optional[float] = None, kind: str = "weekly_all") -> Optional[str]:
@@ -950,7 +951,9 @@ def weekly_usage(now: Optional[float] = None, kind: str = "weekly_all") -> Optio
         floor = now - 4 * _tau_hours() * 3600
         points = []  # (t, percent, reset key), newest first
         login = keychain_service()
-        for e in _recent("budget_sampled", now):
+        for e in _recent("budget_sampled", now, floor):
+            if e["timestamp"] < floor:
+                break  # checked before the login: a seat whose newest samples are another login's must not walk the week
             if e["data"].get("login", KEYCHAIN_SERVICE) != login:
                 continue  # another login's sample (a seat that changed login) says nothing about this one
             w = next((l for l in e["data"].get("limits", []) if l.get("kind") == kind), None)
