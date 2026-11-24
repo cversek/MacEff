@@ -380,10 +380,11 @@ Breadcrumb: {breadcrumb}"""
         # reports), read after hook_lines has had its chance to refresh it. It
         # moves on its own, so it is carried like the clock: at the end of the
         # one-line header, and as a line the diff never compares.
-        from macf.budget import weekly_usage
-        week = weekly_usage()
-        if week:
-            token_section = f"{token_section}\nWeekly usage: {week}"
+        from macf.budget import usage_brief, usage_line
+        usage = usage_brief()  # "wk 38%", or "5h 4%" on a seat whose plan has no all-models week
+        usage_long = usage_line()
+        if usage_long:
+            token_section = f"{token_section}\n{usage_long}"
 
         # Voice message detection: if prompt contains channel voice metadata,
         # inject a transcription directive for the agent
@@ -457,7 +458,7 @@ Breadcrumb: {breadcrumb}"""
             from macf.utils import get_minimal_timestamp
             header = (f"{format_macf_brand(indicators=mode_indicator)} | DEV_DRV Started | "
                       f"{get_minimal_timestamp()} | {breadcrumb} | CL{token_info['cl_level']}"
-                      + (f" | wk {week}" if week else ""))
+                      + (f" | {usage}" if usage else ""))
             emission = emit("user_prompt_submit", session_id, plain_content, header, UPS_VOLATILE)
             agent_content, operator_content = emission.agent, emission.operator
         except (ImportError, OSError, ValueError, KeyError) as e:

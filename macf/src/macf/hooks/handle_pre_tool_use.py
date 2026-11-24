@@ -530,10 +530,10 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # The week's usage beside CL, so both budgets read at a glance on every call.
         # weekly_usage() reads only the newest sample (about half a millisecond) and is a
         # guard: when there is no sample this week it returns None and the field is omitted.
-        from macf.budget import weekly_usage
-        week = weekly_usage()
-        if week:
-            token_context_minimal = f"{token_context_minimal} wk {week}"
+        from macf.budget import usage_brief
+        usage = usage_brief()  # "wk 38%", or "5h 4%" on a seat whose plan has no all-models week
+        if usage:
+            token_context_minimal = f"{token_context_minimal} {usage}"
 
         # Notify Telegram (non-blocking, descriptive)
         try:

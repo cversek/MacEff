@@ -654,6 +654,7 @@ def keychain(monkeypatch, dump=DUMP, tokens=None):
     monkeypatch.setattr(budget.sys, "platform", "darwin")
     monkeypatch.setattr(budget.subprocess, "run", run)
     monkeypatch.setattr(budget, "CREDENTIAL_FILE", budget.Path("/nonexistent/.credentials.json"))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)  #the fake listing names the plain service
     return asked
 
 
@@ -694,3 +695,27 @@ def test_a_lapsed_mode_is_reported_not_silent(log):
     assert budget.lapsed_mode(later)["mode"] == "conserve"
     budget.set_mode("normal")
     assert budget.lapsed_mode(later) is None, "an explicit normal is not a lapse"
+
+
+def test_a_seat_with_its_own_config_dir_reads_its_own_login(monkeypatch):
+    """CLAUDE_CONFIG_DIR gives a seat its own Keychain item, suffixed with sha256(path)[:8]; reading the plain
+    name there reported the other login's usage (seen 2026-11-23 on an organization seat)."""
+    from macf import budget
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    assert budget.keychain_service() == "Claude Code-credentials"
+    assert budget.credential_file() == budget.CREDENTIAL_FILE
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/Users/cversek/.claude-bez")
+    assert budget.keychain_service() == "Claude Code-credentials-6feed713"  #the name Claude Code wrote
+    assert budget.credential_file() == budget.Path("/Users/cversek/.claude-bez/.credentials.json")
+
+
+def test_samples_from_another_login_are_not_mixed_in(monkeypatch):
+    from macf import budget
+    rows = [{"timestamp": 100.0, "data": {"source": "endpoint", "limits": [{"kind": "session", "percent": 90.0}]}},
+            {"timestamp": 200.0, "data": {"source": "endpoint", "limits": [{"kind": "session", "percent": 4.0}],
+                                          "login": "Claude Code-credentials-6feed713"}}]
+    monkeypatch.setattr(budget, "_recent", lambda event, now, since=None: list(reversed(rows)))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/Users/cversek/.claude-bez")
+    assert [s["t"] for s in budget.samples(now=300.0)] == [200.0]
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+    assert [s["t"] for s in budget.samples(now=300.0)] == [100.0]  #untagged samples belong to the plain login

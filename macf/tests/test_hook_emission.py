@@ -150,7 +150,8 @@ def test_each_hook_diffs_against_its_own_last_block(mock_dependencies, quiet_liv
 
 def _week(pct):
     """A budget sample carrying the all-models weekly limit."""
-    append_event("budget_sampled", {"source": "test", "limits": [
+    from macf.budget import keychain_service
+    append_event("budget_sampled", {"source": "test", "login": keychain_service(), "limits": [
         {"kind": "weekly_all", "scope": None, "percent": float(pct), "severity": "normal", "resets_at": None}]})
 
 
