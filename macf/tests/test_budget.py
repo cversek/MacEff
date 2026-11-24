@@ -719,3 +719,27 @@ def test_samples_from_another_login_are_not_mixed_in(monkeypatch):
     assert [s["t"] for s in budget.samples(now=300.0)] == [200.0]
     monkeypatch.delenv("CLAUDE_CONFIG_DIR")
     assert [s["t"] for s in budget.samples(now=300.0)] == [100.0]  #untagged samples belong to the plain login
+
+
+def test_a_stale_own_sample_still_shows_its_age(monkeypatch):
+    """From review: an own-login sample older than the floor must still show, aged, not vanish."""
+    import time as _t
+    now = _t.time()
+    rows = [{"timestamp": now - 20 * 3600, "data": {"source": "endpoint", "login": budget.keychain_service(),
+             "limits": [{"kind": "weekly_all", "percent": 38.0, "resets_at": None}]}}]
+    monkeypatch.setattr(budget, "_recent", lambda event, now, since=None: rows)
+    out = budget.weekly_usage(now=now)
+    assert out is not None and "38%" in out and "old" in out
+
+
+def test_another_logins_samples_past_the_floor_stop_the_walk(monkeypatch):
+    import time as _t
+    now = _t.time()
+    other = [{"timestamp": now - h * 3600, "data": {"source": "endpoint", "login": "someone-else",
+              "limits": [{"kind": "weekly_all", "percent": 90.0}]}} for h in range(1, 200)]
+    seen = []
+    def walk(event, now, since=None):
+        for r in other:
+            seen.append(r); yield r
+    monkeypatch.setattr(budget, "_recent", walk)
+    assert budget.weekly_usage(now=now) is None and len(seen) < 20  #stopped near the floor, not after the week

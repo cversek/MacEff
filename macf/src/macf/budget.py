@@ -951,10 +951,10 @@ def weekly_usage(now: Optional[float] = None, kind: str = "weekly_all") -> Optio
         floor = now - 4 * _tau_hours() * 3600
         points = []  # (t, percent, reset key), newest first
         login = keychain_service()
-        for e in _recent("budget_sampled", now, floor):
-            if e["timestamp"] < floor:
-                break  # checked before the login: a seat whose newest samples are another login's must not walk the week
+        for e in _recent("budget_sampled", now):
             if e["data"].get("login", KEYCHAIN_SERVICE) != login:
+                if e["timestamp"] < floor:
+                    break  # past the floor with only another login's samples: stop, don't walk the week
                 continue  # another login's sample (a seat that changed login) says nothing about this one
             w = next((l for l in e["data"].get("limits", []) if l.get("kind") == kind), None)
             if w is not None and w.get("percent") is not None:
