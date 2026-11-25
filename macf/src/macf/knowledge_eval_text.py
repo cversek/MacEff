@@ -6,7 +6,7 @@ combined.
 
 - **bm25**: SQLite FTS5's Okapi BM25 over each artifact's indexed text; the query is every
   distinct word of the query artifact's indexed text.
-- **dense**: all-MiniLM-L6-v2 cosine. An artifact is embedded in windows of CHUNK_WORDS words and
+- **dense**: all-MiniLM-L6-v2 cosine, on Apple's GPU when present. An artifact is embedded in windows of CHUNK_WORDS words and
   its vector is the normalized mean of its windows, so a long artifact is not cut at the model's
   input limit.
 - **hybrid-cc:A**: a convex combination of the two, each list min-max normalized over its own top
@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import sys
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -88,12 +89,23 @@ def words(text: str) -> List[str]:
     return _WORD.findall(text.lower())
 
 
+def embedding_device() -> str:
+    """Apple's GPU when there is one, else the CPU. On the host this was measured on, MPS ran
+    28 times faster under load and its vectors matched the CPU's to 2e-7."""
+    try:
+        import torch
+        return "mps" if torch.backends.mps.is_available() else "cpu"
+    except (ImportError, AttributeError) as e:
+        print(f"warning: no torch device query ({e}); embedding on the CPU", file=sys.stderr)
+        return "cpu"
+
+
 def _minilm() -> Embedder:
     try:
         from sentence_transformers import SentenceTransformer
     except ImportError as e:
         raise EvalRefused(f"the dense ranker needs sentence-transformers ({e})") from e
-    model = SentenceTransformer(MODEL, device="cpu")     # CPU, so two runs give identical vectors
+    model = SentenceTransformer(MODEL, device=embedding_device())
 
     def embed(texts: List[str]):
         return model.encode(texts, batch_size=64, normalize_embeddings=True, show_progress_bar=False)
