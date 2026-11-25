@@ -1,0 +1,22 @@
+# Template of the host-side seat's E8 registry. The seat's own file names its memory entries and a private folder, so it stays on that host; its sha256 is posted on #1149. Each seat writes and hashes its own before replay.
+id	class	cue_type	cue	recall
+T01	commit	cmd	\bgit\b[^\n|;&]*\bcommit\b	memory:<rule: commits under the agent's own identity>
+T02	commit	cmd	\bgit\b[^\n|;&]*\bcommit\b	memory:<rule: calling card and disclosure, never a session URL>
+T03	commit	cmd	--no-verify	memory:<rule: no hook bypass>
+T04	github_post	cmd	\bgh\b.*\b(pr|issue)\s+(create|edit|comment|review)\b	memory:<rule: no private ids in public bodies>
+T05	github_post	cmd	\bgh\b.*\bpr\s+merge\b	memory:<rule: who may merge, and when>
+T06	github_post	cmd	\bgh\b.*\bissue\s+create\b	memory:<rule: issues, not branches in a shared checkout>
+T07	outgoing	cmd	gmail\s+draft	memory:<rule: draft recipients and sign-off>
+T08	outgoing	cmd	outlook\s+draft	memory:<rule: draft recipients and sign-off>
+T09	outgoing	cmd	amail\s+send	memory:<rule: mail only when directed>
+T10	outgoing	tool	SendMessage	memory:<rule: a ping is a post plus a wake>
+T11	browser	cmd	(macf_browser|browser)\s+cdp\s+(goto|click|fill|press|download)	memory:<rule: browser tabs at a person's pace>
+T12	delegation	tool	Agent	memory:<rule: subagent briefs carry the download rule>
+T13	session_start	event	compact	memory:<rule: read the recovery artifacts yourself>
+T14	task_ops	cmd	task\s+complete\b	memory:<rule: complete on merged, not on posted>
+T15	task_ops	cmd	task\s+create\s+(mission|experiment|detour)\b	memory:<rule: expand phases at task start>
+T16	deliverable	path	\.docx$	memory:<rule: form fills keep the template's structure>
+T17	deliverable	path	<the operator's deliverables folder>	memory:<rule: deliverables in the operator's voice, plain ASCII>
+T18	ask	tool	AskUserQuestion	memory:<rule: decisions through the question tool>
+T19	roles	cmd	role\s+duty\b	memory:<rule: focus the role before servicing it>
+T20	containers	cmd	Library/Containers	memory:<rule: never read app containers>
