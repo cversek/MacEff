@@ -65,8 +65,9 @@ class _Log:
 
 def test_indexed_text_drops_the_label_bearing_parts_and_states_the_concepts_once():
     node = _snapshot()["nodes"][f"learnings:{_learning(0)[:-3]}"]
-    node = dict(node, text=node["text"] + '\nSee [LEARNING 2026-01-05 "Note 4 on the granite quarry"] and '
-                                          f"{_learning(8)} for more.\n")
+    extra = f'See [LEARNING 2026-01-05 "Note 4 on the granite quarry"] and {_learning(8)} for more.\n'
+    node = dict(node, text=node["text"].replace("\n## Cross-References", extra + "\n## Cross-References"))
+    assert _learning(8) in node["text"].split("## Cross-References")[0]
     for context in kt.CONTEXTS:
         text = kt.indexed_text(node, context)
         assert "Cross-References" not in text and "Wiki-Links" not in text
@@ -112,9 +113,9 @@ def test_convex_combination_weights_dense_by_alpha_and_scores_a_missing_list_as_
 def test_reciprocal_rank_fusion_sums_one_over_k_plus_rank():
     bm25 = [("a", 3.0), ("b", 2.0)]
     dense = [("b", 0.9), ("c", 0.8)]
-    # b: 1/(k+2) + 1/(k+1) beats a's 1/(k+1) for any k > 0.
+    # b: 1/(k+2) + 1/(k+1), then a: 1/(k+1), then c: 1/(k+2), for any k > 0.
     for k in (1, 60):
-        assert kt.fuse_rrf(bm25, dense, k)[0] == "b"
+        assert kt.fuse_rrf(bm25, dense, k) == ["b", "a", "c"]
 
 
 def test_parameters_are_read_from_the_name_and_bad_ones_refused():
