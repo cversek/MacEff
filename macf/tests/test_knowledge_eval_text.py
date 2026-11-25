@@ -141,3 +141,13 @@ def test_a_context_after_an_at_sign_scores_both_arms_in_one_run(corpus):
     assert "xref" in out["comparison"]
     with pytest.raises(ke.EvalRefused, match="context after"):
         kt.text_ranker("bm25@footer")
+
+
+def test_the_model_context_puts_the_written_text_first_and_needs_a_file(corpus):
+    q = f"learnings:{_learning(0)[:-3]}"
+    with pytest.raises(ke.EvalRefused, match="context-file"):
+        kt.text_ranker("bm25@model").reads(q, corpus)
+    corpus.model_contexts = {q: "A learning about quarrying granite."}
+    text = kt.text_ranker("bm25@model").reads(q, corpus)
+    assert text.startswith("A learning about quarrying granite.")
+    assert text.endswith(kt.text_ranker("bm25").reads(q, corpus))

@@ -24,6 +24,7 @@ put back exactly once, so the two contexts below differ only by what the header 
 
 - ``plain``: the text, then the concepts as keywords.
 - ``header``: a line naming the artifact's kind, date and title and its concepts, then the text.
+- ``model``: a context a model wrote for the artifact (``--context-file``), then the plain text.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from .knowledge_eval import Corpus, EvalRefused, Ranker, stable_key
 
-CONTEXTS = ("plain", "header")
+CONTEXTS = ("plain", "header", "model")
 TOP_N = 100
 CHUNK_WORDS = 200
 MODEL = "all-MiniLM-L6-v2"
@@ -72,14 +73,17 @@ def _kind(node: dict) -> str:
     return _KINDS.get(t, t[:-1] if t.endswith("s") else t).replace("_", " ")
 
 
-def indexed_text(node: dict, context: str = "plain") -> str:
-    """What is indexed for *node*, and what a ranker reads when *node* is the query."""
+def indexed_text(node: dict, context: str = "plain", written: Optional[str] = None) -> str:
+    """What is indexed for *node*, and what a ranker reads when *node* is the query. *written* is
+    the model-written context the ``model`` context puts in front of the plain text."""
     if context not in CONTEXTS:
         raise EvalRefused(f"--context is one of {', '.join(CONTEXTS)}, not {context!r}")
     concepts = " ".join(c.replace("_", " ") for c in node.get("concepts", ()))
     body = body_text(node).strip()
     if context == "plain":
         return f"{body}\n\n{concepts}".strip()
+    if context == "model":
+        return f"{written or ''}\n\n{body}\n\n{concepts}".strip()
     m = _DATE.search(Path(node.get("path", "")).name)
     header = " ".join(x for x in (_kind(node), m.group(1) if m else "", (node.get("title") or "").strip()) if x)
     return f"{header}. Concepts: {concepts}.\n\n{body}".strip()
@@ -118,7 +122,10 @@ class TextIndex:
     def __init__(self, corpus: Corpus, context: str, embedder: Optional[Embedder] = None):
         self.corpus, self.context = corpus, context
         self.ids = list(corpus.web)
-        self.text = {nid: indexed_text(corpus.nodes[nid], context) for nid in self.ids}
+        written = getattr(corpus, "model_contexts", None) or {}
+        if context == "model" and not written:
+            raise EvalRefused("the model context needs --context-file: no model-written contexts are loaded")
+        self.text = {nid: indexed_text(corpus.nodes[nid], context, written.get(nid)) for nid in self.ids}
         self.db = sqlite3.connect(":memory:")
         self.db.execute("CREATE VIRTUAL TABLE t USING fts5(body)")
         self.db.executemany("INSERT INTO t(rowid, body) VALUES (?, ?)",
@@ -219,7 +226,10 @@ def text_ranker(name: str) -> Optional[Ranker]:
         return text_index(c, context)
 
     def reads(q: str, c: Corpus) -> str:
-        return idx(c).text[q] if q in idx(c).text else indexed_text(c.nodes[q], context or getattr(c, "context", "plain"))
+        if q in idx(c).text:
+            return idx(c).text[q]
+        return indexed_text(c.nodes[q], context or getattr(c, "context", "plain"),
+                            (getattr(c, "model_contexts", None) or {}).get(q))
 
     if base == "bm25" and not param:
         return Ranker(name, lambda q, c: [n for n, _ in idx(c).bm25(q)], "FTS5 BM25 over the text", reads)

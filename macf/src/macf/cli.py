@@ -12957,6 +12957,13 @@ def cmd_knowledge_eval(args: argparse.Namespace) -> int:
     try:
         corpus = Corpus(snap, digest)
         corpus.context = getattr(args, "context", "plain")
+        if getattr(args, "context_file", None):
+            try:
+                written = json.loads(Path(args.context_file).read_text())
+            except (OSError, ValueError) as e:
+                print(f"❌ cannot read the context file {args.context_file}: {e}")
+                return 2
+            corpus.model_contexts = written.get("contexts", written) if isinstance(written, dict) else {}
         out = evaluate(corpus, args.rankers or ["random", "today", "idf", "like"],
                        sources=args.labels or ("xref", "citations", "same_subject"), which=args.split,
                        seed=args.split_seed, compare=tuple(args.compare) if args.compare else None,
@@ -12964,6 +12971,8 @@ def cmd_knowledge_eval(args: argparse.Namespace) -> int:
     except EvalRefused as e:
         print(f"❌ refused: {e}")
         return 2
+    if getattr(corpus, "model_contexts", None):
+        out["chart"]["model_contexts"] = sum(1 for n in corpus.web if corpus.model_contexts.get(n))
     print(json.dumps(out, indent=2) if args.json_output else format_report(out))
     return 0
 
@@ -15125,9 +15134,12 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="leave out files whose path contains TEXT (an experiment's own folder)")
     kg_eval.add_argument("--split-seed", default="knowledge-eval-heldout", metavar="SEED",
                          help="the seed of the held split; a new seed is a new seal")
-    kg_eval.add_argument("--context", choices=["plain", "header"], default="plain",
+    kg_eval.add_argument("--context", choices=["plain", "header", "model"], default="plain",
                          help="what the text rankers index: the text (plain, default), or a header naming "
-                              "the artifact's kind, date, title and concepts, then the text")
+                              "the artifact's kind, date, title and concepts, then the text; or model: "
+                              "a model-written context from --context-file, then the text")
+    kg_eval.add_argument("--context-file", metavar="PATH",
+                         help="JSON of model-written contexts by node id (or under a 'contexts' key)")
     kg_eval.add_argument("--boot", type=int, default=2000, metavar="N",
                          help="bootstrap resamples for the intervals (default 2000)")
     kg_eval.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
