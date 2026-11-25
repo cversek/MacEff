@@ -128,3 +128,16 @@ def test_parameters_are_read_from_the_name_and_bad_ones_refused():
             kt.text_ranker(bad)
     with pytest.raises(ke.EvalRefused, match="unknown ranker"):
         ke.evaluate(ke.Corpus(_snapshot(), "e" * 64), ["bm26"], sources=("xref",), **_Log().kw())
+
+
+def test_a_context_after_an_at_sign_scores_both_arms_in_one_run(corpus):
+    q = f"learnings:{_learning(0)[:-3]}"
+    plain, header = kt.text_ranker("bm25"), kt.text_ranker("bm25@header")
+    assert plain.reads(q, corpus).endswith("topic 0")
+    assert header.reads(q, corpus).startswith("learning 2026-01-01 Note 0")
+    out = ke.evaluate(corpus, ["hybrid-cc:0.5", "hybrid-cc:0.5@header"], sources=("xref",), boot=50,
+                      compare=("hybrid-cc:0.5", "hybrid-cc:0.5@header"), **_Log().kw())
+    assert set(out["chart"]["leak_share"]) == {"hybrid-cc:0.5", "hybrid-cc:0.5@header"}
+    assert "xref" in out["comparison"]
+    with pytest.raises(ke.EvalRefused, match="context after"):
+        kt.text_ranker("bm25@footer")

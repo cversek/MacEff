@@ -162,9 +162,10 @@ class TextIndex:
         return self._dense[q]
 
 
-def text_index(corpus: Corpus) -> TextIndex:
-    """The index for the corpus's context (``corpus.context``, plain unless set), cached on it."""
-    context = getattr(corpus, "context", "plain")
+def text_index(corpus: Corpus, context: Optional[str] = None) -> TextIndex:
+    """The index for *context* (default the corpus's, ``corpus.context``, plain unless set),
+    cached on the corpus so every ranker in a run shares it."""
+    context = context or getattr(corpus, "context", "plain")
     cache = corpus.__dict__.setdefault("_text_index", {})
     if context not in cache:
         cache[context] = TextIndex(corpus, context, getattr(corpus, "embedder", None))
@@ -192,17 +193,26 @@ def fuse_rrf(bm25: Sequence[Tuple[str, float]], dense: Sequence[Tuple[str, float
     return sorted(score, key=lambda n: (-score[n], stable_key("rrf", n)))[:TOP_N]
 
 
-def _reads(q: str, corpus: Corpus) -> str:
-    return text_index(corpus).text.get(q) or indexed_text(corpus.nodes[q], getattr(corpus, "context", "plain"))
-
-
 def text_ranker(name: str) -> Optional[Ranker]:
-    """The text ranker *name* names (``hybrid-cc:0.3``, ``hybrid-rrf:30``), or None if it names none."""
-    base, param = (name.split(":", 1) + [""])[:2]
+    """The text ranker *name* names, or None if it names none. A parameter follows a colon
+    (``hybrid-cc:0.3``, ``hybrid-rrf:30``) and a context an at sign (``bm25@header``), so the two
+    arms of a context comparison can be scored, and paired, in one run."""
+    spec, ctx = (name.split("@", 1) + [""])[:2]
+    if ctx and ctx not in CONTEXTS:
+        raise EvalRefused(f"{name!r}: the context after '@' is one of {', '.join(CONTEXTS)}")
+    context = ctx or None
+    base, param = (spec.split(":", 1) + [""])[:2]
+
+    def idx(c: Corpus) -> TextIndex:
+        return text_index(c, context)
+
+    def reads(q: str, c: Corpus) -> str:
+        return idx(c).text[q] if q in idx(c).text else indexed_text(c.nodes[q], context or getattr(c, "context", "plain"))
+
     if base == "bm25" and not param:
-        return Ranker(name, lambda q, c: [n for n, _ in text_index(c).bm25(q)], "FTS5 BM25 over the text", _reads)
+        return Ranker(name, lambda q, c: [n for n, _ in idx(c).bm25(q)], "FTS5 BM25 over the text", reads)
     if base == "dense" and not param:
-        return Ranker(name, lambda q, c: [n for n, _ in text_index(c).dense(q)], "MiniLM cosine", _reads)
+        return Ranker(name, lambda q, c: [n for n, _ in idx(c).dense(q)], "MiniLM cosine", reads)
     if base not in ("hybrid-cc", "hybrid-rrf"):
         return None
     try:
@@ -212,9 +222,9 @@ def text_ranker(name: str) -> Optional[Ranker]:
     if base == "hybrid-cc":
         if not 0.0 <= value <= 1.0:
             raise EvalRefused(f"{name!r}: the weight on dense must lie in [0, 1]")
-        return Ranker(name, lambda q, c: fuse_cc(text_index(c).bm25(q), text_index(c).dense(q), value),
-                      f"convex combination, {value} on dense", _reads)
+        return Ranker(name, lambda q, c: fuse_cc(idx(c).bm25(q), idx(c).dense(q), value),
+                      f"convex combination, {value} on dense", reads)
     if value <= 0:
         raise EvalRefused(f"{name!r}: the RRF constant must be positive")
-    return Ranker(name, lambda q, c: fuse_rrf(text_index(c).bm25(q), text_index(c).dense(q), value),
-                  f"reciprocal rank fusion, k = {value:g}", _reads)
+    return Ranker(name, lambda q, c: fuse_rrf(idx(c).bm25(q), idx(c).dense(q), value),
+                  f"reciprocal rank fusion, k = {value:g}", reads)
