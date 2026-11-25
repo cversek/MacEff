@@ -77,6 +77,8 @@ def test_indexed_text_drops_the_label_bearing_parts_and_states_the_concepts_once
     header = kt.indexed_text(node, "header")
     assert header.startswith("learning 2026-01-01 Note 0 on the granite quarry. Concepts: topic 0.")
     assert kt.indexed_text(node, "plain").endswith("topic 0")
+    with pytest.raises(ke.EvalRefused, match="--context is one of"):
+        kt.indexed_text(node, "footer")
 
 
 def test_the_text_rankers_pass_the_leak_audit_their_raw_text_would_fail(corpus, monkeypatch):
