@@ -29,6 +29,7 @@ put back exactly once, so the two contexts below differ only by what the header 
 
 from __future__ import annotations
 
+import math
 import re
 import sqlite3
 import sys
@@ -43,6 +44,7 @@ CHUNK_WORDS = 200
 MODEL = "all-MiniLM-L6-v2"
 DEFAULT_ALPHA = 0.5
 DEFAULT_K = 60
+MODEL_COVERAGE_FLOOR = 0.9   # the share of the web that must have a written context
 
 _CITATION = re.compile(r"\[(?:OBSERVATION|LEARNING|REFLECTION|JOTEWR|CCP|CHECKPOINT|EXPERIMENT|REPORT|ROADMAP|"
                        r"MISSION|IDEA)\s+\d{4}-\d{2}-\d{2}[^\]]*\]", re.I)
@@ -123,8 +125,15 @@ class TextIndex:
         self.corpus, self.context = corpus, context
         self.ids = list(corpus.web)
         written = getattr(corpus, "model_contexts", None) or {}
-        if context == "model" and not written:
-            raise EvalRefused("the model context needs --context-file: no model-written contexts are loaded")
+        if context == "model":
+            if not written:
+                raise EvalRefused("the model context needs --context-file: no model-written contexts are loaded")
+            covered = sum(1 for nid in self.ids if written.get(nid))
+            if covered < MODEL_COVERAGE_FLOOR * len(self.ids):
+                # A file keyed by something other than node ids would leave every artifact without its
+                # context, and the model arm would silently score the plain text (review of #1155).
+                raise EvalRefused(f"the context file covers {covered} of the {len(self.ids)} artifacts in the web, "
+                                  f"under the floor of {MODEL_COVERAGE_FLOOR:.0%}; is it keyed by node id?")
         self.text = {nid: indexed_text(corpus.nodes[nid], context, written.get(nid)) for nid in self.ids}
         self.db = sqlite3.connect(":memory:")
         self.db.execute("CREATE VIRTUAL TABLE t USING fts5(body)")
@@ -246,7 +255,7 @@ def text_ranker(name: str) -> Optional[Ranker]:
             raise EvalRefused(f"{name!r}: the weight on dense must lie in [0, 1]")
         return Ranker(name, lambda q, c: fuse_cc(idx(c).bm25(q), idx(c).dense(q), value),
                       f"convex combination, {value} on dense", reads)
-    if value <= 0:
-        raise EvalRefused(f"{name!r}: the RRF constant must be positive")
+    if not (math.isfinite(value) and value > 0):
+        raise EvalRefused(f"{name!r}: the RRF constant must be a positive finite number")
     return Ranker(name, lambda q, c: fuse_rrf(idx(c).bm25(q), idx(c).dense(q), value),
                   f"reciprocal rank fusion, k = {value:g}", reads)

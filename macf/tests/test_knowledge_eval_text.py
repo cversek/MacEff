@@ -108,6 +108,9 @@ def test_convex_combination_weights_dense_by_alpha_and_scores_a_missing_list_as_
     assert kt.fuse_cc(bm25, dense, 1.0)[:2] == ["c", "b"] and set(kt.fuse_cc(bm25, dense, 1.0)[2:]) == {"a", "d"}
     # At 0.5: a = 0.5, b = 0.25 + 0.25, c = 0.5, d = 0; a tie between a and b and c broken stably.
     assert kt.fuse_cc(bm25, dense, 0.5)[-1] == "d"
+    # A list of one scores its member 1, not 0, so the weight decides between two singletons.
+    assert kt.fuse_cc([("a", 5.0)], [("b", 0.3)], 0.3) == ["a", "b"]
+    assert kt.fuse_cc([("a", 5.0)], [("b", 0.3)], 0.7) == ["b", "a"]
 
 
 def test_reciprocal_rank_fusion_sums_one_over_k_plus_rank():
@@ -116,6 +119,12 @@ def test_reciprocal_rank_fusion_sums_one_over_k_plus_rank():
     # b: 1/(k+2) + 1/(k+1), then a: 1/(k+1), then c: 1/(k+2), for any k > 0.
     for k in (1, 60):
         assert kt.fuse_rrf(bm25, dense, k) == ["b", "a", "c"]
+    # Ranks count from 1: x, first in one list, scores 1/(k+1); y, third in both, 2/(k+3). At k = 1.5,
+    # y leads; ranks counted from 0 would give x 1/k against y's 2/(k+2) and put x first.
+    assert kt.fuse_rrf([("x", 9.0), ("p", 8.0), ("y", 7.0)], [("q", 9.0), ("r", 8.0), ("y", 7.0)], 1.5)[0] == "y"
+    for bad in ("hybrid-rrf:nan", "hybrid-rrf:inf", "hybrid-cc:nan"):
+        with pytest.raises(ke.EvalRefused):
+            kt.text_ranker(bad)
 
 
 def test_parameters_are_read_from_the_name_and_bad_ones_refused():
@@ -147,7 +156,54 @@ def test_the_model_context_puts_the_written_text_first_and_needs_a_file(corpus):
     q = f"learnings:{_learning(0)[:-3]}"
     with pytest.raises(ke.EvalRefused, match="context-file"):
         kt.text_ranker("bm25@model").reads(q, corpus)
-    corpus.model_contexts = {q: "A learning about quarrying granite."}
+    corpus.model_contexts = {n: f"A learning, {n[-12:]}." for n in corpus.web}
+    corpus.model_contexts[q] = "A learning about quarrying granite."
     text = kt.text_ranker("bm25@model").reads(q, corpus)
     assert text.startswith("A learning about quarrying granite.")
     assert text.endswith(kt.text_ranker("bm25").reads(q, corpus))
+
+
+def test_a_long_artifact_is_embedded_in_windows_and_averaged(corpus):
+    seen = []
+
+    def recording(texts):
+        seen.extend(texts)
+        return _bag_embedder(texts)
+    q = f"learnings:{_learning(0)[:-3]}"
+    body = corpus.nodes[q]["text"].replace("\n## Cross-References", " filler" * (2 * kt.CHUNK_WORDS) + "\n## Cross-References")
+    corpus.nodes[q] = dict(corpus.nodes[q], text=body)   # in the body: text after Wiki-Links is not indexed
+    corpus.embedder = recording
+    v = kt.text_index(corpus).vectors()
+    words_q = len(kt.text_index(corpus).text[q].split())
+    assert sum(1 for t in seen if "filler" in t) == -(-words_q // kt.CHUNK_WORDS) >= 3
+    import numpy as np
+    windows = [kt.text_index(corpus).text[q].split()[i:i + kt.CHUNK_WORDS] for i in range(0, words_q, kt.CHUNK_WORDS)]
+    mean = _bag_embedder([" ".join(w) for w in windows]).sum(axis=0)
+    assert np.allclose(v[kt.text_index(corpus).ids.index(q)], mean / np.linalg.norm(mean), atol=1e-6)
+
+
+def test_the_command_takes_context_boot_and_refuses_a_mis_keyed_context_file(tmp_path, capsys, monkeypatch):
+    import json
+    from argparse import Namespace
+    from macf.cli import cmd_knowledge_eval
+    snap = _snapshot()
+    p = tmp_path / "snap.json"
+    ke.save_snapshot(snap, p)
+    log = _Log()
+    monkeypatch.setattr(ke, "_default_append", log.kw()["append"])
+    monkeypatch.setattr(ke, "_default_events", log.kw()["events"])
+    base = {"snapshot": str(p), "save_snapshot": None, "exclude": None, "rankers": ["bm25@header"], "labels": ["xref"],
+            "split": "dev", "split_seed": "t", "compare": None, "json_output": True,
+            "context": "header", "boot": 37, "context_file": None}
+    assert cmd_knowledge_eval(Namespace(**base)) == 0
+    chart = json.loads(capsys.readouterr().out)["chart"]
+    assert chart["context"] == "header" and chart["bootstrap"] == 37
+    by_path = tmp_path / "by_path.json"
+    by_path.write_text(json.dumps({"contexts": {v["path"]: "context" for v in snap["nodes"].values()}}))
+    assert cmd_knowledge_eval(Namespace(**{**base, "rankers": ["bm25@model"], "context_file": str(by_path)})) == 2
+    assert "covers 0 of the 24" in capsys.readouterr().out
+    by_id = tmp_path / "by_id.json"
+    by_id.write_text(json.dumps({"contexts": {k: "a note" for k in snap["nodes"]}}))
+    assert cmd_knowledge_eval(Namespace(**{**base, "rankers": ["bm25@model"], "context_file": str(by_id),
+                                           "json_output": False})) == 0
+    assert "model-written contexts for 24 of the 24 artifacts" in capsys.readouterr().out

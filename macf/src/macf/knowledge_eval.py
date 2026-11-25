@@ -599,6 +599,8 @@ def format_report(out: dict) -> str:
                      f"has changed since sealing, as the corpus grew")
     if c.get("context", "plain") != "plain" or c.get("leak_share"):
         lines.append(f"   context {c.get('context', 'plain')}, {c.get('bootstrap', BOOTSTRAP)} bootstrap resamples")
+    if c.get("model_contexts") is not None:
+        lines.append(f"   model-written contexts for {c['model_contexts']} of the {c['web']} artifacts in the web")
     for name, by in c.get("leak_share", {}).items():
         lines.append(f"   leak audit, {name}: " + ", ".join(f"{s} {v:.1%}" for s, v in by.items()))
     for name, by in c.get("unauditable", {}).items():
