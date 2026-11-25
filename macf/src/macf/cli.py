@@ -12955,9 +12955,12 @@ def cmd_knowledge_eval(args: argparse.Namespace) -> int:
         digest = save_snapshot(snap, Path(args.save_snapshot))
         print(f"📸 snapshot {digest[:12]} saved to {args.save_snapshot} (owner-only: it holds private text)")
     try:
-        out = evaluate(Corpus(snap, digest), args.rankers or ["random", "today", "idf", "like"],
+        corpus = Corpus(snap, digest)
+        corpus.context = getattr(args, "context", "plain")
+        out = evaluate(corpus, args.rankers or ["random", "today", "idf", "like"],
                        sources=args.labels or ("xref", "citations", "same_subject"), which=args.split,
-                       seed=args.split_seed, compare=tuple(args.compare) if args.compare else None)
+                       seed=args.split_seed, compare=tuple(args.compare) if args.compare else None,
+                       boot=getattr(args, "boot", 2000))
     except EvalRefused as e:
         print(f"❌ refused: {e}")
         return 2
@@ -15109,7 +15112,9 @@ def _build_parser() -> argparse.ArgumentParser:
     kg_eval.add_argument("--split", choices=["dev", "held"], default="dev",
                          help="dev (default), or held: spent once read, and recorded")
     kg_eval.add_argument("--ranker", dest="rankers", action="append", metavar="NAME",
-                         help="random, today, idf or like; repeat for several (default: all four)")
+                         help="random, today, idf or like; or a text ranker: bm25, dense, hybrid-cc[:ALPHA] "
+                              "(ALPHA the weight on dense, default 0.5), hybrid-rrf[:K] (default 60); "
+                              "repeat for several (default: the four concept rankers)")
     kg_eval.add_argument("--labels", action="append", choices=["xref", "citations", "same_subject"],
                          help="label source; repeat for several (default: all three)")
     kg_eval.add_argument("--compare", nargs=2, metavar=("A", "B"),
@@ -15120,6 +15125,11 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="leave out files whose path contains TEXT (an experiment's own folder)")
     kg_eval.add_argument("--split-seed", default="knowledge-eval-heldout", metavar="SEED",
                          help="the seed of the held split; a new seed is a new seal")
+    kg_eval.add_argument("--context", choices=["plain", "header"], default="plain",
+                         help="what the text rankers index: the text (plain, default), or a header naming "
+                              "the artifact's kind, date, title and concepts, then the text")
+    kg_eval.add_argument("--boot", type=int, default=2000, metavar="N",
+                         help="bootstrap resamples for the intervals (default 2000)")
     kg_eval.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
     kg_eval.set_defaults(func=cmd_knowledge_eval)
 
