@@ -495,7 +495,12 @@ def evaluate(corpus: Corpus, rankers: Sequence[str], sources: Sequence[str] = LA
     known = {**RANKERS, **(extra_rankers or {})}
     for name in rankers:
         if name not in known:
-            raise EvalRefused(f"unknown ranker {name!r}; the rankers are {', '.join(sorted(known))}")
+            from .knowledge_eval_text import text_ranker
+            r = text_ranker(name)
+            if r is None:
+                raise EvalRefused(f"unknown ranker {name!r}; the rankers are {', '.join(sorted(known))}, "
+                                  f"bm25, dense, hybrid-cc[:ALPHA] and hybrid-rrf[:K]")
+            known[name] = r
     if compare:
         for name in compare:
             if name not in rankers:
@@ -503,7 +508,7 @@ def evaluate(corpus: Corpus, rankers: Sequence[str], sources: Sequence[str] = LA
     index_text = corpus.snap.get("learnings_index")
     chart = {"snapshot_sha256": corpus.digest, "taken_at": corpus.snap.get("taken_at"),
              "nodes": len(corpus.nodes), "web": len(corpus.web), "split": which, "split_seed": seed,
-             "sources": {}}
+             "context": getattr(corpus, "context", "plain"), "bootstrap": boot, "sources": {}}
     labelled, split_ids = {}, {}
     for s in sources:
         rel, unresolved = labels_for(corpus, s, index_text)
@@ -543,6 +548,8 @@ def evaluate(corpus: Corpus, rankers: Sequence[str], sources: Sequence[str] = LA
         for s in sources:
             qs = split_ids[s][0 if which == "dev" else 1]
             audit = leak_audit(r, qs, labelled[s], corpus)
+            if r.reads is not None:
+                chart.setdefault("leak_share", {}).setdefault(name, {})[s] = round(audit.share, 4)
             if audit.unauditable:
                 chart.setdefault("unauditable", {}).setdefault(name, {})[s] = audit.unauditable
             if audit.share > LEAK_LIMIT:
@@ -590,6 +597,12 @@ def format_report(out: dict) -> str:
     if c["seal"]["held_set_changed_since_sealing"]:
         lines.append(f"   note: the held set of {', '.join(c['seal']['held_set_changed_since_sealing'])} "
                      f"has changed since sealing, as the corpus grew")
+    if c.get("context", "plain") != "plain" or c.get("leak_share"):
+        lines.append(f"   context {c.get('context', 'plain')}, {c.get('bootstrap', BOOTSTRAP)} bootstrap resamples")
+    if c.get("model_contexts") is not None:
+        lines.append(f"   model-written contexts for {c['model_contexts']} of the {c['web']} artifacts in the web")
+    for name, by in c.get("leak_share", {}).items():
+        lines.append(f"   leak audit, {name}: " + ", ".join(f"{s} {v:.1%}" for s, v in by.items()))
     for name, by in c.get("unauditable", {}).items():
         lines.append(f"   leak audit, {name}: " + ", ".join(f"{n} {s} pairs unauditable (no name to search for)"
                                                       for s, n in by.items()))
