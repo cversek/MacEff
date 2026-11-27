@@ -98,7 +98,7 @@ def test_a_short_dialog_under_an_empty_prompt_frame_is_still_a_dialog():
 
 
 def test_a_frame_without_the_prompt_glyph_is_not_an_input_box():
-    assert wake.classify("\n".join(["  output", RULE, "", RULE, "  a status line"])) == wake.DIALOG
+    assert wake.classify("\n".join(["  output", RULE, "", RULE, "  a status line"])) == wake.NO_BOX
 
 
 def test_a_long_screen_under_the_last_rule_is_not_an_input_box():
@@ -107,8 +107,8 @@ def test_a_long_screen_under_the_last_rule_is_not_an_input_box():
 
 
 def test_a_screen_with_no_input_box_is_busy():
-    assert wake.classify("") == wake.DIALOG
-    assert wake.classify("some output\nmore output\n") == wake.DIALOG
+    assert wake.classify("") == wake.NO_BOX
+    assert wake.classify("some output\nmore output\n") == wake.NO_BOX
 
 
 LABELED = "labeled_border_draft_2.1.300"
@@ -147,4 +147,4 @@ def test_a_draft_is_read_while_a_turn_runs():
 
 def test_a_short_labeled_rule_in_the_conversation_is_not_a_border():
     short = chr(0x2500) * 8 + " notes " + chr(0x2500) * 4
-    assert wake.classify("\n".join([short, EMPTY_PROMPT, RULE, "  a status line"])) == wake.DIALOG
+    assert wake.classify("\n".join([short, EMPTY_PROMPT, RULE, "  a status line"])) == wake.NO_BOX

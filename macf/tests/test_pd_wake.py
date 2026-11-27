@@ -43,7 +43,7 @@ def test_an_idle_empty_box_is_the_only_state_that_may_be_typed_into():
 
 
 def test_a_dialog_menu_or_question_is_never_typed_into():
-    assert wk.classify("plain output, no input box") == wk.DIALOG
+    assert wk.classify("plain output, no input box") == wk.NO_BOX   # holds too, under its own name (#1156)
     assert wk.classify(screen(below=("Do you want to proceed?", "❯ 1. Yes", "  2. No"))) == wk.DIALOG
     assert wk.classify(screen(below=["line"] * 9)) == wk.DIALOG
     assert wk.classify(screen(below=("Enter to select · Esc to cancel",))) == wk.DIALOG
@@ -53,11 +53,72 @@ def test_no_box_on_a_narrow_pane_is_reported_by_its_width_not_as_a_dialog():
     """#800: a 45-column pane wraps the client's lines past reading, and was reported as a
     dialog, which sent the agent looking for one. It still holds; it now says why."""
     assert wk.classify("plain output, no input box", 45) == wk.TOO_NARROW
-    assert wk.classify("plain output, no input box", wk.MIN_READABLE_WIDTH) == wk.DIALOG
-    assert wk.classify("plain output, no input box") == wk.DIALOG, "width unknown"
+    assert wk.classify("plain output, no input box", wk.MIN_READABLE_WIDTH) == wk.NO_BOX
+    assert wk.classify("plain output, no input box") == wk.NO_BOX, "width unknown"
     # A box that does read at that width is read; a dialog drawn below it is still a dialog.
     assert wk.classify(screen(), 45) == wk.IDLE_EMPTY
     assert wk.classify(screen(below=("Do you want to proceed?",)), 45) == wk.DIALOG
+
+
+#: The shape of the screen behind #1156: system broadcasts (wall), written over the client's
+#: display every five minutes, with the client's own status line at the bottom. No input box.
+OVERWRITTEN = "\n".join(
+    [line for i in range(3) for line in
+     ("", f"Broadcast message from nut@host (somewhere) (Wed Nov 25 18:{i:02d}:39 2026):", "",
+      "UPS ups@localhost is unavailable", "")]
+    + ["                                     new task? /clear to save 320.4k tokens"])
+
+
+def test_a_screen_written_over_is_no_box_not_a_dialog():
+    """#1156: a screen with no input box and no dialog marker is NO_BOX. It still holds, failing
+    closed, but a dialog is reported only when one is recognized, around the box or in its place."""
+    assert wk.classify(OVERWRITTEN) == wk.NO_BOX
+    assert wk.classify(OVERWRITTEN, 45) == wk.TOO_NARROW
+    # A permission prompt drawn in the box's place is still a dialog, by its markers or its options.
+    assert wk.classify("Bash command\n  rm x\nDo you want to proceed?\n❯ 1. Yes\n  2. No\n\nEsc to cancel") == wk.DIALOG
+    assert wk.classify("Which one?\n❯ 1. This\n  2. That") == wk.DIALOG
+    assert wk.classify("Do you want to make this edit?\n  › Yes   No\n\nEsc to cancel") == wk.DIALOG   # markers alone
+    # A numbered list without a highlighted first option is conversation, not a selection.
+    assert wk.classify("Steps:\n1. this\n2. that") == wk.NO_BOX
+
+
+def test_a_dialog_without_a_box_is_found_well_above_the_last_line():
+    """Ira on #1157: a selection followed by lines of description, with no footer marker, is
+    still a dialog. The lookback reaches it; a lookback shrunk to a few lines would call a real
+    prompt no_box, the mislabel this fixes in the other direction."""
+    prompt = "\n".join(["Which model?", "❯ 1. The first", "  2. The second"]
+                       + [f"  description line {i}" for i in range(5)])
+    assert wk.classify(prompt) == wk.DIALOG
+
+
+def test_one_highlighted_numbered_line_alone_is_not_a_dialog():
+    """Ira on #1157: a single '❯ 1.' line with no second option (scrollback, or a broadcast
+    quoting one) is not a selection, or one stray line would make an overwritten screen a dialog."""
+    assert wk.classify(OVERWRITTEN + "\n❯ 1. something quoted earlier\n  more output") == wk.NO_BOX
+
+
+def test_a_no_box_hold_says_so_and_keeps_the_screen(tmp_path):
+    events, pane = [], FakePane([OVERWRITTEN])
+    h = _waker(pane, events, screens_dir=tmp_path / "wake_screens", wall=lambda: 1792292400.0)
+    h.waker.tick([ID1])
+    (event, held), = events
+    assert event == wk.EVENT_HELD and held["reason"] == wk.NO_BOX
+    assert Path(held["screen"]).name.endswith("-no_box.txt")
+    assert Path(held["screen"]).read_text() == OVERWRITTEN
+    assert pane.typed == [] and h.recorded == []
+
+
+def test_the_outside_watch_says_what_a_no_box_hold_means():
+    """The alert reached the operator as 'on the pane: dialog' and sent him looking for a dialog to
+    clear. A no_box hold names the unreadable screen and the channel, which delivers without it."""
+    from macf.pd import watch
+    card, now = "Tester_abc123", 10_000.0
+    held = {"timestamp": now - 2000, "event": "pd_wake_held", "data": {"agent": card, "reason": wk.NO_BOX}}
+    finding = watch.check_wake(card, held, now)
+    assert finding.verdict == "HELD"
+    assert "no input box" in finding.detail and "channel" in finding.detail and "dialog was recognized" in finding.detail
+    dialog = dict(held, data={"agent": card, "reason": wk.DIALOG})
+    assert watch.check_wake(card, dialog, now).detail.endswith("on the pane: dialog")
 
 
 def test_a_narrow_pane_hold_names_the_width_and_keeps_the_screen(tmp_path):

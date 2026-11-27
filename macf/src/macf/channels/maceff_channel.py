@@ -261,14 +261,20 @@ class Channel:
         """Deliver every record on one connection until the daemon closes it; return how
         many were delivered."""
         delivered = 0
-        with conn, conn.makefile("r", encoding="utf-8") as lines:
-            for line in lines:
-                if not line.strip():
-                    continue
-                record = parse_record(line)
-                if record is not None:
-                    self.send(build_event(record))
-                    delivered += 1
+        try:
+            with conn, conn.makefile("r", encoding="utf-8") as lines:
+                for line in lines:
+                    if not line.strip():
+                        continue
+                    record = parse_record(line)
+                    if record is not None:
+                        self.send(build_event(record))
+                        delivered += 1
+        except OSError as e:
+            # A daemon that dies mid-connection resets the socket rather than closing it. That ends
+            # this connection, as a close does, and what was delivered before it still counts (#1156).
+            print(f"⚠️ MACF: channel's daemon connection failed after {delivered} notice(s): "
+                  f"{type(e).__name__}: {e}", file=sys.stderr)
         print("⚠️ MACF: channel lost its daemon connection (reconnecting)", file=sys.stderr)
         return delivered
 
@@ -276,14 +282,23 @@ class Channel:
         """Reconnect for the life of the session, always waiting first. A daemon that refuses
         this channel accepts the connection and closes it at once; reconnecting at once after
         that ran a refused channel at about 600 connections a second, measured on a host
-        where a second session's channel met the lineage check."""
+        where a second session's channel met the lineage check.
+
+        Every exception from one attempt is said and survived (#1156). This loop is the channel's
+        only link to its daemon and runs in a daemon thread: an exception it let out ended the
+        thread for good, while the process went on serving MCP and the client still listed the
+        channel as connected, so every notice fell to the keystroke fallback for days."""
         backoff = _BACKOFF_FIRST
         while True:
-            conn = self.connect_once()
-            if conn is not None:
-                started = clock()
-                if self.pump(conn) or clock() - started >= _HEALTHY_S:
-                    backoff = _BACKOFF_FIRST
+            try:
+                conn = self.connect_once()
+                if conn is not None:
+                    started = clock()
+                    if self.pump(conn) or clock() - started >= _HEALTHY_S:
+                        backoff = _BACKOFF_FIRST
+            except Exception as e:  # noqa: BLE001 - GUARD: said on stderr, then the loop backs off and reconnects; letting it out kills the only daemon link silently
+                print(f"⚠️ MACF: channel's attempt to reach its daemon failed ({type(e).__name__}: {e}); "
+                      f"reconnecting", file=sys.stderr)
             sleep(backoff)
             backoff = min(backoff * 2, _BACKOFF_MAX)
 
