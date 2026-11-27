@@ -577,7 +577,7 @@ class Waker:
 
     def _evidence(self, screen: Optional[str], state: str) -> dict:
         """What a hold can show for itself: the saved screen's path for a dialog or a draft,
-        or that no screen could be read at all, which also reads as a dialog."""
+        or that no screen could be read at all, which holds as UNCAPTURED (#1158)."""
         if screen is None:
             return {"captured": False}
         if state not in SCREEN_KEPT_FOR or self.screens_dir is None:
