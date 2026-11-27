@@ -11925,6 +11925,17 @@ def cmd_amail_contacts(args: argparse.Namespace) -> int:
     except BrokerUnavailable as e:
         print(f"❌ {e}")
         return 1
+    if not reply.get("ok", False):
+        # A refusal is not an empty list: a broker that predates the operation, or one that won't answer
+        # this agent, said so, and "no correspondents" would tell the agent it may write to nobody.
+        error = str(reply.get("error") or "the broker gave no reason")
+        hint = ("this broker was started before it learned this operation; restart it (the operator's step)"
+                if "unknown operation" in error else "")
+        if args.json:
+            print(json.dumps({"ok": False, "error": error, "hint": hint}, indent=2))
+        else:
+            print(f"❌ the broker refused to list correspondents: {error}" + (f"\n   {hint}" if hint else ""))
+        return 1
     entries = list(reply.get("contacts") or [])
     needle = (args.filter or "").strip().lower()
     if needle:
