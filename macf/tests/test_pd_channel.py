@@ -412,6 +412,29 @@ def test_the_listener_survives_an_exception_and_reconnects(monkeypatch, capsys, 
     assert ("ConnectionResetError" if fail == "pump" else "ValueError") in err and "reconnecting" in err
 
 
+def test_the_listener_names_a_failed_write_without_blaming_the_daemon(monkeypatch, capsys):
+    """Ira on #1159: a SessionWriteFailed reaches the listener's guard, and the line it prints there
+    names it, not a failed attempt to reach the daemon."""
+    import macf.channels.maceff_channel as mc
+    ch = Channel("Resident_1a2b3c")
+    calls = [0]
+
+    def connect():
+        calls[0] += 1
+        if calls[0] > 1:
+            raise _Stop
+        return object()
+
+    def pump(conn):
+        raise mc.SessionWriteFailed("the channel could not write a notice to its session: BrokenPipeError")
+    monkeypatch.setattr(ch, "connect_once", connect)
+    monkeypatch.setattr(ch, "pump", pump)
+    with pytest.raises(_Stop):
+        ch.listen_forever(sleep=lambda s: None, clock=lambda: 0.0)
+    err = capsys.readouterr().err
+    assert "SessionWriteFailed" in err and "daemon" not in err
+
+
 def test_a_reset_mid_pump_still_counts_what_it_delivered(sock_dir):
     """A connection reset after some records were delivered ends that connection, not the listener,
     and pump returns what it delivered, so a working connection still restarts the back-off."""
@@ -447,6 +470,28 @@ def test_a_reset_mid_pump_still_counts_what_it_delivered(sock_dir):
     assert ch.pump(_Resetting(a)) == 1
     assert json.loads(ch.out.getvalue().splitlines()[0])["params"]["meta"]["notice_id"] == "a1"
     b.close()
+
+
+def test_a_failed_write_to_the_session_is_not_blamed_on_the_daemon(capsys):
+    """CTB on #1157 (#1158): pump's catch for a reset daemon also caught a write to the session that
+    failed, and said the daemon connection had failed. A failed write is the session's end, said as
+    such, and leaves pump as its own error rather than as a quiet end of one connection."""
+    import macf.channels.maceff_channel as mc
+    a, b = socket.socketpair()
+    rec = {"source": "amail", "arrival_id": "a1", "count": 1, "read_at": 1.0, "sent_at": 2.0}
+    b.sendall((json.dumps(rec) + "\n").encode())
+    b.close()
+
+    class _Closed:
+        def write(self, text):
+            raise BrokenPipeError(32, "Broken pipe")
+
+        def flush(self):
+            pass
+    ch = Channel("Resident_1a2b3c", out=_Closed())
+    with pytest.raises(mc.SessionWriteFailed, match="session"):
+        ch.pump(a)
+    assert "daemon connection failed" not in capsys.readouterr().err
 
 
 

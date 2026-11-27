@@ -625,7 +625,29 @@ def test_a_dialog_or_draft_hold_keeps_the_screen_it_read(tmp_path):
             return None
     events = []
     _waker(Unreadable([screen()]), events, screens_dir=kept).waker.tick([ID1])
-    assert events == [(wk.EVENT_HELD, {"reason": wk.DIALOG, "waiting": 1, "captured": False})]
+    # A pane that couldn't be read at all is UNCAPTURED, not a dialog (#1158). It still holds.
+    assert events == [(wk.EVENT_HELD, {"reason": wk.UNCAPTURED, "waiting": 1, "captured": False})]
+
+
+def test_a_sent_wake_whose_pane_cannot_be_captured_records_uncaptured():
+    """Ira on #1159: after a wake is sent, _submit looks for the turn's start; a pane it can't capture
+    is recorded as uncaptured in pd_wake_turn, not as a dialog."""
+    class Unreadable(FakePane):
+        def capture(self):
+            return None
+    events = []
+    h = _waker(Unreadable([""]), events, clock=[10.0])
+    h.waker.verify_by = 5.0                                # a wake was sent and its look has run out
+    h.waker.tick([ID1])
+    assert events == [(wk.EVENT_TURN, {"started": False, "screen": wk.UNCAPTURED, "enters": 0})]
+
+
+def test_the_outside_watch_says_what_an_uncaptured_hold_means():
+    from macf.pd import watch
+    card, now = "Tester_abc123", 10_000.0
+    held = {"timestamp": now - 2000, "event": "pd_wake_held", "data": {"agent": card, "reason": wk.UNCAPTURED}}
+    detail = watch.check_wake(card, held, now).detail
+    assert "could not be read" in detail and "tmux" in detail and "dialog" not in detail
 
 
 def test_only_the_newest_twenty_screens_are_kept(tmp_path):
