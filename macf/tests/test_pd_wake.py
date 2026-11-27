@@ -82,6 +82,21 @@ def test_a_screen_written_over_is_no_box_not_a_dialog():
     assert wk.classify("Steps:\n1. this\n2. that") == wk.NO_BOX
 
 
+def test_a_dialog_without_a_box_is_found_well_above_the_last_line():
+    """Ira on #1157: a selection followed by lines of description, with no footer marker, is
+    still a dialog. The lookback reaches it; a lookback shrunk to a few lines would call a real
+    prompt no_box, the mislabel this fixes in the other direction."""
+    prompt = "\n".join(["Which model?", "❯ 1. The first", "  2. The second"]
+                       + [f"  description line {i}" for i in range(5)])
+    assert wk.classify(prompt) == wk.DIALOG
+
+
+def test_one_highlighted_numbered_line_alone_is_not_a_dialog():
+    """Ira on #1157: a single '❯ 1.' line with no second option (scrollback, or a broadcast
+    quoting one) is not a selection, or one stray line would make an overwritten screen a dialog."""
+    assert wk.classify(OVERWRITTEN + "\n❯ 1. something quoted earlier\n  more output") == wk.NO_BOX
+
+
 def test_a_no_box_hold_says_so_and_keeps_the_screen(tmp_path):
     events, pane = [], FakePane([OVERWRITTEN])
     h = _waker(pane, events, screens_dir=tmp_path / "wake_screens", wall=lambda: 1792292400.0)
