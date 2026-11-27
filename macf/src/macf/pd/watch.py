@@ -727,6 +727,8 @@ _HOLD_WORDS = {
     "no_box": ("no input box on the screen (no dialog was recognized: the screen may be overwritten "
                "or unreadable; check that the session's MacEff channel is attached, since a channel "
                "delivers without reading the screen)"),
+    "uncaptured": ("the session's pane could not be read at all (its tmux server or pane may be gone; "
+                   "`tmux` on the session unit's socket shows which)"),
 }
 
 

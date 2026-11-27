@@ -449,6 +449,28 @@ def test_a_reset_mid_pump_still_counts_what_it_delivered(sock_dir):
     b.close()
 
 
+def test_a_failed_write_to_the_session_is_not_blamed_on_the_daemon(capsys):
+    """CTB on #1157 (#1158): pump's catch for a reset daemon also caught a write to the session that
+    failed, and said the daemon connection had failed. A failed write is the session's end, said as
+    such, and leaves pump as its own error rather than as a quiet end of one connection."""
+    import macf.channels.maceff_channel as mc
+    a, b = socket.socketpair()
+    rec = {"source": "amail", "arrival_id": "a1", "count": 1, "read_at": 1.0, "sent_at": 2.0}
+    b.sendall((json.dumps(rec) + "\n").encode())
+    b.close()
+
+    class _Closed:
+        def write(self, text):
+            raise BrokenPipeError(32, "Broken pipe")
+
+        def flush(self):
+            pass
+    ch = Channel("Resident_1a2b3c", out=_Closed())
+    with pytest.raises(mc.SessionWriteFailed, match="session"):
+        ch.pump(a)
+    assert "daemon connection failed" not in capsys.readouterr().err
+
+
 
 def test_the_channel_names_its_daemon_by_the_homes_card_not_the_environment(tmp_path):
     """The daemon names its socket by the home's card (pd.names.agent_card). A channel that

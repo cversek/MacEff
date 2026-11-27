@@ -213,6 +213,11 @@ def verify_peer(conn: socket.socket, daemon: DaemonRecord) -> bool:
     return verify_incarnation(peer.pid, daemon.proc_start)
 
 
+class SessionWriteFailed(Exception):
+    """A notice could not be written to the session (#1158): the session's end, not the daemon's. Not an
+    OSError, so pump's catch for a reset daemon connection can't take it for one."""
+
+
 class Channel:
     """The server: MCP over stdin and stdout, the daemon over a Unix socket."""
 
@@ -268,7 +273,11 @@ class Channel:
                         continue
                     record = parse_record(line)
                     if record is not None:
-                        self.send(build_event(record))
+                        try:
+                            self.send(build_event(record))
+                        except OSError as e:
+                            raise SessionWriteFailed(f"the channel could not write a notice to its session: "
+                                                     f"{type(e).__name__}: {e}") from e
                         delivered += 1
         except OSError as e:
             # A daemon that dies mid-connection resets the socket rather than closing it. That ends
@@ -297,8 +306,7 @@ class Channel:
                     if self.pump(conn) or clock() - started >= _HEALTHY_S:
                         backoff = _BACKOFF_FIRST
             except Exception as e:  # noqa: BLE001 - GUARD: said on stderr, then the loop backs off and reconnects; letting it out kills the only daemon link silently
-                print(f"⚠️ MACF: channel's attempt to reach its daemon failed ({type(e).__name__}: {e}); "
-                      f"reconnecting", file=sys.stderr)
+                print(f"⚠️ MACF: channel: {type(e).__name__}: {e}; reconnecting", file=sys.stderr)
             sleep(backoff)
             backoff = min(backoff * 2, _BACKOFF_MAX)
 

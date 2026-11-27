@@ -90,6 +90,9 @@ MIN_READABLE_WIDTH = 80
 #: client's display (a system broadcast, every five minutes) left it unreadable for a day, and a
 #: hold reported as a dialog sent the operator looking for one to clear.
 NO_BOX = "no_box"
+#: The pane couldn't be captured at all (#1158): its tmux server or pane may be gone. It holds, failing
+#: closed, under its own name: it isn't a dialog, and it isn't a screen with no box either.
+UNCAPTURED = "uncaptured"
 #: The hold reason while the refractory window runs: the agent's pace, not its screen.
 REFRACTORY = "refractory"
 
@@ -523,7 +526,7 @@ class Waker:
                 return self._hold("the transcript's last turn has not ended" if ended is False
                                   else "the transcript can't be read", fresh)
         screen, width = self.pane.capture(), self.pane.width()
-        state = classify(screen, width) if screen is not None else DIALOG
+        state = classify(screen, width) if screen is not None else UNCAPTURED
         if state != IDLE_EMPTY:
             if self.held != state:                         # once per busy stretch
                 self.held = state
@@ -590,7 +593,7 @@ class Waker:
         """Press Enter only while the wake is still in the box, at most three times; then
         look for the turn's start until the deadline, and say whether it came."""
         screen = self.pane.capture()
-        state = classify(screen, self.pane.width()) if screen is not None else DIALOG
+        state = classify(screen, self.pane.width()) if screen is not None else UNCAPTURED
         if state == RUNNING:
             self.verify_by = None
             self._say(EVENT_TURN, {"started": True})
