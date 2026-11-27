@@ -144,3 +144,84 @@ def test_a_declared_window_reaches_the_daemons_check(monkeypatch):
                                                     "hours_left": None, "detail": ""})
     login.HostedLoginCheck("Resident_1a2b3c", lambda event, data: None, expiring_s=7 * DAY).tick()
     assert seen == [7 * DAY]
+
+
+# ---------------------------------------------------------------- the warning to the agent (#1161)
+
+def _warning_check(hours_seq, ends_seq=None, warned_before=None, expiring_s=login.EXPIRING_S):
+    """A check fed one verdict per poll, recording events and raised notices."""
+    events, notices, clock = [], [], [0.0]
+    ends_seq = ends_seq or [NOW + 30 * DAY] * len(hours_seq)
+    verdicts = iter({"state": "x", "refresh_expires_at": e, "hours_left": h, "detail": ""}
+                    for h, e in zip(hours_seq, ends_seq, strict=True))
+    check = login.HostedLoginCheck("Resident_1a2b3c", lambda e, d: events.append((e, d)),
+                                   assess_now=lambda: next(verdicts), clock=lambda: clock[0],
+                                   expiring_s=expiring_s,
+                                   raise_notice=lambda s, i: notices.append((s, i)),
+                                   warned_before=warned_before)
+    for n in range(len(hours_seq)):
+        clock[0] = n * login.POLL_S
+        check.tick()
+    return events, notices
+
+
+def test_the_agent_is_warned_once_at_the_window_at_a_day_and_at_the_end():
+    hours = [100, 72, 71, 30, 24, 23, 1, 0, -5, -30]
+    events, notices = _warning_check(hours)
+    steps = [d["step"] for e, d in events if e == login.EVENT_WARNED]
+    assert steps == [1, 2, 3], "one warning per step, never repeated while the step holds"
+    assert [s for s, _ in notices] == [login.NOTICE] * 3
+    assert [i.split(":")[1] for _, i in notices] == ["1", "2", "3"]
+
+
+def test_a_login_first_seen_expired_is_warned_once_not_three_times():
+    events, notices = _warning_check([-700, -701])
+    assert [d["step"] for e, d in events if e == login.EVENT_WARNED] == [3]
+    assert len(notices) == 1
+
+
+def test_a_renewed_login_starts_its_steps_again():
+    old, new = NOW + 2 * DAY, NOW + 30 * DAY
+    events, notices = _warning_check([48, 700, 70], ends_seq=[old, new, new])
+    assert [d["step"] for e, d in events if e == login.EVENT_WARNED] == [1, 1]
+    assert len(notices) == 2
+
+
+def test_a_restart_reads_back_the_warning_already_given():
+    ends = NOW + 30 * DAY
+    earlier = [{"event": login.EVENT_WARNED, "data": {"agent": "Someone_else", "step": 0, "refresh_expires_at": ends}},
+               {"event": login.EVENT_WARNED, "data": {"agent": "Resident_1a2b3c", "step": 2,
+                                                      "refresh_expires_at": ends}}]
+    events, notices = _warning_check([20, 10, -1], warned_before=lambda: iter(earlier))
+    assert [d["step"] for e, d in events if e == login.EVENT_WARNED] == [3], "step 2 was already given"
+
+
+def test_a_verdict_with_no_date_warns_of_nothing():
+    events, notices = [], []
+    verdicts = iter([{"state": "unknown", "refresh_expires_at": None, "hours_left": None, "detail": ""}])
+    login.HostedLoginCheck("Resident_1a2b3c", lambda e, d: events.append(e), assess_now=lambda: next(verdicts),
+                           raise_notice=lambda s, i: notices.append(i)).tick()
+    assert notices == [] and login.EVENT_WARNED not in events
+
+
+@pytest.mark.parametrize("window,steps", [
+    (7 * DAY, [7 * DAY, DAY, 0.0]),
+    (DAY, [DAY, 0.0]),
+    (0.0, [0.0]),
+])
+def test_the_steps_follow_the_declared_window(window, steps):
+    assert login.warn_steps(window) == steps
+
+
+def test_the_warning_is_recorded_before_its_notice_is_raised():
+    order = []
+    verdicts = iter([{"state": "expiring", "refresh_expires_at": NOW, "hours_left": 10, "detail": ""}])
+    login.HostedLoginCheck("Resident_1a2b3c", lambda e, d: order.append(e), assess_now=lambda: next(verdicts),
+                           raise_notice=lambda s, i: order.append("notice")).tick()
+    assert order.index(login.EVENT_WARNED) < order.index("notice")
+
+
+def test_the_channel_and_the_notifier_both_carry_the_login_notice():
+    from macf.pd.notifier import INTERNAL_SOURCES, channel_takes
+    assert login.NOTICE in INTERNAL_SOURCES
+    assert channel_takes(login.NOTICE, f"login:3:{int(NOW)}")
