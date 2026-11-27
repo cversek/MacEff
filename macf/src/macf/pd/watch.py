@@ -718,7 +718,16 @@ def check_wake(card: str, event: Optional[dict], now: float,
             or not isinstance(stamp, (int, float)) or now - stamp < held_alert_s):
         return Finding(card, "wake", "ALIVE", "no wake held past its allowance")
     reason = (event.get("data") or {}).get("reason", "held")
-    return Finding(card, "wake", "HELD", f"a wake has waited {_age(now - stamp)} on the pane: {reason}")
+    return Finding(card, "wake", "HELD",
+                   f"a wake has waited {_age(now - stamp)} on the pane: {_HOLD_WORDS.get(reason, reason)}")
+
+
+#: What a hold reason means to the person the alert reaches, where the bare name misleads (#1156).
+_HOLD_WORDS = {
+    "no_box": ("no input box on the screen (no dialog was recognized: the screen may be overwritten "
+               "or unreadable; check that the session's MacEff channel is attached, since a channel "
+               "delivers without reading the screen)"),
+}
 
 
 def check_unit(card: str, unit: interface.Unit, event: Optional[dict], now: float,
