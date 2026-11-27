@@ -1,0 +1,11 @@
+# Run outputs and caches hold a seat's private text (artifact bodies, transcript excerpts, index copies).
+# Only figures leave a host, and only by being posted.
+out/
+cache/
+*.lance/
+src_F*/
+*.npy
+snapshot.json
+choices.json
+held_results.json
+*_stdout.txt
