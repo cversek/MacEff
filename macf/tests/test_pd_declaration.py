@@ -246,6 +246,13 @@ def test_grants_declared():
         _declaration(units=[dict(_unit("bot"), privacy_grants=["local-network"])])
 
 
+def test_a_capture_unit_on_a_mac_declares_the_microphone_and_input_monitoring():
+    """MIS-0008 on macOS: the capture unit holds the microphone and reads the keyboards, each a grant
+    macOS gives the process that runs it, so both must be declarable like any other."""
+    capture = dict(_unit("capture"), privacy_grants=["microphone", "input_monitoring"])
+    assert _declaration(units=[capture]).units[0].privacy_grants == ["microphone", "input_monitoring"]
+
+
 class _Fake:
     def __init__(self, platform):
         self.platform = platform
@@ -418,7 +425,7 @@ def _managed(tmp_path, entries):
 
 
 TELEGRAM = {"plugin": "telegram", "marketplace": "claude-plugins-official"}
-MACEFF = {"plugin": "maceff-channel", "marketplace": "maceff"}
+MACEFF = {"plugin": "maceff-notification-channel", "marketplace": "maceff"}
 
 
 def test_without_an_allowlist_a_channel_outside_the_default_marketplace_is_named(tmp_path):
@@ -432,10 +439,10 @@ def test_without_an_allowlist_a_channel_outside_the_default_marketplace_is_named
             {"version": 1, "agent": "Ira_ee9a78", "allowlisted_channels": channels})
 
     (named,) = allowlist.unadmitted_without_allowlist(decl([TELEGRAM, MACEFF]), None)
-    assert "maceff-channel@maceff" in named and "telegram" not in named and "allowedChannelPlugins" in named
+    assert "maceff-notification-channel@maceff" in named and "telegram" not in named and "allowedChannelPlugins" in named
     assert allowlist.unadmitted_without_allowlist(decl([TELEGRAM]), None) == []
     assert allowlist.unadmitted_without_allowlist(decl([]), None) == []
-    admitted = allowlist.managed_allowlist([_managed(tmp_path, [TELEGRAM, "maceff-channel@maceff"])])
+    admitted = allowlist.managed_allowlist([_managed(tmp_path, [TELEGRAM, "maceff-notification-channel@maceff"])])
     assert allowlist.unadmitted_without_allowlist(decl([TELEGRAM, MACEFF]), admitted) == []
 
 
@@ -451,8 +458,8 @@ def test_allowlist_lists_every_channel(tmp_path):
             body["allowlisted_channels"] = channels
         return interface.Declaration.model_validate(body)
 
-    admitted = allowlist.managed_allowlist([_managed(tmp_path, [TELEGRAM, "maceff-channel@maceff"])])
-    assert admitted == {("telegram", "claude-plugins-official"), ("maceff-channel", "maceff")}
+    admitted = allowlist.managed_allowlist([_managed(tmp_path, [TELEGRAM, "maceff-notification-channel@maceff"])])
+    assert admitted == {("telegram", "claude-plugins-official"), ("maceff-notification-channel", "maceff")}
 
     assert allowlist.findings(decl([TELEGRAM, MACEFF]), admitted) == []
     assert allowlist.findings(decl([MACEFF, TELEGRAM]), admitted) == []         # order is not a difference

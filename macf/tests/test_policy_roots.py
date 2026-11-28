@@ -701,6 +701,15 @@ def test_the_cli_exit_code_says_whether_it_passed(roots, capsys):
     assert cli.cmd_policy_check(Namespace(policy_name="personal:absent")) == 2
 
 
+def test_personal_task_policies_survive_a_manifest_without_the_section(roots):
+    """A framework manifest that has no task_type_policies, or wasn't found at all, has no framework
+    mappings; the agent's own task policies still apply. Dropping them too lost them silently."""
+    from macf.utils.manifest import get_policies_for_task_type
+    _declare(_personal(), {"name": "merging", "task_types": ["TASK"]})
+    assert get_policies_for_task_type("TASK", manifest={}) == ["personal:merging"]
+    assert get_policies_for_task_type("TASK", manifest={"task_type_policies": {}}) == ["personal:merging"]
+
+
 def test_with_its_build_recorded_the_index_is_judged_by_content(roots, tmp_path, isolated_events_log):
     """#898: a checkout re-stamps files whose content didn't change. With the build's contents
     recorded in the event log, only a real change, a new policy or a removed one reads as changed."""

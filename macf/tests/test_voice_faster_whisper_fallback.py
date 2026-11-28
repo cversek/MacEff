@@ -38,6 +38,7 @@ def _install(monkeypatch, behaviour):
 
     monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=WhisperModel))
     monkeypatch.setattr(t, "_faster_whisper_cpu_only", False)
+    monkeypatch.setattr(t, "_LOADED", {})     # the model cache is per process; each test starts empty
     return built
 
 
@@ -60,7 +61,7 @@ def test_later_calls_go_straight_to_the_cpu_and_say_nothing(monkeypatch, capsys)
     t.transcribe_faster_whisper("x.wav")
     capsys.readouterr()
     assert t.transcribe_faster_whisper("y.wav").text == "heard on cpu"
-    assert built[2:] == [("cpu", "int8")]
+    assert ("cuda", "float16") not in built[2:], "a later call never builds the GPU model again"
     assert capsys.readouterr().err == ""
 
 

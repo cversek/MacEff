@@ -1,4 +1,4 @@
-"""Whether the session's MacEff channel is dark, derived each pass (MIS-0002-R115).
+"""Whether the session's MacEff Notification Channel is dark, derived each pass (MIS-0002-R115).
 
 A channel is dark when the session that should hold it is running and none is attached:
 either one was attached during this incarnation of the session and has gone, or none

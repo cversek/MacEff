@@ -10,7 +10,7 @@ host, and nothing in the tool events can prove it didn't. What it counts as untr
 - a tool that reads GitHub or mail, or fetches a channel's attachment;
 - a Bash call that names a URL or a host, or runs a client that reads one (``gh``, ``curl``,
   ``ssh``, ``amail`` and the like);
-- a message that arrived by a channel, Telegram included. The MacEff channel is the exception:
+- a message that arrived by a channel, Telegram included. The MacEff Notification Channel is the exception:
   its notices are fixed words with an opaque id, which no sender chooses.
 
 It fails closed: a log with no session start or compaction to bound the scan reads tainted.
@@ -37,7 +37,9 @@ _NAMES_A_HOST = re.compile(
     r"|\b[a-z0-9-]+(\.[a-z0-9-]+)*\.(com|org|net|io|dev|ai|app|local)\b",
     re.IGNORECASE)
 _CHANNEL = re.compile(r'^\s*<channel source="([^"]+)"')
-_OWN_CHANNEL = "plugin:maceff-channel:maceff"
+# One constant for the channel's source, shared with the input-origin classifier, so a rename can't
+# leave the two disagreeing (MIS-0008 section 9).
+from macf.utils.input_origin import NOTIFICATION_CHANNEL_SOURCE as _OWN_CHANNEL
 
 
 def _why(event: dict) -> str:

@@ -139,6 +139,11 @@ def channel_socket(card: str, base: Optional[Path] = None) -> Path:
     return (base or runtime_dir()) / f"{pd_id(card)}.channel.sock"
 
 
+def voice_socket(card: str, base: Optional[Path] = None) -> Path:
+    """Where an agent's primal daemon serves its Voice Input Channel (MIS-0008 R04)."""
+    return (base or runtime_dir()) / f"{pd_id(card)}.voice.sock"
+
+
 
 
 def record_path(card: str, base: Optional[Path] = None) -> Path:

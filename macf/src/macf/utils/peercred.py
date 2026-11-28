@@ -1,7 +1,7 @@
 """Who is on the other end of a local socket, as the kernel recorded it.
 
 One implementation for every component that authenticates a local peer: the mail
-broker identifies submitters by it, and the MacEff channel checks that the process
+broker identifies submitters by it, and the MacEff Notification Channel checks that the process
 it connected to is its own primal daemon. Two components reading peer credentials
 two ways would eventually disagree about who is calling, which is the one question
 neither may get wrong.

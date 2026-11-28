@@ -1,4 +1,4 @@
-"""A dark MacEff channel, derived by the daemon and told by the outside watch (MIS-0002-R115)."""
+"""A dark MacEff Notification Channel, derived by the daemon and told by the outside watch (MIS-0002-R115)."""
 import json
 import time
 from dataclasses import dataclass, field

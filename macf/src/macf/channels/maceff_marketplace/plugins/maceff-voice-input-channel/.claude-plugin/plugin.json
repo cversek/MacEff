@@ -1,0 +1,12 @@
+{
+  "name": "maceff-voice-input-channel",
+  "description": "MacEff Voice Input Channel for Claude Code: the operator's dictated speech arrives as a labeled channel event from the agent's primal daemon. One-way; no tools and no permission relay (MIS-0008).",
+  "version": "0.1.0",
+  "keywords": [
+    "maceff",
+    "channel",
+    "mcp",
+    "voice",
+    "dictation"
+  ]
+}

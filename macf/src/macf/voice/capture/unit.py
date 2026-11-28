@@ -1,0 +1,748 @@
+"""The capture unit's logic: from microphone frames and key presses to utterances (MIS-0008 6.3 to 6.5).
+
+Platform-free. It reaches the world only through the backends it is given (R14), so the same code
+runs on Linux, on macOS, and in tests on recorded audio.
+
+States:
+  off        listening is off and nothing is recording: the microphone is closed and no audio is
+             read (R15).
+  listening  reading audio only to detect a wake; nothing is kept past the short window the wake
+             check needs, and no indicator shows.
+  recording  capturing an utterance, from a wake or a key press until it ends, with the
+             indicator showing the agent and the mode (R21, R22).
+
+How each recording ends:
+  wake phrase      a pause of ``end_silence_s`` after speech.
+  hold key         the key's release.
+  continual voice  each pause of ``end_silence_s`` ends one utterance and the microphone stays
+                   open; the toggle key, or ``continual_close_s`` without speech, closes it.
+No recording is cut off for its length unless a ``max_utterance_s`` is declared; long speech is transcribed ahead, at pauses, so its end waits only for the last stretch. One that heard no speech at all sends nothing.
+
+The audio of a recording lives in this process's memory and is dropped once transcribed; it is
+never written anywhere (R13). Only the text, with closed metadata, leaves, through ``deliver``.
+"""
+from __future__ import annotations
+
+import collections
+import re
+import time
+from concurrent.futures import Executor, ThreadPoolExecutor
+from dataclasses import dataclass, field
+from typing import Callable, Deque, List, Optional
+
+import numpy as np
+
+from macf.voice.capture.backends import (FRAME, RATE, AudioIn, Indicator, LockState, Mode, SpeechGate,
+                                         TriggerSource, WakeDetector)
+
+#: The wake check's window: long enough to hold the phrase whole.
+WAKE_WINDOW_S = 2.4
+#: How long a fire waits for the phrase to finish before it is judged: the low bar fires as the
+#: phrase begins, and a transcription of half of it fails.
+SETTLE_AFTER_FIRE_S = 0.8
+#: After a rejected fire: short, or a real call that follows a false fire is lost.
+REJECT_COOLDOWN_S = 0.75
+#: After a recording, before another wake may open one.
+COOLDOWN_S = 3.0
+#: Long speech is transcribed ahead: at a pause, once this much audio waits untranscribed, it is sent to the
+#: worker and kept as text, so the end of a long utterance waits only for its last stretch.
+STREAM_AFTER_S = 8.0
+#: While speech goes on, the uncommitted audio is transcribed again this often, as a tentative line the indicator
+#: shows until the stretch is committed at a pause (the operator, 2026-11-14: "a live one ... until it's settled").
+TENTATIVE_EVERY_S = 1.5
+#: How far behind real time the unit may fall before it says so: audio it hasn't read yet, or lost.
+BEHIND_WARN_S = 0.5
+#: Audio kept from just before a key press, so the first word isn't clipped.
+KEY_PREROLL_S = 0.3
+#: A recording that has heard no speech this long is cancelled, and sends nothing.
+NO_SPEECH_CANCEL_S = 4.5
+#: R56's stop words: said as the last word, ``send`` ends the utterance and sends it without the word;
+#: ``abort`` ends it and sends nothing.
+SEND_WORD, ABORT_WORD = "send", "abort"
+#: What recognition actually writes for a stop word, each counted as that word. "sand" is how Whisper heard
+#: the operator's "send" in the second live trial (2026-11-13); add one only from a real mishearing.
+STOP_WORD_HEARD_AS = {"send": SEND_WORD, "sand": SEND_WORD, "abort": ABORT_WORD}
+#: The pause after speech at which the last words are checked for a stop word, and how much is checked.
+STOP_PAUSE_S = 0.6
+STOP_TAIL_S = 2.5
+
+
+def last_stop_word(text: str) -> Optional[str]:
+    """``send`` or ``abort`` when the text's last word is one of them, ignoring case and punctuation."""
+    words = re.findall(r"[a-z']+", (text or "").lower())
+    return STOP_WORD_HEARD_AS.get(words[-1]) if words else None
+
+
+def strip_stop_word(text: str) -> tuple:
+    """(text without a trailing stop word, the word or None)."""
+    word = last_stop_word(text)
+    if word is None:
+        return text, None
+    cut = re.search(r"\b[\w']+\W*$", text)        # the last word as heard, whichever spelling matched
+    return (text[:cut.start()] if cut else text).rstrip(" ,.!?;:-"), word
+
+
+@dataclass
+class CaptureConfig:
+    """What the voice section declares, as the capture logic uses it."""
+
+    agent: str
+    wake_phrase: Optional[str] = None
+    hold_key: Optional[str] = None
+    toggle_key: Optional[str] = None
+    session_key: Optional[str] = None
+    send_key: Optional[str] = None
+    detector_bar: float = 0.85
+    #: R56's end window: full for ``end_hold_s`` of quiet, empty at ``end_silence_s``, when the utterance ends.
+    end_hold_s: float = 2.0
+    end_silence_s: float = 5.0
+    #: R56: listen for the stop words at each short pause. Off only where transcription is scripted.
+    stop_words: bool = True
+    #: Tentative transcription while speech goes on, for an indicator that shows it; the builders turn it on.
+    live_text: bool = False
+    #: Commit a stretch at a pause once this much audio waits untranscribed; the builders lower it with live text,
+    #: so committed text follows the speaker sentence by sentence.
+    stream_after_s: float = STREAM_AFTER_S
+    continual_close_s: float = 30.0
+    #: None: never cut off for length (the operator, 2026-11-14: "it should never cut you off").
+    max_utterance_s: Optional[float] = None
+    #: The voice lock's lockout (MIS-0008 R39, R40), and whether it also covers key recordings
+    #: (open question Q02: by default it covers the wake phrase only).
+    lockout_attempts: int = 3
+    lockout_window_s: float = 600.0
+    lockout_s: float = 600.0
+    lock_keys: bool = False
+
+
+@dataclass
+class AgentBinding:
+    """One agent a capture unit listens for: its card, the phrase and keys that open the microphone
+    for it, its wake model, and its voice lock with the lockout counted for it alone (MIS-0008 R46,
+    R47). A unit for one agent builds its single binding from its ``CaptureConfig``; a system's
+    unit is given one per member, from the system declaration."""
+
+    agent: str
+    wake_phrase: Optional[str] = None
+    hold_key: Optional[str] = None
+    toggle_key: Optional[str] = None
+    session_key: Optional[str] = None
+    send_key: Optional[str] = None
+    detector: Optional[WakeDetector] = None
+    detector_bar: float = 0.85
+    #: True when the audio's speaker matches this agent's enrolled voice. None: no voice lock.
+    speaker: Optional[Callable[[np.ndarray], bool]] = None
+    on_voice_event: Callable[[str, dict], None] = lambda kind, data: None
+    guard_lowered: Callable[[], bool] = lambda: False
+    lockout_attempts: int = 3
+    lockout_window_s: float = 600.0
+    lockout_s: float = 600.0
+    lock_keys: bool = False
+
+
+class _Agent:
+    """A binding with its running state: the phrase as a pattern, and the voice lock's count."""
+
+    def __init__(self, binding: AgentBinding):
+        self.b = binding
+        self.phrase = _phrase_pattern(binding.wake_phrase) if binding.wake_phrase else None
+        self.failures: List[float] = []
+        self.locked_out_until: Optional[float] = None
+        self.locked_out_attempts = 0
+        #: Whether this agent's model is above its bar now, so a run of firing frames is one fire.
+        self.firing = False
+
+    @property
+    def wakeable(self) -> bool:
+        return self.phrase is not None and self.b.detector is not None
+
+
+@dataclass
+class Utterance:
+    """One utterance, ready for the daemon: the words and the closed metadata, and the agent it is
+    for, which only the binding that fired decides (R47)."""
+
+    trigger: Mode
+    spoken_at: float
+    screen: str
+    text: str
+    voice_lock: str = "not_declared"
+    agent: str = ""
+    #: Why the recording ended (idea 602): "end window", "send", "key released", "toggle key",
+    #: "longest length". Metadata for the unit's own log; never sent to the daemon.
+    ended: str = ""
+
+
+@dataclass
+class _Recording:
+    mode: Mode
+    started: float
+    spoken_at: float
+    agent: "_Agent"
+    frames: List[np.ndarray] = field(default_factory=list)
+    heard_speech: bool = False
+    last_speech: float = 0.0
+    utterance_started: float = 0.0     # continual voice: when the current utterance began
+    window_shown: float = 1.0          # the end window's fill last sent to the indicator (R56)
+    stop_check: object = None          # a stop-word check in flight (R56)
+    stop_checked_at: Optional[float] = None   # the last speech the check covered, so each pause is checked once
+    aborted: bool = False              # ended by "abort" (R57): nothing is sent, and that was already said
+    #: Stretches of this utterance already sent to be transcribed, in order: the buffer a send delivers and an
+    #: abort drops. ``streamed_at`` is the last speech the latest cut followed, so each pause cuts once.
+    streamed: List[object] = field(default_factory=list)
+    streamed_at: Optional[float] = None
+    #: The tentative transcription in flight, when the last one started, and how many frames it covered.
+    tentative: object = None
+    tentative_at: float = 0.0
+    voice_lock: str = "not_declared"     # "matched" once the voice lock passed it
+    #: R60: a locked recording isn't ended by a pause or by hearing no speech; a stop word, the send key or the
+    #: session key ends it.
+    locked: bool = False
+
+
+def _phrase_pattern(phrase: str) -> re.Pattern:
+    words = [re.escape(w) for w in re.findall(r"[\w']+", phrase.lower())]
+    return re.compile(r"\b" + r"\W+".join(words) + r"\b", re.I)
+
+
+class InlineExecutor(Executor):
+    """Run a job at once: for tests, so a transcription finishes before ``tick`` returns."""
+
+    def submit(self, fn, *args, **kwargs):
+        from concurrent.futures import Future
+        future: Future = Future()
+        try:
+            future.set_result(fn(*args, **kwargs))
+        except BaseException as e:  # noqa: BLE001 - carried to the future, as a real executor does
+            future.set_exception(e)
+        return future
+
+
+class CaptureUnit:
+    """One capture unit: for one agent, or on a system daemon for each member agent (R46). Call
+    ``tick`` in a loop; it returns after one frame, or at once while the microphone is closed.
+
+    For one agent, the phrase and keys come from ``config`` and the wake model and voice lock from
+    the keyword arguments. For several, ``members`` gives one binding each, and ``config`` supplies
+    only what every recording shares: its pauses and its longest length."""
+
+    def __init__(self, config: CaptureConfig, *, audio: AudioIn, lock: LockState, indicator: Indicator,
+                 triggers: TriggerSource, gate: SpeechGate, transcribe: Callable[[np.ndarray, Optional[str]], str],
+                 deliver: Callable[[Utterance], object], detector: Optional[WakeDetector] = None,
+                 listening_on: Callable[[], bool] = lambda: True, speaking: Callable[[], bool] = lambda: False,
+                 clock: Callable[[], float] = time.monotonic, wall: Callable[[], float] = time.time,
+                 executor: Optional[Executor] = None, log: Callable[[str], None] = lambda s: None,
+                 speaker: Optional[Callable[[np.ndarray], bool]] = None,
+                 on_voice_event: Callable[[str, dict], None] = lambda kind, data: None,
+                 guard_lowered: Callable[[], bool] = lambda: False,
+                 members: Optional[List[AgentBinding]] = None,
+                 check: Optional[Callable[[np.ndarray, Optional[str]], str]] = None,
+                 release: Callable[[], int] = lambda: 0, show_words: bool = False):
+        self.config = config
+        self.audio, self.lock, self.indicator, self.triggers = audio, lock, indicator, triggers
+        self.gate, self._transcribe, self._deliver = gate, transcribe, deliver
+        #: The short checks, the wake phrase and the stop words: a transcriber capped to a few words, so a
+        #: decode that loops costs a moment. The full transcriber when none is given.
+        self._check = check or transcribe
+        #: Gives back the transcription model's memory while listening is off (R58); 0 when nothing was held.
+        self._release = release
+        #: Whether a wake's line may quote what the words check heard. Off for a running unit, whose log is
+        #: the journal and carries no words (R10); on for ``voice capture trial``, printing to a terminal.
+        self.show_words = show_words
+        self._listening_on, self._speaking = listening_on, speaking
+        self.clock, self.wall, self.log = clock, wall, log
+        self.executor = executor or ThreadPoolExecutor(max_workers=1, thread_name_prefix="voice-transcribe")
+        #: The wake check runs here, off the capture loop, so the microphone keeps being read while Whisper
+        #: confirms the phrase; its own worker, so a long utterance being transcribed never delays a wake.
+        self.wake_executor = executor or ThreadPoolExecutor(max_workers=1, thread_name_prefix="voice-wake-check")
+        if members is None:
+            members = [AgentBinding(agent=config.agent, wake_phrase=config.wake_phrase, hold_key=config.hold_key,
+                                    toggle_key=config.toggle_key, session_key=config.session_key,
+                                    send_key=config.send_key, detector=detector,
+                                    detector_bar=config.detector_bar, speaker=speaker,
+                                    on_voice_event=on_voice_event, guard_lowered=guard_lowered,
+                                    lockout_attempts=config.lockout_attempts,
+                                    lockout_window_s=config.lockout_window_s, lockout_s=config.lockout_s,
+                                    lock_keys=config.lock_keys)]
+        if not members:
+            raise ValueError("a capture unit listens for at least one agent")
+        self.agents: List[_Agent] = [_Agent(m) for m in members]
+        self.ring: Deque[np.ndarray] = collections.deque(maxlen=int(WAKE_WINDOW_S * RATE / FRAME))
+        self.recording: Optional[_Recording] = None
+        #: The agent whose wake model fired, and when, while the phrase settles.
+        self._pending: Optional[tuple] = None
+        #: A wake check in flight: (agent, future, the window it judges, the frames read since).
+        self._checking: Optional[tuple] = None
+        self._quiet_until = 0.0
+        #: Why fires are ignored until ``_quiet_until``, said on the fire's own line.
+        self._quiet_why = ""
+        #: When the microphone opened and how many frames were read since: how far behind real time the
+        #: unit is, and whether it said so already.
+        self._opened_at: Optional[float] = None
+        self._frames_since_open = 0
+        self._behind_said = False
+        #: When listening and the current recording began, for the status entries (R16).
+        self.listening_since: Optional[float] = None
+        self.recording_since: Optional[float] = None
+        self.frames_read = 0
+
+    # A unit for one agent reads its lockout as its own.
+    @property
+    def locked_out_until(self) -> Optional[float]:
+        return self.agents[0].locked_out_until
+
+    @property
+    def locked_out_attempts(self) -> int:
+        return self.agents[0].locked_out_attempts
+
+    # ------------------------------------------------------------------ the loop
+
+    @property
+    def state(self) -> str:
+        if self.recording is not None:
+            return "recording"
+        return "listening" if self.audio.is_open else "off"
+
+    def _wakeable(self) -> bool:
+        return any(a.wakeable for a in self.agents)
+
+    def tick(self) -> None:
+        for event in self.triggers.poll():
+            self._key(event.key, event.down)
+        if self.recording is None:
+            on = self._listening_on() and self._wakeable()
+            if on and not self.audio.is_open:
+                self._open("listening")
+            elif not on and self.audio.is_open:
+                self._close()
+            if not self.audio.is_open:
+                return                       # R15: listening off reads nothing
+        frame = self.audio.read()
+        self.frames_read += 1
+        self._frames_since_open += 1
+        now = self.clock()
+        self._check_behind()
+        self.ring.append(frame)
+        if self.recording is not None:
+            self._record(frame, now)
+        else:
+            self._listen(frame, now)
+
+    def _open(self, why: str) -> None:
+        self.audio.open()
+        self._opened_at, self._frames_since_open, self._behind_said = self.clock(), 0, False
+        self.ring.clear()
+        self._reset_detectors()
+        self.gate.reset()
+        self._pending = None
+        if why == "listening":
+            self.listening_since = self.wall()
+        self.log(f"microphone open ({why})")
+
+    @property
+    def behind_s(self) -> float:
+        """How far behind real time the unit is: the time since the microphone opened, less the audio read
+        in it. Audio the platform still holds, or dropped, while the loop was busy; 0 while closed."""
+        if self._opened_at is None:
+            return 0.0
+        return max(0.0, (self.clock() - self._opened_at) - self._frames_since_open * FRAME / RATE)
+
+    def _check_behind(self) -> None:
+        """Say once when the unit falls more than BEHIND_WARN_S behind, and once when it has caught up: a
+        wake or an utterance heard late, or lost, is then explained by the log, not left to guess."""
+        behind = self.behind_s
+        if behind > BEHIND_WARN_S and not self._behind_said:
+            self._behind_said = True
+            self.log(f"capture is {behind:.1f} s behind real time: audio is waiting or was lost")
+        elif behind < BEHIND_WARN_S / 2 and self._behind_said:
+            self._behind_said = False
+            self.log("capture has caught up with real time")
+
+    def _close(self) -> None:
+        self.audio.close()
+        self._opened_at = None
+        self._checking = None
+        self.listening_since = None
+        self.log("microphone closed")
+        if not self._listening_on():
+            # R58: with listening off, the model isn't held for a wake that can't come. A key still opens a
+            # recording, whose transcription loads it again.
+            try:
+                if self._release():
+                    self.log("listening is off: the transcription model is released")
+            except Exception as e:  # noqa: BLE001 - a failed release keeps the model loaded, said, and never stops the unit
+                self.log(f"the transcription model could not be released ({e}); it stays loaded")
+
+    # ------------------------------------------------------------------ keys
+
+    def _key(self, key: str, down: bool) -> None:
+        """A key opens or closes a recording for the agent whose key it is, and only that agent
+        (R47). A key nobody declared does nothing; while one agent's recording runs, another
+        agent's key waits its turn rather than cutting it off."""
+        rec = self.recording
+        for agent in self.agents:
+            if key == agent.b.hold_key:
+                if down and rec is None:
+                    self._start("hold_key", agent)
+                elif not down and rec is not None and rec.mode == "hold_key" and rec.agent is agent:
+                    self._finish(self.clock(), ended="key released")
+                return
+            if key == agent.b.session_key and down:
+                if rec is None:
+                    self._start("key_session", agent)
+                    self.recording.locked = True
+                elif rec.agent is agent:
+                    self._abort(self.clock(), "session key")
+                return
+            if key == agent.b.send_key and down:
+                if rec is not None and rec.agent is agent:
+                    self._finish(self.clock(), closing=True, ended="send key")
+                return
+            if key == agent.b.toggle_key and down:
+                if rec is not None and rec.mode == "continual_voice" and rec.agent is agent:
+                    self._finish(self.clock(), closing=True, ended="toggle key")
+                elif rec is None:
+                    self._start("continual_voice", agent)
+                return
+
+    # ------------------------------------------------------------------ listening
+
+    def _reset_detectors(self) -> None:
+        for agent in self.agents:
+            if agent.b.detector is not None:
+                agent.b.detector.reset()
+
+    def _listen(self, frame: np.ndarray, now: float) -> None:
+        if not self._wakeable():
+            return
+        if self._checking is not None:
+            self._checking[3].append(frame)
+            self._judge_wake(now)
+            return
+        if self._speaking():                 # R27: never wake on an agent's own voice
+            self._pending = None
+            self._reset_detectors()
+            return
+        # Every wake model hears every frame, so each keeps its own state; the first to fire
+        # decides whose phrase is checked (R47).
+        fired, fired_score = None, 0.0
+        for agent in self.agents:
+            if agent.wakeable:
+                score = agent.b.detector.score(frame)
+                above = score >= agent.b.detector_bar
+                if above and not agent.firing and now < self._quiet_until:
+                    # Said once per fire, so a fire that changes nothing still reads as decided, not dropped.
+                    self.log(f"{agent.b.wake_phrase} {score:.2f} → ignored: {self._quiet_why}")
+                agent.firing = above
+                if fired is None and above:
+                    fired, fired_score = agent, score
+        if now < self._quiet_until:
+            return
+        if self._pending is None:
+            if fired is not None:
+                self._pending = (fired, now, fired_score)
+            return
+        agent, since, score = self._pending
+        if fired is agent:
+            score = max(score, fired_score)
+            self._pending = (agent, since, score)
+        if now - since < SETTLE_AFTER_FIRE_S:
+            return
+        self._pending = None
+        chain = f"{agent.b.wake_phrase} {score:.2f}"
+        window = np.concatenate(self.ring)
+        if not self._window_has_speech(window):
+            self._reject(f"{chain} → no speech in the window: rejected", now)
+            return
+        chain += " → speech ✓"
+        if not self._voice_lock_passes(agent, window, now):
+            self._reject(f"{chain} → voice not matched: rejected", now)
+            return
+        if agent.b.speaker is not None:
+            chain += " → voice ✓"
+        self._checking = (agent, self.wake_executor.submit(self._check, window, agent.b.wake_phrase),
+                          list(self.ring), [], chain)
+        self._judge_wake(now)
+
+    def _reject(self, line: str, now: float) -> None:
+        self.log(line)
+        self._quiet_until, self._quiet_why = now + REJECT_COOLDOWN_S, "just after a rejected wake"
+
+    def _judge_wake(self, now: float) -> None:
+        """Act on the wake check once its transcription is back. Until then the loop goes on reading the
+        microphone, and the frames read meanwhile are kept, so nothing said after the phrase is lost."""
+        agent, future, window_frames, since, chain = self._checking
+        if not future.done():
+            return
+        self._checking = None
+        self._reset_detectors()              # they heard none of the frames read while the check ran
+        try:
+            heard = future.result() or ""
+        except Exception as e:  # noqa: BLE001 - a failed check is a rejected wake, said, never a crash of the loop
+            self._reject(f"{chain} → the words check failed ({e}): rejected", now)
+            return
+        found = agent.phrase.search(heard)
+        said = f" {heard.strip()!r}" if self.show_words else ""
+        if not found:
+            self._reject(f"{chain} → heard{said} ✗ not the phrase: rejected", now)
+            return
+        self.log(f"{chain} → heard{said} ✓ → wake for {agent.b.agent}")
+        self._start("wake_phrase", agent, preroll=window_frames + since)
+        if agent.b.speaker is not None:
+            self.recording.voice_lock = "matched"
+        if heard[found.end():].strip(" ,.!?;:-") or (since and self._window_has_speech(np.concatenate(since))):
+            # Words run on in the same breath as the phrase, or said while the check ran, are already
+            # recorded: the recording has heard speech, so its pause ends it rather than a no-speech cancel.
+            self.recording.heard_speech = True
+
+    def _window_has_speech(self, window: np.ndarray) -> bool:
+        self.gate.reset()
+        found = any(self.gate.is_speech(window[i:i + FRAME]) for i in range(0, window.size - FRAME + 1, FRAME))
+        self.gate.reset()
+        return found
+
+    # ------------------------------------------------------------------ recording
+
+    def _start(self, mode: Mode, agent: _Agent, preroll: Optional[List[np.ndarray]] = None) -> None:
+        if not self.audio.is_open:
+            self._open(mode)
+        now = self.clock()
+        if preroll is None:
+            keep = int(KEY_PREROLL_S * RATE / FRAME)
+            preroll = list(self.ring)[-keep:] if keep else []
+        self._checking = None                # a key press overrides a wake still being checked
+        self.recording = _Recording(mode=mode, started=now, spoken_at=self.wall(), agent=agent,
+                                    frames=list(preroll), last_speech=now, utterance_started=now)
+        self.recording_since = self.wall()
+        self.gate.reset()
+        self.indicator.show(agent.b.agent, mode)     # R21: which agent the microphone is open for
+
+    def _record(self, frame: np.ndarray, now: float) -> None:
+        rec = self.recording
+        rec.frames.append(frame)
+        self.indicator.feed(frame)
+        if self.gate.is_speech(frame):
+            rec.heard_speech, rec.last_speech = True, now
+        if self.config.max_utterance_s is not None and now - rec.started >= self.config.max_utterance_s:
+            self._finish(now, closing=True, ended="longest length")
+            return
+        if rec.mode == "hold_key":
+            return                           # the release ends it
+        silent_for = now - rec.last_speech
+        if not rec.heard_speech:
+            if rec.locked:
+                return                       # R60: a locked recording waits for the operator, however quiet
+            limit = self.config.continual_close_s if rec.mode == "continual_voice" else NO_SPEECH_CANCEL_S
+            if now - rec.utterance_started >= limit:
+                self._finish(now, closing=True, ended="no speech")
+            return
+        self._show_window(rec, silent_for)
+        said = self._stop_word_heard(rec, silent_for)
+        if said == ABORT_WORD:
+            self._abort(now, f"\"{ABORT_WORD}\"")
+            return
+        if said == SEND_WORD or (not rec.locked and silent_for >= self.config.end_silence_s):
+            self._finish(now, closing=rec.mode != "continual_voice",
+                         ended="send" if said == SEND_WORD else "end window")
+            return
+        self._stream_ahead(rec, silent_for)
+        self._guess_ahead(rec, now, silent_for)
+
+    def _guess_ahead(self, rec: "_Recording", now: float, silent_for: float) -> None:
+        """While speech goes on, transcribe the uncommitted audio again and show it as tentative, one pass at a time.
+        A pass that finishes after its stretch was committed is dropped, never shown."""
+        if (not self.config.live_text or not self._streams(rec) or silent_for >= STOP_PAUSE_S or now - rec.tentative_at < TENTATIVE_EVERY_S
+                or (rec.tentative is not None and not rec.tentative.done()) or len(rec.frames) * FRAME / RATE < 0.5):
+            return
+        rec.tentative_at = now
+        prompt = rec.agent.b.wake_phrase if rec.mode == "wake_phrase" and not rec.streamed else None
+        streamed, generation = rec.streamed, len(rec.streamed)
+        future = self.executor.submit(self._transcribe, np.concatenate(rec.frames), prompt)
+        rec.tentative = future
+
+        def shown(f):
+            if f.cancelled() or len(streamed) != generation:
+                return                       # its stretch has since been committed: stale, never shown
+            if f.exception() is not None:
+                self.log(f"a tentative transcription failed ({f.exception()}); the committed text is unaffected")
+                return
+            self._show_text(streamed, (f.result() or "").strip())
+        future.add_done_callback(shown)
+
+    def _streams(self, rec: "_Recording") -> bool:
+        # A key's recording under the voice lock is judged whole at its end, and an unmatched voice must never be
+        # transcribed (R37), so nothing of it is transcribed ahead.
+        return not (rec.mode != "wake_phrase" and rec.agent.b.lock_keys and rec.agent.b.speaker is not None)
+
+    def _stream_ahead(self, rec: "_Recording", silent_for: float) -> None:
+        """At a pause, once STREAM_AFTER_S of audio waits, send it to be transcribed and keep only its text to come.
+        The pause is the cut, so no word is split; the first stretch of a wake keeps the phrase, which the
+        delivery strips."""
+        if (silent_for < STOP_PAUSE_S or rec.streamed_at == rec.last_speech or not self._streams(rec)
+                or len(rec.frames) * FRAME / RATE < self.config.stream_after_s):
+            return
+        prompt = rec.agent.b.wake_phrase if rec.mode == "wake_phrase" and not rec.streamed else None
+        future = self.executor.submit(self._transcribe, np.concatenate(rec.frames), prompt)
+        rec.streamed.append(future)
+        rec.frames, rec.streamed_at = [], rec.last_speech
+        streamed = rec.streamed
+        future.add_done_callback(lambda _f: self._show_text(streamed))
+
+    def _show_text(self, streamed: list, tentative: str = "") -> None:
+        """Tell the indicator the words so far: every stretch back, in order, up to the first still being transcribed,
+        and the tentative guess at what follows."""
+        parts = []
+        for f in list(streamed):
+            if not f.done() or f.cancelled() or f.exception() is not None:
+                break
+            parts.append((f.result() or "").strip())
+        try:
+            self.indicator.text(" ".join(p for p in parts if p), tentative)
+        except Exception as e:  # noqa: BLE001 - a view that fails mustn't stop a transcription; said, not dropped
+            self.log(f"the indicator couldn't show the text so far ({e})")
+
+    def _abort(self, now: float, by: str) -> None:
+        """Discard the recording and everything transcribed ahead of it, and send nothing (R57, R60)."""
+        rec = self.recording
+        self.log(f"{by}: the utterance is discarded, nothing sent")
+        rec.frames, rec.heard_speech, rec.aborted, rec.streamed = [], False, True, []
+        self._finish(now, closing=rec.mode != "continual_voice", ended="abort")
+
+    def _show_window(self, rec: "_Recording", silent_for: float) -> None:
+        """R56: how much of the end window is left, for the indicator. Full until ``end_hold_s`` of quiet,
+        then draining to empty at ``end_silence_s``; speech fills it again."""
+        hold, close = self.config.end_hold_s, self.config.end_silence_s
+        left = 1.0 if rec.locked or silent_for <= hold else max(0.0, 1.0 - (silent_for - hold) / max(close - hold, 1e-6))
+        if left != rec.window_shown:
+            rec.window_shown = left
+            self.indicator.window(left)
+
+    def _stop_word_heard(self, rec: "_Recording", silent_for: float) -> Optional[str]:
+        """R56: at a short pause after speech, transcribe the last few seconds once, in the background; a
+        stop word said last ends the utterance at once (``send``) or discards it (``abort``). Speech that
+        resumes before the answer makes the answer stale, so it is dropped."""
+        if not self.config.stop_words or silent_for < STOP_PAUSE_S:
+            rec.stop_check, rec.stop_checked_at = None, None
+            return None
+        if rec.stop_check is None and rec.stop_checked_at != rec.last_speech:
+            tail = np.concatenate(rec.frames[-int(STOP_TAIL_S * RATE / FRAME):])
+            rec.stop_checked_at = rec.last_speech
+            rec.stop_check = self.executor.submit(self._check, tail, None)
+        if rec.stop_check is not None and rec.stop_check.done():
+            future, rec.stop_check = rec.stop_check, None
+            try:
+                return last_stop_word(future.result() or "")
+            except Exception as e:  # noqa: BLE001 - a failed check only means no early end; the window still ends it
+                self.log(f"the stop-word check failed ({e}); the end window ends the utterance")
+        return None
+
+    def _finish(self, now: float, closing: bool = True, ended: str = "") -> None:
+        """End the current utterance: transcribe it on the worker and deliver it. In continual voice
+        a pause ends the utterance and keeps the microphone open, unless ``closing``. ``ended`` says
+        why, in the log and on the utterance, so a cut that surprises the speaker can be read (idea 602)."""
+        rec = self.recording
+        if ended and rec.heard_speech:
+            self.log(f"{rec.mode} utterance ended: {ended}")
+        if rec.heard_speech:
+            audio = np.concatenate(rec.frames) if rec.frames else np.zeros(0, dtype=np.int16)
+            if rec.mode != "wake_phrase" and rec.agent.b.lock_keys and rec.agent.b.speaker is not None:
+                if self._voice_lock_passes(rec.agent, audio, now):
+                    rec.voice_lock = "matched"
+                else:
+                    audio = None             # discarded untranscribed (R37)
+            if audio is not None:
+                self.executor.submit(self._transcribe_and_deliver, audio, rec.mode, rec.spoken_at, rec.voice_lock,
+                                     rec.agent, ended, list(rec.streamed))
+        else:
+            if not rec.aborted:                  # an abort already said why nothing was sent
+                self.log(f"{rec.mode} recording heard no speech: nothing sent")
+        rec.frames, rec.streamed, rec.streamed_at = [], [], None   # the worker's alone now, dropped after
+        if rec.mode == "continual_voice" and not closing:
+            rec.heard_speech, rec.utterance_started, rec.spoken_at = False, now, self.wall()
+            rec.aborted = False
+            return
+        self.recording = None
+        self.recording_since = None
+        self.indicator.hide()
+        self._quiet_until, self._quiet_why = now + COOLDOWN_S, "just after a recording"
+        if not (self._listening_on() and self._wakeable()):
+            self._close()
+        else:
+            self.ring.clear()
+            self._reset_detectors()
+
+    def _voice_lock_passes(self, agent: _Agent, audio: np.ndarray, now: float) -> bool:
+        """``agent``'s voice lock on ``audio``, before any transcription (R23, R37). A failure
+        discards the audio and tells that agent without content; enough failures in its window lock
+        voice contact with it out, and during a lockout every attempt is counted and none delivered
+        (R39, R41). Each agent's count is its own, so one agent's lockout never silences another."""
+        b = agent.b
+        if b.speaker is None:
+            return True
+        if agent.locked_out_until is not None:
+            if now < agent.locked_out_until and b.guard_lowered():
+                self.log(f"the operator lowered {b.agent}'s guard: the lockout ends early")
+                agent.locked_out_until, agent.locked_out_attempts = None, 0
+            elif now < agent.locked_out_until:
+                agent.locked_out_attempts += 1
+                self.log(f"voice locked out for {b.agent}: attempt {agent.locked_out_attempts} ignored")
+                return False
+            agent.locked_out_until, agent.locked_out_attempts = None, 0
+        if b.speaker(audio):
+            return True
+        agent.failures = [t for t in agent.failures if now - t < b.lockout_window_s] + [now]
+        self.log(f"voice not matched for {b.agent} ({len(agent.failures)} of {b.lockout_attempts}): "
+                 f"discarded untranscribed")
+        b.on_voice_event("unmatched", {"attempts": len(agent.failures), "of": b.lockout_attempts})
+        if len(agent.failures) >= b.lockout_attempts:
+            agent.locked_out_until = now + b.lockout_s
+            agent.failures = []
+            b.on_voice_event("lockout", {"until": self.wall() + b.lockout_s})
+        return False
+
+    def _transcribe_and_deliver(self, audio: np.ndarray, mode: Mode, spoken_at: float,
+                                voice_lock: str = "not_declared", agent: Optional[_Agent] = None,
+                                ended: str = "", streamed: Optional[list] = None) -> None:
+        agent = agent or self.agents[0]
+        streamed = streamed or []
+        # The stretches transcribed ahead come first, in order, then the last; only the first carries the phrase.
+        parts = [(f.result() or "").strip() for f in streamed]
+        if audio.size:
+            prompt = agent.b.wake_phrase if mode == "wake_phrase" and not streamed else None
+            parts.append((self._transcribe(audio, prompt) or "").strip())
+        text = " ".join(p for p in parts if p)
+        if mode == "wake_phrase" and agent.phrase is not None:
+            found = agent.phrase.search(text)
+            if found:
+                text = text[found.end():]
+        text = text.strip(" ,.!?;:-")
+        text, word = strip_stop_word(text)       # R56: whatever ended it, a trailing stop word is obeyed
+        if word == ABORT_WORD:
+            self.log(f"{mode} utterance ended in \"{ABORT_WORD}\": discarded, nothing sent")
+            return
+        if not text:
+            self.log(f"{mode} utterance transcribed to nothing: nothing sent")
+            return
+        self._deliver(Utterance(trigger=mode, spoken_at=spoken_at, screen=self.lock.state(), text=text,
+                                voice_lock=voice_lock, agent=agent.b.agent, ended=ended))
+
+    # ------------------------------------------------------------------ status
+
+    def status(self) -> dict:
+        """What the capture unit's beat reports (R16): listening and recording, each with when it
+        began, and the agent and mode of a recording."""
+        rec = self.recording
+        return {"listening_since": self.listening_since if rec is None else None,
+                "recording_since": self.recording_since,
+                "recording_for": rec.agent.b.agent if rec is not None else None,
+                "mode": rec.mode if rec is not None else None}
+
+    def shutdown(self) -> None:
+        # The microphone closes first: nothing reads it from here on, and a recorder left writing into a full
+        # pipe is slow to stop. Then a wake check in flight is dropped, since it decides nothing now, and the
+        # last utterance's transcription is waited for, so what was said is still delivered.
+        self.audio.close()
+        self.indicator.hide()
+        if self.wake_executor is not self.executor:
+            self.wake_executor.shutdown(wait=False, cancel_futures=True)
+        self.executor.shutdown(wait=True)
+        self.triggers.close()

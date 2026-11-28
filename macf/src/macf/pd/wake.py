@@ -1,4 +1,4 @@
-"""The keystroke wake: the notifier's fallback for a session with no MacEff channel.
+"""The keystroke wake: the notifier's fallback for a session with no MacEff Notification Channel.
 
 MIS-0002-R105 (keystroke_wake_MUST_be_fallback_only): the daemon types a wake only when
 no channel has taken the notices it owes. What it may type, when, and how it submits

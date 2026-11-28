@@ -171,7 +171,7 @@ def test_the_carried_notice_pointer_shows_what_it_says_it_will(capsys):
     import shlex
 
     from macf.agent_events_log import get_log_path
-    from macf.channels.maceff_channel import DAEMON_POINTERS
+    from macf.channels.notification_channel import DAEMON_POINTERS
     from macf.cli import _build_parser
     path = get_log_path()
     path.parent.mkdir(parents=True, exist_ok=True)

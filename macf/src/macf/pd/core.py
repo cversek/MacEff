@@ -51,6 +51,7 @@ from macf.pd.interface import (
     DaemonStart,
     Declaration,
     Liveness,
+    MicrophoneState,
     Peer,
     State,
     Unit,
@@ -86,7 +87,7 @@ STABLE_INTERVALS = 10
 DRAIN_TIMEOUT_S = 300.0
 #: How often a running unit's memory is read against its declared limit (MIS-0002-R60).
 MEMORY_CHECK_S = 30.0
-#: The notice source for a unit past its memory limit, as the MacEff channel knows it.
+#: The notice source for a unit past its memory limit, as the MacEff Notification Channel knows it.
 LIMIT_NOTICE_SOURCE = "pd_limit_exceeded"
 #: The notice source for a unit that failed: exited with a failing code, missed its liveness, or
 #: couldn't be started. Its id is ``<unit>:<failures in a row>:<epoch>`` (``_unit_failed_id``).
@@ -530,6 +531,7 @@ class _Runner:
     alive_at: Optional[float] = None    # monotonic, at the last accepted liveness
     alive_interval_s: Optional[float] = None
     in_flight: Optional[int] = None     # as the unit last reported it; None if it never has
+    microphone: Optional[MicrophoneState] = None # a capture unit's microphone, as its last credited beat said (MIS-0008 R16)
     auth_failed: Optional[str] = None   # what the harness said while it can't authenticate (R19)
     rerecorded_at: float = 0.0          # wall time of the last repeat of a still-failed state (#896)
     failures: int = 0
@@ -747,9 +749,16 @@ class Core:
         """The session unit's live process as (pid, proc_start), or None when no session
         unit is declared or running. A channel is accepted only below this process
         (MIS-0002-R122 (pd_MUST_check_channel_peer_lineage))."""
-        for r in self._units.values():
-            if r.spec.kind == "session" and r.proc is not None and r.pid and r.proc_start:
-                return r.pid, r.proc_start
+        session = next((r for r in self._units.values() if r.spec.kind == "session"), None)
+        return self.incarnation(session.spec.name) if session is not None else None
+
+    def incarnation(self, unit: str) -> Optional[tuple]:
+        """``unit``'s live process as (pid, proc_start), or None when it isn't declared or isn't
+        running. A peer is taken as the unit only below this process: an utterance only from
+        the declared capture unit (MIS-0008 R12), as a channel only from the session."""
+        r = self._units.get(unit)
+        if r is not None and r.proc is not None and r.pid and r.proc_start:
+            return r.pid, r.proc_start
         return None
 
     def session_active_since(self) -> Optional[float]:
@@ -772,6 +781,7 @@ class Core:
         return [UnitStatus(unit=r.spec.name, state=r.state, pid=r.pid if r.proc else None,
                            proc_start=r.proc_start if r.proc else None, since=r.since,
                            restart_held_until=self._restart_held_until(r),
+                           microphone=r.microphone if r.proc else None,
                            waiting_on=auth_wait(r.auth_failed) if r.proc and r.auth_failed is not None
                            and r.state == "waiting_on_a_person" else None,
                            auth_failed=r.auth_failed if r.proc else None)
@@ -1281,6 +1291,7 @@ class Core:
         r.alive_at = now
         r.alive_interval_s = live.interval_s
         r.in_flight = live.in_flight
+        r.microphone = live.microphone
         if live.auth_failed:
             # The harness can't authenticate. The session is running but can't work, and that
             # must never read as idle or healthy: it waits on a person to log in, named as data,
