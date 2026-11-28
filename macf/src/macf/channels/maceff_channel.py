@@ -114,6 +114,10 @@ DAEMON_POINTERS: Dict[str, str] = {
     # A duty's crossing, hosted by the daemon (the scheduler design, section 4.4)
     "pd_duty_due": "A duty of yours became due soon or overdue. Run `macf_tools role calendar`; the event "
                    "log's duty_tier_crossed entry names the duty and its tier.",
+    # The login warning (#1161): the warning window, one day, and the end
+    "pd_login_expiring": "Your Claude login is near the end of its refresh grant, or past it. Run "
+                         "`macf_tools pd login`; it gives the time left. Only a person can renew it, by "
+                         "running /login in your session, so tell the operator now, with that time.",
     # MIS-0002-R55 (unread_mail_MUST_raise_notice)
     "pd_unread_mail": "Mail has waited in your pickup box past your declared threshold. Run "
                       "`macf_tools amail list` to read it; the event log's pd_unread_mail entry says how long.",
@@ -136,7 +140,7 @@ class NoticeRecord(BaseModel):
 
     source: Literal["amail", "pd_limit_exceeded", "pd_grant_denied", "pd_carried", "pd_unread_mail",
                     "pd_run_failed", "pd_run_missed", "pd_schedule_changed", "pd_entry_due", "pd_duty_due",
-                    "pd_unit_failed"]
+                    "pd_unit_failed", "pd_login_expiring"]
     arrival_id: str = Field(pattern=r"^[A-Za-z0-9._:-]{1,128}$")
     count: Optional[int] = Field(default=None, ge=0)
     read_at: float
