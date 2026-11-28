@@ -3,7 +3,7 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the deployments that provision them
 **Status**: ACTIVE
-**Version**: 1.0
+**Version**: 1.1 — §3.2: the mail ports are closed by an allow-list, `mail_egress.allow_accounts`, which refuses every account it doesn't name (MIS-0004 R33). Without it, a deployment keeps its per-agent deny-lists and the start step warns. Minor: a new declaration field and a new refusal a deployment can meet.
 
 ---
 
@@ -51,6 +51,10 @@ to prevent. **The explanation is part of the control, not documentation of it.**
 - What must be true before a declaration means anything?
 - What happens if the boundary cannot be enforced?
 - How do I exempt a component that legitimately needs the capability?
+
+**3.2 The Mail Ports Are an Allow-List**
+- Why are the mail ports closed by naming who may open them, not who may not?
+- Which accounts belong on the list, and what does the start step refuse?
 
 **3.1 Identity Separation as Prerequisite**
 - Why can't I filter an agent that shares a uid with a person?
@@ -221,6 +225,33 @@ to opt in. Exemption must be *written*, which puts it in front of a reviewer.
 
 A deployment that declares nothing is unaffected. Boundaries are opt-in at the
 deployment level and deny-by-default within it.
+
+### 3.2 The Mail Ports Are an Allow-List
+
+A per-agent `deny_tcp_ports` list refuses the accounts it names, and nothing else.
+A service account, a seat added later without an `egress` block of its own, or any
+process run under an unlisted uid can still open the mail ports. That is the
+fail-open MIS-0004 R33 (host_egress_MUST_match_the_broker_account) exists to close.
+An effect probe found it in a live container: three seats refused, and five service
+accounts free to connect.
+
+So the mail ports (25, 465, 587, 993) are declared by naming who **may** open them:
+
+```yaml
+mail_egress:
+  allow_accounts: [amail_broker]   # plus any tunnel, inbound fetcher or human account that really sends
+```
+
+The start step installs an ACCEPT per listed account, matched on the socket's owner,
+then one REJECT for every other owner, for IPv4 and IPv6, and reads the chain back. It
+refuses to start a deployment whose list names an account that doesn't exist, leaves
+out the broker's account when the image has one, or names an account that is also
+denied a mail port. List every account that really opens a mail port. One left off
+loses its mail, which shows at once as a refused connection, not as silence. On
+macOS the same allow-list is a pf anchor (`macf.amail.egress`).
+
+Without `mail_egress`, the per-agent deny-lists apply as before, and the start step
+logs that R33 isn't met.
 
 ### 3.1 Identity Separation as Prerequisite
 

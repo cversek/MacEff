@@ -1,4 +1,4 @@
-"""MIS-0004 R33 on macOS: an owner-matched pf allow-list for the mail ports, rendered without root.
+"""MIS-0004 R33 on macOS and Linux: an owner-matched allow-list for the mail ports, rendered without root.
 
 pf's ``user`` matches the socket's owner, so the rule holds on any network the host joins. It is an
 allow-list: the broker's account and the human accounts the operator declares may open the mail
@@ -19,6 +19,16 @@ def test_rule_allows_only_declared_accounts():
     assert all("port { 25 465 587 993 }" in l for l in passes + lines[-1:])
     # Owner matching, never a destination list: the rule holds on any network.
     assert "to any" in lines[-1]
+
+    # Linux: the same allow-list as iptables rules, an ACCEPT per declared account's uid, then a
+    # REJECT for every other owner, all on the same mail ports.
+    linux = eg.render_iptables_rules({"amail_broker": 22998, "alice": 22000})
+    accepts, last = linux[:-1], linux[-1]
+    assert {r[r.index("--uid-owner") + 1] for r in accepts} == {"22998", "22000"}
+    assert all(r[-2:] == ["-j", "ACCEPT"] for r in accepts)
+    assert "--uid-owner" not in last and last[last.index("-j") + 1] == "REJECT", \
+        "the last rule refuses every owner the accepts didn't name"
+    assert all(r[r.index("--dports") + 1] == "25,465,587,993" for r in linux)
 
 
 @pytest.mark.parametrize("bad", ["", "a b", "root;pass", "x" * 40])

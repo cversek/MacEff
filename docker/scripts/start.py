@@ -2202,6 +2202,41 @@ def resolve_egress_policies(agents_config: AgentsConfig) -> Dict[str, List[int]]
     return policies
 
 
+#: The account the image runs the amail broker as. When it exists, an allow-list that leaves it
+#: out would refuse the broker its own mail ports.
+BROKER_ACCOUNT = 'amail_broker'
+
+
+def resolve_mail_allow(names: List[str], policies: Dict[str, List[int]]) -> Dict[str, int]:
+    """Each allowed account's uid, or a refusal naming what is wrong (MIS-0004 R33).
+
+    Refuses an account that doesn't exist, an allow-list that leaves out the broker's account when
+    the image has one, and an account both allowed the mail ports and denied one of them, since
+    the two can't both be meant."""
+    from macf.amail.egress import MAIL_PORTS
+    allowed: Dict[str, int] = {}
+    for name in names:
+        try:
+            allowed[name] = pwd.getpwnam(name).pw_uid
+        except KeyError:
+            raise RuntimeError(
+                f"Egress policy: mail_egress.allow_accounts names '{name}', which is not an "
+                f"account here. The allow-list must name real accounts." + POLICY_POINTER
+            )
+    if BROKER_ACCOUNT not in allowed and user_exists(BROKER_ACCOUNT):
+        raise RuntimeError(
+            f"Egress policy: mail_egress.allow_accounts leaves out '{BROKER_ACCOUNT}', so the "
+            f"broker could not open its own mail ports. Add it." + POLICY_POINTER
+        )
+    both = sorted(n for n in allowed if set(policies.get(n, ())) & set(MAIL_PORTS))
+    if both:
+        raise RuntimeError(
+            f"Egress policy: {both} are both allowed the mail ports and denied one of them "
+            f"in deny_tcp_ports. Keep one." + POLICY_POINTER
+        )
+    return allowed
+
+
 def apply_egress_policy(agents_config: AgentsConfig) -> None:
     """Install per-uid outbound restrictions, or fail provisioning trying.
 
@@ -2215,12 +2250,21 @@ def apply_egress_policy(agents_config: AgentsConfig) -> None:
     have, which is strictly worse than having no control, because it is believed.
     """
     policies = resolve_egress_policies(agents_config)
+    mail_allow = list(agents_config.mail_egress.allow_accounts) if agents_config.mail_egress else None
 
-    if not policies:
+    if not policies and mail_allow is None:
         log("Egress policy: none declared, no rules installed")
         return
 
-    log(f"Egress policy: {len(policies)} agent(s) restricted, enforcing before sshd")
+    if mail_allow is None:
+        # A deny-list names the accounts it refuses, so any account it doesn't name opens the
+        # mail ports: a service account, a new seat, anything run as an unlisted uid.
+        log("⚠️ Egress policy: no mail_egress.allow_accounts declared, so the mail ports are closed "
+            "only to the agents listed; every other account can open them (MIS-0004 R33 asks for "
+            "an allow-list)")
+    log(f"Egress policy: {len(policies)} agent(s) restricted"
+        + (f", mail ports open only to {', '.join(mail_allow)}" if mail_allow is not None else "")
+        + ", enforcing before sshd")
 
     # Capability check by ATTEMPT, not by inspecting anything that merely reports
     # capability. A missing binary and a missing NET_ADMIN both surface here.
@@ -2269,6 +2313,8 @@ def apply_egress_policy(agents_config: AgentsConfig) -> None:
             f"A rule matching one would silently match the other." + POLICY_POINTER
         )
 
+    allowed = resolve_mail_allow(mail_allow, policies) if mail_allow is not None else {}
+
     for binary in EGRESS_BINARIES:
         # Idempotent rebuild: create the chain if absent, flush it if present, and
         # ensure exactly one jump to it from OUTPUT.
@@ -2311,6 +2357,18 @@ def apply_egress_policy(agents_config: AgentsConfig) -> None:
                     f"(uid {uid}, ports {port_spec}) via {binary}: {add.stderr.strip()}"
                 )
 
+        # The mail-port allow-list comes after the per-agent rules: each allowed account's
+        # ACCEPT, then a REJECT for every other owner (MIS-0004 R33).
+        if allowed:
+            from macf.amail.egress import render_iptables_rules
+            for spec in render_iptables_rules(allowed):
+                add = subprocess.run([binary, '-A', EGRESS_CHAIN, *spec], capture_output=True, text=True)
+                if add.returncode != 0:
+                    raise RuntimeError(
+                        f"Egress policy: could not install the mail allow-list rule {' '.join(spec)} "
+                        f"via {binary}: {add.stderr.strip()}" + POLICY_POINTER
+                    )
+
     # Read the rules back. Reporting what we asked for is not evidence of what is
     # installed; these must be two separate observations or they are one variable.
     for binary in EGRESS_BINARIES:
@@ -2331,6 +2389,18 @@ def apply_egress_policy(agents_config: AgentsConfig) -> None:
                 )
             log(f"Egress rule active [{binary}]: {username} "
                 f"(uid {uids[username]}) denied tcp/{','.join(str(p) for p in ports)}")
+        if allowed:
+            missing = [n for n, u in allowed.items()
+                       if f"--uid-owner {u} -j ACCEPT" not in listed.stdout]
+            catch_all = any("-j REJECT" in line and "--uid-owner" not in line and "--dports" in line
+                            for line in listed.stdout.splitlines())
+            if missing or not catch_all:
+                raise RuntimeError(
+                    f"Egress policy: the mail allow-list is incomplete in {binary} {EGRESS_CHAIN} "
+                    f"after installation (missing ACCEPT for {missing or 'none'}, catch-all REJECT "
+                    f"{'present' if catch_all else 'absent'}). Chain reads:\n{listed.stdout}" + POLICY_POINTER
+                )
+            log(f"Egress rule active [{binary}]: mail ports open only to {', '.join(sorted(allowed))}")
 
 
 #: Where compose mounts the host's secrets/ directory, read-only. The base image
