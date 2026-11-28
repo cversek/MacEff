@@ -68,8 +68,8 @@ and then: "Work on the fix with the attachable login expired waiting state."
 
 MIS-0001-R57 (amendment_MUST_have_maintainer_signoff) requires each maintainer of MIS-0002 other than the drafter to sign off before this merges.
 
-- **The host-side maintainer:** agreed on #1161 (comment 7230662153) with four points, each answered in section 2. Sign-off on this text: pending.
-- **The head maintainer:** agreed on #1161 (comment 7230997677) with four points, each answered above, and said it would sign off with them. Sign-off on this text: pending.
+- **The host-side maintainer:** agreed on #1161 (comment 7230662153) with four points, each answered in section 2. Approved pull request #1163 at 4c143f60 after planting 14 defects, all caught but one equivalent, whose dead line was then removed (review 6095957808). Sign-off: given by that approval, to be confirmed at the head that carries this record.
+- **The head maintainer:** agreed on #1161 (comment 7230997677) with four points, each answered above, and asked in review for two changes, both made: the new rows renumbered R205 to R207, past MIS-0011's, and a seat with its own config directory reading no credential. Signed off under MIS-0001-R57 on the amendment as written, in its approval at 00ffe0ac (review 6094891673), to be confirmed at the head that carries this record.
 - **The repo owner's decision:** pending, by merge.
 
 ## Wiki-Links
