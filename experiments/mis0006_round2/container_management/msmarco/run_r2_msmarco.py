@@ -2,6 +2,7 @@
 queries (MacEff #1149). The rule was posted before any round 2 data was read: comment 7231398098.
 
     R1_SNAPSHOT=<round 1 snapshot.json> python3 run_r2_msmarco.py seal    # picks fresh queries, seals them; ranks nothing
+    R1_SNAPSHOT=none python3 run_r2_msmarco.py seal   # a record that never ran knowledge eval in round 1: all are fresh
     python3 run_r2_msmarco.py run     # checks the seal, ranks, decides H3.3 and its guard
     python3 run_r2_msmarco.py cost    # added latency and memory of reranking 50 candidates
 
@@ -70,16 +71,20 @@ def labels(corpus, source):
 def seal():
     r1_path = os.environ.get("R1_SNAPSHOT")
     if not r1_path:
-        sys.exit("R1_SNAPSHOT must name round 1's snapshot.json: fresh queries are those it didn't label")
-    r1_snap, r1_digest = KE.load_snapshot(Path(r1_path))
-    r1 = KE.Corpus(r1_snap, r1_digest)
+        sys.exit("R1_SNAPSHOT must name round 1's snapshot.json, or be 'none' on a record that never ran "
+                 "knowledge eval in round 1: fresh queries are those round 1 didn't label")
+    if r1_path == "none":
+        r1, r1_digest = None, None          # no round 1 run on this record: every labeled query is fresh
+    else:
+        r1_snap, r1_digest = KE.load_snapshot(Path(r1_path))
+        r1 = KE.Corpus(r1_snap, r1_digest)
     snap = KE.build_snapshot()
     digest = KE.save_snapshot(snap, HERE / "snapshot.json")
     corpus = KE.Corpus(snap, digest)
     out = {"rule": "MacEff #1149 comment 7231398098", "seed": SEED, "snapshot": digest,
            "round1_snapshot": r1_digest, "sealed_at": time.time(), "sources": {}}
     for source in (PRIMARY, GUARD):
-        now, before = labels(corpus, source), labels(r1, source)
+        now, before = labels(corpus, source), (labels(r1, source) if r1 is not None else {})
         fresh = sorted(q for q in now if q not in before)
         ids, filled = list(fresh), 0
         if len(ids) < MIN_FRESH:

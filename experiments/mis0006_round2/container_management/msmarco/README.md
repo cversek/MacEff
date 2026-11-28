@@ -8,7 +8,7 @@ python3 run_r2_msmarco.py run    # checks the seal, ranks, decides
 python3 run_r2_msmarco.py cost   # added latency and memory
 ```
 
-1. **Seal.** `seal` picks the queries: every same-subject query, and every cross-reference query for the guard, that your round 1 snapshot didn't label. If fewer than 60 are fresh, it fills from round 1's queries in the order a fixed seed gives, and says how many. It writes `seal.json` and prints a hash. Post the hash before running `run`.
+1. **Seal.** On a record that never ran knowledge eval in round 1, set `R1_SNAPSHOT=none`: no query there was labeled or read, so every one is fresh, and the seal records `round1_snapshot: null`. Otherwise, `seal` picks the queries: every same-subject query, and every cross-reference query for the guard, that your round 1 snapshot didn't label. If fewer than 60 are fresh, it fills from round 1's queries in the order a fixed seed gives, and says how many. It writes `seal.json` and prints a hash. Post the hash before running `run`.
 2. **Run.** `run` refuses if the snapshot or a query list changed since the seal. It runs the leak audit, then both arms, and applies the posted rule:
    - **H3.3** validates if the paired 95% bootstrap lower bound (10,000 resamples) of reranked minus plain MRR on same-subject queries is above 10% of plain's MRR.
    - **The guard** holds if that lower bound on cross-references is not below minus 10% of plain's MRR.
