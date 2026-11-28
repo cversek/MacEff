@@ -11956,6 +11956,42 @@ def cmd_amail_contacts(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_amail_state(args: argparse.Namespace) -> int:
+    """Where one message this agent sent stopped: each recipient's latest receipt state, asked of the
+    broker by the message's id (MIS-0004 R24). Read-only."""
+    import json
+    from macf.amail.client import BrokerUnavailable, message_state
+
+    cfg = _amail_config()
+    started = _ensure_host_broker(cfg)
+    if started:
+        print(started, file=sys.stderr)
+    try:
+        reply = message_state(args.message_id, Path(cfg["socket"]), sender=cfg.get("agent") or None)
+    except BrokerUnavailable as e:
+        print(f"❌ {e}")
+        return 1
+    if args.json:
+        print(json.dumps(reply, indent=2))
+        return 0 if reply.get("ok") and reply.get("found") else 1
+    if not reply.get("ok", False):
+        error = str(reply.get("error") or "the broker gave no reason")
+        hint = ("this broker was started before it learned this operation; restart it (the operator's step)"
+                if "unknown operation" in error else "")
+        print(f"❌ the broker gave no state: {error}" + (f"\n   {hint}" if hint else ""))
+        return 1
+    if not reply.get("found"):
+        # Not "nothing happened": the broker holds no record of this id for this agent, which is also
+        # the answer for another agent's message.
+        print(f"no record of {args.message_id} sent by this agent")
+        return 1
+    print(f"{args.message_id}: {reply.get('state') or 'unknown (a state this build does not know)'}")
+    for addr, entry in sorted((reply.get("recipients") or {}).items()):
+        detail = f"  {entry['detail']}" if entry.get("detail") else ""
+        print(f"  {addr}  {entry.get('state')}  {entry.get('at')}{detail}")
+    return 0
+
+
 def cmd_amail_status(args: argparse.Namespace) -> int:
     """Report whether amail is usable, and say precisely what is missing if not."""
     import socket as _socket
@@ -14541,6 +14577,12 @@ def _build_parser() -> argparse.ArgumentParser:
                                 help="show only addresses containing this text")
     amail_contacts.add_argument("--json", action="store_true", help="machine-readable output")
     amail_contacts.set_defaults(func=cmd_amail_contacts)
+    amail_state = amail_sub.add_parser(
+        "state", help="where one message you sent stopped: each recipient's latest receipt state, "
+                      "from the broker, by the message's id (MIS-0004 R24)")
+    amail_state.add_argument("message_id", help="the id the broker gave when it accepted the message")
+    amail_state.add_argument("--json", action="store_true", help="machine-readable output")
+    amail_state.set_defaults(func=cmd_amail_state)
 
     amail_peer = amail_sub.add_parser(
         "peer", help="rung-2 peer links between brokers (MIS-0004 R56 to R65): cards, not hand-written config")
