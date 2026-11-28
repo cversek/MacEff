@@ -63,7 +63,7 @@ from .contacts import ContactBook, ContactListError
 from .models import Message, new_id, _now_iso
 from .trust import TrustClass, LOCAL_SUBMISSION
 from .store import deliver, ensure_maildir
-from . import store
+from . import socket_protocol, store
 
 DEFAULT_SOCKET = "/run/amail/broker.sock"
 
@@ -1652,9 +1652,10 @@ class Broker:
         message.trust = None
 
         # PASSED — `signature` is the sender's own claim about its own message
-        # and is carried unchanged. It is PASSED rather than CHECKED on purpose:
-        # the broker cannot verify an outbound signature (it holds no private
-        # key, by design) and the recipient is the party who must. Its size is
+        # and is carried unchanged here. canonicalize() doesn't judge it: submit()
+        # does, against the operator's registry (R43), and the recipient judges
+        # it again at ingest (R44). Verifying needs only public keys, so holding
+        # no private key (by design) doesn't stop the broker checking. Its size is
         # bounded because an unbounded "signature" is an unbounded channel
         # wearing a cryptographic name — the same defect round 3 found in the
         # identifier fields.
@@ -1723,6 +1724,21 @@ class Broker:
                 self.audit.refused(sender=sender, recipients=[], reason=reason,
                                    message_id=message.message_id)
             return {"ok": False, "refused": [reason], "message_id": message.message_id}
+
+        # AN AGENT THE REGISTRY DECLARES SIGNS, OR ITS MAIL DOESN'T LEAVE (MIS-0004 R43). The
+        # broker holds no private key, but verifying needs only the public keys, which are the
+        # operator's registry. It applies the receiver's own rule (attest.sender_verdict, R44) at
+        # this acceptance, so a key rotated out is refused on new mail (R45) and the two sides
+        # never disagree on the same bytes. A sender the registry doesn't declare, and every
+        # sender while the registry can't be trusted, passes as unverified, the receiver's
+        # reading too: the landing declares first and enforces second (section 12.4).
+        unsigned = self._signature_refusal(message)
+        if unsigned is not None:
+            if self.audit:
+                self.audit.refused(sender=sender, recipients=message.to,
+                                   reason=unsigned, message_id=message.message_id)
+            self._record_fate(sender, message, "denied", unsigned)
+            return {"ok": False, "refused": [unsigned], "message_id": message.message_id}
 
         refusals = self._check(sender, message.to)
         if refusals:
@@ -1893,6 +1909,21 @@ class Broker:
                 edited.append("to")
         message.to = to
         return edited
+
+    def _signature_refusal(self, message: Message) -> Optional[str]:
+        """Why this submission is refused under R43, or None. Refused only when the registry
+        declares the sender's card and the message is unsigned or verifies against none of the
+        keys valid now; the reason is the verdict's own words."""
+        from .attest import sender_verdict
+        verdict = sender_verdict(message, self.sender_card(message), self.registry, _accepted_now())
+        if verdict.get("registry_trusted") is False:
+            # Not a refusal (see submit), but never silent: an untrusted registry means no agent
+            # is held to its keys until the operator repairs it.
+            print(f"⚠️ MACF: amail broker: {verdict['reason']}; signatures aren't enforced (R43)",
+                  file=sys.stderr)
+        if verdict.get("trust") != TrustClass.SUSPECT.value:
+            return None
+        return f"signature required (MIS-0004 R43): {verdict['reason']}"
 
     def sender_card(self, message: Message) -> Optional[str]:
         """The sender's calling card, resolved once here and written into the hand-off sidecar, so
@@ -2299,6 +2330,43 @@ class Broker:
     # These exist so the CLI has a path that is not `import store`. A read that
     # bypasses the broker leaves no audit trace and answers to no allowlist —
     # the framework's own tooling was the first thing doing it.
+
+    def message_state(self, agent: str, message_id: Any) -> Dict[str, Any]:
+        """The latest receipt state of one message *agent* sent, by its id (MIS-0004 R24,
+        state_MUST_be_queryable_by_id).
+
+        Read from the disposition record, the same broker-owned file a sender can also read by
+        filesystem when no broker runs: one record, two ways to reach it. Each recipient's latest
+        state comes back with its detail and time, and `state` is the message-level view derived
+        from them as the sender's own reader derives it.
+
+        A message another agent sent answers exactly as an unknown id does, `found: false`, so the
+        reply doesn't tell one agent which ids another holds (R12). An id that isn't a broker id is
+        refused, since it would otherwise name a path."""
+        from .client import derive_message_state
+        if not isinstance(message_id, str) or not _ID_RE.match(message_id):
+            return {"ok": False, "error": f"{message_id!r} is not a message id this broker mints"}
+        if self.config.dispositions_dir is None:
+            return {"ok": False, "error": "this broker keeps no disposition records, so it has no state to give"}
+        f = Path(self.config.dispositions_dir) / f"{message_id}.json"
+        try:
+            rec = json.loads(f.read_text())
+        except FileNotFoundError:
+            rec = None
+        except (OSError, ValueError) as e:
+            print(f"⚠️ MACF: disposition record {f.name} is unreadable ({e}); its state is unknown, "
+                  "not reported as any state", file=sys.stderr)
+            return {"ok": False, "error": f"the record for {message_id} can't be read ({type(e).__name__})"}
+        if not isinstance(rec, dict) or rec.get("agent") != agent:
+            return {"ok": True, "message_id": message_id, "found": False, "state": None, "recipients": {}}
+        latest = {}
+        for addr, entry in (rec.get("recipients") or {}).items():
+            history = (entry or {}).get("history") or []
+            if history:
+                last = history[-1]
+                latest[addr] = {"state": last.get("state"), "detail": last.get("detail", ""), "at": last.get("at")}
+        return {"ok": True, "message_id": message_id, "found": True,
+                "state": derive_message_state(rec), "recipients": latest}
 
     def status_counts(self, agent: str) -> Dict[str, Any]:
         """Counts of the BROKER's stores scoped to this agent — nothing else.
@@ -2714,6 +2782,7 @@ class _Handler(socketserver.StreamRequestHandler):
     def handle(self) -> None:
         broker: Broker = self.server.broker  # type: ignore[attr-defined]
         resp: Dict[str, Any]
+        version_note = ""
         try:
             # IDENTITY COMES FROM THE KERNEL, NOT THE PAYLOAD.
             #
@@ -2757,6 +2826,16 @@ class _Handler(socketserver.StreamRequestHandler):
             if not raw:
                 return
             req = json.loads(raw.decode("utf-8"))
+            # THE PROTOCOL VERSION (MIS-0004 R35). Checked before anything is
+            # read from the request, so a client on another build is refused
+            # with the versions this broker speaks rather than half-understood.
+            accepted, note = socket_protocol.check(req.get("v"))
+            if not accepted:
+                raise ValueError(note)
+            # Only an accepted request in a superseded version carries a note
+            # forward: a refusal's reason belongs in its error, never in
+            # `deprecated`, where it would read as "served, but update soon".
+            version_note = note
             # The kernel named the uid; the claim settles the rest. On an
             # unshared uid a disagreeing claim is refused and recorded; on a
             # uid the host tier declares shared the claim is the identity
@@ -2786,6 +2865,8 @@ class _Handler(socketserver.StreamRequestHandler):
                 resp = broker.status_counts(sender)
             elif op == "contacts":
                 resp = broker.contact_entries(sender)
+            elif op == "state":
+                resp = broker.message_state(sender, req.get("message_id"))
             else:
                 # Named rather than ignored: a client asking for an operation
                 # this broker does not have is a version skew or an intention,
@@ -2805,6 +2886,11 @@ class _Handler(socketserver.StreamRequestHandler):
                 broker.audit.error(context="request",
                                    detail=f"{type(e).__name__}: {e}",
                                    sender=(sender if "sender" in dir() else (who if "who" in dir() and who else None)))
+        # Every reply says which version answered it, refusals included, so a
+        # client can tell a skew from any other error.
+        resp.setdefault("v", socket_protocol.VERSION)
+        if version_note:
+            resp.setdefault("deprecated", version_note)
         try:
             self.wfile.write((json.dumps(resp) + "\n").encode("utf-8"))
         except OSError as e:

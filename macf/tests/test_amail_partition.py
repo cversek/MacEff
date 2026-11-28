@@ -73,3 +73,55 @@ def test_box_files_not_group_writable(delivered):
     for p in delivered.iterdir():
         if p.is_file():
             assert os.stat(p).st_mode & stat.S_IWGRP == 0, p.name
+
+
+def _sparrow_ingest(broker):
+    from macf.amail.client import ingest
+    return ingest(broker.config.agent_homes["sparrow"], broker.config.inbound_handoff / "sparrow",
+                  broker.config.contacts_path, "sparrow")
+
+
+def _held_ids(broker):
+    from macf.amail import store
+    return {m.message_id for m in store.read_all(broker.config.agent_homes["sparrow"])}
+
+
+def _send(broker, body):
+    r = broker.submit("ira", Message(sender=f"ira@{DOMAIN}", to=[f"sparrow@{DOMAIN}"],
+                                     subject="r37", body=body))
+    assert r["ok"], r
+    return r["message_id"]
+
+
+def test_receiver_checks_owner_and_links(broker, tmp_path, monkeypatch):
+    """R37 (receiver_MUST_check_owner_and_link_count): the receiver ingests only a file the
+    broker's account owns with one link, read on the descriptor it opened. A hard link made from
+    outside the box and a pair the recipient's group created are each refused and set aside, and
+    neither reaches the store; a genuine delivery in the same box still does."""
+    from macf.amail import client
+
+    box = broker.config.inbound_handoff / "sparrow"
+    genuine = _send(broker, "genuine")
+    linked = _send(broker, "hard-linked")
+    [linked_amsg] = [p for p in box.glob("*.amsg") if linked in p.name]
+    os.link(linked_amsg, tmp_path / "a-second-name-outside-the-box")
+
+    results = {r.get("name", ""): r for r in _sparrow_ingest(broker)}
+    assert genuine in _held_ids(broker), "the broker's own single-link file is ingested"
+    assert linked not in _held_ids(broker), "a file with a second link is not ingested"
+    refused = [r for r in results.values() if r.get("refused")]
+    assert len(refused) == 1 and "2 links" in refused[0]["reason"]
+    assert sorted(p.name for p in box.iterdir() if p.name.endswith(".refused")) == sorted(
+        [linked_amsg.name + ".refused", linked_amsg.with_suffix(".json").name + ".refused"]), \
+        "the hard-linked pair is set aside, not left to be refused again"
+
+    # A pair the recipient's group created: same bytes a broker would write, but the box's owner
+    # (the broker's account) is someone else. One account runs the test, so the box owner stands in.
+    planted = _send(broker, "planted")
+    [planted_amsg] = [p for p in box.glob("*.amsg") if planted in p.name]
+    monkeypatch.setattr(client, "_box_owner", lambda fd: os.getuid() + 1)
+    [r] = _sparrow_ingest(broker)
+    assert r["refused"] and "not the broker's" in r["reason"]
+    assert planted not in _held_ids(broker)
+    assert (box / (planted_amsg.name + ".refused")).exists()
+    assert (box / (planted_amsg.with_suffix(".json").name + ".refused")).exists()
