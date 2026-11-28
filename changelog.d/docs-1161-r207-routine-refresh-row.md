@@ -1,0 +1,3 @@
+### Changed
+
+- **MIS-0010 is recorded as Accepted, and R207 cites its routine-refresh test** (`framework/mis/MIS-0010-*.md`, `framework/mis/MIS-0002-persistent-layer.md`, #1161): the repo owner's merge of #1163 accepted the amendment and confirmed its number, so its status and resolution now say so. MIS-0002-R207's decidable path, in the requirement and in the conformance table, also names `test_a_routine_refresh_ends_no_wait_and_only_a_new_login_does`. That test was in #1163, and it is the one that shows a healthy session's routine token refresh ends no other session's wait. Editorial: no requirement's text changes.
