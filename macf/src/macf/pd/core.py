@@ -38,7 +38,7 @@ from macf.agent_events_log import append_event, get_log_path, read_events
 from macf.notify.session import proc_start, proc_start_key, verify_incarnation
 from macf.pd.interface import (
     AUTH_FAILED_REASON,
-    LOGIN_WAIT,
+    auth_wait,
     EVENT_CONTROL,
     EVENT_OVER_LIMIT,
     EVENT_UNDER_LIMIT,
@@ -772,7 +772,7 @@ class Core:
         return [UnitStatus(unit=r.spec.name, state=r.state, pid=r.pid if r.proc else None,
                            proc_start=r.proc_start if r.proc else None, since=r.since,
                            restart_held_until=self._restart_held_until(r),
-                           waiting_on=LOGIN_WAIT if r.proc and r.auth_failed is not None
+                           waiting_on=auth_wait(r.auth_failed) if r.proc and r.auth_failed is not None
                            and r.state == "waiting_on_a_person" else None,
                            auth_failed=r.auth_failed if r.proc else None)
                 for r in self._units.values()]
@@ -1210,7 +1210,7 @@ class Core:
         began = datetime.fromtimestamp(r.since).astimezone().strftime("%Y-%m-%d %H:%M %Z")
         self._emit(EVENT_STATE, UnitState(
             agent=self.card, unit=r.spec.name, state="waiting_on_a_person", pid=r.pid,
-            proc_start=r.proc_start, waiting_on=LOGIN_WAIT,
+            proc_start=r.proc_start, waiting_on=auth_wait(r.auth_failed),
             reason=f"{AUTH_FAILED_REASON}: {r.auth_failed} (still waiting; first recorded {began})",
             boot_id=self._boot_id, since=r.since,
         ).model_dump())
@@ -1285,13 +1285,13 @@ class Core:
             # The harness can't authenticate. The session is running but can't work, and that
             # must never read as idle or healthy: it waits on a person to log in, named as data,
             # and is kept running so that a person can attach and log in
-            # (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_login)). It is not restarted: a
+            # (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person)). It is not restarted: a
             # restart can't log in (R22), and a restarted session that is never prompted makes
             # no request, so it would read healthy again while it can't.
             if r.auth_failed is None or r.state != "waiting_on_a_person":
                 r.auth_failed = live.auth_failed
                 self._transition(r, "waiting_on_a_person", f"{AUTH_FAILED_REASON}: {live.auth_failed}",
-                                 waiting_on=LOGIN_WAIT)
+                                 waiting_on=auth_wait(live.auth_failed))
             return
         if r.auth_failed is not None:
             r.auth_failed = None
@@ -1308,7 +1308,7 @@ class Core:
         login flow while the session waits on its login (MIS-0002-R19)."""
         for r in self._units.values():
             if r.spec.kind == "session" and r.state == "waiting_on_a_person":
-                return "its login" if r.auth_failed is not None else "a person"
+                return f"its {auth_wait(r.auth_failed)}" if r.auth_failed is not None else "a person"
         return None
 
     def session_transcript(self, claude_home: Optional[Path] = None) -> Optional[Path]:

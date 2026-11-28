@@ -96,7 +96,7 @@ def credential_fingerprint(reader: Optional[Callable[[], str]] = None) -> Option
     to read or it states neither. Only those two fields are read, as in ``assess``: no token leaves
     the read. A session waiting on its login compares this with the pair it saw when it failed, so
     one ``/login`` returns every session sharing the credential to running, not only the one it was
-    typed in (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_login))."""
+    typed in (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person))."""
     from macf.budget import BudgetError, read_credential
     try:
         raw = (reader or read_credential)()

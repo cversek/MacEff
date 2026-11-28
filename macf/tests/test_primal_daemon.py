@@ -1811,7 +1811,7 @@ def test_a_failed_login_waits_on_a_person(make_core, script):
     """A session that can't authenticate waits on a person, with the login named as data and what
     the harness said, and is not stopped or restarted, because a restart can't log in; once it
     can authenticate again it reads running, as the same process
-    (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_login))."""
+    (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person))."""
     core = make_core([make_unit("session", script, {"auth_failed": LOGIN_EXPIRED, "auth_failed_for": 1.5})])
     core.boot()
 

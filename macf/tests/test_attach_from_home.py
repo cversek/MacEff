@@ -151,7 +151,7 @@ def _held_for_login(tmp_path, auth_failed, state=None, waiting_on="login"):
 
 
 def test_a_session_waiting_on_its_login_is_attachable_to_log_in(tmp_path):
-    """MIS-0002-R19 (auth_failure_MUST_read_waiting_on_login) keeps a session that can't log in
+    """MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person) keeps a session that can't log in
     running, so a person can run /login in it (persistent_layer 3.2's alert: attach and run
     /login). Attach must reach it and say why (MacEff #1015)."""
     plan = _held_for_login(tmp_path, "Login expired")

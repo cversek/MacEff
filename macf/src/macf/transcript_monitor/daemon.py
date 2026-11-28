@@ -378,7 +378,7 @@ CREDENTIAL_RECHECK_S = 60.0
 
 class AuthWatch:
     """Whether the session can authenticate, read from its own transcript as each line arrives
-    (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_login)).
+    (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person)).
 
     Claude Code writes a failed login as an assistant entry with ``isApiErrorMessage`` and
     ``error: "authentication_failed"`` ("Login expired · Please run /login", or the API's 401).

@@ -345,7 +345,7 @@ def test_a_run_waiting_as_declared_or_never_started_is_not_overdue():
 
 
 def test_auth_failure_waits_on_login(tmp_path):
-    """MIS-0002-R19 (auth_failure_MUST_read_waiting_on_login): the session's harness adapter reads a
+    """MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person): the session's harness adapter reads a
     failed login from the transcript, in the shapes Claude Code writes it, and says so in the
     session's beat until a request goes through again. The daemon, hearing that beat, sets the
     session's state to waiting on a person with the login named as data, keeps the same process
@@ -479,3 +479,18 @@ def test_a_credential_that_wont_read_leaves_the_wait_and_says_so(capsys):
     clock[0] += CREDENTIAL_RECHECK_S
     assert watch.state() == "Login expired"
     assert "couldn't be read" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("said,kind", [
+    ("Login expired \u00b7 Please run /login", "login"),
+    ('API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}}', "login"),
+    ("Invalid API key \u00b7 Fix external API key", "credential"),
+    ("authentication failed", "login"),
+    (None, "login"),
+])
+def test_what_the_adapter_read_names_the_wait(said, kind):
+    """MIS-0002-R19 names what the session waits on from what the client said: a rejected API key
+    waits on its credential, where no /login helps; every other failure waits on its login."""
+    from macf.pd.interface import auth_wait
+    assert auth_wait(said) == kind
+

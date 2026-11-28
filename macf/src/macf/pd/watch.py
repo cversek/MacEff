@@ -222,7 +222,7 @@ def check_unit_state(card: str, unit: interface.Unit, event: Optional[dict],
     """A failed unit is unhealthy even while its liveness is fresh, and so is a session that
     waits on its login. That session keeps running, so it keeps beating, and a watch reading
     liveness alone called it ALIVE while it could do no work
-    (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_login)). A login wait is found by its
+    (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person)). A login wait is found by its
     record's ``waiting_on``, never the reason's words, and at the first read: unlike a prompt, a
     login doesn't come back by itself, so the allowance a prompt gets would only lose hours.
     None for any other state, a prompt wait included, or when *beat* shows another process has
@@ -230,7 +230,7 @@ def check_unit_state(card: str, unit: interface.Unit, event: Optional[dict],
     data = event.get("data") if isinstance(event, dict) else None
     if not isinstance(data, dict):
         return None
-    login_wait = data.get("state") == "waiting_on_a_person" and data.get("waiting_on") == interface.LOGIN_WAIT
+    login_wait = data.get("state") == "waiting_on_a_person" and data.get("waiting_on") in interface.AUTH_WAITS
     if data.get("state") != "failed" and not login_wait:
         return None
     if _beats_from_another_process(event, data, beat):
@@ -239,9 +239,10 @@ def check_unit_state(card: str, unit: interface.Unit, event: Optional[dict],
     if login_wait:
         # The session runs on its daemon's own tmux socket, so a plain ``tmux ls`` can't find
         # it: the alert names the command that can (#884).
+        remedy = interface.AUTH_REMEDY[data["waiting_on"]]
         return Finding(card, unit.name, "AUTH-FAILED",
-                       f"waits on a person to log in: attach with "
-                       f"macf_tools harness attach --card {card} and run /login ({reason})")
+                       f"waits on a person, its {data['waiting_on']}: {remedy}, reaching it with "
+                       f"macf_tools harness attach --card {card} ({reason})")
     return Finding(card, unit.name, "FAILED", reason)
 
 

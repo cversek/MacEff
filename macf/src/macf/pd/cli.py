@@ -18,6 +18,8 @@ import time
 from pathlib import Path
 from typing import Optional, Tuple
 
+from macf.pd.interface import AUTH_REMEDY  # what a person does about each wait for authentication (MIS-0002-R19)
+
 
 def add_pd_parser(sub) -> None:
     pd = sub.add_parser("pd", help="the agent's primal daemon and its units (policy: persistent_layer)")
@@ -545,9 +547,10 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         line += f", since {_when(unit.get('since'))}"
         if unit.get("restart_held_until"):
             line += f"; restart held until {unit['restart_held_until']} (quiet window)"
-        if unit.get("waiting_on") == "login":
-            # Waiting on its login and still running: the way back is a person's /login (MIS-0002-R19)
-            line += f": login ({unit.get('auth_failed') or 'authentication failed'}), attach and run /login"
+        if unit.get("waiting_on") in AUTH_REMEDY:
+            # Waiting on its authentication and still running: the way back is a person (MIS-0002-R19)
+            line += (f": {unit['waiting_on']} ({unit.get('auth_failed') or 'authentication failed'}), "
+                     f"{AUTH_REMEDY[unit['waiting_on']]}")
             from macf.pd.login import missing_login_env
             cause = missing_login_env(declared.get(unit["unit"]))
             if cause:
