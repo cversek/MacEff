@@ -32,6 +32,7 @@ def sock(tmp_path):
     with tempfile.TemporaryDirectory(prefix="amu", dir="/tmp") as sock_dir:
         cfg = BrokerConfig(domain=DOMAIN, agent_homes={"alpha": home}, contacts_path=contacts,
                            audit_path=tmp_path / "audit.jsonl", socket_path=Path(sock_dir) / "u.sock",
+                           dispositions_dir=tmp_path / "dispositions",
                            inbound_handoff=tmp_path / "handoff", inbound_quarantine=tmp_path / "quarantine",
                            shared_uid_agents={os.getuid(): ("alpha",)}, tier="host",
                            supervision="operator-at-terminal")
@@ -91,6 +92,9 @@ def test_socket_version(sock, monkeypatch):
     monkeypatch.setattr(socket_protocol, "SUPERSEDED", {1: (today - datetime.timedelta(days=1)).isoformat()})
     closed = _ask(sock, {"v": 1, **status})
     assert closed["ok"] is False and "is no longer" in closed["error"]
+    unversioned = _ask(sock, status)
+    assert unversioned["ok"] is False and "version 1 was accepted through" in unversioned["error"], \
+        "a request with no v is version 1, so it is refused once version 1's window closes"
     assert "deprecated" not in closed, "a closed window's refusal carries no deprecation note"
     assert _ask(sock, {"v": 2, **status})["ok"] is True
 
@@ -99,3 +103,25 @@ def test_a_version_that_is_not_a_number_is_refused(sock):
     for bad in ("1", 1.0, True, [1]):
         reply = _ask(sock, {"v": bad, "op": "status", "sender": "alpha"})
         assert reply["ok"] is False and "not a whole number" in reply["error"], bad
+
+
+def test_a_refused_version_runs_nothing(sock, tmp_path):
+    """The version is checked before the operation: a submission in a version the broker doesn't
+    speak gets no message id and leaves no disposition record."""
+    from macf.amail.models import Message
+    m = Message(sender=f"alpha@{DOMAIN}", to=[f"beta@{DOMAIN}"], subject="v99", body="v99")
+    reply = _ask(sock, {"v": 99, "sender": "alpha", "message": m.to_dict()})
+    assert reply["ok"] is False and "does not speak version 99" in reply["error"]
+    assert "message_id" not in reply
+    records = tmp_path / "dispositions"
+    assert not records.exists() or not any(records.iterdir()), "nothing was recorded for a refused request"
+
+
+def test_the_client_sends_its_version(sock, monkeypatch):
+    """The real client names its version: with the protocol at 2 and no older version accepted, a
+    client that sent nothing would be read as version 1 and refused."""
+    from macf.amail.client import status
+    monkeypatch.setattr(socket_protocol, "VERSION", 2)
+    monkeypatch.setattr(socket_protocol, "SUPERSEDED", {})
+    reply = status(sock, sender="alpha")
+    assert reply["ok"] is True and reply["v"] == 2

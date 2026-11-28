@@ -76,7 +76,11 @@ def _roundtrip(req: Dict[str, Any], socket_path: Path, timeout: float,
         s.close()
     if not buf.strip():
         raise BrokerUnavailable("broker closed the connection without answering")
-    return json.loads(buf.decode("utf-8"))
+    reply = json.loads(buf.decode("utf-8"))
+    if isinstance(reply, dict) and reply.get("deprecated"):
+        # Served, but on borrowed time (MIS-0004 R35): say so where the agent will see it.
+        print(f"⚠️ MACF: amail: {reply['deprecated']}", file=sys.stderr)
+    return reply
 
 
 def submit(sender: str, message: Message, socket_path: Path,
