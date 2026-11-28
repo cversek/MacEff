@@ -3,6 +3,7 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.18.0 — §3.2.3: the broker refuses a declared agent's submission that is unsigned or carries no signature valid for a declared key at its acceptance (MIS-0004 R43), with the verdict's reason; an undeclared sender, and every sender while the registry can't be trusted, still passes as unverified. Minor: a refusal a declared agent can meet.
 **Version**: 1.17.0 — §6b.2: a sender can also ask the broker for a message's latest state by its id, `amail state <id>`, answered from the same disposition record and scoped to the caller (MIS-0004 R24). §3.2: every request on the broker socket carries a protocol version `v`, every reply names the version that answered, and a superseded version is served through a declared last day, then refused by name (R35). Minor: a new verb, and a new refusal a client on another build can meet.
 **Version**: 1.16.0 — §3.2.3: every agent message is judged against the operator's registry (MIS-0004 R44), by the broker and the recipient with one rule, card and time: the broker resolves the sender's card and writes it with its acceptance time into the hand-off sidecar. A declared sender's unsigned or failed signature is suspect; any other sender is unverified; contact books no longer verify. Minor for operators: a declared agent's verdicts change, and a receiver's amail settings may name `domain`.
 **Version**: 1.15.0 — §3.2.3: the operator's registry. Each MacEff agent's public key is declared with its account in a root-owned file only the operator can write, which also records each certificate his authority issues by name, serial and expiry; anything else can write it and it is refused when read (MIS-0004 R42). `amail registry check` reports it.
@@ -757,8 +758,9 @@ means something to a party that doesn't trust the broker.
 - **The declare step.** An agent whose configuration sets `signing_required` refuses
   to send without a usable key. Any other agent without a key sends unsigned and is
   told on stderr. Until the operator declares an agent's key, its mail is unverified at
-  every receiver, never suspect (R44, §3.2.3); the broker's refusal of unsigned agent
-  mail (R43) switches on only once every key is declared.
+  every receiver, never suspect (R44, §3.2.3), and the broker doesn't refuse it. Once
+  its key is declared, the broker refuses its unsigned mail (R43), so declare the key
+  only after the agent signs with it (`amail key-status` says so).
 
 ### 3.2.3 The operator's registry
 
@@ -839,8 +841,14 @@ expiry, never its key; the repo owner chose one file for both.
   recipient judges by both, so the two never disagree on the same message. A sidecar
   that doesn't name the message gives no card, and the mail is unverified. A
   receiver's own domain comes from `domain` in its amail settings.
-- Refusing an agent's unsigned mail at the broker (R43) switches on once every key is
-  declared.
+- **The broker refuses what the receiver would mark suspect (R43).** At submission the
+  broker applies the same verdict at its own acceptance time. A declared agent's message
+  that is unsigned, or verifies against no key valid then, is refused with the verdict's
+  reason, recorded in the audit, and given a `denied` fate, so it never reaches a
+  recipient. Enforcement follows the declaration agent by agent: an undeclared agent
+  isn't refused, which is how the landing declares first and enforces second. While the
+  registry can't be trusted nothing is refused, as nothing is verified, and the broker
+  warns of it on every submission until the operator repairs the file.
 
 ### 3.3 The audit record
 
